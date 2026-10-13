@@ -4,23 +4,31 @@ This file separates near-term work from long-term ideas. `docs/ARCHITECTURE.md` 
 
 ## P0 — finish current 0.4.0 checkpoint
 
-1. Complete KTE unit/regression tests.
-2. Validate stateful partial exits, break-even, trailing and cooldown edge cases.
-3. Verify KTE chart/report/export output uses the same saved trade ledger.
-4. Update validation artifacts and release status to match the actual KTE implementation.
-5. Run full Rust + Python test suites in a Rust-capable environment.
+Completed on `development`:
+
+1. KTE unit/regression coverage for partial sizing and trade management.
+2. Stateful TP1/TP2/TP3, break-even, trailing, time-limit, ambiguity and cooldown validation.
+3. KTE report/chart/export consistency from the same saved `Trade` ledger.
+4. Detailed fills / stop-updates / targets CSV exports plus deterministic offline replay checks.
+5. Fresh Linux Rust + Python + real-core integration CI.
+
+Remaining before promotion to `main`:
+
+1. Wait for the current Windows CI packaging job to complete; fix any real failure if present.
+2. Reconcile final validation/release documents with that Windows result.
+3. Promote the tested resumable 0.4.0 checkpoint to `main` only after the latest branch head is green.
 
 ## P1 — broker/laptop validation
 
 1. Validate native Windows build on the user's laptop.
 2. Verify MT5 historical retrieval against the user's broker/account.
-3. Confirm UI behavior on all pages and timeframes.
-4. Test Telegram delivery only after the user supplies credentials locally; never commit tokens.
+3. Confirm UI behavior on all pages and supported analysis timeframes.
+4. Test Telegram delivery only after credentials are supplied locally; never commit tokens.
 
 ## P2 — analysis expansion
 
 - Gann research brain.
-- Order-flow/DOM acquisition when the broker/feed exposes real data.
+- Order-flow/DOM acquisition only when the broker/feed exposes real market depth/trade data.
 - Volume-profile research module.
 - Trend/regime brain and stronger Meta decision layer.
 - Historical news/event replay and macro context.

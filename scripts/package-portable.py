@@ -162,7 +162,8 @@ def main():
         for path in sorted(output.rglob("*")):
             if path.is_file():
                 z.write(path, Path("BrainTrade") / path.relative_to(output))
-    with temporary_archive.open("rb") as completed:
+    with temporary_archive.open("rb+") as completed:
+        completed.flush()
         os.fsync(completed.fileno())
     temporary_archive.replace(archive)
     if os.name != "nt":
