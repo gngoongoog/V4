@@ -1,0 +1,32 @@
+name: Windows build and tests
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - name: Package desktop, core and gateway
+        shell: pwsh
+        run: ./scripts/build-windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BrainTrade-Windows-x64-v0.3.0-Preview
+          path: release/BrainTrade-Windows-x64-v0.3.0-Preview.zip
+  linux-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p braintrade-domain -p braintrade-runtime --locked
+      - run: cargo build -p braintrade-runtime --bin braintrade-core --locked
+      - run: python3 -m unittest discover -s tests -v
+      - run: python3 scripts/smoke_core.py
