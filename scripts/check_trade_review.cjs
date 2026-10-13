@@ -21,6 +21,7 @@ const {chromium}=require('playwright');
     if(!report.trades.length) {
      assert(await select.isDisabled());assert(await page.locator('#trade-next').isDisabled());assert(await page.locator('#trade-prev').isDisabled());
      assert.equal(await page.locator('#trade-chart [data-candle]').count(),0);
+     assert(await page.locator('#trade-chart').isHidden());
     }else{
      const indexes=[0,report.trades.length-1];
      for(const i of indexes) {

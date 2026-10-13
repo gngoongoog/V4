@@ -3,14 +3,17 @@
 <p>شموع M1 من بيانات الاختبار المحفوظة. الشموع أسعار BID؛ مخارج البيع تستعمل ASK المقدّر. الأوقات UTC.</p>
 <div class="review-controls"><label for="trade-select">الصفقة</label><select id="trade-select"></select><button id="trade-prev" type="button">السابقة</button><button id="trade-next" type="button">التالية</button></div>
 <p id="trade-detail" aria-live="polite"></p>
+<div id="trade-content" hidden>
 <div class="chart-scroll"><svg id="trade-chart" viewBox="0 0 1120 420" role="img" aria-label="شموع الصفقة والدخول والأهداف ومسار الوقف"></svg></div>
 <p class="legend"><span style="color:#c5a1ff">● E الدخول</span> · <span style="color:#58dcb6">— TP الأهداف</span> · <span style="color:#ff8998">— SL الوقف الفعّال</span> · <span style="color:#ffc977">│ SIG شمعة الإشارة</span> · الدوائر المرقمة: الإغلاقات</p>
 <small>مرّر المؤشر فوق الشمعة أو العلامة لعرض تفاصيلها. المسافات الأفقية تمثل الشموع المتوفرة؛ الفجوة الزمنية معلّمة بخط أحمر. تغيير الوقف يبدأ عند الوقت المسجل. ترتيب الأسعار داخل الدقيقة غير معروف.</small>
 <h3>الإغلاقات والتكاليف</h3><div class="scroll"><table><thead><tr><th>#</th><th>الدقيقة UTC</th><th>المرحلة</th><th>السبب</th><th>السعر</th><th>اللوت</th><th>العمولة</th><th>الصافي</th></tr></thead><tbody id="trade-fills"></tbody></table></div>
 <details><summary>سجل تغييرات الوقف</summary><div id="trade-stops"></div></details>
+</div>
 <noscript><p>فعّل JavaScript المحلي لعرض المخطط. سجل الصفقات والجداول أدناه وملفات CSV/JSON تبقى متاحة.</p></noscript>
 </section>
 <style>
+#trade-review{display:flow-root;padding-block:8px}
 .review-controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.review-controls select{flex:1;min-width:200px;max-width:100%}.review-controls select,.review-controls button{font:inherit;border:1px solid #465873;background:#21334b;color:#e5edf9;border-radius:8px;padding:10px}.review-controls button:disabled{opacity:.4}.review-controls :focus-visible{outline:2px solid #76dfc0;outline-offset:3px}.chart-scroll{overflow:auto}.chart-scroll svg{min-width:760px;display:block;direction:ltr}#trade-chart circle{fill:var(--marker);stroke:#101827;stroke-width:2}.legend{font-size:14px}#trade-detail{line-height:1.8}#trade-stops{white-space:pre-wrap;line-height:1.8;direction:ltr;text-align:left}details{margin:20px 0;padding:15px;border:1px solid #344055;border-radius:10px}
 </style>
 <script type="application/json" id="trade-data">__TRADE_DATA__</script>
@@ -31,7 +34,8 @@ function lower(time){let a=0,b=bars.length;while(a<b){const m=(a+b)>>1;if(bars[m
 function draw(){
  chart.replaceChildren();body.replaceChildren();stopList.textContent='';
  prev.disabled=select.selectedIndex<=0;next.disabled=select.selectedIndex>=trades.length-1;
- const t=trades[select.selectedIndex];if(!t){detail.textContent='لا توجد صفقات في هذه النتيجة؛ لا يوجد مخطط صفقة لعرضه.';return;}
+ const t=trades[select.selectedIndex];document.getElementById('trade-content').hidden=!t;
+ if(!t){detail.textContent='لا توجد صفقات في هذه النتيجة؛ لا يوجد مخطط صفقة لعرضه.';return;}
  const fills=t.fills?.length?t.fills:[{time:t.exit_bar,phase:t.exit_phase,price:t.exit,lots:t.lots,commission:t.commission,net:t.net,reason:t.reason,ambiguous:t.ambiguous}];
  const stops=t.stop_updates?.length?t.stop_updates:[{effective_time:t.entry_time,price:t.stop,reason:'initial'}];
  const targets=t.targets?.length?t.targets:[t.target];

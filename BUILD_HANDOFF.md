@@ -24,23 +24,26 @@ Shadow entry decision, broker execution or saved report calculation is changed.
 
 ## Validation
 
-- Base candidate PR CI: success on `adf94f8ede354a15db350954557dc7fc00afba87`,
-  run https://github.com/gngoongoog/V4/actions/runs/38460931318.
-- Local Rust tests: BLOCKED by a truncated LLVM toolchain file (rustc SIGBUS), before project compilation.
-- Linux-only research CI added for this checkpoint; result pending.
-- Browser interaction and real-core integration now have automated synthetic KTE, legacy Meta and empty-result coverage; execution pending in CI.
-- Native laptop MT5 and live Telegram: NOT RUN.
-- Windows packaging: deferred by the user's active instruction. Do not start it.
+Research CI on `5288368d375a16d834cd2fa57260c0fc3d7cd300` passed:
+https://github.com/gngoongoog/V4/actions/runs/38472670478
+- Rust: domain 33 passed, runtime 14 passed, one explicit network test ignored.
+- Python: 16 passed; core build and real-core smoke passed.
+- Real KTE fixture: three targets, saved fills/stops, deterministic JSON/CSV/HTML replay.
+- Browser: offline interactions, legacy fallback and zero trades at 1200/880 widths.
+- Six synthetic screenshots were produced; KTE/Meta/empty states visually inspected.
+
+Visual review found unnecessary blank chart space in zero-trade reports. The latest
+small adjustment hides that panel and prevents section heading margin collapse.
+This adjustment still needs its new CI run checked before final validation.
+Local Rust compilation was blocked by a truncated toolchain LLVM file; all Rust
+results above came from GitHub CI, not that failed local installation.
+Windows packaging stays deferred; native laptop MT5/Telegram remain NOT RUN.
 
 ## Next exact action
 
-Inspect the research.yml workflow for this development checkpoint. It runs Rust,
-Python, a real-core KTE three-target export/replay and browser interaction tests at
-1200/880 widths. Read actual job logs, fix failures and inspect the synthetic chart
-images. No Windows packaging is triggered by this workflow.
-Update this handoff and reconcile PROJECT_STATE/ROADMAP/CHANGELOG with actual
-code and verification. Save another small checkpoint to development. Do not
-promote to main or declare native broker acceptance from a fixture test.
+Check the research workflow after the empty-state correction. Inspect the refreshed
+KTE and empty-state screenshots. Reconcile state docs and save a final tested
+checkpoint on development. Do not trigger Windows packaging or promote main.
 
 After trade review is complete, the next code task is a selectable historical
 Meta v2 evaluation path (docs/META_V2.md). Keep legacy Meta as Shadow's decision
