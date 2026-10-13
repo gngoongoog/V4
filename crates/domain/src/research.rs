@@ -2,7 +2,9 @@
 use serde::{Deserialize, Serialize};
 
 mod regime;
+mod volume_profile;
 pub use regime::{RegimeBrain, TrendBrain, TrendFrame};
+pub use volume_profile::VolumeProfileBrain;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -106,6 +108,8 @@ pub struct Analysis {
     pub trend_brain: TrendBrain,
     #[serde(default)]
     pub regime_brain: RegimeBrain,
+    #[serde(default)]
+    pub volume_profile_brain: VolumeProfileBrain,
     pub action: String,
     pub reason: String,
     pub atr: Option<f64>,
@@ -127,6 +131,7 @@ impl Default for Analysis {
             regime: "UNKNOWN".into(),
             trend_brain: TrendBrain::default(),
             regime_brain: RegimeBrain::default(),
+            volume_profile_brain: VolumeProfileBrain::default(),
             action: "WAIT".into(),
             reason: "Waiting for completed M1/M5/M15 candles".into(),
             atr: None,
@@ -170,7 +175,7 @@ impl Analysis {
             })
             .unwrap_or_default();
         format!(
-            "{} | {} | {}\nCurrent: {} | M1 bar UTC epoch: {}\n{}\n\nTREND BRAIN\n{}\n\nREGIME BRAIN\n{}\n\nLEGACY META INPUTS\n{}\n\nRisk gates: {}{}\n\nعقول بقواعد حسابية؛ قوة الدليل ليست نسبة نجاح. لا تُرسل صفقات إلى MT5.",
+            "{} | {} | {}\nCurrent: {} | M1 bar UTC epoch: {}\n{}\n\nTREND BRAIN\n{}\n\nREGIME BRAIN\n{}\n\nVOLUME PROFILE BRAIN\n{}\n\nLEGACY META INPUTS\n{}\n\nRisk gates: {}{}\n\nعقول بقواعد حسابية؛ قوة الدليل ليست نسبة نجاح. لا تُرسل صفقات إلى MT5.",
             self.symbol,
             self.regime,
             self.action,
@@ -179,6 +184,7 @@ impl Analysis {
             reason_ar(&self.reason),
             self.trend_brain.text(),
             self.regime_brain.text(),
+            self.volume_profile_brain.text(),
             votes,
             if self.gates.is_empty() {
                 "No veto".into()
@@ -284,8 +290,7 @@ fn trend(series: &[Candle]) -> (i8, f64) {
 }
 
 /// Uses only complete bars available at this timestamp; no future indexing.
-/// Trend/Regime brains are observational in v1: the legacy Meta decision path is intentionally
-/// unchanged until a separate regression/ablation checkpoint validates the integration.
+/// Independent research brains remain observational until their own promotion gates pass.
 pub fn analyze(market: Option<&MarketData>, symbol: &str, now: u64) -> Analysis {
     let mut result = Analysis {
         symbol: symbol.into(),
@@ -335,6 +340,7 @@ pub fn analyze(market: Option<&MarketData>, symbol: &str, now: u64) -> Analysis 
     result.regime = regime_brain.label.clone();
     result.trend_brain = trend_brain;
     result.regime_brain = regime_brain;
+    result.volume_profile_brain = volume_profile::assess(&market.m1);
 
     // Legacy Meta inputs remain unchanged in this checkpoint.
     let trends: Vec<_> = [&market.m1, &market.m5, &market.m15]
@@ -383,7 +389,7 @@ pub fn analyze(market: Option<&MarketData>, symbol: &str, now: u64) -> Analysis 
         ),
     });
 
-    // Legacy Meta decision path. New Trend/Regime outputs do not change entries in this checkpoint.
+    // Legacy Meta decision path. Observational brains do not change entries here.
     let direction = trends[0].0;
     let aligned = direction != 0 && trends.iter().all(|trend| trend.0 == direction);
     if aligned
@@ -493,10 +499,13 @@ pub mod tests {
         assert_eq!(analysis.action, "BUY");
         assert_eq!(analysis.trend_brain.version, "trend-v1");
         assert_eq!(analysis.regime_brain.version, "regime-v1");
+        assert_eq!(analysis.volume_profile_brain.version, "volume-profile-v1");
+        assert!(analysis.volume_profile_brain.available);
         assert!(analysis.trend_brain.aligned);
         assert_eq!(analysis.regime, analysis.regime_brain.label);
         assert!(analysis.text().contains("TREND BRAIN"));
         assert!(analysis.text().contains("REGIME BRAIN"));
+        assert!(analysis.text().contains("VOLUME PROFILE BRAIN"));
     }
 
     #[test]
@@ -505,6 +514,8 @@ pub mod tests {
         let analysis: Analysis = serde_json::from_str(old).unwrap();
         assert_eq!(analysis.trend_brain.version, "trend-v1");
         assert_eq!(analysis.regime_brain.version, "regime-v1");
+        assert_eq!(analysis.volume_profile_brain.version, "volume-profile-v1");
+        assert!(!analysis.volume_profile_brain.available);
     }
 
     #[test]
