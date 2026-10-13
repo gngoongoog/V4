@@ -6,9 +6,10 @@
 - Added stateful KTE historical execution path.
 - Added TP1/TP2/TP3 partial-position handling, break-even/trailing behavior and cooldown logic.
 - Added KTE to the historical strategy selector.
-- Migrated the source checkpoint to GitHub repository `gngoongoog/BrainTrade-OS` for durable continuation.
-- Added `PROJECT_STATE.md` and `ROADMAP.md` as resume/checkpoint documents.
-- Python gateway/packaging tests: 16/16 passed during migration.
+- Moved the durable working source to GitHub repository `gngoongoog/V4` as normal files and folders; legacy `.import` staging is not part of the working tree.
+- Added `PROJECT_STATE.md`, `BUILD_HANDOFF.md` and `ROADMAP.md` as resume/checkpoint documents.
+- `Cargo.lock` is generated normally by Cargo from the committed manifests.
+- Python gateway/packaging tests: 16/16 passed during the earlier migration checkpoint; fresh 0.4.0 CI validation is tracked separately.
 
 ## 0.3.0 — validated source preview baseline
 

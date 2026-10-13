@@ -4,7 +4,7 @@ This is the first file to read when resuming work after a chat/session interrupt
 
 ## Canonical repository
 
-- Repository: `gngoongoog/BrainTrade-OS`
+- Repository: `gngoongoog/V4`
 - Stable branch: `main`
 - Ongoing work branch: `development`
 - Current development checkpoint: **0.4.0 in progress**
@@ -13,7 +13,7 @@ This is the first file to read when resuming work after a chat/session interrupt
 
 ## Last safe checkpoint
 
-The source tree is stored as normal GitHub files and folders. The core project structure is present (`crates/`, `gateway/`, `scripts/`, `tests/`, `docs/`) with no `.import` staging/chunk mechanism in the working tree.
+The source tree is stored as normal GitHub files and folders. The core project structure is present (`crates/`, `gateway/`, `scripts/`, `tests/`, `docs/`) with no `.import` staging/chunk mechanism in the working tree. `Cargo.lock` is generated normally by Cargo from the committed manifests. The permanent CI workflow is `.github/workflows/windows.yml`.
 
 ## Current active work
 
@@ -30,7 +30,7 @@ Priority order:
 ## Known validation state
 
 - Python gateway/packaging suite previously recorded: **16/16 passed** on 2026-10-13 in the ChatGPT build environment.
-- Rust tests were not freshly rerun during the GitHub migration.
+- Rust tests were not freshly rerun during the repository migration; use the current GitHub CI result as the fresh validation boundary when it completes.
 - The prior 0.3.0 checkpoint records 18 domain + 13 runtime Rust tests as passed; do not treat that as fresh 0.4.0 validation.
 
 ## Resume procedure
@@ -49,6 +49,7 @@ Priority order:
 - Do not overwrite newer repository changes without comparing first.
 - Do not mark unfinished features as complete.
 - Do not commit credentials or secret local configuration.
+- Do not reintroduce encoded staging, chunk files, `.import`, or ZIP-only source storage.
 
 ## Next exact action
 

@@ -6,7 +6,7 @@
 - Last validated baseline: **0.3.0 source preview**.
 - Last delivered Windows portable: **0.2.0 Preview**.
 - Windows packaging remains deferred until Mohammed explicitly asks for a new build.
-- Canonical repository: `gngoongoog/BrainTrade-OS`.
+- Canonical repository: `gngoongoog/V4`.
 - `main` is the latest safe/resumable checkpoint.
 - `development` is reserved for ongoing/WIP checkpoints.
 
@@ -47,8 +47,12 @@ risk manager and full restore remain roadmap items unless later commits say othe
 ## Verification at this checkpoint
 
 - Python gateway/packaging suite: **16/16 passed** on 2026-10-13 in the ChatGPT build environment.
-- Rust tests were not rerun during the GitHub migration because Rust tooling is not installed in that environment.
+- Rust tests were not rerun during the repository migration; the current GitHub CI is the next fresh validation boundary.
 - The prior 0.3.0 checkpoint records 18 domain + 13 runtime Rust tests as passed; treat that as prior validation, not a fresh 0.4.0 result.
+
+## Repository continuity
+
+The project source is stored in `gngoongoog/V4` as normal GitHub files and folders. No `.import` staging/chunk mechanism belongs in the working tree. `Cargo.lock` is generated normally by Cargo, and the permanent CI workflow is `.github/workflows/windows.yml`.
 
 ## Continuation rule
 
