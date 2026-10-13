@@ -372,9 +372,12 @@ impl Service {
     }
     fn report(db: &Connection, id: &str) -> Result<Value> {
         let (r, _) = Self::load(db, id)?;
-        Ok(
-            json!({"report_id":id,"text":format!("{} → {}\n{}",utc(r.options.from),utc(r.options.to),r.text()),"summary":r.summary(),"metrics":r.metrics}),
-        )
+        Ok(json!({
+            "report_id":id,
+            "text":format!("{} → {}\n{}\n\n{}",utc(r.options.from),utc(r.options.to),r.text(),ledger_text(&r.trades)),
+            "summary":r.summary(),
+            "metrics":r.metrics
+        }))
     }
     fn runs(db: &Connection) -> Result<Value> {
         let mut stmt=db.prepare("SELECT id,created_ms,json_extract(report,'$.symbol'),json_extract(report,'$.options.from'),json_extract(report,'$.options.to'),json_extract(report,'$.metrics.net'),json_extract(report,'$.algorithm') FROM backtest_runs ORDER BY created_ms DESC,id DESC LIMIT 50")?;
@@ -482,6 +485,154 @@ fn escape(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
 }
+fn csv_cell(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+fn ledger_text(trades: &[braintrade_domain::backtest::Trade]) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    for (index, t) in trades.iter().enumerate() {
+        if t.fills.is_empty() && t.stop_updates.is_empty() && t.targets.is_empty() {
+            continue;
+        }
+        let _ = writeln!(
+            out,
+            "TRADE #{} {} entry {} @ {:.5}",
+            index + 1,
+            if t.side == 1 { "BUY" } else { "SELL" },
+            t.entry_time,
+            t.entry
+        );
+        if !t.targets.is_empty() {
+            let targets = t
+                .targets
+                .iter()
+                .enumerate()
+                .map(|(i, price)| format!("TP{} {:.5}", i + 1, price))
+                .collect::<Vec<_>>()
+                .join(" | ");
+            let _ = writeln!(out, "  TARGETS {targets}");
+        }
+        for f in &t.fills {
+            let _ = writeln!(
+                out,
+                "  FILL {} | {} | {:.4} lot @ {:.5} | net {:.2} | {}{}",
+                f.time,
+                f.phase,
+                f.lots,
+                f.price,
+                f.net,
+                f.reason,
+                if f.ambiguous { " | SL-first ambiguous" } else { "" }
+            );
+        }
+        for s in &t.stop_updates {
+            let _ = writeln!(
+                out,
+                "  STOP {} | {:.5} | {}",
+                s.effective_time, s.price, s.reason
+            );
+        }
+    }
+    if out.is_empty() {
+        "لا توجد أحداث تنفيذ جزئي لهذه النتيجة.".into()
+    } else {
+        out
+    }
+}
+fn ledger_csvs(
+    trades: &[braintrade_domain::backtest::Trade],
+) -> (String, String, String) {
+    use std::fmt::Write;
+    let mut fills = "trade_index,fill_index,side,entry_time_utc,fill_time_utc,phase,price,lots,commission,net,reason,ambiguous\n".to_string();
+    let mut stops = "trade_index,update_index,side,entry_time_utc,effective_time_utc,price,reason\n".to_string();
+    let mut targets = "trade_index,target_index,side,entry_time_utc,price\n".to_string();
+    for (trade_index, t) in trades.iter().enumerate() {
+        let side = if t.side == 1 { "BUY" } else { "SELL" };
+        for (fill_index, f) in t.fills.iter().enumerate() {
+            let _ = writeln!(
+                fills,
+                "{},{},{},{},{},{},{:.10},{:.10},{:.10},{:.10},{},{}",
+                trade_index + 1,
+                fill_index + 1,
+                side,
+                t.entry_time,
+                f.time,
+                csv_cell(&f.phase),
+                f.price,
+                f.lots,
+                f.commission,
+                f.net,
+                csv_cell(&f.reason),
+                f.ambiguous
+            );
+        }
+        for (update_index, s) in t.stop_updates.iter().enumerate() {
+            let _ = writeln!(
+                stops,
+                "{},{},{},{},{},{:.10},{}",
+                trade_index + 1,
+                update_index + 1,
+                side,
+                t.entry_time,
+                s.effective_time,
+                s.price,
+                csv_cell(&s.reason)
+            );
+        }
+        for (target_index, price) in t.targets.iter().enumerate() {
+            let _ = writeln!(
+                targets,
+                "{},{},{},{},{:.10}",
+                trade_index + 1,
+                target_index + 1,
+                side,
+                t.entry_time,
+                price
+            );
+        }
+    }
+    (fills, stops, targets)
+}
+fn ledger_markers(
+    trades: &[braintrade_domain::backtest::Trade],
+    values: &[braintrade_domain::backtest::EquityPoint],
+) -> String {
+    use std::fmt::Write;
+    if values.is_empty() {
+        return String::new();
+    }
+    let min = values.iter().map(|p| p.equity).fold(f64::INFINITY, f64::min);
+    let max = values.iter().map(|p| p.equity).fold(f64::NEG_INFINITY, f64::max);
+    let span = (max - min).max(1.0);
+    let start = values.first().map(|p| p.time).unwrap_or(0);
+    let duration = values
+        .last()
+        .map(|p| p.time.saturating_sub(start).max(1))
+        .unwrap_or(1);
+    let mut markers = String::new();
+    for t in trades {
+        for f in &t.fills {
+            let point = values
+                .iter()
+                .find(|p| p.time >= f.time)
+                .or_else(|| values.last());
+            let Some(point) = point else { continue };
+            let elapsed = f.time.saturating_sub(start).min(duration);
+            let x = 20.0 + 760.0 * elapsed as f64 / duration as f64;
+            let y = 210.0 - 180.0 * (point.equity - min) / span;
+            let _ = write!(
+                markers,
+                "<circle cx=\"{x:.2}\" cy=\"{y:.2}\" r=\"3\"><title>{} {} {:.4} lot @ {:.5}</title></circle>",
+                escape(&f.reason),
+                utc(f.time),
+                f.lots,
+                f.price
+            );
+        }
+    }
+    markers
+}
 fn html(r: &Report) -> String {
     use std::fmt::Write;
     let values = &r.equity;
@@ -516,12 +667,15 @@ fn html(r: &Report) -> String {
     for t in r.trades.iter().rev().take(200) {
         let _=write!(rows,"<tr><td>{}</td><td>{}</td><td>{}</td><td>{:.4}</td><td>{:.5}</td><td>{:.5}</td><td>{:.2}</td><td>{}{}</td></tr>",if t.side==1 {"BUY"}else{"SELL"},utc(t.entry_time),utc(t.exit_bar),t.lots,t.entry,t.exit,t.net,escape(&t.reason),if t.ambiguous{" / SL-first"}else{""});
     }
+    let markers = ledger_markers(&r.trades, values);
+    let ledger = escape(&ledger_text(&r.trades));
     format!(
-        r##"<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>BrainTrade Backtest</title><style>body{{margin:0;background:#101827;color:#e5edf9;font:16px system-ui,sans-serif}}main{{max-width:1100px;margin:auto;padding:32px}}h1{{color:#76dfc0}}pre{{white-space:pre-wrap;line-height:1.8;background:#1b273a;padding:20px;border-radius:12px}}svg{{width:100%;background:#1b273a;border-radius:12px}}table{{width:100%;border-collapse:collapse;font-size:13px}}td,th{{padding:12px;border-bottom:1px solid #344055;text-align:right}}.scroll{{overflow:auto}}small{{color:#aabbd2}}@media print{{body{{background:white;color:black}}pre,svg{{background:#eee}}}}</style><main><h1>BRAINTRADE OS — الاختبار التاريخي</h1><p>{} → {}</p><pre>{}</pre><h2>منحنى حقوق الحساب الافتراضية</h2><svg viewBox="0 0 800 240" role="img" aria-label="Virtual equity curve"><polyline fill="none" stroke="#51cba8" stroke-width="2" points="{}"/></svg><small>أدنى {:.2} — أعلى {:.2} {}. الخط يصل العينات؛ تفاصيل كل دقيقة في equity.csv.</small><h2>افتراضات وحدود البيانات</h2><pre>{}</pre><p>أول شمعة متوفرة: {}، آخر شمعة: {}. أول/آخر دقيقة اختبار: {} / {}.</p><h2>آخر 200 صفقة — السجل الكامل في trades.csv</h2><div class="scroll"><table><thead><tr><th>الاتجاه</th><th>الدخول</th><th>دقيقة الخروج</th><th>اللوت</th><th>سعر الدخول</th><th>سعر الخروج</th><th>الصافي</th><th>السبب</th></tr></thead><tbody>{}</tbody></table></div><p>تجربة تاريخية تقديرية؛ لا أوامر إلى الوسيط ولا ادعاء ربحية مستقبلية.</p></main></html>"##,
+        r##"<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>BrainTrade Backtest</title><style>body{{margin:0;background:#101827;color:#e5edf9;font:16px system-ui,sans-serif}}main{{max-width:1100px;margin:auto;padding:32px}}h1{{color:#76dfc0}}pre{{white-space:pre-wrap;line-height:1.8;background:#1b273a;padding:20px;border-radius:12px}}svg{{width:100%;background:#1b273a;border-radius:12px}}svg circle{{fill:#f3c969;stroke:#101827;stroke-width:1}}table{{width:100%;border-collapse:collapse;font-size:13px}}td,th{{padding:12px;border-bottom:1px solid #344055;text-align:right}}.scroll{{overflow:auto}}small{{color:#aabbd2}}@media print{{body{{background:white;color:black}}pre,svg{{background:#eee}}}}</style><main><h1>BRAINTRADE OS — الاختبار التاريخي</h1><p>{} → {}</p><pre>{}</pre><h2>منحنى حقوق الحساب الافتراضية</h2><svg viewBox="0 0 800 240" role="img" aria-label="Virtual equity curve"><polyline fill="none" stroke="#51cba8" stroke-width="2" points="{}"/>{}</svg><small>أدنى {:.2} — أعلى {:.2} {}. الدوائر تمثل أحداث fills من سجل الصفقة نفسه؛ تفاصيل كل دقيقة في equity.csv.</small><h2>افتراضات وحدود البيانات</h2><pre>{}</pre><p>أول شمعة متوفرة: {}، آخر شمعة: {}. أول/آخر دقيقة اختبار: {} / {}.</p><h2>آخر 200 صفقة</h2><div class="scroll"><table><thead><tr><th>الاتجاه</th><th>الدخول</th><th>دقيقة الخروج</th><th>اللوت</th><th>سعر الدخول</th><th>سعر الخروج</th><th>الصافي</th><th>السبب</th></tr></thead><tbody>{}</tbody></table></div><h2>سجل التنفيذ الجزئي / KTE ledger</h2><pre>{}</pre><small>التصدير الكامل: trades.csv + fills.csv + stop_updates.csv + targets.csv + report.json.</small><p>تجربة تاريخية تقديرية؛ لا أوامر إلى الوسيط ولا ادعاء ربحية مستقبلية.</p></main></html>"##,
         utc(r.options.from),
         utc(r.options.to),
         escape(&r.summary()),
         points,
+        markers,
         min,
         max,
         escape(&r.currency),
@@ -530,7 +684,8 @@ fn html(r: &Report) -> String {
         utc(r.history_last),
         utc(r.first_test_bar),
         utc(r.last_test_bar),
-        rows
+        rows,
+        ledger
     )
 }
 fn export(db: &Connection, dir: &Path, id: &str) -> Result<Value> {
@@ -554,7 +709,7 @@ fn export(db: &Connection, dir: &Path, id: &str) -> Result<Value> {
             t.signal_bar,
             t.entry_time,
             t.exit_bar,
-            t.exit_phase,
+            csv_cell(&t.exit_phase),
             if t.side == 1 { "BUY" } else { "SELL" },
             t.entry,
             t.exit,
@@ -563,21 +718,25 @@ fn export(db: &Connection, dir: &Path, id: &str) -> Result<Value> {
             t.lots,
             t.commission,
             t.net,
-            t.reason,
+            csv_cell(&t.reason),
             t.ambiguous
         )?;
     }
     atomic_write(&staging.join("trades.csv"), trades.as_bytes())?;
+    let (fills, stops, targets) = ledger_csvs(&r.trades);
+    atomic_write(&staging.join("fills.csv"), fills.as_bytes())?;
+    atomic_write(&staging.join("stop_updates.csv"), stops.as_bytes())?;
+    atomic_write(&staging.join("targets.csv"), targets.as_bytes())?;
     let mut curve = "time_utc,equity,balance\n".to_string();
     for p in &r.equity {
         writeln!(curve, "{},{:.10},{:.10}", p.time, p.equity, p.balance)?;
     }
     atomic_write(&staging.join("equity.csv"), curve.as_bytes())?;
-    atomic_write(&staging.join("README.txt"),"افتح report.html للمراجعة. JSON يحفظ الافتراضات ومواصفات الرمز والشموع. CSV يحتوي السجل الكامل بأوقات UTC epoch. الأرقام محاكاة وليست تنفيذ وسيط. بيانات الحساب موجودة في التقرير؛ التوكن وكلمات المرور غير موجودة.\n".as_bytes())?;
+    atomic_write(&staging.join("README.txt"),"افتح report.html للمراجعة. report.json يحفظ Report الكامل. trades.csv يحفظ ملخص الصفقات، وfills.csv / stop_updates.csv / targets.csv تحفظ سجل KTE التفصيلي من نفس Trade ledger، وequity.csv يحفظ منحنى الحساب بأوقات UTC epoch. الأرقام محاكاة وليست تنفيذ وسيط. بيانات الحساب موجودة في التقرير؛ التوكن وكلمات المرور غير موجودة.\n".as_bytes())?;
     let dest = root.join(name);
     fs::rename(staging, &dest)?;
     Ok(
-        json!({"path":dest,"note":"افتح report.html للتقرير والمنحنى؛ CSV/JSON يحفظان تفاصيل التجربة كاملة"}),
+        json!({"path":dest,"note":"افتح report.html؛ JSON وCSV يحفظان نفس سجل الصفقات التفصيلي، بما فيه fills/stops/targets لـ KTE"}),
     )
 }
 
@@ -590,6 +749,55 @@ mod tests {
         assert!(date("2024-02-30").is_err());
         assert!(date("2024-1-01").is_err());
         assert_eq!(escape("<script>&\""), "&lt;script&gt;&amp;&quot;");
+    }
+    #[test]
+    fn kte_ledger_drives_text_csv_and_chart_markers() {
+        use braintrade_domain::backtest::{EquityPoint, Fill, StopUpdate, Trade};
+        let trade = Trade {
+            signal_bar: 60,
+            entry_time: 120,
+            exit_bar: 300,
+            exit_phase: "range".into(),
+            side: 1,
+            entry: 100.0,
+            exit: 120.0,
+            stop: 90.0,
+            target: 130.0,
+            lots: 1.0,
+            commission: 0.0,
+            net: 20.0,
+            reason: "tp3".into(),
+            ambiguous: false,
+            fills: vec![
+                Fill { time: 180, phase: "range".into(), price: 110.0, lots: 0.4, commission: 0.0, net: 4.0, reason: "tp1,partial".into(), ambiguous: false },
+                Fill { time: 240, phase: "range".into(), price: 120.0, lots: 0.3, commission: 0.0, net: 6.0, reason: "tp2".into(), ambiguous: false },
+                Fill { time: 300, phase: "range".into(), price: 130.0, lots: 0.3, commission: 0.0, net: 9.0, reason: "tp3".into(), ambiguous: false },
+            ],
+            stop_updates: vec![
+                StopUpdate { effective_time: 120, price: 90.0, reason: "initial".into() },
+                StopUpdate { effective_time: 240, price: 100.0, reason: "breakeven".into() },
+                StopUpdate { effective_time: 300, price: 112.0, reason: "atr_trail".into() },
+            ],
+            targets: vec![110.0, 120.0, 130.0],
+        };
+        let trades = vec![trade];
+        let text = ledger_text(&trades);
+        assert!(text.contains("tp1,partial"));
+        assert!(text.contains("breakeven"));
+        assert!(text.contains("TP3 130.00000"));
+        let (fills, stops, targets) = ledger_csvs(&trades);
+        assert!(fills.contains("\"tp1,partial\""));
+        assert!(stops.contains("breakeven"));
+        assert!(targets.contains("1,3,BUY,120,130.0000000000"));
+        let equity = vec![
+            EquityPoint { time: 120, equity: 1000.0, balance: 1000.0 },
+            EquityPoint { time: 180, equity: 1004.0, balance: 1004.0 },
+            EquityPoint { time: 240, equity: 1010.0, balance: 1010.0 },
+            EquityPoint { time: 300, equity: 1019.0, balance: 1019.0 },
+        ];
+        let markers = ledger_markers(&trades, &equity);
+        assert_eq!(markers.matches("<circle").count(), 3);
+        assert!(markers.contains("tp1,partial"));
     }
     #[test]
     fn cancelled_or_timed_out_jobs_never_accept_late_data() {
