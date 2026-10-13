@@ -1,0 +1,65 @@
+{
+  "version": "0.2.0",
+  "validation_date": "2026-10-12",
+  "rust_unit_tests": {
+    "passed": 15,
+    "failed": 0,
+    "command": "cargo test -p braintrade-domain -p braintrade-runtime --locked"
+  },
+  "python_tests": {
+    "passed": 12,
+    "failed": 0,
+    "command": "python3 -m unittest discover -s tests -v"
+  },
+  "core_integration": {
+    "status": "passed",
+    "command": "python3 scripts/smoke_core.py",
+    "checks": [
+      "authentication and Origin rejection",
+      "single core instance",
+      "start/stop/shutdown",
+      "stale gateway detection",
+      "virtual entry and exit",
+      "decision deduplication",
+      "risk setting validation",
+      "JSONL export",
+      "SQLite backup integrity",
+      "restart persistence"
+    ]
+  },
+  "windows_cross_build": {
+    "status": "passed",
+    "target": "x86_64-pc-windows-gnu",
+    "compiler": "Rust 1.99.0",
+    "exe_bytes": 40751978,
+    "exe_sha256": "44ab8653d22cdabb56415d8d0529a8032ee00b87dd24ee8446f5455fdb3a0384",
+    "subsystem": "Windows GUI",
+    "native_execution_test": false
+  },
+  "headless_ui_render": {
+    "status": "passed",
+    "pages": 7,
+    "size": [
+      1120,
+      820
+    ],
+    "method": "native Slint software renderer on Linux; visually reviewed all pages",
+    "fixture_data": true,
+    "images": "docs/ui-*.png",
+    "windows_dpi_and_font_check": "pending on native Windows"
+  },
+  "native_windows_v020": "not run; v0.1.1 launch, MT5 connection and balance previously confirmed by user",
+  "telegram_delivery": "not run; credentials not supplied",
+  "broker_execution": "not implemented; execution_enabled=false",
+  "package_manifest_regression": "passed: regenerated manifest excludes a previous copy of itself",
+  "packaging": {
+    "checks_enforced": [
+      "pinned dependency SHA256",
+      "Windows x64 PE imports including delayed imports",
+      "ZIP CRC",
+      "complete member coverage",
+      "all file SHA256 hashes"
+    ],
+    "archive_hash_location": "reported separately after final packaging"
+  }
+}

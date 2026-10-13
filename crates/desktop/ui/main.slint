@@ -1,0 +1,287 @@
+import { AboutSlint, Palette, ComboBox, Button, LineEdit, CheckBox, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
+export struct NewsRow {title:string,detail:string,url:string}
+
+component Card inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    background: #151f30;
+    border-radius: 10px;
+    min-height: 96px;
+    VerticalLayout {
+        padding: 16px; spacing: 8px;
+        Text { text: root.label; color: #8d9cb4; font-size: 13px; }
+        Text { text: root.value; color: #f1f5fc; font-size: 23px; font-weight: 700; }
+    }
+}
+export component Dashboard inherits Window {
+    init => { Palette.color-scheme = ColorScheme.dark; }
+    title: "BRAINTRADE OS | Research 0.3.0";
+    preferred-width: 1120px; preferred-height: 820px; min-width: 880px; min-height: 700px;
+    background: #0b1220;
+    in-out property <int> page: 0;
+    in property <string> state: "CONNECTING";
+    in property <string> connection: "Waiting for core";
+    in property <string> balance: "—";
+    in property <string> equity: "—";
+    in property <string> today: "—";
+    in property <string> positions: "No current MT5 snapshot";
+    in property <string> diagnostics: "";
+    in property <string> events: "";
+    in property <string> feedback: "";
+    in property <string> account: "No account connected";
+    in property <string> telegram-status: "Not configured";
+    in property <bool> online: false;
+    in property <bool> busy: false;
+    in property <bool> token-saved: false;
+    in-out property <string> mt5-path;
+    in-out property <string> symbol: "XAUUSD";
+    in-out property <string> telegram-user;
+    in-out property <string> telegram-chat;
+    in-out property <string> telegram-token;
+    in-out property <bool> telegram-enabled: false;
+    in-out property <bool> clear-token: false;
+    in property <string> brains: "Waiting for closed M1/M5/M15 candles";
+    in property <string> paper: "Virtual trades appear after START and an eligible signal";
+    in property <string> regime: "UNKNOWN";
+    in property <string> decision: "WAIT";
+    in-out property <string> risk-percent: "0.25";
+    in-out property <string> daily-limit: "2";
+    in-out property <string> drawdown-limit: "5";
+    in-out property <string> spread-limit: "0.25";
+    in-out property <string> max-lots: "0.10";
+    in-out property <string> commission-lot: "7";
+    in-out property <string> slippage-ticks: "2";
+    in-out property <string> bt-from;
+    in-out property <string> bt-to;
+    in-out property <string> bt-equity: "10000";
+    in-out property <string> bt-spread: "0.20";
+    in-out property <int> bt-strategy: 0;
+    in property <string> bt-status: "Waiting for core";
+    in property <string> bt-report: "لا توجد نتيجة بعد. اختر فترة UTC وجلب بيانات MT5، أو افتح اختباراً محفوظاً.";
+    in property <string> bt-report-id;
+    in property <string> bt-net: "—";
+    in property <string> bt-trades: "—";
+    in property <string> bt-drawdown: "—";
+    in property <[string]> bt-runs;
+    in property <[string]> bt-ids;
+    in-out property <int> bt-selected: -1;
+    in property <bool> bt-busy: false;
+    in property <bool> bt-active: false;
+    callback backtest-action(string);
+    in property <[NewsRow]> news-items;
+    in property <string> news-status: "بانتظار المحرك";
+    in property <string> news-sources;
+    in property <bool> news-enabled: true;
+    in property <bool> news-refreshing: false;
+    in property <bool> news-empty: true;
+    callback news-action(string);
+    callback open-news(string);
+    callback save-risk();
+    callback action(string);
+    callback save-settings();
+    callback browse-mt5();
+    VerticalLayout {
+        padding: 24px; spacing: 16px;
+        HorizontalLayout {
+            spacing: 12px;
+            VerticalLayout {
+                Text { text: "BRAINTRADE OS"; color: #f5f7fd; font-size: 26px; font-weight: 800; }
+                Text { text: "مركز التحكم  /  RESEARCH 0.3.0"; color: #8d9cb4; font-size: 13px; }
+            }
+            Rectangle { horizontal-stretch: 1; background: transparent; }
+            Text { text: root.state; color: root.online ? #5be0be : #f0c578; font-size: 16px; vertical-alignment: center; }
+        }
+        Rectangle {
+            background: #242337; border-radius: 8px; height: 46px;
+            Text { x: 14px; width: parent.width - 28px; height: parent.height; text: "SHADOW / تحليل ومحاكاة افتراضية — لا تُرسل صفقات إلى MT5"; color: #eedaa5; vertical-alignment: center; horizontal-alignment: center; }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            Button { text: "تشغيل النظام  START"; enabled: !root.busy; clicked => { root.action("start"); } }
+            Button { text: "إيقاف النظام  STOP"; enabled: !root.busy; clicked => { root.action("stop"); } }
+            Button { text: "إعادة الاتصال بـ MT5"; enabled: !root.busy; clicked => { root.action("reconnect"); } }
+            Rectangle { horizontal-stretch: 1; background: transparent; }
+            Text { text: root.decision; color: #6bdbc5; vertical-alignment: center; }
+        }
+        VerticalLayout {spacing: 6px;
+          HorizontalLayout {spacing: 8px;
+            Button { text: "العقول والتحليل"; clicked => { root.page = 4; } }
+            Button { text: "المحاكاة"; clicked => { root.page = 5; } }
+            Button { text: "الاختبار التاريخي"; clicked => { root.page = 7; } }
+            Button { text: "المخاطرة"; clicked => { root.page = 6; } }
+            Button {text: "الأخبار الرسمية"; clicked => {root.page = 8;} }
+          }
+          HorizontalLayout {spacing: 8px;
+            Button { text: "الرئيسية"; clicked => { root.page = 0; } }
+            Button { text: "الإعدادات"; clicked => { root.page = 1; } }
+            Button { text: "السجل"; clicked => { root.page = 2; root.action("events"); } }
+            Button { text: "حول"; clicked => { root.page = 3; } }
+          }
+        }
+        if root.page == 0: ScrollView { VerticalBox {
+            spacing: 14px;
+            Text { text: root.account; color: #d5deed; font-size: 15px; }
+            HorizontalLayout {
+                spacing: 12px;
+                Card { label: "BALANCE / الرصيد"; value: root.balance; }
+                Card { label: "EQUITY / حقوق الحساب"; value: root.equity; }
+                Card { label: "TODAY NET / صافي اليوم"; value: root.today; }
+            }
+            Rectangle {
+                background: #151f30; border-radius: 10px; min-height: 140px;
+                VerticalLayout { padding: 16px; spacing: 10px;
+                    Text { text: "MT5 CONNECTION"; color: #6bdbc5; font-weight: 700; }
+                    Text { text: root.connection; color: #eff3fa; wrap: word-wrap; }
+                    Text { text: root.diagnostics; color: #9dabbe; wrap: word-wrap; }
+                    Text { text: "Telegram: " + root.telegram-status; color: #9dabbe; wrap: word-wrap; }
+                }
+            }
+            Text { text: "OPEN POSITIONS / الصفقات المفتوحة"; color: #d5deed; font-weight: 700; }
+            ScrollView {
+                min-height: 140px; vertical-stretch: 1;
+                VerticalBox { alignment: start; Text { text: root.positions; color: #ced9e9; wrap: word-wrap; font-size: 14px; horizontal-alignment: left; } }
+            }
+        }
+        }
+        if root.page == 1: ScrollView {
+            VerticalBox {
+                spacing: 12px;
+                Text { text: "MT5 — الإعدادات"; color: #eaf0fb; font-size: 20px; }
+                Text { text: "اختر terminal64.exe. سجّل دخول حسابك واحفظه داخل MT5 أول مرة."; color: #acbad0; wrap: word-wrap; }
+                HorizontalBox {
+                    LineEdit { text <=> root.mt5-path; placeholder-text: "C:\\Program Files\\MetaTrader 5\\terminal64.exe"; }
+                    Button { text: "اختيار الملف…"; clicked => { root.browse-mt5(); } }
+                }
+                Text { text: "رمز السوق كما يظهر لدى الوسيط، مثال XAUUSDm"; color: #acbad0; }
+                LineEdit { text <=> root.symbol; }
+                Text { text: "TELEGRAM — يمكنك إعداده لاحقاً"; color: #eaf0fb; font-size: 20px; }
+                CheckBox { text: "تفعيل البوت / Enable Telegram"; checked <=> root.telegram-enabled; }
+                LineEdit { text <=> root.telegram-user; placeholder-text: "Your numeric Telegram User ID"; }
+                LineEdit { text <=> root.telegram-chat; placeholder-text: "Private Chat ID (same as User ID)"; }
+                LineEdit { text <=> root.telegram-token; input-type: password; placeholder-text: "Bot token — leave blank to keep saved token"; }
+                Text { text: root.token-saved ? "Token saved securely with Windows DPAPI" : "No bot token saved"; color: #8d9cb4; }
+                CheckBox { text: "حذف التوكن المحفوظ / Remove saved token"; checked <=> root.clear-token; }
+                Button { text: "حفظ الإعدادات وإعادة الاتصال"; enabled: !root.busy; clicked => { root.save-settings(); } }
+                Text { text: "إغلاق الواجهة يبقي المحرك شغالاً. الخروج الكامل يوقف البرنامج ولا يغلق صفقات MT5."; color: #acbad0; wrap: word-wrap; }
+            }
+        }
+        if root.page == 2: VerticalLayout {
+            spacing: 12px;
+            Text { text: "AUDIT LOG — آخر 100 حدث"; color: #eaf0fb; font-size: 20px; }
+            HorizontalLayout {
+                Button { text: "أحداث النظام"; enabled: !root.busy; clicked => { root.action("events"); } }
+                Button { text: "قرارات العقول والمخاطرة"; enabled: !root.busy; clicked => { root.action("decisions"); } }
+            }
+            ScrollView { VerticalBox { alignment: start; Text { text: root.events; color: #c3cfe1; wrap: word-wrap; font-size: 14px; horizontal-alignment: left; } } }
+        }
+        if root.page == 3: VerticalLayout {
+            spacing: 16px; alignment: start; vertical-stretch: 1;
+            Text { text: "BRAINTRADE OS 0.3.0"; color: #eaf0fb; font-size: 24px; }
+            Text { text: "عقول بقواعد حسابية + إدارة مخاطرة + محاكاة. التعلم الآلي والتنفيذ الفعلي مراحل لاحقة."; color: #acbad0; wrap: word-wrap; }
+            Text { text: "Windows x64 • Core + Desktop + MT5 bootstrap"; color: #acbad0; }
+            AboutSlint { max-height: 110px; }
+        }
+        if root.page == 4: VerticalLayout {
+            spacing: 12px;
+            HorizontalLayout { spacing: 12px;
+                Card { label: "REGIME / حالة السوق"; value: root.regime; }
+                Card { label: "META / القرار الحالي"; value: root.decision; }
+            }
+            Text { text: "اتجاه M1 / M5 / M15 + زخم + اختراق نطاق 20 شمعة"; color: #acbad0; }
+            ScrollView { vertical-stretch: 1; VerticalBox { alignment: start; Text { text: root.brains; color: #d5deed; wrap: word-wrap; horizontal-alignment: left; font-size: 14px; } } }
+        }
+        if root.page == 5: VerticalLayout {
+            spacing: 12px;
+            Text { text: "SHADOW LEDGER / سجل الصفقات الافتراضية"; color: #eaf0fb; font-size: 20px; }
+            Text { text: "نتائج افتراضية مستقلة عن رصيد MT5، تحفظ تلقائياً عند إغلاق الواجهة."; color: #acbad0; wrap: word-wrap; }
+            Button { text: "تصدير الشموع والقرارات ونتائج المحاكاة"; enabled: !root.busy; clicked => { root.action("export"); } }
+            ScrollView { vertical-stretch: 1; VerticalBox { alignment: start; Text { text: root.paper; color: #d5deed; wrap: word-wrap; horizontal-alignment: left; font-size: 14px; } } }
+        }
+        if root.page == 6: ScrollView { VerticalBox {
+            spacing: 10px;
+            Text { text: "SHADOW RISK / إعدادات المحاكاة"; color: #eaf0fb; font-size: 20px; }
+            Text { text: "للصفقات الافتراضية الجديدة. عمولة الوسيط لا تكتشف تلقائياً؛ عدّل الافتراض أدناه."; color: #acbad0; wrap: word-wrap; }
+            HorizontalBox { Text { text: "المخاطرة لكل صفقة % (0.01–2)"; color: #d5deed; } LineEdit { text <=> root.risk-percent; } }
+            HorizontalBox { Text { text: "حد الخسارة اليومية % (0.1–10)"; color: #d5deed; } LineEdit { text <=> root.daily-limit; } }
+            HorizontalBox { Text { text: "حد التراجع من القمة % (0.1–30)"; color: #d5deed; } LineEdit { text <=> root.drawdown-limit; } }
+            HorizontalBox { Text { text: "أقصى سبريد كنسبة ATR (0.01–1)"; color: #d5deed; } LineEdit { text <=> root.spread-limit; } }
+            HorizontalBox { Text { text: "سقف اللوت (0.001–100)"; color: #d5deed; } LineEdit { text <=> root.max-lots; } }
+            HorizontalBox { Text { text: "عمولة ذهاب وإياب / لوت / عملة الحساب"; color: #d5deed; } LineEdit { text <=> root.commission-lot; } }
+            HorizontalBox { Text { text: "انزلاق مفترض لكل جانب / ticks (0–1000)"; color: #d5deed; } LineEdit { text <=> root.slippage-ticks; } }
+            Button { text: "حفظ إعدادات المحاكاة"; enabled: !root.busy; clicked => { root.save-risk(); } }
+            Text { text: "SL = 1.5 ATR؛ الهدف ضعف مسافة SL؛ خروج زمني بعد 30 دقيقة. صفقة افتراضية واحدة لكل حساب ورمز. STOP يمنع الدخول ويبقي مخارج المحاكاة فعالة أثناء عمل المحرك."; color: #acbad0; wrap: word-wrap; }
+            Text { text: "الحد اليومي يتجدد بتوقيت بغداد. قفل التراجع يبقى بعد بلوغه؛ تغيير الإعدادات لا يمسح النتائج أو يفك القفل."; color: #acbad0; wrap: word-wrap; }
+        } }
+        if root.page == 7: ScrollView { VerticalBox {
+            spacing: 12px;
+            Text {text: "استراتيجية الاختبار الجديد / التجربة على بيانات محفوظة"; color: #d5deed;}
+            ComboBox {model: ["Meta v1 — اتجاه متعدد الفريمات", "CES v1 — الانتروبيا والضغط", "KTE v1 — اندفاع وارتداد / أهداف جزئية"]; current-index <=> root.bt-strategy;}
+            Text {text: root.bt-strategy == 2 ? "KTE: أهداف 1R/2R/3R، وقف عند الدخول بعد TP1 وتتبع ATR بعد TP2. تقسيم اللوت 40/30/الباقي؛ يُرفض الحجم الذي لا يقبل ثلاثة أجزاء. المحاكاة المباشرة تبقى Meta." : "CES: حجم ticks؛ دخول بالافتتاح التالي، وقف 0.5 وهدف 1.5 من TR3، خروج EG موجب أو 8 دقائق. المحاكاة المباشرة تبقى Meta."; color: #acbad0; wrap: word-wrap;}
+            Text { text: "BACKTEST / مختبر الاستراتيجية"; color: #eaf0fb; font-size: 20px; }
+            Text { text: "فترة من يوم إلى 30 يوماً بصيغة YYYY-MM-DD وبوقت UTC؛ يوم النهاية غير مشمول. يستخدم إعدادات المخاطرة المحفوظة لحظة الطلب."; color: #acbad0; wrap: word-wrap; }
+            HorizontalBox {
+                Text { text: "من UTC"; color: #d5deed; }
+                LineEdit { text <=> root.bt-from; placeholder-text: "2026-10-01"; }
+                Text { text: "إلى UTC"; color: #d5deed; }
+                LineEdit { text <=> root.bt-to; placeholder-text: "2026-10-08"; }
+            }
+            HorizontalBox {
+                Text { text: "رأس مال افتراضي / عملة الحساب"; color: #d5deed; }
+                LineEdit { text <=> root.bt-equity; }
+                Text { text: "أقل سبريد / سعر الرمز"; color: #d5deed; }
+                LineEdit { text <=> root.bt-spread; }
+            }
+            Text { text: "0.20 مثال للذهب؛ عدّل السبريد لرمزك. اضغط STOP قبل جلب التاريخ وانتظر إغلاق أي صفقة افتراضية مفتوحة."; color: #acbad0; wrap: word-wrap; }
+            HorizontalBox {
+                Button { text: "جلب التاريخ وتشغيل الاختبار"; enabled: !root.bt-busy && !root.bt-active; clicked => { root.backtest-action("start"); } }
+                Button { text: "إلغاء الاختبار"; enabled: !root.bt-busy && root.bt-active; clicked => { root.backtest-action("cancel"); } }
+                Button { text: "تحديث القائمة"; enabled: !root.bt-busy; clicked => { root.backtest-action("refresh"); } }
+            }
+            Text { text: root.bt-status; color: #76dfc0; wrap: word-wrap; font-size: 14px; }
+            Text { text: "اختبارات محفوظة — فتح وإعادة اختبار دون اتصال MT5"; color: #d5deed; }
+            ComboBox { model: root.bt-runs; current-index <=> root.bt-selected; }
+            HorizontalBox {
+                Button { text: "فتح النتيجة المختارة"; enabled: !root.bt-busy && root.bt-selected >= 0; clicked => { root.backtest-action("load"); } }
+                Button { text: "إعادة الاختبار بنفس البيانات"; enabled: !root.bt-busy && !root.bt-active && root.bt-selected >= 0; clicked => { root.backtest-action("replay"); } }
+                Button { text: "فتح التقرير ومخطط الصفقات"; enabled: !root.bt-busy && root.bt-report-id != ""; clicked => { root.backtest-action("export"); } }
+            }
+            Text { text: "النتيجة المعروضة / تجربة محفوظة"; color: #d5deed; }
+            Button {text: "تجربة الاستراتيجية المختارة على بيانات النتيجة المحددة"; enabled: !root.bt-busy && !root.bt-active && root.bt-selected >= 0; clicked => {root.backtest-action("experiment");}}
+            Text {text: "التجربة على نتيجة محفوظة تغيّر الاستراتيجية فقط؛ رأس المال والسبريد والمخاطرة تبقى من تلك النتيجة."; color: #acbad0; wrap: word-wrap;}
+            HorizontalLayout { spacing: 12px;
+                Card { label: "NET / الصافي"; value: root.bt-net; }
+                Card { label: "TRADES / الصفقات"; value: root.bt-trades; }
+                Card { label: "MAX DRAWDOWN / التراجع"; value: root.bt-drawdown; }
+            }
+            Text { text: root.bt-report; color: #d5deed; wrap: word-wrap; horizontal-alignment: left; font-size: 14px; }
+            Text { text: "نموذج شموع تقريبي: وقف أولاً عند لمس الوقف والهدف معاً، ولا ملء للفجوات. ليست نتيجة تنفيذ حقيقي أو اختباراً خارج العينة. التصدير يضم تقرير HTML مع منحنى الرصيد وCSV/JSON كاملين."; color: #acbad0; wrap: word-wrap; }
+        } }
+        if root.page == 8: ScrollView {VerticalBox {spacing: 12px;
+            Text {text: "OFFICIAL NEWS / الأخبار الرسمية"; color: #eaf0fb; font-size: 20px;}
+            Text {text: "عناوين من الاحتياطي الفدرالي والبنك المركزي الأوروبي. وقت الخبر UTC؛ تحديث الاتصال لا يعني أن الخبر جديد."; color: #acbad0; wrap: word-wrap;}
+            HorizontalBox {
+                Button {text: "تحديث الآن"; enabled: root.news-enabled && !root.news-refreshing; clicked => {root.news-action("refresh");}}
+                Button {text: root.news-enabled ? "إيقاف تحديث الأخبار" : "تفعيل تحديث الأخبار"; clicked => {root.news-action(root.news-enabled ? "disable" : "enable");}}
+            }
+            Text {text: root.news-status; color: #76dfc0; wrap: word-wrap;}
+            Text {text: root.news-sources; color: #acbad0; wrap: word-wrap; horizontal-alignment: left; font-size: 13px;}
+            Text {text: "عناوين منشورة؛ ليست تقويماً للأحداث القادمة. التصنيف بالكلمات لا يحدد أثر الخبر أو اتجاه السعر، ولا يدخل في قرار Meta أو الاختبار التاريخي."; color: #f0c578; wrap: word-wrap;}
+            if root.news-empty: Text {text: "لا توجد عناوين محفوظة. راجع حالة المصادر أعلاه."; color: #d5deed;}
+            for item in root.news-items: Rectangle {background: #151f30; border-radius: 8px;
+                VerticalLayout {padding: 14px; spacing: 8px;
+                    Text {text: item.title; color: #eaf0fb; font-size: 16px; wrap: word-wrap; horizontal-alignment: left;}
+                    Text {text: item.detail; color: #9dabbe; font-size: 12px; wrap: word-wrap; horizontal-alignment: left;}
+                    Button {text: "فتح الخبر في موقع المصدر"; clicked => {root.open-news(item.url);}}
+                }
+            }
+        }}
+        Rectangle { height: 1px; background: #263145; }
+        Text { text: root.feedback; color: #f0c578; wrap: word-wrap; min-height: 36px; }
+        HorizontalLayout {
+            Text { text: "Closing this window keeps Core running."; color: #7f8fa7; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; background: transparent; }
+            Button { text: "نسخة احتياطية"; enabled: !root.busy; clicked => { root.action("backup"); } }
+            Button { text: "خروج كامل"; enabled: !root.busy; clicked => { root.action("shutdown"); } }
+        }
+    }
+}

@@ -1,0 +1,21 @@
+[package]
+name = "braintrade-desktop"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "BrainTrade"
+path = "src/main.rs"
+
+[dependencies]
+braintrade-domain = { path = "../domain" }
+braintrade-runtime = { path = "../runtime" }
+serde_json.workspace = true
+anyhow.workspace = true
+slint = { version = "=1.16.0", default-features = false, features = ["std", "backend-winit", "renderer-software", "compat-1-2"] }
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
+
+[build-dependencies]
+slint-build = "=1.16.0"
+

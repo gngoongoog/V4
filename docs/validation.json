@@ -1,0 +1,29 @@
+{
+  "version": "0.3.0",
+  "delivery": "source preview; Windows package deferred by user",
+  "rust": {
+    "domain_passed": 18,
+    "runtime_passed": 13,
+    "live_network_separate": 1
+  },
+  "python_passed": 16,
+  "real_core_integration": "pass: auth, staleness, shadow lifecycle, history chunk validation, cancellation, late response isolation, full export, identical offline replay, same-data CES experiment, news settings and restart/backup",
+  "public_rss_parse": "pass: Fed monetary, ECB press, ECB stats, 15 items each",
+  "desktop_linux_release": "pass: Rust1.99 Slint1.16",
+  "desktop_render": {
+    "pages": 9,
+    "sizes": [
+      "1120x820",
+      "880x700"
+    ],
+    "images_rendered": 18,
+    "visual_review": "passed; marked synthetic render fixtures; content scrolls at small size"
+  },
+  "windows_v030": "not built or tested",
+  "native_mt5_history": "not tested",
+  "telegram_live_delivery": "not tested; token configured by user later",
+  "tradingview_parity": "not claimed; tick-volume, seed and next-open differences documented",
+  "broker_order_submission": false,
+  "public_rss_worker": "pass: actual core stayed responsive, 44 unique official headlines, cache and disabled setting survived restart",
+  "status": "validated source preview; not a Windows package"
+}

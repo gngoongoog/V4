@@ -1,0 +1,31 @@
+/target/
+/.build-venv/
+/build/
+/dist/
+/release/
+/test-output/
+/.package-cache/
+
+# Python / editor / OS noise
+__pycache__/
+*.pyc
+.pytest_cache/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets and local runtime state
+.env
+.env.*
+!.env.example
+*.key
+*.sealed
+*.pem
+*.p12
+*.pfx
+*.sqlite*
+*.db
+*.log
+secrets/
+/runtime/
