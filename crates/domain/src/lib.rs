@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 pub mod backtest;
+pub mod meta_v2_compare;
 pub mod ces;
 pub mod kte;
 pub mod research;
