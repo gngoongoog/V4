@@ -633,7 +633,11 @@ fn ledger_markers(
     }
     markers
 }
-fn html(r: &Report) -> String {
+fn review_json(value: Value) -> String {
+    // JSON lives inside an HTML raw-text element: prevent a string from closing it.
+    value.to_string().replace('<', "\\u003c").replace('>', "\\u003e").replace('&', "\\u0026")
+}
+fn html(r: &Report, h: &History) -> String {
     use std::fmt::Write;
     let values = &r.equity;
     let min = values
@@ -669,7 +673,7 @@ fn html(r: &Report) -> String {
     }
     let markers = ledger_markers(&r.trades, values);
     let ledger = escape(&ledger_text(&r.trades));
-    format!(
+    let document = format!(
         r##"<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>BrainTrade Backtest</title><style>body{{margin:0;background:#101827;color:#e5edf9;font:16px system-ui,sans-serif}}main{{max-width:1100px;margin:auto;padding:32px}}h1{{color:#76dfc0}}pre{{white-space:pre-wrap;line-height:1.8;background:#1b273a;padding:20px;border-radius:12px}}svg{{width:100%;background:#1b273a;border-radius:12px}}svg circle{{fill:#f3c969;stroke:#101827;stroke-width:1}}table{{width:100%;border-collapse:collapse;font-size:13px}}td,th{{padding:12px;border-bottom:1px solid #344055;text-align:right}}.scroll{{overflow:auto}}small{{color:#aabbd2}}@media print{{body{{background:white;color:black}}pre,svg{{background:#eee}}}}</style><main><h1>BRAINTRADE OS — الاختبار التاريخي</h1><p>{} → {}</p><pre>{}</pre><h2>منحنى حقوق الحساب الافتراضية</h2><svg viewBox="0 0 800 240" role="img" aria-label="Virtual equity curve"><polyline fill="none" stroke="#51cba8" stroke-width="2" points="{}"/>{}</svg><small>أدنى {:.2} — أعلى {:.2} {}. الدوائر تمثل أحداث fills من سجل الصفقة نفسه؛ تفاصيل كل دقيقة في equity.csv.</small><h2>افتراضات وحدود البيانات</h2><pre>{}</pre><p>أول شمعة متوفرة: {}، آخر شمعة: {}. أول/آخر دقيقة اختبار: {} / {}.</p><h2>آخر 200 صفقة</h2><div class="scroll"><table><thead><tr><th>الاتجاه</th><th>الدخول</th><th>دقيقة الخروج</th><th>اللوت</th><th>سعر الدخول</th><th>سعر الخروج</th><th>الصافي</th><th>السبب</th></tr></thead><tbody>{}</tbody></table></div><h2>سجل التنفيذ الجزئي / KTE ledger</h2><pre>{}</pre><small>التصدير الكامل: trades.csv + fills.csv + stop_updates.csv + targets.csv + report.json.</small><p>تجربة تاريخية تقديرية؛ لا أوامر إلى الوسيط ولا ادعاء ربحية مستقبلية.</p></main></html>"##,
         utc(r.options.from),
         utc(r.options.to),
@@ -686,7 +690,10 @@ fn html(r: &Report) -> String {
         utc(r.last_test_bar),
         rows,
         ledger
-    )
+    );
+    let data = review_json(json!({"trades":r.trades,"bars":h.bars,"currency":r.currency,"tick":r.contract.tick_size}));
+    let review = include_str!("trade_review.html").replace("__TRADE_DATA__", &data);
+    document.replace("<h2>آخر 200 صفقة", &format!("{review}<h2>آخر 200 صفقة"))
 }
 fn export(db: &Connection, dir: &Path, id: &str) -> Result<Value> {
     use std::fmt::Write;
@@ -700,7 +707,7 @@ fn export(db: &Connection, dir: &Path, id: &str) -> Result<Value> {
         &serde_json::to_vec_pretty(&r)?,
     )?;
     atomic_write(&staging.join("history.json"), &serde_json::to_vec(&h)?)?;
-    atomic_write(&staging.join("report.html"), html(&r).as_bytes())?;
+    atomic_write(&staging.join("report.html"), html(&r, &h).as_bytes())?;
     let mut trades="signal_bar_utc,entry_time_utc,exit_bar_utc,exit_phase,side,entry,exit,stop,target,lots,commission,net,reason,ambiguous\n".to_string();
     for t in &r.trades {
         writeln!(
@@ -736,7 +743,7 @@ fn export(db: &Connection, dir: &Path, id: &str) -> Result<Value> {
     let dest = root.join(name);
     fs::rename(staging, &dest)?;
     Ok(
-        json!({"path":dest,"note":"افتح report.html؛ JSON وCSV يحفظان نفس سجل الصفقات التفصيلي، بما فيه fills/stops/targets لـ KTE"}),
+        json!({"path":dest,"note":"افتح report.html واختر صفقة لمراجعة الشموع والدخول والأهداف والوقف؛ يعمل التقرير دون إنترنت، ويستخدم نفس سجل JSON وCSV"}),
     )
 }
 
@@ -749,6 +756,11 @@ mod tests {
         assert!(date("2024-02-30").is_err());
         assert!(date("2024-1-01").is_err());
         assert_eq!(escape("<script>&\""), "&lt;script&gt;&amp;&quot;");
+        let hostile = json!({"reason":"</script><img src=x onerror=alert(1)>&\""});
+        let encoded = review_json(hostile.clone());
+        assert!(!encoded.contains('<'));
+        assert!(!encoded.contains('>'));
+        assert_eq!(serde_json::from_str::<Value>(&encoded).unwrap(), hostile);
     }
     #[test]
     fn kte_ledger_drives_text_csv_and_chart_markers() {
