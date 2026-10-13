@@ -1,50 +1,63 @@
 # BrainTrade OS — Build Handoff
 
-Canonical source: `gngoongoog/V4`. Continue on `development`; `main` is the stable branch.
-Read this file, PROJECT_STATE.md, ROADMAP.md and docs/CONTINUITY_PROTOCOL.md first.
+Canonical repository: `gngoongoog/V4`. Stable branch: `main`; ongoing work:
+`development`. Read this file, PROJECT_STATE.md, ROADMAP.md and
+`docs/CONTINUITY_PROTOCOL.md` before editing. Never restore an old ZIP over GitHub.
 
-## Active checkpoint — trade candlestick review (WIP)
+## Last safe code checkpoint
 
-Resumed from development `d9ca5d356d75e042fb1c65b026344e2695f9f7e4`.
-This base already contains KTE partial-fill validation, independent Trend/Regime,
-Structure/Volatility and observational Meta v2. Preserve these newer changes.
-The earlier ZIP and old pending-Windows handoff are stale. GitHub is authoritative.
+Offline per-trade candlestick review is implemented and verified.
+Tested source commit: `7ea999e41a68a0aff264190f4dc6b79de0379a9b`.
+Research CI: https://github.com/gngoongoog/V4/actions/runs/38473139804 — PASS.
+The documentation checkpoint recording this result changes no executable files.
+`main` remains at the earlier observational Meta v2 checkpoint d9ca5d3; report
+review changes are saved on development. No promotion or Windows packaging was
+performed in this increment.
 
-Current change: extend the saved historical HTML report with an offline per-trade
-M1 candlestick chart. It reads the exact saved History and Trade ledger: entries,
-targets, fills, effective stop updates, visible gaps, costs and UTC times.
-Legacy Meta/CES reports receive a display-only single-exit fallback. No strategy,
-Shadow entry decision, broker execution or saved report calculation is changed.
+## What changed
 
-## Changed files
+- crates/runtime/src/trade_review.html: self-contained offline M1 SVG chart,
+  trade selector, signal/entry/target/fill markers, active stop segments, UTC
+  labels, explicit gaps, costs and compact zero-trade state.
+- crates/runtime/src/backtest.rs: embed exact saved History/Trade data in safe
+  JSON, preserve the static ledger/CSVs and previous report calculations.
+- scripts/check_backtest.py and smoke_core.py: a real KTE three-target fixture,
+  five saved results, deterministic JSON/CSV/HTML replay and restart checks.
+- scripts/check_trade_review.cjs: offline browser interactions, legacy fallback,
+  empty state, 1200/880 layouts and synthetic screenshots.
+- .github/workflows/research.yml: Linux-only research validation on development.
+- State, roadmap, backtest and validation docs reconciled with current code.
 
-- crates/runtime/src/trade_review.html: local SVG/DOM chart, selector and ledger.
-- crates/runtime/src/backtest.rs: safe embedded JSON and history-backed export.
-- BUILD_HANDOFF.md: current continuation checkpoint.
+Existing Trend/Regime, Structure/Volatility and Meta v2 remain observational.
+Legacy Meta still drives Shadow entries. No strategy formulas, broker order
+submission, Telegram sending or private user runtime data changed in this task.
 
-## Validation
+## Verified on the tested source
 
-Research CI on `5288368d375a16d834cd2fa57260c0fc3d7cd300` passed:
-https://github.com/gngoongoog/V4/actions/runs/38472670478
-- Rust: domain 33 passed, runtime 14 passed, one explicit network test ignored.
-- Python: 16 passed; core build and real-core smoke passed.
-- Real KTE fixture: three targets, saved fills/stops, deterministic JSON/CSV/HTML replay.
-- Browser: offline interactions, legacy fallback and zero trades at 1200/880 widths.
-- Six synthetic screenshots were produced; KTE/Meta/empty states visually inspected.
+- Rust domain: 33 passed; runtime: 14 passed; zero failed, one explicit network
+  test ignored. Toolchain: rustc 1.99.0 on GitHub Linux.
+- Python: 16 passed. Actual Rust core build and smoke: PASS.
+- KTE fixture: TP1/TP2/TP3, stop ledger, fee/PnL reconciliation and identical
+  offline CSV/JSON/HTML replay. Meta and empty CES reports also exercised.
+- Browser: chart/ledger counts, selection, previous/next, empty and legacy
+  behavior, no remote requests, at 1200x900 and 880x900: PASS.
+- Six synthetic screenshots generated. KTE/Meta and compact empty state visually
+  inspected; chart data and controls are readable.
+- Local Python and JavaScript syntax checks passed. Local Rust was blocked before
+  compilation by a truncated LLVM toolchain file; do not claim a local Rust pass.
+- Native laptop/MT5 history and Telegram delivery: NOT RUN for these additions.
+- Windows packaging: deferred by active user instruction. Last delivered portable
+  remains 0.2.0 Preview; old CI-produced packages are validation artifacts only.
 
-Visual review found unnecessary blank chart space in zero-trade reports. The latest
-small adjustment hides that panel and prevents section heading margin collapse.
-This adjustment still needs its new CI run checked before final validation.
-Local Rust compilation was blocked by a truncated toolchain LLVM file; all Rust
-results above came from GitHub CI, not that failed local installation.
-Windows packaging stays deferred; native laptop MT5/Telegram remain NOT RUN.
+## Next exact code task
 
-## Next exact action
+Implement a separately versioned selectable historical Meta v2 strategy, using
+`docs/META_V2.md` and current `research/regime.rs`. Compare with legacy Meta on
+identical frozen histories and costs. Preserve old algorithm replay, test causal
+prefix stability and risk/gap handling, and persist candidate gates for review.
+Keep live Shadow's decision source unchanged until this evaluation is reviewed.
+The user can perform native laptop and Telegram acceptance later.
 
-Check the research workflow after the empty-state correction. Inspect the refreshed
-KTE and empty-state screenshots. Reconcile state docs and save a final tested
-checkpoint on development. Do not trigger Windows packaging or promote main.
-
-After trade review is complete, the next code task is a selectable historical
-Meta v2 evaluation path (docs/META_V2.md). Keep legacy Meta as Shadow's decision
-source until identical-data comparison exists. Native laptop tests can wait.
+Commit each coherent batch on development and update this handoff with actual
+verification and the next action. Never commit credentials, private databases,
+encoded transport/chunks, `.import`, or ZIP-only source storage.

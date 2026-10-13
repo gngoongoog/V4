@@ -11,7 +11,9 @@ This repository is the canonical memory for BrainTrade OS. If a chat ends, a mod
 5. `docs/CONTINUITY_PROTOCOL.md` — rules that prevent work loss.
 6. Latest Git commit(s).
 
-Current checkpoint: **0.4.0 in progress**. Last validated baseline: **0.3.0**.
+Current checkpoint: **0.4.0 research in progress**. KTE, observational brains and
+the offline trade-review chart are in the current source; consult BUILD_HANDOFF.md
+for exact tested commits. The 0.3.0-only state in old ZIPs is stale.
 Windows packaging is deferred; the last delivered Windows portable remains 0.2.0 Preview.
 
 ## Non-negotiable continuation rule

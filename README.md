@@ -1,25 +1,23 @@
 # BRAINTRADE OS — 0.4.0 Development Checkpoint
 
 Native Rust/Slint desktop with an independent Rust core and read-only MT5 gateway.
-The current repository is an **in-progress 0.4.0 source checkpoint**. The last fully
-validated source baseline is 0.3.0, and the last delivered Windows portable remains
-0.2.0 Preview. Windows packaging is deferred until explicitly requested.
+The 0.4.0 research milestone is in progress on `development`. GitHub is the
+canonical source; BUILD_HANDOFF.md records the current tested checkpoint.
+The last delivered Windows portable remains 0.2.0 Preview. Windows packaging
+is deferred until requested; CI validation artifacts are not native acceptance.
 
 ## Current capabilities
 
-- Native desktop dashboard and independent Rust Core.
-- Read-only MT5 bootstrap/account visibility and completed-bar market data flow.
-- Start / Stop / reconnect / full-exit lifecycle controls.
-- Live Meta analysis and persistent shadow/risk simulation.
-- Historical Meta/CES research lab with asynchronous MT5 history requests.
-- Saved raw history + reports, deterministic offline replay and same-data experiments.
-- CSV/JSON/HTML exports with equity curve.
-- Official Fed/ECB RSS cache and read-only Telegram `/news` + `/backtest` handlers.
-- 0.4.0 work-in-progress KTE port with stateful historical partial exits.
+- Native dashboard, independent Core and read-only MT5 bootstrap.
+- Start / Stop / reconnect / full-exit controls; persistent Shadow and risk.
+- Historical Meta/CES/KTE lab with saved data, offline replay and experiments.
+- KTE three partial targets, delayed break-even/trailing and detailed ledgers.
+- Local HTML candlestick review for each trade, equity curve and CSV/JSON.
+- Observational Trend/Regime, Structure/Volatility and Meta v2 candidate.
+- Fed/ECB RSS cache and Telegram read-only queries.
 
-KTE is **not yet declared fully validated**. Final regression, chart/export review and
-release-artifact reconciliation remain in progress. No broker orders are sent by this
-checkpoint.
+Legacy Meta remains the Shadow decision source. Broker orders are not submitted.
+Native MT5 acceptance and live Telegram delivery remain to be tested later.
 
 ## Resume here
 
@@ -27,7 +25,7 @@ checkpoint.
 - `ROADMAP.md` — ordered next work.
 - `CHANGELOG.md` — checkpoint history.
 - `docs/ARCHITECTURE.md` — broader design/roadmap, not a completed-feature list.
-- `docs/BACKTEST.md` — historical Meta/CES assumptions.
+- `docs/BACKTEST.md` — historical Meta/CES/KTE assumptions and offline trade review.
 - `docs/NEWS.md` — news sources and freshness behavior.
 
 ## Developer build

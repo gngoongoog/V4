@@ -19,7 +19,7 @@ The core worker runs independently of the UI. Reports and exact input bars are s
 - `targets.csv` — the saved target prices for each trade;
 - `equity.csv` — minute equity/balance points;
 - `history.json` — exact historical input bars;
-- `report.html` — local self-contained report using the same ledger, including fill markers on the equity SVG and a readable KTE ledger section.
+- `report.html` — local self-contained report using the same ledger, including fill markers on the equity SVG, a readable KTE ledger section, and an offline per-trade M1 candlestick review.
 
 Offline replay must reproduce the detailed ledger exports byte-for-byte when strategy and inputs are unchanged. CSV fields that may contain commas or quotes are quoted. The desktop saved-report view also prints the same fills, stop updates and target ledger instead of reconstructing a second simplified KTE result.
 
@@ -55,3 +55,25 @@ SL distance = 0.5 * mean TR3, rounded outward to a tick; TP distance = 1.5 * mea
 Tests cover a hand-constructed CES pressure signal against independent numeric reference values, future-data independence, threshold boundaries, no-volume behavior, actual next-open entry, one commission, smart exit and eight-minute exit. These are software checks on synthetic data, not evidence of profitability.
 
 Official MT5 reference: https://www.mql5.com/en/docs/python_metatrader5/mt5copyratesrange_py
+
+## Offline candlestick review
+
+Use “فتح التقرير ومخطط الصفقات” in the historical lab and select a saved trade.
+The exported HTML embeds the same saved Trade ledger and History; it requests no
+remote charts, JavaScript, price feeds or fonts. It shows the signal candle,
+entry, target levels, numbered fills, fees and each stop at its effective time.
+Meta/CES reports without partial ledgers display their saved summary exit as one
+fill; this display fallback does not mutate the saved report or CSV files.
+
+Candles are BID OHLC. SELL exits use the model's estimated ASK, so fill markers
+can lie outside a BID candle. Horizontal spacing is by available bar index, with
+missing-time boundaries marked explicitly; the chart does not manufacture bars
+or an intraminute price path. Nearby candles before and after the position are
+review context, not information used by the original strategy entry. KTE's exit
+summary is the volume-weighted fill price. All chart labels and ledger times are
+UTC. The full static ledger and CSV/JSON remain readable without JavaScript.
+
+Synthetic review verification: run the real-core smoke harness first, then
+`scripts/check_trade_review.cjs` with Playwright available. The Linux-only
+`research.yml` workflow runs these checks on development pushes. It does not
+build or publish a Windows package.

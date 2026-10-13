@@ -1,50 +1,41 @@
 # BrainTrade OS — Roadmap
 
-This file separates near-term work from long-term ideas. `docs/ARCHITECTURE.md` is the broader design document and must not be treated as a completed-feature list.
+GitHub `gngoongoog/V4` is canonical. The broader ARCHITECTURE.md is a design,
+not a completed feature inventory. Read BUILD_HANDOFF.md before editing.
 
-## P0 — finish current 0.4.0 checkpoint
+## Current source checkpoint
 
-Completed on `development`:
+- Historical Meta/CES/KTE engines, partial fills and detailed saved ledgers exist.
+- Trend/Regime, Structure/Volatility and Meta v2 candidate are implemented as
+  observational outputs. Legacy Meta still controls Shadow entries.
+- Offline per-trade candlestick review is implemented; current validation is
+  recorded in BUILD_HANDOFF.md and docs/validation.json.
+- Windows package delivery remains deferred. Last delivered portable: 0.2.0.
 
-1. KTE unit/regression coverage for partial sizing and trade management.
-2. Stateful TP1/TP2/TP3, break-even, trailing, time-limit, ambiguity and cooldown validation.
-3. KTE report/chart/export consistency from the same saved `Trade` ledger.
-4. Detailed fills / stop-updates / targets CSV exports plus deterministic offline replay checks.
-5. Fresh Linux Rust + Python + real-core integration CI.
+## Next code work — evaluate Meta v2
 
-Remaining before promotion to `main`:
+1. Add a separately versioned selectable historical Meta v2 path.
+2. Compare it with legacy Meta on identical frozen histories and costs.
+3. Test causal prefix stability, missing/stale data, gaps and risk behavior.
+4. Persist candidate gates/decisions for review; preserve old report replay.
+5. Keep live Shadow on legacy Meta until the evaluation is reviewed.
 
-1. Wait for the current Windows CI packaging job to complete; fix any real failure if present.
-2. Reconcile final validation/release documents with that Windows result.
-3. Promote the tested resumable 0.4.0 checkpoint to `main` only after the latest branch head is green.
+## Laptop acceptance (when available)
 
-## P1 — broker/laptop validation
+- Native Windows UI and MT5 historical retrieval against the user's broker.
+- All pages and supported analysis timeframes.
+- Telegram delivery after credentials are configured locally.
 
-1. Validate native Windows build on the user's laptop.
-2. Verify MT5 historical retrieval against the user's broker/account.
-3. Confirm UI behavior on all pages and supported analysis timeframes.
-4. Test Telegram delivery only after credentials are supplied locally; never commit tokens.
+## Later research
 
-## P2 — analysis expansion
+- Gann, actual feed-supported order flow/DOM, volume profile.
+- Historical news/event context and replay.
+- Walk-forward evaluation, model/experiment registry and trained ML/ONNX.
+- Portfolio/correlation risk and full restore/recovery workflow.
 
-- Gann research brain.
-- Order-flow/DOM acquisition only when the broker/feed exposes real market depth/trade data.
-- Volume-profile research module.
-- Trend/regime brain and stronger Meta decision layer.
-- Historical news/event replay and macro context.
+## Execution, after explicit validation
 
-## P3 — learning/research infrastructure
+- Broker order state machine, idempotent intents, reconciliation and protections.
+- Partial execution/reconnect recovery fixtures and account-mode handling.
 
-- Walk-forward evaluation with leakage controls.
-- Model registry and reproducible experiment metadata.
-- Trained ML/ONNX candidates only after robust baselines and validation.
-- Portfolio/correlation risk research.
-
-## P4 — execution, only after explicit validation
-
-- Broker execution state machine.
-- Idempotent order intents and reconciliation.
-- Hard risk protections and account-mode handling.
-- Partial-fill and reconnect recovery fixtures.
-
-No roadmap item is considered implemented until code, tests and `PROJECT_STATE.md` agree.
+A module is complete only when code, verification and state documentation agree.

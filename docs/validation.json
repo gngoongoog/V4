@@ -1,20 +1,19 @@
 {
-  "version": "0.4.0-development",
-  "delivery": "source checkpoint on development; no new end-user Windows release declared",
+  "version": "0.4.0-research-source",
+  "delivery": "development source; Windows package delivery deferred",
   "repository": "gngoongoog/V4",
   "branch": "development",
-  "validation_boundary": "current development source; Windows CI packaging still pending at this snapshot",
+  "validation_boundary": "Tested runtime/source commit recorded in BUILD_HANDOFF.md; documentation-only updates do not change executable code.",
   "rust": {
-    "domain_passed": 25,
-    "domain_failed": 0,
+    "domain_passed": 33,
     "runtime_passed": 14,
-    "runtime_failed": 0,
+    "failed": 0,
     "runtime_ignored_network": 1,
-    "toolchain": "rustc 1.99.0"
+    "toolchain": "rustc 1.99.0 on GitHub Linux"
   },
   "python_passed": 16,
   "linux_ci": "pass: Rust unit tests, runtime build, Python tests and real-core smoke harness",
-  "real_core_integration": "pass: auth, staleness, shadow lifecycle, history chunk validation, cancellation, late response isolation, full export, deterministic offline replay, detailed ledger export replay equality, CES experiment, news settings and restart/backup",
+  "real_core_integration": "PASS: existing lifecycle/auth/shadow/risk/history coverage plus actual KTE three-target run, five saved results, detailed CSV/JSON/HTML offline replay and restart",
   "kte": {
     "signal_and_stateful_history_path": "present",
     "partial_split": "pass: deterministic 40/30/remainder and minimum-volume rejection",
@@ -25,7 +24,7 @@
     "time_limits": "pass: 45 minutes before TP1, 90 minutes after TP1",
     "cooldown": "pass: exactly three following bars",
     "ledger_consistency": "pass on Linux CI: saved Trade ledger drives report text, fills/stops/targets CSV and HTML fill markers",
-    "offline_replay_detailed_exports": "pass on real-core smoke: detailed ledger CSV files reproduced byte-for-byte"
+    "offline_replay_detailed_exports": "PASS: nonempty KTE three-fill fixture reproduces detailed CSV/JSON and report.html byte-for-byte"
   },
   "exports": [
     "report.json",
@@ -38,11 +37,37 @@
     "report.html",
     "README.txt"
   ],
-  "windows_ci": "pending at this snapshot; prior Bad file descriptor fsync failure was fixed by opening the temporary ZIP read/write before fsync",
+  "windows_ci": "Historical Meta v2 candidate adf94f8 succeeded; no Windows build triggered for this report increment",
   "native_mt5_history": "not tested against the user's broker/account",
   "telegram_live_delivery": "not tested; credentials remain local and must never be committed",
   "tradingview_parity": "not claimed; tick-volume, seed, OHLC ambiguity and next-open differences are documented",
   "broker_order_submission": false,
   "profitability_claim": false,
-  "status": "0.4.0 KTE source checkpoint validated on Linux CI; wait for current Windows CI before promotion to main"
+  "status": "PASS: offline trade review source on development; native MT5/Telegram acceptance pending and Windows packaging deferred",
+  "tested_commit": "7ea999e41a68a0aff264190f4dc6b79de0379a9b",
+  "research_ci_url": "https://github.com/gngoongoog/V4/actions/runs/38473139804",
+  "browser": {
+    "status": "PASS",
+    "sizes": [
+      "1200x900",
+      "880x900"
+    ],
+    "cases": [
+      "KTE three fills with targets and stop updates",
+      "legacy Meta single-exit fallback and selection",
+      "empty report"
+    ],
+    "remote_requests": 0,
+    "images_rendered": 6
+  },
+  "visual_review": "PASS: synthetic KTE/Meta chart and compact empty-state images inspected; six images generated",
+  "local_rust": "BLOCKED before compilation by truncated LLVM toolchain file; not counted as a passed local test",
+  "observational_brains": [
+    "Trend v1",
+    "Regime v1",
+    "Structure v1",
+    "Volatility v1",
+    "Meta v2 candidate"
+  ],
+  "shadow_decision_source": "legacy Meta"
 }

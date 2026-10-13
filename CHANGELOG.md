@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-10-13 — offline candlestick review on development
+
+- Added per-trade M1 candles from saved history, entry/target/fill markers and
+  effective stop segments to the self-contained HTML export.
+- Added trade selection, explicit UTC times, gap boundaries, costs, partial-fill
+  detail, legacy Meta/CES fallback and a compact no-trades state.
+- Added a real-core three-target KTE fixture, identical offline HTML/CSV/JSON
+  replay and browser interaction checks at 1200/880 widths.
+- Added Linux-only research validation for development without Windows packaging.
+- Reconciled continuation docs with the already-merged observational Trend/Regime,
+  Structure/Volatility and Meta v2 checkpoints. Legacy Meta remains Shadow's source.
+- Prior successful research CI: 33 domain + 14 runtime tests, 16 Python tests,
+  core smoke and browser checks; exact final tested SHA is in BUILD_HANDOFF.md.
+
 ## 0.4.0 — in progress
 
 - Added KTE signal module from the supplied defaults.
@@ -12,7 +26,7 @@
 - Added `fills.csv`, `stop_updates.csv` and `targets.csv` while preserving `trades.csv` as the compatible trade-summary export.
 - Added HTML KTE ledger output and fill markers on the equity SVG from the same saved fill records.
 - Added real-core integration checks that detailed ledger exports exist and unchanged offline replay reproduces them byte-for-byte.
-- Fixed Windows portable ZIP durability step by opening the temporary archive read/write before `fsync`; final Windows CI confirmation is still pending at this checkpoint.
+- Fixed Windows portable ZIP durability step by opening the temporary archive read/write before `fsync`; subsequent historical Windows CI succeeded on the Meta v2 candidate (adf94f8). No native laptop acceptance is implied.
 - Fresh Linux CI on the current 0.4.0 path: 25 domain Rust tests passed, 14 runtime Rust tests passed with one live-network test ignored, 16 Python tests passed, core build and real-core smoke passed.
 - Durable working source remains `gngoongoog/V4` as normal files/folders; `.import`, encoded staging and chunk transport are not part of the working tree.
 - `Cargo.lock` is generated normally by Cargo.
