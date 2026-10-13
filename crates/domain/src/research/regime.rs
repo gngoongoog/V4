@@ -203,6 +203,47 @@ impl VolatilityBrain {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct MetaBrainV2 {
+    pub version: String,
+    pub action: String,
+    pub direction: i8,
+    pub evidence: f64,
+    pub eligible: bool,
+    pub momentum_atr: f64,
+    pub gates: Vec<String>,
+    pub reason: String,
+}
+impl Default for MetaBrainV2 {
+    fn default() -> Self {
+        Self {
+            version: "meta-v2-candidate".into(),
+            action: "WAIT".into(),
+            direction: 0,
+            evidence: 0.0,
+            eligible: false,
+            momentum_atr: 0.0,
+            gates: vec!["Candidate unavailable".into()],
+            reason: "Meta v2 candidate is observational only".into(),
+        }
+    }
+}
+impl MetaBrainV2 {
+    pub fn text(&self) -> String {
+        format!(
+            "{}: {} | direction {} | evidence {:.2} | eligible {} | momentum {:.2} ATR\n{}\nGates: {}",
+            self.version,
+            self.action,
+            self.direction,
+            self.evidence,
+            self.eligible,
+            self.momentum_atr,
+            self.reason,
+            if self.gates.is_empty() { "none".into() } else { self.gates.join(" | ") }
+        )
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RegimeBrain {
     pub version: String,
     pub label: String,
@@ -217,6 +258,8 @@ pub struct RegimeBrain {
     pub structure_brain: StructureBrain,
     #[serde(default)]
     pub volatility_brain: VolatilityBrain,
+    #[serde(default)]
+    pub meta_v2: MetaBrainV2,
 }
 impl Default for RegimeBrain {
     fn default() -> Self {
@@ -232,13 +275,14 @@ impl Default for RegimeBrain {
             reason: "Regime Brain unavailable".into(),
             structure_brain: StructureBrain::default(),
             volatility_brain: VolatilityBrain::default(),
+            meta_v2: MetaBrainV2::default(),
         }
     }
 }
 impl RegimeBrain {
     pub fn text(&self) -> String {
         format!(
-            "{}: {} | trend evidence {:.2} | ER {:.2} | volatility {} ({:.2}x) | trend-eligible {}\n{}\n\nSTRUCTURE BRAIN\n{}\n\nVOLATILITY BRAIN\n{}",
+            "{}: {} | trend evidence {:.2} | ER {:.2} | volatility {} ({:.2}x) | trend-eligible {}\n{}\n\nSTRUCTURE BRAIN\n{}\n\nVOLATILITY BRAIN\n{}\n\nMETA BRAIN V2 CANDIDATE\n{}",
             self.version,
             self.label,
             self.trend_evidence,
@@ -248,7 +292,8 @@ impl RegimeBrain {
             self.tradable_trend,
             self.reason,
             self.structure_brain.text(),
-            self.volatility_brain.text()
+            self.volatility_brain.text(),
+            self.meta_v2.text()
         )
     }
 }
@@ -487,6 +532,78 @@ fn assess_volatility(m1: &[Candle]) -> VolatilityBrain {
 fn volatility_ratio(m1: &[Candle]) -> f64 {
     assess_volatility(m1).ratio
 }
+fn assess_meta_v2(
+    trend: &TrendBrain,
+    structure: &StructureBrain,
+    volatility: &VolatilityBrain,
+    tradable_trend: bool,
+    m1: &[Candle],
+) -> MetaBrainV2 {
+    let mut gates = Vec::new();
+    let direction = trend.direction;
+    let atr = atr_last(m1, 14).unwrap_or(0.0);
+    let momentum_atr = if m1.len() >= 6 && atr > 0.0 {
+        (m1[m1.len() - 1].close - m1[m1.len() - 6].close) / atr
+    } else {
+        0.0
+    };
+    let momentum_direction = sign(momentum_atr, 0.50);
+    let momentum_evidence = (momentum_atr.abs() / 2.0).clamp(0.0, 1.0);
+
+    if !trend.aligned || direction == 0 {
+        gates.push("Trend Brain is not aligned".into());
+    }
+    if !tradable_trend {
+        gates.push("Regime is not trend-eligible".into());
+    }
+    if volatility.shock {
+        gates.push("Volatility shock veto".into());
+    }
+    if structure.direction != 0 && direction != 0 && structure.direction != direction {
+        gates.push("Structure breakout opposes trend".into());
+    }
+    if direction != 0 && momentum_direction == -direction {
+        gates.push("Momentum opposes trend".into());
+    }
+    let structure_confirms = direction != 0 && structure.direction == direction;
+    let momentum_confirms = direction != 0 && momentum_direction == direction;
+    if direction != 0 && !structure_confirms && !momentum_confirms {
+        gates.push("No independent structure or momentum confirmation".into());
+    }
+    if volatility.state == "COMPRESSED" && !structure_confirms {
+        gates.push("Compressed volatility requires structure breakout confirmation".into());
+    }
+
+    // Regime efficiency is a gate, not another score component, because it overlaps Trend evidence.
+    // This avoids pretending correlated features are independent confirmations.
+    let evidence = (0.60 * trend.evidence
+        + if structure_confirms { 0.25 * structure.evidence } else { 0.0 }
+        + if momentum_confirms { 0.15 * momentum_evidence } else { 0.0 })
+        .clamp(0.0, 1.0);
+    if direction != 0 && evidence < 0.55 {
+        gates.push("Combined independent evidence below 0.55".into());
+    }
+    let eligible = gates.is_empty() && direction != 0;
+    let action = if eligible {
+        if direction == 1 { "BUY" } else { "SELL" }
+    } else {
+        "WAIT"
+    };
+    MetaBrainV2 {
+        version: "meta-v2-candidate".into(),
+        action: action.into(),
+        direction: if eligible { direction } else { 0 },
+        evidence,
+        eligible,
+        momentum_atr,
+        reason: if eligible {
+            "Trend and regime eligibility agree with independent structure or momentum confirmation; candidate only, not execution authority".into()
+        } else {
+            "Candidate abstains until all deterministic gates pass; legacy Meta remains execution source for Shadow".into()
+        },
+        gates,
+    }
+}
 
 /// Uses only the supplied completed bars. This module does not inspect quotes or future bars.
 pub(super) fn assess(m1: &[Candle], m5: &[Candle], m15: &[Candle]) -> (TrendBrain, RegimeBrain) {
@@ -554,6 +671,13 @@ pub(super) fn assess(m1: &[Candle], m5: &[Candle], m15: &[Candle]) -> (TrendBrai
             "Directional structure is mixed or not strong enough for a trend-regime verdict",
         )
     };
+    let meta_v2 = assess_meta_v2(
+        &trend,
+        &structure_brain,
+        &volatility_brain,
+        tradable_trend,
+        m1,
+    );
     let regime = RegimeBrain {
         version: "regime-v1".into(),
         label: format!("{label} / {volatility}"),
@@ -566,6 +690,7 @@ pub(super) fn assess(m1: &[Candle], m5: &[Candle], m15: &[Candle]) -> (TrendBrai
         reason: reason.into(),
         structure_brain,
         volatility_brain,
+        meta_v2,
     };
     (trend, regime)
 }
@@ -601,6 +726,8 @@ mod tests {
         assert_eq!(regime.direction, 1);
         assert!(regime.label.starts_with("TREND_UP"));
         assert!(regime.tradable_trend);
+        assert_eq!(regime.meta_v2.action, "BUY");
+        assert!(regime.meta_v2.eligible);
 
         let down = series(60, -0.30, 0.60);
         let down5 = series(300, -0.30, 0.60);
@@ -608,6 +735,7 @@ mod tests {
         let (trend, regime) = assess(&down, &down5, &down15);
         assert_eq!(trend.direction, -1);
         assert!(regime.label.starts_with("TREND_DOWN"));
+        assert_eq!(regime.meta_v2.action, "SELL");
     }
 
     #[test]
@@ -620,6 +748,7 @@ mod tests {
         assert!(!trend.aligned);
         assert!(regime.label.starts_with("TRANSITION"));
         assert!(!regime.tradable_trend);
+        assert_eq!(regime.meta_v2.action, "WAIT");
     }
 
     #[test]
@@ -629,6 +758,7 @@ mod tests {
         let flat15 = series(900, 0.0, 0.60);
         let (_, regime) = assess(&flat, &flat5, &flat15);
         assert!(regime.label.starts_with("RANGE"));
+        assert_eq!(regime.meta_v2.action, "WAIT");
 
         let mut expanding = series(60, 0.30, 0.40);
         for candle in expanding.iter_mut().rev().take(15) {
@@ -671,21 +801,34 @@ mod tests {
     }
 
     #[test]
-    fn volatility_shock_is_observational() {
-        let mut m1 = series(60, 0.0, 0.40);
+    fn volatility_shock_is_observational_and_vetoes_meta_candidate() {
+        let mut m1 = series(60, 0.30, 0.40);
         let n = m1.len();
         let close = m1[n - 1].close;
         m1[n - 1].high = close + 5.0;
         m1[n - 1].low = close - 5.0;
         let (_, regime) = assess(
             &m1,
-            &series(300, 0.0, 0.40),
-            &series(900, 0.0, 0.40),
+            &series(300, 0.30, 0.40),
+            &series(900, 0.30, 0.40),
         );
         assert_eq!(regime.volatility_brain.version, "volatility-v1");
         assert!(regime.volatility_brain.shock);
         assert!(regime.volatility_brain.shock_ratio >= 2.5);
+        assert_eq!(regime.meta_v2.action, "WAIT");
+        assert!(regime.meta_v2.gates.iter().any(|gate| gate == "Volatility shock veto"));
         assert!(regime.text().contains("STRUCTURE BRAIN"));
         assert!(regime.text().contains("VOLATILITY BRAIN"));
+        assert!(regime.text().contains("META BRAIN V2 CANDIDATE"));
+    }
+
+    #[test]
+    fn meta_candidate_never_counts_regime_efficiency_as_independent_vote() {
+        let m1 = series(60, 0.30, 0.60);
+        let m5 = series(300, 0.30, 0.60);
+        let m15 = series(900, 0.30, 0.60);
+        let (trend, regime) = assess(&m1, &m5, &m15);
+        assert!(regime.meta_v2.evidence <= trend.evidence * 0.60 + 0.40 + 1e-12);
+        assert!(regime.meta_v2.reason.contains("candidate only"));
     }
 }
