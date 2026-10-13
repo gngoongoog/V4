@@ -58,7 +58,17 @@ def check(api, snapshot):
     trades=list(csv.DictReader((folder/'trades.csv').open()))
     assert len(trades)==report['metrics']['trades']
     assert abs(sum(float(t['net']) for t in trades)-report['metrics']['net'])<1e-6
-    assert '<svg' in (folder/'report.html').read_text()
+    detailed={
+        'fills.csv':'trade_index,fill_index,side,entry_time_utc,fill_time_utc,phase,price,lots,commission,net,reason,ambiguous',
+        'stop_updates.csv':'trade_index,update_index,side,entry_time_utc,effective_time_utc,price,reason',
+        'targets.csv':'trade_index,target_index,side,entry_time_utc,price',
+    }
+    for name,header in detailed.items():
+        path=folder/name
+        assert path.is_file(),f'Missing detailed ledger export: {name}'
+        assert path.read_text().splitlines()[0]==header
+    html=(folder/'report.html').read_text()
+    assert '<svg' in html and 'fills.csv' in html and 'stop_updates.csv' in html and 'targets.csv' in html
     assert len(json.loads((folder/'history.json').read_text())['bars'])==9*1440
     from mt5_gateway import empty_snapshot
     api('/v1/gateway/snapshot',empty_snapshot('OFFLINE FIXTURE'))
@@ -66,6 +76,8 @@ def check(api, snapshot):
     second_id=completed();assert second_id!=first_id
     second_folder=Path(api('/v1/backtest/export',dict(id=second_id))['path'])
     assert json.loads((second_folder/'report.json').read_text())==report, 'Offline replay must be deterministic'
+    for name in detailed:
+        assert (second_folder/name).read_bytes()==(folder/name).read_bytes(),f'Offline replay ledger export differs: {name}'
     assert len(api('/v1/backtest/runs')['runs'])==2
     rejected('/v1/backtest/experiment',dict(id=first_id,strategy='not_implemented'))
     api('/v1/backtest/experiment',dict(id=first_id,strategy='ces_v1'))
