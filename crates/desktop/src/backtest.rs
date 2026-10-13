@@ -1,6 +1,7 @@
 use super::*;
 use anyhow::Context;
 use slint::{Model, ModelRc, SharedString, VecModel};
+mod meta_compare;
 
 fn strategy(index: i32) -> &'static str { match index { 1 => "ces_v1", 2 => "kte_v1", _ => "meta_v1" } }
 
@@ -74,7 +75,7 @@ pub fn setup(ui: &Dashboard) {
             let Ok(spread_floor)=ui.get_bt_spread().trim().parse::<f64>() else {ui.set_feedback("أدخل السبريد بوحدة السعر، مثال 0.20 للذهب".into());return;};
             if !initial_equity.is_finite() || !spread_floor.is_finite(){ui.set_feedback("أدخل أرقاماً محدودة".into());return;}
             json!({"strategy":strategy(ui.get_bt_strategy()),"from_date":ui.get_bt_from().to_string(),"to_date":ui.get_bt_to().to_string(),"initial_equity":initial_equity,"spread_floor":spread_floor})
-        } else if action=="load" || action=="replay" || action=="experiment" {
+        } else if action=="load" || action=="replay" || action=="experiment" || action=="compare" {
             let index=ui.get_bt_selected();let id=if index>=0 {ui.get_bt_ids().row_data(index as usize)}else{None};
             let Some(id)=id else{ui.set_feedback("اختر نتيجة محفوظة أولاً".into());return;};if action=="experiment"{json!({"id":id.to_string(),"strategy":strategy(ui.get_bt_strategy())})}else{json!({"id":id.to_string()})}
         } else if action=="export" {
@@ -131,6 +132,15 @@ pub fn setup(ui: &Dashboard) {
                         "refresh" => {
                             runs(c, &weak)?;
                             Ok("تم تحديث قائمة الاختبارات".into())
+                        }
+                        "compare" => {
+                            let id = request.body["id"].as_str().context("Missing selection")?;
+                            let text = meta_compare::run(c, id)?;
+                            let display = text.clone();
+                            let _ = weak.upgrade_in_event_loop(move |ui| {
+                                ui.set_bt_report(display.into());
+                            });
+                            Ok("اكتملت مقارنة Meta v1 / Meta v2 وحُفظت ملفاتها داخل مجلد التصدير".into())
                         }
                         action => {
                             let v = c.post(&format!("/v1/backtest/{action}"), request.body)?;
