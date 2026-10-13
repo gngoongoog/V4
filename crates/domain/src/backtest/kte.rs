@@ -6,6 +6,9 @@ fn split(lots:f64,spec:&Contract)->Option<[f64;3]> {
     let parts=[a*spec.volume_step,b*spec.volume_step,(units-a-b)*spec.volume_step];
     parts.iter().all(|p|*p+1e-9>=spec.volume_min && *p>0.0).then_some(parts)
 }
+fn cooldown_active(index:usize,last_exit:Option<usize>)->bool {
+    last_exit.is_some_and(|exit| index.saturating_sub(1)<exit.saturating_add(3))
+}
 struct Managed {
     side:i8,entry:f64,initial_stop:f64,stop:f64,targets:[f64;3],parts:[f64;3],lots:f64,fee_per_lot:f64,
     entry_time:u64,signal_bar:u64,tp1:bool,tp2:bool,fills:Vec<Fill>,stops:Vec<StopUpdate>,
@@ -91,7 +94,7 @@ pub(super) fn run(history:&History,options:&Options,cancel:&AtomicBool,progress:
         if position.is_some(){ledger.skip("صفقة مفتوحة عند الافتتاح");}
         else if gap {ledger.skip("فجوة قبل الشمعة");}
         else if ledger.daily_locked || ledger.dd_locked || ledger.balance<=0.0 {ledger.skip("حد خسارة أو تراجع");}
-        else if last_exit.is_some_and(|exit|i-1<exit+3) {ledger.skip("تهدئة KTE بعد الإغلاق الكامل");}
+        else if cooldown_active(i,last_exit) {ledger.skip("تهدئة KTE بعد الإغلاق الكامل");}
         else if let Some(f)=frames[i-1].as_ref().filter(|f|f.ready) {
             if let Some(s)=f.signal.as_ref().filter(|s|Some(s.impulse)!=consumed) {
                 // Eligible raw signal consumes impulse even if risk/spread vetoes entry.
@@ -112,4 +115,93 @@ pub(super) fn run(history:&History,options:&Options,cancel:&AtomicBool,progress:
         equity.push(EquityPoint{time:c.time+60,equity:marked,balance:ledger.balance});
     }
     finish(history,options,ledger,equity,bars[first].time,bars[last].time,indexes.len(),gaps,progress)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const BASE:u64=1_728_000_000;
+
+    fn spec()->Contract {
+        Contract{point:1.0,tick_size:1.0,tick_loss:1.0,tick_profit:1.0,volume_min:0.1,volume_step:0.1,volume_max:10.0}
+    }
+    fn risk()->RiskConfig {
+        RiskConfig{risk_percent:1.0,daily_loss_percent:10.0,max_drawdown_percent:30.0,max_spread_atr:1.0,max_lots:10.0,commission_per_lot:0.0,slippage_ticks:0.0}
+    }
+    fn ledger()->Ledger {
+        Ledger{balance:10_000.0,peak:10_000.0,day:0,day_start:10_000.0,daily_locked:false,dd_locked:false,metrics:Metrics::default(),trades:vec![]}
+    }
+    fn managed()->Managed {
+        Managed{side:1,entry:100.0,initial_stop:90.0,stop:90.0,targets:[110.0,120.0,130.0],parts:[0.4,0.3,0.3],lots:1.0,fee_per_lot:0.0,
+            entry_time:BASE,signal_bar:BASE-60,tp1:false,tp2:false,fills:vec![],stops:vec![StopUpdate{effective_time:BASE,price:90.0,reason:"initial".into()}]}
+    }
+    fn candle(minute:u64,open:f64,high:f64,low:f64,close:f64)->Candle {
+        Candle{time:BASE+minute*60,open,high,low,close,tick_volume:100}
+    }
+
+    #[test]
+    fn split_is_deterministic_and_rejects_too_small_positions() {
+        let s=spec();
+        let p=split(1.0,&s).unwrap();
+        assert!((p[0]-0.4).abs()<1e-12 && (p[1]-0.3).abs()<1e-12 && (p[2]-0.3).abs()<1e-12);
+        assert!(split(0.2,&s).is_none());
+    }
+
+    #[test]
+    fn tp1_moves_to_breakeven_tp2_enables_trailing_then_tp3_closes() {
+        let s=spec();let r=risk();let mut l=ledger();let mut p=managed();
+        let c1=candle(1,105.0,112.0,95.0,111.0);
+        p.manage(&c1,0.0,false,&mut l,&s,&r);
+        assert_eq!(p.fills.len(),1);assert_eq!(p.fills[0].reason,"tp1");assert!(p.tp1 && !p.tp2);
+        assert!((p.remaining()-0.6).abs()<1e-12);
+        p.update_stop(&c1,5.0,&s);
+        assert_eq!(p.stop,100.0);assert_eq!(p.stops.last().unwrap().reason,"breakeven");assert_eq!(p.stops.last().unwrap().effective_time,c1.time+60);
+
+        let c2=candle(2,115.0,122.0,105.0,121.0);
+        p.manage(&c2,0.0,false,&mut l,&s,&r);
+        assert_eq!(p.fills.len(),2);assert_eq!(p.fills[1].reason,"tp2");assert!(p.tp2);
+        assert!((p.remaining()-0.3).abs()<1e-12);
+        p.update_stop(&c2,5.0,&s);
+        assert_eq!(p.stop,116.0);assert_eq!(p.stops.last().unwrap().reason,"atr_trail");assert_eq!(p.stops.last().unwrap().effective_time,c2.time+60);
+
+        let c3=candle(3,117.0,132.0,116.5,130.0);
+        p.manage(&c3,0.0,false,&mut l,&s,&r);
+        assert_eq!(p.fills.len(),3);assert_eq!(p.fills[2].reason,"tp3");assert!(p.remaining().abs()<1e-12);
+        let trade=p.finish();
+        assert_eq!(trade.fills.len(),3);assert_eq!(trade.stop_updates.len(),3);assert_eq!(trade.targets,[110.0,120.0,130.0]);
+        assert!((trade.net-19.0).abs()<1e-12);assert_eq!(trade.reason,"tp3");assert!(!trade.ambiguous);
+    }
+
+    #[test]
+    fn range_stop_has_priority_over_target_and_marks_ambiguity() {
+        let s=spec();let r=risk();let mut l=ledger();let mut p=managed();
+        let c=candle(1,100.0,112.0,89.0,100.0);
+        p.manage(&c,0.0,false,&mut l,&s,&r);
+        assert!(p.remaining().abs()<1e-12);assert_eq!(p.fills.len(),1);
+        assert_eq!(p.fills[0].reason,"stop");assert_eq!(p.fills[0].price,90.0);assert!(p.fills[0].ambiguous);
+        let trade=p.finish();assert!(trade.ambiguous);assert!((trade.net+10.0).abs()<1e-12);
+    }
+
+    #[test]
+    fn time_limit_extends_from_45_to_90_minutes_after_tp1() {
+        let s=spec();let r=risk();
+        let mut l=ledger();let mut early=managed();
+        early.manage(&candle(45,100.0,105.0,95.0,100.0),0.0,false,&mut l,&s,&r);
+        assert_eq!(early.fills.last().unwrap().reason,"time_limit");assert!(early.remaining().abs()<1e-12);
+
+        let mut l=ledger();let mut protected=managed();protected.parts[0]=0.0;protected.tp1=true;
+        protected.manage(&candle(45,105.0,109.0,101.0,105.0),0.0,false,&mut l,&s,&r);
+        assert!(protected.remaining()>0.0 && protected.fills.is_empty());
+        protected.manage(&candle(90,105.0,109.0,101.0,105.0),0.0,false,&mut l,&s,&r);
+        assert_eq!(protected.fills.last().unwrap().reason,"time_limit");assert!(protected.remaining().abs()<1e-12);
+    }
+
+    #[test]
+    fn cooldown_blocks_exactly_three_following_bars() {
+        assert!(cooldown_active(11,Some(10)));
+        assert!(cooldown_active(12,Some(10)));
+        assert!(cooldown_active(13,Some(10)));
+        assert!(!cooldown_active(14,Some(10)));
+        assert!(!cooldown_active(14,None));
+    }
 }
