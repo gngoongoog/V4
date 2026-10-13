@@ -216,7 +216,7 @@ export component Dashboard inherits Window {
             spacing: 12px;
             Text {text: "استراتيجية الاختبار الجديد / التجربة على بيانات محفوظة"; color: #d5deed;}
             ComboBox {model: ["Meta v1 — اتجاه متعدد الفريمات", "CES v1 — الانتروبيا والضغط", "KTE v1 — اندفاع وارتداد / أهداف جزئية"]; current-index <=> root.bt-strategy;}
-            Text {text: root.bt-strategy == 2 ? "KTE: أهداف 1R/2R/3R، وقف عند الدخول بعد TP1 وتتبع ATR بعد TP2. تقسيم اللوت 40/30/الباقي؛ يُرفض الحجم الذي لا يقبل ثلاثة أجزاء. المحاكاة المباشرة تبقى Meta." : "CES: حجم ticks؛ دخول بالافتتاح التالي، وقف 0.5 وهدف 1.5 من TR3، خروج EG موجب أو 8 دقائق. المحاكاة المباشرة تبقى Meta."; color: #acbad0; wrap: word-wrap;}
+            Text {text: root.bt-strategy == 2 ? "KTE: أهداف 1R/2R/3R، وقف عند الدخول بعد TP1 وتتبع ATR بعد TP2. تقسيم اللوت 40/30/الباقي؛ يُرفض الحجم الذي لا يقبل ثلاثة أجزاء. المحاكاة المباشرة تبقى Meta." : root.bt-strategy == 1 ? "CES: حجم ticks؛ دخول بالافتتاح التالي، وقف 0.5 وهدف 1.5 من TR3، خروج EG موجب أو 8 دقائق. المحاكاة المباشرة تبقى Meta." : "Meta v1 هو خط الأساس الحالي للمحاكاة. زر مقارنة Meta v2 أدناه يعيد تشغيل Meta v1 وMeta v2 على نفس التاريخ والتكاليف دون ترقية Meta v2 للمحاكاة المباشرة."; color: #acbad0; wrap: word-wrap;}
             Text { text: "BACKTEST / مختبر الاستراتيجية"; color: #eaf0fb; font-size: 20px; }
             Text { text: "فترة من يوم إلى 30 يوماً بصيغة YYYY-MM-DD وبوقت UTC؛ يوم النهاية غير مشمول. يستخدم إعدادات المخاطرة المحفوظة لحظة الطلب."; color: #acbad0; wrap: word-wrap; }
             HorizontalBox {
@@ -247,7 +247,8 @@ export component Dashboard inherits Window {
             }
             Text { text: "النتيجة المعروضة / تجربة محفوظة"; color: #d5deed; }
             Button {text: "تجربة الاستراتيجية المختارة على بيانات النتيجة المحددة"; enabled: !root.bt-busy && !root.bt-active && root.bt-selected >= 0; clicked => {root.backtest-action("experiment");}}
-            Text {text: "التجربة على نتيجة محفوظة تغيّر الاستراتيجية فقط؛ رأس المال والسبريد والمخاطرة تبقى من تلك النتيجة."; color: #acbad0; wrap: word-wrap;}
+            Button {text: "مقارنة Meta v1 مع Meta v2 على نفس البيانات والتكاليف"; enabled: !root.bt-busy && !root.bt-active && root.bt-selected >= 0; clicked => {root.backtest-action("compare");}}
+            Text {text: "التجربة على نتيجة محفوظة تغيّر الاستراتيجية فقط؛ رأس المال والسبريد والمخاطرة تبقى من تلك النتيجة. مقارنة Meta v2 تحفظ JSON/TXT داخل نفس مجلد التصدير ولا تغيّر قرار SHADOW."; color: #acbad0; wrap: word-wrap;}
             HorizontalLayout { spacing: 12px;
                 Card { label: "NET / الصافي"; value: root.bt-net; }
                 Card { label: "TRADES / الصفقات"; value: root.bt-trades; }
