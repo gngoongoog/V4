@@ -81,6 +81,128 @@ impl TrendBrain {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct StructureFrame {
+    pub timeframe: String,
+    pub direction: i8,
+    pub evidence: f64,
+    pub breakout: bool,
+    pub prior_high: f64,
+    pub prior_low: f64,
+    pub close_location: f64,
+    pub range_width_atr: f64,
+}
+impl Default for StructureFrame {
+    fn default() -> Self {
+        Self {
+            timeframe: String::new(),
+            direction: 0,
+            evidence: 0.0,
+            breakout: false,
+            prior_high: 0.0,
+            prior_low: 0.0,
+            close_location: 0.0,
+            range_width_atr: 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct StructureBrain {
+    pub version: String,
+    pub direction: i8,
+    pub evidence: f64,
+    pub consensus: bool,
+    pub frames: Vec<StructureFrame>,
+    pub reason: String,
+}
+impl Default for StructureBrain {
+    fn default() -> Self {
+        Self {
+            version: "structure-v1".into(),
+            direction: 0,
+            evidence: 0.0,
+            consensus: false,
+            frames: vec![],
+            reason: "Structure Brain unavailable".into(),
+        }
+    }
+}
+impl StructureBrain {
+    pub fn text(&self) -> String {
+        let frames = self
+            .frames
+            .iter()
+            .map(|f| {
+                format!(
+                    "{}={} evidence {:.2} | breakout {} | prior {:.5}..{:.5} | location {:.2} | width {:.2} ATR",
+                    f.timeframe,
+                    match f.direction {
+                        1 => "UP",
+                        -1 => "DOWN",
+                        _ => "INSIDE",
+                    },
+                    f.evidence,
+                    f.breakout,
+                    f.prior_low,
+                    f.prior_high,
+                    f.close_location,
+                    f.range_width_atr
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ; ");
+        format!(
+            "{}: direction {} | evidence {:.2} | consensus {}\n{}\n{}",
+            self.version, self.direction, self.evidence, self.consensus, self.reason, frames
+        )
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct VolatilityBrain {
+    pub version: String,
+    pub state: String,
+    pub atr: f64,
+    pub baseline_true_range: f64,
+    pub ratio: f64,
+    pub shock_ratio: f64,
+    pub shock: bool,
+    pub evidence: f64,
+    pub reason: String,
+}
+impl Default for VolatilityBrain {
+    fn default() -> Self {
+        Self {
+            version: "volatility-v1".into(),
+            state: "UNKNOWN".into(),
+            atr: 0.0,
+            baseline_true_range: 0.0,
+            ratio: 1.0,
+            shock_ratio: 0.0,
+            shock: false,
+            evidence: 0.0,
+            reason: "Volatility Brain unavailable".into(),
+        }
+    }
+}
+impl VolatilityBrain {
+    pub fn text(&self) -> String {
+        format!(
+            "{}: {} | ATR {:.5} | baseline TR {:.5} | ratio {:.2}x | last-bar shock {:.2}x ({}) | evidence {:.2}\n{}",
+            self.version,
+            self.state,
+            self.atr,
+            self.baseline_true_range,
+            self.ratio,
+            self.shock_ratio,
+            self.shock,
+            self.evidence,
+            self.reason
+        )
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RegimeBrain {
     pub version: String,
     pub label: String,
@@ -91,6 +213,10 @@ pub struct RegimeBrain {
     pub volatility: String,
     pub tradable_trend: bool,
     pub reason: String,
+    #[serde(default)]
+    pub structure_brain: StructureBrain,
+    #[serde(default)]
+    pub volatility_brain: VolatilityBrain,
 }
 impl Default for RegimeBrain {
     fn default() -> Self {
@@ -104,13 +230,15 @@ impl Default for RegimeBrain {
             volatility: "UNKNOWN".into(),
             tradable_trend: false,
             reason: "Regime Brain unavailable".into(),
+            structure_brain: StructureBrain::default(),
+            volatility_brain: VolatilityBrain::default(),
         }
     }
 }
 impl RegimeBrain {
     pub fn text(&self) -> String {
         format!(
-            "{}: {} | trend evidence {:.2} | ER {:.2} | volatility {} ({:.2}x) | trend-eligible {}\n{}",
+            "{}: {} | trend evidence {:.2} | ER {:.2} | volatility {} ({:.2}x) | trend-eligible {}\n{}\n\nSTRUCTURE BRAIN\n{}\n\nVOLATILITY BRAIN\n{}",
             self.version,
             self.label,
             self.trend_evidence,
@@ -118,7 +246,9 @@ impl RegimeBrain {
             self.volatility,
             self.volatility_ratio,
             self.tradable_trend,
-            self.reason
+            self.reason,
+            self.structure_brain.text(),
+            self.volatility_brain.text()
         )
     }
 }
@@ -219,19 +349,143 @@ fn frame(series: &[Candle], timeframe: &str) -> TrendFrame {
         efficiency: er,
     }
 }
-fn volatility_ratio(m1: &[Candle]) -> f64 {
+fn structure_frame(series: &[Candle], timeframe: &str) -> StructureFrame {
+    if series.len() < 40 {
+        return StructureFrame {
+            timeframe: timeframe.into(),
+            ..Default::default()
+        };
+    }
+    let atr = atr_last(series, 14).unwrap_or(0.0);
+    if !atr.is_finite() || atr <= 0.0 {
+        return StructureFrame {
+            timeframe: timeframe.into(),
+            ..Default::default()
+        };
+    }
+    let count = series.len();
+    let prior = &series[count - 21..count - 1];
+    let prior_high = prior.iter().map(|c| c.high).fold(f64::NEG_INFINITY, f64::max);
+    let prior_low = prior.iter().map(|c| c.low).fold(f64::INFINITY, f64::min);
+    let close = series[count - 1].close;
+    let buffer = 0.05 * atr;
+    let direction = if close > prior_high + buffer {
+        1
+    } else if close < prior_low - buffer {
+        -1
+    } else {
+        0
+    };
+    let half = ((prior_high - prior_low) * 0.5).max(f64::EPSILON);
+    let midpoint = (prior_high + prior_low) * 0.5;
+    let close_location = ((close - midpoint) / half).clamp(-2.0, 2.0);
+    let range_width_atr = ((prior_high - prior_low) / atr).clamp(0.0, 100.0);
+    let distance_atr = if direction == 1 {
+        (close - prior_high) / atr
+    } else if direction == -1 {
+        (prior_low - close) / atr
+    } else {
+        0.0
+    };
+    let evidence = if direction == 0 {
+        (close_location.abs() * 0.20).clamp(0.0, 0.40)
+    } else {
+        (0.55 + distance_atr.max(0.0) * 0.45).clamp(0.55, 1.0)
+    };
+    StructureFrame {
+        timeframe: timeframe.into(),
+        direction,
+        evidence,
+        breakout: direction != 0,
+        prior_high,
+        prior_low,
+        close_location,
+        range_width_atr,
+    }
+}
+fn assess_structure(m1: &[Candle], m5: &[Candle], m15: &[Candle]) -> StructureBrain {
+    let frames = vec![
+        structure_frame(m1, "M1"),
+        structure_frame(m5, "M5"),
+        structure_frame(m15, "M15"),
+    ];
+    let up = frames.iter().filter(|frame| frame.direction == 1).count();
+    let down = frames.iter().filter(|frame| frame.direction == -1).count();
+    let direction = if up >= 2 && down == 0 {
+        1
+    } else if down >= 2 && up == 0 {
+        -1
+    } else {
+        0
+    };
+    let consensus = direction != 0;
+    let weights = [0.20, 0.35, 0.45];
+    let evidence = frames
+        .iter()
+        .zip(weights)
+        .map(|(frame, weight)| frame.evidence * weight)
+        .sum::<f64>()
+        .clamp(0.0, 1.0);
+    StructureBrain {
+        version: "structure-v1".into(),
+        direction,
+        evidence,
+        consensus,
+        reason: if consensus {
+            "At least two completed-bar timeframes break the prior 20-bar range in the same direction with no opposite breakout".into()
+        } else if up > 0 || down > 0 {
+            "Breakout evidence is isolated or conflicts across timeframes; Structure Brain abstains".into()
+        } else {
+            "All closes remain inside their prior 20-bar ranges; location is reported as context only".into()
+        },
+        frames,
+    }
+}
+fn assess_volatility(m1: &[Candle]) -> VolatilityBrain {
     if m1.len() < 80 {
-        return 1.0;
+        return VolatilityBrain::default();
     }
     let current = atr_last(m1, 14).unwrap_or(0.0);
     let end = m1.len() - 14;
     let start = end.saturating_sub(51);
     let baseline = mean_true_range(&m1[start..end]).unwrap_or(0.0);
     if current <= 0.0 || baseline <= 0.0 || !current.is_finite() || !baseline.is_finite() {
-        1.0
-    } else {
-        (current / baseline).clamp(0.05, 20.0)
+        return VolatilityBrain::default();
     }
+    let ratio = (current / baseline).clamp(0.05, 20.0);
+    let state = if ratio >= 1.35 {
+        "EXPANDING"
+    } else if ratio <= 0.75 {
+        "COMPRESSED"
+    } else {
+        "NORMAL"
+    };
+    let last_range = true_range(&m1[m1.len() - 2], &m1[m1.len() - 1]);
+    let shock_ratio = (last_range / current).clamp(0.0, 20.0);
+    let shock = shock_ratio >= 2.50;
+    let evidence = if ratio >= 1.0 {
+        ((ratio - 1.0) / 1.5).clamp(0.0, 1.0)
+    } else {
+        ((1.0 - ratio) / 0.75).clamp(0.0, 1.0)
+    };
+    VolatilityBrain {
+        version: "volatility-v1".into(),
+        state: state.into(),
+        atr: current,
+        baseline_true_range: baseline,
+        ratio,
+        shock_ratio,
+        shock,
+        evidence,
+        reason: if shock {
+            "Latest completed M1 true range is at least 2.5x current ATR; this is reported as a shock, not a trading signal".into()
+        } else {
+            "ATR14 is compared with an earlier completed-bar true-range baseline; state is observational only".into()
+        },
+    }
+}
+fn volatility_ratio(m1: &[Candle]) -> f64 {
+    assess_volatility(m1).ratio
 }
 
 /// Uses only the supplied completed bars. This module does not inspect quotes or future bars.
@@ -266,6 +520,8 @@ pub(super) fn assess(m1: &[Candle], m5: &[Candle], m15: &[Candle]) -> (TrendBrai
         },
     };
 
+    let structure_brain = assess_structure(m1, m5, m15);
+    let volatility_brain = assess_volatility(m1);
     let ratio = volatility_ratio(m1);
     let volatility = if ratio >= 1.35 {
         "EXPANDING"
@@ -308,6 +564,8 @@ pub(super) fn assess(m1: &[Candle], m5: &[Candle], m15: &[Candle]) -> (TrendBrai
         volatility: volatility.into(),
         tradable_trend,
         reason: reason.into(),
+        structure_brain,
+        volatility_brain,
     };
     (trend, regime)
 }
@@ -377,8 +635,57 @@ mod tests {
             candle.high = candle.close + 2.0;
             candle.low = candle.close - 2.0;
         }
-        let (_, regime) = assess(&expanding, &series(300, 0.30, 0.40), &series(900, 0.30, 0.40));
+        let (_, regime) = assess(
+            &expanding,
+            &series(300, 0.30, 0.40),
+            &series(900, 0.30, 0.40),
+        );
         assert_eq!(regime.volatility, "EXPANDING");
         assert!(regime.volatility_ratio >= 1.35);
+        assert_eq!(regime.volatility_brain.state, "EXPANDING");
+    }
+
+    #[test]
+    fn structure_requires_multi_timeframe_consensus() {
+        let mut m1 = series(60, 0.0, 0.60);
+        let mut m5 = series(300, 0.0, 0.60);
+        let m15 = series(900, 0.0, 0.60);
+        for data in [&mut m1, &mut m5] {
+            let n = data.len();
+            let prior_high = data[n - 21..n - 1]
+                .iter()
+                .map(|c| c.high)
+                .fold(f64::NEG_INFINITY, f64::max);
+            data[n - 1].close = prior_high + 1.0;
+            data[n - 1].high = prior_high + 1.2;
+            data[n - 1].low = data[n - 1].open.min(data[n - 1].close) - 0.2;
+        }
+        let (_, regime) = assess(&m1, &m5, &m15);
+        assert_eq!(regime.structure_brain.version, "structure-v1");
+        assert_eq!(regime.structure_brain.direction, 1);
+        assert!(regime.structure_brain.consensus);
+
+        let (_, isolated) = assess(&m1, &series(300, 0.0, 0.60), &m15);
+        assert_eq!(isolated.structure_brain.direction, 0);
+        assert!(!isolated.structure_brain.consensus);
+    }
+
+    #[test]
+    fn volatility_shock_is_observational() {
+        let mut m1 = series(60, 0.0, 0.40);
+        let n = m1.len();
+        let close = m1[n - 1].close;
+        m1[n - 1].high = close + 5.0;
+        m1[n - 1].low = close - 5.0;
+        let (_, regime) = assess(
+            &m1,
+            &series(300, 0.0, 0.40),
+            &series(900, 0.0, 0.40),
+        );
+        assert_eq!(regime.volatility_brain.version, "volatility-v1");
+        assert!(regime.volatility_brain.shock);
+        assert!(regime.volatility_brain.shock_ratio >= 2.5);
+        assert!(regime.text().contains("STRUCTURE BRAIN"));
+        assert!(regime.text().contains("VOLATILITY BRAIN"));
     }
 }
