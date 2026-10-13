@@ -1,29 +1,48 @@
 {
-  "version": "0.3.0",
-  "delivery": "source preview; Windows package deferred by user",
+  "version": "0.4.0-development",
+  "delivery": "source checkpoint on development; no new end-user Windows release declared",
+  "repository": "gngoongoog/V4",
+  "branch": "development",
+  "validation_boundary": "current development source; Windows CI packaging still pending at this snapshot",
   "rust": {
-    "domain_passed": 18,
-    "runtime_passed": 13,
-    "live_network_separate": 1
+    "domain_passed": 25,
+    "domain_failed": 0,
+    "runtime_passed": 14,
+    "runtime_failed": 0,
+    "runtime_ignored_network": 1,
+    "toolchain": "rustc 1.99.0"
   },
   "python_passed": 16,
-  "real_core_integration": "pass: auth, staleness, shadow lifecycle, history chunk validation, cancellation, late response isolation, full export, identical offline replay, same-data CES experiment, news settings and restart/backup",
-  "public_rss_parse": "pass: Fed monetary, ECB press, ECB stats, 15 items each",
-  "desktop_linux_release": "pass: Rust1.99 Slint1.16",
-  "desktop_render": {
-    "pages": 9,
-    "sizes": [
-      "1120x820",
-      "880x700"
-    ],
-    "images_rendered": 18,
-    "visual_review": "passed; marked synthetic render fixtures; content scrolls at small size"
+  "linux_ci": "pass: Rust unit tests, runtime build, Python tests and real-core smoke harness",
+  "real_core_integration": "pass: auth, staleness, shadow lifecycle, history chunk validation, cancellation, late response isolation, full export, deterministic offline replay, detailed ledger export replay equality, CES experiment, news settings and restart/backup",
+  "kte": {
+    "signal_and_stateful_history_path": "present",
+    "partial_split": "pass: deterministic 40/30/remainder and minimum-volume rejection",
+    "tp1_break_even": "pass",
+    "tp2_atr_trailing": "pass",
+    "tp3_final_close": "pass",
+    "same_bar_stop_priority": "pass with ambiguity flag",
+    "time_limits": "pass: 45 minutes before TP1, 90 minutes after TP1",
+    "cooldown": "pass: exactly three following bars",
+    "ledger_consistency": "pass on Linux CI: saved Trade ledger drives report text, fills/stops/targets CSV and HTML fill markers",
+    "offline_replay_detailed_exports": "pass on real-core smoke: detailed ledger CSV files reproduced byte-for-byte"
   },
-  "windows_v030": "not built or tested",
-  "native_mt5_history": "not tested",
-  "telegram_live_delivery": "not tested; token configured by user later",
-  "tradingview_parity": "not claimed; tick-volume, seed and next-open differences documented",
+  "exports": [
+    "report.json",
+    "history.json",
+    "trades.csv",
+    "fills.csv",
+    "stop_updates.csv",
+    "targets.csv",
+    "equity.csv",
+    "report.html",
+    "README.txt"
+  ],
+  "windows_ci": "pending at this snapshot; prior Bad file descriptor fsync failure was fixed by opening the temporary ZIP read/write before fsync",
+  "native_mt5_history": "not tested against the user's broker/account",
+  "telegram_live_delivery": "not tested; credentials remain local and must never be committed",
+  "tradingview_parity": "not claimed; tick-volume, seed, OHLC ambiguity and next-open differences are documented",
   "broker_order_submission": false,
-  "public_rss_worker": "pass: actual core stayed responsive, 44 unique official headlines, cache and disabled setting survived restart",
-  "status": "validated source preview; not a Windows package"
+  "profitability_claim": false,
+  "status": "0.4.0 KTE source checkpoint validated on Linux CI; wait for current Windows CI before promotion to main"
 }

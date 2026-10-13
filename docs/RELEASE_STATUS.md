@@ -1,46 +1,33 @@
 # 0.4.0 development checkpoint
 
-This repository currently contains an **in-progress 0.4.0 source checkpoint**.
-KTE signal logic and a stateful historical partial-exit path are present, but final
-KTE regression coverage, chart/export review and validation-artifact reconciliation
-are still in progress. Do not treat KTE as a fully validated release feature yet.
+This repository contains an **in-progress 0.4.0 source checkpoint** on `development`. KTE signal logic, stateful historical partial exits, deterministic regression coverage, and detailed ledger reporting/export are present. The current Linux CI validation is green; promotion to `main` waits for the current Windows CI packaging job to complete successfully.
 
-The last validated source baseline remains 0.3.0. Windows packaging is still deferred
-and the last delivered Windows portable remains 0.2.0 Preview.
+No new end-user Windows release is declared by this checkpoint. The last delivered Windows portable remains 0.2.0 Preview. The CI package is a validation artifact, not a claim that native broker/MT5 acceptance has been completed on the user's laptop.
+
+## 0.4.0 KTE validation completed on development
+
+KTE historical execution now has deterministic checks for:
+
+- broker-step 40/30/remainder partial sizing and rejection when three valid legs cannot be formed;
+- TP1 partial close and next-minute break-even activation;
+- TP2 partial close and next-minute ATR trailing activation;
+- TP3 final close and aggregate trade accounting;
+- conservative stop-first handling when stop and an unfilled target are both reachable in the same OHLC range, with ambiguity recorded;
+- 45-minute time limit before TP1 and 90-minute limit after TP1;
+- exactly three following bars of cooldown after a complete exit.
+
+The saved `Trade` ledger is also the source for the desktop report, HTML report, chart fill markers and detailed exports. In addition to the existing summary `trades.csv`, exports now contain `fills.csv`, `stop_updates.csv` and `targets.csv`. The real-core integration harness verifies these files exist and that an unchanged offline replay reproduces the detailed ledger exports byte-for-byte.
+
+Fresh Linux CI on the current code path passed **25 domain Rust tests**, **14 runtime Rust tests** with one explicit live-network test ignored, **16 Python tests**, the runtime core build and the real-core smoke harness. These tests use synthetic fixtures and establish software behavior only; they do not establish trading profitability.
+
+## Still not validated as native live integration
+
+Native Windows/MT5 historical retrieval against the user's actual broker/account, live Telegram delivery and any future broker execution remain separate acceptance steps. Broker order submission is still disabled/not implemented. Trained ML/ONNX, Gann, true order-flow/DOM, volume profile, news-informed trade decisions, walk-forward optimization, portfolio management and full restore remain roadmap items unless later commits explicitly change that status.
 
 ---
 
 ## 0.3.0 validated baseline
 
-Windows packaging is explicitly deferred by Mohammed. No new 0.3.0 EXE or Windows
-portable is delivered. Last delivered portable remains 0.2.0. The user confirmed
-v0.1.1 launch, MT5 connection and visible balance; later additions need laptop tests.
+The earlier 0.3.0 source baseline provided the historical Meta/CES lab, asynchronous UTC daily MT5 history collection, strict account isolation, cancellation, saved reports/raw inputs, deterministic offline replay, same-data experiments, HTML equity curve and CSV/JSON exports. Official Fed/ECB RSS and private read-only Telegram `/news` and `/backtest` handlers were also present.
 
-Implemented in this source: native historical lab, asynchronous UTC daily MT5
-history collection, strict account isolation, cancellation, saved reports/raw
-inputs, deterministic offline replay, same-data Meta/CES experiments, HTML equity
-curve and complete CSV/JSON exports. CES follows the supplied Pine defaults with
-explicit tick-volume and next-open-fill differences. See BACKTEST.md.
-
-Official Fed/ECB RSS has a background worker, persistent cache, source-specific
-freshness/errors, manual refresh and enable/disable controls. The News page opens
-only official article URLs. Current headlines are context only, not a calendar,
-sentiment model or trade gate. See NEWS.md. Telegram adds private read-only /news
-and /backtest handlers; no live bot delivery has been tested.
-
-Current reconstructed source passed 18 domain + 13 runtime Rust unit tests,
-16 Python tests, and the real-core integration harness: auth, lifecycle, staleness,
-shadow entry/exit and persistence, history chunks/cancel/account isolation,
-exports, exact offline replay, CES experiment, news settings, backup and restart.
-Live RSS parse and actual background worker passed: three official feeds, 44
-unique cached headlines, responsive core and cache persistence after restart.
-Linux release desktop compiled successfully. All nine pages rendered at
-1120x820 and 880x700 (18 images); layouts were visually reviewed. The docs/ui-*.png
-files show current 0.3.0 marked render fixtures. See validation.json. All test
-trades use explicitly synthetic data.
-
-No broker execution/protection, trained ML, KTE/Gann, true order-flow/DOM,
-news-informed decisions, walk-forward optimization, portfolio manager or full
-restore. These remain roadmap, not implemented capabilities. No profitability,
-win-rate or latency claim. Native Windows, MT5 historical retrieval, bot delivery
-and parity with TradingView are not validated here.
+The earlier recorded baseline passed 18 domain + 13 runtime Rust tests, 16 Python tests, core smoke checks and Linux desktop render/build checks. That historical baseline remains documented for comparison; the fresh 0.4.0 development counts above supersede it for the KTE source checkpoint.
