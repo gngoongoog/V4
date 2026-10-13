@@ -1,7 +1,9 @@
 """Real-core backtest integration using explicitly synthetic historical fixtures."""
 import csv
+from datetime import datetime, timezone
 import json
 from pathlib import Path
+import shutil
 import time
 import urllib.error
 
@@ -89,5 +91,46 @@ def check(api, snapshot):
     assert (third_folder/'history.json').read_bytes()==(folder/'history.json').read_bytes()
     assert ces['metrics']['trades']==0, 'Constant entropy must not invent a CES signal'
     assert len(api('/v1/backtest/runs')['runs'])==3
+    # Exercise a real KTE export with a known impulse/retrace and three fills.
+    api('/v1/gateway/snapshot',snapshot)
+    api('/v1/backtest/start',dict(request,strategy='kte_v1'))
+    fixture_day=int(datetime(2024,10,1,tzinfo=timezone.utc).timestamp())
+    while True:
+        job=api('/v1/gateway/history/request')['job']
+        if job is None:break
+        bars=[]
+        if job['from']==fixture_day:
+            for i in range(120):
+                p=100+i*.02
+                values=(p,p+.12,p-.08,p+.02) if i<100 else (102,103.05,101.95,103) if i==100 else (102.85,103,102.7,102.8) if i<105 else (102.65,102.85,102.4,102.75)
+                values={106:(102.75,102.95,102.7,102.85),107:(102.85,103.4,102.8,103.3),108:(103.3,104,103.25,103.9),109:(103.9,104.8,103.8,104.5)}.get(i,values)
+                o,h,l,c=values
+                bars.append(dict(time=job['from']+i*60,open=o,high=h,low=l,close=c,tick_volume=100,spread_points=2))
+        api('/v1/gateway/history/chunk',dict(job,bars=bars,error=''))
+    kte_id=completed()
+    kte_folder=Path(api('/v1/backtest/export',dict(id=kte_id))['path'])
+    kte=json.loads((kte_folder/'report.json').read_text())
+    assert kte['algorithm'].startswith('kte-v1')
+    assert len(kte['trades'])==1,kte['metrics']
+    trade=kte['trades'][0]
+    assert [f['reason'] for f in trade['fills']]==['tp1','tp2','tp3']
+    assert len(trade['stop_updates'])>=2
+    assert abs(sum(f['net'] for f in trade['fills'])-kte['metrics']['net'])<1e-8
+    assert len(list(csv.DictReader((kte_folder/'fills.csv').open())))==3
+    assert len(list(csv.DictReader((kte_folder/'stop_updates.csv').open())))==len(trade['stop_updates'])
+    assert 'trade-select' in (kte_folder/'report.html').read_text()
+    # These exports contain only explicit synthetic fixtures, never broker data.
+    review=Path(__file__).resolve().parents[1]/'test-output'
+    for source,name in [(kte_folder,'kte-report'),(third_folder,'empty-report'),(folder,'meta-report')]:
+        shutil.copytree(source,review/name,dirs_exist_ok=True)
+    api('/v1/gateway/snapshot',empty_snapshot('OFFLINE KTE FIXTURE'))
+    api('/v1/backtest/replay',dict(id=kte_id))
+    replay_id=completed()
+    replay_folder=Path(api('/v1/backtest/export',dict(id=replay_id))['path'])
+    assert json.loads((replay_folder/'report.json').read_text())==kte
+    for name in detailed:
+        assert (replay_folder/name).read_bytes()==(kte_folder/name).read_bytes()
+    assert (replay_folder/'report.html').read_bytes()==(kte_folder/'report.html').read_bytes()
+    assert len(api('/v1/backtest/runs')['runs'])==5
     api('/v1/gateway/snapshot',snapshot)
     return first_id,view['metrics']

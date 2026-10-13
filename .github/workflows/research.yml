@@ -1,0 +1,33 @@
+name: Research source validation
+on:
+  workflow_dispatch:
+  push:
+    branches: [development]
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: cargo test -p braintrade-domain -p braintrade-runtime --locked
+      - run: cargo build -p braintrade-runtime --bin braintrade-core --locked
+      - run: python3 -m unittest discover -s tests -v
+      - run: python3 scripts/smoke_core.py
+      - name: Install browser test dependency
+        run: |
+          npm install --prefix .ci --no-save --package-lock=false playwright@1.51.1
+          .ci/node_modules/.bin/playwright install --with-deps chromium
+      - name: Verify offline report interactions
+        run: NODE_PATH="$GITHUB_WORKSPACE/.ci/node_modules" node scripts/check_trade_review.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-research-validation
+          path: test-output/

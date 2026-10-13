@@ -112,7 +112,7 @@ def main():
             assert api('/v1/status')['paper']['trades']==1
             assert len(api('/v1/decisions')['decisions'])==1
             assert api('/v1/config')['config']['risk']['risk_percent']==.35
-            assert len(api('/v1/backtest/runs')['runs'])==3
+            assert len(api('/v1/backtest/runs')['runs'])==5
             assert not api('/v1/news')['enabled']
             assert api('/v1/backtest/report',{'id':backtest_id})['metrics']==backtest_metrics
             assert len(api('/v1/events')['events'])>len(events_before)

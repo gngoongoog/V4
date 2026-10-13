@@ -26,16 +26,18 @@ Shadow entry decision, broker execution or saved report calculation is changed.
 
 - Base candidate PR CI: success on `adf94f8ede354a15db350954557dc7fc00afba87`,
   run https://github.com/gngoongoog/V4/actions/runs/38460931318.
-- New code Rust tests: RUNNING / not yet recorded as passed.
-- Browser interaction and real-core export integration: NOT RUN yet.
+- Local Rust tests: BLOCKED by a truncated LLVM toolchain file (rustc SIGBUS), before project compilation.
+- Linux-only research CI added for this checkpoint; result pending.
+- Browser interaction and real-core integration now have automated synthetic KTE, legacy Meta and empty-result coverage; execution pending in CI.
 - Native laptop MT5 and live Telegram: NOT RUN.
 - Windows packaging: deferred by the user's active instruction. Do not start it.
 
 ## Next exact action
 
-Finish the local Rust test run, extend the real-core synthetic fixture to create
-an actual KTE three-target report, and test the generated HTML in a local headless
-browser at desktop and narrow sizes (including no-trades and legacy reports).
+Inspect the research.yml workflow for this development checkpoint. It runs Rust,
+Python, a real-core KTE three-target export/replay and browser interaction tests at
+1200/880 widths. Read actual job logs, fix failures and inspect the synthetic chart
+images. No Windows packaging is triggered by this workflow.
 Update this handoff and reconcile PROJECT_STATE/ROADMAP/CHANGELOG with actual
 code and verification. Save another small checkpoint to development. Do not
 promote to main or declare native broker acceptance from a fixture test.
