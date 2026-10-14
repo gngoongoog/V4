@@ -23,6 +23,11 @@ fn hash_file(path:&Path)->Result<(u64,String)>{
     Ok((bytes,format!("{h:016x}")))
 }
 fn record(path:&Path)->Result<Value>{let(bytes,hash)=hash_file(path)?;Ok(json!({"bytes":bytes,"hash":hash}))}
+fn cleanup_sqlite_sidecars(path:&Path)->Result<()>{
+    let base=path.to_string_lossy();
+    for suffix in ["-wal","-shm","-journal"]{let sidecar=PathBuf::from(format!("{base}{suffix}"));if sidecar.exists(){fs::remove_file(sidecar)?;}}
+    Ok(())
+}
 fn valid_config(path:&Path)->Result<()>{
     let c:Config=serde_json::from_slice(&fs::read(path)?).context("Invalid backup config.json")?;
     c.validate().map_err(anyhow::Error::msg)
@@ -55,7 +60,7 @@ fn validate(root:&Path,name:&str)->Result<Validated>{
 fn create_named(db:&Connection,root:&Path,config:&Config,now:u64,prefix:&str)->Result<Value>{
     fs::create_dir_all(root.join("backups"))?;let name=format!("{prefix}-{now}-{}",uuid::Uuid::new_v4().simple());
     let staging=root.join("backups").join(format!(".{name}.tmp"));fs::create_dir_all(&staging)?;
-    let dp=staging.join("events.sqlite");db.backup(DatabaseName::Main,&dp,None)?;valid_db(&dp)?;
+    let dp=staging.join("events.sqlite");db.backup(DatabaseName::Main,&dp,None)?;valid_db(&dp)?;cleanup_sqlite_sidecars(&dp)?;
     let cp=staging.join("config.json");super::atomic_write(&cp,&serde_json::to_vec_pretty(config)?)?;
     let m=json!({"schema":SCHEMA,"version":braintrade_domain::VERSION,"created_ms":now,
         "kind":"settings-audit-candles-decisions-shadow-backtests-chronological-evaluations-news-learning-dataset-registry-review-eligibility-read-only-predictions-scored-outcomes-challenger-performance-review",
