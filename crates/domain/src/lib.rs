@@ -3,6 +3,7 @@ pub mod backtest;
 pub mod ces;
 pub mod kte;
 pub mod research;
+pub mod opportunities;
 pub use research::{Analysis, Candle, MarketData, PaperSummary, RiskConfig};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

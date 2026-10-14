@@ -1,9 +1,26 @@
 # BrainTrade OS — Build Handoff
 
-Canonical repository: `gngoongoog/V4`. Stable branch: `main`; ongoing work:
-`development`. Read this file, PROJECT_STATE.md, ROADMAP.md and
-`docs/CONTINUITY_PROTOCOL.md` before editing. Never restore an old ZIP over GitHub.
+## Active task / user steering 2026-10-14
 
+User explicitly deferred testing and requested remaining analytical brains,
+including demand/rebound/swing/support/momentum and actionable trade discovery.
+Chronological evaluation is deferred. Do not run automated tests or Windows
+packaging for this increment. Use [skip ci] for WIP and [build-only] for the
+final compilation gate once that workflow path is added. Main remains stable.
+
+Domain checkpoint: new opportunities module with confirmed pivots/zones,
+three-timeframe momentum/divergence, tick-activity/profile proxies, session
+context and grouped reversal/sweep/breakout/retest/value-reclaim setup discovery.
+Quote projection includes structural stop, three targets, costs and lot floor.
+Analysis has an optional new field; historical analyzers do not populate it.
+New code is NOT TESTED and NOT COMPILED yet. No runtime/UI integration yet.
+
+Next exact action: wire a transient closed-bar cache into live research, reprice
+on current quotes, persist first-observed setup snapshots, add dashboard and
+Telegram read-only opportunity views, then compile only and update state docs.
+Do not claim order flow or actual volume-at-price from candle tick volume.
+
+Previous verified baseline (not validation for the new modules):
 ## Last safe code checkpoint
 
 Selectable historical Meta v2 and matched-data comparisons are implemented and
