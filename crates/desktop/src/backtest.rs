@@ -1,6 +1,7 @@
 use super::*;
 use anyhow::Context;
 use slint::{Model, ModelRc, SharedString, VecModel};
+mod evaluation;
 
 fn strategy(index: i32) -> &'static str { match index { 1 => "ces_v1", 2 => "kte_v1", 3 => "meta_v2", _ => "meta_v1" } }
 
@@ -65,6 +66,7 @@ fn runs(client: &Client, weak: &slint::Weak<Dashboard>) -> anyhow::Result<()> {
     Ok(())
 }
 pub fn setup(ui: &Dashboard) {
+    evaluation::setup(ui);
     let (tx, rx) = mpsc::channel::<Request>();
     let weak = ui.as_weak();
     ui.on_backtest_action(move|action|{
