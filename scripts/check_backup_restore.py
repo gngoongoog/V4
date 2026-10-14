@@ -86,6 +86,12 @@ def main():
             (corrupt / "config.json").write_text("{}")
             expect_400("/v1/backup/restore/validate", {"name": "corrupt-fixture"})
             assert api("/v1/backup/restore/status")["pending"] is False
+            sidecar = root / "backups" / name / "events.sqlite-wal"
+            sidecar.write_bytes(b"unexpected WAL must remain untouched")
+            expect_400("/v1/backup/restore/validate", {"name": name})
+            assert sidecar.read_bytes() == b"unexpected WAL must remain untouched"
+            sidecar.unlink()
+            assert api("/v1/backup/restore/validate", {"name": name})["valid"]
 
             risk["risk_percent"] = 0.42
             api("/v1/risk", risk)

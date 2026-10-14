@@ -8,6 +8,7 @@ slint::include_modules!();
 mod backtest;
 mod evaluation;
 mod learning;
+mod backup;
 mod news;
 mod render;
 
@@ -123,6 +124,7 @@ fn main() {
 fn run_ui() -> anyhow::Result<()> {
     let ui = Dashboard::new()?;
     backtest::setup(&ui);
+    backup::setup(&ui);
     news::setup(&ui);
     evaluation::setup(&ui);
     let _learning_timer = learning::setup(&ui);

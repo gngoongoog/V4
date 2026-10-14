@@ -52,6 +52,14 @@ export component Dashboard inherits Window {
     in property <bool> learning-review-ready: false;
     in-out property <string> learning-note;
     callback learning-action(string);
+    in property <bool> learning-performance-ready: false;
+    in property <string> learning-signature;
+    in-out property <string> learning-record;
+    in property <[string]> backup-names;
+    in-out property <int> backup-selected: 0;
+    in property <bool> backup-busy: false;
+    in property <string> backup-detail: "اضغط تحديث لعرض النسخ";
+    callback backup-action(string);
     in property <string> brains: "Waiting for closed M1/M5/M15 candles";
     in property <string> paper: "Virtual trades appear after START and an eligible signal";
     in property <string> regime: "UNKNOWN";
@@ -156,6 +164,21 @@ export component Dashboard inherits Window {
             Button { text: "خريطة العقول والمناطق"; clicked => { root.page = 12; } }
             Button { text: "التعلم ومراجعة النماذج"; clicked => { root.page = 11; root.learning-action("refresh"); } }
         }
+        if root.page == 13: ScrollView { VerticalBox { spacing: 12px;
+            Text { text: "النسخ الاحتياطية والاستعادة"; color: #eaf0fb; font-size: 20px; }
+            Text { text: "تشمل الإعدادات والسجل والشموع والمحاكاة والتقييم والتعلم. لا تشمل أسرار Telegram. الاستعادة تستبدل هذه البيانات، وتحفظ نسخة تراجع تلقائياً، ثم تتطلب إعادة فتح التطبيق."; color: #d5deed; wrap: word-wrap; }
+            HorizontalBox {
+                Button { text: "تحديث القائمة"; enabled: !root.backup-busy; clicked => { root.backup-action("refresh"); } }
+                Button { text: "إنشاء نسخة الآن"; enabled: !root.backup-busy; clicked => { root.backup-action("create"); } }
+            }
+            ComboBox { model: root.backup-names; current-index <=> root.backup-selected; enabled: !root.backup-busy; }
+            HorizontalBox {
+                Button { text: "فحص النسخة المختارة"; enabled: !root.backup-busy && root.backup-names.length > 0; clicked => { root.backup-action("validate"); } }
+                Button { text: "استعادة وإغلاق التطبيق"; enabled: !root.backup-busy && root.backup-names.length > 0 && root.state == "STOPPED"; clicked => { root.backup-action("restore"); } }
+            }
+            Text { text: "أوقف النظام أولاً للاستعادة. افتح BrainTrade.exe بعد الإغلاق، ثم راجع نتيجة الاستعادة أدناه. النسخ القديمة غير المتوافقة تظهر مع سبب الرفض."; color: #f0c578; wrap: word-wrap; }
+            Text { text: root.backup-detail; color: #acbad0; wrap: word-wrap; horizontal-alignment: left; }
+        } }
         if root.page == 0: ScrollView { VerticalBox {
             spacing: 14px;
             Text { text: root.account; color: #d5deed; font-size: 15px; }
@@ -384,6 +407,12 @@ export component Dashboard inherits Window {
                 Button { text: "نتائج التوقعات"; enabled: !root.learning-busy; clicked => { root.learning-action("outcomes"); } }
                 Button { text: "سجل المراجعات"; enabled: !root.learning-busy; clicked => { root.learning-action("records"); } }
             }
+            HorizontalBox {
+                Button { text: "تفاصيل أداء النموذج"; enabled: !root.learning-busy; clicked => { root.learning-action("performance"); } }
+                Button { text: "حفظ مراجعة الأداء الحالية"; enabled: !root.learning-busy && root.learning-performance-ready; clicked => { root.learning-action("freeze"); } }
+            }
+            LineEdit { text <=> root.learning-record; placeholder-text: "معرّف مراجعة الأداء المحفوظة من السجل"; }
+            Button { text: "فتح المراجعة المحفوظة"; enabled: !root.learning-busy && root.learning-record != ""; clicked => { root.learning-action("report"); } }
             Text { text: root.learning-detail; color: #acbad0; wrap: word-wrap; horizontal-alignment: left; }
         } }
         Rectangle { height: 1px; background: #263145; }
@@ -391,7 +420,7 @@ export component Dashboard inherits Window {
         HorizontalLayout {
             Text { text: "Closing this window keeps Core running."; color: #7f8fa7; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; background: transparent; }
-            Button { text: "نسخة احتياطية"; enabled: !root.busy; clicked => { root.action("backup"); } }
+            Button { text: "النسخ والاستعادة"; enabled: !root.backup-busy; clicked => { root.page = 13; root.backup-action("refresh"); } }
             Button { text: "خروج كامل"; enabled: !root.busy; clicked => { root.action("shutdown"); } }
         }
     }

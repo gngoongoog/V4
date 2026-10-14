@@ -33,7 +33,10 @@ fn valid_config(path:&Path)->Result<()>{
     c.validate().map_err(anyhow::Error::msg)
 }
 fn valid_db(path:&Path)->Result<()>{
-    let db=Connection::open_with_flags(path,OpenFlags::SQLITE_OPEN_READ_ONLY|OpenFlags::SQLITE_OPEN_NO_MUTEX)
+    // Immutable URI reads sealed bytes without creating WAL/SHM sidecars.
+    let mut uri=reqwest::Url::from_file_path(path.canonicalize()?).map_err(|_|anyhow::anyhow!("Invalid backup SQLite path"))?;
+    uri.set_query(Some("immutable=1"));
+    let db=Connection::open_with_flags(uri.as_str(),OpenFlags::SQLITE_OPEN_READ_ONLY|OpenFlags::SQLITE_OPEN_NO_MUTEX|OpenFlags::SQLITE_OPEN_URI)
         .context("Backup SQLite cannot be opened read-only")?;
     let ok:String=db.query_row("PRAGMA integrity_check",[],|r|r.get(0))?;if ok!="ok"{bail!("SQLite integrity_check failed: {ok}");}
     let mut st=db.prepare("PRAGMA foreign_key_check")?;let mut rows=st.query([])?;
@@ -43,8 +46,8 @@ fn valid_db(path:&Path)->Result<()>{
 }
 fn folder(root:&Path,name:&str)->Result<PathBuf>{safe_name(name)?;Ok(root.join("backups").join(name))}
 fn validate(root:&Path,name:&str)->Result<Validated>{
-    let dir=folder(root,name)?;if !dir.is_dir(){bail!("Backup does not exist: {name}");}
-    let dbp=dir.join("events.sqlite");cleanup_sqlite_sidecars(&dbp)?;
+    let dir=folder(root,name)?;if !fs::symlink_metadata(&dir).is_ok_and(|m|m.file_type().is_dir()){bail!("Backup does not exist: {name}");}
+    let dbp=dir.join("events.sqlite");
     let mut members=Vec::new();for e in fs::read_dir(&dir)?{let e=e?;if !e.file_type()?.is_file(){bail!("Backup contains unsupported directory/member");}let n=e.file_name().to_string_lossy().to_ascii_lowercase();if !matches!(n.as_str(),"events.sqlite"|"config.json"|"manifest.json"){bail!("Unexpected backup member: {n}");}members.push(n);}members.sort();members.dedup();if members.len()!=3{bail!("Backup member coverage mismatch");}
     let mp=dir.join("manifest.json");let m:Value=serde_json::from_slice(&fs::read(&mp)?).context("Invalid backup manifest")?;
     if m["schema"].as_u64()!=Some(SCHEMA){bail!("Unsupported backup schema; expected {SCHEMA}");}
@@ -55,7 +58,7 @@ fn validate(root:&Path,name:&str)->Result<Validated>{
         let expected=files.get(n).with_context(||format!("Manifest missing {n}"))?;let p=dir.join(n);if !p.is_file(){bail!("Backup file missing: {n}");}
         let(bytes,hash)=hash_file(&p)?;if expected["bytes"].as_u64()!=Some(bytes)||expected["hash"].as_str()!=Some(hash.as_str()){bail!("Backup hash/size mismatch: {n}");}
     }
-    valid_config(&dir.join("config.json"))?;valid_db(&dbp)?;cleanup_sqlite_sidecars(&dbp)?;let(_,manifest_hash)=hash_file(&mp)?;
+    valid_config(&dir.join("config.json"))?;valid_db(&dbp)?;let(_,manifest_hash)=hash_file(&mp)?;
     Ok(Validated{name:name.to_owned(),dir,manifest:m,manifest_hash})
 }
 fn create_named(db:&Connection,root:&Path,config:&Config,now:u64,prefix:&str)->Result<Value>{
@@ -102,8 +105,10 @@ pub fn stage(db:&Connection,root:&Path,config:&Config,body:&[u8],now:u64)->Resul
         "secrets_restored":false,"note":"Restore validated and staged; next Core start applies it before SQLite opens and rolls back on failure."}))
 }
 pub fn pending_status(root:&Path)->Result<Value>{
-    let p=root.join(PENDING);if !p.exists(){return Ok(json!({"pending":false}));}
-    Ok(json!({"pending":true,"restore":serde_json::from_slice::<Value>(&fs::read(p)?)?}))
+    let p=root.join(PENDING);let last=root.join("restore.last.json");
+    let previous=if last.exists(){serde_json::from_slice::<Value>(&fs::read(last)?)?}else{Value::Null};
+    if !p.exists(){return Ok(json!({"pending":false,"last_result":previous}));}
+    Ok(json!({"pending":true,"restore":serde_json::from_slice::<Value>(&fs::read(p)?)?,"last_result":previous}))
 }
 fn replace(v:&Validated,root:&Path)->Result<()>{
     let id=uuid::Uuid::new_v4().simple().to_string();let td=root.join(format!(".events.sqlite.restore-{id}.tmp"));let tc=root.join(format!(".config.json.restore-{id}.tmp"));
@@ -114,7 +119,7 @@ fn replace(v:&Validated,root:&Path)->Result<()>{
 }
 fn archive(root:&Path,result:&Value)->Result<()>{
     let f=root.join(format!("restore.failed-{}-{}.json",super::now_ms(),uuid::Uuid::new_v4().simple()));
-    super::atomic_write(&f,&serde_json::to_vec_pretty(result)?)?;let p=root.join(PENDING);if p.exists(){fs::remove_file(p)?;}Ok(())
+    super::atomic_write(&f,&serde_json::to_vec_pretty(result)?)?;super::atomic_write(&root.join("restore.last.json"),&serde_json::to_vec_pretty(result)?)?;let p=root.join(PENDING);if p.exists(){fs::remove_file(p)?;}Ok(())
 }
 pub fn apply_pending(root:&Path)->Result<Option<Value>>{
     let pp=root.join(PENDING);if !pp.exists(){return Ok(None);}let p:Value=serde_json::from_slice(&fs::read(&pp)?)?;
@@ -134,6 +139,14 @@ pub fn apply_pending(root:&Path)->Result<Option<Value>>{
     use super::*;
     fn root()->PathBuf{let p=std::env::temp_dir().join(format!("braintrade-backup-test-{}",uuid::Uuid::new_v4().simple()));fs::create_dir_all(&p).unwrap();p}
     fn db(root:&Path)->Connection{let d=Connection::open(root.join("events.sqlite")).unwrap();d.execute_batch("PRAGMA foreign_keys=ON;CREATE TABLE events(id INTEGER PRIMARY KEY,timestamp_ms INTEGER NOT NULL,kind TEXT NOT NULL,detail TEXT NOT NULL);").unwrap();d}
+    #[test] fn sealed_validation_is_read_only_and_rejects_sidecars(){
+        let r=root();let d=db(&r);d.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+        let b=create(&d,&r,&Config::default(),1).unwrap();let n=b["name"].as_str().unwrap();let dir=r.join("backups").join(n);
+        for _ in 0..3{validate(&r,n).unwrap();assert_eq!(fs::read_dir(&dir).unwrap().count(),3);}
+        let sidecar=dir.join("events.sqlite-wal");fs::write(&sidecar,b"must never delete unknown bytes").unwrap();
+        assert!(validate(&r,n).is_err());assert_eq!(fs::read(sidecar).unwrap(),b"must never delete unknown bytes");
+        drop(d);let _=fs::remove_dir_all(r);
+    }
     #[test] fn corruption_is_rejected(){
         let r=root();let d=db(&r);d.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(1,'x','{}')",[]).unwrap();let c=Config::default();
         crate::atomic_write(&r.join("config.json"),&serde_json::to_vec_pretty(&c).unwrap()).unwrap();let b=create(&d,&r,&c,1).unwrap();let n=b["name"].as_str().unwrap();

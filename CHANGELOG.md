@@ -1,5 +1,13 @@
 # 0.4.0 portable release candidate — 2026-10-14
 
+## 2026-10-14 — Integrated restore and review controls
+
+- Native backup/restore page and immutable performance-review actions, bringing the dashboard to 14 pages.
+- Sealed SQLite validation is read-only; unexpected sidecars and symlink directories are rejected without deleting data.
+- Restore requires STOP, keeps a rollback snapshot and exposes the last result. Windows packaged acceptance now verifies restore/restart and DPAPI-key preservation.
+- Performance-review creation binds the displayed model and evidence signature; v2 fingerprints include regime slices.
+- Restored atomic-config and foreign-key regression tests.
+
 - Compared both repositories and retained V4 as the fuller source.
 - Added Opportunities, Market Map and Learning pages, with all existing learning actions available from the dashboard.
 - Added first-observed opportunity history and export; historical records are explicitly not current quotes.

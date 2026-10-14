@@ -46,7 +46,7 @@ fn opportunity_history(value: &Value) -> String {
     out
 }
 
-fn run_action(client:&Client,action:&str,model:&str,note:&str)->anyhow::Result<String> {
+fn run_action(client:&Client,action:&str,model:&str,note:&str,signature:&str,record:&str)->anyhow::Result<String> {
     match action {
         "refresh"=>Ok("تم تحديث بيانات التعلم".into()),
         "export"=>{let v=client.post("/v1/learning/export",json!({}))?;Ok(format!("Dataset: {}\n{} rows",v["path"].as_str().unwrap_or("—"),v["rows"]))},
@@ -64,6 +64,12 @@ fn run_action(client:&Client,action:&str,model:&str,note:&str)->anyhow::Result<S
             let v=client.post("/v1/learning/review/create",json!({"model_id":model,"evaluation_ids":eligibility["evidence_ids"],"note":note}))?;
             Ok(format!("حُفظت أهلية المراجعة: {}. التوقعات تبقى للمراقبة فقط.",v["id"].as_str().unwrap_or("—")))
         },
+        "performance"=>Ok(serde_json::to_string_pretty(&client.get("/v1/learning/performance-review/status")?)?),
+        "freeze"=>{
+            let v=client.post("/v1/learning/performance-review/create",json!({"model_id":model,"evidence_signature":signature,"note":note}))?;
+            Ok(format!("حُفظت مراجعة أداء ثابتة: {}\nلا تتغير صلاحيات التنفيذ.\n{}",v["id"].as_str().unwrap_or("—"),serde_json::to_string_pretty(&v)?))
+        },
+        "report"=>Ok(serde_json::to_string_pretty(&client.post("/v1/learning/performance-review/report",json!({"id":record.trim()}))?)?),
         "details"=>{
             let value=client.get("/v1/learning")?;
             Ok(serde_json::to_string_pretty(&value)?)
@@ -81,26 +87,26 @@ fn run_action(client:&Client,action:&str,model:&str,note:&str)->anyhow::Result<S
 }
 
 pub fn setup(ui:&Dashboard)->slint::Timer {
-    let (tx,rx)=mpsc::channel::<(String,String,String)>();
+    let (tx,rx)=mpsc::channel::<(String,String,String,String,String)>();
     let sender=tx.clone();let weak=ui.as_weak();
     ui.on_learning_action(move |action|{if let Some(ui)=weak.upgrade(){
         ui.set_learning_busy(true);
-        let _=sender.send((action.to_string(),ui.get_learning_model().to_string(),ui.get_learning_note().to_string()));
+        let _=sender.send((action.to_string(),ui.get_learning_model().to_string(),ui.get_learning_note().to_string(),ui.get_learning_signature().to_string(),ui.get_learning_record().to_string()));
     }});
     let sender=tx.clone();let weak=ui.as_weak();
-    ui.on_load_opportunity_history(move ||{if let Some(ui)=weak.upgrade(){ui.set_opportunity_history("جاري تحميل السجل…".into());}let _=sender.send(("opportunities".into(),String::new(),String::new()));});
+    ui.on_load_opportunity_history(move ||{if let Some(ui)=weak.upgrade(){ui.set_opportunity_history("جاري تحميل السجل…".into());}let _=sender.send(("opportunities".into(),String::new(),String::new(),String::new(),String::new()));});
     let timer=slint::Timer::default();let weak=ui.as_weak();
     timer.start(slint::TimerMode::Repeated,Duration::from_secs(10),move ||{
         if weak.upgrade().is_some_and(|ui|ui.get_page()==11 && !ui.get_learning_busy()) {
-            let _=tx.send(("poll".into(),String::new(),String::new()));
+            let _=tx.send(("poll".into(),String::new(),String::new(),String::new(),String::new()));
         }
     });
     let weak=ui.as_weak();
-    std::thread::spawn(move ||{while let Ok((action,model,note))=rx.recv(){
+    std::thread::spawn(move ||{while let Ok((action,model,note,signature,record))=rx.recv(){
         let result=(||->anyhow::Result<(Option<Value>,String)>{
             let client=Client::new(&data_dir()).context("المحرك غير متاح؛ افتح التطبيق وانتظر الاتصال")?;
             if action=="opportunities" {return Ok((None,opportunity_history(&client.get("/v1/opportunities/history")?)));}
-            let message=if action=="poll" {String::new()} else {run_action(&client,&action,&model,&note)?};
+            let message=if action=="poll" {String::new()} else {run_action(&client,&action,&model,&note,&signature,&record)?};
             Ok((Some(client.get("/v1/learning")?),message))
         })();
         let _=weak.upgrade_in_event_loop(move |ui|{
@@ -109,6 +115,8 @@ pub fn setup(ui:&Dashboard)->slint::Timer {
                 Ok((None,text))=>ui.set_opportunity_history(text.into()),
                 Ok((Some(value),text))=>{
                     ui.set_learning_summary(summary(&value).into());
+                    ui.set_learning_performance_ready(matches!(value["challenger_performance_review"]["status"].as_str(),Some("review_candidate"|"reject")));
+                    ui.set_learning_signature(value["challenger_performance_review"]["evidence_signature"].as_str().unwrap_or("").into());
                     ui.set_learning_model(value["challenger"].as_str().unwrap_or("").into());
                     ui.set_learning_review_ready(value["manual_review_eligibility"]["eligible_for_manual_review"]==true);
                     ui.set_learning_status(format!("آخر تحديث UTC epoch {}",braintrade_runtime::now_ms()/1000).into());
@@ -119,6 +127,7 @@ pub fn setup(ui:&Dashboard)->slint::Timer {
                     else {
                         ui.set_learning_status(format!("تعذر التحديث: {error}").into());
                         ui.set_learning_review_ready(false);
+                        ui.set_learning_performance_ready(false);
                         ui.set_learning_summary("البيانات الحالية غير متاحة. التفاصيل المعروضة من آخر طلب ناجح فقط.".into());
                     }
                 }

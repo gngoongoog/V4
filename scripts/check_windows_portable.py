@@ -78,14 +78,41 @@ def main():
                 config = api("/v1/config")["config"]
                 api("/v1/config", {"config": config})
                 assert (directory / "config.json").is_file()
+                risk = dict(config["risk"])
+                risk["risk_percent"] = 0.31
+                api("/v1/risk", risk)
                 backup = Path(api("/v1/backup", {})["path"])
                 assert (backup / "events.sqlite").is_file()
+                assert api("/v1/backup/restore/validate", {"name": backup.name})["valid"]
+                risk["risk_percent"] = 0.42
+                api("/v1/risk", risk)
+                original_key = (directory / "ipc.key").read_bytes()
+                staged = api("/v1/backup/restore/stage", {"name": backup.name})
+                assert staged["staged"] and staged["secrets_restored"] is False
+                assert process.wait(timeout=15) == 0
+                process = subprocess.Popen([str(executable), "--core"], env=environment, stderr=log)
+                for _ in range(100):
+                    try:
+                        status = api("/v1/status")
+                        break
+                    except OSError:
+                        if process.poll() is not None:
+                            raise AssertionError("Packaged Core exited during restore")
+                        time.sleep(0.1)
+                else:
+                    raise AssertionError("Packaged Core restore timeout")
+                assert status["state"] == "stopped" and not status["execution_enabled"]
+                assert api("/v1/config")["config"]["risk"]["risk_percent"] == 0.31
+                restored = api("/v1/backup/restore/status")
+                assert restored["pending"] is False and restored["last_result"]["status"] == "applied"
+                assert (directory / "ipc.key").read_bytes() == original_key
+                assert all(item["valid"] for item in api("/v1/backups")["backups"])
                 api("/v1/shutdown", {})
                 assert process.wait(timeout=15) == 0
                 args.output.parent.mkdir(parents=True, exist_ok=True)
                 args.output.write_text(json.dumps({"version": status["version"], "result": "PASS",
                     "checks": ["packaged Core startup", "DPAPI IPC", "stopped/read-only default",
-                               "learning API", "opportunity history", "config save", "backup", "shutdown"],
+                               "learning API", "opportunity history", "config save", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "shutdown"],
                     "native_mt5_acceptance": "not performed"}, indent=2), encoding="utf-8")
             finally:
                 if process.poll() is None:

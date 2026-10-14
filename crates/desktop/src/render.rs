@@ -32,6 +32,8 @@ pub fn render() -> anyhow::Result<()> {
     ui.set_market_map("RENDER FIXTURE\nعقل المناطق: support / demand\nعقل الزخم: RSI 52 / اتجاه محايد\nGann: observational\nDOM: غير متاح — لا يتم اختلاق عمق السوق\nملف النشاط: ticks proxy فقط".into());
     ui.set_learning_summary("RENDER FIXTURE\nعينات: 900 | نتائج ناضجة: 870 | انتظار: 30\nChallenger: نموذج توضيحي فقط\nالتوقعات للمراقبة؛ لا تأثير على Shadow أو MT5".into());
     ui.set_learning_detail("لا بيانات سوق حقيقية ضمن فحص رسم الواجهة".into());
+    ui.set_backup_names(slint::ModelRc::new(slint::VecModel::from(vec!["foundation-fixture".into()])));
+    ui.set_backup_detail("RENDER FIXTURE — نسخة توضيحية فقط\nصالحة للاستعادة\nآخر نتيجة: applied\nأسرار Telegram لم تتغير".into());
     ui.set_bt_from("2026-10-01".into());
     ui.set_bt_to("2026-10-08".into());
     ui.set_bt_status("RENDER FIXTURE / لا توجد نتائج سوق حقيقية".into());
@@ -70,7 +72,7 @@ pub fn render() -> anyhow::Result<()> {
     ui.show()?;
     for (width, height, suffix) in [(1120, 820, ""), (880, 700, "-small")] {
         window.set_size(slint::PhysicalSize::new(width, height));
-        for page in 0..13 {
+        for page in 0..14 {
             ui.set_page(page);
             ui.set_events("#1 | core_started\nversion: 0.4.0 • execution_enabled: false\n\nUI render check — not live trading data".into());
             slint::platform::update_timers_and_animations();

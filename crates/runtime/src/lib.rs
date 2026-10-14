@@ -118,6 +118,7 @@ impl Engine{
             return Ok(result);
         }
         if method=="POST"&&path=="/v1/backup/restore/stage"{
+            if self.shared.lock().unwrap().status.requested_run{bail!("Stop the system before staging restore");}
             if self.backtests.loading(){bail!("Cannot stage restore while broker history is loading");}
             let config=self.shared.lock().unwrap().config.clone();
             let result=backup::stage(&self.db,&self.dir,&config,body,now_ms())?;
@@ -175,4 +176,13 @@ pub fn ensure_core()->Result<Client>{
     let mut command=Command::new(std::env::current_exe()?);fs::create_dir_all(&dir)?;command.arg("--core").stdin(Stdio::null()).stdout(Stdio::null()).stderr(OpenOptions::new().append(true).create(true).open(dir.join("core.log"))?);
     #[cfg(windows)] {use std::os::windows::process::CommandExt;command.creation_flags(0x08000008);}
     command.spawn()?;for _ in 0..100{std::thread::sleep(Duration::from_millis(100));if let Ok(client)=Client::new(&dir){if client.get("/v1/status").is_ok(){return Ok(client);}}}bail!("Core did not become ready. See {}",dir.join("core.log").display())
+}
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    #[test]
+    fn atomic_config_replacement(){let dir=std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());fs::create_dir_all(&dir).unwrap();let p=dir.join("config.json");atomic_write(&p,b"first").unwrap();atomic_write(&p,b"second").unwrap();assert_eq!(fs::read(&p).unwrap(),b"second");fs::remove_dir_all(dir).unwrap();}
+    #[test]
+    fn sqlite_foreign_keys_are_enforced(){let db=Connection::open_in_memory().unwrap();configure_database(&db).unwrap();let enabled:i64=db.query_row("PRAGMA foreign_keys",[],|row|row.get(0)).unwrap();assert_eq!(enabled,1);db.execute_batch("CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(id INTEGER PRIMARY KEY,parent_id INTEGER NOT NULL REFERENCES parent(id));").unwrap();assert!(db.execute("INSERT INTO child(id,parent_id) VALUES(1,99)",[]).is_err());db.execute("INSERT INTO parent(id) VALUES(99)",[]).unwrap();db.execute("INSERT INTO child(id,parent_id) VALUES(1,99)",[]).unwrap();verify_foreign_key_integrity(&db).unwrap();}
 }
