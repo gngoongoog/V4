@@ -59,6 +59,20 @@ class SourceArchiveTests(unittest.TestCase):
             ):
                 self.assertNotIn("BrainTrade-OS/" + name, names)
 
+    def test_output_inside_source_tree_never_archives_itself(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "source"
+            root.mkdir()
+            (root / "README.md").write_text("safe", encoding="utf-8")
+            output = root / "snapshot.zip"
+            size, digest = archive_tool.create_archive(root, output)
+            self.assertGreater(size, 0)
+            self.assertEqual(len(digest), 64)
+            self.assertFalse((root / "snapshot.zip.tmp").exists())
+            with zipfile.ZipFile(output) as archive:
+                names = set(archive.namelist())
+            self.assertEqual(names, {"BrainTrade-OS/README.md"})
+
 
 if __name__ == "__main__":
     unittest.main()
