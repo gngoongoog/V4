@@ -2,6 +2,7 @@ mod backtest;
 mod evaluation;
 mod learning;
 mod learning_inference;
+pub mod learning_performance;
 mod learning_review;
 mod learning_scoring;
 pub mod news;
@@ -99,6 +100,7 @@ impl Engine{
     fn route(&mut self,method:&str,path:&str,body:&[u8])->Result<Value>{
         if path=="/v1/news"||path.starts_with("/v1/news/"){return self.news.route(method,path,body,&self.db);}
         if path=="/v1/evaluation"||path.starts_with("/v1/evaluation/"){return self.evaluations.route(method,path,body,&self.db,&self.dir);}
+        if method=="GET"&&path=="/v1/learning/performance"{return learning_performance::review(&self.db);}
         if path=="/v1/learning/inference"||path.starts_with("/v1/learning/inference/"){return self.inference.route(method,path,&self.db);}
         if path=="/v1/learning/scoring"||path.starts_with("/v1/learning/scoring/"){return self.scoring.route(method,path,&self.db);}
         if path.starts_with("/v1/learning/review/"){return learning_review::route(method,path,body,&mut self.db,now_ms());}
@@ -108,7 +110,7 @@ impl Engine{
         match(method,path){
             ("GET","/v1/status")=>{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());Ok(serde_json::to_value(&s.status)?)},
             ("GET","/v1/config")=>{let s=self.shared.lock().unwrap();Ok(json!({"config":s.config,"token_saved":s.token.is_some()}))},
-            ("GET","/v1/learning")=>{let base=self.learning.status(&self.db)?;let reviewed=learning_review::enrich_learning_status(&self.db,base)?;let inferred=self.inference.enrich_learning_status(&self.db,reviewed)?;self.scoring.enrich_learning_status(&self.db,inferred)},
+            ("GET","/v1/learning")=>{let base=self.learning.status(&self.db)?;let reviewed=learning_review::enrich_learning_status(&self.db,base)?;let inferred=self.inference.enrich_learning_status(&self.db,reviewed)?;let mut scored=self.scoring.enrich_learning_status(&self.db,inferred)?;if let Some(object)=scored.as_object_mut(){object.insert("performance_review".into(),learning_performance::review(&self.db)?);}Ok(scored)},
             ("POST","/v1/learning/export")=>self.learning.export(&self.db,&self.dir,now_ms()),
             ("POST","/v1/learning/register")=>{let artifact:Value=serde_json::from_slice(body)?;self.learning.register(&mut self.db,artifact,now_ms())},
             ("GET","/v1/decisions")=>research::decision_history(&self.db),
