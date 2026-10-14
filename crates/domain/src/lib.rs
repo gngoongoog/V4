@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 pub mod backtest;
+#[path = "backtest/evaluation.rs"]
+pub mod evaluation;
 pub mod ces;
 pub mod kte;
 pub mod research;
