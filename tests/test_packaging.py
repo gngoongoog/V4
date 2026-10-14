@@ -44,5 +44,36 @@ class PackagingTests(unittest.TestCase):
             packaging.extract_checked(root/"good.zip", root/"output")
             self.assertEqual((root/"output/Lib/site-packages/package/__init__.py").read_text(), "value = 42\n")
 
+    def test_source_copy_defensively_excludes_secret_and_runtime_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "source"
+            destination = Path(tmp) / "copy"
+            root.mkdir()
+            (root / "keep.txt").write_text("safe", encoding="utf-8")
+            (root / ".env.example").write_text("PLACEHOLDER=1", encoding="utf-8")
+            for name in (".env", "token.key", "telegram.sealed", "events.sqlite3", "runtime.db", "app.log", "cert.pem", "cert.p12", "cert.pfx"):
+                (root / name).write_text("secret", encoding="utf-8")
+            runtime = root / "runtime"
+            runtime.mkdir()
+            (runtime / "generated.txt").write_text("generated", encoding="utf-8")
+            original = packaging.ROOT
+            packaging.ROOT = root
+            try:
+                packaging.source_copy(destination)
+            finally:
+                packaging.ROOT = original
+            self.assertEqual((destination / "keep.txt").read_text(encoding="utf-8"), "safe")
+            self.assertTrue((destination / ".env.example").is_file())
+            self.assertFalse((destination / ".env").exists())
+            self.assertFalse((destination / "token.key").exists())
+            self.assertFalse((destination / "telegram.sealed").exists())
+            self.assertFalse((destination / "events.sqlite3").exists())
+            self.assertFalse((destination / "runtime.db").exists())
+            self.assertFalse((destination / "app.log").exists())
+            self.assertFalse((destination / "cert.pem").exists())
+            self.assertFalse((destination / "cert.p12").exists())
+            self.assertFalse((destination / "cert.pfx").exists())
+            self.assertFalse((destination / "runtime").exists())
+
 if __name__ == "__main__":
     unittest.main()
