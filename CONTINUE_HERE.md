@@ -1,32 +1,35 @@
 # Continue Here
 
-This repository is the canonical memory for BrainTrade OS. If a chat ends, a model changes, or a session is lost, resume from GitHub — never from conversational memory alone.
+GitHub is the canonical memory for BrainTrade OS. Resume from repository state, not conversational memory or old ZIP files.
 
-## Read in this order before any new code
+## Read before editing
 
-1. `BUILD_HANDOFF.md` — exact last safe checkpoint, active task, files touched, tests and next action.
-2. `PROJECT_STATE.md` — current product state and validation boundary.
-3. `ROADMAP.md` — ordered next work.
-4. `CHANGELOG.md` — completed checkpoints.
-5. `docs/CONTINUITY_PROTOCOL.md` — rules that prevent work loss.
-6. Latest Git commit(s).
+1. `BUILD_HANDOFF.md` — exact tested code checkpoint, validation and next action.
+2. `PROJECT_STATE.md` — implemented vs pending state.
+3. `ROADMAP.md` — ordered future work.
+4. `docs/QUALITY_AUDIT.md` — repository-wide quality findings and open limitations.
+5. `CHANGELOG.md` — completed milestones.
+6. `docs/CONTINUITY_PROTOCOL.md` — checkpoint/resume rules.
+7. Recent commits on `development` and the comparison with `main`.
 
-Current checkpoint: **0.4.0 research in progress**. KTE, observational brains and
-the offline trade-review chart, selectable historical Meta v2, matched-data
-comparisons and candidate audit are in the current source; consult BUILD_HANDOFF.md
-for exact tested commits. The 0.3.0-only state in old ZIPs is stale.
-Windows packaging is deferred; the last delivered Windows portable remains 0.2.0 Preview.
+## Current checkpoint
 
-Current validation note (2026-10-14): the first full chronological-evaluation run exposed three Rust borrow-lifetime errors in the Learning Foundation SQLite iterator blocks. Commit `48b1fb0f` fixes those iterator lifetimes without changing learning policy or data semantics. The next full research CI run must validate that fix together with chronological holdout/rolling boundary and future-causality tests before runtime evaluation persistence is added.
+The active branch contains the 0.4.0 research milestone while Cargo/Windows preview metadata remain 0.3.0 until an explicit release bump.
+
+Implemented research layers include Meta v1/v2, CES, KTE, offline trade review, Trend/Regime/Structure/Volatility, Gann, broker DOM Depth, Macro/News context, persisted chronological evaluation, Learning Foundation snapshots/labels/export/trainer/registry, manual review eligibility, read-only challenger inference and exact matured-label prediction scoring.
+
+Legacy Meta remains the live Shadow decision source. Learned outputs are audit telemetry only. There is no champion activation and no broker-order route.
+
+The repository audit also hardened SQLite foreign-key integrity, source/package hygiene, generated-file guards and Windows CI coverage on `development`.
+
+## Exact next action
+
+Follow `BUILD_HANDOFF.md`. The next scientific layer is a manual challenger performance-review policy over sufficiently large scored out-of-sample samples. It must remain read-only and must not auto-promote a champion or influence Shadow/broker execution.
 
 ## Non-negotiable continuation rule
 
-- GitHub is the source of truth.
-- Work must be committed in small logical checkpoints; do not wait for an entire phase to finish.
-- `development` stores ongoing/WIP checkpoints.
-- `main` stores the latest safe checkpoint that is ready to resume from.
-- After each meaningful code checkpoint, update `BUILD_HANDOFF.md` with the exact next action and test state.
-- Never claim a test passed unless it actually ran on that checkpoint.
-- Never commit passwords, broker credentials, Telegram tokens, API keys, `.env` secrets, private runtime databases or logs.
-
-If interrupted mid-task, preserve the latest coherent work on `development` and record the unfinished state in `BUILD_HANDOFF.md` before doing anything else in the next session.
+- Commit coherent checkpoints to `development` and validate the changed area.
+- Promote to `main` only after a deliberate safe-checkpoint review.
+- Never claim a test passed unless it ran on the referenced code checkpoint.
+- Never commit credentials, tokens, private runtime DB/logs, generated dependency trees, `.import`, encoded chunks or ZIP-only source.
+- If documentation follows a tested code commit, clearly separate the documentation head from the executable validation boundary.

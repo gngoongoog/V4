@@ -1,25 +1,19 @@
-# Research source checkpoint — offline trade review
+# Development release status
 
-Development contains the existing KTE partial execution engine and observational
-Trend/Regime, Structure/Volatility and Meta v2, plus the new offline per-trade
-candlestick review. The report uses saved history and the same execution ledger
-as JSON/CSV. Tests and exact source commit are in BUILD_HANDOFF.md and validation.json.
+BrainTrade OS is currently a **research-source checkpoint**, not a newly declared end-user release.
 
-Research validation covers 33 domain and 14 runtime unit tests (one explicit
-network test ignored), 16 Python tests, the actual Rust core with synthetic MT5
-inputs, KTE three-target exports, deterministic offline replay and browser
-interactions at 1200/880 widths. No remote chart requests are made.
+- Research milestone name: **0.4.0 development**.
+- Cargo/workspace and Windows preview package metadata: **0.3.0**.
+- Last declared delivered Windows portable: **0.2.0 Preview**.
 
-A failed local toolchain install did not execute Rust tests; the reported Rust
-and integration results come from GitHub's Linux research job. New Windows
-packaging is deferred. The historical Meta v2 CI run on adf94f8 was successful,
-but its Windows artifact is not a new declared user release or laptop acceptance.
-The last delivered Windows portable remains 0.2.0 Preview.
+Current `development` includes historical Meta v1/v2, CES and KTE; deterministic replay/exports and trade review; observational Trend/Regime/Structure/Volatility/Gann/DOM/Macro-News layers; persisted chronological evaluation; and the Learning Foundation through challenger registration, manual review eligibility, read-only inference and matured prediction outcome scoring.
 
-Native broker history on the user's laptop and live Telegram delivery with local
-credentials remain untested for these additions. Broker order submission remains
-disabled. The next code task is a selectable historical Meta v2 comparison on
-identical saved data and costs; live Shadow still uses legacy Meta.
+Legacy Meta remains the live Shadow decision source. No broker-order route or champion activation exists.
 
-Software fixture results establish implementation behavior, not profitability,
-TradingView equivalence or real broker execution quality.
+Repository-wide quality work now includes explicit SQLite foreign-key enforcement/checks, source/package secret/generated-artifact hygiene, permanent project-contract tests and Windows CI coverage on `development`.
+
+Exact executable validation and run IDs are recorded in `BUILD_HANDOFF.md` and `docs/validation.json`. GitHub Windows packaging is build validation only; native acceptance against the user's actual Windows + MT5 demo broker and live Telegram credentials remains pending.
+
+Full restore, broker execution/reconciliation, portfolio execution risk and autonomous promotion remain unimplemented.
+
+No CI, backtest, Shadow or machine-learning metric is a profitability or future win-rate guarantee.

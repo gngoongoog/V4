@@ -1,77 +1,74 @@
 # BrainTrade Learning Foundation
 
-This document describes the current learning pipeline on `development`. It is a research data pipeline and model registry, not an autonomous trading AI.
+This document describes the implemented research-only learning pipeline on `development`. It is not an autonomous trading AI and does not authorize broker execution.
 
 ## Safety boundary
 
-Current invariants:
-
-- `training_enabled = false` inside the live Core.
-- `prediction_enabled = false` inside Shadow.
-- `champion_promotion_enabled = false`.
-- `live_self_modification = false`.
-- No learned artifact can submit, modify or close an MT5 order.
+- Training is offline; the live Core does not retrain itself.
+- Registered learned models do not control Shadow.
+- Champion promotion/activation is disabled and has no API route.
+- Learned artifacts cannot submit, modify or close MT5 orders.
 - Legacy Meta remains the live Shadow decision source.
+- Metrics are research evidence, not a profitability or win-rate guarantee.
 
-A high historical score is not a profitability guarantee and is not enough to promote a model.
+## 1. Immutable completed-bar features
 
-## 1. Closed-bar feature capture
+Core stores one `learning_snapshots` row per account/server/symbol/currency context and completed M1 bar using schema `gold-m1-feature-v1`.
 
-Core stores one immutable `learning_snapshots` row per account/server/symbol/currency context and completed M1 bar.
+Inputs reproducible from saved completed candles include Trend, Regime, Structure, Volatility, Meta-v2 candidate state, multi-timeframe momentum/divergence, normalized Gann geometry, confirmed zones/setups, candle tick-activity/profile proxies and UTC session geometry. Current bid/ask projection, live DOM and live News/Macro context remain excluded from v1 learned features until replay/timestamp parity exists.
 
-Feature schema: `gold-m1-feature-v1`.
+## 2. Exact delayed labels
 
-Included inputs are reproducible from completed candle history: Trend, Regime, Structure, Volatility, Meta-v2 candidate state, M1/M5/M15 momentum/divergence, Gann-inspired normalized geometry, confirmed zone geometry, setup metadata, MT5 candle tick-activity/profile proxies and UTC session geometry.
+Schema: `gold-m1-outcome-v1`.
 
-Deliberately excluded from v1 learning features are current bid/ask entry projection, live DOM / Market Book, News/Macro context and every future-derived value. Those feeds stay excluded until historical replay parity and timestamp alignment exist.
+Labels mature only when exact future M1 bars exist for 5, 15 and 30 minutes. Each horizon records ATR-normalized return, MFE, MAE and class `-1/0/1` around the ±0.20 ATR threshold. Missing, duplicated, out-of-order or gapped horizons are not shifted or fabricated.
 
-## 2. Delayed outcome labels
+## 3. Deterministic dataset export
 
-Label schema: `gold-m1-outcome-v1`.
-
-A label is not written when the feature is captured. Core waits until exact future M1 bars exist for 5, 15 and 30 minutes. Each horizon stores final ATR-normalized return, MFE, MAE and direction class `-1/0/1` using ±0.20 ATR around zero.
-
-If a required minute is missing, duplicated, out of order or gapped, the label is not shifted to another bar and is not fabricated.
-
-## 3. Dataset export
-
-`POST /v1/learning/export` writes matured feature+label rows only to `exports/learning-dataset-<timestamp>/dataset.jsonl` with deterministic database ordering. `GET /v1/learning` reports snapshot/label counts, registry slots, recent registered models and all disabled execution flags.
+`POST /v1/learning/export` writes matured feature+label rows in deterministic database order. Dataset identity is SHA-256 bound and later model/review/inference layers verify that identity.
 
 ## 4. Offline baseline trainer
 
-Run only after enough matured data exists:
+`scripts/train_linear_baseline.py` implements a deterministic class-weighted 3-class softmax baseline with chronological context splits, 30-row purge around boundaries, train-only standardization, no random split, no parameter search and no automatic promotion. Artifacts report train/validation/untouched-holdout classification metrics and preserve split/context metadata.
 
-```text
-python scripts/train_linear_baseline.py <learning-export-folder>
-```
+## 5. Immutable challenger registry
 
-The trainer has no network, MT5 or Core dependency. It uses a deterministic 3-class softmax linear baseline, fixed transparent features, train-only standardization, train-only class weights, no random split, no parameter search and no automatic promotion.
+`POST /v1/learning/register` validates the model/feature/label schema contract, dataset identity, minimum post-purge rows, chronological split metadata, class order, dimensions and finite values. A valid artifact is stored immutably and may occupy only the challenger slot with `eligible_for_promotion=false`.
 
-Each account context is split chronologically about 60% / 20% / 20%. Because labels inspect up to 30 future minutes, 30 rows are purged on each side of split boundaries. Training is refused if post-purge data is too small or any partition lacks one of the three classes.
+## 6. Persisted chronological evidence
 
-The artifact records train/validation/holdout accuracy, balanced accuracy, macro F1, log loss, mean confidence, confusion matrix and majority baseline. These are dataset metrics, not expected profit or broker execution quality.
+The chronological evaluation service runs Meta v1/v2 over frozen saved backtest History using explicit holdout/rolling windows, causal warmup and independent ledgers. Results are persisted with exact source identity in `chronological_evaluations`. They are evidence records, not promotion decisions.
 
-## 5. Immutable challenger registration
+## 7. Manual review eligibility
 
-Model schema: `braintrade-linear-softmax-v1`.
+Policy: `manual-review-eligibility-v1`.
 
-`POST /v1/learning/register` accepts the JSON artifact body. Core refuses registration unless the current contract is satisfied:
+A review record requires a valid immutable challenger, matching dataset identity, at least 600 post-purge rows, untouched holdout metrics, >=30-row purge metadata and compatible chronological evidence for every distinct training context. The resulting record is only a prerequisite/audit record; it does not create a champion or enable trading influence.
 
-- feature and label schemas match;
-- status is exactly `unreviewed_challenger` and `eligible_for_promotion=false`;
-- target is supported at 5m, 15m or 30m;
-- dataset identity is a valid lowercase SHA-256 and at least 600 post-purge rows were used;
-- each recorded context split has at least a 30-row purge on both sides;
-- `random_split=false`, `purged_chronological_split=true`, `automatic_promotion=false`;
-- classes are exactly `[-1, 0, 1]`;
-- feature names are unique and bounded;
-- means, positive standard deviations, biases and all three weight rows have exact matching dimensions and finite values;
-- train, validation and holdout metric summaries exist with finite values.
+Routes:
+- `GET /v1/learning/review/status`
+- `GET /v1/learning/review/records`
+- `POST /v1/learning/review/create`
+- `POST /v1/learning/review/report`
 
-A valid artifact is stored as immutable compact JSON inside `learning_models`. Registration creates a unique model ID and makes that model the current `challenger` slot. Registering a new challenger may replace the challenger pointer, but it never changes a `champion` slot and never enables inference.
+## 8. Read-only challenger inference
 
-There is intentionally no Champion promotion endpoint in this checkpoint.
+After a valid review-eligibility record exists, the current challenger may produce audit predictions from the exact stored `learning_snapshots.features` payload. Runtime inference reproduces the trainer's 87-feature ordering, clipping, means/stds, class order `[-1,0,1]` and stable softmax. Cross-language fixtures guard parity and feature drift fails closed.
 
-## 6. Next required layer
+Predictions persist model ID, dataset identity, review record, context, completed-bar time, target, probabilities, predicted class and confidence. They never change `Analysis.action`, Meta, opportunities, risk, lot sizing or Shadow.
 
-Before Champion promotion or runtime inference can exist, BrainTrade still needs a separate forward chronological evaluation record on data not used by the trainer. Promotion logic must require that evidence, immutable artifact identity and an explicit manual action. Shadow remains disconnected from every registered model until those conditions are implemented and reviewed.
+## 9. Prediction outcome scoring
+
+Policy/version: `prediction-outcome-scoring-v1`.
+
+Scoring waits for the exact matured learning label corresponding to the prediction and selects only the immutable target horizon (5m/15m/30m). It persists realized class, correctness, true-class probability, log loss, multiclass Brier score, calibration error and realized return/MFE/MAE.
+
+Aggregate read-only metrics by model+target include sample/pending counts, class/predicted support, confusion matrix, accuracy, balanced accuracy, macro-F1, mean log loss, mean Brier, mean confidence and 10-bin ECE. Small samples are explicitly warned; the current reporting floors are not promotion thresholds. Every result remains `promotion_eligible=false`, `shadow_effect=false`, `broker_effect=false`.
+
+Routes:
+- `GET /v1/learning/scoring`
+- `GET /v1/learning/scoring/recent`
+
+## 10. Next layer
+
+The next scientific layer is a separate manual challenger performance-review policy over sufficiently large persisted scored outcomes. It must bind exact immutable evidence, reject insufficient/context-mismatched samples and produce at most a human-review recommendation. Champion activation and any Shadow/broker influence remain later, separate design/validation work.
