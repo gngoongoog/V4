@@ -60,8 +60,11 @@ def create_archive(root: Path, destination: Path) -> tuple[int, str]:
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     if temporary.exists():
         temporary.unlink()
+    # Freeze the source list before the temporary archive is created so an output
+    # path inside the source tree can never archive its own partially written bytes.
+    files = list(source_files(root))
     with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as archive:
-        for path, relative in source_files(root):
+        for path, relative in files:
             archive.write(path, Path("BrainTrade-OS") / relative)
     with temporary.open("rb+") as handle:
         handle.flush()
