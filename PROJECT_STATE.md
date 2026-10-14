@@ -1,51 +1,69 @@
 # BrainTrade OS — Project State
 
-Canonical repository: `gngoongoog/V4`. Stable branch: `main`; active work:
-`development`. The 0.4.0 research milestone is in progress; Cargo/package labels
-still use 0.3.0. No new end-user Windows release is declared. Last delivered
-portable: 0.2.0 Preview. Native broker acceptance remains separate from CI.
+Canonical repository: `gngoongoog/V4`. Stable/resumable branch: `main`. Active research branch: `development`.
+
+The project is in the **0.4.0 research milestone**, while Cargo and Windows preview package metadata remain **0.3.0** until an explicit release-version bump. No new end-user Windows release is declared; the last delivered portable remains **0.2.0 Preview**.
 
 ## Implemented
 
-- Independent Rust Core, native Slint dashboard, Start/Stop/reconnect/full exit.
-- Read-only MT5 bootstrap, account visibility and completed M1/M5/M15 data.
-- Persistent Shadow simulation/risk and legacy Meta entry decisions.
-- Historical Meta v1/v2/CES/KTE lab: asynchronous UTC chunks, isolation, cancellation,
-  exact input/report storage, offline replay and same-data experiments.
-- KTE three-leg partial fills, next-minute break-even/trailing, time limits,
-  stop-first ambiguity and three-following-bar cooldown.
-- One saved ledger drives report text, fills/stop-updates/targets CSV, JSON and
-  HTML; new per-trade candlestick review reads the same history and ledger.
-- Trend/Regime v1, Structure/Volatility v1 and Meta v2 candidate outputs.
-  They remain observational in live analysis. Historical Meta v2 is selectable,
-  stores candidate gates/admission outcomes, and uses Meta v1's cost/risk model.
-- Same-data experiments persist parent linkage and verify complete history and
-  option equality. Comparison metrics and candidate CSV/JSON/HTML survive replay
-  and restart. Legacy Meta remains Shadow's entry source.
-- Fed/ECB RSS cache/freshness controls and private read-only Telegram queries.
+### Core / desktop / MT5 boundary
 
-## Current verification
+- Independent Rust Core with authenticated loopback IPC and native Slint desktop.
+- Start, Stop, reconnect and full-exit lifecycle controls.
+- Read-only MT5 account/positions/orders/history/quotes/Market Book access.
+- Persistent rule-based Shadow simulation and deterministic risk limits.
+- Explicit repository contract tests reject broker-write APIs and learned-model execution/promotion routes.
 
-Tested source: `b488350416ccbbde1947ae3aae381ba02aec008d`. [Linux research CI](https://github.com/gngoongoog/V4/actions/runs/38516269617) passed:
-38 domain + 15 runtime Rust tests (one live-network test ignored), 16 Python tests,
-core build/smoke, seven saved runs with comparison persistence, full legacy-report
-digests, deterministic candidate CSV/JSON/HTML replay and browser review at
-1200/880 widths. Native Slint desktop `cargo check` also passed on Linux.
-The final state documentation checkpoint changes no executable code.
-Native Windows/MT5/Telegram acceptance remains pending. See BUILD_HANDOFF.md
-and docs/validation.json for the verification boundary.
+### Historical research
 
-## Remaining
+- Meta v1, Meta v2 candidate, CES v1 and KTE v1 historical engines.
+- Frozen input/options, exact saved History, offline replay and same-data experiments.
+- KTE three-leg fills, TP1 break-even, TP2 ATR trailing, TP3 final close, 45/90-minute limits, cooldown and conservative stop-first ambiguity.
+- Saved ledger drives report JSON/text, trades/fills/stops/targets/equity CSV and self-contained HTML trade review.
+- Persisted chronological Meta v1/v2 holdout/rolling evaluation over immutable saved backtest sources.
 
-Real broker-data Meta v1/v2 evaluation and chronological out-of-sample/walk-forward
-research remain pending. Native laptop/MT5 history
-acceptance and Telegram delivery with local credentials have not been done for
-these additions. Broker execution, Gann, actual order flow/DOM, volume profile,
-news-informed decisions, walk-forward, trained ML/ONNX, portfolio risk and full
-restore remain roadmap work. No profitability or latency claim is established.
+### Live observational analysis
+
+- Trend, Regime, Structure, Volatility and Meta v2 candidate.
+- Market Opportunities with structural zones/setups, Gann geometry and broker-supported DOM Depth.
+- Macro/News context from official Fed/ECB RSS freshness state.
+- These newer brains remain observational. Legacy Meta still controls Shadow entries.
+
+### Learning Foundation
+
+- Immutable `gold-m1-feature-v1` completed-bar snapshots.
+- Exact delayed `gold-m1-outcome-v1` labels at 5/15/30 minutes; missing/gapped horizons are not shifted or fabricated.
+- Deterministic dataset export and offline class-weighted linear-softmax baseline trainer.
+- Immutable challenger registry with dataset identity and chronological split metadata.
+- Persisted chronological evaluation evidence and manual review-eligibility records.
+- Read-only challenger inference using the exact stored learning feature payload.
+- Immutable matured prediction outcomes and descriptive scoring by model/target: accuracy, balanced accuracy, macro-F1, log loss, Brier score, confidence/calibration and class/confusion support.
+- No champion promotion, Shadow effect, broker effect or live self-modification.
+
+### Persistence / packaging / CI
+
+- SQLite WAL + synchronous FULL, explicit `foreign_keys=ON`, startup `foreign_key_check`, and a unit test that rejects orphan foreign-key inserts.
+- Backup schema 8 includes historical/chronological/learning registry/review/prediction/scoring audit state; secrets are excluded. Full restore is not implemented.
+- Both source export paths exclude runtime state, secrets, archives, generated dependency trees/caches and `.import`; tests preserve real source such as `crates/runtime`.
+- Research CI and Windows CI run on `development`; Windows package CI is a validation artifact, not native broker acceptance or a declared release.
+
+## Validation boundary
+
+The latest executable checkpoint being validated is recorded in `BUILD_HANDOFF.md`, with run IDs and final PASS/FAIL state mirrored in `docs/validation.json`. Documentation-only reconciliation after that checkpoint does not alter executable behavior.
+
+## Known limitations / pending
+
+- Native Windows + real MT5 broker-history acceptance and live Telegram delivery with local credentials.
+- Real-broker-data scientific evaluation large enough to judge candidate effectiveness.
+- Explicit challenger performance-review policy over sufficiently large scored out-of-sample samples.
+- True feed-supported order flow / volume profile beyond broker Market Book and candle tick-volume proxies.
+- Portfolio/correlation execution risk, full backup restore and multi-account migration.
+- Broker order state machine, reconciliation and live/demo execution.
+- Automated champion promotion remains intentionally absent.
+- `main` and `development` currently have no GitHub branch protection / required-status enforcement.
+
+No profitability, win-rate or broker-latency guarantee is established by synthetic fixtures, CI, backtests or model metrics.
 
 ## Continuity
 
-Keep source as normal Git files. Commit small coherent checkpoints to development
-and update BUILD_HANDOFF.md. Never reconstruct over newer code from an old ZIP.
-Never commit credentials, tokens, private runtime databases or personal logs.
+GitHub normal files/folders are the source of truth. Never reconstruct over newer code from an old ZIP. Never commit credentials, tokens, private runtime databases/logs, generated dependency trees, `.import`, encoded chunks or ZIP-only source.
