@@ -1,88 +1,87 @@
 {
-  "version": "0.4.0-research-source",
-  "delivery": "development source; Windows package delivery deferred",
+  "version": "0.4.0-research-development",
   "repository": "gngoongoog/V4",
   "branch": "development",
-  "validation_boundary": "Tested runtime/source commit recorded in BUILD_HANDOFF.md; documentation-only updates do not change executable code.",
-  "rust": {
-    "domain_passed": 38,
-    "runtime_passed": 15,
-    "failed": 0,
-    "runtime_ignored_network": 1,
-    "toolchain": "rustc 1.99.0 on GitHub Linux"
-  },
-  "python_passed": 16,
-  "linux_ci": "pass: Rust unit tests, runtime build, Python tests and real-core smoke harness",
-  "real_core_integration": "PASS: lifecycle/auth/shadow/risk/history coverage, KTE partial ledger, seven saved results, original legacy report digests, Meta v2 same-data comparison, audit CSV/JSON/HTML byte-identical offline replay and restart",
-  "kte": {
-    "signal_and_stateful_history_path": "present",
-    "partial_split": "pass: deterministic 40/30/remainder and minimum-volume rejection",
-    "tp1_break_even": "pass",
-    "tp2_atr_trailing": "pass",
-    "tp3_final_close": "pass",
-    "same_bar_stop_priority": "pass with ambiguity flag",
-    "time_limits": "pass: 45 minutes before TP1, 90 minutes after TP1",
-    "cooldown": "pass: exactly three following bars",
-    "ledger_consistency": "pass on Linux CI: saved Trade ledger drives report text, fills/stops/targets CSV and HTML fill markers",
-    "offline_replay_detailed_exports": "PASS: nonempty KTE three-fill fixture reproduces detailed CSV/JSON and report.html byte-for-byte"
-  },
-  "exports": [
-    "report.json",
-    "history.json",
-    "trades.csv",
-    "fills.csv",
-    "stop_updates.csv",
-    "targets.csv",
-    "equity.csv",
-    "report.html",
-    "README.txt",
-    "decisions.csv (Meta v2 only)",
-    "comparison.json (experiments with persisted parent)"
-  ],
-  "windows_ci": "No Windows build or package triggered for this increment; user deferral remains active",
-  "native_mt5_history": "not tested against the user's broker/account",
-  "telegram_live_delivery": "not tested; credentials remain local and must never be committed",
-  "tradingview_parity": "not claimed; tick-volume, seed, OHLC ambiguity and next-open differences are documented",
-  "broker_order_submission": false,
-  "profitability_claim": false,
-  "status": "PASS: historical Meta v2, experiment comparison and audit on development; native MT5/Telegram acceptance pending, Windows packaging deferred",
-  "tested_commit": "b488350416ccbbde1947ae3aae381ba02aec008d",
-  "research_ci_url": "https://github.com/gngoongoog/V4/actions/runs/38516269617",
-  "browser": {
+  "tested_executable_commit": "a74f7ca87497d8e1c923523050acb6bbf293bd7d",
+  "validation_boundary": "Executable/source behavior is validated at tested_executable_commit. Later documentation-only commits do not inherit a different executable claim.",
+  "research_ci": {
+    "run_id": 38544897072,
     "status": "PASS",
-    "sizes": [
-      "1200x900",
-      "880x900"
-    ],
-    "cases": [
-      "KTE three fills with targets and stop updates",
-      "legacy Meta single-exit fallback and selection",
-      "empty report",
-      "Meta v2 comparison metrics",
-      "Meta v2 audit and chart"
-    ],
-    "remote_requests": 0,
-    "images_rendered": 12
+    "rust_domain_runtime_tests": "PASS",
+    "core_build": "PASS",
+    "python_tests": "PASS",
+    "real_core_smoke": "PASS",
+    "browser_report_checks": "PASS",
+    "desktop_compile": "PASS",
+    "desktop_headless_all_pages": "PASS",
+    "artifact_upload": "PASS"
   },
-  "visual_review": "PASS: 7555ab3 comparison-880, audit-1200 and Meta v2 chart-880 inspected; application code is identical to tested b488350",
-  "local_rust": "NOT RUN: Rust toolchain is not installed on PATH",
-  "observational_brains": [
-    "Trend v1",
-    "Regime v1",
-    "Structure v1",
-    "Volatility v1",
-    "Meta v2 candidate"
-  ],
-  "shadow_decision_source": "legacy Meta",
-  "linux_desktop": "PASS: cargo check -p braintrade-desktop --locked (native Slint selector compilation only)",
-  "meta_v2": {
-    "algorithm": "meta-v2-candidate-v1 / M1-OHLC-conservative-v1",
-    "historical_selectable": true,
-    "live_observational": true,
-    "causal_prefix": "PASS: changed/appended future data cannot change previous decisions",
-    "data_and_risk": "PASS: warmup, missing/stale data, shock, spread, lot floor, gap closure and loss latch",
-    "comparison": "PASS: complete History and non-strategy options verified; persistent ancestry and offline replay",
-    "legacy_report_regression": "PASS: three pre-change synthetic report digests",
-    "fixture": "2880 decisions / 262 trades; zero net delta on steady synthetic trend; no effectiveness conclusion"
-  }
+  "windows_ci": {
+    "run_id": 38544897241,
+    "linux_duplicate_validation": "PASS",
+    "windows_package_and_artifact": "IN_PROGRESS",
+    "final_status": "IN_PROGRESS"
+  },
+  "capabilities": {
+    "historical_strategies": ["Meta v1", "Meta v2 candidate", "CES v1", "KTE v1"],
+    "observational_brains": [
+      "Trend v1",
+      "Regime v1",
+      "Structure v1",
+      "Volatility v1",
+      "Meta v2 candidate",
+      "Market Opportunities",
+      "Gann Geometry v1",
+      "broker DOM Depth",
+      "Macro/News Context"
+    ],
+    "chronological_evaluation": true,
+    "learning_snapshots_labels_export": true,
+    "offline_linear_baseline_trainer": true,
+    "immutable_challenger_registry": true,
+    "manual_review_eligibility": true,
+    "read_only_challenger_inference": true,
+    "prediction_outcome_scoring": true,
+    "full_restore": false
+  },
+  "learning_safety": {
+    "live_training": false,
+    "champion_exists_by_design": false,
+    "automatic_promotion": false,
+    "live_self_modification": false,
+    "shadow_model_effect": false,
+    "risk_model_effect": false,
+    "broker_model_effect": false,
+    "prediction_scoring_policy": "prediction-outcome-scoring-v1",
+    "promotion_eligible_from_scoring": false
+  },
+  "broker_execution": {
+    "order_send_modify_close_path": false,
+    "demo_execution_state_machine": false,
+    "live_execution": false,
+    "shadow_decision_source": "legacy Meta"
+  },
+  "data_semantics": {
+    "dom": "broker-specific resting Market Book depth only",
+    "tick_volume": "broker activity proxy; not exchange volume",
+    "executed_order_flow": "not implemented",
+    "news": "Fed/ECB context/freshness; not direct BUY/SELL sentiment"
+  },
+  "integrity": {
+    "sqlite_foreign_keys": "ENFORCED_AND_STARTUP_CHECKED",
+    "source_archive_hygiene": "TESTED",
+    "portable_source_copy_hygiene": "TESTED",
+    "generated_directory_contract_guard": "TESTED",
+    "branch_protection_main": false,
+    "branch_protection_development": false
+  },
+  "native_acceptance": {
+    "user_windows_laptop": "NOT_RUN",
+    "real_mt5_broker_history": "NOT_RUN",
+    "real_market_book": "NOT_RUN",
+    "telegram_live_delivery": "NOT_RUN"
+  },
+  "profitability_claim": false,
+  "tradingview_equivalence_claim": false,
+  "next_stage": "Challenger Performance Review Policy (read-only/manual review recommendation; no Champion or trading effect)"
 }
