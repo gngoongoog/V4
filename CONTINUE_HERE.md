@@ -17,6 +17,8 @@ comparisons and candidate audit are in the current source; consult BUILD_HANDOFF
 for exact tested commits. The 0.3.0-only state in old ZIPs is stale.
 Windows packaging is deferred; the last delivered Windows portable remains 0.2.0 Preview.
 
+Current validation note (2026-10-14): the first full chronological-evaluation run exposed three Rust borrow-lifetime errors in the Learning Foundation SQLite iterator blocks. Commit `48b1fb0f` fixes those iterator lifetimes without changing learning policy or data semantics. The next full research CI run must validate that fix together with chronological holdout/rolling boundary and future-causality tests before runtime evaluation persistence is added.
+
 ## Non-negotiable continuation rule
 
 - GitHub is the source of truth.
