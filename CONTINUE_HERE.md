@@ -12,7 +12,8 @@ This repository is the canonical memory for BrainTrade OS. If a chat ends, a mod
 6. Latest Git commit(s).
 
 Current checkpoint: **0.4.0 research in progress**. KTE, observational brains and
-the offline trade-review chart are in the current source; consult BUILD_HANDOFF.md
+the offline trade-review chart, selectable historical Meta v2, matched-data
+comparisons and candidate audit are in the current source; consult BUILD_HANDOFF.md
 for exact tested commits. The 0.3.0-only state in old ZIPs is stale.
 Windows packaging is deferred; the last delivered Windows portable remains 0.2.0 Preview.
 

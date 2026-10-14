@@ -10,10 +10,11 @@ is deferred until requested; CI validation artifacts are not native acceptance.
 
 - Native dashboard, independent Core and read-only MT5 bootstrap.
 - Start / Stop / reconnect / full-exit controls; persistent Shadow and risk.
-- Historical Meta/CES/KTE lab with saved data, offline replay and experiments.
+- Historical Meta v1/v2/CES/KTE lab with saved data, offline replay and experiments.
 - KTE three partial targets, delayed break-even/trailing and detailed ledgers.
 - Local HTML candlestick review for each trade, equity curve and CSV/JSON.
-- Observational Trend/Regime, Structure/Volatility and Meta v2 candidate.
+- Trend/Regime, Structure/Volatility and Meta v2 candidate (observational live).
+- Historical Meta v2 gate audit and verified same-data/cost experiment comparisons.
 - Fed/ECB RSS cache and Telegram read-only queries.
 
 Legacy Meta remains the Shadow decision source. Broker orders are not submitted.
@@ -25,7 +26,7 @@ Native MT5 acceptance and live Telegram delivery remain to be tested later.
 - `ROADMAP.md` — ordered next work.
 - `CHANGELOG.md` — checkpoint history.
 - `docs/ARCHITECTURE.md` — broader design/roadmap, not a completed-feature list.
-- `docs/BACKTEST.md` — historical Meta/CES/KTE assumptions and offline trade review.
+- `docs/BACKTEST.md` — historical Meta v1/v2/CES/KTE assumptions and offline trade review.
 - `docs/NEWS.md` — news sources and freshness behavior.
 
 ## Developer build

@@ -5,15 +5,15 @@
   "branch": "development",
   "validation_boundary": "Tested runtime/source commit recorded in BUILD_HANDOFF.md; documentation-only updates do not change executable code.",
   "rust": {
-    "domain_passed": 33,
-    "runtime_passed": 14,
+    "domain_passed": 38,
+    "runtime_passed": 15,
     "failed": 0,
     "runtime_ignored_network": 1,
     "toolchain": "rustc 1.99.0 on GitHub Linux"
   },
   "python_passed": 16,
   "linux_ci": "pass: Rust unit tests, runtime build, Python tests and real-core smoke harness",
-  "real_core_integration": "PASS: existing lifecycle/auth/shadow/risk/history coverage plus actual KTE three-target run, five saved results, detailed CSV/JSON/HTML offline replay and restart",
+  "real_core_integration": "PASS: lifecycle/auth/shadow/risk/history coverage, KTE partial ledger, seven saved results, original legacy report digests, Meta v2 same-data comparison, audit CSV/JSON/HTML byte-identical offline replay and restart",
   "kte": {
     "signal_and_stateful_history_path": "present",
     "partial_split": "pass: deterministic 40/30/remainder and minimum-volume rejection",
@@ -35,17 +35,19 @@
     "targets.csv",
     "equity.csv",
     "report.html",
-    "README.txt"
+    "README.txt",
+    "decisions.csv (Meta v2 only)",
+    "comparison.json (experiments with persisted parent)"
   ],
-  "windows_ci": "Historical Meta v2 candidate adf94f8 succeeded; no Windows build triggered for this report increment",
+  "windows_ci": "No Windows build or package triggered for this increment; user deferral remains active",
   "native_mt5_history": "not tested against the user's broker/account",
   "telegram_live_delivery": "not tested; credentials remain local and must never be committed",
   "tradingview_parity": "not claimed; tick-volume, seed, OHLC ambiguity and next-open differences are documented",
   "broker_order_submission": false,
   "profitability_claim": false,
-  "status": "PASS: offline trade review source on development; native MT5/Telegram acceptance pending and Windows packaging deferred",
-  "tested_commit": "7ea999e41a68a0aff264190f4dc6b79de0379a9b",
-  "research_ci_url": "https://github.com/gngoongoog/V4/actions/runs/38473139804",
+  "status": "PASS: historical Meta v2, experiment comparison and audit on development; native MT5/Telegram acceptance pending, Windows packaging deferred",
+  "tested_commit": "b488350416ccbbde1947ae3aae381ba02aec008d",
+  "research_ci_url": "https://github.com/gngoongoog/V4/actions/runs/38516269617",
   "browser": {
     "status": "PASS",
     "sizes": [
@@ -55,13 +57,15 @@
     "cases": [
       "KTE three fills with targets and stop updates",
       "legacy Meta single-exit fallback and selection",
-      "empty report"
+      "empty report",
+      "Meta v2 comparison metrics",
+      "Meta v2 audit and chart"
     ],
     "remote_requests": 0,
-    "images_rendered": 6
+    "images_rendered": 12
   },
-  "visual_review": "PASS: synthetic KTE/Meta chart and compact empty-state images inspected; six images generated",
-  "local_rust": "BLOCKED before compilation by truncated LLVM toolchain file; not counted as a passed local test",
+  "visual_review": "PASS: 7555ab3 comparison-880, audit-1200 and Meta v2 chart-880 inspected; application code is identical to tested b488350",
+  "local_rust": "NOT RUN: Rust toolchain is not installed on PATH",
   "observational_brains": [
     "Trend v1",
     "Regime v1",
@@ -69,5 +73,16 @@
     "Volatility v1",
     "Meta v2 candidate"
   ],
-  "shadow_decision_source": "legacy Meta"
+  "shadow_decision_source": "legacy Meta",
+  "linux_desktop": "PASS: cargo check -p braintrade-desktop --locked (native Slint selector compilation only)",
+  "meta_v2": {
+    "algorithm": "meta-v2-candidate-v1 / M1-OHLC-conservative-v1",
+    "historical_selectable": true,
+    "live_observational": true,
+    "causal_prefix": "PASS: changed/appended future data cannot change previous decisions",
+    "data_and_risk": "PASS: warmup, missing/stale data, shock, spread, lot floor, gap closure and loss latch",
+    "comparison": "PASS: complete History and non-strategy options verified; persistent ancestry and offline replay",
+    "legacy_report_regression": "PASS: three pre-change synthetic report digests",
+    "fixture": "2880 decisions / 262 trades; zero net delta on steady synthetic trend; no effectiveness conclusion"
+  }
 }

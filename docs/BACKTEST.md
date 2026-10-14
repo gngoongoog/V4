@@ -1,6 +1,6 @@
 # Historical research — 0.4.0 development
 
-The native Backtest page supports Meta v1, CES v1 and KTE v1. Live quote-sampled Shadow continues to use Meta. Historical testing never submits broker orders.
+The native Backtest page supports Meta v1, CES v1, KTE v1 and Meta v2 candidate. Live quote-sampled Shadow continues to use Meta. Historical testing never submits broker orders.
 
 ## Run and replay
 
@@ -22,6 +22,28 @@ The core worker runs independently of the UI. Reports and exact input bars are s
 - `report.html` — local self-contained report using the same ledger, including fill markers on the equity SVG, a readable KTE ledger section, and an offline per-trade M1 candlestick review.
 
 Offline replay must reproduce the detailed ledger exports byte-for-byte when strategy and inputs are unchanged. CSV fields that may contain commas or quotes are quoted. The desktop saved-report view also prints the same fills, stop updates and target ledger instead of reconstructing a second simplified KTE result.
+
+## Same-data experiments and Meta v2 audit
+
+To compare Meta versions, select a saved Meta v1 run, choose Meta v2 and press
+“تجربة الاستراتيجية المختارة على بيانات النتيجة المحددة”. The new report displays
+a comparison with that exact original result. All historical bars, contract
+specifications, dates, starting equity and cost/risk settings must match; the
+core rejects a mismatched comparison. This works offline and survives restart.
+Only experiments created since this checkpoint have persisted parent linkage;
+older results still load and replay, and can serve as a new experiment's source.
+
+`comparison.json` accompanies experiment exports and includes both metrics and
+net/drawdown deltas. Undefined profit factor remains undefined. It does not
+select a winner or imply out-of-sample superiority. Replaying an experiment
+preserves its original comparison source.
+
+Meta v2 stores one candidate snapshot per tested minute in `Report.decisions`.
+`decisions.csv` contains every snapshot and the HTML shows outcome/gate counts
+and the latest 50 records after the candlestick review. Candidate gates and
+simulator admission reasons are separate: an eligible signal may be blocked
+by an open position, spread, budget or a loss limit. Old strategy report JSON
+omits the empty audit field. See [META_V2.md](META_V2.md) for version and rules.
 
 ## Common fill model
 

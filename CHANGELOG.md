@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-14 — selectable historical Meta v2 and matched comparisons
+
+- Added versioned Meta v2 historical candidate with the same exit/cost/risk model as Meta v1.
+- Persisted candidate gates and engine admission outcomes for every tested minute.
+- Added native strategy selection, CSV/JSON audit, HTML gate review and side-by-side metrics.
+- Saved experiment ancestry atomically; verify exact history/options equality before comparisons and preserve it on offline replay.
+- Added prefix/gap/risk fixtures, pre-change legacy report digests, seven-run persistence/replay integration and browser checks.
+- Live Shadow remains legacy Meta; Windows packaging and native broker acceptance remain deferred.
+- Exact validation result is recorded in BUILD_HANDOFF.md.
+
 ## 2026-10-13 — offline candlestick review on development
 
 - Added per-trade M1 candles from saved history, entry/target/fill markers and

@@ -4,87 +4,74 @@ Canonical repository: `gngoongoog/V4`. Stable branch: `main`; ongoing work:
 `development`. Read this file, PROJECT_STATE.md, ROADMAP.md and
 `docs/CONTINUITY_PROTOCOL.md` before editing. Never restore an old ZIP over GitHub.
 
-## Active task — Meta v2 historical evaluation (2026-10-14)
+## Last safe code checkpoint
 
-WIP checkpoint: historical Meta v2, per-opening candidate audit, experiment
-lineage, matched-data/cost comparison and desktop selector are implemented.
-New comparison metadata is stored atomically alongside a completed report;
-offline replay preserves its baseline. JSON/CSV/HTML and report text expose the
-candidate gates and comparison. Live Shadow remains legacy Meta.
-
-Code checkpoint 7555ab3d6ce14572f573eaef3630d6f99231620b:
-Linux CI https://github.com/gngoongoog/V4/actions/runs/38515998056 passed domain
-38/runtime 15 Rust tests (one network test ignored), 16 Python tests, core build,
-seven-run smoke, golden legacy reports and browser checks. The final desktop
-check was BLOCKED by missing system fontconfig headers, before app compilation.
-This checkpoint installs libfontconfig1-dev in Linux CI and reruns that gate.
-No application code changes. Local Python/syntax/diff checks PASS; Rust absent.
-Windows builds/packages remain deferred. The prior gap-test assertion is fixed.
-
-Integration now checks seven persisted results, full legacy-report golden digests
-from prior verified synthetic artifacts, Meta v2 decisions CSV, same-data comparison,
-byte-identical offline replay and comparison survival across restart. Linux CI
-also checks the native Slint selector compilation; browser review adds Meta v2.
-
-Next exact action: inspect current Linux research CI, fix failures, verify the
-comparison/audit screenshots and update PROJECT_STATE, ROADMAP, CHANGELOG,
-docs/META_V2.md, docs/BACKTEST.md and validation.json with the actual result.
-Then record the next research step, keeping native broker acceptance pending.
-
-## Previous verified code checkpoint
-
-Offline per-trade candlestick review is implemented and verified.
-Tested source commit: `7ea999e41a68a0aff264190f4dc6b79de0379a9b`.
-Research CI: https://github.com/gngoongoog/V4/actions/runs/38473139804 — PASS.
-The documentation checkpoint recording this result changes no executable files.
-`main` remains at the earlier observational Meta v2 checkpoint d9ca5d3; report
-review changes are saved on development. No promotion or Windows packaging was
-performed in this increment.
+Selectable historical Meta v2 and matched-data comparisons are implemented and
+verified. Tested source: `b488350416ccbbde1947ae3aae381ba02aec008d`.
+Research CI: https://github.com/gngoongoog/V4/actions/runs/38516269617 — PASS.
+Application source is identical to 7555ab3d6ce14572f573eaef3630d6f99231620b; the
+last code checkpoint adds the Linux fontconfig build dependency to CI only.
+This final documentation checkpoint changes no executable files.
+`main` remains at d9ca5d3; new work is on development. Windows packaging remains
+deferred by user instruction; last delivered Windows portable is 0.2.0 Preview.
 
 ## What changed
 
-- crates/runtime/src/trade_review.html: self-contained offline M1 SVG chart,
-  trade selector, signal/entry/target/fill markers, active stop segments, UTC
-  labels, explicit gaps, costs and compact zero-trade state.
-- crates/runtime/src/backtest.rs: embed exact saved History/Trade data in safe
-  JSON, preserve the static ledger/CSVs and previous report calculations.
-- scripts/check_backtest.py and smoke_core.py: a real KTE three-target fixture,
-  five saved results, deterministic JSON/CSV/HTML replay and restart checks.
-- scripts/check_trade_review.cjs: offline browser interactions, legacy fallback,
-  empty state, 1200/880 layouts and synthetic screenshots.
-- .github/workflows/research.yml: Linux-only research validation on development.
-- State, roadmap, backtest and validation docs reconciled with current code.
-
-Existing Trend/Regime, Structure/Volatility and Meta v2 remain observational.
-Legacy Meta still drives Shadow entries. No strategy formulas, broker order
-submission, Telegram sending or private user runtime data changed in this task.
+- domain/backtest.rs: selectable `meta_v2`, independent algorithm identifier
+  `meta-v2-candidate-v1 / M1-OHLC-conservative-v1`; same exit/cost/risk model as
+  Meta v1, completed-bar candidate and admission audit for every tested minute.
+- research.rs only re-exports MetaBrainV2; existing brain formulas and live Shadow
+  decision source are unchanged.
+- desktop Backtest selector: fourth strategy and accurate descriptions. Choose
+  an existing Meta v1 run, select Meta v2, then experiment on that saved history.
+- runtime/backtest.rs + backtest/comparison.rs: atomic experiment-parent storage
+  in `backtest_experiments`; verify complete History and options except strategy
+  before comparison; preserve parent on offline replay and restart.
+- runtime/backtest/audit.rs: full decisions CSV, all-minute gate/outcome counts,
+  latest 50 candidate rows in HTML; comparison metrics in desktop text and HTML,
+  with `comparison.json`. Legacy reports omit empty `decisions` in their JSON.
+- tests/scripts: causal prefix, data/shock/spread/size/gap/risk coverage; full
+  legacy-report digests from verified pre-change synthetic CI artifacts;
+  seven-run real-core persistence, exact replay and offline browser review.
+- research.yml: Linux native selector compilation, including fontconfig headers.
 
 ## Verified on the tested source
 
-- Rust domain: 33 passed; runtime: 14 passed; zero failed, one explicit network
-  test ignored. Toolchain: rustc 1.99.0 on GitHub Linux.
-- Python: 16 passed. Actual Rust core build and smoke: PASS.
-- KTE fixture: TP1/TP2/TP3, stop ledger, fee/PnL reconciliation and identical
-  offline CSV/JSON/HTML replay. Meta and empty CES reports also exercised.
-- Browser: chart/ledger counts, selection, previous/next, empty and legacy
-  behavior, no remote requests, at 1200x900 and 880x900: PASS.
-- Six synthetic screenshots generated. KTE/Meta and compact empty state visually
-  inspected; chart data and controls are readable.
-- Local Python and JavaScript syntax checks passed. Local Rust was blocked before
-  compilation by a truncated LLVM toolchain file; do not claim a local Rust pass.
-- Native laptop/MT5 history and Telegram delivery: NOT RUN for these additions.
-- Windows packaging: deferred by active user instruction. Last delivered portable
-  remains 0.2.0 Preview; old CI-produced packages are validation artifacts only.
+- Rust domain: 38 PASS; runtime: 15 PASS, one explicit live-network test ignored;
+  zero failures. GitHub Linux rustc 1.99.0.
+- Python: 16 PASS. Actual Rust core build and smoke: PASS.
+- Meta v2 audit: 2880 decisions on synthetic two-day sample; 262 admitted trades
+  match the saved ledger. Same steady-trend sample produces identical Meta v1/v2
+  metrics (delta net zero); this is a correctness fixture, not effectiveness evidence.
+- Exact Meta/CES/KTE old-report digests PASS (only captured_ms normalized).
+- Meta v2 Report/History/decisions.csv/comparison.json/HTML replay byte-identical;
+  seven saved runs and parent comparison survive core restart.
+- Mismatched costs, dates, bars, spread or contract cause comparison refusal.
+- Browser: offline chart/ledger interactions, comparison rows and candidate audit,
+  1200x900 / 880x900 layouts, no remote requests: PASS. Twelve synthetic images.
+- Visual review: comparison at 880, candidate audit at 1200 and Meta v2 chart at
+  880 inspected from 7555ab3 artifacts; same application code as tested b488350.
+- Native Slint desktop `cargo check -p braintrade-desktop --locked`: PASS on Linux.
+  This is compilation, not a native Windows/laptop interaction test.
+- Local Python, Python/JS syntax and diff checks PASS. Local Rust: NOT RUN,
+  no toolchain on PATH. Native MT5 history/Telegram delivery: NOT RUN.
+
+Earlier failures were resolved: d715203's gap test incorrectly required invalid
+analysis on the first observed gap minute instead of asserting blocked entry;
+7555ab3 lacked fontconfig development headers for the new desktop CI gate.
 
 ## Next exact code task
 
-Implement a separately versioned selectable historical Meta v2 strategy, using
-`docs/META_V2.md` and current `research/regime.rs`. Compare with legacy Meta on
-identical frozen histories and costs. Preserve old algorithm replay, test causal
-prefix stability and risk/gap handling, and persist candidate gates for review.
-Keep live Shadow's decision source unchanged until this evaluation is reviewed.
-The user can perform native laptop and Telegram acceptance later.
+Add an offline chronological evaluation path using saved History. Define explicit
+in-sample/held-out or rolling windows, use warmup before each boundary without
+permitting earlier entries, and independently close/reset each window's ledger.
+Compare Meta v1/v2 on matching windows and costs. Persist split definitions,
+algorithm/input identity and per-window/aggregate metrics. Test boundary isolation,
+insufficient history, prefix causality and deterministic replay. No random split,
+automatic parameter tuning or live strategy promotion in that increment.
 
-Commit each coherent batch on development and update this handoff with actual
-verification and the next action. Never commit credentials, private databases,
-encoded transport/chunks, `.import`, or ZIP-only source storage.
+Keep live Shadow's source legacy Meta until real broker-data evaluation is
+reviewed. The user will perform native laptop/MT5/Telegram acceptance later.
+No broker execution, real Telegram message or Windows package was produced.
+Commit coherent batches to development and update this handoff. Never commit
+credentials, private runtime databases/logs, transport chunks or ZIP-only source.
