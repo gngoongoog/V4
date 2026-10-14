@@ -7,7 +7,9 @@ mod zones;
 mod features;
 mod setups;
 mod gann;
+mod dom;
 pub use gann::GannFrame;
+pub use dom::DomBrain;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Swing {
@@ -108,6 +110,8 @@ pub struct MarketBrains {
     pub swings: Vec<Swing>,
     pub momentum: Vec<Momentum>,
     pub gann: Vec<GannFrame>,
+    #[serde(default)]
+    pub dom: DomBrain,
     pub tick_activity_ratio: Option<f64>,
     pub profile: Profile,
     pub session: SessionContext,
@@ -159,10 +163,11 @@ pub fn scan(m: &MarketData, symbol: &str, trend: &TrendBrain, regime: &RegimeBra
 
 impl MarketBrains {
     pub fn withdraw(&mut self, reason: &str) {
-        self.current=false; self.quote_ms=None; self.note=reason.into();
+        self.current=false; self.quote_ms=None; self.note=reason.into(); self.dom=DomBrain::default();
         for s in &mut self.setups { s.clear_quote(); s.state="UNAVAILABLE".into(); s.gates=vec![reason.into()]; }
     }
     pub fn expire(&mut self, now:u64, quote_fresh:bool) {
+        if !quote_fresh { self.dom=DomBrain::default(); }
         for s in &mut self.setups {
             if now > s.expires_ms || !quote_fresh {
                 s.clear_quote(); s.state=if now>s.expires_ms {"EXPIRED"}else{"WAIT_QUOTE"}.into();
@@ -172,6 +177,14 @@ impl MarketBrains {
     }
     /// Re-price ideas on the current quote; never modifies the closed-bar cache.
     pub fn price(&mut self, t:&Telemetry, risk:&RiskConfig, budget:f64, gates:&[String], now:u64) {
+        self.dom=dom::assess(t);
+        self.specialists.retain(|vote| vote.name != "DOM Depth Brain / عقل عمق السوق");
+        self.specialists.push(Vote {
+            name:"DOM Depth Brain / عقل عمق السوق".into(),
+            direction:self.dom.direction,
+            evidence:self.dom.evidence,
+            reason:self.dom.note.clone(),
+        });
         let specs=match(t.bid,t.ask,t.tick_size,t.tick_value_loss,t.tick_value_profit,t.volume_min,t.volume_step,t.volume_max) {
             (Some(b),Some(a),Some(tick),Some(loss),Some(profit),Some(min),Some(step),Some(max))
             if t.connected && t.tick_age_ms.is_some_and(|v|v<=3000) && a>=b && min<=max
@@ -231,6 +244,11 @@ impl MarketBrains {
     }
     pub fn signals_text(&self)->String {
         let mut out=format!("{}\n{}\n{}\n",self.symbol,self.headline(),self.note);
+        if self.dom.available {
+            let _=writeln!(out,"DOM حي: imbalance {:+.2} | bid depth {:.2} / ask depth {:.2} | أقرب {} مستويات مرصودة\n{}",self.dom.imbalance,self.dom.bid_depth,self.dom.ask_depth,self.dom.levels,self.dom.note);
+        } else {
+            let _=writeln!(out,"DOM: غير متاح حالياً — لا يتم اختلاق Order Flow من الشموع أو tick volume.");
+        }
         if self.setups.is_empty() {out.push_str("لم تظهر إشارة مكتملة الشروط في آخر شمعة؛ لا تُولّد صفقة لمجرد وجود مستوى قريب.\n");}
         for s in self.setups.iter().take(6) {
             let state=match s.state.as_str(){"READY"=>"فرصة جاهزة للمراجعة","ALTERNATIVE"=>"بديل أقل ترتيباً","EXPIRED"=>"منتهية","WAIT_QUOTE"=>"انتظار سعر","UNAVAILABLE"=>"بيانات غير متاحة",_=>"مرصودة وشروط الدخول غير مكتملة"};
@@ -255,6 +273,11 @@ impl MarketBrains {
                 let _=writeln!(out,"{} | بيانات swing/range غير كافية لهندسة جان",frame.timeframe);
             }
         }
+        let _=writeln!(out,"\nDOM / عمق السوق:");
+        if self.dom.available {
+            let _=writeln!(out,"best bid {} | best ask {} | bid depth {:.2} | ask depth {:.2} | imbalance {:+.3} | microprice proxy {}\n{}",
+                self.dom.best_bid.map(|v|format!("{v:.5}")).unwrap_or("—".into()),self.dom.best_ask.map(|v|format!("{v:.5}")).unwrap_or("—".into()),self.dom.bid_depth,self.dom.ask_depth,self.dom.imbalance,self.dom.microprice_proxy.map(|v|format!("{v:.5}")).unwrap_or("—".into()),self.dom.note);
+        } else {let _=writeln!(out,"{}",self.dom.note);}
         let _=writeln!(out,"\nمناطق فعالة (الأحدث بكل فريم):");
         for z in self.zones.iter().filter(|z|!z.broken).take(36) {let _=writeln!(out,"{} {} | {:.5} .. {:.5} | زيارات {} | قوة {:.2}",z.timeframe,z.kind,z.low,z.high,z.touches,z.strength);}
         let _=writeln!(out,"\nملف النشاط الحجمي: {}",self.profile.note);
