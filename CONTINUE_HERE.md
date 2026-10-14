@@ -14,7 +14,7 @@ GitHub is the canonical memory for BrainTrade OS. Resume from repository state, 
 
 ## Current checkpoint
 
-The active branch contains the 0.4.0 research milestone while Cargo/Windows preview metadata remain 0.3.0 until an explicit release bump.
+Current release candidate: **0.4.0 Preview**. Cargo, lockfile, desktop and Windows package versions are aligned. The user has requested Windows delivery; use BUILD_HANDOFF.md and docs/validation.json for the exact final validation boundary.
 
 Implemented research layers include Meta v1/v2, CES, KTE, offline trade review, Trend/Regime/Structure/Volatility, Gann, broker DOM Depth, Macro/News context, persisted chronological evaluation, Learning Foundation snapshots/labels/export/trainer/registry, manual review eligibility, read-only challenger inference and exact matured-label prediction scoring.
 

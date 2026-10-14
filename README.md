@@ -1,8 +1,18 @@
-# BRAINTRADE OS — Development Research Checkpoint
+# BRAINTRADE OS — 0.4.0 Preview
 
 Canonical source: `gngoongoog/V4`. `development` contains active research work; `main` remains the last deliberately promoted stable/resumable checkpoint.
 
-Version note: the current research milestone is referred to as **0.4.0 development**, while the Rust workspace and Windows preview package still report **0.3.0**. No new end-user Windows release is declared; the last delivered portable remains **0.2.0 Preview**.
+Current release candidate: **0.4.0 Preview**. Cargo, lockfile, desktop and Windows package versions are aligned. The user has requested Windows delivery; use BUILD_HANDOFF.md and docs/validation.json for the exact final validation boundary.
+
+## Windows launch
+
+Extract the complete portable ZIP and open **BrainTrade.exe**. Python and the gateway
+are bundled. In Settings, choose the installed MT5 `terminal64.exe`, save the exact
+broker symbol and reconnect. See `docs/QUICKSTART_AR.md` for the Arabic guide.
+
+The dashboard has 13 pages, including dedicated Opportunities, Market Map and
+Learning/review surfaces. No separate server command or Python installation is
+needed by the end user.
 
 ## Implemented now
 

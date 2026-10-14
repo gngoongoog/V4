@@ -54,7 +54,7 @@ When the Windows laptop/MT5 environment is available:
 ## Reliability / release work
 
 - Full backup restore with manifest/hash/schema validation, staged restore and rollback.
-- Decide when to normalize the 0.4.0 research milestone to a Cargo/package version bump; regenerate/validate `Cargo.lock` as part of that release step.
+- The 0.4.0 package version is now aligned with Cargo/Cargo.lock/UI. Complete the requested portable delivery after fresh release validation.
 - Enable GitHub branch protection / required CI checks for `main` and preferably `development` when repository settings access is available.
 - Promote a safe/resumable `development` checkpoint to `main` only after deliberate review; do not fast-forward merely because CI is green.
 

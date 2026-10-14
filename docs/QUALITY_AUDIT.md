@@ -42,9 +42,20 @@ Documentation-only commits after that checkpoint do not change executable behavi
 
 - `main` and `development` are currently unprotected GitHub branches; required status checks are not enforced by branch protection. Until repository settings are changed, discipline depends on the documented branch policy and CI review.
 - `development` is intentionally ahead of `main`; promotion to `main` should happen only after a deliberate safe-checkpoint review.
-- The research milestone is called 0.4.0 while the Cargo/Windows package version remains 0.3.0. This is documented intentionally; normalize package/version numbers only as part of an explicit release bump with `Cargo.lock` validation.
+- Version normalization is implemented in the 0.4.0 candidate; Cargo regenerated the three workspace lockfile versions without third-party upgrades.
 - Native Windows + the user's real MT5 broker history, live Telegram delivery, full restore, broker execution, portfolio execution risk and autonomous champion promotion are not validated/implemented.
 - Historical/synthetic metrics are implementation evidence, not proof of profitability or future win rate.
+
+## Additional 0.4.0 release review
+
+- Compared both repositories; V4 includes all other-repository paths and newer analytical/learning layers.
+- Added 13-page native coverage, with explicit Opportunities, Market Map and Learning surfaces.
+- STOP and stale quotes/market snapshots withdraw both specialist and legacy Meta plans; stale news items are withdrawn on Core loss.
+- Opportunity caches compare completed-bar inputs on every timeframe and react to broker corrections.
+- Opportunity history/export exposes immutable first-observed records, explicitly marked historical.
+- DOM subscription failures retry with backoff; bounded books preserve both sides, aggregate duplicate price levels and exclude market-order rows from resting-depth analysis.
+- Packaged Windows executable now undergoes real Core startup, DPAPI IPC, config save, backup, shutdown and headless page rendering.
+- Fresh validation for these changes is tracked in BUILD_HANDOFF.md; the earlier PASS block above belongs to its older commit.
 
 ## Next quality gate
 

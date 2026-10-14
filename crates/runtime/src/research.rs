@@ -460,6 +460,12 @@ impl Research {
         if new_bar {
             b.last_bar = a.bar_time;
         }
+        // A Shadow entry on this quote must not leave a concurrent READY plan visible.
+        if b.position.is_some() {
+            if let Some(opportunities)=a.opportunities.as_mut() {
+                opportunities.pause("توجد صفقة افتراضية مفتوحة؛ أرقام الفرص الجديدة مسحوبة");
+            }
+        }
         let summary = b.summary(&display, quote);
         let tx = db.transaction()?;
         if let Some(m) = t.market.as_ref().filter(|m| m.valid()) {

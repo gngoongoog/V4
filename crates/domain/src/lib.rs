@@ -215,6 +215,7 @@ impl Default for Status {
 impl Status {
     pub fn refresh(&mut self, now: u64) {
         self.execution_enabled = false;
+        if !self.requested_run { self.analysis.action="WAIT".into(); self.analysis.clear_plan(); }
         if let Some(opportunities) = self.analysis.opportunities.as_mut() {
             opportunities.expire(now, true);
             if !self.requested_run {
@@ -240,6 +241,7 @@ impl Status {
             RunState::Degraded
         };
         if !self.gateway_fresh {
+            self.analysis.clear_plan();
             self.analysis.current = false;
             self.analysis.action = "WAIT".into();
             self.analysis.reason = "MT5 data unavailable or stale".into();
@@ -254,6 +256,7 @@ impl Status {
                 .is_none_or(|age| age.saturating_add(elapsed) > 3000)
             {
                 self.paper.quote_current = false;
+                self.analysis.clear_plan();
                 self.analysis.action = "WAIT".into();
                 let gate = "Quote unavailable or older than 3 seconds".to_string();
                 if !self.analysis.gates.contains(&gate) {
@@ -267,7 +270,8 @@ impl Status {
                 .as_ref()
                 .is_none_or(|m| now.saturating_sub(m.captured_ms) > 15000)
             {
-                self.analysis.current = false;
+                self.analysis.clear_plan();
+            self.analysis.current = false;
                 self.analysis.action = "WAIT".into();
                 self.analysis.reason =
                     "Candle snapshot unavailable or older than 15 seconds".into();

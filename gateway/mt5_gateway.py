@@ -30,6 +30,7 @@ class DomCache:
     def __init__(self):
         self.key=None
         self.active=False
+        self.next_retry=0.0
     def release(self,mt5):
         if self.active and self.key is not None:
             try:
@@ -38,10 +39,13 @@ class DomCache:
                 pass
         self.key=None
         self.active=False
+        self.next_retry=0.0
     def read(self,mt5,key):
         if self.key!=key:
             self.release(mt5)
             self.key=key
+        if not self.active and time.monotonic() >= self.next_retry:
+            self.next_retry=time.monotonic()+30.0
             try:
                 self.active=bool(mt5.market_book_add(key[2]))
             except Exception:
@@ -52,8 +56,8 @@ class DomCache:
             book=mt5.market_book_get(key[2])
             if not book:
                 return False,[]
-            buy_types={getattr(mt5,'BOOK_TYPE_BUY',2),getattr(mt5,'BOOK_TYPE_BUY_MARKET',4)}
-            sell_types={getattr(mt5,'BOOK_TYPE_SELL',1),getattr(mt5,'BOOK_TYPE_SELL_MARKET',3)}
+            buy_types={getattr(mt5,'BOOK_TYPE_BUY',2)}
+            sell_types={getattr(mt5,'BOOK_TYPE_SELL',1)}
             rows=[]
             for level in book:
                 kind=getattr(level,'type',None)
@@ -66,7 +70,17 @@ class DomCache:
                 if math.isfinite(price) and math.isfinite(volume) and price>0 and volume>0:
                     rows.append(dict(side=side,price=price,volume=volume))
             rows.sort(key=lambda row:(0 if row['side']=='buy' else 1,-row['price'] if row['side']=='buy' else row['price']))
-            return bool(rows),rows[:100]
+            # Preserve both sides even when one side has more than 100 rows.
+            # Multiple rows at one price are one level for nearest-depth analysis.
+            levels={}
+            for row in rows:
+                identity=(row['side'],row['price'])
+                levels[identity]=levels.get(identity,0.0)+row['volume']
+            bids=[dict(side=side,price=price,volume=volume) for (side,price),volume in levels.items() if side=='buy' and math.isfinite(volume)]
+            asks=[dict(side=side,price=price,volume=volume) for (side,price),volume in levels.items() if side=='sell' and math.isfinite(volume)]
+            bids.sort(key=lambda row:-row['price']);asks.sort(key=lambda row:row['price'])
+            depth=bids[:50]+asks[:50]
+            return bool(bids and asks),depth
         except Exception:
             return False,[]
 

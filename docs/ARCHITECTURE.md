@@ -80,6 +80,6 @@ Execution must persist intent before external side effects, treat send timeouts 
 
 ## 11. Release/version boundary
 
-The research milestone is called 0.4.0 development while Cargo/Windows preview metadata remain 0.3.0. Normalize those versions only in an explicit release step with `Cargo.lock` and Windows validation. The last declared delivered portable remains 0.2.0 Preview.
+Current release candidate: **0.4.0 Preview**. Cargo, lockfile, desktop and Windows package versions are aligned. The user has requested Windows delivery; use BUILD_HANDOFF.md and docs/validation.json for the exact final validation boundary.
 
 No architecture item or test result is a profitability, latency or win-rate guarantee.

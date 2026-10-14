@@ -2,14 +2,15 @@
 
 Canonical repository: `gngoongoog/V4`. Stable/resumable branch: `main`. Active research branch: `development`.
 
-The project is in the **0.4.0 research milestone**, while Cargo and Windows preview package metadata remain **0.3.0** until an explicit release-version bump. No new end-user Windows release is declared; the last delivered portable remains **0.2.0 Preview**.
+Current release candidate: **0.4.0 Preview**. Cargo, lockfile, desktop and Windows package versions are aligned. The user has requested Windows delivery; use BUILD_HANDOFF.md and docs/validation.json for the exact final validation boundary.
 
 ## Implemented
 
 ### Core / desktop / MT5 boundary
 
 - Independent Rust Core with authenticated loopback IPC and native Slint desktop.
-- Start, Stop, reconnect and full-exit lifecycle controls.
+- Start, Stop, reconnect and full-exit lifecycle controls. STOP/stale data immediately withdraw quote plans.
+- 13 native pages including Opportunities/history, Market Map and Learning/model review.
 - Read-only MT5 account/positions/orders/history/quotes/Market Book access.
 - Persistent rule-based Shadow simulation and deterministic risk limits.
 - Explicit repository contract tests reject broker-write APIs and learned-model execution/promotion routes.
@@ -45,7 +46,7 @@ The project is in the **0.4.0 research milestone**, while Cargo and Windows prev
 - SQLite WAL + synchronous FULL, explicit `foreign_keys=ON`, startup `foreign_key_check`, and a unit test that rejects orphan foreign-key inserts.
 - Backup schema 8 includes historical/chronological/learning registry/review/prediction/scoring audit state; secrets are excluded. Full restore is not implemented.
 - Both source export paths exclude runtime state, secrets, archives, generated dependency trees/caches and `.import`; tests preserve real source such as `crates/runtime`.
-- Research CI and Windows CI run on `development`; Windows package CI is a validation artifact, not native broker acceptance or a declared release.
+- Research CI and Windows CI run on `development`; Windows CI includes the packaged Core DPAPI/startup/config/backup/shutdown checks and all-page rendering; it does not substitute for native broker acceptance.
 
 ## Validation boundary
 

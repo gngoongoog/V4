@@ -6,7 +6,7 @@ Cargo, Cargo.lock, native UI and package version are now 0.4.0.
 
 Includes the existing analytical/research/learning stack, plus dedicated Opportunities,
 Market Map and Learning pages, persisted opportunity history/export, immediate STOP
-withdrawal and corrected-history cache invalidation. The one launcher is BrainTrade.exe;
+withdrawal and corrected-history cache invalidation, plus robust DOM resubscription and balanced depth collection. The one launcher is BrainTrade.exe;
 Core and the bundled Python MT5 bridge start automatically. MT5 itself must already
 be installed and the account saved locally.
 

@@ -32,7 +32,9 @@ fn stop_withdraws_ready_plan_immediately_without_gateway_update() {
     let mut map=opportunities();map.price(&quote(),&RiskConfig::default(),5.0,&[],120_000);
     let mut t=quote();t.market=Some(MarketData{captured_ms:120_000,..Default::default()});
     let mut status=Status{requested_run:false,last_received_ms:Some(120_000),telemetry:Some(t),..Default::default()};
+    status.analysis.entry=Some(100.0);status.analysis.lots=Some(0.1);
     status.analysis.opportunities=Some(map);status.refresh(120_100);
+    assert!(status.analysis.entry.is_none() && status.analysis.lots.is_none());
     let s=&status.analysis.opportunities.as_ref().unwrap().setups[0];
     assert_eq!(s.state,"BLOCKED");assert!(s.entry.is_none() && s.targets.is_empty() && s.lots.is_none());
 }
