@@ -91,7 +91,7 @@ def main():
             assert len((export/'candles.jsonl').read_text().splitlines())==540
 
             from check_backtest import check
-            backtest_id,backtest_metrics=check(api,snapshot)
+            backtest_id,backtest_metrics,candidate_id,comparison=check(api,snapshot)
 
             backup=api('/v1/backup',{})
             folder=Path(backup['path'])
@@ -112,13 +112,14 @@ def main():
             assert api('/v1/status')['paper']['trades']==1
             assert len(api('/v1/decisions')['decisions'])==1
             assert api('/v1/config')['config']['risk']['risk_percent']==.35
-            assert len(api('/v1/backtest/runs')['runs'])==5
+            assert len(api('/v1/backtest/runs')['runs'])==7
+            assert api('/v1/backtest/report',{'id':candidate_id})['comparison']==comparison
             assert not api('/v1/news')['enabled']
             assert api('/v1/backtest/report',{'id':backtest_id})['metrics']==backtest_metrics
             assert len(api('/v1/events')['events'])>len(events_before)
             api('/v1/shutdown',{});process.wait(timeout=5)
             assert process.returncode==0
-            print('PASS: lifecycle/auth/staleness/shadow/risk; backtest UTC chunking, cancel, account isolation, asynchronous completion, full export, deterministic offline replay, CES experiment, news API/settings, backup and restart persistence')
+            print('PASS: lifecycle/auth/staleness/shadow/risk; backtest UTC chunking, cancel, account isolation, asynchronous completion, full export, deterministic offline replay, CES/Meta-v2 experiments, same-data comparison persistence, legacy report digests, news API/settings, backup and restart persistence')
         finally:
             if process.poll() is None:process.terminate();process.wait(timeout=5)
 

@@ -972,7 +972,8 @@ mod tests {
         let r = execute(&h, &o);
         assert_eq!(r.trades[0].reason, "data_gap");
         assert_eq!(r.trades[0].exit_bar, BASE+1602*60);
-        assert!(r.decisions.iter().skip(1).all(|d| !d.current && d.outcome != "entered"));
+        assert_ne!(r.decisions[1].outcome, "entered");
+        assert!(r.decisions.iter().skip(2).all(|d| !d.current && d.outcome != "entered"));
         let m1: Vec<_> = h.bars.iter().map(|b| b.candle.clone()).collect();
         let mut market = market_at(&m1, &aggregate(&h.bars,300), &aggregate(&h.bars,900),1600);
         market.m15.clear();

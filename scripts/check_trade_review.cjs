@@ -12,7 +12,7 @@ const {chromium}=require('playwright');
    const errors=[],network=[];
    page.on('pageerror',e=>errors.push(e.message));
    page.on('request',r=>{if(/^https?:/.test(r.url()))network.push(r.url());});
-   for(const name of ['kte-report','meta-report','empty-report']) {
+   for(const name of ['kte-report','meta-report','empty-report','meta-v2-report']) {
     const folder=path.resolve(__dirname,'../test-output',name);
     const report=JSON.parse(fs.readFileSync(path.join(folder,'report.json'),'utf8'));
     await page.goto(pathToFileURL(path.join(folder,'report.html')).href);
@@ -40,6 +40,14 @@ const {chromium}=require('playwright');
       await page.locator('#trade-prev').click();assert.equal(await select.inputValue(),'0');
      }
      await select.selectOption('0');
+    }
+    if(name==='meta-v2-report') {
+     assert.equal(await page.locator('#experiment-comparison [data-comparison-metric]').count(),8);
+     assert.equal(await page.locator('#candidate-audit [data-candidate-time]').count(),Math.min(50,report.decisions.length));
+     const comparison=JSON.parse(fs.readFileSync(path.join(folder,'comparison.json'),'utf8'));
+     assert((await page.locator('#experiment-comparison [data-comparison-metric="net"]').innerText()).includes(comparison.target_metrics.net.toFixed(2)));
+     await page.locator('#experiment-comparison').screenshot({path:path.resolve(__dirname,`../test-output/comparison-${width}.png`)});
+     await page.locator('#candidate-audit').screenshot({path:path.resolve(__dirname,`../test-output/audit-${width}.png`)});
     }
     assert.deepEqual(errors,[]);assert.deepEqual(network,[],'Export must work without remote requests');
     await page.locator('#trade-review').screenshot({path:path.resolve(__dirname,`../test-output/review-${name}-${width}.png`)});

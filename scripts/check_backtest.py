@@ -1,5 +1,6 @@
 """Real-core backtest integration using explicitly synthetic historical fixtures."""
 import csv
+import hashlib
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -132,5 +133,46 @@ def check(api, snapshot):
         assert (replay_folder/name).read_bytes()==(kte_folder/name).read_bytes()
     assert (replay_folder/'report.html').read_bytes()==(kte_folder/'report.html').read_bytes()
     assert len(api('/v1/backtest/runs')['runs'])==5
+    # Guard the complete legacy report, not only a handful of totals. Digests come
+    # from verified pre-Meta-v2 CI synthetic artifacts; captured_ms alone varies.
+    goldens=json.loads((Path(__file__).resolve().parents[1]/'tests/legacy_report_hashes.json').read_text())
+    for old in (report,ces,kte):
+        normalized=dict(old);normalized.pop('captured_ms')
+        digest=hashlib.sha256(json.dumps(normalized,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        assert digest==goldens['reports'][old['options']['strategy']], (old['algorithm'],digest)
+    # MT5 is offline. Experiment must use the original stored history and options.
+    api('/v1/backtest/experiment',dict(id=first_id,strategy='meta_v2'))
+    candidate_id=completed()
+    candidate_folder=Path(api('/v1/backtest/export',dict(id=candidate_id))['path'])
+    candidate=json.loads((candidate_folder/'report.json').read_text())
+    comparison=json.loads((candidate_folder/'comparison.json').read_text())
+    assert candidate['algorithm']=='meta-v2-candidate-v1 / M1-OHLC-conservative-v1'
+    assert candidate['metrics']['trades']>0
+    assert candidate['options']==dict(report['options'],strategy='meta_v2')
+    assert (candidate_folder/'history.json').read_bytes()==(folder/'history.json').read_bytes()
+    assert comparison['source_id']==first_id
+    assert comparison['identical_history'] and comparison['identical_options_except_strategy']
+    assert comparison['source_metrics']==report['metrics'] and comparison['target_metrics']==candidate['metrics']
+    assert abs(comparison['delta_net']-(candidate['metrics']['net']-report['metrics']['net']))<1e-8
+    candidate_view=api('/v1/backtest/report',dict(id=candidate_id))
+    assert candidate_view['comparison']==comparison and 'مقارنة بنفس البيانات' in candidate_view['text']
+    decisions=candidate['decisions']
+    assert len(decisions)==candidate['metrics']['tested_bars']
+    assert sum(d['outcome']=='entered' for d in decisions)==len(candidate['trades'])
+    rows=list(csv.DictReader((candidate_folder/'decisions.csv').open()))
+    assert len(rows)==len(decisions)
+    for d,row in zip(decisions,rows):
+        assert int(row['time_utc'])==d['time'] and int(row['signal_bar_utc'])==d['signal_bar']
+        assert row['outcome']==d['outcome'] and row['candidate_action']==d['candidate']['action']
+        assert row['gates']==' | '.join(d['candidate']['gates'])
+    assert 'experiment-comparison' in (candidate_folder/'report.html').read_text()
+    assert 'candidate-audit' in (candidate_folder/'report.html').read_text()
+    shutil.copytree(candidate_folder,review/'meta-v2-report',dirs_exist_ok=True)
+    api('/v1/backtest/replay',dict(id=candidate_id))
+    candidate_replay_id=completed()
+    replay_folder=Path(api('/v1/backtest/export',dict(id=candidate_replay_id))['path'])
+    for name in ('report.json','history.json','decisions.csv','comparison.json','report.html'):
+        assert (replay_folder/name).read_bytes()==(candidate_folder/name).read_bytes(),name
+    assert len(api('/v1/backtest/runs')['runs'])==7
     api('/v1/gateway/snapshot',snapshot)
-    return first_id,view['metrics']
+    return first_id,view['metrics'],candidate_id,comparison

@@ -6,21 +6,28 @@ Canonical repository: `gngoongoog/V4`. Stable branch: `main`; ongoing work:
 
 ## Active task — Meta v2 historical evaluation (2026-10-14)
 
-WIP checkpoint: selectable `meta_v2` / `meta-v2-candidate-v1` historical path
-and per-opening candidate audit are implemented. Legacy admission and exit rules
-are retained. Five new domain tests cover cost reconciliation, prefix causality,
-missing/stale data, volatility/spread/size vetoes and gap/risk behavior. The native
-selector includes Meta v2. Live Shadow is unchanged.
+WIP checkpoint: historical Meta v2, per-opening candidate audit, experiment
+lineage, matched-data/cost comparison and desktop selector are implemented.
+New comparison metadata is stored atomically alongside a completed report;
+offline replay preserves its baseline. JSON/CSV/HTML and report text expose the
+candidate gates and comparison. Live Shadow remains legacy Meta.
 
-Local Python: 16 PASS; `git diff --check`: PASS. Rust tests and desktop compilation:
-NOT RUN locally (no Rust on PATH); Linux research CI will validate this checkpoint.
-A prior synthetic artifact was verified by SHA256 and reduced to three legacy
-report digests in tests/legacy_report_hashes.json; integration assertions follow.
+First checkpoint d715203 compiled on Linux. Domain: 37 PASS / 1 FAIL; the failed
+gap test incorrectly required `current=false` on the first observed gap minute,
+where the ledger already rejects entry. It now checks that admission is blocked
+and subsequent incomplete windows are unavailable. No strategy rule changed.
+Current tests: NOT RUN in CI yet. Local Python 16 PASS; Python/JS syntax and diff
+checks PASS. No Rust installed locally. No Windows build/package triggered.
 
-Next exact action: persist experiment parent linkage, display/export verified
-same-data comparisons and candidate gates, wire the golden regression checks and
-exercise Meta v2 replay/compare through the real core. Then inspect Linux CI,
-fix any failures and update state documentation. Windows packaging is deferred.
+Integration now checks seven persisted results, full legacy-report golden digests
+from prior verified synthetic artifacts, Meta v2 decisions CSV, same-data comparison,
+byte-identical offline replay and comparison survival across restart. Linux CI
+also checks the native Slint selector compilation; browser review adds Meta v2.
+
+Next exact action: inspect current Linux research CI, fix failures, verify the
+comparison/audit screenshots and update PROJECT_STATE, ROADMAP, CHANGELOG,
+docs/META_V2.md, docs/BACKTEST.md and validation.json with the actual result.
+Then record the next research step, keeping native broker acceptance pending.
 
 ## Previous verified code checkpoint
 
