@@ -43,37 +43,45 @@ Macro/News integration compile-only run `38522309782` passed Domain + Runtime, P
 - News dashboard and Telegram `/news` expose the context;
 - Meta, Shadow, historical strategy decisions and broker execution remain unchanged.
 
-### Learning Foundation v1 — current increment
+### Learning Foundation v1
 
-A leakage-aware learning data foundation is now wired into Core, with no trained model or prediction path:
+Learning Foundation compile-only run `38523080105` passed Domain + Runtime, Python gateway syntax and native Desktop compilation.
 
 - `learning_snapshots` stores at most one immutable closed-bar feature snapshot per account/server/symbol/currency + M1 bar;
-- feature schema is `gold-m1-feature-v1` and uses reproducible closed-bar data only: Trend, Regime, Structure, Volatility, Meta-v2 candidate state, M1/M5/M15 momentum, Gann geometry, zone geometry, setup metadata, tick-activity/profile proxies and session context;
-- live quote projection, DOM and News/Macro are deliberately excluded from v1 training features because historical replay parity for those feeds is not yet available;
-- labels are never written immediately. `learning_labels` is inserted only after exact future M1 sequences exist for 5/15/30 minutes;
-- each horizon stores final ATR-normalized return, MFE, MAE and a neutral/up/down class using ±0.20 ATR; missing or gapped future minutes are not shifted or fabricated;
-- model registry tables exist (`learning_models`, `learning_slots`) with reserved `champion` and `challenger` slots, but contain no trained model by default;
-- `/v1/learning` exposes dataset/registry status; `/v1/learning/export` writes matured rows only in deterministic order;
-- backup schema now includes learning dataset/registry metadata while explicitly declaring `trained_model_included=false`;
-- `training_enabled=false`, `prediction_enabled=false` and `live_self_modification=false` remain explicit invariants.
+- feature schema `gold-m1-feature-v1` contains reproducible closed-bar Trend, Regime, Structure, Volatility, Meta-v2 candidate state, M1/M5/M15 momentum, Gann geometry, zones, setup metadata, tick-activity/profile proxies and session context;
+- quote projection, DOM and News/Macro are deliberately excluded until replay parity exists for those feeds;
+- `learning_labels` is written only after exact future M1 sequences exist for 5/15/30 minutes; gapped horizons are never shifted or fabricated;
+- labels store ATR-normalized return, MFE, MAE and neutral/up/down class at ±0.20 ATR;
+- `/v1/learning` exposes status and `/v1/learning/export` writes matured rows only in deterministic order;
+- registry tables reserve `champion`/`challenger` but have no registered trained model by default;
+- `training_enabled=false`, `prediction_enabled=false`, `live_self_modification=false`.
 
-This commit requests a `[build-only]` gate for Learning Foundation v1. Automated strategy tests, statistical effectiveness claims, chronological model evaluation and Windows packaging remain deferred by user instruction.
+### Offline Linear Baseline Trainer — current increment
 
-Do not describe candle tick-volume/profile proxies as exchange volume or order flow. Do not describe Gann/DOM/Macro evidence as a win probability. Do not call the learning foundation an AI model until an actual versioned trained artifact exists.
+`scripts/train_linear_baseline.py` is now added as an offline-only research trainer and documented in `docs/LEARNING.md`.
+
+- reads only a matured `dataset.jsonl` Learning Foundation export;
+- verifies feature/label schema and hashes the exact dataset bytes with SHA-256;
+- flattens a fixed transparent numerical feature set; no hidden feature search;
+- uses chronological splits independently per account context;
+- applies a 30-row purge on both sides of train/validation and validation/holdout boundaries because labels inspect up to 30 future M1 minutes;
+- refuses datasets that remain too small after purging or whose partitions lack one of the three target classes;
+- train-only standardization; no holdout normalization leakage;
+- deterministic class-weighted 3-class softmax linear baseline with early stopping on validation log-loss;
+- artifact records train, validation and untouched holdout accuracy, balanced accuracy, macro-F1, log-loss, mean confidence, confusion matrix and majority baseline;
+- artifact status is always `unreviewed_challenger`, `eligible_for_promotion=false`; it has no MT5/Core network path and cannot affect Shadow.
+
+The build-only gate now syntax-checks both `gateway/mt5_gateway.py` and `scripts/train_linear_baseline.py`. This commit requests that gate. It does not train a model because no user broker dataset was supplied in CI.
+
+Automated strategy tests, profitability/effectiveness claims, native Windows packaging and laptop acceptance remain deferred by user instruction. Do not call the trainer output production AI or a profitable model before real chronological evaluation.
 
 ## Previous verified research baseline
 
 Selectable historical Meta v2 and matched-data comparisons are implemented and verified. Tested source: `b488350416ccbbde1947ae3aae381ba02aec008d`.
 Research CI: https://github.com/gngoongoog/V4/actions/runs/38516269617 — PASS.
 
-- Rust domain: 38 PASS; runtime: 15 PASS, one explicit live-network test ignored; zero failures on that baseline.
-- Python: 16 PASS. Actual Rust core build and smoke: PASS.
-- Meta v2 Report/History/decisions.csv/comparison.json/HTML replay byte-identical on the verified research baseline.
-- Native Slint desktop compilation passed on Linux for the verified baseline.
-- Native MT5 history/Telegram/DOM delivery on the user's laptop: NOT RUN.
+## Next after the trainer compile/syntax gate
 
-## Next after the Learning Foundation compile gate
+Add immutable model registration and challenger lifecycle only. Registration must verify schemas, dataset identity and artifact metadata; it must not enable inference. Then add manual promotion preconditions based on separately persisted chronological evaluation evidence. Only after registry and evaluation are sound should a read-only inference engine be designed; Shadow remains legacy Meta until explicit later promotion.
 
-If compilation passes, build the offline trainer contract and model registry operations without allowing prediction to affect Shadow: deterministic dataset identity, explicit train/validation/holdout windows, simple interpretable baseline model first, metrics persisted with model metadata, then challenger registration. Champion promotion must remain manual and impossible unless chronological held-out evaluation criteria are satisfied. Only after this foundation is validated should ONNX/runtime inference be added.
-
-Keep live Shadow's source legacy Meta until real broker-data evaluation is reviewed. The user will perform native laptop/MT5/Telegram acceptance later. No broker execution is enabled. Never commit credentials, private runtime databases/logs, transport chunks or ZIP-only source.
+Keep live Shadow's source legacy Meta. No broker execution is enabled. Never commit credentials, private runtime databases/logs, transport chunks or ZIP-only source.
