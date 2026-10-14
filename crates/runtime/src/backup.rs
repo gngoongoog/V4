@@ -44,6 +44,7 @@ fn valid_db(path:&Path)->Result<()>{
 fn folder(root:&Path,name:&str)->Result<PathBuf>{safe_name(name)?;Ok(root.join("backups").join(name))}
 fn validate(root:&Path,name:&str)->Result<Validated>{
     let dir=folder(root,name)?;if !dir.is_dir(){bail!("Backup does not exist: {name}");}
+    let dbp=dir.join("events.sqlite");cleanup_sqlite_sidecars(&dbp)?;
     let mut members=Vec::new();for e in fs::read_dir(&dir)?{let e=e?;if !e.file_type()?.is_file(){bail!("Backup contains unsupported directory/member");}let n=e.file_name().to_string_lossy().to_ascii_lowercase();if !matches!(n.as_str(),"events.sqlite"|"config.json"|"manifest.json"){bail!("Unexpected backup member: {n}");}members.push(n);}members.sort();members.dedup();if members.len()!=3{bail!("Backup member coverage mismatch");}
     let mp=dir.join("manifest.json");let m:Value=serde_json::from_slice(&fs::read(&mp)?).context("Invalid backup manifest")?;
     if m["schema"].as_u64()!=Some(SCHEMA){bail!("Unsupported backup schema; expected {SCHEMA}");}
@@ -54,7 +55,7 @@ fn validate(root:&Path,name:&str)->Result<Validated>{
         let expected=files.get(n).with_context(||format!("Manifest missing {n}"))?;let p=dir.join(n);if !p.is_file(){bail!("Backup file missing: {n}");}
         let(bytes,hash)=hash_file(&p)?;if expected["bytes"].as_u64()!=Some(bytes)||expected["hash"].as_str()!=Some(hash.as_str()){bail!("Backup hash/size mismatch: {n}");}
     }
-    valid_config(&dir.join("config.json"))?;valid_db(&dir.join("events.sqlite"))?;let(_,manifest_hash)=hash_file(&mp)?;
+    valid_config(&dir.join("config.json"))?;valid_db(&dbp)?;cleanup_sqlite_sidecars(&dbp)?;let(_,manifest_hash)=hash_file(&mp)?;
     Ok(Validated{name:name.to_owned(),dir,manifest:m,manifest_hash})
 }
 fn create_named(db:&Connection,root:&Path,config:&Config,now:u64,prefix:&str)->Result<Value>{
