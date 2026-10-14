@@ -27,8 +27,21 @@ class ProjectContractTests(unittest.TestCase):
             "test-output",
             ".package-cache",
             ".build-venv",
+            ".ci",
+            ".venv",
+            "venv",
+            "node_modules",
             "build",
             "dist",
+        }
+        forbidden_dir_names = {
+            "node_modules",
+            ".venv",
+            "venv",
+            "__pycache__",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
         }
         forbidden_suffixes = {
             ".zip",
@@ -50,6 +63,9 @@ class ProjectContractTests(unittest.TestCase):
             if not relative.parts:
                 continue
             if relative.parts[0] in forbidden_top_level or ".import" in relative.parts:
+                bad.append(str(relative))
+                continue
+            if any(part in forbidden_dir_names for part in relative.parts[:-1]):
                 bad.append(str(relative))
                 continue
             if path.suffix.lower() in forbidden_suffixes:
