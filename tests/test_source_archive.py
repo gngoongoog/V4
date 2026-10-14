@@ -24,6 +24,23 @@ class SourceArchiveTests(unittest.TestCase):
             (root / "runtime" / "generated.txt").write_text("generated", encoding="utf-8")
             (root / ".import").mkdir()
             (root / ".import" / "chunk.txt").write_text("transport", encoding="utf-8")
+
+            generated_files = (
+                ".ci/node_modules/pkg/index.js",
+                "node_modules/pkg/index.js",
+                ".venv/Lib/site-packages/pkg.py",
+                "venv/Lib/site-packages/pkg.py",
+                "src/__pycache__/module.pyc",
+                "src/.pytest_cache/state.txt",
+                "src/.mypy_cache/state.json",
+                "src/.ruff_cache/state.bin",
+                "vendor/node_modules/pkg/index.js",
+            )
+            for name in generated_files:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("generated", encoding="utf-8")
+
             for name in (
                 ".env",
                 "ipc.key",
@@ -34,6 +51,9 @@ class SourceArchiveTests(unittest.TestCase):
                 "cert.pem",
                 "cert.p12",
                 "cert.pfx",
+                "old-source.zip",
+                "old-source.7z",
+                "old-source.rar",
             ):
                 (root / name).write_text("secret", encoding="utf-8")
 
@@ -46,6 +66,8 @@ class SourceArchiveTests(unittest.TestCase):
             self.assertIn("BrainTrade-OS/.env.example", names)
             self.assertNotIn("BrainTrade-OS/runtime/generated.txt", names)
             self.assertNotIn("BrainTrade-OS/.import/chunk.txt", names)
+            for name in generated_files:
+                self.assertNotIn("BrainTrade-OS/" + name, names)
             for name in (
                 ".env",
                 "ipc.key",
@@ -56,6 +78,9 @@ class SourceArchiveTests(unittest.TestCase):
                 "cert.pem",
                 "cert.p12",
                 "cert.pfx",
+                "old-source.zip",
+                "old-source.7z",
+                "old-source.rar",
             ):
                 self.assertNotIn("BrainTrade-OS/" + name, names)
 
