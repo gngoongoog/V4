@@ -17,7 +17,20 @@ enum Task {
 }
 
 fn paint(ui: &Dashboard, status: Status) {
-    ui.set_brains(status.analysis.text().into());
+    let mut brains = status.analysis.text();
+    brains.push_str("\n\nMARKET OPPORTUNITIES / فرص السوق\n");
+    brains.push_str(
+        &status
+            .analysis
+            .opportunities
+            .as_ref()
+            .map(|value| value.signals_text())
+            .unwrap_or_else(|| {
+                "بانتظار خريطة فرص من شموع MT5 المكتملة. لا توجد أرقام دخول صالحة حالياً."
+                    .into()
+            }),
+    );
+    ui.set_brains(brains.into());
     ui.set_regime(
         if status.analysis.current {
             status.analysis.regime.clone()
@@ -354,7 +367,7 @@ fn run_ui() -> anyhow::Result<()> {
                         ui.set_equity("—".into());
                         ui.set_today("—".into());
                         ui.set_positions("Live data unavailable".into());
-                        ui.set_brains("Core unavailable — analysis withdrawn".into());
+                        ui.set_brains("Core unavailable — analysis and opportunity plans withdrawn".into());
                         ui.set_regime("UNAVAILABLE".into());
                         ui.set_decision("WAIT".into());
                         ui.set_paper("Core unavailable — current virtual equity unknown".into());
