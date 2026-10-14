@@ -1,4 +1,3 @@
-use super::{utc, Service as BacktestService};
 use crate::{atomic_write, now_ms};
 use anyhow::{bail, Context, Result};
 use braintrade_domain::{
@@ -54,6 +53,28 @@ pub struct Service {
     rx: mpsc::Receiver<Completion>,
 }
 
+fn utc(seconds: u64) -> String {
+    chrono::DateTime::from_timestamp(seconds as i64, 0)
+        .map(|date| date.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| seconds.to_string())
+}
+
+fn load_source(db: &Connection, id: &str) -> Result<(u64, Report, History)> {
+    let (created_ms, report, history): (u64, String, String) = db
+        .query_row(
+            "SELECT created_ms,report,history FROM backtest_runs WHERE id=?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?
+        .context("اختبار المصدر غير موجود")?;
+    Ok((
+        created_ms,
+        serde_json::from_str(&report)?,
+        serde_json::from_str(&history)?,
+    ))
+}
+
 fn source_identity(source_id: &str, created_ms: u64, report: &Report, history: &History) -> Value {
     json!({
         "source_id": source_id,
@@ -67,8 +88,8 @@ fn source_identity(source_id: &str, created_ms: u64, report: &Report, history: &
             "currency": history.currency,
             "captured_ms": history.captured_ms,
             "bars": history.bars.len(),
-            "first_bar": history.bars.first().map(|b| b.candle.time),
-            "last_bar": history.bars.last().map(|b| b.candle.time),
+            "first_bar": history.bars.first().map(|bar| bar.candle.time),
+            "last_bar": history.bars.last().map(|bar| bar.candle.time),
             "contract": history.contract
         }
     })
@@ -151,19 +172,11 @@ impl Service {
         }
     }
 
-    pub fn start(&mut self, db: &Connection, request: StartRequest, backtest_active: bool) -> Result<Value> {
-        if self.active() || backtest_active {
-            bail!("يوجد اختبار أو تقييم زمني قيد العمل؛ انتظر أو ألغِه أولاً");
+    pub fn start(&mut self, db: &Connection, request: StartRequest) -> Result<Value> {
+        if self.active() {
+            bail!("يوجد تقييم زمني قيد العمل؛ انتظر أو ألغِه أولاً");
         }
-        let source_created_ms: u64 = db
-            .query_row(
-                "SELECT created_ms FROM backtest_runs WHERE id=?1",
-                [&request.source_id],
-                |row| row.get(0),
-            )
-            .optional()?
-            .context("اختبار المصدر غير موجود")?;
-        let (report, history) = BacktestService::load(db, &request.source_id)?;
+        let (source_created_ms, report, history) = load_source(db, &request.source_id)?;
         if report.algorithm != report.options.strategy.algorithm() {
             bail!("إصدار خوارزمية المصدر لا يطابق الإصدار الحالي");
         }
