@@ -20,9 +20,15 @@ SQLite startup explicitly enables `PRAGMA foreign_keys=ON` and runs `foreign_key
 
 Both `scripts/source_archive.py` and portable `source_copy()` defensively exclude runtime state, `.import`, archives, secrets, generated dependency trees and caches while preserving real source such as `crates/runtime` and `.env.example`. Tests cover output-inside-source-tree behavior and exclusions for `.ci`, `node_modules`, virtual environments, Python caches, SQLite/log/key/certificate files and ZIP/7z/RAR artifacts. `test_project_contract.py` also fails CI if these artifacts become tracked later.
 
-## Validation boundary
+## Validation boundary — PASS
 
-The executable/code checkpoint under audit is `a74f7ca87497d8e1c923523050acb6bbf293bd7d`. Research validation run: `38544897072`. Windows build/tests run: `38544897241`. The exact final status is mirrored in `BUILD_HANDOFF.md` and `docs/validation.json` after those runs complete. Documentation-only commits after that checkpoint do not change executable behavior.
+Executable/code checkpoint: `a74f7ca87497d8e1c923523050acb6bbf293bd7d`.
+
+- Research validation run `38544897072`: **PASS** including Rust/Core/Python, real-Core smoke, browser checks, Desktop compile/all-page headless render and artifact upload.
+- Windows build/tests run `38544897241`: **PASS** including Linux duplicate validation, Windows portable packaging and artifact upload.
+- Windows artifact: `BrainTrade-Windows-x64-v0.3.0-Preview`, 32,991,252 bytes, SHA-256 `b417c82c5f105624292bef10061f9254cfb0a6949aed899ad116e30a85e04a76`.
+
+Documentation-only commits after that checkpoint do not change executable behavior. Native acceptance on the user's own Windows/MT5 broker environment remains separate from CI.
 
 ## Findings fixed during this audit
 
@@ -30,7 +36,7 @@ The executable/code checkpoint under audit is `a74f7ca87497d8e1c923523050acb6bbf
 - Source packaging exclusions were hardened and aligned between both export paths.
 - SQLite foreign-key enforcement became explicit and tested.
 - Permanent project-contract tests now guard read-only broker access, no promotion/execution routes, causal learning order, shared schemas, CI coverage and repository hygiene.
-- Stale project documentation is being reconciled with already implemented Gann/DOM opportunities, chronological evaluation, manual review eligibility, read-only inference and prediction outcome scoring.
+- Project documentation was reconciled with already implemented Gann/DOM opportunities, chronological evaluation, manual review eligibility, read-only inference and prediction outcome scoring.
 
 ## Open limitations / not defects
 
@@ -42,4 +48,4 @@ The executable/code checkpoint under audit is `a74f7ca87497d8e1c923523050acb6bbf
 
 ## Next quality gate
 
-After the current code checkpoint is green on Research and Windows CI, the next scientific layer should be an explicit challenger performance-review policy over sufficiently large scored out-of-sample samples. It may produce a manual review recommendation only; it must not auto-promote a champion or influence Shadow/broker execution.
+The next scientific layer is an explicit Challenger Performance Review Policy over sufficiently large immutable scored out-of-sample samples. It may produce a manual review recommendation only; it must not auto-promote a Champion or influence Shadow/broker execution.

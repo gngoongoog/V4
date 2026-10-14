@@ -10,9 +10,9 @@ Current code checkpoint: `a74f7ca87497d8e1c923523050acb6bbf293bd7d` (`Guard gene
 
 Research workflow `38544897072`: **PASS** — Rust domain/runtime tests, Core build, Python tests, real-Core smoke, offline browser checks, native Desktop compile, all-page headless render and artifact upload all completed successfully.
 
-Windows workflow `38544897241`: Linux duplicate validation **PASS**. The Windows `Package desktop, core and gateway` job is **IN PROGRESS** at this documentation checkpoint. Do not claim final Windows PASS until GitHub records that job and artifact upload as successful.
+Windows workflow `38544897241`: **PASS** — Linux duplicate validation, real Windows portable packaging and artifact upload all completed successfully. Artifact: `BrainTrade-Windows-x64-v0.3.0-Preview`, 32,991,252 bytes, SHA-256 `b417c82c5f105624292bef10061f9254cfb0a6949aed899ad116e30a85e04a76`.
 
-Commits after `a74f7ca...` are documentation/reconciliation only unless a newer code checkpoint is explicitly recorded here.
+Commits after `a74f7ca...` are documentation/reconciliation only unless a newer code checkpoint is explicitly recorded here. GitHub Windows packaging success is not native acceptance on the user's own MT5/broker environment.
 
 ## Non-negotiable safety boundary
 
@@ -59,15 +59,14 @@ Commits after `a74f7ca...` are documentation/reconciliation only unless a newer 
 
 ## Current documentation reconciliation
 
-`README.md`, `PROJECT_STATE.md`, `ROADMAP.md` and `docs/QUALITY_AUDIT.md` are already reconciled. This checkpoint also reconciles `CONTINUE_HERE.md`, this handoff, `docs/LEARNING.md`, `docs/RESEARCH.md`, `docs/ARCHITECTURE.md`, `docs/RELEASE_STATUS.md`, `docs/validation.json`, `docs/BRANCH_POLICY.md` and `CHANGELOG.md`.
+`README.md`, `PROJECT_STATE.md`, `ROADMAP.md`, `CONTINUE_HERE.md`, `CHANGELOG.md`, `docs/QUALITY_AUDIT.md`, `docs/ARCHITECTURE.md`, `docs/RESEARCH.md`, `docs/LEARNING.md`, `docs/BRANCH_POLICY.md`, `docs/RELEASE_STATUS.md` and related acceptance/quickstart docs have been reconciled with the implemented pipeline. This handoff and `docs/validation.json` carry the exact code/CI boundary.
 
 ## Exact next action
 
-1. Re-check Windows run `38544897241` until the Windows package/artifact job reaches a terminal state.
-2. If it fails, inspect that exact job and fix packaging without weakening source/security/causality guards.
-3. If it passes, update only the final Windows status fields in this handoff / validation / release-quality docs and consider a deliberate PR promotion of the safe development checkpoint to `main`.
-4. Then begin the **Challenger Performance Review Policy** as a separate read-only scientific layer over immutable scored outcomes.
+Begin the **Challenger Performance Review Policy** as a separate read-only scientific layer over immutable scored outcomes.
 
-That next policy must require sufficiently large samples and class support, multiple chronological/context windows, transparent baselines, calibration/stability/drift checks and immutable evidence linkage. It may output `insufficient_evidence`, `review_candidate` or `reject`; it must not create a Champion, auto-promote or influence Shadow/risk/broker execution.
+The policy must require sufficiently large samples and per-class support, multiple chronological/context windows, transparent baselines, calibration/stability/drift checks and immutable evidence linkage. It may output `insufficient_evidence`, `review_candidate` or `reject`; it must not create a Champion, auto-promote or influence Shadow/risk/broker execution.
+
+After that layer is fully tested, the next separate acceptance gate is native user-laptop MT5/broker + Telegram verification. Broker Demo/Live execution remains a later architecture track.
 
 Never commit credentials, private runtime DB/logs, `.import`, encoded chunks, generated dependency trees or ZIP-only source.

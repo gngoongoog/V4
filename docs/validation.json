@@ -3,7 +3,7 @@
   "repository": "gngoongoog/V4",
   "branch": "development",
   "tested_executable_commit": "a74f7ca87497d8e1c923523050acb6bbf293bd7d",
-  "validation_boundary": "Executable/source behavior is validated at tested_executable_commit. Later documentation-only commits do not inherit a different executable claim.",
+  "validation_boundary": "Executable/source behavior is validated at tested_executable_commit. Later documentation-only commits do not change executable behavior.",
   "research_ci": {
     "run_id": 38544897072,
     "status": "PASS",
@@ -18,9 +18,13 @@
   },
   "windows_ci": {
     "run_id": 38544897241,
+    "status": "PASS",
     "linux_duplicate_validation": "PASS",
-    "windows_package_and_artifact": "IN_PROGRESS",
-    "final_status": "IN_PROGRESS"
+    "windows_package": "PASS",
+    "artifact_upload": "PASS",
+    "artifact_name": "BrainTrade-Windows-x64-v0.3.0-Preview",
+    "artifact_bytes": 32991252,
+    "artifact_sha256": "b417c82c5f105624292bef10061f9254cfb0a6949aed899ad116e30a85e04a76"
   },
   "capabilities": {
     "historical_strategies": ["Meta v1", "Meta v2 candidate", "CES v1", "KTE v1"],
