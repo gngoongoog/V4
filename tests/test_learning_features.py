@@ -14,17 +14,26 @@ assert spec.loader is not None
 spec.loader.exec_module(trainer)
 
 
-def fingerprint(values):
-    payload = "".join(f"{name}={values[name]:.12f}\n" for name in sorted(values))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+def canonical(values):
+    return "".join(f"{name}={values[name]:.12f}\n" for name in sorted(values)).encode("utf-8")
+
+
+def fnv64(payload):
+    value = 0xCBF29CE484222325
+    for byte in payload:
+        value ^= byte
+        value = (value * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return f"{value:016x}"
 
 
 class LearningFeatureParityTests(unittest.TestCase):
     def test_python_flatten_matches_shared_fixture(self):
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
         values = trainer.flatten(fixture["features"])
+        payload = canonical(values)
         self.assertEqual(len(values), fixture["expected_feature_count"])
-        self.assertEqual(fingerprint(values), fixture["expected_sha256"])
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), fixture["expected_sha256"])
+        self.assertEqual(fnv64(payload), fixture["expected_fnv64"])
 
     def test_feature_contract_is_fixed_for_schema_v1(self):
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
