@@ -7,9 +7,19 @@
 - Opportunity cache reacts to corrected history on any timeframe.
 - Normalized Cargo/UI/portable version to 0.4.0; added source commit to package metadata.
 - Added packaged Windows startup/DPAPI/config/backup/shutdown and native-render verification.
-- Validation pending for this candidate; earlier results below retain their original boundaries.
+- Validated executable checkpoint `74e6387e3f66b8035f5ce55db92561ec1809ebf4`: Research run `38586058214` PASS and Windows run `38586058215` PASS.
+- Windows artifact: `BrainTrade-Windows-x64-v0.4.0-Preview`, 33,229,148 bytes, SHA-256 `e9e09749359a8bfd4cc14959d141d1c8485bf3fe427887413f4b2c5274db0237`.
 
 # Changelog
+
+## 2026-10-14 — challenger performance review policy
+
+- Added `challenger-performance-review-v1` over immutable scored challenger outcomes.
+- Added fixed sample/class/context/window/regime evidence gates, majority/uniform baselines, calibration, chronological stability and class-distribution drift checks.
+- Added deterministic exact-evidence identity, outcome IDs/boundaries/reason codes and immutable review records.
+- Added read-only status/list/create/report APIs and Learning-page visibility.
+- Bumped backup manifest schema to 9 to include performance-review records.
+- Kept Champion creation, automatic promotion, Shadow/risk influence and broker execution disabled.
 
 ## 2026-10-14 — learning audit pipeline and repository quality reconciliation
 
@@ -57,7 +67,7 @@
 - Persistent reports/raw inputs and deterministic offline replay.
 - Same-data experiments and CSV/JSON/HTML exports with equity curve.
 - Official Fed/ECB RSS page/cache and Telegram read-only handlers.
-- Cargo and current Windows preview package metadata still use 0.3.0 during the 0.4.0 research milestone.
+- Historical package metadata used 0.3.0 during the earlier research milestone; the current candidate is aligned at 0.4.0.
 
 ## 0.2.0 — last declared delivered Windows portable preview
 

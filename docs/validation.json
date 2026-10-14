@@ -2,10 +2,10 @@
   "version": "0.4.0-research-development",
   "repository": "gngoongoog/V4",
   "branch": "development",
-  "tested_executable_commit": "a74f7ca87497d8e1c923523050acb6bbf293bd7d",
+  "tested_executable_commit": "74e6387e3f66b8035f5ce55db92561ec1809ebf4",
   "validation_boundary": "Executable/source behavior is validated at tested_executable_commit. Later documentation-only commits do not change executable behavior.",
   "research_ci": {
-    "run_id": 38544897072,
+    "run_id": 38586058214,
     "status": "PASS",
     "rust_domain_runtime_tests": "PASS",
     "core_build": "PASS",
@@ -17,28 +17,19 @@
     "artifact_upload": "PASS"
   },
   "windows_ci": {
-    "run_id": 38544897241,
+    "run_id": 38586058215,
     "status": "PASS",
     "linux_duplicate_validation": "PASS",
     "windows_package": "PASS",
     "artifact_upload": "PASS",
-    "artifact_name": "BrainTrade-Windows-x64-v0.3.0-Preview",
-    "artifact_bytes": 32991252,
-    "artifact_sha256": "b417c82c5f105624292bef10061f9254cfb0a6949aed899ad116e30a85e04a76"
+    "artifact_name": "BrainTrade-Windows-x64-v0.4.0-Preview",
+    "artifact_bytes": 33229148,
+    "artifact_sha256": "e9e09749359a8bfd4cc14959d141d1c8485bf3fe427887413f4b2c5274db0237",
+    "native_validation_artifact": "windows-native-validation"
   },
   "capabilities": {
     "historical_strategies": ["Meta v1", "Meta v2 candidate", "CES v1", "KTE v1"],
-    "observational_brains": [
-      "Trend v1",
-      "Regime v1",
-      "Structure v1",
-      "Volatility v1",
-      "Meta v2 candidate",
-      "Market Opportunities",
-      "Gann Geometry v1",
-      "broker DOM Depth",
-      "Macro/News Context"
-    ],
+    "observational_brains": ["Trend v1", "Regime v1", "Structure v1", "Volatility v1", "Meta v2 candidate", "Market Opportunities", "Gann Geometry v1", "broker DOM Depth", "Macro/News Context"],
     "chronological_evaluation": true,
     "learning_snapshots_labels_export": true,
     "offline_linear_baseline_trainer": true,
@@ -46,6 +37,9 @@
     "manual_review_eligibility": true,
     "read_only_challenger_inference": true,
     "prediction_outcome_scoring": true,
+    "challenger_performance_review": true,
+    "challenger_performance_policy": "challenger-performance-review-v1",
+    "backup_schema": 9,
     "full_restore": false
   },
   "learning_safety": {
@@ -56,20 +50,14 @@
     "shadow_model_effect": false,
     "risk_model_effect": false,
     "broker_model_effect": false,
-    "prediction_scoring_policy": "prediction-outcome-scoring-v1",
-    "promotion_eligible_from_scoring": false
+    "performance_review_human_consideration_only": true,
+    "performance_review_promotion_enabled": false
   },
   "broker_execution": {
     "order_send_modify_close_path": false,
     "demo_execution_state_machine": false,
     "live_execution": false,
     "shadow_decision_source": "legacy Meta"
-  },
-  "data_semantics": {
-    "dom": "broker-specific resting Market Book depth only",
-    "tick_volume": "broker activity proxy; not exchange volume",
-    "executed_order_flow": "not implemented",
-    "news": "Fed/ECB context/freshness; not direct BUY/SELL sentiment"
   },
   "integrity": {
     "sqlite_foreign_keys": "ENFORCED_AND_STARTUP_CHECKED",
@@ -87,5 +75,5 @@
   },
   "profitability_claim": false,
   "tradingview_equivalence_claim": false,
-  "next_stage": "Challenger Performance Review Policy (read-only/manual review recommendation; no Champion or trading effect)"
+  "next_stage": "Accumulate real out-of-sample scored evidence and run native user-laptop MT5/broker + Telegram acceptance; no Champion or trading effect."
 }

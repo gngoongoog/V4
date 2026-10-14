@@ -2,69 +2,56 @@
 
 Canonical repository: `gngoongoog/V4`. Stable/resumable branch: `main`. Active research branch: `development`.
 
-Current release candidate: **0.4.0 Preview**. Cargo, lockfile, desktop and Windows package versions are aligned. The user has requested Windows delivery; use BUILD_HANDOFF.md and docs/validation.json for the exact final validation boundary.
+Current release candidate: **0.4.0 Preview**. Exact tested executable boundary is in `BUILD_HANDOFF.md` and `docs/validation.json`.
 
 ## Implemented
 
 ### Core / desktop / MT5 boundary
 
 - Independent Rust Core with authenticated loopback IPC and native Slint desktop.
-- Start, Stop, reconnect and full-exit lifecycle controls. STOP/stale data immediately withdraw quote plans.
 - 13 native pages including Opportunities/history, Market Map and Learning/model review.
 - Read-only MT5 account/positions/orders/history/quotes/Market Book access.
-- Persistent rule-based Shadow simulation and deterministic risk limits.
-- Explicit repository contract tests reject broker-write APIs and learned-model execution/promotion routes.
+- Persistent deterministic Shadow simulation and risk limits; Legacy Meta remains the Shadow entry source.
+- STOP/stale-data handling withdraws new quote plans; repository guards reject broker-write APIs.
 
-### Historical research
+### Historical / observational research
 
-- Meta v1, Meta v2 candidate, CES v1 and KTE v1 historical engines.
-- Frozen input/options, exact saved History, offline replay and same-data experiments.
-- KTE three-leg fills, TP1 break-even, TP2 ATR trailing, TP3 final close, 45/90-minute limits, cooldown and conservative stop-first ambiguity.
-- Saved ledger drives report JSON/text, trades/fills/stops/targets/equity CSV and self-contained HTML trade review.
-- Persisted chronological Meta v1/v2 holdout/rolling evaluation over immutable saved backtest sources.
+- Historical Meta v1, Meta v2 candidate, CES v1 and KTE v1 with frozen saved inputs, deterministic replay and same-data experiments.
+- KTE multi-leg ledger, break-even/trailing/time limits/cooldown and offline candlestick trade review.
+- Trend, Regime, Structure, Volatility, Market Opportunities, Gann Geometry, broker DOM Depth and Fed/ECB Macro/News context.
+- Persisted chronological evaluation over immutable saved histories.
 
-### Live observational analysis
+### Learning pipeline
 
-- Trend, Regime, Structure, Volatility and Meta v2 candidate.
-- Market Opportunities with structural zones/setups, Gann geometry and broker-supported DOM Depth.
-- Macro/News context from official Fed/ECB RSS freshness state.
-- These newer brains remain observational. Legacy Meta still controls Shadow entries.
-
-### Learning Foundation
-
-- Immutable `gold-m1-feature-v1` completed-bar snapshots.
-- Exact delayed `gold-m1-outcome-v1` labels at 5/15/30 minutes; missing/gapped horizons are not shifted or fabricated.
-- Deterministic dataset export and offline class-weighted linear-softmax baseline trainer.
-- Immutable challenger registry with dataset identity and chronological split metadata.
-- Persisted chronological evaluation evidence and manual review-eligibility records.
-- Read-only challenger inference using the exact stored learning feature payload.
-- Immutable matured prediction outcomes and descriptive scoring by model/target: accuracy, balanced accuracy, macro-F1, log loss, Brier score, confidence/calibration and class/confusion support.
-- No champion promotion, Shadow effect, broker effect or live self-modification.
+- Immutable completed-bar feature snapshots and exact delayed 5/15/30-minute outcome labels.
+- Deterministic dataset export and offline linear-softmax baseline trainer.
+- Immutable challenger registry with dataset/split identity.
+- Persisted chronological evidence and manual review-eligibility records.
+- Read-only challenger inference from the exact stored feature payload.
+- Immutable matured prediction outcomes with accuracy, balanced accuracy, macro-F1, log loss, Brier, confidence/ECE and class/confusion metrics.
+- `challenger-performance-review-v1`: fixed sample/class/context/window/regime evidence gates, transparent baselines, calibration/stability/drift checks, immutable reason-coded review records and native Learning-page status.
+- Performance review may return `insufficient_evidence`, `review_candidate` or `reject`; it never creates a Champion or affects Shadow/risk/broker behavior.
 
 ### Persistence / packaging / CI
 
-- SQLite WAL + synchronous FULL, explicit `foreign_keys=ON`, startup `foreign_key_check`, and a unit test that rejects orphan foreign-key inserts.
-- Backup schema 8 includes historical/chronological/learning registry/review/prediction/scoring audit state; secrets are excluded. Full restore is not implemented.
-- Both source export paths exclude runtime state, secrets, archives, generated dependency trees/caches and `.import`; tests preserve real source such as `crates/runtime`.
-- Research CI and Windows CI run on `development`; Windows CI includes the packaged Core DPAPI/startup/config/backup/shutdown checks and all-page rendering; it does not substitute for native broker acceptance.
-
-## Validation boundary
-
-The latest executable checkpoint being validated is recorded in `BUILD_HANDOFF.md`, with run IDs and final PASS/FAIL state mirrored in `docs/validation.json`. Documentation-only reconciliation after that checkpoint does not alter executable behavior.
+- SQLite WAL + synchronous FULL, foreign keys enabled and startup integrity checked.
+- Backup manifest schema 9 includes historical/chronological/learning registry/review/prediction/scoring/performance-review audit state. Full restore is not implemented.
+- Source/package hygiene excludes secrets, runtime DB/log state, archives and generated dependency/cache trees.
+- Validated executable checkpoint `74e6387e3f66b8035f5ce55db92561ec1809ebf4` passed Research workflow `38586058214` and Windows workflow `38586058215`.
+- Windows artifact: `BrainTrade-Windows-x64-v0.4.0-Preview`.
 
 ## Known limitations / pending
 
-- Native Windows + real MT5 broker-history acceptance and live Telegram delivery with local credentials.
-- Real-broker-data scientific evaluation large enough to judge candidate effectiveness.
-- Explicit challenger performance-review policy over sufficiently large scored out-of-sample samples.
-- True feed-supported order flow / volume profile beyond broker Market Book and candle tick-volume proxies.
+- Native acceptance on the user's actual Windows laptop, MT5 broker history/Market Book and live Telegram credentials.
+- Enough real out-of-sample observations to judge challenger behavior with the fixed review policy.
+- True feed-supported order flow/volume profile beyond broker Market Book and candle tick-volume proxies.
 - Portfolio/correlation execution risk, full backup restore and multi-account migration.
-- Broker order state machine, reconciliation and live/demo execution.
-- Automated champion promotion remains intentionally absent.
-- `main` and `development` currently have no GitHub branch protection / required-status enforcement.
+- Broker order state machine, reconciliation and Demo/Live execution.
+- Champion activation/automatic promotion remains intentionally absent.
+- `main` and `development` have no required-status branch protection.
 
-No profitability, win-rate or broker-latency guarantee is established by synthetic fixtures, CI, backtests or model metrics.
+No profitability, win-rate or broker-latency guarantee is established by fixtures, CI, backtests or model metrics.
 
 ## Continuity
 
-GitHub normal files/folders are the source of truth. Never reconstruct over newer code from an old ZIP. Never commit credentials, tokens, private runtime databases/logs, generated dependency trees, `.import`, encoded chunks or ZIP-only source.
+GitHub normal files/folders are the source of truth. Never reconstruct over newer code from an old ZIP and never commit credentials/private runtime state/generated dependency trees.
