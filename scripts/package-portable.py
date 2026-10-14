@@ -62,7 +62,7 @@ def download(asset, cache):
     return path
 
 def collect_licenses(destination, cargo):
-    metadata = json.loads(subprocess.check_output([cargo, "metadata", "--locked", "--format-version", "1", "--filter-platform", "x86_64-pc-windows-gnu"], cwd=ROOT))
+    metadata = json.loads(subprocess.check_output([cargo, "metadata", "--locked", "--format-version", "1", "--filter-platform", "x86_64-pc-windows-msvc"], cwd=ROOT))
     catalog = []
     for package in metadata["packages"]:
         if not package["source"]:
@@ -116,12 +116,23 @@ def check_pe_tree(folder, extra_dirs=()):
     return reports
 
 def source_copy(destination):
-    excluded = {"target", ".package-cache", ".build-venv", "test-output", "__pycache__", ".git", "release", "build", "dist"}
+    excluded_top_level = {"target", ".package-cache", ".build-venv", ".ci", ".venv", "venv", "node_modules", "test-output", ".git", "release", "runtime", "build", "dist"}
+    excluded_dir_names = {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+    secret_suffixes = (".pyc", ".sealed", ".key", ".log", ".sqlite", ".sqlite3", ".db", ".zip", ".7z", ".rar", ".pem", ".p12", ".pfx")
     for path in ROOT.rglob("*"):
         if not path.is_file():
             continue
         relative = path.relative_to(ROOT)
-        if excluded.intersection(relative.parts) or path.suffix in (".pyc", ".sealed", ".key", ".log", ".sqlite"):
+        lower_name = path.name.lower()
+        if relative.parts and relative.parts[0] in excluded_top_level:
+            continue
+        if any(part in excluded_dir_names for part in relative.parts[:-1]):
+            continue
+        if ".import" in relative.parts:
+            continue
+        if lower_name.startswith(".env") and lower_name != ".env.example":
+            continue
+        if lower_name.endswith(secret_suffixes):
             continue
         output = destination / relative
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -153,7 +164,7 @@ def main():
     source_copy(output / "Source")
     count = collect_licenses(output / "licenses/rust", args.cargo)
     reports = check_pe_tree(output, args.dll_dir)
-    (output / "package-validation.json").write_text(json.dumps({"version": VERSION, "architecture": "Windows x64", "rust_dependencies": count, "assets": ASSETS, "pe_imports": reports, "validation": "Cross-compiled and statically checked. User confirmed v0.1.1 Windows/MT5 balance; new 0.3.0 native features pending"}, indent=2), encoding="utf-8")
+    (output / "package-validation.json").write_text(json.dumps({"version": VERSION, "architecture": "Windows x64", "rust_dependencies": count, "assets": ASSETS, "pe_imports": reports, "validation": "Portable package built from the checked source tree with pinned embedded assets and PE dependency validation. Native MT5 acceptance remains a separate manual step."}, indent=2), encoding="utf-8")
     manifest = build_manifest(output)
     (output / "SHA256SUMS.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     archive = ROOT / "release" / f"BrainTrade-Windows-x64-v{VERSION}-Preview.zip"

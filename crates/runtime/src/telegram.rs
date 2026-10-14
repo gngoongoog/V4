@@ -29,7 +29,6 @@ pub fn spawn(shared: Arc<Mutex<Shared>>) {
                 offset = 0;
                 identity = current_identity;
             }
-            // Never log reqwest errors: their URLs include the Telegram token.
             let url = format!("https://api.telegram.org/bot{token}/getUpdates");
             let result = http
                 .post(url)
@@ -39,7 +38,6 @@ pub fn spawn(shared: Arc<Mutex<Shared>>) {
                 .and_then(|r| r.json::<Value>());
             match result {
                 Ok(v) if v["ok"] == true => {
-                    // Ignore an in-flight response if settings changed while polling.
                     {
                         let s = shared.lock().unwrap();
                         if !s.config.telegram_enabled
@@ -74,6 +72,7 @@ pub fn spawn(shared: Arc<Mutex<Shared>>) {
                                 "الحالة" => "/status",
                                 "الصفقات" => "/positions",
                                 "العقول" => "/brains",
+                                "الفرص" | "فرص" => "/opportunities",
                                 "المحاكاة" => "/paper",
                                 "الأخبار" | "اخبار" => "/news",
                                 "الاختبار" => "/backtest",
@@ -89,7 +88,7 @@ pub fn spawn(shared: Arc<Mutex<Shared>>) {
                                 s.status.report(command)
                             };
                             let text: String = response.chars().take(3800).collect();
-                            let sent=http.post(format!("https://api.telegram.org/bot{token}/sendMessage")).json(&json!({"chat_id":config.telegram_chat_id,"text":text,"reply_markup":{"keyboard":[["/status","/report"],["/positions","/health"],["/brains","/paper"],["/news","/backtest"],["/help"]],"resize_keyboard":true}})).send().and_then(|r|r.error_for_status()).and_then(|r|r.json::<Value>());
+                            let sent=http.post(format!("https://api.telegram.org/bot{token}/sendMessage")).json(&json!({"chat_id":config.telegram_chat_id,"text":text,"reply_markup":{"keyboard":[["/status","/report"],["/positions","/health"],["/brains","/opportunities"],["/paper","/news"],["/backtest","/help"]],"resize_keyboard":true}})).send().and_then(|r|r.error_for_status()).and_then(|r|r.json::<Value>());
                             if !matches!(sent,Ok(ref v) if v["ok"]==true) {
                                 shared.lock().unwrap().status.telegram_status =
                                     "Reply failed; check connectivity / bot permissions".into();
@@ -122,7 +121,8 @@ fn research_report(command: &str) -> Result<String> {
     }
     let v = c.get("/v1/news")?;
     let mut text = format!(
-        "أخبار رسمية محفوظة\n{}\n\n",
+        "{}\n\nأخبار رسمية محفوظة\n{}\n\n",
+        v["macro_text"].as_str().unwrap_or("MACRO / NEWS CONTEXT — غير متاح"),
         v["sources_text"].as_str().unwrap_or("الحالة غير متاحة")
     );
     for item in v["items"].as_array().into_iter().flatten().take(4) {

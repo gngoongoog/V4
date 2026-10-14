@@ -1,76 +1,69 @@
 # BrainTrade OS — Project State
 
-## Current checkpoint
+Canonical repository: `gngoongoog/V4`. Stable/resumable branch: `main`. Active research branch: `development`.
 
-- Development checkpoint: **0.4.0 in progress**.
-- Stable branch: `main`.
-- Active branch: `development`.
-- Canonical repository: `gngoongoog/V4`.
-- Last delivered Windows portable: **0.2.0 Preview**.
-- A CI-generated Windows package is a validation artifact only; no new user-facing Windows release is declared until laptop/MT5 acceptance is explicitly performed.
+The project is in the **0.4.0 research milestone**, while Cargo and Windows preview package metadata remain **0.3.0** until an explicit release-version bump. No new end-user Windows release is declared; the last delivered portable remains **0.2.0 Preview**.
 
-## Implemented and preserved
+## Implemented
 
-- Native Rust Core + Slint desktop UI.
-- Read-only MT5 gateway/bootstrap and account visibility.
-- Start / Stop / reconnect / full-exit lifecycle controls.
-- M1/M5/M15 completed-bar Meta analysis and shadow simulation.
-- Persistent risk/shadow state and settings.
-- Historical Meta/CES/KTE research lab with asynchronous MT5 history collection.
-- UTC chunking, account isolation, cancellation, raw-input/report persistence.
-- Deterministic offline replay and same-data strategy experiments.
-- CSV / JSON / HTML exports with an equity curve.
-- Official Fed/ECB RSS cache, freshness/error state and manual refresh.
-- Telegram read-only `/news` and `/backtest` handlers.
+### Core / desktop / MT5 boundary
 
-## 0.4.0 KTE state on development
+- Independent Rust Core with authenticated loopback IPC and native Slint desktop.
+- Start, Stop, reconnect and full-exit lifecycle controls.
+- Read-only MT5 account/positions/orders/history/quotes/Market Book access.
+- Persistent rule-based Shadow simulation and deterministic risk limits.
+- Explicit repository contract tests reject broker-write APIs and learned-model execution/promotion routes.
 
-- KTE signal port based on the supplied defaults.
-- Stateful KTE historical execution path.
-- Three-leg partial handling: TP1 / TP2 / TP3.
-- Break-even after TP1 and ATR trailing after TP2, effective only on subsequent bars.
-- Conservative stop-first handling for unknown same-candle stop/target ordering.
-- 45-minute pre-TP1 and 90-minute post-TP1 time limits.
-- Three-following-bar cooldown after complete exit.
-- Detailed ledger persisted in each `Trade`: fills, stop updates and target levels.
-- Saved-report text, HTML report and SVG fill markers consume that same ledger.
-- Detailed exports: `fills.csv`, `stop_updates.csv`, `targets.csv`; legacy `trades.csv` remains as a summary table.
-- Offline replay checks detailed ledger exports byte-for-byte.
+### Historical research
 
-## Fresh verification
+- Meta v1, Meta v2 candidate, CES v1 and KTE v1 historical engines.
+- Frozen input/options, exact saved History, offline replay and same-data experiments.
+- KTE three-leg fills, TP1 break-even, TP2 ATR trailing, TP3 final close, 45/90-minute limits, cooldown and conservative stop-first ambiguity.
+- Saved ledger drives report JSON/text, trades/fills/stops/targets/equity CSV and self-contained HTML trade review.
+- Persisted chronological Meta v1/v2 holdout/rolling evaluation over immutable saved backtest sources.
 
-For the current 0.4.0 code path on Linux GitHub CI:
+### Live observational analysis
 
-- braintrade-domain: **25 passed, 0 failed**.
-- braintrade-runtime: **14 passed, 0 failed, 1 explicit live-network test ignored**.
-- Python gateway/packaging: **16 passed**.
-- `braintrade-core` build: **PASS**.
-- real-core smoke/integration harness: **PASS**, including full export and deterministic detailed-ledger replay.
+- Trend, Regime, Structure, Volatility and Meta v2 candidate.
+- Market Opportunities with structural zones/setups, Gann geometry and broker-supported DOM Depth.
+- Macro/News context from official Fed/ECB RSS freshness state.
+- These newer brains remain observational. Legacy Meta still controls Shadow entries.
 
-Windows CI packaging is still pending at this snapshot. The previous Windows failure was isolated to `os.fsync()` on a read-only temporary ZIP handle; the script now opens that handle read/write before `fsync`. Do not record Windows PASS until the current workflow actually completes successfully.
+### Learning Foundation
 
-## Explicitly not complete
+- Immutable `gold-m1-feature-v1` completed-bar snapshots.
+- Exact delayed `gold-m1-outcome-v1` labels at 5/15/30 minutes; missing/gapped horizons are not shifted or fabricated.
+- Deterministic dataset export and offline class-weighted linear-softmax baseline trainer.
+- Immutable challenger registry with dataset identity and chronological split metadata.
+- Persisted chronological evaluation evidence and manual review-eligibility records.
+- Read-only challenger inference using the exact stored learning feature payload.
+- Immutable matured prediction outcomes and descriptive scoring by model/target: accuracy, balanced accuracy, macro-F1, log loss, Brier score, confidence/calibration and class/confusion support.
+- No champion promotion, Shadow effect, broker effect or live self-modification.
 
-- Native MT5 historical acceptance against the user's broker/account.
-- Live Telegram delivery with user credentials.
-- Broker order execution/protection.
-- Trained ML/ONNX.
-- Gann brain.
-- True order-flow/DOM acquisition and analysis.
-- Volume profile.
-- News-informed trade decisions.
-- Walk-forward optimization.
-- Portfolio/correlation risk manager.
-- Full restore/recovery workflow.
+### Persistence / packaging / CI
 
-No profitability, win-rate or HFT-latency claim is established by these software tests.
+- SQLite WAL + synchronous FULL, explicit `foreign_keys=ON`, startup `foreign_key_check`, and a unit test that rejects orphan foreign-key inserts.
+- Backup schema 8 includes historical/chronological/learning registry/review/prediction/scoring audit state; secrets are excluded. Full restore is not implemented.
+- Both source export paths exclude runtime state, secrets, archives, generated dependency trees/caches and `.import`; tests preserve real source such as `crates/runtime`.
+- Research CI and Windows CI run on `development`; Windows package CI is a validation artifact, not native broker acceptance or a declared release.
 
-## Repository continuity
+## Validation boundary
 
-The project source is stored in `gngoongoog/V4` as normal GitHub files and folders. No `.import`, encoded staging, chunk transport or ZIP-only source storage belongs in the working tree. `Cargo.lock` is generated normally by Cargo. The permanent CI workflow is `.github/workflows/windows.yml`.
+The latest executable checkpoint being validated is recorded in `BUILD_HANDOFF.md`, with run IDs and final PASS/FAIL state mirrored in `docs/validation.json`. Documentation-only reconciliation after that checkpoint does not alter executable behavior.
 
-## Continuation rule
+## Known limitations / pending
 
-GitHub is the source of truth. Before new work, read `CONTINUE_HERE.md`, `BUILD_HANDOFF.md`, this file, `ROADMAP.md`, `CHANGELOG.md`, `docs/CONTINUITY_PROTOCOL.md`, and recent commits.
+- Native Windows + real MT5 broker-history acceptance and live Telegram delivery with local credentials.
+- Real-broker-data scientific evaluation large enough to judge candidate effectiveness.
+- Explicit challenger performance-review policy over sufficiently large scored out-of-sample samples.
+- True feed-supported order flow / volume profile beyond broker Market Book and candle tick-volume proxies.
+- Portfolio/correlation execution risk, full backup restore and multi-account migration.
+- Broker order state machine, reconciliation and live/demo execution.
+- Automated champion promotion remains intentionally absent.
+- `main` and `development` currently have no GitHub branch protection / required-status enforcement.
 
-Commit ongoing work in coherent checkpoints to `development`. Keep `BUILD_HANDOFF.md` current with exact changed areas, test state and next action. Promote only a safe/resumable tested checkpoint to `main`.
+No profitability, win-rate or broker-latency guarantee is established by synthetic fixtures, CI, backtests or model metrics.
+
+## Continuity
+
+GitHub normal files/folders are the source of truth. Never reconstruct over newer code from an old ZIP. Never commit credentials, tokens, private runtime databases/logs, generated dependency trees, `.import`, encoded chunks or ZIP-only source.

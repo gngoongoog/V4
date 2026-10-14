@@ -1,50 +1,68 @@
 # BrainTrade OS — Roadmap
 
-This file separates near-term work from long-term ideas. `docs/ARCHITECTURE.md` is the broader design document and must not be treated as a completed-feature list.
+GitHub `gngoongoog/V4` is canonical. Read `BUILD_HANDOFF.md` and `docs/QUALITY_AUDIT.md` before editing.
 
-## P0 — finish current 0.4.0 checkpoint
+## Current completed research foundation
 
-Completed on `development`:
+- Historical Meta v1/v2, CES v1 and KTE v1 with frozen saved data, offline replay, experiments and detailed ledgers.
+- Offline per-trade candlestick review and deterministic report/export replay.
+- Observational Trend, Regime, Structure, Volatility, Gann, broker DOM Depth and Macro/News context.
+- Persisted chronological Meta v1/v2 evaluation over immutable saved sources.
+- Learning snapshots/labels/export, deterministic offline baseline trainer and immutable challenger registry.
+- Manual challenger review eligibility, read-only challenger inference and exact matured-label prediction outcome scoring.
+- Repository quality guards for broker read-only behavior, no learned execution/promotion route, source/package hygiene, SQLite FK integrity and Windows CI on `development`.
 
-1. KTE unit/regression coverage for partial sizing and trade management.
-2. Stateful TP1/TP2/TP3, break-even, trailing, time-limit, ambiguity and cooldown validation.
-3. KTE report/chart/export consistency from the same saved `Trade` ledger.
-4. Detailed fills / stop-updates / targets CSV exports plus deterministic offline replay checks.
-5. Fresh Linux Rust + Python + real-core integration CI.
+Legacy Meta still controls live Shadow. No broker execution exists.
 
-Remaining before promotion to `main`:
+## Next scientific layer — challenger performance review
 
-1. Wait for the current Windows CI packaging job to complete; fix any real failure if present.
-2. Reconcile final validation/release documents with that Windows result.
-3. Promote the tested resumable 0.4.0 checkpoint to `main` only after the latest branch head is green.
+Build a **manual research review policy** over persisted scored prediction outcomes. It must remain observational and must not create/activate a champion.
 
-## P1 — broker/laptop validation
+1. Require immutable model/dataset/review identity and sufficiently large scored samples per target/context.
+2. Evaluate class support, confusion, balanced accuracy, macro-F1, log loss, Brier and calibration with explicit small-sample rejection/warnings.
+3. Add chronological/regime/context slices without selecting thresholds from the same held-out evidence being judged.
+4. Persist a signed/versioned review record with exact input outcome IDs / boundaries and reason codes.
+5. Expose read-only status/report APIs and a native UI review surface.
+6. Add deterministic tests for insufficient samples, missing classes, duplicated/reordered outcomes, context mismatch and reproducibility.
+7. Keep `promotion_enabled=false`, `shadow_effect=false`, `broker_effect=false` everywhere.
 
-1. Validate native Windows build on the user's laptop.
-2. Verify MT5 historical retrieval against the user's broker/account.
-3. Confirm UI behavior on all pages and supported analysis timeframes.
-4. Test Telegram delivery only after credentials are supplied locally; never commit tokens.
+A favorable review may say “eligible for human consideration” only. Champion activation remains a later, separate design and validation stage.
 
-## P2 — analysis expansion
+## Real-data research and walk-forward work
 
-- Gann research brain.
-- Order-flow/DOM acquisition only when the broker/feed exposes real market depth/trade data.
-- Volume-profile research module.
-- Trend/regime brain and stronger Meta decision layer.
-- Historical news/event replay and macro context.
+- Collect enough real broker completed-bar observations and exact matured labels.
+- Compare baseline/challenger behavior across chronological windows and market regimes.
+- Extend walk-forward evaluation without leakage, random shuffling or automatic parameter selection on holdout results.
+- Add ablation checks to distinguish real signal contribution from correlated duplicate features.
+- Only after reproducible evidence exists, consider a versioned model packaging path such as ONNX for more complex offline-trained challengers.
 
-## P3 — learning/research infrastructure
+## Native acceptance
 
-- Walk-forward evaluation with leakage controls.
-- Model registry and reproducible experiment metadata.
-- Trained ML/ONNX candidates only after robust baselines and validation.
-- Portfolio/correlation risk research.
+When the Windows laptop/MT5 environment is available:
 
-## P4 — execution, only after explicit validation
+- Run the full native acceptance checklist against the user's actual demo broker/account.
+- Verify historical retrieval, Market Book availability/absence behavior, account switching, restart persistence and all UI pages.
+- Test private Telegram delivery only after credentials are configured locally.
+- Treat GitHub Windows packaging as build validation only; it is not broker acceptance.
 
-- Broker execution state machine.
-- Idempotent order intents and reconciliation.
-- Hard risk protections and account-mode handling.
-- Partial-fill and reconnect recovery fixtures.
+## Data/market extensions
 
-No roadmap item is considered implemented until code, tests and `PROJECT_STATE.md` agree.
+- True feed-supported order flow and volume profile only when the data source actually provides those fields; do not relabel candle tick volume or CFD Market Book as global exchange flow.
+- Correlation/portfolio research with aligned timestamps and explicit availability masks.
+- Historical news/event replay with first-observed timestamps and no-lookahead joins.
+
+## Reliability / release work
+
+- Full backup restore with manifest/hash/schema validation, staged restore and rollback.
+- Decide when to normalize the 0.4.0 research milestone to a Cargo/package version bump; regenerate/validate `Cargo.lock` as part of that release step.
+- Enable GitHub branch protection / required CI checks for `main` and preferably `development` when repository settings access is available.
+- Promote a safe/resumable `development` checkpoint to `main` only after deliberate review; do not fast-forward merely because CI is green.
+
+## Execution — only after separate explicit validation
+
+- Broker order state machine with persistent idempotent intent IDs.
+- Reconciliation after timeout/restart; never blind-resubmit an unknown order.
+- Hard deterministic risk gate, broker contract checks, hedging/netting behavior and partial-fill fixtures.
+- Demo acceptance before any optional live mode.
+
+No deadline or profitability guarantee is implied. A module is complete only when code, verification and state documentation agree.

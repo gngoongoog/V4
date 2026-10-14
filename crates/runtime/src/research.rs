@@ -1,6 +1,7 @@
 //! Quote-sampled research. No broker order API is used here.
 use anyhow::Result;
 use braintrade_domain::{
+    opportunities::{self, MarketBrains},
     research::{analyze, size_lots},
     Analysis, Config, PaperSummary, Telemetry,
 };
@@ -113,6 +114,8 @@ impl Book {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Research {
     books: BTreeMap<String, Book>,
+    #[serde(skip)]
+    opportunity_cache: BTreeMap<String, MarketBrains>,
 }
 impl Research {
     pub fn has_open_position(&self, telemetry: &Telemetry) -> bool {
@@ -124,7 +127,8 @@ impl Research {
         db.execute_batch("CREATE TABLE IF NOT EXISTS research_checkpoint(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS candles(context TEXT NOT NULL,timeframe TEXT NOT NULL,bar_time INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,timeframe,bar_time));
             CREATE TABLE IF NOT EXISTS decisions(id INTEGER PRIMARY KEY,context TEXT NOT NULL,bar_time INTEGER NOT NULL,timestamp_ms INTEGER NOT NULL,payload TEXT NOT NULL,UNIQUE(context,bar_time));
-            CREATE TABLE IF NOT EXISTS paper_events(id INTEGER PRIMARY KEY,context TEXT NOT NULL,timestamp_ms INTEGER NOT NULL,kind TEXT NOT NULL,payload TEXT NOT NULL);")?;
+            CREATE TABLE IF NOT EXISTS paper_events(id INTEGER PRIMARY KEY,context TEXT NOT NULL,timestamp_ms INTEGER NOT NULL,kind TEXT NOT NULL,payload TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS opportunity_setups(context TEXT NOT NULL,setup_id TEXT NOT NULL,bar_time INTEGER NOT NULL,first_seen_ms INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,setup_id));")?;
         let mut stmt = db.prepare("SELECT payload FROM research_checkpoint WHERE id=1")?;
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))?
@@ -132,6 +136,31 @@ impl Research {
         match rows.first() {
             Some(v) => Ok(serde_json::from_str(v)?),
             None => Ok(Self::default()),
+        }
+    }
+    fn refresh_opportunity_cache(&mut self, key: &str, t: &Telemetry, a: &Analysis, now: u64) {
+        if !a.current {
+            if let Some(cached) = self.opportunity_cache.get_mut(key) {
+                cached.withdraw(&a.reason);
+            }
+            return;
+        }
+        let Some(market) = t.market.as_ref() else {
+            return;
+        };
+        let needs_scan = self
+            .opportunity_cache
+            .get(key)
+            .is_none_or(|cached| cached.bar_time != a.bar_time || !cached.current);
+        if needs_scan {
+            let scan = opportunities::scan(
+                market,
+                &t.symbol,
+                &a.trend_brain,
+                &a.regime_brain,
+                now,
+            );
+            self.opportunity_cache.insert(key.to_owned(), scan);
         }
     }
     /// Call on a clone. Publish only after checkpoint, decision and ledger transaction commits.
@@ -158,6 +187,7 @@ impl Research {
             a.gates.push("Account equity must be positive".into());
             return Ok((a, PaperSummary::default()));
         }
+        self.refresh_opportunity_cache(&key, t, &a, now);
         let b = self
             .books
             .entry(key.clone())
@@ -166,6 +196,11 @@ impl Research {
             a.action = "WAIT".into();
             a.gates
                 .push("Quote unavailable or older than 3 seconds".into());
+            if let Some(cached) = self.opportunity_cache.get(&key) {
+                let mut current = cached.clone();
+                current.expire(now, false);
+                a.opportunities = Some(current);
+            }
             return Ok((a, b.summary(&display, None)));
         };
         let mut ledger: Vec<(&str, Value)> = vec![];
@@ -287,6 +322,31 @@ impl Research {
             a.gates
                 .push("This M1 bar has already been evaluated".into());
         }
+
+        // Market opportunities are observational and quote-aware. Their closed-bar map is cached
+        // per context; only quote projection changes between M1 closes.
+        if a.current {
+            let opportunity_gates = a
+                .gates
+                .iter()
+                .filter(|gate| gate.as_str() != "This M1 bar has already been evaluated")
+                .cloned()
+                .collect::<Vec<_>>();
+            let available = (equity
+                - b.day_start * (1.0 - c.risk.daily_loss_percent / 100.0))
+                .min(equity - b.peak * (1.0 - c.risk.max_drawdown_percent / 100.0));
+            let budget = (((b.starting_equity + b.realized).min(t.equity)
+                * c.risk.risk_percent
+                / 100.0)
+                .min(available))
+                .max(0.0);
+            if let Some(cached) = self.opportunity_cache.get(&key) {
+                let mut current = cached.clone();
+                current.price(t, &c.risk, budget, &opportunity_gates, now);
+                a.opportunities = Some(current);
+            }
+        }
+
         let raw = a.action.clone();
         if matches!(raw.as_str(), "BUY" | "SELL") {
             let side = if raw == "BUY" { 1 } else { -1 };
@@ -414,6 +474,14 @@ impl Research {
                 {
                     b.recorded[index] = b.recorded[index].max(last.time);
                 }
+            }
+        }
+        if let Some(opps) = a.opportunities.as_ref() {
+            for setup in &opps.setups {
+                tx.execute(
+                    "INSERT OR IGNORE INTO opportunity_setups(context,setup_id,bar_time,first_seen_ms,payload) VALUES(?1,?2,?3,?4,?5)",
+                    params![key, setup.id, setup.signal_bar, now, serde_json::to_string(setup)?],
+                )?;
             }
         }
         if new_bar {

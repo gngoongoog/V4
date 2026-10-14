@@ -1,0 +1,69 @@
+<section id="trade-review">
+<h2>مراجعة الصفقة على الشموع</h2>
+<p>شموع M1 من بيانات الاختبار المحفوظة. الشموع أسعار BID؛ مخارج البيع تستعمل ASK المقدّر. الأوقات UTC.</p>
+<div class="review-controls"><label for="trade-select">الصفقة</label><select id="trade-select"></select><button id="trade-prev" type="button">السابقة</button><button id="trade-next" type="button">التالية</button></div>
+<p id="trade-detail" aria-live="polite"></p>
+<div id="trade-content" hidden>
+<div class="chart-scroll"><svg id="trade-chart" viewBox="0 0 1120 420" role="img" aria-label="شموع الصفقة والدخول والأهداف ومسار الوقف"></svg></div>
+<p class="legend"><span style="color:#c5a1ff">● E الدخول</span> · <span style="color:#58dcb6">— TP الأهداف</span> · <span style="color:#ff8998">— SL الوقف الفعّال</span> · <span style="color:#ffc977">│ SIG شمعة الإشارة</span> · الدوائر المرقمة: الإغلاقات</p>
+<small>مرّر المؤشر فوق الشمعة أو العلامة لعرض تفاصيلها. المسافات الأفقية تمثل الشموع المتوفرة؛ الفجوة الزمنية معلّمة بخط أحمر. تغيير الوقف يبدأ عند الوقت المسجل. ترتيب الأسعار داخل الدقيقة غير معروف.</small>
+<h3>الإغلاقات والتكاليف</h3><div class="scroll"><table><thead><tr><th>#</th><th>الدقيقة UTC</th><th>المرحلة</th><th>السبب</th><th>السعر</th><th>اللوت</th><th>العمولة</th><th>الصافي</th></tr></thead><tbody id="trade-fills"></tbody></table></div>
+<details><summary>سجل تغييرات الوقف</summary><div id="trade-stops"></div></details>
+</div>
+<noscript><p>فعّل JavaScript المحلي لعرض المخطط. سجل الصفقات والجداول أدناه وملفات CSV/JSON تبقى متاحة.</p></noscript>
+</section>
+<style>
+#trade-review{display:flow-root;padding-block:8px}
+.review-controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.review-controls select{flex:1;min-width:200px;max-width:100%}.review-controls select,.review-controls button{font:inherit;border:1px solid #465873;background:#21334b;color:#e5edf9;border-radius:8px;padding:10px}.review-controls button:disabled{opacity:.4}.review-controls :focus-visible{outline:2px solid #76dfc0;outline-offset:3px}.chart-scroll{overflow:auto}.chart-scroll svg{min-width:760px;display:block;direction:ltr}#trade-chart circle{fill:var(--marker);stroke:#101827;stroke-width:2}.legend{font-size:14px}#trade-detail{line-height:1.8}#trade-stops{white-space:pre-wrap;line-height:1.8;direction:ltr;text-align:left}details{margin:20px 0;padding:15px;border:1px solid #344055;border-radius:10px}
+</style>
+<script type="application/json" id="trade-data">__TRADE_DATA__</script>
+<script>
+(() => {
+'use strict';
+const data=JSON.parse(document.getElementById('trade-data').textContent);
+const trades=data.trades,bars=data.bars,select=document.getElementById('trade-select');
+const chart=document.getElementById('trade-chart'),body=document.getElementById('trade-fills');
+const prev=document.getElementById('trade-prev'),next=document.getElementById('trade-next');
+const detail=document.getElementById('trade-detail'),stopList=document.getElementById('trade-stops');
+const date=t=>new Date(t*1000).toISOString().replace('T',' ').slice(0,16);
+const num=(n,d=5)=>Number(n).toFixed(d);
+const phases={open:'افتتاح',range:'داخل الدقيقة',final_close:'إغلاق آخر دقيقة'};
+const reasons={tp1:'الهدف 1',tp2:'الهدف 2',tp3:'الهدف 3',target:'الهدف',stop:'وقف',stop_gap:'تجاوز الوقف عند الافتتاح',data_gap:'فجوة بيانات',time_limit:'انتهاء المدة',end_of_test:'نهاية الاختبار',ces_eg_positive:'EG موجب'};
+function el(tag,attrs={},text,parent=chart){const e=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const[k,v]of Object.entries(attrs))e.setAttribute(k,v);if(text!==undefined)e.textContent=text;parent.appendChild(e);return e;}
+function lower(time){let a=0,b=bars.length;while(a<b){const m=(a+b)>>1;if(bars[m].time<time)a=m+1;else b=m;}return a;}
+function draw(){
+ chart.replaceChildren();body.replaceChildren();stopList.textContent='';
+ prev.disabled=select.selectedIndex<=0;next.disabled=select.selectedIndex>=trades.length-1;
+ const t=trades[select.selectedIndex];document.getElementById('trade-content').hidden=!t;
+ if(!t){detail.textContent='لا توجد صفقات في هذه النتيجة؛ لا يوجد مخطط صفقة لعرضه.';return;}
+ const fills=t.fills?.length?t.fills:[{time:t.exit_bar,phase:t.exit_phase,price:t.exit,lots:t.lots,commission:t.commission,net:t.net,reason:t.reason,ambiguous:t.ambiguous}];
+ const stops=t.stop_updates?.length?t.stop_updates:[{effective_time:t.entry_time,price:t.stop,reason:'initial'}];
+ const targets=t.targets?.length?t.targets:[t.target];
+ detail.textContent=`${t.side===1?'BUY':'SELL'} • ${date(t.entry_time)} → ${date(t.exit_bar)} UTC | ${num(t.lots,4)} lot | الصافي ${num(t.net,2)} ${data.currency} | العمولة ${num(t.commission,2)} | سعر الخروج ${num(t.exit)}${t.fills?.length?' (متوسط موزون)':''}${t.ambiguous?' | وقف أولاً عند التباس المسار':''}`;
+ fills.forEach((f,i)=>{const row=document.createElement('tr');[i+1,date(f.time),phases[f.phase]||f.phase,reasons[f.reason]||f.reason,num(f.price),num(f.lots,4),num(f.commission,4),num(f.net,2)].forEach(v=>{const td=document.createElement('td');td.textContent=String(v);row.appendChild(td);});body.appendChild(row);});
+ stopList.textContent=stops.map(s=>`${date(s.effective_time)} UTC | ${num(s.price)} | ${s.reason}`).join('\n');
+ const first=Math.max(0,lower(t.entry_time)-12),last=Math.min(bars.length,lower(t.exit_bar)+9),windowBars=bars.slice(first,last);
+ if(!windowBars.length){el('text',{x:40,y:80,fill:'#e5edf9'},'لا تتوفر شموع لهذه الصفقة');return;}
+ const prices=windowBars.flatMap(c=>[c.low,c.high]).concat([t.entry,t.stop],targets,fills.map(f=>f.price),stops.map(s=>s.price));
+ let lo=Math.min(...prices),hi=Math.max(...prices);const pad=Math.max((hi-lo)*.12,data.tick*3);lo-=pad;hi+=pad;
+ const left=28,right=1010,top=26,bottom=358,step=(right-left)/windowBars.length;
+ const x=time=>left+(Math.max(first,Math.min(last-1,lower(time)))-first+.5)*step;
+ const y=price=>bottom-(price-lo)/(hi-lo)*(bottom-top);
+ for(let i=0;i<=5;i++){const p=lo+(hi-lo)*i/5,yy=y(p);el('line',{x1:left,x2:right,y1:yy,y2:yy,stroke:'#344055'});el('text',{x:1020,y:yy+4,fill:'#b1bfd4','font-size':12},num(p));}
+ windowBars.forEach((c,i)=>{const xx=left+(i+.5)*step,color=c.close>=c.open?'#58dcb6':'#ff8998',g=el('g',{'data-candle':c.time});el('title',{},`${date(c.time)} UTC\nO ${num(c.open)} H ${num(c.high)} L ${num(c.low)} C ${num(c.close)}`,g);el('line',{x1:xx,x2:xx,y1:y(c.high),y2:y(c.low),stroke:color},undefined,g);el('rect',{x:xx-Math.min(step*.65,12)/2,y:Math.min(y(c.open),y(c.close)),width:Math.min(step*.65,12),height:Math.max(1.5,Math.abs(y(c.open)-y(c.close))),fill:color},undefined,g);
+  if(i>0&&c.time!==windowBars[i-1].time+60){const l=el('line',{'data-gap':c.time,x1:xx-step/2,x2:xx-step/2,y1:top,y2:bottom,stroke:'#ff8998','stroke-dasharray':'3 6'});el('title',{},`فجوة: ${date(windowBars[i-1].time)} → ${date(c.time)}`,l);}
+ });
+ const startX=x(t.entry_time),endX=x(t.exit_bar)+step*.45;
+ targets.forEach((p,i)=>{el('line',{'data-target':i+1,x1:startX,x2:endX,y1:y(p),y2:y(p),stroke:'#58dcb6','stroke-dasharray':'5 5'});el('text',{x:Math.min(endX+4,965),y:y(p)-5,fill:'#58dcb6','font-size':12},`TP${i+1}`);});
+ el('line',{x1:startX,x2:endX,y1:y(t.entry),y2:y(t.entry),stroke:'#c5a1ff','stroke-dasharray':'3 5'});
+ stops.forEach((s,i)=>{const xx=x(s.effective_time),end=i+1<stops.length?x(stops[i+1].effective_time):endX;const l=el('line',{'data-stop':s.effective_time,x1:xx,x2:end,y1:y(s.price),y2:y(s.price),stroke:'#ff8998','stroke-width':2});el('title',{},`${s.reason} | ${date(s.effective_time)} | ${num(s.price)}`,l);if(i>0)el('line',{x1:xx,x2:xx,y1:y(stops[i-1].price),y2:y(s.price),stroke:'#ff8998','stroke-width':2});});
+ el('line',{x1:x(t.signal_bar),x2:x(t.signal_bar),y1:top,y2:bottom,stroke:'#ffc977','stroke-dasharray':'2 6'});el('text',{x:x(t.signal_bar)+4,y:top+14,fill:'#ffc977','font-size':12},'SIG');
+ el('circle',{cx:startX,cy:y(t.entry),r:9,style:'--marker:#c5a1ff'});el('text',{x:startX,y:y(t.entry)+4,'text-anchor':'middle',fill:'#101827','font-size':11},'E');
+ fills.forEach((f,i)=>{const g=el('g',{'data-fill':i+1});el('title',{},`#${i+1} ${reasons[f.reason]||f.reason} | ${date(f.time)} | ${phases[f.phase]||f.phase} | ${num(f.price)} | ${num(f.lots,4)} lot`,g);el('circle',{cx:x(f.time),cy:y(f.price),r:9,style:'--marker:#ffc977'},undefined,g);el('text',{x:x(f.time),y:y(f.price)+4,'text-anchor':'middle',fill:'#101827','font-size':11},String(i+1),g);});
+ for(let i=0;i<windowBars.length;i+=Math.max(1,Math.ceil(windowBars.length/5))){const c=windowBars[i];el('text',{x:x(c.time),y:387,'text-anchor':'middle',fill:'#b1bfd4','font-size':11},date(c.time).slice(5));}
+ el('text',{x:1030,y:387,fill:'#b1bfd4','font-size':12},'UTC');
+}
+trades.forEach((t,i)=>{const option=document.createElement('option');option.value=String(i);option.textContent=`#${i+1} · ${t.side===1?'BUY':'SELL'} · ${date(t.entry_time)} · ${num(t.net,2)} ${data.currency}`;select.appendChild(option);});
+select.disabled=!trades.length;select.addEventListener('change',draw);prev.addEventListener('click',()=>{select.selectedIndex--;draw();});next.addEventListener('click',()=>{select.selectedIndex++;draw();});draw();
+})();
+</script>

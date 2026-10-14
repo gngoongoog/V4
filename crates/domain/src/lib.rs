@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
 pub mod backtest;
+#[path = "backtest/evaluation.rs"]
+pub mod evaluation;
 pub mod ces;
 pub mod kte;
 pub mod research;
+pub mod opportunities;
 pub use research::{Analysis, Candle, MarketData, PaperSummary, RiskConfig};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -89,6 +92,14 @@ pub struct Position {
     pub sl: f64,
     pub tp: f64,
 }
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DomLevel {
+    pub side: String,
+    pub price: f64,
+    pub volume: f64,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Telemetry {
     pub connected: bool,
@@ -112,6 +123,8 @@ pub struct Telemetry {
     pub volume_step: Option<f64>,
     pub tick_size: Option<f64>,
     pub dom_available: bool,
+    #[serde(default)]
+    pub dom: Vec<DomLevel>,
     #[serde(default)]
     pub volume_max: Option<f64>,
     #[serde(default)]
@@ -154,6 +167,14 @@ impl Telemetry {
                 ]
                 .iter()
                 .all(|v| v.is_finite())
+            })
+            && self.dom.len() <= 200
+            && self.dom.iter().all(|level| {
+                matches!(level.side.as_str(), "buy" | "sell")
+                    && level.price.is_finite()
+                    && level.price > 0.0
+                    && level.volume.is_finite()
+                    && level.volume > 0.0
             })
     }
 }
@@ -216,6 +237,9 @@ impl Status {
             self.analysis.current = false;
             self.analysis.action = "WAIT".into();
             self.analysis.reason = "MT5 data unavailable or stale".into();
+            if let Some(opportunities) = self.analysis.opportunities.as_mut() {
+                opportunities.withdraw("بيانات MT5 الحالية غير متاحة أو قديمة");
+            }
             self.paper.quote_current = false;
         }
         if let Some(t) = &self.telemetry {
@@ -229,6 +253,9 @@ impl Status {
                 if !self.analysis.gates.contains(&gate) {
                     self.analysis.gates.push(gate);
                 }
+                if let Some(opportunities) = self.analysis.opportunities.as_mut() {
+                    opportunities.expire(now, false);
+                }
             }
             if t.market
                 .as_ref()
@@ -238,6 +265,9 @@ impl Status {
                 self.analysis.action = "WAIT".into();
                 self.analysis.reason =
                     "Candle snapshot unavailable or older than 15 seconds".into();
+                if let Some(opportunities) = self.analysis.opportunities.as_mut() {
+                    opportunities.withdraw("بيانات الشموع غير متاحة أو أقدم من 15 ثانية");
+                }
             }
         }
     }
@@ -247,10 +277,18 @@ impl Status {
             self.version, self.state, self.gateway_fresh
         );
         if command == "/help" || command == "/start" {
-            return "/status — System status\n/report — Today (Baghdad)\n/positions — MT5 positions\n/health — Connection health\n/brains — Analysis and decision\n/paper — Virtual trades only\n/news — Official cached headlines\n/backtest — Latest saved historical test\n/help — Commands".into();
+            return "/status — System status\n/report — Today (Baghdad)\n/positions — MT5 positions\n/health — Connection health\n/brains — Analysis and decision\n/opportunities — Market setups with Entry/SL/TP when valid\n/paper — Virtual trades only\n/news — Official cached headlines\n/backtest — Latest saved historical test\n/help — Commands".into();
         }
         if command == "/brains" {
             return self.analysis.text();
+        }
+        if command == "/opportunities" {
+            return self
+                .analysis
+                .opportunities
+                .as_ref()
+                .map(|value| value.signals_text())
+                .unwrap_or_else(|| "لا توجد خريطة فرص حالية؛ انتظر بيانات شموع مكتملة من MT5.".into());
         }
         if command == "/paper" {
             return self.paper.text();

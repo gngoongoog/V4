@@ -40,10 +40,33 @@ pub fn render() -> anyhow::Result<()> {
             .into(),
         url: "https://www.federalreserve.gov/".into(),
     }])));
+
+    ui.set_ev_source_ids(slint::ModelRc::new(slint::VecModel::from(vec![
+        "render-meta-source".into(),
+    ])));
+    ui.set_ev_source_runs(slint::ModelRc::new(slint::VecModel::from(vec![
+        "Meta v2 | FIXTURE / XAUUSD | 2026-10-01 → 2026-10-08".into(),
+    ])));
+    ui.set_ev_source_selected(0);
+    ui.set_ev_ids(slint::ModelRc::new(slint::VecModel::from(vec![
+        "render-evaluation".into(),
+    ])));
+    ui.set_ev_runs(slint::ModelRc::new(slint::VecModel::from(vec![
+        "holdout | FIXTURE / XAUUSD | windows 2 | Δnet +18.40 | src render-m | render-e".into(),
+    ])));
+    ui.set_ev_selected(0);
+    ui.set_ev_status("completed | 100% | RENDER FIXTURE — immutable chronological evidence".into());
+    ui.set_ev_v1_net("+42.10".into());
+    ui.set_ev_v2_net("+60.50".into());
+    ui.set_ev_delta("+18.40".into());
+    ui.set_ev_report("CHRONOLOGICAL EVALUATION / تقييم زمني\nRENDER FIXTURE — ليست بيانات سوق حقيقية\nPlan: Holdout 30%\nFIXTURE / 77 / XAUUSD\nWindows: 2\nMeta v1: 18 trades | net-sum 42.10 | avg return 0.21% | worst DD 1.20%\nMeta v2: 17 trades | net-sum 60.50 | avg return 0.30% | worst DD 1.10%\nAverage delta v2-v1: net +18.40 | return +0.09%\n\nPER-WINDOW EVIDENCE\nCycle 0 | development | UTC epoch 1790812800 → 1791244800\n  Meta v1: trades 11 | net 25.40 | return 0.25% | DD 1.00%\n  Meta v2: trades 10 | net 34.20 | return 0.34% | DD 0.95%\n  Δ v2-v1: net +8.80 | return +0.09% | DD -0.05%\n\nCycle 0 | holdout | UTC epoch 1791244800 → 1791417600\n  Meta v1: trades 7 | net 16.70 | return 0.17% | DD 1.20%\n  Meta v2: trades 7 | net 26.30 | return 0.26% | DD 1.10%\n  Δ v2-v1: net +9.60 | return +0.09% | DD -0.10%\n\nImmutable evidence: true | Prediction enabled: false | Promotion enabled: false".into());
+
+    let output = std::path::Path::new("test-output").join("native-ui");
+    std::fs::create_dir_all(&output)?;
     ui.show()?;
     for (width, height, suffix) in [(1120, 820, ""), (880, 700, "-small")] {
         window.set_size(slint::PhysicalSize::new(width, height));
-        for page in 0..9 {
+        for page in 0..10 {
             ui.set_page(page);
             ui.set_events("#1 | core_started\nversion: 0.3.0 • execution_enabled: false\n\nUI render check — not live trading data".into());
             slint::platform::update_timers_and_animations();
@@ -52,7 +75,7 @@ pub fn render() -> anyhow::Result<()> {
             window.draw_if_needed(|renderer| {
                 renderer.render(&mut pixels, width as usize);
             });
-            let path = format!("dashboard-page-{page}{suffix}.ppm");
+            let path = output.join(format!("dashboard-page-{page}{suffix}.ppm"));
             let mut file = std::fs::File::create(path)?;
             write!(file, "P6\n{width} {height}\n255\n")?;
             for pixel in pixels {

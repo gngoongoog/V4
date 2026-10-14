@@ -1,6 +1,9 @@
 use super::*;
+#[path = "evaluation.rs"]
+mod evaluation;
 use slint::{ModelRc, VecModel};
 pub fn setup(ui: &Dashboard) {
+    evaluation::setup(ui);
     let (tx, rx) = mpsc::channel::<String>();
     ui.on_news_action(move |a| {
         let _ = tx.send(a.to_string());
@@ -69,7 +72,13 @@ pub fn setup(ui: &Dashboard) {
                     } else {
                         "تحديث تلقائي كل 5 دقائق؛ قد يتأخر نشر المصدر"
                     };
-                    let state = format!("{}\n{}", state, v["storage_error"].as_str().unwrap_or(""));
+                    let macro_text = v["macro_text"].as_str().unwrap_or("MACRO / NEWS CONTEXT — غير متاح");
+                    let state = format!(
+                        "{}\n{}\n\n{}",
+                        state,
+                        v["storage_error"].as_str().unwrap_or(""),
+                        macro_text
+                    );
                     let sources = v["sources_text"].as_str().unwrap_or("").to_owned();
                     let rows = v["items"]
                         .as_array()
@@ -105,7 +114,7 @@ pub fn setup(ui: &Dashboard) {
                 Err(_) => {
                     client = None;
                     let _ = weak.upgrade_in_event_loop(|ui| {
-                        ui.set_news_status("الاتصال بالمحرك غير متاح؛ المعروض محفوظ وقديم".into())
+                        ui.set_news_status("الاتصال بالمحرك غير متاح؛ Macro Brain والعناوين الحالية مسحوبة".into())
                     });
                 }
             }

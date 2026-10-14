@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 
 mod regime;
-pub use regime::{RegimeBrain, TrendBrain, TrendFrame};
+pub use regime::{MetaBrainV2, RegimeBrain, TrendBrain, TrendFrame};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -49,7 +49,7 @@ impl RiskConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Candle {
     pub time: u64, // UTC opening time in seconds
     pub open: f64,
@@ -69,7 +69,7 @@ impl Candle {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MarketData {
     pub captured_ms: u64,
     pub m1: Vec<Candle>,
@@ -102,6 +102,8 @@ pub struct Analysis {
     pub bar_time: u64,
     pub symbol: String,
     pub regime: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opportunities: Option<crate::opportunities::MarketBrains>,
     #[serde(default)]
     pub trend_brain: TrendBrain,
     #[serde(default)]
@@ -125,6 +127,7 @@ impl Default for Analysis {
             bar_time: 0,
             symbol: String::new(),
             regime: "UNKNOWN".into(),
+            opportunities: None,
             trend_brain: TrendBrain::default(),
             regime_brain: RegimeBrain::default(),
             action: "WAIT".into(),

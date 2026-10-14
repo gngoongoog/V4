@@ -68,6 +68,26 @@ export component Dashboard inherits Window {
     in property <bool> bt-busy: false;
     in property <bool> bt-active: false;
     callback backtest-action(string);
+    in property <[string]> ev-source-runs;
+    in property <[string]> ev-source-ids;
+    in-out property <int> ev-source-selected: -1;
+    in-out property <int> ev-plan: 0;
+    in-out property <string> ev-holdout-percent: "30";
+    in-out property <string> ev-development-days: "5";
+    in-out property <string> ev-holdout-days: "2";
+    in-out property <string> ev-step-days: "2";
+    in property <string> ev-status: "Waiting for core";
+    in property <string> ev-report: "لا يوجد دليل تقييم زمني معروض بعد.";
+    in property <string> ev-report-id;
+    in property <string> ev-v1-net: "—";
+    in property <string> ev-v2-net: "—";
+    in property <string> ev-delta: "—";
+    in property <[string]> ev-runs;
+    in property <[string]> ev-ids;
+    in-out property <int> ev-selected: -1;
+    in property <bool> ev-busy: false;
+    in property <bool> ev-active: false;
+    callback evaluation-action(string);
     in property <[NewsRow]> news-items;
     in property <string> news-status: "بانتظار المحرك";
     in property <string> news-sources;
@@ -112,6 +132,7 @@ export component Dashboard inherits Window {
             Button {text: "الأخبار الرسمية"; clicked => {root.page = 8;} }
           }
           HorizontalLayout {spacing: 8px;
+            Button { text: "التقييم الزمني"; clicked => { root.page = 9; root.evaluation-action("refresh"); } }
             Button { text: "الرئيسية"; clicked => { root.page = 0; } }
             Button { text: "الإعدادات"; clicked => { root.page = 1; } }
             Button { text: "السجل"; clicked => { root.page = 2; root.action("events"); } }
@@ -215,8 +236,8 @@ export component Dashboard inherits Window {
         if root.page == 7: ScrollView { VerticalBox {
             spacing: 12px;
             Text {text: "استراتيجية الاختبار الجديد / التجربة على بيانات محفوظة"; color: #d5deed;}
-            ComboBox {model: ["Meta v1 — اتجاه متعدد الفريمات", "CES v1 — الانتروبيا والضغط", "KTE v1 — اندفاع وارتداد / أهداف جزئية"]; current-index <=> root.bt-strategy;}
-            Text {text: root.bt-strategy == 2 ? "KTE: أهداف 1R/2R/3R، وقف عند الدخول بعد TP1 وتتبع ATR بعد TP2. تقسيم اللوت 40/30/الباقي؛ يُرفض الحجم الذي لا يقبل ثلاثة أجزاء. المحاكاة المباشرة تبقى Meta." : "CES: حجم ticks؛ دخول بالافتتاح التالي، وقف 0.5 وهدف 1.5 من TR3، خروج EG موجب أو 8 دقائق. المحاكاة المباشرة تبقى Meta."; color: #acbad0; wrap: word-wrap;}
+            ComboBox {model: ["Meta v1 — اتجاه متعدد الفريمات", "CES v1 — الانتروبيا والضغط", "KTE v1 — اندفاع وارتداد / أهداف جزئية", "Meta v2 — مرشح متعدد العقول"]; current-index <=> root.bt-strategy;}
+            Text {text: root.bt-strategy == 3 ? "Meta v2: اختبار مرشح الاتجاه والبنية والزخم مع بوابات التذبذب؛ يحفظ أسباب قبول ورفض الإشارات. اختر نتيجة Meta v1 ثم تجربة الاستراتيجية للمقارنة بنفس البيانات والتكاليف." : root.bt-strategy == 0 ? "Meta v1: اتفاق اتجاه M1/M5/M15 مع تأكيد زخم أو اختراق؛ وقف 1.5 ATR وهدف 2R وحد زمني 30 دقيقة." : root.bt-strategy == 2 ? "KTE: أهداف 1R/2R/3R، وقف عند الدخول بعد TP1 وتتبع ATR بعد TP2. تقسيم اللوت 40/30/الباقي؛ يُرفض الحجم الذي لا يقبل ثلاثة أجزاء. المحاكاة المباشرة تبقى Meta." : "CES: حجم ticks؛ دخول بالافتتاح التالي، وقف 0.5 وهدف 1.5 من TR3، خروج EG موجب أو 8 دقائق. المحاكاة المباشرة تبقى Meta."; color: #acbad0; wrap: word-wrap;}
             Text { text: "BACKTEST / مختبر الاستراتيجية"; color: #eaf0fb; font-size: 20px; }
             Text { text: "فترة من يوم إلى 30 يوماً بصيغة YYYY-MM-DD وبوقت UTC؛ يوم النهاية غير مشمول. يستخدم إعدادات المخاطرة المحفوظة لحظة الطلب."; color: #acbad0; wrap: word-wrap; }
             HorizontalBox {
@@ -275,6 +296,47 @@ export component Dashboard inherits Window {
                 }
             }
         }}
+        if root.page == 9: ScrollView { VerticalBox {
+            spacing: 12px;
+            Text { text: "CHRONOLOGICAL EVALUATION / التقييم الزمني"; color: #eaf0fb; font-size: 20px; }
+            Text { text: "يقارن Meta v1 وMeta v2 على نفس History والتكاليف ضمن نوافذ زمنية مستقلة. لا يوجد random split ولا tuning تلقائي ولا ترقية نموذج."; color: #acbad0; wrap: word-wrap; }
+            Text { text: "مصدر التقييم — اختبارات Meta المحفوظة فقط"; color: #d5deed; }
+            ComboBox { model: root.ev-source-runs; current-index <=> root.ev-source-selected; }
+            Text { text: "خطة التقسيم"; color: #d5deed; }
+            ComboBox { model: ["Holdout — development ثم جزء أخير محجوز", "Rolling — نوافذ development/holdout متتابعة"]; current-index <=> root.ev-plan; }
+            if root.ev-plan == 0: HorizontalBox {
+                Text { text: "نسبة Holdout %"; color: #d5deed; }
+                LineEdit { text <=> root.ev-holdout-percent; placeholder-text: "30"; }
+            }
+            if root.ev-plan == 1: HorizontalBox {
+                Text { text: "Development days"; color: #d5deed; }
+                LineEdit { text <=> root.ev-development-days; }
+                Text { text: "Holdout days"; color: #d5deed; }
+                LineEdit { text <=> root.ev-holdout-days; }
+                Text { text: "Step days"; color: #d5deed; }
+                LineEdit { text <=> root.ev-step-days; }
+            }
+            Text { text: "كل نافذة تبدأ بدفتر صفقات ورأس مال افتراضي جديد؛ الإحماء يقرأ شموعاً أقدم فقط ولا يسمح بدخول قبل بداية النافذة."; color: #f0c578; wrap: word-wrap; }
+            HorizontalBox {
+                Button { text: "تشغيل التقييم الزمني"; enabled: !root.ev-busy && !root.ev-active && root.ev-source-selected >= 0; clicked => { root.evaluation-action("start"); } }
+                Button { text: "إلغاء"; enabled: !root.ev-busy && root.ev-active; clicked => { root.evaluation-action("cancel"); } }
+                Button { text: "تحديث المصادر والأدلة"; enabled: !root.ev-busy; clicked => { root.evaluation-action("refresh"); } }
+            }
+            Text { text: root.ev-status; color: #76dfc0; wrap: word-wrap; font-size: 14px; }
+            Text { text: "أدلة تقييم محفوظة immutable"; color: #d5deed; }
+            ComboBox { model: root.ev-runs; current-index <=> root.ev-selected; }
+            HorizontalBox {
+                Button { text: "فتح الدليل المختار"; enabled: !root.ev-busy && root.ev-selected >= 0; clicked => { root.evaluation-action("load"); } }
+                Button { text: "تصدير JSON + هوية المصدر"; enabled: !root.ev-busy && root.ev-selected >= 0; clicked => { root.evaluation-action("export"); } }
+            }
+            HorizontalLayout { spacing: 12px;
+                Card { label: "META V1 NET-SUM"; value: root.ev-v1-net; }
+                Card { label: "META V2 NET-SUM"; value: root.ev-v2-net; }
+                Card { label: "AVG Δ NET V2−V1"; value: root.ev-delta; }
+            }
+            Text { text: root.ev-report; color: #d5deed; wrap: word-wrap; horizontal-alignment: left; font-size: 14px; }
+            Text { text: "مهم: net-sum والمتوسطات تجمع نوافذ مستقلة وليست منحنى حساب متصل. Holdout/rolling دليل تقييم بحثي فقط، وليس إثبات ربحية ولا إذناً لـShadow أو LIVE."; color: #f0c578; wrap: word-wrap; }
+        } }
         Rectangle { height: 1px; background: #263145; }
         Text { text: root.feedback; color: #f0c578; wrap: word-wrap; min-height: 36px; }
         HorizontalLayout {

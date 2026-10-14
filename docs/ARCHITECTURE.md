@@ -1,234 +1,85 @@
-> Roadmap, not implemented-feature claims. Current 0.2.0 scope: see RESEARCH.md.
+# BrainTrade OS — Current architecture and future boundaries
 
-# BRAINTRADE OS — Architecture baseline 0.1
-
-Date: 2026-10-11. Target: Windows x64 desktop, with a later headless VPS core.
-This document preserves the full requested scope while distinguishing contracts
-already implemented from planned services.
+This document separates what is implemented now from later execution/release work. GitHub normal files/folders are the canonical source.
 
 ## 1. Process ownership
 
-`BrainTrade.exe` is the only user entry point. It opens the Slint dashboard and
-ensures one `BrainTrade.exe --core` process. Packaging uses one binary with two
-roles, rather than requiring the user to select Core vs Desktop executables.
-The core survives normal UI closure. Core owns gateway, persistence and Telegram.
-The UI performs network requests on a worker thread; no HTTP calls in UI callbacks.
+`BrainTrade.exe` is the desktop entry point and ensures one independent Core process. The Core owns authenticated loopback IPC, persistence, gateway supervision, research services and Telegram. Closing the UI can leave Core running; Full Exit stops Core/gateway without touching MT5 positions.
 
-v0.1 uses a Python read-only MT5 bootstrap process. This gives official terminal
-initialization without EA installation. It is explicitly outside the future
-FLASH path. The eventual MQL5/native gateway must expose every execution and
-transaction state before execution is enabled. No Python inference, database
-write, HTTP, charting, news parsing or Telegram runs on that future hot path.
+The current Python MT5 gateway is deliberately **read-only**. It supplies account/positions/orders, quotes, completed bars/history and broker Market Book where available. Repository contract tests reject broker-write APIs.
 
-## 2. Current repository
+## 2. Layering
 
-| Path | Responsibility |
-|---|---|
-| crates/domain | Configuration, telemetry, lifecycle and report contracts |
-| crates/runtime | Independent core, IPC, SQLite audit, gateway supervisor, secrets, Telegram |
-| crates/runtime/src/bin | Headless development/test entry point |
-| crates/desktop | Single executable launcher + native Slint desktop |
-| gateway | Official read-only MT5 bootstrap bridge |
-| tests | Bridge unit tests using explicit fake MT5 fixtures |
-| scripts | Integration harness and Windows packaging |
-| docs | Architecture, setup, implementation boundaries, acceptance |
+- `crates/domain` — deterministic market/research/backtest/evaluation contracts and pure analytical logic.
+- `crates/runtime` — Core lifecycle, SQLite, Shadow, historical services, chronological evaluation, learning registry/review/inference/scoring, news, backup and Telegram.
+- `crates/desktop` — native Slint UI and Core API client; no broker execution ownership.
+- `gateway` — official MetaTrader5 Python bridge with read-only collection.
+- `scripts` / `tests` — trainer, packaging, smoke/browser/contract/integration checks.
+- `docs` — implementation boundaries, acceptance and continuity.
 
-Planned crates are introduced only when implemented: `market`, `features`,
-`brains`, `meta`, `risk`, `execution`, `portfolio`, `recorder`, `replay`, `models`,
-`knowledge`, `news`, `backup`, `telemetry`. Planned Python `ai_lab` handles training,
-validation and ONNX export independently of the trading core.
+## 3. Live market/research path
 
-## 3. Current lifecycle and future semantics
+Completed-bar market state feeds the legacy deterministic Meta/Shadow baseline and observational brains: Trend, Regime, Structure, Volatility, Meta v2, Gann, zones/setups, broker DOM Depth and Macro/News context. Market Opportunities can expose research plans with structural stops/targets and cost/lot gates.
 
-- Launch: core becomes ready, gateway attempts connection using saved path/account.
-- Start: v0.1 requests monitoring. Fresh account snapshot yields Monitoring;
-  absent initial snapshot yields Starting; expired/disconnected data yields Degraded.
-- Stop: withdraw monitoring intent; connection diagnostics and reports continue.
-- UI Close: keeps core alive.
-- Full Exit: stop gateway and core, leave MT5 and all broker positions untouched.
-- Restart: starts stopped, re-reads configuration, gets a fresh broker snapshot.
-- No auto-trading setting exists until execution is implemented and validated.
+Only legacy Meta may create live **virtual** Shadow entries. Observational/new learning outputs cannot alter Shadow decisions or broker state.
 
-Future Start requires reconciliation, feed health, permission, selected mode,
-model eligibility and hard-risk checks. Future Stop prevents entries while
-continuing exit/protection logic for existing positions. Flatten-and-stop is a
-separate explicit command. v0.1 does not perform that protection or flattening.
+## 4. Historical research
 
-## 4. IPC v1
+The historical lab supports Meta v1/v2, CES and KTE over frozen broker M1 history and frozen simulation assumptions. Exact History/report ledgers persist for replay, experiments and exports. KTE carries partial fills, targets and stop updates. Self-contained HTML provides offline trade review.
 
-Current control plane: JSON on fixed loopback `127.0.0.1:18741`. Every route requires
-a bearer key. Reject Origin-bearing browser requests. No remote binding, no CORS,
-no telemetry upload to external services. Key is DPAPI protected on Windows;
-Linux development file is private (0600, directory 0700).
+Chronological evaluation runs explicit holdout/rolling Meta windows against immutable saved source identity. It is an evidence service, not an optimizer or promotion mechanism.
 
-| Method and route | Purpose |
-|---|---|
-| GET /v1/status | Current health, lifecycle, latest reconciled account snapshot |
-| GET /v1/config | Nonsecret configuration and token-present flag |
-| POST /v1/config | Validate, persist settings, restart gateway |
-| POST /v1/start | Request monitoring |
-| POST /v1/stop | Stop monitoring intent |
-| POST /v1/reconnect | Reset gateway and invalidate old snapshot |
-| POST /v1/gateway/snapshot | Complete bridge snapshot |
-| GET /v1/events | Last 100 audited control/connection events |
-| POST /v1/backup | Snapshot of settings and audit database only |
-| POST /v1/shutdown | Stop background core |
+## 5. Learning pipeline
 
-Future remote control needs authenticated encrypted transport and role checks;
-the current loopback service must never be exposed with port forwarding.
-Future market transport is separate from this low-frequency control plane.
+Current pipeline:
 
-## 5. Persistence
+`completed-bar snapshot -> exact delayed label -> deterministic dataset -> offline trainer -> immutable challenger registry -> chronological evidence -> manual review eligibility -> read-only inference -> exact matured-label outcome scoring`
 
-Current SQLite `events` columns: id INTEGER PRIMARY KEY, timestamp_ms INTEGER,
-kind TEXT, detail JSON text. WAL + synchronous FULL. Audit includes startup,
-commands, connection transitions, settings changes and backup creation. Secrets
-are redacted. This is a control audit, **not yet** a complete trading event-sourcing
-implementation or raw tick recorder.
+The feature, label and model schemas are versioned. Inference consumes the same stored feature payload used for dataset export. Scoring stores immutable prediction outcomes and descriptive metrics.
 
-Nonsecret config schema 1: mt5_path, symbol, telegram_user_id, telegram_chat_id,
-telegram_enabled. Write via same-directory temporary file, fsync and atomic
-replacement. Invalid config is preserved and startup fails visibly instead of
-silently discarding user settings.
+There is no champion activation, auto-promotion, live self-modification or learned execution path.
 
-Telegram token uses user-scoped Windows DPAPI, excluded from backups. MT5 login
-credentials remain in the existing MT5 terminal in this milestone. Account
-password UI/vault and multi-terminal workers are future work.
+## 6. Persistence and backup
 
-## 6. Market/account boundaries
+SQLite uses WAL + synchronous FULL. Foreign keys are explicitly enabled and checked on startup. Runtime tables include audit/control state, market research state, historical reports/history, chronological evidence and learning audit records.
 
-Current snapshot: login/server/currency/account type, balance/equity, full open
-positions, pending count, today's booked trade-deal net, quote and symbol lot
-step/tick size. Missing orders/positions invalidate the snapshot; missing deal
-history yields unknown daily PnL. Recheck account identity after collection to
-reject account-switch races. Account feed freshness expires after eight seconds;
-quote age is a separate field and does not falsely mark a weekend account stale.
+Backup schema 8 includes the implemented research/learning audit state and excludes secrets. Full restore/staged rollback remains future work and backups must not imply automatic execution on restore.
 
-Daily report uses Baghdad UTC+03:00 boundaries converted to UTC for MT5. Sum trade
-deal profit+commission+swap+fee booked during that day, excluding cash transfers.
-It is account-wide, not bot-only. Deal count is not a count of closed trades;
-no win rate or drawdown is calculated from insufficient data.
+## 7. IPC/security boundary
 
-Future terminal identity: account_id + server + terminal_instance_id. Future symbol
-identity: internal market ID + broker-native symbol + instrument specification
-version. XAUUSD, GOLD, XAUUSDm etc. require explicit verified mapping; do not
-assume economically equivalent contracts from names alone.
+Control IPC remains loopback-only with bearer authentication. Origin-bearing browser requests are rejected. Secrets such as Telegram token are local and Windows DPAPI-backed where applicable. Source/package paths defensively exclude secrets, runtime DB/logs, `.import`, generated dependency trees and archives.
 
-## 7. Knowledge and model contract (planned)
+Do not expose the current loopback service through port forwarding as a remote-control mechanism.
 
-Each `Knowledge/<market-id>/` capsule has models, replay, news, trades, features,
-statistics, regimes, execution and checkpoints. Global knowledge stores broker
-execution, general regimes and reusable patterns with provenance. Transfer
-between markets requires validation; independent normalizers and versions.
+## 8. Data semantics
 
-Model manifest: UUID, market/mode/brain, feature schema/hash, software compatibility,
-training time span and dataset IDs, label horizon, costs, validation metrics,
-parent lineage, weights hash, calibration, champion/challenger role. Confidence
-is not called win probability without out-of-sample calibration.
+- Candle tick volume is a broker activity proxy, not exchange volume.
+- MT5 CFD Market Book is broker-specific and not global gold order flow.
+- News carries source/freshness context and must not create fabricated millisecond-event claims.
+- Missing/stale market inputs withdraw evidence; they are not synthetically filled.
+- Historical OHLC cannot reveal intrabar order; ambiguous stop/target cases use explicit conservative rules.
 
-Learning: observations -> replay -> train candidate -> cost-aware backtest ->
-out-of-sample -> walk-forward -> deterministic replay -> shadow -> demo -> eligible
-champion. Freeze Learning stops training/promotions, not data collection unless
-explicitly selected. Reset/rollback are audited and scoped by symbol/brain.
+## 9. Validation architecture
 
-Save Learning: coordinated quiescent checkpoint across weights, optimizer state,
-normalizers, replay cursor, news memory, model registry and audit watermark.
-Full Backup: versioned manifest, hashes, compatibility, optional encryption;
-verify and stage before restore, never resume live execution automatically.
-Current settings/audit backup does not implement these learning semantics.
+`research.yml` validates domain/runtime Rust tests, Core build, Python tests, real-Core synthetic smoke, browser report behavior, native desktop compile and headless all-page rendering on `development`.
 
-## 8. Brain SDK and decisions (planned)
+`windows.yml` validates Linux duplicates plus a real `windows-latest` package build on `main` and `development`. CI packaging is not native acceptance against the user's actual MT5/broker.
 
-Input: immutable MarketState + event/receive timestamps + data availability/quality
-mask + feature schema + market/mode ID. Output: vote/abstain, score, uncertainty,
-horizon, proposed entry/exit context, evidence IDs, model version and health.
-Unavailable DOM/news/volume generates abstention, not synthetic observations.
+Permanent project-contract tests protect repository hygiene, read-only broker access, causal learning wiring, shared schemas and the absence of learned promotion/execution routes.
 
-Brain roster: Trend, Regime, Structure, Order Flow, DOM, Volume, Volume Profile,
-Liquidity, Momentum, Volatility, Microstructure, Burst, Reversal, Breakout,
-Mean Reversion, Session, Correlation, Gann, CES, KTE, News, Macro, Execution,
-Exit, Risk Intelligence and Meta. Existing CES/KTE ideas require exact versioned
-specifications and tests before porting; names alone are not implementations.
+## 10. Planned work — not current capability
 
-Meta combines nonredundant evidence; it does not independently bypass risk or
-submit orders. Correlated votes must not be counted as independent confirmations.
-Hard Risk is a deterministic execution gate with explicit reason codes.
+- Manual challenger performance review over sufficiently large scored outcomes.
+- Broader real-data walk-forward/ablation research and later complex offline-trained model packaging only if justified.
+- Historical news/event replay with no-lookahead observability timestamps.
+- True feed-supported order flow/volume profile and aligned correlation/portfolio research.
+- Full backup restore/migration.
+- Broker execution state machine, hard execution risk, reconciliation, demo acceptance and only then any optional live mode.
 
-Modes: Swing, Intraday, Scalp, Sniper, Flash, Auto, Hybrid; each has distinct
-features, horizons, models, entry/exit/execution policy and resource budget.
-Separate execution environment: Backtest, Replay, Paper, Shadow, Demo, Live.
+Execution must persist intent before external side effects, treat send timeouts as unknown rather than blindly retry, reconcile broker state after restart and respect broker-discovered contract/session/account-mode constraints.
 
-## 9. Execution contract (planned)
+## 11. Release/version boundary
 
-Intent -> risk approved -> submission pending -> accepted/rejected/unknown ->
-partially filled/filled -> managing -> closed. Persist client intent ID before
-external side effects. A send timeout means unknown, never automatic blind
-resubmission. Reconcile orders/deals/positions with broker history after restart.
-MT5 OrderSendAsync receipt is not evidence of fill; OnTradeTransaction is handled
-with idempotency and correlation. Hedging/netting, volume step, tick size, filling
-mode, stop/freeze levels and market sessions are broker-discovered.
+The research milestone is called 0.4.0 development while Cargo/Windows preview metadata remain 0.3.0. Normalize those versions only in an explicit release step with `Cargo.lock` and Windows validation. The last declared delivered portable remains 0.2.0 Preview.
 
-Risk: daily loss, drawdown, open exposure, lot/position limits, spread/slippage,
-latency, consecutive loss, sessions, news, hard stop. AI cannot alter these limits.
-Measure decision/send/receipt/ack/fill separately with monotonic durations and
-timestamp uncertainty; do not promise microsecond end-to-end broker fills.
-
-## 10. News, macro, correlation (planned)
-
-Sources carry attribution, publication time, first observed time and ingest time.
-Deduplication -> entity relevance -> importance -> novelty/surprise -> symbol
-context. As-of joins prevent lookahead and revised macro data leakage. Measure
-market response from first observability; free delayed feeds do not justify
-claims of tradable 100 ms news reactions. News state is an immutable summary for
-fast inference; parsing/LLM calls stay outside the trading path.
-
-CFD DOM is broker-specific; it does not represent the worldwide gold order book.
-Tick volume is labeled separately from exchange traded volume. Correlations use
-aligned observations and availability masks; yields/index proxies are labeled.
-
-## 11. Desktop scope
-
-Current: overview, Start/Stop, reconnect, account/positions, Settings with file
-picker, Telegram setup, audit and basic backup.
-
-Planned pages: Trading, Charts, Markets, Accounts, Positions, Orders, History,
-Brains, Meta, Mode Engine, Learning, Training Lab, Models/Registry, Experience
-Replay, News, Economic Events, Regime, Order Flow, DOM, Volume Profile, Liquidity,
-Correlations, Backtest, Replay, Walk Forward, Performance, Risk, Execution,
-Latency Lab, Brokers, Telegram, Backup/Restore, Health, Logs, Settings.
-Pages are added with functional data/actions, not empty cards presenting invented
-performance. Chart marks reference immutable trade IDs for historical review.
-
-## 12. Delivery sequence and exit gates
-
-| Milestone | Deliverable | Exit gate |
-|---|---|---|
-| 1 — current | Core, native dashboard, bootstrap monitoring, settings, Telegram code | Core lifecycle tests; desktop build; native Windows/MT5 verification still required |
-| 2 | Native/MQL5 transport, recording, account manager | Disconnect/restart, timestamps, complete broker snapshots |
-| 3 | Execution state machine + hard risk | Idempotent intents, no blind retry, hedging/netting and partial-fill fixtures |
-| 4 | Replay + paper/shadow + charts | Determinism, fee/slippage model, historical annotation consistency |
-| 5 | Regime/Trend/Structure/Volatility then volume/liquidity/flow | Availability-aware outputs and ablation tests |
-| 6 | Modes, Microstructure/Burst/Exit/Flash | Measured latency distributions and replay equivalence |
-| 7 | Learning/ONNX/model registry | Reproducible training, calibration, champion rollback |
-| 8 | News/Macro/Correlation and Meta | No lookahead, proven source availability, cost-aware validation |
-| 9 | Capsules, full backup/restore, multi-account, migration | Round-trip restore, schema/hash validation, secret exclusion |
-| 10 | Extended demo validation then optional live | Measured execution, recovery and risk invariants under failure |
-
-No deadline or profitability guarantee is implied. Features are marked complete
-only after their own tests and target-environment acceptance.
-
-## Source references
-
-- Slint Rust integration: https://docs.slint.dev/latest/docs/rust/slint/
-- MT5 initialize (starts terminal if necessary): https://www.mql5.com/en/docs/python_metatrader5/mt5initialize_py
-- MT5 Python integration: https://www.mql5.com/en/docs/python_metatrader5
-- Telegram Bot API: https://core.telegram.org/bots/api
-
-
-## 0.1.1 packaging update
-
-The portable preview contains a cross-compiled Windows x64 BrainTrade.exe and an
-isolated CPython 3.13.16 runtime under runtime/python/. The core launches the
-bundled script with that runtime, with no user Python/Rust installation. Source,
-dependency notices, asset hashes and a PE import report accompany the preview.
-Windows execution/MT5 acceptance is still pending; execution remains disabled.
+No architecture item or test result is a profitability, latency or win-rate guarantee.

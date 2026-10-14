@@ -19,12 +19,14 @@ pub enum Strategy {
     MetaV1,
     CesV1,
     KteV1,
+    MetaV2,
 }
 impl Strategy {
     pub fn algorithm(self) -> &'static str {
         match self {
             Self::MetaV1 => "meta-v1 / M1-OHLC-conservative-v1",
             Self::CesV1 => "ces-v1 / M1-OHLC-conservative-v1",
+            Self::MetaV2 => "meta-v2-candidate-v1 / M1-OHLC-conservative-v1",
             Self::KteV1 => "kte-v1 / M1-partials-conservative-v1",
         }
     }
@@ -211,6 +213,19 @@ pub struct Metrics {
     pub tested_bars: usize,
     pub skipped: BTreeMap<String, usize>,
 }
+/// One candidate snapshot per tested opening, including minutes blocked by the ledger.
+/// Features use completed bars only; outcome describes simulated entry admission.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CandidateDecision {
+    pub time: u64,
+    pub signal_bar: u64,
+    pub current: bool,
+    pub data_reason: String,
+    pub atr: Option<f64>,
+    pub legacy_action: String,
+    pub candidate: crate::research::MetaBrainV2,
+    pub outcome: String,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Report {
     pub algorithm: String,
@@ -230,6 +245,8 @@ pub struct Report {
     pub trades: Vec<Trade>,
     pub equity: Vec<EquityPoint>,
     pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decisions: Vec<CandidateDecision>,
 }
 impl Report {
     pub fn summary(&self) -> String {
@@ -455,8 +472,9 @@ impl Ledger {
             targets: vec![],
         });
     }
-    fn skip(&mut self, reason: &str) {
+    fn skip<'a>(&mut self, reason: &'a str) -> &'a str {
         *self.metrics.skipped.entry(reason.into()).or_default() += 1;
+        reason
     }
 }
 pub fn run(
@@ -506,6 +524,7 @@ pub fn run(
     let mut equity = vec![];
     let mut gaps = 0;
     let mut last_spread = 0.0;
+    let mut decisions = Vec::new();
     for (step, &i) in indexes.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return Err("تم إلغاء الاختبار".into());
@@ -513,6 +532,10 @@ pub fn run(
         progress.store(step * 100 / indexes.len(), Ordering::Relaxed);
         let c = &m1[i];
         let previous = &m1[i - 1];
+        let candidate_analysis = (options.strategy == Strategy::MetaV2).then(|| {
+            analyze(Some(&market_at(&m1, &m5, &m15, i)), &history.symbol, c.time * 1000)
+        });
+        let mut outcome = "entered";
         let gap = c.time != previous.time + 60;
         if gap {
             gaps += 1;
@@ -559,13 +582,13 @@ pub fn run(
             }
         }
         if position.is_some() {
-            ledger.skip("صفقة مفتوحة");
+            outcome = ledger.skip("صفقة مفتوحة");
         } else if exited {
-            ledger.skip("خروج في نفس الدقيقة؛ لا إعادة دخول");
+            outcome = ledger.skip("خروج في نفس الدقيقة؛ لا إعادة دخول");
         } else if gap {
-            ledger.skip("فجوة قبل الشمعة");
+            outcome = ledger.skip("فجوة قبل الشمعة");
         } else if ledger.daily_locked || ledger.dd_locked || ledger.balance <= 0.0 {
-            ledger.skip("حد خسارة أو تراجع");
+            outcome = ledger.skip("حد خسارة أو تراجع");
         } else {
             let (current, side, atr, stop_distance, ces_target) =
                 if options.strategy == Strategy::CesV1 {
@@ -579,6 +602,10 @@ pub fn run(
                         ),
                         None => (false, 0, 0.0, 0.0, None),
                     }
+                } else if let Some(a) = candidate_analysis.as_ref() {
+                    let atr = a.atr.unwrap_or(0.0);
+                    let candidate = &a.regime_brain.meta_v2;
+                    (a.current, if candidate.eligible { candidate.direction } else { 0 }, atr, 1.5 * atr, None)
                 } else {
                     let a = analyze(
                         Some(&market_at(&m1, &m5, &m15, i)),
@@ -601,18 +628,20 @@ pub fn run(
                     )
                 };
             if !current {
-                ledger.skip("إحماء أو بيانات ناقصة");
+                outcome = ledger.skip("إحماء أو بيانات ناقصة");
             } else if side == 0 {
-                ledger.skip(if options.strategy == Strategy::MetaV1 {
+                outcome = ledger.skip(if options.strategy == Strategy::MetaV1 {
                     "عدم اتفاق العقول"
+                } else if options.strategy == Strategy::MetaV2 {
+                    "لم تجتز بوابات Meta v2"
                 } else {
                     "لم تتحقق شروط CES"
                 });
             } else {
                 if spread > atr * risk.max_spread_atr {
-                    ledger.skip("سبريد مرتفع");
+                    outcome = ledger.skip("سبريد مرتفع");
                 } else if (c.open - previous.close).abs() > 2.0 * atr {
-                    ledger.skip("قفزة سعرية");
+                    outcome = ledger.skip("قفزة سعرية");
                 } else {
                     let entry = if side == 1 {
                         c.open + spread + slip
@@ -641,7 +670,7 @@ pub fn run(
                         * spec.tick_loss.max(spec.tick_profit)
                         + risk.commission_per_lot;
                     if entry <= 0.0 || stop <= 0.0 || target <= 0.0 {
-                        ledger.skip("أسعار الوقف أو الهدف غير صالحة");
+                        outcome = ledger.skip("أسعار الوقف أو الهدف غير صالحة");
                     } else if let Some(lots) = size_lots(
                         budget,
                         loss_per_lot,
@@ -686,10 +715,22 @@ pub fn run(
                             position = Some(p);
                         }
                     } else {
-                        ledger.skip("اللوت الأدنى يتجاوز الميزانية");
+                        outcome = ledger.skip("اللوت الأدنى يتجاوز الميزانية");
                     }
                 }
             }
+        }
+        if let Some(a) = candidate_analysis {
+            decisions.push(CandidateDecision {
+                time: c.time,
+                signal_bar: previous.time,
+                current: a.current,
+                data_reason: if a.current { String::new() } else { a.reason },
+                atr: a.atr,
+                legacy_action: a.action,
+                candidate: a.regime_brain.meta_v2,
+                outcome: outcome.into(),
+            });
         }
         let marked = ledger.balance
             + position
@@ -738,7 +779,9 @@ pub fn run(
             point.balance = ledger.balance;
         }
     }
-    finish(history, options, ledger, equity, first, last, indexes.len(), gaps, progress)
+    let mut report = finish(history, options, ledger, equity, first, last, indexes.len(), gaps, progress)?;
+    report.decisions = decisions;
+    Ok(report)
 }
 fn finish(history: &History, options: &Options, ledger: Ledger, equity: Vec<EquityPoint>, first: u64, last: u64, tested_bars: usize, gaps: usize, progress: &AtomicUsize) -> Result<Report, String> {
     let mut m = ledger.metrics;
@@ -787,6 +830,9 @@ fn finish(history: &History, options: &Options, ledger: Ledger, equity: Vec<Equi
     if options.strategy == Strategy::CesV1 {
         warnings.push("CES يستخدم حجم ticks وATR20 من الإحماء المتاح؛ وقف 0.5 وهدف 1.5 من TR3 وخروج EG موجب أو 8 دقائق. الدخول بالافتتاح التالي يختلف عن Pine process_orders_on_close؛ لا ادعاء تطابق النتائج.".into());
     }
+    if options.strategy == Strategy::MetaV2 {
+        warnings.push("Meta v2 candidate v1: بوابات الاتجاه والنظام والبنية والزخم والتذبذب؛ سجل decisions يحفظ مرشح كل دقيقة وسبب منع الدخول. الوقف 1.5 ATR والهدف 2R والخروج 30 دقيقة مثل Meta v1؛ المحاكاة المباشرة تبقى Meta v1.".into());
+    }
     if options.strategy == Strategy::KteV1 {
         warnings.push("KTE: أهداف 1R/2R/3R بنسبة 40/30/الباقي بعد تقريب اللوت للأسفل؛ تُرفض الصفقة إن تعذر تقسيمها إلى ثلاثة أحجام صالحة. الوقف عند الدخول بعد TP1 والتتبع بعد TP2 يُفعّلان بالدقيقة التالية ولا يتراجع الوقف. خروج 45/90 دقيقة وتهدئة 3 شموع بعد الإغلاق الكامل.".into());
         warnings.push("KTE يستخدم الافتراضات الأصلية دون فلتر جلسة أو ADX. إحماء 100 شمعة؛ الاندفاع يُلغى بعد فجوة. الدخول بالافتتاح التالي وحفظ الحالة حتى الإغلاق الكامل يختلفان عن Pine؛ لا ادعاء تطابق TradingView.".into());
@@ -810,6 +856,7 @@ fn finish(history: &History, options: &Options, ledger: Ledger, equity: Vec<Equi
         trades: ledger.trades,
         equity,
         warnings,
+        decisions: vec![],
     })
 }
 
@@ -863,6 +910,110 @@ mod tests {
     }
     fn execute(h: &History, o: &Options) -> Report {
         run(h, o, &AtomicBool::new(false), &AtomicUsize::new(0)).unwrap()
+    }
+    #[test]
+    fn meta_v2_entries_reconcile_and_legacy_report_shape_stays_unchanged() {
+        let h = fixture(1800);
+        let mut o = options(1800);
+        let legacy = execute(&h, &o);
+        assert!(!serde_json::to_value(&legacy).unwrap().as_object().unwrap().contains_key("decisions"));
+        o.strategy = Strategy::MetaV2;
+        let r = execute(&h, &o);
+        assert_eq!(r.algorithm, "meta-v2-candidate-v1 / M1-OHLC-conservative-v1");
+        assert!(r.metrics.trades > 0);
+        assert_eq!(r.decisions.len(), r.metrics.tested_bars);
+        assert_eq!(r.decisions.iter().filter(|d| d.outcome == "entered").count(), r.trades.len());
+        assert_eq!(serde_json::to_value(&r.trades).unwrap(), serde_json::to_value(&legacy.trades).unwrap());
+        assert_eq!(serde_json::to_value(&r).unwrap(), serde_json::to_value(execute(&h, &o)).unwrap());
+        for t in &r.trades {
+            let d = r.decisions.iter().find(|d| d.time == t.entry_time).unwrap();
+            assert!(d.current && d.candidate.eligible && d.candidate.gates.is_empty());
+            assert_eq!(d.candidate.direction, t.side);
+            assert_eq!(d.signal_bar + 60, d.time);
+            assert_eq!(d.outcome, "entered");
+            let budget = ((t.entry-t.stop).abs() + o.risk.slippage_ticks*h.contract.tick_size)
+                / h.contract.tick_size*h.contract.tick_loss*t.lots+t.commission;
+            assert!(budget <= o.initial_equity*o.risk.risk_percent/100.0+1e-8);
+        }
+        assert!((r.metrics.net-r.trades.iter().map(|t|t.net).sum::<f64>()).abs()<1e-7);
+    }
+    #[test]
+    fn meta_v2_decision_prefix_is_stable_when_future_prices_and_spreads_change() {
+        let h = fixture(1800);
+        let mut o = options(1800);
+        o.strategy = Strategy::MetaV2;
+        let original = execute(&h, &o);
+        let mut future = h.clone();
+        for b in &mut future.bars[1700..] {
+            b.candle.open += 500.0; b.candle.high += 500.0;
+            b.candle.low += 500.0; b.candle.close += 500.0;
+            b.spread_points = 99999;
+        }
+        let changed = execute(&future, &o);
+        assert_eq!(serde_json::to_value(&original.decisions[..100]).unwrap(),
+                   serde_json::to_value(&changed.decisions[..100]).unwrap());
+        let mut prefix = h.clone();
+        prefix.bars.truncate(1700);
+        o.to = BASE + 1700*60;
+        let short = execute(&prefix, &o);
+        assert_eq!(serde_json::to_value(&original.decisions[..100]).unwrap(),
+                   serde_json::to_value(&short.decisions).unwrap());
+    }
+    #[test]
+    fn meta_v2_missing_stale_and_gap_data_never_admit_entries() {
+        let mut h = fixture(1800);
+        let mut o = options(1800);
+        o.strategy = Strategy::MetaV2;
+        o.from = BASE + 60;
+        let r = execute(&h, &o);
+        assert!(r.decisions.iter().take(1400).all(|d| !d.current && d.outcome != "entered"));
+        o.from = BASE+1600*60;
+        h.bars.remove(1601); // the first admitted position must close at next observed open
+        let r = execute(&h, &o);
+        assert_eq!(r.trades[0].reason, "data_gap");
+        assert_eq!(r.trades[0].exit_bar, BASE+1602*60);
+        assert_ne!(r.decisions[1].outcome, "entered");
+        assert!(r.decisions.iter().skip(2).all(|d| !d.current && d.outcome != "entered"));
+        let m1: Vec<_> = h.bars.iter().map(|b| b.candle.clone()).collect();
+        let mut market = market_at(&m1, &aggregate(&h.bars,300), &aggregate(&h.bars,900),1600);
+        market.m15.clear();
+        assert!(!analyze(Some(&market),"TEST",market.captured_ms).regime_brain.meta_v2.eligible);
+        market = market_at(&m1, &aggregate(&h.bars,300), &aggregate(&h.bars,900),1600);
+        assert!(!analyze(Some(&market),"TEST",market.captured_ms+20_000).current);
+    }
+    #[test]
+    fn meta_v2_shock_and_execution_vetoes_are_saved_separately() {
+        let mut h = fixture(1800);
+        let mut o = options(1800); o.strategy = Strategy::MetaV2;
+        h.bars[1599].candle.high += 10.0;
+        h.bars[1599].candle.low -= 10.0;
+        let r = execute(&h,&o);
+        assert!(r.decisions[0].candidate.gates.iter().any(|s|s=="Volatility shock veto"));
+        assert_ne!(r.decisions[0].outcome,"entered");
+        h = fixture(1800);
+        o.spread_floor = 10.0;
+        let r = execute(&h,&o);
+        assert_eq!(r.metrics.trades,0);
+        assert!(r.decisions.iter().all(|d|d.candidate.eligible && d.outcome=="سبريد مرتفع"));
+        o.spread_floor = 0.02;
+        o.initial_equity = 1.0;
+        let r = execute(&h,&o);
+        assert_eq!(r.metrics.trades,0);
+        assert!(r.decisions.iter().all(|d|d.outcome=="اللوت الأدنى يتجاوز الميزانية"));
+    }
+    #[test]
+    fn meta_v2_gap_loss_latches_risk_and_stops_new_entries() {
+        let mut h = fixture(1800);
+        let mut o = options(1800); o.strategy = Strategy::MetaV2;
+        for b in &mut h.bars[1601..] {
+            b.candle.open -= 100.0; b.candle.high -= 100.0;
+            b.candle.low -= 100.0; b.candle.close -= 100.0;
+        }
+        let r = execute(&h,&o);
+        assert_eq!(r.trades.len(),1);
+        assert_eq!(r.trades[0].reason,"stop_gap");
+        assert!(r.metrics.max_drawdown_percent > o.risk.max_drawdown_percent);
+        assert!(r.decisions.iter().skip(2).all(|d|d.outcome=="حد خسارة أو تراجع"));
     }
     #[test]
     fn ces_next_open_entry_costs_smart_exit_and_eight_minute_limit() {

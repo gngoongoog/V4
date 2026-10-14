@@ -91,7 +91,17 @@ def main():
             assert len((export/'candles.jsonl').read_text().splitlines())==540
 
             from check_backtest import check
-            backtest_id,backtest_metrics=check(api,snapshot)
+            backtest_id,backtest_metrics,candidate_id,comparison=check(api,snapshot)
+
+            # Full public-API chain: independent chronological evidence -> challenger
+            # registration -> immutable review prerequisite -> read-only prediction.
+            from check_learning import check as check_learning
+            learning_ids=check_learning(api,snapshot)
+            assert len(api('/v1/backtest/runs')['runs'])==8
+            assert len(api('/v1/evaluation/runs')['runs'])==1
+            assert len(api('/v1/learning/review/records')['records'])==1
+            assert len(api('/v1/learning/inference/recent')['predictions'])==1
+            assert not api('/v1/status')['execution_enabled']
 
             backup=api('/v1/backup',{})
             folder=Path(backup['path'])
@@ -99,6 +109,10 @@ def main():
             with sqlite3.connect(folder/'events.sqlite') as db:
                 assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
                 assert db.execute('SELECT COUNT(*) FROM events').fetchone()[0]>3
+                assert db.execute('SELECT COUNT(*) FROM chronological_evaluations').fetchone()[0]==1
+                assert db.execute('SELECT COUNT(*) FROM learning_review_records').fetchone()[0]==1
+                assert db.execute('SELECT COUNT(*) FROM learning_predictions').fetchone()[0]==1
+                assert db.execute("SELECT COUNT(*) FROM learning_slots WHERE slot='champion' AND model_id IS NOT NULL").fetchone()[0]==0
             assert not list(folder.glob('*.sealed'))
             events_before=api('/v1/events')['events']
             api('/v1/shutdown',{});process.wait(timeout=5)
@@ -112,13 +126,20 @@ def main():
             assert api('/v1/status')['paper']['trades']==1
             assert len(api('/v1/decisions')['decisions'])==1
             assert api('/v1/config')['config']['risk']['risk_percent']==.35
-            assert len(api('/v1/backtest/runs')['runs'])==3
+            assert len(api('/v1/backtest/runs')['runs'])==8
+            assert api('/v1/backtest/report',{'id':candidate_id})['comparison']==comparison
             assert not api('/v1/news')['enabled']
             assert api('/v1/backtest/report',{'id':backtest_id})['metrics']==backtest_metrics
+            assert api('/v1/evaluation/report',{'id':learning_ids['evaluation_id']})['immutable'] is True
+            reviews=api('/v1/learning/review/records')['records']
+            assert reviews[0]['id']==learning_ids['review_id']
+            inference=api('/v1/learning/inference')
+            assert inference['predictions']==1 and inference['shadow_effect'] is False
+            assert inference['broker_effect'] is False
             assert len(api('/v1/events')['events'])>len(events_before)
             api('/v1/shutdown',{});process.wait(timeout=5)
             assert process.returncode==0
-            print('PASS: lifecycle/auth/staleness/shadow/risk; backtest UTC chunking, cancel, account isolation, asynchronous completion, full export, deterministic offline replay, CES experiment, news API/settings, backup and restart persistence')
+            print('PASS: lifecycle/auth/staleness/shadow/risk; backtest UTC chunking, cancel, account isolation, asynchronous completion, full export, deterministic offline replay, CES/Meta-v2 experiments, chronological evidence, challenger review eligibility, cross-language feature parity, read-only inference persistence/isolation, news API/settings, backup and restart persistence')
         finally:
             if process.poll() is None:process.terminate();process.wait(timeout=5)
 

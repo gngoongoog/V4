@@ -1,15 +1,21 @@
 /target/
 /.build-venv/
+/.ci/
+/.venv/
+/venv/
 /build/
 /dist/
 /release/
 /test-output/
 /.package-cache/
+node_modules/
 
 # Python / editor / OS noise
 __pycache__/
 *.pyc
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .vscode/
 .idea/
 .DS_Store

@@ -1,3 +1,5 @@
+mod comparison;
+mod audit;
 use crate::{atomic_write, now_ms};
 use anyhow::{bail, Context, Result};
 use braintrade_domain::{
@@ -64,6 +66,7 @@ struct Job {
     history: Option<History>,
     cursor: u64,
     history_start: u64,
+    comparison_source: Option<String>,
     cancel: Arc<AtomicBool>,
     progress: Arc<AtomicUsize>,
 }
@@ -100,7 +103,7 @@ pub fn utc(seconds: u64) -> String {
 
 impl Service {
     pub fn new(db: &Connection) -> Result<Self> {
-        db.execute_batch("CREATE TABLE IF NOT EXISTS backtest_runs(id TEXT PRIMARY KEY,created_ms INTEGER NOT NULL,report TEXT NOT NULL,history TEXT NOT NULL);")?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS backtest_runs(id TEXT PRIMARY KEY,created_ms INTEGER NOT NULL,report TEXT NOT NULL,history TEXT NOT NULL);CREATE TABLE IF NOT EXISTS backtest_experiments(run_id TEXT PRIMARY KEY,source_id TEXT NOT NULL);")?;
         let (tx, rx) = mpsc::channel();
         Ok(Self { job: None, tx, rx })
     }
@@ -194,6 +197,7 @@ impl Service {
             options,
             cursor: start,
             history_start: start,
+            comparison_source: None,
             cancel: Arc::new(AtomicBool::new(false)),
             progress: Arc::new(AtomicUsize::new(0)),
         });
@@ -323,7 +327,12 @@ impl Service {
                 }
                 Ok((report, history)) => {
                     let saved = (|| -> Result<()> {
-                        db.execute("INSERT INTO backtest_runs(id,created_ms,report,history) VALUES(?1,?2,?3,?4)",params![j.id,j.created_ms,serde_json::to_string(&report)?,serde_json::to_string(&history)?])?;
+                        let tx = db.unchecked_transaction()?;
+                        tx.execute("INSERT INTO backtest_runs(id,created_ms,report,history) VALUES(?1,?2,?3,?4)",params![j.id,j.created_ms,serde_json::to_string(&report)?,serde_json::to_string(&history)?])?;
+                        if let Some(source) = &j.comparison_source {
+                            tx.execute("INSERT INTO backtest_experiments(run_id,source_id) VALUES(?1,?2)",params![j.id,source])?;
+                        }
+                        tx.commit()?;
                         Ok(())
                     })();
                     match saved {
@@ -371,10 +380,12 @@ impl Service {
         Ok((serde_json::from_str(&r)?, serde_json::from_str(&h)?))
     }
     fn report(db: &Connection, id: &str) -> Result<Value> {
-        let (r, _) = Self::load(db, id)?;
+        let (r, h) = Self::load(db, id)?;
+        let comparison = comparison::load(db, id, &r, &h)?;
         Ok(json!({
             "report_id":id,
-            "text":format!("{} → {}\n{}\n\n{}",utc(r.options.from),utc(r.options.to),r.text(),ledger_text(&r.trades)),
+            "text":format!("{} → {}\n{}\n\n{}\n{}\n{}",utc(r.options.from),utc(r.options.to),r.text(),comparison.as_ref().map(comparison::text).unwrap_or_default(),audit::summary(&r.decisions),ledger_text(&r.trades)),
+            "comparison":comparison,
             "summary":r.summary(),
             "metrics":r.metrics
         }))
@@ -406,6 +417,7 @@ impl Service {
         if report.algorithm != report.options.strategy.algorithm() {
             bail!("إصدار خوارزمية النتيجة لا يطابق الإصدار الحالي");
         }
+        let comparison_source = if strategy.is_some() { Some(id.to_owned()) } else { comparison::source(db,id)? };
         let now = now_ms();
         self.job = Some(Job {
             id: uuid::Uuid::new_v4().to_string(),
@@ -422,6 +434,7 @@ impl Service {
             history: Some(history),
             cursor: 0,
             history_start: 0,
+            comparison_source,
             cancel: Arc::new(AtomicBool::new(false)),
             progress: Arc::new(AtomicUsize::new(0)),
         });
@@ -633,7 +646,11 @@ fn ledger_markers(
     }
     markers
 }
-fn html(r: &Report) -> String {
+fn review_json(value: Value) -> String {
+    // JSON lives inside an HTML raw-text element: prevent a string from closing it.
+    value.to_string().replace('<', "\\u003c").replace('>', "\\u003e").replace('&', "\\u0026")
+}
+fn html(r: &Report, h: &History) -> String {
     use std::fmt::Write;
     let values = &r.equity;
     let min = values
@@ -669,7 +686,7 @@ fn html(r: &Report) -> String {
     }
     let markers = ledger_markers(&r.trades, values);
     let ledger = escape(&ledger_text(&r.trades));
-    format!(
+    let document = format!(
         r##"<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>BrainTrade Backtest</title><style>body{{margin:0;background:#101827;color:#e5edf9;font:16px system-ui,sans-serif}}main{{max-width:1100px;margin:auto;padding:32px}}h1{{color:#76dfc0}}pre{{white-space:pre-wrap;line-height:1.8;background:#1b273a;padding:20px;border-radius:12px}}svg{{width:100%;background:#1b273a;border-radius:12px}}svg circle{{fill:#f3c969;stroke:#101827;stroke-width:1}}table{{width:100%;border-collapse:collapse;font-size:13px}}td,th{{padding:12px;border-bottom:1px solid #344055;text-align:right}}.scroll{{overflow:auto}}small{{color:#aabbd2}}@media print{{body{{background:white;color:black}}pre,svg{{background:#eee}}}}</style><main><h1>BRAINTRADE OS — الاختبار التاريخي</h1><p>{} → {}</p><pre>{}</pre><h2>منحنى حقوق الحساب الافتراضية</h2><svg viewBox="0 0 800 240" role="img" aria-label="Virtual equity curve"><polyline fill="none" stroke="#51cba8" stroke-width="2" points="{}"/>{}</svg><small>أدنى {:.2} — أعلى {:.2} {}. الدوائر تمثل أحداث fills من سجل الصفقة نفسه؛ تفاصيل كل دقيقة في equity.csv.</small><h2>افتراضات وحدود البيانات</h2><pre>{}</pre><p>أول شمعة متوفرة: {}، آخر شمعة: {}. أول/آخر دقيقة اختبار: {} / {}.</p><h2>آخر 200 صفقة</h2><div class="scroll"><table><thead><tr><th>الاتجاه</th><th>الدخول</th><th>دقيقة الخروج</th><th>اللوت</th><th>سعر الدخول</th><th>سعر الخروج</th><th>الصافي</th><th>السبب</th></tr></thead><tbody>{}</tbody></table></div><h2>سجل التنفيذ الجزئي / KTE ledger</h2><pre>{}</pre><small>التصدير الكامل: trades.csv + fills.csv + stop_updates.csv + targets.csv + report.json.</small><p>تجربة تاريخية تقديرية؛ لا أوامر إلى الوسيط ولا ادعاء ربحية مستقبلية.</p></main></html>"##,
         utc(r.options.from),
         utc(r.options.to),
@@ -686,7 +703,10 @@ fn html(r: &Report) -> String {
         utc(r.last_test_bar),
         rows,
         ledger
-    )
+    );
+    let data = review_json(json!({"trades":r.trades,"bars":h.bars,"currency":r.currency,"tick":r.contract.tick_size}));
+    let review = include_str!("trade_review.html").replace("__TRADE_DATA__", &data);
+    document.replace("<h2>آخر 200 صفقة", &format!("{review}<h2>آخر 200 صفقة"))
 }
 fn export(db: &Connection, dir: &Path, id: &str) -> Result<Value> {
     use std::fmt::Write;
@@ -700,7 +720,18 @@ fn export(db: &Connection, dir: &Path, id: &str) -> Result<Value> {
         &serde_json::to_vec_pretty(&r)?,
     )?;
     atomic_write(&staging.join("history.json"), &serde_json::to_vec(&h)?)?;
-    atomic_write(&staging.join("report.html"), html(&r).as_bytes())?;
+    let comparison = comparison::load(db, id, &r, &h)?;
+    let mut extra = String::new();
+    if let Some(c) = comparison {
+        atomic_write(&staging.join("comparison.json"), &serde_json::to_vec_pretty(&c)?)?;
+        extra = comparison::html(&c);
+    }
+    let document = html(&r, &h).replacen("<h2>منحنى", &format!("{extra}<h2>منحنى"), 1)
+        .replacen("<h2>آخر 200 صفقة", &format!("{}<h2>آخر 200 صفقة", audit::html(&r.decisions)), 1);
+    atomic_write(&staging.join("report.html"), document.as_bytes())?;
+    if !r.decisions.is_empty() {
+        atomic_write(&staging.join("decisions.csv"), audit::csv(&r.decisions).as_bytes())?;
+    }
     let mut trades="signal_bar_utc,entry_time_utc,exit_bar_utc,exit_phase,side,entry,exit,stop,target,lots,commission,net,reason,ambiguous\n".to_string();
     for t in &r.trades {
         writeln!(
@@ -732,11 +763,11 @@ fn export(db: &Connection, dir: &Path, id: &str) -> Result<Value> {
         writeln!(curve, "{},{:.10},{:.10}", p.time, p.equity, p.balance)?;
     }
     atomic_write(&staging.join("equity.csv"), curve.as_bytes())?;
-    atomic_write(&staging.join("README.txt"),"افتح report.html للمراجعة. report.json يحفظ Report الكامل. trades.csv يحفظ ملخص الصفقات، وfills.csv / stop_updates.csv / targets.csv تحفظ سجل KTE التفصيلي من نفس Trade ledger، وequity.csv يحفظ منحنى الحساب بأوقات UTC epoch. الأرقام محاكاة وليست تنفيذ وسيط. بيانات الحساب موجودة في التقرير؛ التوكن وكلمات المرور غير موجودة.\n".as_bytes())?;
+    atomic_write(&staging.join("README.txt"),"افتح report.html للمراجعة. comparison.json يظهر عند تجربة استراتيجية على بيانات نتيجة محفوظة؛ يراجع تطابق الشموع والإعدادات والتكاليف. decisions.csv يحفظ كل قرارات Meta v2 وبواباتها؛ يعرض HTML آخر 50 قراراً وملخص جميع الأسباب. report.json يحفظ Report الكامل. trades.csv يحفظ ملخص الصفقات، وfills.csv / stop_updates.csv / targets.csv تحفظ سجل KTE التفصيلي من نفس Trade ledger، وequity.csv يحفظ منحنى الحساب بأوقات UTC epoch. الأرقام محاكاة وليست تنفيذ وسيط. بيانات الحساب موجودة في التقرير؛ التوكن وكلمات المرور غير موجودة.\n".as_bytes())?;
     let dest = root.join(name);
     fs::rename(staging, &dest)?;
     Ok(
-        json!({"path":dest,"note":"افتح report.html؛ JSON وCSV يحفظان نفس سجل الصفقات التفصيلي، بما فيه fills/stops/targets لـ KTE"}),
+        json!({"path":dest,"note":"افتح report.html واختر صفقة لمراجعة الشموع والدخول والأهداف والوقف؛ يعمل التقرير دون إنترنت، ويستخدم نفس سجل JSON وCSV"}),
     )
 }
 
@@ -749,6 +780,11 @@ mod tests {
         assert!(date("2024-02-30").is_err());
         assert!(date("2024-1-01").is_err());
         assert_eq!(escape("<script>&\""), "&lt;script&gt;&amp;&quot;");
+        let hostile = json!({"reason":"</script><img src=x onerror=alert(1)>&\""});
+        let encoded = review_json(hostile.clone());
+        assert!(!encoded.contains('<'));
+        assert!(!encoded.contains('>'));
+        assert_eq!(serde_json::from_str::<Value>(&encoded).unwrap(), hostile);
     }
     #[test]
     fn kte_ledger_drives_text_csv_and_chart_markers() {
@@ -820,6 +856,7 @@ mod tests {
             history: None,
             cursor: 0,
             history_start: 0,
+            comparison_source: None,
             cancel: Arc::new(AtomicBool::new(false)),
             progress: Arc::new(AtomicUsize::new(0)),
         });
