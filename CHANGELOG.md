@@ -1,3 +1,14 @@
+# 0.4.0 portable release candidate — 2026-10-14
+
+- Compared both repositories and retained V4 as the fuller source.
+- Added Opportunities, Market Map and Learning pages, with all existing learning actions available from the dashboard.
+- Added first-observed opportunity history and export; historical records are explicitly not current quotes.
+- STOP immediately withdraws quote plans; stale maps cannot present old levels as current.
+- Opportunity cache reacts to corrected history on any timeframe.
+- Normalized Cargo/UI/portable version to 0.4.0; added source commit to package metadata.
+- Added packaged Windows startup/DPAPI/config/backup/shutdown and native-render verification.
+- Validation pending for this candidate; earlier results below retain their original boundaries.
+
 # Changelog
 
 ## 2026-10-14 — learning audit pipeline and repository quality reconciliation

@@ -158,6 +158,23 @@ class ProjectContractTests(unittest.TestCase):
             with self.subTest(path=path.name):
                 json.loads(path.read_text(encoding="utf-8"))
 
+    def test_release_versions_and_dashboard_routes_are_consistent(self):
+        import tomllib
+        workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+        lock = tomllib.loads((ROOT / "Cargo.lock").read_text())
+        packages = [p for p in lock["package"] if p["name"].startswith("braintrade-")]
+        self.assertEqual(len(packages), 3)
+        self.assertTrue(all(p["version"] == workspace for p in packages))
+        ui = (ROOT / "crates/desktop/ui/main.slint").read_text()
+        workflow = (ROOT / ".github/workflows/windows.yml").read_text()
+        self.assertIn("Research " + workspace, ui)
+        self.assertIn("v" + workspace + "-Preview", workflow)
+        main = (ROOT / "crates/desktop/src/main.rs").read_text()
+        for module in ("backtest", "news", "evaluation", "learning"):
+            self.assertIn(module + "::setup(&ui)", main)
+        for page in (10, 11, 12):
+            self.assertIn(f"if root.page == {page}:", ui)
+
     def test_windows_ci_covers_development(self):
         workflow = (
             ROOT / ".github" / "workflows" / "windows.yml"

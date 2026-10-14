@@ -15,7 +15,7 @@ component Card inherits Rectangle {
 }
 export component Dashboard inherits Window {
     init => { Palette.color-scheme = ColorScheme.dark; }
-    title: "BRAINTRADE OS | Research 0.3.0";
+    title: "BRAINTRADE OS | Research 0.4.0";
     preferred-width: 1120px; preferred-height: 820px; min-width: 880px; min-height: 700px;
     background: #0b1220;
     in-out property <int> page: 0;
@@ -40,6 +40,18 @@ export component Dashboard inherits Window {
     in-out property <string> telegram-token;
     in-out property <bool> telegram-enabled: false;
     in-out property <bool> clear-token: false;
+    in property <string> opportunities: "بانتظار البيانات";
+    in property <string> market-map: "بانتظار البيانات";
+    in property <string> opportunity-history: "اضغط عرض سجل الفرص لقراءة أول رصد محفوظ.";
+    callback load-opportunity-history();
+    in property <string> learning-summary: "افتح صفحة التعلم لتحديث البيانات";
+    in property <string> learning-status: "لم يُحدّث بعد";
+    in property <string> learning-detail: "صدّر dataset للتدريب الخارجي، ثم استورد ملف النموذج. يلزم دليل زمني متوافق قبل تسجيل المراجعة.";
+    in property <string> learning-model;
+    in property <bool> learning-busy: false;
+    in property <bool> learning-review-ready: false;
+    in-out property <string> learning-note;
+    callback learning-action(string);
     in property <string> brains: "Waiting for closed M1/M5/M15 candles";
     in property <string> paper: "Virtual trades appear after START and an eligible signal";
     in property <string> regime: "UNKNOWN";
@@ -106,7 +118,7 @@ export component Dashboard inherits Window {
             spacing: 12px;
             VerticalLayout {
                 Text { text: "BRAINTRADE OS"; color: #f5f7fd; font-size: 26px; font-weight: 800; }
-                Text { text: "مركز التحكم  /  RESEARCH 0.3.0"; color: #8d9cb4; font-size: 13px; }
+                Text { text: "مركز التحكم  /  RESEARCH 0.4.0"; color: #8d9cb4; font-size: 13px; }
             }
             Rectangle { horizontal-stretch: 1; background: transparent; }
             Text { text: root.state; color: root.online ? #5be0be : #f0c578; font-size: 16px; vertical-alignment: center; }
@@ -138,6 +150,11 @@ export component Dashboard inherits Window {
             Button { text: "السجل"; clicked => { root.page = 2; root.action("events"); } }
             Button { text: "حول"; clicked => { root.page = 3; } }
           }
+        }
+        HorizontalLayout { spacing: 8px;
+            Button { text: "فرص السوق"; clicked => { root.page = 10; } }
+            Button { text: "خريطة العقول والمناطق"; clicked => { root.page = 12; } }
+            Button { text: "التعلم ومراجعة النماذج"; clicked => { root.page = 11; root.learning-action("refresh"); } }
         }
         if root.page == 0: ScrollView { VerticalBox {
             spacing: 14px;
@@ -197,8 +214,8 @@ export component Dashboard inherits Window {
         }
         if root.page == 3: VerticalLayout {
             spacing: 16px; alignment: start; vertical-stretch: 1;
-            Text { text: "BRAINTRADE OS 0.3.0"; color: #eaf0fb; font-size: 24px; }
-            Text { text: "عقول بقواعد حسابية + إدارة مخاطرة + محاكاة. التعلم الآلي والتنفيذ الفعلي مراحل لاحقة."; color: #acbad0; wrap: word-wrap; }
+            Text { text: "BRAINTRADE OS 0.4.0"; color: #eaf0fb; font-size: 24px; }
+            Text { text: "عقول تحليلية، مختبر تاريخي، تقييم زمني وتعلم بحثي للمراقبة. التنفيذ الفعلي والترقية التلقائية غير مفعّلين."; color: #acbad0; wrap: word-wrap; }
             Text { text: "Windows x64 • Core + Desktop + MT5 bootstrap"; color: #acbad0; }
             AboutSlint { max-height: 110px; }
         }
@@ -336,6 +353,38 @@ export component Dashboard inherits Window {
             }
             Text { text: root.ev-report; color: #d5deed; wrap: word-wrap; horizontal-alignment: left; font-size: 14px; }
             Text { text: "مهم: net-sum والمتوسطات تجمع نوافذ مستقلة وليست منحنى حساب متصل. Holdout/rolling دليل تقييم بحثي فقط، وليس إثبات ربحية ولا إذناً لـShadow أو LIVE."; color: #f0c578; wrap: word-wrap; }
+        } }
+        if root.page == 10: ScrollView { VerticalBox { spacing: 12px;
+            Text { text: "فرص السوق — طلب وعرض، ارتداد، اختراق وزخم"; color: #eaf0fb; font-size: 20px; wrap: word-wrap; }
+            Text { text: "تتغير الخطة مع السعر، وتُسحب عند الإيقاف أو تقادم البيانات. قوة الخصائص ليست احتمال نجاح."; color: #f0c578; wrap: word-wrap; }
+            Text { text: root.opportunities; color: #d5deed; wrap: word-wrap; horizontal-alignment: left; }
+            Button { text: "عرض آخر 100 فرصة محفوظة"; clicked => { root.load-opportunity-history(); } }
+            Text { text: root.opportunity-history; color: #acbad0; wrap: word-wrap; horizontal-alignment: left; }
+        } }
+        if root.page == 12: ScrollView { VerticalBox { spacing: 12px;
+            Text { text: "خريطة السوق والعقول المتخصصة"; color: #eaf0fb; font-size: 20px; }
+            Text { text: "المناطق والقمم والقيعان • الزخم والتباعد • Gann • DOM • ملف نشاط ticks والجلسات"; color: #acbad0; wrap: word-wrap; }
+            Text { text: root.market-map; color: #d5deed; wrap: word-wrap; horizontal-alignment: left; }
+        } }
+        if root.page == 11: ScrollView { VerticalBox { spacing: 12px;
+            Text { text: "التعلم والتوقعات البحثية"; color: #eaf0fb; font-size: 20px; }
+            Text { text: root.learning-status; color: #76dfc0; wrap: word-wrap; }
+            HorizontalBox {
+                Button { text: "تحديث"; enabled: !root.learning-busy; clicked => { root.learning-action("refresh"); } }
+                Button { text: "تصدير بيانات التدريب"; enabled: !root.learning-busy; clicked => { root.learning-action("export"); } }
+                Button { text: "استيراد نموذج JSON"; enabled: !root.learning-busy; clicked => { root.learning-action("register"); } }
+            }
+            Text { text: root.learning-summary; color: #d5deed; wrap: word-wrap; horizontal-alignment: left; }
+            Text { text: "راجع هوية النموذج والدليل الزمني في التفاصيل قبل التسجيل. تسجيل الأهلية يتيح توقعات مراقبة فقط."; color: #f0c578; wrap: word-wrap; }
+            LineEdit { text <=> root.learning-note; placeholder-text: "ملاحظة المراجعة (حتى 500 حرف)"; }
+            Button { text: "تسجيل أهلية المراجعة الحالية"; enabled: !root.learning-busy && root.learning-review-ready; clicked => { root.learning-action("review"); } }
+            HorizontalBox {
+                Button { text: "تفاصيل النموذج والدليل"; enabled: !root.learning-busy; clicked => { root.learning-action("details"); } }
+                Button { text: "التوقعات"; enabled: !root.learning-busy; clicked => { root.learning-action("predictions"); } }
+                Button { text: "نتائج التوقعات"; enabled: !root.learning-busy; clicked => { root.learning-action("outcomes"); } }
+                Button { text: "سجل المراجعات"; enabled: !root.learning-busy; clicked => { root.learning-action("records"); } }
+            }
+            Text { text: root.learning-detail; color: #acbad0; wrap: word-wrap; horizontal-alignment: left; }
         } }
         Rectangle { height: 1px; background: #263145; }
         Text { text: root.feedback; color: #f0c578; wrap: word-wrap; min-height: 36px; }

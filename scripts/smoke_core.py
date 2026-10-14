@@ -85,7 +85,9 @@ def main():
             assert api('/v1/stop',{})['state']=='stopped'
             snapshot.update(bid=target+.1,ask=target+.2);api('/v1/gateway/snapshot',snapshot)
             paper=api('/v1/status')['paper'];assert paper['trades']==1 and paper['realized']>0
+            assert isinstance(api('/v1/opportunities/history')['setups'], list)
             export=Path(api('/v1/export',{})['path'])
+            assert (export/'opportunity_setups.jsonl').exists()
             assert len((export/'decisions.jsonl').read_text().splitlines())==1
             assert len((export/'paper_events.jsonl').read_text().splitlines())==2
             assert len((export/'candles.jsonl').read_text().splitlines())==540

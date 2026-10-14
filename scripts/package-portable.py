@@ -11,9 +11,10 @@ import shutil
 import subprocess
 import urllib.request
 import zipfile
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.3.0"
+VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
 ASSETS = [
     {"file": "python-3.13.16-embed-amd64.zip", "url": "https://www.python.org/ftp/python/3.13.16/python-3.13.16-embed-amd64.zip",
      "sha256": "97dae5274cc54867065e8d5a3226e48c35017ed332a0fdb0e27d5b5821961297", "destination": "runtime/python"},
@@ -138,6 +139,13 @@ def source_copy(destination):
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, output)
 
+def source_commit():
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT,
+                                       text=True, stderr=subprocess.DEVNULL).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None  # A source-only archive has no Git metadata; never invent provenance.
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--exe", type=Path, required=True)
@@ -164,7 +172,7 @@ def main():
     source_copy(output / "Source")
     count = collect_licenses(output / "licenses/rust", args.cargo)
     reports = check_pe_tree(output, args.dll_dir)
-    (output / "package-validation.json").write_text(json.dumps({"version": VERSION, "architecture": "Windows x64", "rust_dependencies": count, "assets": ASSETS, "pe_imports": reports, "validation": "Portable package built from the checked source tree with pinned embedded assets and PE dependency validation. Native MT5 acceptance remains a separate manual step."}, indent=2), encoding="utf-8")
+    (output / "package-validation.json").write_text(json.dumps({"version": VERSION, "architecture": "Windows x64", "source_commit": source_commit(), "rust_dependencies": count, "assets": ASSETS, "pe_imports": reports, "validation": "Portable package built from the checked source tree with pinned embedded assets and PE dependency validation. Native MT5 acceptance remains a separate manual step."}, indent=2), encoding="utf-8")
     manifest = build_manifest(output)
     (output / "SHA256SUMS.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     archive = ROOT / "release" / f"BrainTrade-Windows-x64-v{VERSION}-Preview.zip"

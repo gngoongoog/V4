@@ -23,11 +23,15 @@ pub fn render() -> anyhow::Result<()> {
     ui.set_diagnostics(
         "Set your terminal path in Settings. No trade execution in this release.".into(),
     );
-    ui.set_feedback("Research 0.3.0 • RENDER FIXTURE / no live data".into());
+    ui.set_feedback("Research 0.4.0 • RENDER FIXTURE / no live data".into());
     ui.set_regime("UPTREND".into());
     ui.set_decision("WAIT".into());
     ui.set_brains("RENDER FIXTURE / بيانات فحص فقط\nTrend M1: BUY | evidence 0.72\nTrend M5: BUY | evidence 0.61\nTrend M15: BUY | evidence 0.58\nMomentum M1: BUY\nStructure M1: NEUTRAL\n\nالنظام متوقف؛ لا مداخل افتراضية جديدة\nقوة الدليل ليست نسبة نجاح".into());
     ui.set_paper("SHADOW / محاكاة فقط\nRENDER FIXTURE / no live data\nVirtual equity: 1000.00 | realized: 0.00\nClosed virtual trades: 0\n\nNo open virtual position\n\nSpread, configured commission and slippage included.\nNo MT5 orders.".into());
+    ui.set_opportunities("RENDER FIXTURE — لا توجد فرصة حالية\nمنطقة طلب | انتظار تأكيد\nالدخول والوقف والأهداف مسحوبة أثناء الإيقاف".into());
+    ui.set_market_map("RENDER FIXTURE\nعقل المناطق: support / demand\nعقل الزخم: RSI 52 / اتجاه محايد\nGann: observational\nDOM: غير متاح — لا يتم اختلاق عمق السوق\nملف النشاط: ticks proxy فقط".into());
+    ui.set_learning_summary("RENDER FIXTURE\nعينات: 900 | نتائج ناضجة: 870 | انتظار: 30\nChallenger: نموذج توضيحي فقط\nالتوقعات للمراقبة؛ لا تأثير على Shadow أو MT5".into());
+    ui.set_learning_detail("لا بيانات سوق حقيقية ضمن فحص رسم الواجهة".into());
     ui.set_bt_from("2026-10-01".into());
     ui.set_bt_to("2026-10-08".into());
     ui.set_bt_status("RENDER FIXTURE / لا توجد نتائج سوق حقيقية".into());
@@ -66,9 +70,9 @@ pub fn render() -> anyhow::Result<()> {
     ui.show()?;
     for (width, height, suffix) in [(1120, 820, ""), (880, 700, "-small")] {
         window.set_size(slint::PhysicalSize::new(width, height));
-        for page in 0..10 {
+        for page in 0..13 {
             ui.set_page(page);
-            ui.set_events("#1 | core_started\nversion: 0.3.0 • execution_enabled: false\n\nUI render check — not live trading data".into());
+            ui.set_events("#1 | core_started\nversion: 0.4.0 • execution_enabled: false\n\nUI render check — not live trading data".into());
             slint::platform::update_timers_and_animations();
             ui.window().request_redraw();
             let mut pixels = vec![Rgb8Pixel::default(); (width * height) as usize];

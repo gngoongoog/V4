@@ -3,7 +3,7 @@ use anyhow::Result;
 use braintrade_domain::{
     opportunities::{self, MarketBrains},
     research::{analyze, size_lots},
-    Analysis, Config, PaperSummary, Telemetry,
+    Analysis, Config, MarketData, PaperSummary, Telemetry,
 };
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -116,6 +116,8 @@ pub struct Research {
     books: BTreeMap<String, Book>,
     #[serde(skip)]
     opportunity_cache: BTreeMap<String, MarketBrains>,
+    #[serde(skip)]
+    opportunity_inputs: BTreeMap<String, MarketData>,
 }
 impl Research {
     pub fn has_open_position(&self, telemetry: &Telemetry) -> bool {
@@ -151,7 +153,9 @@ impl Research {
         let needs_scan = self
             .opportunity_cache
             .get(key)
-            .is_none_or(|cached| cached.bar_time != a.bar_time || !cached.current);
+            .is_none_or(|cached| cached.bar_time != a.bar_time || !cached.current)
+            || self.opportunity_inputs.get(key).is_none_or(|previous|
+                previous.m1 != market.m1 || previous.m5 != market.m5 || previous.m15 != market.m15);
         if needs_scan {
             let scan = opportunities::scan(
                 market,
@@ -161,6 +165,7 @@ impl Research {
                 now,
             );
             self.opportunity_cache.insert(key.to_owned(), scan);
+            self.opportunity_inputs.insert(key.to_owned(), market.clone());
         }
     }
     /// Call on a clone. Publish only after checkpoint, decision and ledger transaction commits.
@@ -498,6 +503,16 @@ impl Research {
         Ok((a, summary))
     }
 }
+pub fn opportunity_history(db: &Connection) -> Result<Value> {
+    let mut statement = db.prepare("SELECT context,setup_id,bar_time,first_seen_ms,payload FROM opportunity_setups ORDER BY first_seen_ms DESC,setup_id DESC LIMIT 100")?;
+    let rows = statement.query_map([], |row| {
+        let raw: String = row.get(4)?;
+        Ok(json!({"context":row.get::<_,String>(0)?,"setup_id":row.get::<_,String>(1)?,
+            "bar_time":row.get::<_,u64>(2)?,"first_seen_ms":row.get::<_,u64>(3)?,
+            "setup":serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null)}))
+    })?.collect::<std::result::Result<Vec<_>,_>>()?;
+    Ok(json!({"setups":rows,"scope":"First observation only; historical plans are never current quotes or broker orders."}))
+}
 pub fn decision_history(db: &Connection) -> Result<Value> {
     let mut q = db.prepare(
         "SELECT id,context,bar_time,timestamp_ms,payload FROM decisions ORDER BY id DESC LIMIT 100",
@@ -551,6 +566,22 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+    #[test]
+    fn opportunity_cache_refreshes_corrected_history_not_capture_timestamp() {
+        let now=1_700_000_000_000;
+        let mut db=Connection::open_in_memory().unwrap();
+        let mut research=Research::load(&db).unwrap();let mut t=snapshot(now);
+        let c=Config::default();let key=context(&t);
+        research.update(&mut db,&t,&c,false,now).unwrap();
+        let first=research.opportunity_cache[&key].computed_ms;
+        t.market.as_mut().unwrap().captured_ms=now+1;
+        research.update(&mut db,&t,&c,false,now+1).unwrap();
+        assert_eq!(research.opportunity_cache[&key].computed_ms,first);
+        t.market.as_mut().unwrap().m5[160].high+=0.2;
+        research.update(&mut db,&t,&c,false,now+2).unwrap();
+        assert_eq!(research.opportunity_cache[&key].computed_ms,now+2);
+        assert!(serde_json::to_value(&research).unwrap().get("opportunity_inputs").is_none());
     }
     #[test]
     fn restart_dedup_and_exit_while_stopped() {

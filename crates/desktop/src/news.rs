@@ -1,9 +1,6 @@
 use super::*;
-#[path = "evaluation.rs"]
-mod evaluation;
 use slint::{ModelRc, VecModel};
 pub fn setup(ui: &Dashboard) {
-    evaluation::setup(ui);
     let (tx, rx) = mpsc::channel::<String>();
     ui.on_news_action(move |a| {
         let _ = tx.send(a.to_string());

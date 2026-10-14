@@ -6,6 +6,8 @@ use slint::ComponentHandle;
 use std::{sync::mpsc, time::Duration};
 slint::include_modules!();
 mod backtest;
+mod evaluation;
+mod learning;
 mod news;
 mod render;
 
@@ -17,20 +19,12 @@ enum Task {
 }
 
 fn paint(ui: &Dashboard, status: Status) {
-    let mut brains = status.analysis.text();
-    brains.push_str("\n\nMARKET OPPORTUNITIES / فرص السوق\n");
-    brains.push_str(
-        &status
-            .analysis
-            .opportunities
-            .as_ref()
-            .map(|value| value.signals_text())
-            .unwrap_or_else(|| {
-                "بانتظار خريطة فرص من شموع MT5 المكتملة. لا توجد أرقام دخول صالحة حالياً."
-                    .into()
-            }),
-    );
-    ui.set_brains(brains.into());
+    ui.set_brains(status.analysis.text().into());
+    let opportunities = status.analysis.opportunities.as_ref();
+    ui.set_opportunities(opportunities.map(|value| value.signals_text()).unwrap_or_else(||
+        "بانتظار شموع MT5 المكتملة؛ لا توجد أرقام دخول صالحة حالياً.".into()).into());
+    ui.set_market_map(opportunities.map(|value| value.map_text()).unwrap_or_else(||
+        "خريطة المناطق والزخم وGann وDOM غير متاحة حالياً.".into()).into());
     ui.set_regime(
         if status.analysis.current {
             status.analysis.regime.clone()
@@ -130,6 +124,8 @@ fn run_ui() -> anyhow::Result<()> {
     let ui = Dashboard::new()?;
     backtest::setup(&ui);
     news::setup(&ui);
+    evaluation::setup(&ui);
+    let _learning_timer = learning::setup(&ui);
     let (tx, rx) = mpsc::channel::<Task>();
     let sender = tx.clone();
     let weak = ui.as_weak();
@@ -368,6 +364,8 @@ fn run_ui() -> anyhow::Result<()> {
                         ui.set_today("—".into());
                         ui.set_positions("Live data unavailable".into());
                         ui.set_brains("Core unavailable — analysis and opportunity plans withdrawn".into());
+                        ui.set_opportunities("المحرك غير متصل؛ أرقام الفرص مسحوبة".into());
+                        ui.set_market_map("المحرك غير متصل؛ الخريطة مسحوبة".into());
                         ui.set_regime("UNAVAILABLE".into());
                         ui.set_decision("WAIT".into());
                         ui.set_paper("Core unavailable — current virtual equity unknown".into());

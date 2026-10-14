@@ -215,6 +215,12 @@ impl Default for Status {
 impl Status {
     pub fn refresh(&mut self, now: u64) {
         self.execution_enabled = false;
+        if let Some(opportunities) = self.analysis.opportunities.as_mut() {
+            opportunities.expire(now, true);
+            if !self.requested_run {
+                opportunities.pause("النظام متوقف؛ أرقام الدخول مسحوبة حتى التشغيل وتحديث السعر");
+            }
+        }
         self.gateway_fresh = self
             .last_received_ms
             .map(|t| now.saturating_sub(t) <= FRESH_MS)

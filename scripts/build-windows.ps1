@@ -20,5 +20,7 @@ Invoke-Checked -Program $Python -Arguments @('scripts\package-portable.py','--ex
 $EmbeddedPython = Join-Path $PWD 'release\BrainTrade\runtime\python\python.exe'
 $Check = Join-Path $PWD 'release\BrainTrade\runtime\gateway\check_runtime.py'
 Invoke-Checked -Program $EmbeddedPython -Arguments @($Check)
+Invoke-Checked -Program $Python -Arguments @('scripts\check_windows_portable.py','--exe','release\BrainTrade\BrainTrade.exe')
+Invoke-Checked -Program (Join-Path $PWD 'release\BrainTrade\BrainTrade.exe') -Arguments @('--render-check')
 Write-Host 'Portable package created. End users launch BrainTrade.exe; no separate Python/Rust installation.'
 Write-Host 'Complete the Windows + demo MT5 acceptance checklist before declaring native integration validated.'
