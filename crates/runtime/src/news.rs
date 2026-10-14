@@ -1,4 +1,4 @@
-//! Official RSS headlines; context only, no sentiment, economic calendar or execution signal.
+//! Official RSS headlines plus bounded macro/news context. No directional execution signal.
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use quick_xml::{events::Event, Reader};
@@ -43,6 +43,54 @@ pub struct Headline {
     pub published_ms: Option<u64>,
     pub fetched_ms: u64,
     pub topic: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MacroContext {
+    pub version: String,
+    pub current: bool,
+    pub evaluated_ms: u64,
+    pub state: String,
+    pub fresh_sources: usize,
+    pub recent_15m: usize,
+    pub recent_60m: usize,
+    pub attention_30m: usize,
+    pub latest_age_minutes: Option<u64>,
+    pub topics: Vec<String>,
+    pub note: String,
+}
+impl Default for MacroContext {
+    fn default() -> Self {
+        Self {
+            version: "macro-news-context-v1".into(),
+            current: false,
+            evaluated_ms: 0,
+            state: "STALE".into(),
+            fresh_sources: 0,
+            recent_15m: 0,
+            recent_60m: 0,
+            attention_30m: 0,
+            latest_age_minutes: None,
+            topics: vec![],
+            note: "أخبار رسمية غير متاحة أو قديمة. لا يوجد تقويم أحداث مستقبلية في هذه النسخة.".into(),
+        }
+    }
+}
+impl MacroContext {
+    pub fn text(&self) -> String {
+        format!(
+            "MACRO / NEWS CONTEXT — {}\nمصادر حديثة: {} | أخبار 15m: {} | 60m: {} | انتباه 30m: {}\nأحدث خبر: {} | المواضيع: {}\n{}\nسياق مخاطر فقط؛ لا يعطي BUY/SELL ولا يستنتج sentiment من العنوان.",
+            self.state,
+            self.fresh_sources,
+            self.recent_15m,
+            self.recent_60m,
+            self.attention_30m,
+            self.latest_age_minutes
+                .map(|v| format!("قبل {v} دقيقة"))
+                .unwrap_or("غير متاح".into()),
+            if self.topics.is_empty() { "—".into() } else { self.topics.join(" | ") },
+            self.note
+        )
+    }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct Cache {
@@ -363,7 +411,62 @@ impl Service {
             self.begin(now);
         }
     }
+    pub fn macro_context(&self, now: u64) -> MacroContext {
+        let mut out = MacroContext { evaluated_ms: now, ..Default::default() };
+        let mut latest = None::<u64>;
+        let mut topics = Vec::<String>::new();
+        for feed in FEEDS {
+            let Some(source) = self.saved.sources.iter().find(|s| s.id == feed.id) else { continue; };
+            let stale = !self.saved.enabled
+                || self.offline
+                || source.last_success_ms == 0
+                || now < source.last_success_ms
+                || now.saturating_sub(source.last_success_ms) > STALE_MS
+                || !source.error.is_empty();
+            if stale { continue; }
+            out.fresh_sources += 1;
+            for item in &source.items {
+                let Some(published) = item.published_ms.filter(|value| *value <= now) else { continue; };
+                let age = now.saturating_sub(published);
+                latest = Some(latest.map_or(published, |old| old.max(published)));
+                if age <= 60 * 60 * 1000 {
+                    out.recent_60m += 1;
+                    if !item.topic.is_empty() && !topics.contains(&item.topic) {
+                        topics.push(item.topic.clone());
+                    }
+                }
+                if age <= 15 * 60 * 1000 { out.recent_15m += 1; }
+                let attention = item.topic.contains("سياسة نقدية")
+                    || item.topic.contains("تضخم")
+                    || item.topic.contains("توظيف");
+                if attention && age <= 30 * 60 * 1000 { out.attention_30m += 1; }
+            }
+        }
+        topics.sort();
+        topics.truncate(6);
+        out.topics = topics;
+        out.current = out.fresh_sources > 0;
+        out.latest_age_minutes = latest.map(|published| now.saturating_sub(published) / 60_000);
+        out.state = if !out.current {
+            "STALE".into()
+        } else if out.attention_30m > 0 {
+            "ATTENTION".into()
+        } else if out.recent_60m > 0 {
+            "RECENT_NEWS".into()
+        } else {
+            "QUIET".into()
+        };
+        out.note = match out.state.as_str() {
+            "ATTENTION" => "عنوان رسمي حديث ضمن سياسة نقدية/تضخم/توظيف؛ ارفع الانتباه للتقلب، لكن اتجاه الأثر غير مستنتج من العنوان.".into(),
+            "RECENT_NEWS" => "توجد عناوين رسمية حديثة خلال الساعة؛ سياق فقط ولا توجد إشارة اتجاه.".into(),
+            "QUIET" => "المصادر متصلة ولا توجد عناوين منشورة حديثاً خلال الساعة في الكاش الحالي.".into(),
+            _ => "المصادر الرسمية غير حديثة أو فشل آخر تحديث؛ لا تستخدم الأخبار القديمة كسياق حالي.".into(),
+        };
+        out
+    }
     pub fn snapshot(&self, now: u64) -> Value {
+        let macro_context = self.macro_context(now);
+        let macro_text = macro_context.text();
         let mut items = vec![];
         let mut sources = vec![];
         let mut lines = vec![];
@@ -411,7 +514,7 @@ impl Service {
         }
         items.sort_by_key(|i| std::cmp::Reverse(i["published_ms"].as_u64().unwrap_or(0)));
         items.truncate(100);
-        json!({"enabled":self.saved.enabled,"offline":self.offline,"refreshing":self.rx.is_some(),"sources":sources,"sources_text":lines.join("\n\n"),"items":items,"storage_error":self.storage_error,"note":"عناوين منشورة وليست تقويماً للأحداث القادمة. التصنيف بالكلمات لا يحدد الأثر أو اتجاه السعر؛ لا يدخل في قرار Meta أو الاختبار التاريخي."})
+        json!({"enabled":self.saved.enabled,"offline":self.offline,"refreshing":self.rx.is_some(),"sources":sources,"sources_text":lines.join("\n\n"),"items":items,"macro":macro_context,"macro_text":macro_text,"storage_error":self.storage_error,"note":"عناوين منشورة وليست تقويماً للأحداث القادمة. التصنيف بالكلمات لا يحدد الأثر أو اتجاه السعر؛ Macro Brain سياق مخاطر فقط ولا يدخل في قرار Meta أو الاختبار التاريخي."})
     }
     pub fn route(
         &mut self,
@@ -541,6 +644,25 @@ mod tests {
         assert_eq!(s.saved.sources[0].last_success_ms, NOW);
         assert_eq!(s.snapshot(NOW + 2000)["items"][0]["source_stale"], true);
         assert_eq!(s.snapshot(NOW + STALE_MS + 1)["sources"][0]["stale"], true);
+    }
+    #[test]
+    fn macro_context_never_infers_direction_from_headline() {
+        let db = Connection::open_in_memory().unwrap();
+        let mut s = Service::new(&db).unwrap();
+        s.offline = false;
+        s.saved.enabled = true;
+        let rows = vec![Headline {
+            title: "FOMC monetary policy statement".into(),
+            url: "https://www.federalreserve.gov/a".into(),
+            published_ms: Some(NOW - 5 * 60_000),
+            fetched_ms: NOW,
+            topic: "سياسة نقدية / كلمات عنوان".into(),
+        }];
+        s.apply(Update { id:"fed", at:NOW, result:Ok(rows) });
+        let macro_context=s.macro_context(NOW);
+        assert_eq!(macro_context.state,"ATTENTION");
+        assert_eq!(macro_context.attention_30m,1);
+        assert!(macro_context.text().contains("لا يعطي BUY/SELL"));
     }
     #[test]
     #[ignore = "explicit public-network check"]
