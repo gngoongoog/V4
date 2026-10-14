@@ -11,8 +11,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - name: Check domain and runtime compilation only
         run: cargo check -p braintrade-domain -p braintrade-runtime --locked
+      - name: Check gateway Python syntax only
+        run: python3 -m py_compile gateway/mt5_gateway.py
       - name: Install native font build dependency
         run: |
           sudo apt-get update
