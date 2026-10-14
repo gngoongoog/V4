@@ -65,10 +65,7 @@ def _evaluation_source(api, snapshot):
                 )
             )
         api("/v1/gateway/history/chunk", dict(job, bars=bars, error=""))
-    source_id = _wait(api, "/v1/backtest")["latest_id"]
-    source = api("/v1/backtest/report", {"id": source_id})
-    assert source["summary"]["strategy"] == "meta_v1"
-    return source_id
+    return _wait(api, "/v1/backtest")["latest_id"]
 
 
 def _chronological_evidence(api, source_id):
@@ -85,6 +82,9 @@ def _chronological_evidence(api, source_id):
     assert report["immutable"] is True
     assert report["prediction_enabled"] is False
     assert report["promotion_enabled"] is False
+    identity = report["source_identity"]
+    assert identity["algorithm"].startswith("meta-v1")
+    assert identity["strategy"] == "meta_v1"
     roles = {row["window"]["role"] for row in report["evaluation"]["windows"]}
     assert roles == {"development", "holdout"}
     return evaluation_id
@@ -153,7 +153,6 @@ def _artifact(snapshot):
 
 
 def check(api, snapshot):
-    # Build independent time evidence through the public Core API.
     source_id = _evaluation_source(api, snapshot)
     evaluation_id = _chronological_evidence(api, source_id)
 
@@ -192,8 +191,6 @@ def check(api, snapshot):
     assert inference["risk_effect"] is False
     assert inference["broker_effect"] is False
 
-    # Re-send the same closed-bar snapshot after the review exists. Learning snapshot
-    # insertion is idempotent; inference must consume that exact stored feature payload.
     before = api("/v1/status")
     api("/v1/gateway/snapshot", snapshot)
     after = api("/v1/status")
@@ -209,8 +206,6 @@ def check(api, snapshot):
     assert abs(sum(probabilities.values()) - 1.0) < 1e-12
     assert prediction["shadow_effect"] is False
 
-    # A duplicate observation of the same model/context/closed bar must not create
-    # a second audit prediction and must not alter the rule-based Shadow decision.
     api("/v1/gateway/snapshot", snapshot)
     inference = api("/v1/learning/inference")
     assert inference["predictions"] == 1
