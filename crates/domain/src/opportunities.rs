@@ -6,6 +6,8 @@ use std::fmt::Write;
 mod zones;
 mod features;
 mod setups;
+mod gann;
+pub use gann::GannFrame;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Swing {
@@ -105,6 +107,7 @@ pub struct MarketBrains {
     pub zones: Vec<Zone>,
     pub swings: Vec<Swing>,
     pub momentum: Vec<Momentum>,
+    pub gann: Vec<GannFrame>,
     pub tick_activity_ratio: Option<f64>,
     pub profile: Profile,
     pub session: SessionContext,
@@ -124,12 +127,33 @@ pub fn scan(m: &MarketData, symbol: &str, trend: &TrendBrain, regime: &RegimeBra
     for (tf,seconds,bars) in [("M1",60,&m.m1),("M5",300,&m.m5),("M15",900,&m.m15)] {
         let (swings,zones)=zones::map(bars,tf,seconds);
         out.momentum.push(features::momentum(bars,tf,&swings));
+        out.gann.push(gann::assess(bars,tf,&swings));
         out.swings.extend(swings); out.zones.extend(zones);
     }
     out.tick_activity_ratio=features::activity(&m.m1);
     out.profile=features::profile(&m.m5);
     out.session=features::session(&m.m1);
     setups::discover(&mut out,m,trend,regime);
+
+    // Gann geometry is observational in v1 and does not change setup scoring or Shadow.
+    let directional = out.gann.iter().filter(|frame| frame.available && frame.direction != 0).collect::<Vec<_>>();
+    let consensus = if directional.len() >= 2 && directional.iter().all(|frame| frame.direction == directional[0].direction) {
+        directional[0].direction
+    } else { 0 };
+    let evidence = if consensus == 0 { 0.0 } else {
+        directional.iter().filter(|frame| frame.direction == consensus).map(|frame| frame.strength).sum::<f64>()
+            / directional.iter().filter(|frame| frame.direction == consensus).count().max(1) as f64
+    };
+    out.specialists.push(Vote {
+        name:"Gann Geometry Brain / عقل جان الهندسي".into(),
+        direction:consensus,
+        evidence,
+        reason:if consensus == 0 {
+            "لا يوجد اتفاق هندسي بين فريمين على الأقل. القياس يستخدم swing مؤكد، شبكة 1/8، وميل ATR/شمعة؛ لا يعتمد زاوية شاشة.".into()
+        } else {
+            format!("اتفاق هندسي على {} فريمات باتجاه {}؛ شبكة 1/8 وميل سعري مطبّع بالـATR. هذا دليل مراقبة وليس إشارة مستقلة.", directional.iter().filter(|f|f.direction==consensus).count(), if consensus==1 {"الصعود"} else {"الهبوط"})
+        }
+    });
     out
 }
 
@@ -223,6 +247,14 @@ impl MarketBrains {
         let mut out=String::new();
         for v in &self.specialists {let _=writeln!(out,"{} | اتجاه {} | قوة {:.2}\n{}\n",v.name,v.direction,v.evidence,v.reason);}
         for m in &self.momentum {let _=writeln!(out,"{}: RSI {:.1} | زخم 3 {:.2} ATR / 8 {:.2} ATR | تسارع {:.2} | تباعد {}",m.timeframe,m.rsi14,m.roc3_atr,m.roc8_atr,m.acceleration_atr,m.divergence);}
+        let _=writeln!(out,"\nGann Geometry / هندسة جان:");
+        for frame in &self.gann {
+            if frame.available {
+                let _=writeln!(out,"{} | اتجاه {} | قوة {:.2} | anchor {:.5} @ {} | speed {:.3} ATR/bar | 1/8 level {}/8 = {:.5} | distance {:.2} ATR",frame.timeframe,frame.direction,frame.strength,frame.anchor_price,frame.anchor_time,frame.atr_per_bar,frame.nearest_eighth,frame.nearest_level,frame.distance_atr);
+            } else {
+                let _=writeln!(out,"{} | بيانات swing/range غير كافية لهندسة جان",frame.timeframe);
+            }
+        }
         let _=writeln!(out,"\nمناطق فعالة (الأحدث بكل فريم):");
         for z in self.zones.iter().filter(|z|!z.broken).take(36) {let _=writeln!(out,"{} {} | {:.5} .. {:.5} | زيارات {} | قوة {:.2}",z.timeframe,z.kind,z.low,z.high,z.touches,z.strength);}
         let _=writeln!(out,"\nملف النشاط الحجمي: {}",self.profile.note);
