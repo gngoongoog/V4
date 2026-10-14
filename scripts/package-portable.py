@@ -116,14 +116,16 @@ def check_pe_tree(folder, extra_dirs=()):
     return reports
 
 def source_copy(destination):
-    excluded = {"target", ".package-cache", ".build-venv", "test-output", "__pycache__", ".git", "release", "runtime", "build", "dist"}
+    excluded_top_level = {"target", ".package-cache", ".build-venv", "test-output", ".git", "release", "runtime", "build", "dist"}
     secret_suffixes = (".pyc", ".sealed", ".key", ".log", ".sqlite", ".sqlite3", ".db", ".pem", ".p12", ".pfx")
     for path in ROOT.rglob("*"):
         if not path.is_file():
             continue
         relative = path.relative_to(ROOT)
         lower_name = path.name.lower()
-        if excluded.intersection(relative.parts):
+        if relative.parts and relative.parts[0] in excluded_top_level:
+            continue
+        if ".import" in relative.parts:
             continue
         if lower_name.startswith(".env") and lower_name != ".env.example":
             continue
