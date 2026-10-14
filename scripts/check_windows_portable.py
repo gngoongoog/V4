@@ -8,6 +8,7 @@ import ctypes
 from ctypes import wintypes
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -109,10 +110,26 @@ def main():
                 assert all(item["valid"] for item in api("/v1/backups")["backups"])
                 api("/v1/shutdown", {})
                 assert process.wait(timeout=15) == 0
+                # Windows GUI-subsystem binaries may outlive a PowerShell invocation.
+                # subprocess.run waits for completion before validating/uploading frames.
+                subprocess.run([str(executable), "--render-check"], env=environment,
+                               cwd=directory, check=True, timeout=180)
+                frames = directory / "test-output" / "native-ui"
+                expected = {}
+                for width, height, suffix in [(1120, 820, ""), (880, 700, "-small")]:
+                    for page in range(14):
+                        expected[f"dashboard-page-{page}{suffix}.ppm"] = (width, height)
+                assert {path.name for path in frames.glob("*.ppm")} == set(expected)
+                for name, (width, height) in expected.items():
+                    raw = (frames / name).read_bytes()
+                    header = f"P6\n{width} {height}\n255\n".encode()
+                    assert raw.startswith(header) and len(raw) == len(header) + width * height * 3, name
                 args.output.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(frames, args.output.parent / "native-ui", dirs_exist_ok=True)
                 args.output.write_text(json.dumps({"version": status["version"], "result": "PASS",
                     "checks": ["packaged Core startup", "DPAPI IPC", "stopped/read-only default",
-                               "learning API", "opportunity history", "config save", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "shutdown"],
+                               "learning API", "opportunity history", "config save", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "shutdown", "all 28 complete native frames"],
+                    "native_pages": 14, "rendered_frames": len(expected),
                     "native_mt5_acceptance": "not performed"}, indent=2), encoding="utf-8")
             finally:
                 if process.poll() is None:
