@@ -23,7 +23,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libfontconfig1-dev
       - name: Check desktop compilation only
-        run: cargo check -p braintrade-desktop --locked
+        shell: bash
+        run: |
+          mkdir -p test-output
+          set -o pipefail
+          cargo check -p braintrade-desktop --locked 2>&1 | tee test-output/desktop-check.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-only-validation
+          path: test-output/
   research:
     if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[build-only]')
     runs-on: ubuntu-latest
@@ -52,7 +61,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libfontconfig1-dev
       - name: Check native selector compilation on Linux
-        run: cargo check -p braintrade-desktop --locked
+        shell: bash
+        run: |
+          mkdir -p test-output
+          set -o pipefail
+          cargo check -p braintrade-desktop --locked 2>&1 | tee test-output/desktop-check.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
