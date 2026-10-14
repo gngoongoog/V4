@@ -6,24 +6,36 @@ User explicitly deferred automated strategy testing and Windows packaging while 
 
 ## Current development checkpoint
 
-Live market-opportunity integration is wired on `development` and its first compile-only gate passed in GitHub Actions run `38520989480`:
+### Market Opportunity Engine
+
+Live market-opportunity integration is wired on `development`; compile-only run `38520989480` passed Domain + Runtime + native Desktop compilation.
 
 - closed-bar opportunity maps are cached per account/server/symbol/currency context and recomputed only when the completed M1 bar changes;
 - demand/supply/support/resistance zones, confirmed swings, M1/M5/M15 momentum/divergence, tick-activity/profile proxies and session context feed grouped reversal/sweep/breakout/retest/value-reclaim setup discovery;
 - each setup is repriced from the current quote with structural stop, three targets, spread/slippage/commission assumptions, broker lot constraints and a conservative risk budget;
-- stale quotes expire price plans and stale/disconnected candle data withdraws them instead of leaving old Entry/SL/TP values visible;
-- first-observed setup snapshots persist in SQLite table `opportunity_setups` using `(context, setup_id)` as stable identity;
-- the Analysis page appends the read-only opportunity report;
-- Telegram accepts `/opportunities`, `الفرص` and `فرص` and returns the same read-only setup report;
-- no opportunity module has an order API and live Shadow still uses the existing legacy Meta decision source.
+- stale quotes expire price plans and stale/disconnected candle data withdraws old Entry/SL/TP values;
+- first-observed setup snapshots persist in `opportunity_setups` using `(context, setup_id)` identity;
+- Analysis dashboard and Telegram `/opportunities` expose the same read-only setup report;
+- no opportunity module has an order API and live Shadow still uses legacy Meta.
 
 ### Gann Geometry Brain v1
 
-A new observational Gann-inspired geometry brain is now added to the market-specialist map. It uses only completed bars and confirmed pivots. It deliberately avoids chart-pixel angles: the latest confirmed swing is the time/price anchor, movement is normalized as ATR per bar, and the latest confirmed swing range is divided into eighths. M1/M5/M15 frames are exposed and a specialist vote is reported only when at least two directional frames agree. It does not change setup scoring, Meta, Shadow or broker execution.
+Gann-inspired geometry is integrated and compile-only run `38521328784` passed Domain + Runtime + native Desktop compilation. It uses completed bars and confirmed pivots only: latest confirmed swing as time/price anchor, ATR-per-bar normalized slope, and the latest confirmed swing range split into eighths. M1/M5/M15 are exposed; it remains observational and does not change setup scoring, Meta or Shadow.
 
-This commit requests a second `[build-only]` gate for the Gann integration. Automated strategy tests, chronological evaluation and Windows packaging remain deferred for this increment.
+### DOM Depth Brain v1 — current increment
 
-Do not describe broker candle tick volume/profile proxies as exchange volume, DOM or global order flow. Do not describe Gann geometry strength as a win probability.
+True broker-supported MT5 Market Book depth is now being integrated without inventing order flow:
+
+- Telemetry has validated `dom` levels (`buy`/`sell`, positive finite price/volume, max 200 rows) plus `dom_available`;
+- Python gateway subscribes using `market_book_add`, reads `market_book_get`, releases subscriptions on account/symbol changes and disconnect/shutdown, and sends at most 100 validated book rows;
+- DOM Brain uses the nearest five bid/ask levels, exposes visible resting bid/ask depth, imbalance, best bid/ask and a microprice proxy;
+- it explicitly does NOT claim executed order flow, footprint delta, hidden liquidity or exchange-wide volume;
+- Market Opportunities displays DOM state and adds an observational specialist vote; DOM does not yet alter setup scoring or trading decisions;
+- build-only CI now also syntax-checks `gateway/mt5_gateway.py` with Python 3.13.
+
+This commit requests a `[build-only]` gate for the complete DOM integration. Automated strategy tests, chronological evaluation and Windows packaging remain deferred for this increment.
+
+Do not describe broker candle tick volume/profile proxies as exchange volume, DOM or global order flow. Do not describe Gann/DOM evidence as win probability.
 
 ## Previous verified research baseline
 
@@ -34,10 +46,10 @@ Research CI: https://github.com/gngoongoog/V4/actions/runs/38516269617 — PASS.
 - Python: 16 PASS. Actual Rust core build and smoke: PASS.
 - Meta v2 Report/History/decisions.csv/comparison.json/HTML replay byte-identical on the verified research baseline.
 - Native Slint desktop compilation passed on Linux for the verified baseline.
-- Native MT5 history/Telegram delivery on the user's laptop: NOT RUN.
+- Native MT5 history/Telegram/DOM delivery on the user's laptop: NOT RUN.
 
-## Next after the Gann compile gate
+## Next after the DOM compile gate
 
-Continue the analytical-brain roadmap without promoting any new brain into live trading. The next useful feed-boundary task is to separate what can be inferred from candle/tick proxies from true DOM/order-flow data and only enable a DOM brain when the broker actually supplies depth. After the analytical layer is complete, add chronological held-out/rolling evaluation and only then design the trained/self-learning model registry.
+Continue the analytical-brain roadmap without promoting new brains to live execution. Next priorities are macro/news context and completing data-quality/feed capability boundaries. After the analytical layer is coherent, add chronological held-out/rolling evaluation, then build a trained/self-learning model registry with offline training, champion/challenger promotion and no uncontrolled live self-modification.
 
 Keep live Shadow's source legacy Meta until real broker-data evaluation is reviewed. The user will perform native laptop/MT5/Telegram acceptance later. No broker execution is enabled. Never commit credentials, private runtime databases/logs, transport chunks or ZIP-only source.
