@@ -12,12 +12,22 @@ EXCLUDED_TOP_LEVEL = {
     "target",
     ".package-cache",
     ".build-venv",
+    ".ci",
+    ".cache",
     "test-output",
     ".git",
     "release",
     "runtime",
     "build",
     "dist",
+}
+EXCLUDED_ANYWHERE = {
+    ".import",
+    "__pycache__",
+    ".pytest_cache",
+    ".venv",
+    "venv",
+    "node_modules",
 }
 SECRET_SUFFIXES = {
     ".pyc",
@@ -44,7 +54,7 @@ def source_files(root: Path):
         lower_name = path.name.lower()
         if relative.parts and relative.parts[0] in EXCLUDED_TOP_LEVEL:
             continue
-        if ".import" in relative.parts:
+        if any(part in EXCLUDED_ANYWHERE for part in relative.parts):
             continue
         if lower_name.startswith(".env") and lower_name != ".env.example":
             continue

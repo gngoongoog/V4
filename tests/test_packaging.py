@@ -44,18 +44,43 @@ class PackagingTests(unittest.TestCase):
             packaging.extract_checked(root/"good.zip", root/"output")
             self.assertEqual((root/"output/Lib/site-packages/package/__init__.py").read_text(), "value = 42\n")
 
-    def test_source_copy_defensively_excludes_secret_and_runtime_state(self):
+    def test_source_copy_defensively_excludes_secret_runtime_and_generated_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "source"
             destination = Path(tmp) / "copy"
             root.mkdir()
             (root / "keep.txt").write_text("safe", encoding="utf-8")
             (root / ".env.example").write_text("PLACEHOLDER=1", encoding="utf-8")
-            for name in (".env", "token.key", "telegram.sealed", "events.sqlite3", "runtime.db", "app.log", "cert.pem", "cert.p12", "cert.pfx"):
+            for name in (
+                ".env",
+                "token.key",
+                "telegram.sealed",
+                "events.sqlite3",
+                "runtime.db",
+                "app.log",
+                "cert.pem",
+                "cert.p12",
+                "cert.pfx",
+                "old-build.zip",
+                "old-build.7z",
+                "old-build.rar",
+            ):
                 (root / name).write_text("secret", encoding="utf-8")
             runtime = root / "runtime"
             runtime.mkdir()
             (runtime / "generated.txt").write_text("generated", encoding="utf-8")
+            for directory in (
+                ".ci",
+                ".cache",
+                ".venv",
+                "venv",
+                "node_modules",
+                "nested/__pycache__",
+                "nested/.pytest_cache",
+            ):
+                generated = root / directory
+                generated.mkdir(parents=True)
+                (generated / "generated.txt").write_text("generated", encoding="utf-8")
             original = packaging.ROOT
             packaging.ROOT = root
             try:
@@ -64,16 +89,32 @@ class PackagingTests(unittest.TestCase):
                 packaging.ROOT = original
             self.assertEqual((destination / "keep.txt").read_text(encoding="utf-8"), "safe")
             self.assertTrue((destination / ".env.example").is_file())
-            self.assertFalse((destination / ".env").exists())
-            self.assertFalse((destination / "token.key").exists())
-            self.assertFalse((destination / "telegram.sealed").exists())
-            self.assertFalse((destination / "events.sqlite3").exists())
-            self.assertFalse((destination / "runtime.db").exists())
-            self.assertFalse((destination / "app.log").exists())
-            self.assertFalse((destination / "cert.pem").exists())
-            self.assertFalse((destination / "cert.p12").exists())
-            self.assertFalse((destination / "cert.pfx").exists())
+            for name in (
+                ".env",
+                "token.key",
+                "telegram.sealed",
+                "events.sqlite3",
+                "runtime.db",
+                "app.log",
+                "cert.pem",
+                "cert.p12",
+                "cert.pfx",
+                "old-build.zip",
+                "old-build.7z",
+                "old-build.rar",
+            ):
+                self.assertFalse((destination / name).exists(), name)
             self.assertFalse((destination / "runtime").exists())
+            for directory in (
+                ".ci",
+                ".cache",
+                ".venv",
+                "venv",
+                "node_modules",
+                "nested/__pycache__",
+                "nested/.pytest_cache",
+            ):
+                self.assertFalse((destination / directory).exists(), directory)
 
 if __name__ == "__main__":
     unittest.main()
