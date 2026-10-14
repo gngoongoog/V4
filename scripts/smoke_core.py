@@ -101,6 +101,15 @@ def main():
             assert len(api('/v1/evaluation/runs')['runs'])==1
             assert len(api('/v1/learning/review/records')['records'])==1
             assert len(api('/v1/learning/inference/recent')['predictions'])==1
+            performance=api('/v1/learning/performance')
+            assert performance['status']=='insufficient_evidence',performance
+            assert performance['promotion_eligible'] is False
+            assert performance['promotion_enabled'] is False
+            assert performance['shadow_effect'] is False
+            assert performance['risk_effect'] is False
+            assert performance['broker_effect'] is False
+            learning_status=api('/v1/learning')
+            assert learning_status['performance_review']==performance
             assert not api('/v1/status')['execution_enabled']
 
             backup=api('/v1/backup',{})
@@ -136,10 +145,15 @@ def main():
             inference=api('/v1/learning/inference')
             assert inference['predictions']==1 and inference['shadow_effect'] is False
             assert inference['broker_effect'] is False
+            performance_after_restart=api('/v1/learning/performance')
+            assert performance_after_restart['status']=='insufficient_evidence'
+            assert performance_after_restart['evidence']['fingerprint']==performance['evidence']['fingerprint']
+            assert performance_after_restart['promotion_enabled'] is False
+            assert performance_after_restart['broker_effect'] is False
             assert len(api('/v1/events')['events'])>len(events_before)
             api('/v1/shutdown',{});process.wait(timeout=5)
             assert process.returncode==0
-            print('PASS: lifecycle/auth/staleness/shadow/risk; backtest UTC chunking, cancel, account isolation, asynchronous completion, full export, deterministic offline replay, CES/Meta-v2 experiments, chronological evidence, challenger review eligibility, cross-language feature parity, read-only inference persistence/isolation, news API/settings, backup and restart persistence')
+            print('PASS: lifecycle/auth/staleness/shadow/risk; backtest UTC chunking, cancel, account isolation, asynchronous completion, full export, deterministic offline replay, CES/Meta-v2 experiments, chronological evidence, challenger review eligibility, cross-language feature parity, read-only inference persistence/isolation, challenger performance review API isolation/persistence, news API/settings, backup and restart persistence')
         finally:
             if process.poll() is None:process.terminate();process.wait(timeout=5)
 
