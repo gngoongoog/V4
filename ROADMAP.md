@@ -13,7 +13,7 @@ GitHub `gngoongoog/V4` is canonical. Read `BUILD_HANDOFF.md` and `docs/validatio
 - **Challenger Performance Review Policy v1** over immutable scored outcomes, with fixed evidence gates, baselines, chronological/context/regime slices, calibration/stability/drift checks, immutable review records/reason codes, read-only API/UI, and no Champion/Shadow/broker effect.
 - Repository guards for read-only MT5 behavior, no learned execution/promotion route, source/package hygiene, SQLite FK integrity and Windows CI.
 
-Validated executable checkpoint: `74e6387e3f66b8035f5ce55db92561ec1809ebf4`.
+Validated executable checkpoint: `42c8c6dfda42acfa02de733f3acb93ff639075cc`.
 
 Legacy Meta still controls live Shadow. No broker execution exists.
 
@@ -44,7 +44,7 @@ When the target Windows/MT5 environment is available:
 
 ## Reliability / release work
 
-- Full backup restore with manifest/hash/schema validation, staged restore and rollback.
+- Completed: backup restore with manifest/hash/schema validation, staged restart and rollback, native controls and packaged Windows verification.
 - Enable GitHub branch protection / required CI checks for `main` and preferably `development` when repository administration access is available.
 - Promote a safe `development` checkpoint to `main` only after deliberate review.
 

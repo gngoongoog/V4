@@ -38,7 +38,7 @@ See `LEARNING.md` for the complete contract.
 
 ## Persistence
 
-SQLite persists audit events, candles, Shadow state, historical runs, chronological evidence and learning audit data. Foreign keys are explicitly enabled and checked at startup. Backups exclude secrets and currently do not implement full restore.
+SQLite persists audit events, candles, Shadow state, historical runs, chronological evidence and learning audit data. Foreign keys are explicitly enabled and checked at startup. Schema-10 backups exclude secrets and support validated staged restart restore with rollback snapshots and native controls.
 
 ## Research claims
 

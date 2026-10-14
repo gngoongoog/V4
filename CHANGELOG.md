@@ -7,6 +7,7 @@
 - Restore requires STOP, keeps a rollback snapshot and exposes the last result. Windows packaged acceptance now verifies restore/restart and DPAPI-key preservation.
 - Performance-review creation binds the displayed model and evidence signature; v2 fingerprints include regime slices.
 - Restored atomic-config and foreign-key regression tests.
+- Windows render validation waits for process exit and verifies all 28 exact-size frames before reporting success.
 
 - Compared both repositories and retained V4 as the fuller source.
 - Added Opportunities, Market Map and Learning pages, with all existing learning actions available from the dashboard.

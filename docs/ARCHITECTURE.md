@@ -43,7 +43,7 @@ There is no champion activation, auto-promotion, live self-modification or learn
 
 SQLite uses WAL + synchronous FULL. Foreign keys are explicitly enabled and checked on startup. Runtime tables include audit/control state, market research state, historical reports/history, chronological evidence and learning audit records.
 
-Backup schema 8 includes the implemented research/learning audit state and excludes secrets. Full restore/staged rollback remains future work and backups must not imply automatic execution on restore.
+Backup schema 10 includes research/learning state and excludes secrets. Restore validates exact members, version/schema, checksums/config/SQLite integrity; stages a source plus rollback snapshot; and applies before SQLite startup under the Core lock. STOP is required. Native controls expose validation, staging and the last result. Sealed validation uses a read-only immutable URI and rejects unexpected files without deleting them. Restore never enables execution.
 
 ## 7. IPC/security boundary
 

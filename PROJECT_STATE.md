@@ -9,7 +9,7 @@ Current release candidate: **0.4.0 Preview**. Exact tested executable boundary i
 ### Core / desktop / MT5 boundary
 
 - Independent Rust Core with authenticated loopback IPC and native Slint desktop.
-- 13 native pages including Opportunities/history, Market Map and Learning/model review.
+- 14 native pages including Opportunities/history, Market Map and Learning/model review and Backup/Restore.
 - Read-only MT5 account/positions/orders/history/quotes/Market Book access.
 - Persistent deterministic Shadow simulation and risk limits; Legacy Meta remains the Shadow entry source.
 - STOP/stale-data handling withdraws new quote plans; repository guards reject broker-write APIs.
@@ -35,17 +35,17 @@ Current release candidate: **0.4.0 Preview**. Exact tested executable boundary i
 ### Persistence / packaging / CI
 
 - SQLite WAL + synchronous FULL, foreign keys enabled and startup integrity checked.
-- Backup manifest schema 9 includes historical/chronological/learning registry/review/prediction/scoring/performance-review audit state. Full restore is not implemented.
+- Backup manifest schema 10 includes historical/chronological/learning registry/review/prediction/scoring/performance-review audit state. Validated staged restart restore, rollback snapshots and native controls are implemented.
 - Source/package hygiene excludes secrets, runtime DB/log state, archives and generated dependency/cache trees.
-- Validated executable checkpoint `74e6387e3f66b8035f5ce55db92561ec1809ebf4` passed Research workflow `38586058214` and Windows workflow `38586058215`.
-- Windows artifact: `BrainTrade-Windows-x64-v0.4.0-Preview`.
+- Validated executable checkpoint `42c8c6dfda42acfa02de733f3acb93ff639075cc` passed Research workflow `38601402760` and Windows workflow `38601402734`.
+- Original GitHub artifact (outer ZIP): `BrainTrade-Windows-x64-v0.4.0-Preview`.
 
 ## Known limitations / pending
 
 - Native acceptance on the user's actual Windows laptop, MT5 broker history/Market Book and live Telegram credentials.
 - Enough real out-of-sample observations to judge challenger behavior with the fixed review policy.
 - True feed-supported order flow/volume profile beyond broker Market Book and candle tick-volume proxies.
-- Portfolio/correlation execution risk, full backup restore and multi-account migration.
+- Portfolio/correlation execution risk and multi-account migration.
 - Broker order state machine, reconciliation and Demo/Live execution.
 - Champion activation/automatic promotion remains intentionally absent.
 - `main` and `development` have no required-status branch protection.

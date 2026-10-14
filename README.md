@@ -10,8 +10,8 @@ Extract the complete portable ZIP and open **BrainTrade.exe**. Python and the ga
 are bundled. In Settings, choose the installed MT5 `terminal64.exe`, save the exact
 broker symbol and reconnect. See `docs/QUICKSTART_AR.md` for the Arabic guide.
 
-The dashboard has 13 pages, including dedicated Opportunities, Market Map and
-Learning/review surfaces. No separate server command or Python installation is
+The dashboard has 14 pages, including dedicated Opportunities, Market Map and
+Learning/review and Backup/Restore surfaces. No separate server command or Python installation is
 needed by the end user.
 
 ## Implemented now
@@ -26,7 +26,8 @@ needed by the end user.
 - Learning Foundation: immutable completed-bar snapshots, delayed exact 5/15/30-minute labels, deterministic dataset export, offline linear-softmax baseline trainer and immutable challenger registry.
 - Manual challenger review-eligibility records, read-only challenger inference using the exact stored feature payload, and matured prediction outcome scoring with descriptive out-of-sample metrics.
 - Official Fed/ECB RSS cache and private read-only Telegram query handlers.
-- Backup metadata includes research/learning audit state through schema 8; full restore is not implemented yet.
+- Backup schema 10 includes research/learning state; native validated restore stages a restart with rollback protection and preserves local secrets.
+- Fixed Challenger performance-review policy with immutable evidence-bound reviews and native freeze/report controls.
 
 ## Non-negotiable safety boundary
 
@@ -53,6 +54,7 @@ cargo test -p braintrade-domain -p braintrade-runtime --locked
 cargo build -p braintrade-runtime --bin braintrade-core --locked
 python3 -m unittest discover -s tests -v
 python3 scripts/smoke_core.py
+python3 scripts/check_backup_restore.py
 cargo check -p braintrade-desktop --locked
 cargo run -p braintrade-desktop --locked -- --render-check
 ```

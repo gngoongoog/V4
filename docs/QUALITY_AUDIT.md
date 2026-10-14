@@ -15,16 +15,16 @@ This audit covers the Rust workspace, native desktop, read-only MT5 gateway, his
 ## Persistence / package integrity
 
 - SQLite uses WAL/FULL synchronous behavior, explicitly enables foreign keys and runs startup `foreign_key_check`.
-- Backup manifest schema 9 includes settings/audit, historical data, chronological evidence, learning registry/review, predictions, scored outcomes and performance-review records. Full restore is intentionally not implemented.
+- Backup manifest schema 10 includes settings/audit, historical data, chronological evidence, learning registry/review, predictions, scored outcomes and performance-review records. Validated staged restart restore, rollback snapshots and native controls are implemented.
 - Source/package paths exclude secrets, runtime DB/log state, `.import`, archives and generated dependency/cache/venv trees.
 
 ## Current validation boundary — PASS
 
-Executable/code checkpoint: `74e6387e3f66b8035f5ce55db92561ec1809ebf4`.
+Executable/code checkpoint: `42c8c6dfda42acfa02de733f3acb93ff639075cc`.
 
-- Research run `38586058214`: **PASS** including Rust/Core/Python, real-Core smoke, browser checks, Desktop compile/all-page render and artifact upload.
-- Windows run `38586058215`: **PASS** including Linux duplicate validation, Windows workspace/Python tests, release portable packaging, packaged runtime/native checks and artifact uploads.
-- Windows artifact: `BrainTrade-Windows-x64-v0.4.0-Preview`, 33,229,148 bytes, SHA-256 `e9e09749359a8bfd4cc14959d141d1c8485bf3fe427887413f4b2c5274db0237`.
+- Research run `38601402760`: **PASS** including Rust/Core/Python, real-Core smoke, browser checks, Desktop compile/all-page render and artifact upload.
+- Windows run `38601402734`: **PASS** including Linux duplicate validation, Windows workspace/Python tests, release portable packaging, packaged runtime/native checks and artifact uploads.
+- Original GitHub artifact (outer ZIP): `BrainTrade-Windows-x64-v0.4.0-Preview`, 33,345,482 bytes, SHA-256 `2d8115e64c91cf39231577a2f662bf80430646af61c0579aa108ffbd1fd84585`.
 
 Documentation-only commits after this checkpoint do not change executable behavior. Native acceptance on the user's own Windows/MT5 broker environment remains separate.
 
@@ -37,9 +37,15 @@ Documentation-only commits after this checkpoint do not change executable behavi
 - `main` and `development` are unprotected; required status checks are not enforced by branch protection.
 - Native Windows + actual MT5 broker history/Market Book and live Telegram delivery have not been accepted on the user's machine.
 - Real out-of-sample evidence is not yet large enough by definition to claim candidate effectiveness simply because the policy exists.
-- Full restore, true feed-supported order flow/volume profile, portfolio execution risk, broker execution/reconciliation and autonomous champion promotion are not implemented.
+- True feed-supported order flow/volume profile, portfolio execution risk, broker execution/reconciliation and autonomous champion promotion are not implemented.
 - Historical/synthetic metrics are implementation evidence, not proof of future profitability or win rate.
 
 ## Next quality gate
 
 Accumulate fresh real out-of-sample scored evidence under the fixed review policy and run the native user-laptop MT5/broker + Telegram acceptance checklist. Do not turn a favorable research review into automatic trading authority.
+
+## Final integration checks
+
+Sealed backup validation is read-only and rejects unexpected sidecars without deleting them. Native restore requires STOP, creates rollback state and exposes the last outcome. Performance-review creation binds the displayed model/evidence; the v2 fingerprint includes regime slices.
+
+An earlier Windows render invocation returned before all frames were produced. The final harness waits and requires all 28 exact-size pixel payloads; this corrected check passed.

@@ -81,3 +81,7 @@ holdout boundary across **all** contexts plus 30 minutes (the maximum label hori
 This prevents in-sample observations or labels used to build/evaluate the artifact
 from being scored as prospective evidence. Older artifacts lacking the boundary
 must be retrained/re-exported; they are not silently granted inference eligibility.
+
+## Native performance review
+
+The Learning page exposes current performance details, freezes immutable reviews and opens saved reports by ID from the review list. POST /v1/learning/performance-review/create requires model_id, evidence_signature and optional note (500 characters). A changed subject or evidence set is rejected. Fingerprint v2 includes regime slices and exact serialized metrics; fixed v1 policy thresholds remain unchanged. No Champion or trading effect is enabled.

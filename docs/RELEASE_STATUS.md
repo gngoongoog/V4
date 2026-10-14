@@ -1,19 +1,9 @@
-# BrainTrade OS 0.4.0 Preview — release candidate
+# BrainTrade OS 0.4.0 Preview
 
-The user explicitly requested a current Windows portable. This candidate uses
-V4/development, the fuller repository identified in REPOSITORY_COMPARISON.md.
-Cargo, Cargo.lock, native UI and package version are now 0.4.0.
+V4/development is the fuller repository. This build includes 14 native pages and the historical, observational, learning, news and Shadow research stack. BrainTrade.exe starts Core and the bundled Python MT5 bridge. Select your installed terminal64.exe in Settings.
 
-Includes the existing analytical/research/learning stack, plus dedicated Opportunities,
-Market Map and Learning pages, persisted opportunity history/export, immediate STOP
-withdrawal and corrected-history cache invalidation, plus robust DOM resubscription and balanced depth collection. The one launcher is BrainTrade.exe;
-Core and the bundled Python MT5 bridge start automatically. MT5 itself must already
-be installed and the account saved locally.
+Native Backup/Restore validates and stages restart with rollback protection and preserves local secrets. Learning controls freeze evidence-bound performance reviews and load their saved reports.
 
-Candidate validation: pending fresh Linux/Windows CI. Do not mistake earlier 0.3.0
-results for this build. Final provenance will be recorded after CI completes.
+Research and Windows validation passed at the code checkpoint recorded in BUILD_HANDOFF.md and docs/validation.json in the source tree (Source in the portable package). DELIVERY_VERIFICATION.json distinguishes the tested executable commit from final documentation. Documentation repacking preserves every tested executable/runtime byte.
 
-Broker execution, automatic champion promotion and full backup restore remain
-unimplemented. The application analyzes and simulates; it does not send MT5 orders.
-Native broker/history/DOM and private Telegram acceptance still require the user's
-Windows laptop. No synthetic metric proves profitability.
+Broker execution and automatic Champion activation remain absent. Actual MT5 broker/history/DOM and private Telegram acceptance require the user's Windows laptop. CI does not establish profitability.

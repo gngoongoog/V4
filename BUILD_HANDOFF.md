@@ -1,73 +1,37 @@
 # BrainTrade OS — Build Handoff
 
-## Active checkpoint — 2026-10-14
+Canonical repository: `gngoongoog/V4`. Active branch: `development`. Release: **0.4.0 Preview**.
 
-Canonical repository: `gngoongoog/V4`. Active branch: `development`. `main` remains an older deliberately promoted checkpoint.
+## Validated executable boundary
 
-Current release candidate: **0.4.0 Preview**.
+Code checkpoint: `42c8c6dfda42acfa02de733f3acb93ff639075cc`.
+Research workflow `38601402760`: **PASS**. Windows workflow `38601402734`: **PASS**.
 
-## Validated executable/code boundary
+- 49 domain + 39 runtime Rust tests passed; one live-network test intentionally ignored.
+- 32 Python tests passed on Linux and Windows.
+- Real-Core lifecycle/auth/staleness/risk, historical/replay/chronological/learning integration passed.
+- Corrupt/traversal backup rejection, staged restore/restart and rollback-copy checks passed.
+- Offline candlestick report interactions passed.
+- All 14 native pages rendered at 1120×820 and 880×700; Windows validates all 28 complete pixel payloads before reporting success.
+- Packaged Windows EXE startup, DPAPI IPC, stopped/read-only defaults, config/backup, staged restore/restart and IPC-key preservation passed.
 
-Executable checkpoint: `74e6387e3f66b8035f5ce55db92561ec1809ebf4` (`Fix challenger performance review fixtures and tighten validation`).
+Original GitHub Actions outer artifact: `BrainTrade-Windows-x64-v0.4.0-Preview`, ID `11915201695`, 33,345,482 bytes, SHA-256 `2d8115e64c91cf39231577a2f662bf80430646af61c0579aa108ffbd1fd84585`.
+The final portable is a documentation-only repack with a separate delivery digest. Its tested EXE/runtime bytes remain unchanged; DELIVERY_VERIFICATION.json distinguishes executable and documentation commits.
 
-Research workflow `38586058214`: **PASS** — Rust domain/runtime tests, Core build, Python tests, real-Core smoke, browser report interaction checks, native Desktop compile, all-page headless render and artifact upload completed successfully.
+## Completed integration
 
-Windows workflow `38586058215`: **PASS** — Linux duplicate validation, Windows workspace/Python tests, release Desktop/Core/gateway portable build, packaged runtime checks, native render check and artifact upload completed successfully.
+V4 contains the other repository's paths plus the fuller research stack; see docs/REPOSITORY_COMPARISON.md. Historical Meta v1/v2, CES/KTE, frozen replay/experiments, detailed ledgers and offline trade review are integrated. Observational Trend/Regime/Structure/Volatility, Market Opportunities, Gann, broker DOM and Fed/ECB context have native surfaces. STOP/stale state withdraws quote plans; corrected history invalidates cached analysis.
 
-Windows artifact: `BrainTrade-Windows-x64-v0.4.0-Preview`, 33,229,148 bytes, SHA-256 `e9e09749359a8bfd4cc14959d141d1c8485bf3fe427887413f4b2c5274db0237`.
+Learning includes immutable completed-bar features, exact delayed labels, offline baseline training, challenger registry, chronological eligibility, prospective read-only inference, matured scoring and fixed performance-review policy. Native controls freeze model/evidence-bound reviews and load saved reports. Evidence v2 includes regime slices; policy thresholds remain v1. No Champion is created.
 
-A previous candidate run exposed a test-fixture calibration mismatch (the “good” fixture used confidence 0.80 while the policy ECE ceiling was 0.12). The fixture was corrected at the validated checkpoint; the final policy tests and both CI workflows pass.
+Schema-10 backups include research/learning state and exclude secrets. Validation checks exact members, version/schema, checksums/config/SQLite integrity without deleting unexpected sidecars. Restore requires STOP, stages a source and rollback copy, applies before SQLite startup under the Core lock, preserves local secrets and exposes the last result. Native Backup/Restore is implemented.
 
-Documentation commits after this checkpoint do not change executable behavior and are not a substitute for native acceptance on the user's own MT5/broker environment.
-
-## What was completed from the prior handoff
-
-The prior exact next action was the **Challenger Performance Review Policy**. It is now implemented in `crates/runtime/src/learning_performance_review.rs`, wired into Core and exposed on the existing Learning page.
-
-Policy: `challenger-performance-review-v1`.
-
-Fixed evidence gates include:
-
-- minimum total scored samples: 600;
-- minimum realized support per class: 60;
-- minimum samples per context: 150;
-- three chronological windows per context, minimum 50 samples each;
-- minimum 60 samples in at least two regime slices;
-- overall/per-context/window performance floors;
-- majority-class and uniform-probability baselines;
-- log loss, Brier, 10-bin ECE, chronological stability and class-distribution drift checks.
-
-Possible policy statuses are `insufficient_evidence`, `review_candidate` and `reject`. `review_candidate` means eligible for human consideration only.
-
-Review evidence is deterministically ordered and bound to the exact model/dataset/manual-review record/target, outcome IDs, context boundaries and a versioned evidence fingerprint. Duplicate IDs, duplicate context/bar outcomes and identity mismatch fail closed. Frozen review records are immutable; insufficient evidence cannot be frozen as a review.
-
-Core endpoints:
-
-- `GET /v1/learning/performance-review/status`
-- `GET /v1/learning/performance-review/records`
-- `POST /v1/learning/performance-review/create`
-- `POST /v1/learning/performance-review/report`
-
-Learning-page summary/records now expose this audit state. Backup manifest schema 9 includes performance-review records.
-
-## Safety boundary — unchanged
-
-- MT5 gateway remains read-only; no broker order send/modify/close path exists.
-- Legacy Meta remains the live Shadow decision source.
-- Learned inference, scoring and performance review remain audit-only.
-- `promotion_enabled=false`, `champion_created=false`, `shadow_effect=false`, `risk_effect=false`, `broker_effect=false` in the performance-review path.
-- No automatic promotion, live self-modification or Champion activation exists.
-
-## Existing implemented stack
-
-Historical Meta v1/v2, CES and KTE; deterministic saved-history replay; KTE partial-exit ledger and offline trade review; Trend/Regime/Structure/Volatility; Market Opportunities; Gann; broker DOM Depth; Fed/ECB Macro/News context; chronological evaluation; immutable learning snapshots/labels/export; offline baseline trainer; challenger registry; manual review eligibility; read-only challenger inference; exact matured-label scoring; and now challenger performance review.
+An earlier Windows GUI launch returned before rendering finished. The acceptance harness now waits for process exit and rejects any missing or incomplete frame; the final run above supersedes that incomplete evidence.
 
 ## Remaining work / next gate
 
-1. Accumulate enough **real** out-of-sample scored observations across contexts/regimes to use the fixed policy meaningfully. Do not retune thresholds post hoc on the same held-out evidence.
-2. Run native user-laptop Windows + actual MT5 broker-history/Market Book + Telegram acceptance.
-3. Full backup restore, feed-supported order flow/volume profile, portfolio/correlation research and multi-account migration remain later work.
-4. Broker execution state machine/reconciliation and any Champion activation are separate future architecture tracks and remain disabled.
-5. `main` and `development` are currently unprotected; required status checks are not enforced by GitHub branch protection.
+Native acceptance on the user's own Windows laptop, actual MT5 broker/history/DOM and private Telegram credentials remains pending. Collect fresh out-of-sample scored observations before judging models; do not retune the same holdout after reviewing it.
 
-No synthetic/CI/backtest metric is a profitability or future win-rate guarantee.
+Legacy Meta drives Shadow; other brains/learning remain observational. Broker order send/modify/close, broker execution/reconciliation, portfolio execution risk, true feed-supported order flow, cross-version/multi-account migration and Champion activation are separate future stages. No profitability guarantee is established.
+
+Keep source on development, preserve newer commits, never overwrite from an old ZIP, and record the tested code boundary separately from documentation-only commits. Main is an older deliberately promoted checkpoint; branch protection is not enabled.

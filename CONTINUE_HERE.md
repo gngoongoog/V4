@@ -15,15 +15,15 @@ GitHub `gngoongoog/V4` is the canonical memory for BrainTrade OS. Resume from re
 
 Release candidate: **0.4.0 Preview**.
 
-Validated executable checkpoint: `74e6387e3f66b8035f5ce55db92561ec1809ebf4`.
+Validated executable checkpoint: `42c8c6dfda42acfa02de733f3acb93ff639075cc`.
 
-- Research source validation `38586058214`: **PASS**.
-- Windows build/tests `38586058215`: **PASS**.
-- Windows artifact: `BrainTrade-Windows-x64-v0.4.0-Preview`, 33,229,148 bytes, SHA-256 `e9e09749359a8bfd4cc14959d141d1c8485bf3fe427887413f4b2c5274db0237`.
+- Research source validation `38601402760`: **PASS**.
+- Windows build/tests `38601402734`: **PASS**.
+- Original GitHub artifact (outer ZIP): `BrainTrade-Windows-x64-v0.4.0-Preview`, 33,345,482 bytes, SHA-256 `2d8115e64c91cf39231577a2f662bf80430646af61c0579aa108ffbd1fd84585`.
 
 The Challenger Performance Review Policy is now implemented as a separate read-only audit layer over immutable scored challenger outcomes. It adds fixed sample/class/context/window/regime gates, transparent baselines, calibration/stability/drift checks, immutable review evidence, reason codes, APIs and Learning-page visibility. It cannot create a Champion and cannot influence Legacy Meta, Shadow, risk or broker execution.
 
-Backup manifest schema is now 9 and includes immutable challenger performance-review records. Full restore remains unimplemented.
+Backup manifest schema is now 10 and includes immutable challenger performance-review records. Validated staged restart restore, rollback snapshots and native controls are implemented.
 
 ## Exact next action
 

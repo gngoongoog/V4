@@ -51,9 +51,10 @@ These checks require a Windows x64 host with a real MT5 installation and a demo 
 
 - Create backup while Core runs and verify SQLite integrity and expected manifest fields.
 - Confirm secrets are excluded.
-- Confirm the application does not falsely present full restore as implemented.
+- After STOP, validate and stage a backup, confirm replacement, reopen the app and verify the result.
+- Confirm rollback snapshot exists, local Telegram/IPC secrets remain unchanged, and corrupt or incompatible backups are rejected.
 - Restart and verify historical/evaluation/learning audit state survives.
 
 ## Still future / separate acceptance
 
-Broker execution, hard execution risk, reconciliation, partial live fills, portfolio execution risk, full restore/migration and any champion activation require separate designs and acceptance plans. None are enabled by the current research checkpoint.
+Broker execution, hard execution risk, reconciliation, partial live fills, portfolio execution risk, cross-version/multi-account migration and any champion activation require separate designs and acceptance plans. None are enabled by the current research checkpoint.
