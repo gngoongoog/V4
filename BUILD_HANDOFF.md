@@ -2,7 +2,7 @@
 
 ## Active task / user steering 2026-10-14
 
-User explicitly deferred automated strategy testing and Windows packaging while the remaining analytical brains are being built. Current increments therefore use compile-only gates.
+User requested that construction continue step by step with maximum precision. Windows packaging and native laptop acceptance remain deferred, but correctness validation is now appropriate for the chronological-evaluation boundary because future model promotion must not rely on unverified split logic. No profitability/effectiveness claim is implied by tests.
 
 ## Current development checkpoint
 
@@ -56,32 +56,48 @@ Learning Foundation compile-only run `38523080105` passed Domain + Runtime, Pyth
 - registry tables reserve `champion`/`challenger` but have no registered trained model by default;
 - `training_enabled=false`, `prediction_enabled=false`, `live_self_modification=false`.
 
-### Offline Linear Baseline Trainer — current increment
+### Offline Linear Baseline Trainer
 
-`scripts/train_linear_baseline.py` is now added as an offline-only research trainer and documented in `docs/LEARNING.md`.
+`scripts/train_linear_baseline.py` is an offline-only research trainer documented in `docs/LEARNING.md`.
 
 - reads only a matured `dataset.jsonl` Learning Foundation export;
-- verifies feature/label schema and hashes the exact dataset bytes with SHA-256;
+- verifies feature/label schema and hashes exact dataset bytes with SHA-256;
 - flattens a fixed transparent numerical feature set; no hidden feature search;
 - uses chronological splits independently per account context;
 - applies a 30-row purge on both sides of train/validation and validation/holdout boundaries because labels inspect up to 30 future M1 minutes;
-- refuses datasets that remain too small after purging or whose partitions lack one of the three target classes;
+- refuses datasets too small after purging or partitions missing one of the three target classes;
 - train-only standardization; no holdout normalization leakage;
 - deterministic class-weighted 3-class softmax linear baseline with early stopping on validation log-loss;
 - artifact records train, validation and untouched holdout accuracy, balanced accuracy, macro-F1, log-loss, mean confidence, confusion matrix and majority baseline;
 - artifact status is always `unreviewed_challenger`, `eligible_for_promotion=false`; it has no MT5/Core network path and cannot affect Shadow.
 
-The build-only gate now syntax-checks both `gateway/mt5_gateway.py` and `scripts/train_linear_baseline.py`. This commit requests that gate. It does not train a model because no user broker dataset was supplied in CI.
+### Chronological Evaluation Engine v1 — current increment
 
-Automated strategy tests, profitability/effectiveness claims, native Windows packaging and laptop acceptance remain deferred by user instruction. Do not call the trainer output production AI or a profitable model before real chronological evaluation.
+A domain-level chronological evaluator is now added on top of the existing deterministic `backtest::run` implementation instead of creating a second simulator.
+
+- supports explicit `holdout` and rolling development/holdout plans; no random split;
+- compares Meta v1 and Meta v2 using identical saved History, contract, costs and risk assumptions;
+- every window creates a fresh ledger and resets virtual equity to the configured initial value; aggregate sums/averages are explicitly labelled as independent-window statistics, not a chained equity curve;
+- at least two full days of real historical warmup are required before the first evaluation window;
+- backtest entries remain bounded by each window's `from..to`; warmup can read only earlier completed bars;
+- holdout and rolling definitions are UTC-day aligned and persisted in the result structure;
+- targeted tests cover non-overlapping holdout boundaries, report bounds, rolling-window definitions, insufficient warmup/non-Meta rejection, and future mutation not changing an already completed development window;
+- this increment is intentionally domain-only first. Runtime persistence/API and desktop review come only after the core split/causality tests pass.
+
+This commit triggers the full research correctness workflow (Rust domain/runtime tests, core build/smoke, Python tests, offline browser review and native Desktop compile). Windows packaging remains deferred. Do not interpret CI success as profitability evidence.
 
 ## Previous verified research baseline
 
 Selectable historical Meta v2 and matched-data comparisons are implemented and verified. Tested source: `b488350416ccbbde1947ae3aae381ba02aec008d`.
 Research CI: https://github.com/gngoongoog/V4/actions/runs/38516269617 — PASS.
 
-## Next after the trainer compile/syntax gate
+## Next exact action
 
-Add immutable model registration and challenger lifecycle only. Registration must verify schemas, dataset identity and artifact metadata; it must not enable inference. Then add manual promotion preconditions based on separately persisted chronological evaluation evidence. Only after registry and evaluation are sound should a read-only inference engine be designed; Shadow remains legacy Meta until explicit later promotion.
+1. Fix any chronological-evaluation compile/test failure without weakening causality or boundary rules.
+2. Once green, add runtime persistence tied to an exact saved `backtest_runs` source id and expose create/read/export API routes.
+3. Persist evaluation evidence immutably with source History identity, plan, algorithms and per-window metrics.
+4. Add desktop review for development vs holdout/rolling windows.
+5. Then add immutable model registration/challenger lifecycle. Registration must verify schemas, dataset SHA-256 and artifact metadata; it must not enable inference.
+6. Manual promotion preconditions must reference separately persisted chronological evaluation evidence. Only after registry + evaluation are sound should read-only inference be designed.
 
-Keep live Shadow's source legacy Meta. No broker execution is enabled. Never commit credentials, private runtime databases/logs, transport chunks or ZIP-only source.
+Keep live Shadow's source legacy Meta. No broker execution is enabled. `training_enabled=false`, `prediction_enabled=false`, `live_self_modification=false`. Never commit credentials, private runtime databases/logs, transport chunks or ZIP-only source.
