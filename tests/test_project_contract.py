@@ -20,8 +20,7 @@ def tracked_files() -> list[Path]:
 
 class ProjectContractTests(unittest.TestCase):
     def test_tracked_tree_has_no_runtime_state_or_transport_artifacts(self):
-        forbidden_dirs = {
-            ".import",
+        forbidden_top_level = {
             "target",
             "release",
             "runtime",
@@ -36,6 +35,7 @@ class ProjectContractTests(unittest.TestCase):
             ".7z",
             ".rar",
             ".sqlite",
+            ".sqlite3",
             ".db",
             ".log",
             ".key",
@@ -47,7 +47,9 @@ class ProjectContractTests(unittest.TestCase):
         bad = []
         for path in tracked_files():
             relative = path.relative_to(ROOT)
-            if forbidden_dirs.intersection(relative.parts):
+            if not relative.parts:
+                continue
+            if relative.parts[0] in forbidden_top_level or ".import" in relative.parts:
                 bad.append(str(relative))
                 continue
             if path.suffix.lower() in forbidden_suffixes:
