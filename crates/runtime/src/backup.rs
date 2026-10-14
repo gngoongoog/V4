@@ -39,7 +39,7 @@ fn valid_db(path:&Path)->Result<()>{
 fn folder(root:&Path,name:&str)->Result<PathBuf>{safe_name(name)?;Ok(root.join("backups").join(name))}
 fn validate(root:&Path,name:&str)->Result<Validated>{
     let dir=folder(root,name)?;if !dir.is_dir(){bail!("Backup does not exist: {name}");}
-    for e in fs::read_dir(&dir)?{let n=e?.file_name().to_string_lossy().to_ascii_lowercase();if n.contains("sealed")||n=="ipc.key"||n.contains("token"){bail!("Backup contains forbidden secret-bearing file");}}
+    let mut members=Vec::new();for e in fs::read_dir(&dir)?{let e=e?;if !e.file_type()?.is_file(){bail!("Backup contains unsupported directory/member");}let n=e.file_name().to_string_lossy().to_ascii_lowercase();if !matches!(n.as_str(),"events.sqlite"|"config.json"|"manifest.json"){bail!("Unexpected backup member: {n}");}members.push(n);}members.sort();members.dedup();if members.len()!=3{bail!("Backup member coverage mismatch");}
     let mp=dir.join("manifest.json");let m:Value=serde_json::from_slice(&fs::read(&mp)?).context("Invalid backup manifest")?;
     if m["schema"].as_u64()!=Some(SCHEMA){bail!("Unsupported backup schema; expected {SCHEMA}");}
     if m["version"].as_str()!=Some(braintrade_domain::VERSION){bail!("Backup application version does not match this build");}
@@ -121,7 +121,7 @@ pub fn apply_pending(root:&Path)->Result<Option<Value>>{
     if let Err(e)=replace(&source,root){let reason=e.to_string();replace(&rollback,root).context("Restore and automatic rollback both failed")?;
         let r=json!({"status":"rolled_back","source":source.name,"rollback":rollback.name,"reason":reason,"rollback_used":true});archive(root,&r)?;return Ok(Some(r));}
     let r=json!({"status":"applied","source":source.name,"rollback":rollback.name,"rollback_used":false,"secrets_restored":false,
-        "restore_strategy":"validate-stage-restart-rollback"});super::atomic_write(&root.join("restore.last.json"),&serde_json::to_vec_pretty(&r)?)?;fs::remove_file(pp)?;Ok(Some(r))
+        "restore_strategy":"validate-stage-restart-rollback"});let last=root.join("restore.last.json");if last.exists(){fs::remove_file(&last)?;}super::atomic_write(&last,&serde_json::to_vec_pretty(&r)?)?;fs::remove_file(pp)?;Ok(Some(r))
 }
 
 #[cfg(test)] mod tests{
