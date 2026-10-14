@@ -1,66 +1,50 @@
-# BRAINTRADE OS — 0.4.0 Development Checkpoint
+# BRAINTRADE OS — Development Research Checkpoint
 
-Native Rust/Slint desktop with an independent Rust core and read-only MT5 gateway.
-The 0.4.0 research milestone is in progress on `development`. GitHub is the
-canonical source; BUILD_HANDOFF.md records the current tested checkpoint.
-The last delivered Windows portable remains 0.2.0 Preview. Windows packaging
-is deferred until requested; CI validation artifacts are not native acceptance.
+Canonical source: `gngoongoog/V4`. `development` contains active research work; `main` remains the last deliberately promoted stable/resumable checkpoint.
 
-## Current capabilities
+Version note: the current research milestone is referred to as **0.4.0 development**, while the Rust workspace and Windows preview package still report **0.3.0**. No new end-user Windows release is declared; the last delivered portable remains **0.2.0 Preview**.
 
-- Native dashboard, independent Core and read-only MT5 bootstrap.
-- Start / Stop / reconnect / full-exit controls; persistent Shadow and risk.
-- Historical Meta v1/v2/CES/KTE lab with saved data, offline replay and experiments.
-- KTE three partial targets, delayed break-even/trailing and detailed ledgers.
-- Local HTML candlestick review for each trade, equity curve and CSV/JSON.
-- Trend/Regime, Structure/Volatility and Meta v2 candidate (observational live).
-- Historical Meta v2 gate audit and verified same-data/cost experiment comparisons.
-- Fed/ECB RSS cache and Telegram read-only queries.
+## Implemented now
 
-Legacy Meta remains the Shadow decision source. Broker orders are not submitted.
-Native MT5 acceptance and live Telegram delivery remain to be tested later.
+- Native Rust/Slint desktop plus an independent Rust Core and authenticated loopback IPC.
+- Read-only MT5 gateway for account state, positions/orders, completed candles, historical bars and broker-supported Market Book depth.
+- Start / Stop / reconnect / full-exit controls; persistent rule-based Shadow simulation and risk limits.
+- Historical Meta v1, Meta v2 candidate, CES v1 and KTE v1 with frozen inputs, saved reports, offline replay and same-data experiments.
+- KTE partial TP1/TP2/TP3 ledger, break-even/trailing updates, conservative OHLC ambiguity handling and offline candlestick trade review.
+- Observational market brains/opportunities for Trend, Regime, Structure, Volatility, Gann geometry, broker DOM depth and Macro/News context.
+- Persisted chronological Meta v1/v2 evaluation over immutable saved history.
+- Learning Foundation: immutable completed-bar snapshots, delayed exact 5/15/30-minute labels, deterministic dataset export, offline linear-softmax baseline trainer and immutable challenger registry.
+- Manual challenger review-eligibility records, read-only challenger inference using the exact stored feature payload, and matured prediction outcome scoring with descriptive out-of-sample metrics.
+- Official Fed/ECB RSS cache and private read-only Telegram query handlers.
+- Backup metadata includes research/learning audit state through schema 8; full restore is not implemented yet.
 
-## Resume here
+## Non-negotiable safety boundary
 
-- `PROJECT_STATE.md` — exact current state and validation boundary.
-- `ROADMAP.md` — ordered next work.
-- `CHANGELOG.md` — checkpoint history.
-- `docs/ARCHITECTURE.md` — broader design/roadmap, not a completed-feature list.
-- `docs/BACKTEST.md` — historical Meta v1/v2/CES/KTE assumptions and offline trade review.
-- `docs/NEWS.md` — news sources and freshness behavior.
+Legacy rule-based Meta remains the live Shadow entry source. Learned challengers are audit telemetry only. There is no champion-promotion endpoint and no broker execution route. The Python MT5 bridge does not call `order_send`, modify or close broker positions. Historical/ML metrics are not profitability guarantees.
 
-## Developer build
+## Validation and quality
 
-Rust stable (prior source tested with Rust 1.99), Python 3.13 x64 on Windows and
-Visual Studio C++ build tools are expected for the Windows build machine.
+`docs/QUALITY_AUDIT.md` records the repository-wide consistency review, packaging hardening, SQLite foreign-key enforcement and permanent contract tests. `BUILD_HANDOFF.md` and `docs/validation.json` record the exact tested code checkpoint and CI runs.
 
-Linux/core verification commands:
+Native acceptance on the user's real Windows/MT5 environment and live Telegram delivery remain separate manual checks; CI does not claim those passed.
+
+## Resume in this order
+
+1. `BUILD_HANDOFF.md` — exact tested checkpoint, remaining limitations and next action.
+2. `PROJECT_STATE.md` — implemented vs pending state.
+3. `ROADMAP.md` — ordered next work.
+4. `docs/QUALITY_AUDIT.md` — integrity/quality findings and open limitations.
+5. `CHANGELOG.md` — completed milestones.
+
+## Developer verification
 
 ```sh
 cargo test -p braintrade-domain -p braintrade-runtime --locked
 cargo build -p braintrade-runtime --bin braintrade-core --locked
 python3 -m unittest discover -s tests -v
 python3 scripts/smoke_core.py
+cargo check -p braintrade-desktop --locked
+cargo run -p braintrade-desktop --locked -- --render-check
 ```
 
-Development desktop:
-
-```sh
-cargo run -p braintrade-desktop
-```
-
-For a source gateway on Windows, set `BRAINTRADE_GATEWAY_SCRIPT` to its absolute
-path and `BRAINTRADE_PYTHON` to the interpreter containing MetaTrader5. Production
-packaging finds its bundled gateway automatically.
-
-## Secrets and local data
-
-Do not commit live Telegram tokens, API keys, broker passwords, MT5 credentials,
-private databases or runtime logs. Runtime data should stay in the user's OS app-data
-folder (or a private `BRAINTRADE_DATA_DIR`).
-
-## Portable delivery
-
-Packaging scripts are preserved for later use, but **no new 0.4.0 Windows portable is
-claimed here**. The previous delivery remains 0.2.0 Preview until a new Windows build
-is explicitly requested and tested.
+Do not commit Telegram tokens, API keys, broker passwords/credentials, runtime databases/logs, generated dependency trees, `.import`, or source ZIP/chunk staging artifacts.
