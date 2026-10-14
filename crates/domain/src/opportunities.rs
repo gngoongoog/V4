@@ -8,8 +8,10 @@ mod features;
 mod setups;
 mod gann;
 mod dom;
+mod quality;
 pub use gann::GannFrame;
 pub use dom::DomBrain;
+pub use quality::FeedQuality;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Swing {
@@ -112,6 +114,8 @@ pub struct MarketBrains {
     pub gann: Vec<GannFrame>,
     #[serde(default)]
     pub dom: DomBrain,
+    #[serde(default)]
+    pub feed_quality: FeedQuality,
     pub tick_activity_ratio: Option<f64>,
     pub profile: Profile,
     pub session: SessionContext,
@@ -164,10 +168,14 @@ pub fn scan(m: &MarketData, symbol: &str, trend: &TrendBrain, regime: &RegimeBra
 impl MarketBrains {
     pub fn withdraw(&mut self, reason: &str) {
         self.current=false; self.quote_ms=None; self.note=reason.into(); self.dom=DomBrain::default();
+        self.feed_quality=FeedQuality::unavailable(reason);
         for s in &mut self.setups { s.clear_quote(); s.state="UNAVAILABLE".into(); s.gates=vec![reason.into()]; }
     }
     pub fn expire(&mut self, now:u64, quote_fresh:bool) {
-        if !quote_fresh { self.dom=DomBrain::default(); }
+        if !quote_fresh {
+            self.dom=DomBrain::default();
+            self.feed_quality.mark_quote_stale("السعر الحالي غير متاح أو قديم");
+        }
         for s in &mut self.setups {
             if now > s.expires_ms || !quote_fresh {
                 s.clear_quote(); s.state=if now>s.expires_ms {"EXPIRED"}else{"WAIT_QUOTE"}.into();
@@ -177,6 +185,7 @@ impl MarketBrains {
     }
     /// Re-price ideas on the current quote; never modifies the closed-bar cache.
     pub fn price(&mut self, t:&Telemetry, risk:&RiskConfig, budget:f64, gates:&[String], now:u64) {
+        self.feed_quality=quality::assess(t,now);
         self.dom=dom::assess(t);
         self.specialists.retain(|vote| vote.name != "DOM Depth Brain / عقل عمق السوق");
         self.specialists.push(Vote {
@@ -185,6 +194,9 @@ impl MarketBrains {
             evidence:self.dom.evidence,
             reason:self.dom.note.clone(),
         });
+        let quality_gate=if self.feed_quality.trade_plan_ready {None}else {
+            Some(format!("جودة/قدرة البيانات غير كافية لخطة دخول حالية: {}",if self.feed_quality.issues.is_empty(){"سبب غير محدد".into()}else{self.feed_quality.issues.join(" • ")}))
+        };
         let specs=match(t.bid,t.ask,t.tick_size,t.tick_value_loss,t.tick_value_profit,t.volume_min,t.volume_step,t.volume_max) {
             (Some(b),Some(a),Some(tick),Some(loss),Some(profit),Some(min),Some(step),Some(max))
             if t.connected && t.tick_age_ms.is_some_and(|v|v<=3000) && a>=b && min<=max
@@ -194,6 +206,7 @@ impl MarketBrains {
         self.quote_ms=specs.map(|_|now);
         for s in &mut self.setups {
             s.clear_quote(); s.gates=s.signal_gates.clone(); s.gates.extend_from_slice(gates);
+            if let Some(gate)=quality_gate.as_ref() {s.gates.push(gate.clone());}
             s.state="BLOCKED".into();
             if now>s.expires_ms {s.state="EXPIRED".into();s.gates.push("انتهت صلاحية الإشارة؛ انتظر شمعة جديدة".into());continue;}
             let Some((bid,ask,tick,loss,profit,min,step,max))=specs else {
@@ -243,7 +256,7 @@ impl MarketBrains {
         }
     }
     pub fn signals_text(&self)->String {
-        let mut out=format!("{}\n{}\n{}\n",self.symbol,self.headline(),self.note);
+        let mut out=format!("{}\n{}\n{}\n\n{}\n",self.symbol,self.headline(),self.note,self.feed_quality.text());
         if self.dom.available {
             let _=writeln!(out,"DOM حي: imbalance {:+.2} | bid depth {:.2} / ask depth {:.2} | أقرب {} مستويات مرصودة\n{}",self.dom.imbalance,self.dom.bid_depth,self.dom.ask_depth,self.dom.levels,self.dom.note);
         } else {
@@ -263,6 +276,7 @@ impl MarketBrains {
     }
     pub fn map_text(&self)->String {
         let mut out=String::new();
+        let _=writeln!(out,"{}\n",self.feed_quality.text());
         for v in &self.specialists {let _=writeln!(out,"{} | اتجاه {} | قوة {:.2}\n{}\n",v.name,v.direction,v.evidence,v.reason);}
         for m in &self.momentum {let _=writeln!(out,"{}: RSI {:.1} | زخم 3 {:.2} ATR / 8 {:.2} ATR | تسارع {:.2} | تباعد {}",m.timeframe,m.rsi14,m.roc3_atr,m.roc8_atr,m.acceleration_atr,m.divergence);}
         let _=writeln!(out,"\nGann Geometry / هندسة جان:");
