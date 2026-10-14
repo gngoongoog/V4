@@ -12,12 +12,14 @@ New comparison metadata is stored atomically alongside a completed report;
 offline replay preserves its baseline. JSON/CSV/HTML and report text expose the
 candidate gates and comparison. Live Shadow remains legacy Meta.
 
-First checkpoint d715203 compiled on Linux. Domain: 37 PASS / 1 FAIL; the failed
-gap test incorrectly required `current=false` on the first observed gap minute,
-where the ledger already rejects entry. It now checks that admission is blocked
-and subsequent incomplete windows are unavailable. No strategy rule changed.
-Current tests: NOT RUN in CI yet. Local Python 16 PASS; Python/JS syntax and diff
-checks PASS. No Rust installed locally. No Windows build/package triggered.
+Code checkpoint 7555ab3d6ce14572f573eaef3630d6f99231620b:
+Linux CI https://github.com/gngoongoog/V4/actions/runs/38515998056 passed domain
+38/runtime 15 Rust tests (one network test ignored), 16 Python tests, core build,
+seven-run smoke, golden legacy reports and browser checks. The final desktop
+check was BLOCKED by missing system fontconfig headers, before app compilation.
+This checkpoint installs libfontconfig1-dev in Linux CI and reruns that gate.
+No application code changes. Local Python/syntax/diff checks PASS; Rust absent.
+Windows builds/packages remain deferred. The prior gap-test assertion is fixed.
 
 Integration now checks seven persisted results, full legacy-report golden digests
 from prior verified synthetic artifacts, Meta v2 decisions CSV, same-data comparison,
