@@ -2,67 +2,87 @@
 
 ## Active task / user steering 2026-10-14
 
-User requested that construction continue step by step with maximum precision. Build on `development`, keep `main` stable, and validate each coherent stage before the next. Windows packaging/native laptop acceptance remain deferred. No CI/backtest/ML metric is a profitability claim.
+Continue construction step by step with maximum precision on `development`; keep `main` stable. Validate each coherent stage before the next. Windows packaging/native laptop acceptance remain deferred. No CI/backtest/ML metric is a profitability claim.
 
-## Current verified development checkpoint
+## Verified foundation
 
 ### Analytical / market layer
 
-The live research layer contains the Market Opportunity Engine plus Trend, Regime, Structure, Volatility, Gann Geometry, broker-supported DOM Depth and Macro/News Context brains. Opportunity plans use completed-bar analysis plus current quote projection and expose structural stop/three targets/cost/lot gates. Stale inputs withdraw old Entry/SL/TP values. DOM is resting depth only when MT5 supplies Market Book; candle tick-volume/profile data are explicitly proxies, not exchange order flow. Macro/News uses official Fed/ECB RSS freshness and never converts headlines into BUY/SELL. New brains remain observational; live Shadow still uses legacy Meta and no broker execution exists.
+The live research layer contains Market Opportunities plus Trend, Regime, Structure, Volatility, Gann Geometry, broker-supported DOM Depth and Macro/News Context brains. Opportunity plans use completed-bar analysis plus current quote projection and expose structural stop/three targets/cost/lot gates. Stale inputs withdraw old Entry/SL/TP values. DOM is resting depth only when MT5 supplies Market Book; candle tick-volume/profile data are proxies, not exchange order flow. Macro/News uses official Fed/ECB RSS freshness and does not convert headlines into BUY/SELL. These newer brains remain observational; live Shadow still uses legacy Meta and no broker execution exists.
 
-Verified compile-only runs for the newer analytical stages:
-- Market Opportunities: `38520989480` PASS.
-- Gann Geometry: `38521328784` PASS.
-- DOM Depth + gateway syntax: `38521812267` PASS.
-- Macro/News Context: `38522309782` PASS.
+Verified compile-only runs: Market Opportunities `38520989480`, Gann `38521328784`, DOM `38521812267`, Macro/News `38522309782`.
 
 ### Learning Foundation v1
 
-- `learning_snapshots` stores immutable closed-bar features once per account/server/symbol/currency + M1 bar.
-- feature schema `gold-m1-feature-v1` uses reproducible closed-bar analytical features; quote projection, DOM and news are excluded until replay parity exists.
-- `learning_labels` matures only after exact future M1 sequences for 5/15/30 minutes exist; gapped horizons are never shifted or fabricated.
-- labels store ATR-normalized return/MFE/MAE and -1/0/+1 class at +/-0.20 ATR.
+- `learning_snapshots`: immutable closed-bar features once per account/server/symbol/currency + M1 bar.
+- feature schema `gold-m1-feature-v1`; quote projection, DOM and news are excluded until replay parity exists.
+- `learning_labels`: exact future M1 sequences at 5/15/30m only; gapped horizons are never shifted/fabricated.
+- labels include ATR-normalized return/MFE/MAE and -1/0/+1 class at +/-0.20 ATR.
 - `/v1/learning` and `/v1/learning/export` expose deterministic matured data.
-- `scripts/train_linear_baseline.py` is offline-only: SHA-256 dataset identity, chronological per-context split, 30-row purge around split boundaries, train-only standardization, deterministic class-weighted 3-class softmax and untouched holdout metrics.
-- model artifacts are always `unreviewed_challenger`, `eligible_for_promotion=false`.
+- `scripts/train_linear_baseline.py`: offline-only SHA-256 dataset identity, chronological per-context split, 30-row purge, train-only standardization, deterministic class-weighted 3-class softmax and untouched holdout metrics.
+- artifacts remain `unreviewed_challenger`, `eligible_for_promotion=false`.
 
 ### Model registry / challenger lifecycle
 
-Runtime accepts validated research artifacts through `/v1/learning/register` and stores them immutably in `learning_models`. Registration validates model/feature/label schemas, target, lowercase SHA-256 dataset identity, minimum post-purge rows, purge metadata, chronological/manual-promotion contract, exact classes, finite dimensions/weights and train/validation/holdout metrics. Registration can assign only the `challenger` slot. There is no champion promotion, prediction or live self-modification.
+`/v1/learning/register` stores validated artifacts immutably in `learning_models` and may assign only the `challenger` slot. It validates schemas/target/dataset SHA/post-purge rows/purge metadata/chronological contract/classes/finite model vectors and split metrics. No champion promotion, inference or live self-modification exists at this checkpoint.
 
-A first full chronology/registry run exposed three Rust `rusqlite::query_map` lifetime errors only. Commit `48b1fb0fb6ae897f42f72a0a1452fb5df55e16da` fixed those iterator lifetimes without changing split, purge, causality or registry policy. Full research run `38524176106` then passed Rust tests, Core build, Python tests, Core smoke, browser review, native Desktop compile and artifact upload.
+Commit `48b1fb0fb6ae897f42f72a0a1452fb5df55e16da` fixed only three `rusqlite::query_map` lifetime errors. Full research run `38524176106` then passed Rust tests, Core build, Python tests, Core smoke, browser review and native Desktop compile.
 
-### Chronological Evaluation Engine v1
+### Chronological Evaluation + Evidence Store
 
-Domain evaluator `chronological-evaluation-v1` reuses the deterministic backtest engine and supports:
-- explicit holdout and rolling development/holdout plans; no random split;
-- Meta v1 vs Meta v2 on identical History/contract/cost/risk assumptions;
-- at least two full days of real warmup before the first test window;
-- fresh ledger and configured initial equity per window;
-- entries strictly bounded to each window while warmup reads only earlier completed bars;
-- UTC-day aligned definitions;
-- tests for non-overlap, report bounds, rolling definitions, insufficient warmup/non-Meta rejection and future-mutation causality.
+`chronological-evaluation-v1` reuses the deterministic backtest engine with explicit holdout/rolling development+holdout windows, real pre-window warmup, fresh ledger/equity per window, UTC-day boundaries and future-mutation causality tests. Runtime persists immutable evidence in `chronological_evaluations` bound to exact saved backtest source identity and exposes start/cancel/list/report/export routes. Commit `e97723daa227255de295171d3e63642dad108f3e`, full run `38525014871` PASS.
 
-### Runtime Chronological Evidence Store — verified
+The dedicated native Desktop chronological-evaluation review page was subsequently implemented and headless-render validated. Verified head before the current review-policy stage: `8ab1020c0ca5c4730441bfcd004e58f21be7bdb4`; full run `38527014379` PASS.
 
-Commit `e97723daa227255de295171d3e63642dad108f3e` adds persisted research evidence and Core routes. Full research run `38525014871` PASS: Rust domain/runtime tests, Core build, Python tests, Core smoke, offline browser review, native Desktop compile and artifact upload all succeeded.
+## Current stage — Manual Challenger Review Eligibility
 
-- SQLite table `chronological_evaluations` stores immutable rows; there is no update/delete/promotion route.
-- every evaluation binds to an exact saved `backtest_runs` source id plus immutable source identity: source creation time, algorithm/strategy/options, account/server/symbol/currency, history capture/first/last/bar count and contract.
-- report/history identity and current algorithm identity are revalidated before evaluation.
-- asynchronous worker supports cancellation/progress and never persists partial/panicked results.
-- Core routes: `GET /v1/evaluation`, `POST /v1/evaluation/start`, `POST /v1/evaluation/cancel`, `GET /v1/evaluation/runs`, `POST /v1/evaluation/report`, `POST /v1/evaluation/export`.
-- export writes normal files only: `evaluation.json`, `source_identity.json`, `manifest.json`.
-- backup manifest schema 5 includes chronological evaluation evidence through the SQLite backup.
-- every API/report explicitly keeps `prediction_enabled=false` and `promotion_enabled=false`.
+Code head under validation: `9ab88714852c167b18c26b1277c8b15a15d54839`.
+Workflow run: `38528848123`.
+
+New normal source file: `crates/runtime/src/learning_review.rs`.
+
+Policy `manual-review-eligibility-v1` is intentionally a prerequisite gate only:
+- verifies the current challenger still obeys immutable model/feature/label/manual-promotion contracts;
+- verifies dataset identity, >=600 post-purge rows, untouched holdout metrics and >=30-row purge metadata;
+- parses every distinct training context `(server, login, symbol, currency)`;
+- requires valid separately persisted chronological evidence for every training context, not merely one context;
+- validates evidence/source identity, development+holdout presence and that Meta v1/v2 reports remain bounded to their declared windows;
+- creates immutable `learning_review_records` only when the submitted evidence set exactly covers the policy-selected evidence;
+- never changes model status, never creates a champion, never enables model prediction, never alters Shadow.
+
+Core routes:
+- `GET /v1/learning/review/status`
+- `GET /v1/learning/review/records`
+- `POST /v1/learning/review/create`
+- `POST /v1/learning/review/report`
+
+`GET /v1/learning` is enriched with computed manual-review eligibility. Backup manifest schema is now 6 and records review-eligibility data while explicitly keeping model inference/promotion disabled.
+
+Tests added:
+- every training context needs separate compatible chronological evidence;
+- malformed/out-of-window evidence is rejected;
+- persistence does not create a champion or change the challenger status.
+
+### CI status at this checkpoint
+
+For run `38528848123` on `9ab8871...`, the following are already PASS:
+- Rust domain/runtime tests;
+- Core build;
+- Python unit tests;
+- Core smoke;
+- browser/offline report interaction check;
+- native Desktop compilation on Linux.
+
+At checkpoint write time, the final headless Desktop page render and artifact upload were still running/pending. Do not call the stage fully green until that run concludes SUCCESS.
 
 ## Next exact action
 
-1. Add a dedicated Desktop chronological-evaluation review page using only the verified runtime API.
-2. The UI must choose an existing saved Meta backtest as the source, choose Holdout or Rolling parameters, start/cancel, show progress, list immutable saved evaluations, display per-window/aggregate evidence and export it.
-3. UI wording must state that windows are independent and results are not a connected equity curve or profitability proof.
-4. Run the full research CI again, including native Desktop compilation, before moving on.
-5. Only after the UI/evidence stage is green, implement manual challenger review-eligibility preconditions that reference separately persisted chronological evidence. Do not implement automatic promotion.
-6. After registry + evidence + review policy are proven, add read-only challenger inference/logging only; it must not alter Shadow.
+1. Confirm run `38528848123` completes fully SUCCESS. Fix the same stage first if it does not.
+2. Once green, build **read-only challenger inference/logging** only.
+3. Rust inference must reproduce the offline trainer feature contract exactly by feature name, normalization means/stds, class ordering and softmax; add parity tests before trusting output.
+4. Inference may run only for the current immutable challenger after a persisted valid manual-review eligibility record exists.
+5. Store model id, dataset identity, review record, account context, closed-bar time, target, class probabilities and predicted class in a separate immutable audit table with one prediction per model/context/bar.
+6. Read-only predictions must never feed `Analysis.action`, risk, lot sizing, opportunities, Meta, Shadow or broker execution.
+7. Only after enough separately labeled read-only predictions exist should a later stage evaluate challenger calibration/out-of-sample performance. No automatic promotion.
 
-Keep live Shadow's source legacy Meta. No broker execution is enabled. `training_enabled=false`, `prediction_enabled=false`, `live_self_modification=false`. Never commit credentials, private runtime databases/logs, transport chunks, `.import`, encoded source, or ZIP-only source.
+Keep live Shadow's source legacy Meta. No broker execution is enabled. No live self-modification exists. Never commit credentials, private runtime DB/logs, `.import`, chunks, encoded source, or ZIP-only source.
