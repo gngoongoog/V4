@@ -219,6 +219,7 @@ def split_purged(rows, min_rows):
             "validation_first_bar": parts[1][0]["bar_time"],
             "validation_last_bar": parts[1][-1]["bar_time"],
             "holdout_first_bar": parts[2][0]["bar_time"],
+            "holdout_last_bar": parts[2][-1]["bar_time"],
         })
     total = len(train) + len(validation) + len(holdout)
     if total < min_rows:

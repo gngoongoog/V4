@@ -160,16 +160,16 @@ class ProjectContractTests(unittest.TestCase):
 
     def test_release_versions_and_dashboard_routes_are_consistent(self):
         import tomllib
-        workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
-        lock = tomllib.loads((ROOT / "Cargo.lock").read_text())
+        workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
+        lock = tomllib.loads((ROOT / "Cargo.lock").read_text(encoding="utf-8"))
         packages = [p for p in lock["package"] if p["name"].startswith("braintrade-")]
         self.assertEqual(len(packages), 3)
         self.assertTrue(all(p["version"] == workspace for p in packages))
-        ui = (ROOT / "crates/desktop/ui/main.slint").read_text()
-        workflow = (ROOT / ".github/workflows/windows.yml").read_text()
+        ui = (ROOT / "crates/desktop/ui/main.slint").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github/workflows/windows.yml").read_text(encoding="utf-8")
         self.assertIn("Research " + workspace, ui)
         self.assertIn("v" + workspace + "-Preview", workflow)
-        main = (ROOT / "crates/desktop/src/main.rs").read_text()
+        main = (ROOT / "crates/desktop/src/main.rs").read_text(encoding="utf-8")
         for module in ("backtest", "news", "evaluation", "learning"):
             self.assertIn(module + "::setup(&ui)", main)
         for page in (10, 11, 12):

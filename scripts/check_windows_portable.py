@@ -96,7 +96,7 @@ def main():
                         subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], check=False,
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 if process.returncode not in (None, 0):
-                    print((directory / "native-stderr.log").read_text(errors="replace"))
+                    print((directory / "native-stderr.log").read_text(encoding="utf-8", errors="replace"))
 
 if __name__ == "__main__":
     main()

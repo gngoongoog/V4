@@ -130,6 +130,7 @@ def _artifact(snapshot):
                     "validation_first_bar": 2,
                     "validation_last_bar": 3,
                     "holdout_first_bar": 4,
+                    "holdout_last_bar": 5,
                 }
             ],
         },
