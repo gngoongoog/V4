@@ -1,8 +1,6 @@
 //! Read-only CLI wrapper for the challenger performance review policy.
-#[path = "../learning_performance.rs"]
-mod learning_performance;
-
 use anyhow::Result;
+use braintrade_runtime::learning_performance;
 use rusqlite::{Connection, OpenFlags};
 use std::{env, path::PathBuf};
 
