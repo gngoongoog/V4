@@ -4,7 +4,23 @@ on:
   push:
     branches: [development]
 jobs:
+  build-only:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[build-only]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check domain and runtime compilation only
+        run: cargo check -p braintrade-domain -p braintrade-runtime --locked
+      - name: Install native font build dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev
+      - name: Check desktop compilation only
+        run: cargo check -p braintrade-desktop --locked
   research:
+    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[build-only]')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
