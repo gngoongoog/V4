@@ -93,5 +93,6 @@
     }
   },
   "expected_feature_count": 87,
-  "expected_sha256": "0de13915d19126262d39667ca058744db4614bd9e13520746a300335a3298e91"
+  "expected_sha256": "0de13915d19126262d39667ca058744db4614bd9e13520746a300335a3298e91",
+  "expected_fnv64": "0e4a2a0a94f2516f"
 }
