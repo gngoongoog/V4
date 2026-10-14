@@ -91,7 +91,11 @@ impl Service{
             CREATE TABLE IF NOT EXISTS learning_labels(snapshot_id INTEGER PRIMARY KEY,matured_ms INTEGER NOT NULL,label_schema TEXT NOT NULL,label TEXT NOT NULL,FOREIGN KEY(snapshot_id) REFERENCES learning_snapshots(id));
             CREATE TABLE IF NOT EXISTS learning_models(model_id TEXT PRIMARY KEY,created_ms INTEGER NOT NULL,family TEXT NOT NULL,feature_schema TEXT NOT NULL,dataset_identity TEXT NOT NULL,status TEXT NOT NULL,metrics TEXT NOT NULL,artifact_path TEXT NOT NULL,artifact_sha256 TEXT NOT NULL,note TEXT NOT NULL,artifact TEXT NOT NULL DEFAULT '{}');
             CREATE TABLE IF NOT EXISTS learning_slots(slot TEXT PRIMARY KEY CHECK(slot IN ('champion','challenger')),model_id TEXT,assigned_ms INTEGER NOT NULL,note TEXT NOT NULL,FOREIGN KEY(model_id) REFERENCES learning_models(model_id));")?;
-        let has_artifact={let mut s=db.prepare("PRAGMA table_info(learning_models)")?;s.query_map([],|r|r.get::<_,String>(1))?.collect::<std::result::Result<Vec<_>,_>>()?.iter().any(|n|n=="artifact")};
+        let has_artifact={
+            let mut s=db.prepare("PRAGMA table_info(learning_models)")?;
+            let columns=s.query_map([],|r|r.get::<_,String>(1))?.collect::<std::result::Result<Vec<_>,_>>()?;
+            columns.iter().any(|n|n=="artifact")
+        };
         if !has_artifact{db.execute("ALTER TABLE learning_models ADD COLUMN artifact TEXT NOT NULL DEFAULT '{}'",[])?;}
         Ok(Self::default())
     }
@@ -100,7 +104,11 @@ impl Service{
         let Some((reference_close,atr,payload))=feature_payload(t,a)else{return Ok(());};let market=t.market.as_ref().unwrap();let key=context(t);let tx=db.transaction()?;
         tx.execute("INSERT OR IGNORE INTO learning_snapshots(context,bar_time,captured_ms,feature_schema,reference_close,atr,features) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![key,a.bar_time,now,FEATURE_SCHEMA,reference_close,atr,payload.to_string()])?;
         let cutoff=market.m1.last().map(|b|b.time.saturating_sub(1800)).unwrap_or(0);
-        let pending={let mut s=tx.prepare("SELECT s.id,s.bar_time,s.reference_close,s.atr FROM learning_snapshots s LEFT JOIN learning_labels l ON l.snapshot_id=s.id WHERE s.context=?1 AND l.snapshot_id IS NULL AND s.bar_time<=?2 ORDER BY s.bar_time LIMIT 180")?;s.query_map(params![key,cutoff],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,u64>(1)?,r.get::<_,f64>(2)?,r.get::<_,f64>(3)?)))?.collect::<std::result::Result<Vec<_>,_>>()?};
+        let pending={
+            let mut s=tx.prepare("SELECT s.id,s.bar_time,s.reference_close,s.atr FROM learning_snapshots s LEFT JOIN learning_labels l ON l.snapshot_id=s.id WHERE s.context=?1 AND l.snapshot_id IS NULL AND s.bar_time<=?2 ORDER BY s.bar_time LIMIT 180")?;
+            let rows=s.query_map(params![key,cutoff],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,u64>(1)?,r.get::<_,f64>(2)?,r.get::<_,f64>(3)?)))?.collect::<std::result::Result<Vec<_>,_>>()?;
+            rows
+        };
         for(id,bar_time,reference,snapshot_atr)in pending{if !snapshot_atr.is_finite()||snapshot_atr<=0.0{continue;}let Some(w5)=exact_window(&market.m1,bar_time,5)else{continue;};let Some(w15)=exact_window(&market.m1,bar_time,15)else{continue;};let Some(w30)=exact_window(&market.m1,bar_time,30)else{continue;};let label=json!({"schema":LABEL_SCHEMA,"reference_bar_time":bar_time,"reference_close":reference,"reference_atr":snapshot_atr,"horizons":[outcome(reference,snapshot_atr,w5,5),outcome(reference,snapshot_atr,w15,15),outcome(reference,snapshot_atr,w30,30)],"note":"Label written only after exact future M1 bars exist; missing/gapped horizons are not shifted or fabricated."});tx.execute("INSERT OR IGNORE INTO learning_labels(snapshot_id,matured_ms,label_schema,label) VALUES(?1,?2,?3,?4)",params![id,now,LABEL_SCHEMA,label.to_string()])?;}
         tx.commit()?;Ok(())
     }
@@ -114,7 +122,11 @@ impl Service{
         let snapshots=db.query_row("SELECT COUNT(*) FROM learning_snapshots",[],|r|r.get::<_,i64>(0))?;let labels=db.query_row("SELECT COUNT(*) FROM learning_labels",[],|r|r.get::<_,i64>(0))?;let models=db.query_row("SELECT COUNT(*) FROM learning_models",[],|r|r.get::<_,i64>(0))?;
         let latest:Option<(u64,u64,String)>=db.query_row("SELECT bar_time,captured_ms,feature_schema FROM learning_snapshots ORDER BY id DESC LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
         let champion:Option<String>=db.query_row("SELECT model_id FROM learning_slots WHERE slot='champion'",[],|r|r.get::<_,Option<String>>(0)).optional()?.flatten();let challenger:Option<String>=db.query_row("SELECT model_id FROM learning_slots WHERE slot='challenger'",[],|r|r.get::<_,Option<String>>(0)).optional()?.flatten();
-        let recent={let mut s=db.prepare("SELECT model_id,created_ms,family,dataset_identity,status,metrics FROM learning_models ORDER BY created_ms DESC LIMIT 10")?;s.query_map([],|r|{let metrics:String=r.get(5)?;Ok(json!({"model_id":r.get::<_,String>(0)?,"created_ms":r.get::<_,u64>(1)?,"family":r.get::<_,String>(2)?,"dataset_identity":r.get::<_,String>(3)?,"status":r.get::<_,String>(4)?,"metrics":serde_json::from_str::<Value>(&metrics).unwrap_or(Value::Null)}))})?.collect::<std::result::Result<Vec<_>,_>>()?};
+        let recent={
+            let mut s=db.prepare("SELECT model_id,created_ms,family,dataset_identity,status,metrics FROM learning_models ORDER BY created_ms DESC LIMIT 10")?;
+            let rows=s.query_map([],|r|{let metrics:String=r.get(5)?;Ok(json!({"model_id":r.get::<_,String>(0)?,"created_ms":r.get::<_,u64>(1)?,"family":r.get::<_,String>(2)?,"dataset_identity":r.get::<_,String>(3)?,"status":r.get::<_,String>(4)?,"metrics":serde_json::from_str::<Value>(&metrics).unwrap_or(Value::Null)}))})?.collect::<std::result::Result<Vec<_>,_>>()?;
+            rows
+        };
         Ok(json!({"version":"learning-foundation-v1","feature_schema":FEATURE_SCHEMA,"label_schema":LABEL_SCHEMA,"snapshots":snapshots,"matured_labels":labels,"pending_labels":snapshots-labels,"models":models,"champion":champion,"challenger":challenger,"recent_models":recent,"latest":latest.map(|(bar_time,captured_ms,schema)|json!({"bar_time":bar_time,"captured_ms":captured_ms,"schema":schema})),"last_error":self.last_error,"training_enabled":false,"prediction_enabled":false,"champion_promotion_enabled":false,"live_self_modification":false,"note":"Registry accepts validated unreviewed challengers only. No model can influence Shadow."}))
     }
     pub fn export(&self,db:&Connection,dir:&Path,now:u64)->Result<Value>{
