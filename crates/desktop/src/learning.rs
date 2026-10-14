@@ -10,9 +10,14 @@ fn summary(value: &Value) -> String {
     let review=&value["manual_review_eligibility"];
     let inference=&value["read_only_inference"];
     let scoring=&value["prediction_scoring"];
+    let performance=&value["challenger_performance_review"];
     let _=writeln!(out,"\nأهلية الدليل الزمني: {}\n{}\nتوقعات للمراقبة: {} | نتائج مقاسة: {} | تنتظر نضج الهدف: {}\nجاهزية التوقع البحثي: {}",
         review["eligible_for_manual_review"],review["reason"].as_str().unwrap_or("راجع تفاصيل الدليل قبل تسجيل المراجعة"),
         inference["predictions"],scoring["scored"],scoring["pending"],inference["read_only_gate_ready"]);
+    let _=writeln!(out,"\nمراجعة أداء Challenger: {} | عينات: {} | مرشح للنظر البشري فقط: {}\nنقص الدليل: {}\nأسباب الرفض: {}\nتحذيرات: {}",
+        performance["status"].as_str().unwrap_or("insufficient_evidence"),performance["samples"],
+        performance["eligible_for_human_consideration"],performance["insufficient_reason_codes"],
+        performance["reject_reason_codes"],performance["warning_codes"]);
     for group in scoring["groups"].as_array().into_iter().flatten() {
         let m=&group["metrics"];
         let number=|key:&str|m[key].as_f64().map(|v|format!("{v:.4}")).unwrap_or_else(||"—".into());
@@ -20,10 +25,10 @@ fn summary(value: &Value) -> String {
             group["model_id"].as_str().unwrap_or("—"),group["target"].as_str().unwrap_or("—"),m["samples"],m["class_support"],
             number("accuracy"),number("balanced_accuracy"),number("macro_f1"),number("mean_log_loss"),number("mean_brier"),number("ece_10_bin"),m["small_sample_warning"]);
     }
-    for part in [value,inference,scoring] {
+    for part in [value,inference,scoring,performance] {
         if let Some(error)=part["last_error"].as_str().filter(|s|!s.is_empty()) {let _=writeln!(out,"خطأ: {error}");}
     }
-    out.push_str("\nالتدريب خارج المحرك. التوقعات للمراقبة فقط؛ لا تغيّر Meta أو المحاكاة أو المخاطرة، ولا يوجد نموذج Champion مفعّل.");
+    out.push_str("\nالتدريب خارج المحرك. التوقعات ومراجعة الأداء للمراقبة فقط؛ لا تغيّر Meta أو المحاكاة أو المخاطرة، ولا يوجد نموذج Champion مفعّل.");
     out
 }
 
@@ -65,7 +70,12 @@ fn run_action(client:&Client,action:&str,model:&str,note:&str)->anyhow::Result<S
         },
         "predictions"=>Ok(serde_json::to_string_pretty(&client.get("/v1/learning/inference/recent")?)?),
         "outcomes"=>Ok(serde_json::to_string_pretty(&client.get("/v1/learning/scoring/recent")?)?),
-        "records"=>Ok(serde_json::to_string_pretty(&client.get("/v1/learning/review/records")?)?),
+        "records"=>{
+            let eligibility=client.get("/v1/learning/review/records")?;
+            let performance=client.get("/v1/learning/performance-review/records")?;
+            Ok(format!("Manual eligibility records:\n{}\n\nChallenger performance records:\n{}",
+                serde_json::to_string_pretty(&eligibility)?,serde_json::to_string_pretty(&performance)?))
+        },
         _=>bail!("Unknown learning action"),
     }
 }
