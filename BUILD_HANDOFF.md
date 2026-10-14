@@ -13,7 +13,7 @@ Live market-opportunity integration is wired on `development`; compile-only run 
 - closed-bar opportunity maps are cached per account/server/symbol/currency context and recomputed only when the completed M1 bar changes;
 - demand/supply/support/resistance zones, confirmed swings, M1/M5/M15 momentum/divergence, tick-activity/profile proxies and session context feed grouped reversal/sweep/breakout/retest/value-reclaim setup discovery;
 - each setup is repriced from the current quote with structural stop, three targets, spread/slippage/commission assumptions, broker lot constraints and a conservative risk budget;
-- stale quotes expire price plans and stale/disconnected candle data withdraws old Entry/SL/TP values;
+- stale quotes expire price plans and stale/disconnected candle data withdraw old Entry/SL/TP values;
 - first-observed setup snapshots persist in `opportunity_setups` using `(context, setup_id)` identity;
 - Analysis dashboard and Telegram `/opportunities` expose the same read-only setup report;
 - no opportunity module has an order API and live Shadow still uses legacy Meta.
@@ -22,20 +22,30 @@ Live market-opportunity integration is wired on `development`; compile-only run 
 
 Gann-inspired geometry is integrated and compile-only run `38521328784` passed Domain + Runtime + native Desktop compilation. It uses completed bars and confirmed pivots only: latest confirmed swing as time/price anchor, ATR-per-bar normalized slope, and the latest confirmed swing range split into eighths. M1/M5/M15 are exposed; it remains observational and does not change setup scoring, Meta or Shadow.
 
-### DOM Depth Brain v1 — current increment
+### DOM Depth Brain v1
 
-True broker-supported MT5 Market Book depth is now being integrated without inventing order flow:
+Broker-supported MT5 Market Book depth is integrated and compile-only run `38521812267` passed Domain + Runtime, Python gateway syntax and native Desktop compilation.
 
-- Telemetry has validated `dom` levels (`buy`/`sell`, positive finite price/volume, max 200 rows) plus `dom_available`;
-- Python gateway subscribes using `market_book_add`, reads `market_book_get`, releases subscriptions on account/symbol changes and disconnect/shutdown, and sends at most 100 validated book rows;
-- DOM Brain uses the nearest five bid/ask levels, exposes visible resting bid/ask depth, imbalance, best bid/ask and a microprice proxy;
-- it explicitly does NOT claim executed order flow, footprint delta, hidden liquidity or exchange-wide volume;
-- Market Opportunities displays DOM state and adds an observational specialist vote; DOM does not yet alter setup scoring or trading decisions;
-- build-only CI now also syntax-checks `gateway/mt5_gateway.py` with Python 3.13.
+- Telemetry validates `dom` rows (`buy`/`sell`, positive finite price/volume, max 200);
+- gateway subscribes with `market_book_add`, reads `market_book_get`, releases on context changes/disconnect/shutdown and sends at most 100 validated rows;
+- DOM Brain uses nearest five bid/ask levels and exposes visible resting depth, imbalance, best bid/ask and microprice proxy;
+- it does NOT claim executed order flow, footprint delta, hidden liquidity or exchange-wide volume;
+- DOM is shown as an observational specialist and does not alter setup scoring, Meta, Shadow or execution.
 
-This commit requests a `[build-only]` gate for the complete DOM integration. Automated strategy tests, chronological evaluation and Windows packaging remain deferred for this increment.
+### Macro / News Context Brain v1 — current increment
 
-Do not describe broker candle tick volume/profile proxies as exchange volume, DOM or global order flow. Do not describe Gann/DOM evidence as win probability.
+Official Fed/ECB RSS cache now has a bounded macro-context brain:
+
+- source freshness is mandatory; failed/stale feeds are not treated as current context;
+- counts official headlines inside 15m and 60m windows and highlights monetary-policy/inflation/employment topics published within 30m;
+- state is `STALE`, `QUIET`, `RECENT_NEWS` or `ATTENTION`;
+- it never derives BUY/SELL or sentiment from headline text and does not pretend the RSS feed is a future economic calendar;
+- the News dashboard shows the macro context and Telegram `/news` includes it before cached headlines;
+- Meta, Shadow, historical strategy decisions and broker execution remain unchanged.
+
+This commit requests a `[build-only]` gate for Macro/News integration. Automated strategy tests, chronological evaluation and Windows packaging remain deferred for this increment.
+
+Do not describe candle tick-volume/profile proxies as exchange volume or order flow. Do not describe Gann/DOM/Macro evidence as a win probability.
 
 ## Previous verified research baseline
 
@@ -48,8 +58,8 @@ Research CI: https://github.com/gngoongoog/V4/actions/runs/38516269617 — PASS.
 - Native Slint desktop compilation passed on Linux for the verified baseline.
 - Native MT5 history/Telegram/DOM delivery on the user's laptop: NOT RUN.
 
-## Next after the DOM compile gate
+## Next after the Macro compile gate
 
-Continue the analytical-brain roadmap without promoting new brains to live execution. Next priorities are macro/news context and completing data-quality/feed capability boundaries. After the analytical layer is coherent, add chronological held-out/rolling evaluation, then build a trained/self-learning model registry with offline training, champion/challenger promotion and no uncontrolled live self-modification.
+The analytical/feed layer is now broad enough to move toward the learning foundation without promoting any new brain into live execution. Next build the dataset/model registry plumbing first: immutable feature snapshots, outcome labels only after the future is known, versioned model metadata, offline training interface and champion/challenger slots. It must start with no trained model and no autonomous live self-modification. Chronological held-out/rolling evaluation is still required before any learned model can influence Shadow.
 
 Keep live Shadow's source legacy Meta until real broker-data evaluation is reviewed. The user will perform native laptop/MT5/Telegram acceptance later. No broker execution is enabled. Never commit credentials, private runtime databases/logs, transport chunks or ZIP-only source.
