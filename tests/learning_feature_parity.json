@@ -1,0 +1,97 @@
+{
+  "features": {
+    "schema": "gold-m1-feature-v1",
+    "legacy_directional_score": 1.7,
+    "trend": {
+      "direction": -2,
+      "evidence": 1.2,
+      "aligned": true
+    },
+    "regime": {
+      "direction": 0.25,
+      "structure_direction": -0.75,
+      "meta_v2_direction": 2,
+      "trend_evidence": 0.8,
+      "efficiency": -1,
+      "structure_evidence": 0.33,
+      "volatility_evidence": 1.4,
+      "meta_v2_evidence": 0.66,
+      "volatility_ratio": 9.5,
+      "tradable_trend": true,
+      "structure_consensus": false,
+      "volatility_shock": true,
+      "meta_v2_eligible": true
+    },
+    "momentum": [
+      {
+        "timeframe": "M1",
+        "direction": 1,
+        "roc3_atr": 7,
+        "roc8_atr": -11,
+        "acceleration_atr": 2.5,
+        "rsi14": 75,
+        "strength": 0.7,
+        "divergence": -2
+      },
+      {
+        "timeframe": "M15",
+        "direction": -1,
+        "roc3_atr": -3,
+        "roc8_atr": 4,
+        "acceleration_atr": -7,
+        "rsi14": 0,
+        "strength": 1.5,
+        "divergence": 0.4
+      }
+    ],
+    "gann": [
+      {
+        "timeframe": "M1",
+        "available": true,
+        "direction": 1,
+        "strength": 0.45,
+        "atr_per_bar": 3,
+        "distance_atr": 12,
+        "nearest_eighth": 4
+      },
+      {
+        "timeframe": "M5",
+        "available": false,
+        "direction": -1,
+        "strength": 0.25,
+        "atr_per_bar": -3,
+        "distance_atr": 2,
+        "nearest_eighth": 9
+      }
+    ],
+    "zones": {
+      "active_count": 55,
+      "nearest_side": -1,
+      "nearest_strength": 1.2,
+      "nearest_mid_distance_atr": -12,
+      "nearest_width_atr": 11
+    },
+    "setup": {
+      "count": 8,
+      "top_pattern": "breakout_retest",
+      "top_side": 1,
+      "top_evidence": 0.9
+    },
+    "activity": {
+      "tick_activity_ratio": 6.5,
+      "profile_available": true,
+      "poc_distance_atr": 11,
+      "value_low_distance_atr": -11,
+      "value_high_distance_atr": 3.5
+    },
+    "session": {
+      "covers_day_open": true,
+      "open_distance_atr": 13,
+      "high_distance_atr": -13,
+      "low_distance_atr": 2.25,
+      "vwap_distance_atr": null
+    }
+  },
+  "expected_feature_count": 87,
+  "expected_sha256": "0de13915d19126262d39667ca058744db4614bd9e13520746a300335a3298e91"
+}
