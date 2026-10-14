@@ -2,7 +2,7 @@ use super::*;
 use anyhow::Context;
 use slint::{Model, ModelRc, SharedString, VecModel};
 
-fn strategy(index: i32) -> &'static str { match index { 1 => "ces_v1", 2 => "kte_v1", _ => "meta_v1" } }
+fn strategy(index: i32) -> &'static str { match index { 1 => "ces_v1", 2 => "kte_v1", 3 => "meta_v2", _ => "meta_v1" } }
 
 struct Request {
     action: String,

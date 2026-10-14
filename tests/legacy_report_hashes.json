@@ -1,0 +1,10 @@
+{
+  "source_commit": "7ea999e41a68a0aff264190f4dc6b79de0379a9b",
+  "artifact_id": 11852142897,
+  "normalization": "Python sorted JSON, ensure_ascii=True, compact separators; remove only captured_ms",
+  "reports": {
+    "meta_v1": "917304205b21844ee227b9a3029fff7451fc08caedb35d186170de001dc31b11",
+    "ces_v1": "ed62cbc0d316d20cdc102bb06634d2bc93e28c5c2fa2d99226835198b1ea568b",
+    "kte_v1": "e2d536aca7a8d08057ac1368b7cac528277ba3c1cb69a2dbe2f7d360970c7fde"
+  }
+}

@@ -4,7 +4,25 @@ Canonical repository: `gngoongoog/V4`. Stable branch: `main`; ongoing work:
 `development`. Read this file, PROJECT_STATE.md, ROADMAP.md and
 `docs/CONTINUITY_PROTOCOL.md` before editing. Never restore an old ZIP over GitHub.
 
-## Last safe code checkpoint
+## Active task — Meta v2 historical evaluation (2026-10-14)
+
+WIP checkpoint: selectable `meta_v2` / `meta-v2-candidate-v1` historical path
+and per-opening candidate audit are implemented. Legacy admission and exit rules
+are retained. Five new domain tests cover cost reconciliation, prefix causality,
+missing/stale data, volatility/spread/size vetoes and gap/risk behavior. The native
+selector includes Meta v2. Live Shadow is unchanged.
+
+Local Python: 16 PASS; `git diff --check`: PASS. Rust tests and desktop compilation:
+NOT RUN locally (no Rust on PATH); Linux research CI will validate this checkpoint.
+A prior synthetic artifact was verified by SHA256 and reduced to three legacy
+report digests in tests/legacy_report_hashes.json; integration assertions follow.
+
+Next exact action: persist experiment parent linkage, display/export verified
+same-data comparisons and candidate gates, wire the golden regression checks and
+exercise Meta v2 replay/compare through the real core. Then inspect Linux CI,
+fix any failures and update state documentation. Windows packaging is deferred.
+
+## Previous verified code checkpoint
 
 Offline per-trade candlestick review is implemented and verified.
 Tested source commit: `7ea999e41a68a0aff264190f4dc6b79de0379a9b`.

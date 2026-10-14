@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 
 mod regime;
-pub use regime::{RegimeBrain, TrendBrain, TrendFrame};
+pub use regime::{MetaBrainV2, RegimeBrain, TrendBrain, TrendFrame};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
