@@ -1,4 +1,5 @@
 mod backtest;
+mod learning;
 pub mod news;
 mod research;
 pub mod secrets;
@@ -49,7 +50,6 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     f.write_all(bytes)?;
     f.sync_all()?;
     drop(f);
-    // On Windows MoveFileEx replacement is used by std::fs::rename.
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         return Err(e.into());
@@ -145,6 +145,7 @@ struct Engine {
     research: research::Research,
     backtests: backtest::Service,
     news: news::Service,
+    learning: learning::Service,
 }
 #[derive(Deserialize)]
 struct ConfigRequest {
@@ -267,6 +268,8 @@ impl Engine {
                 let s = self.shared.lock().unwrap();
                 Ok(json!({"config":s.config,"token_saved":s.token.is_some()}))
             }
+            ("GET", "/v1/learning") => self.learning.status(&self.db),
+            ("POST", "/v1/learning/export") => self.learning.export(&self.db, &self.dir, now_ms()),
             ("GET", "/v1/decisions") => research::decision_history(&self.db),
             ("POST", "/v1/risk") => {
                 let risk: braintrade_domain::RiskConfig = serde_json::from_slice(body)?;
@@ -424,9 +427,12 @@ impl Engine {
                     let s = self.shared.lock().unwrap();
                     (s.config.clone(), s.status.requested_run)
                 };
+                let observed_ms = now_ms();
                 let mut next = self.research.clone();
                 let (analysis, paper) =
-                    next.update(&mut self.db, &telemetry, &config, run, now_ms())?;
+                    next.update(&mut self.db, &telemetry, &config, run, observed_ms)?;
+                self.learning
+                    .observe(&mut self.db, &telemetry, &analysis, observed_ms);
                 self.research = next;
                 let mut s = self.shared.lock().unwrap();
                 let changed =
@@ -446,7 +452,7 @@ impl Engine {
                 s.status.analysis = analysis;
                 s.status.paper = paper;
                 s.status.telemetry = Some(telemetry);
-                s.status.last_received_ms = Some(now_ms());
+                s.status.last_received_ms = Some(observed_ms);
                 s.status.refresh(now_ms());
                 Ok(json!({"ok":true}))
             }
@@ -484,14 +490,14 @@ impl Engine {
                 fs::write(
                     staging.join("manifest.json"),
                     serde_json::to_vec_pretty(
-                        &json!({"schema":3,"version":braintrade_domain::VERSION,"kind":"settings-audit-candles-decisions-shadow-backtests-news","secrets_included":false,"learning_included":false,"restore_implemented":false}),
+                        &json!({"schema":4,"version":braintrade_domain::VERSION,"kind":"settings-audit-candles-decisions-shadow-backtests-news-learning-dataset-registry","secrets_included":false,"learning_included":true,"trained_model_included":false,"restore_implemented":false}),
                     )?,
                 )?;
                 let dest = self.dir.join("backups").join(name);
                 fs::rename(&staging, &dest)?;
                 self.event("foundation_backup_created", json!({"path":dest}))?;
                 Ok(
-                    json!({"path":dest,"note":"Settings, audit, candles, virtual ledger, backtest reports/raw history and news cache. Full restore is not implemented."}),
+                    json!({"path":dest,"note":"Settings, audit, candles, virtual ledger, backtests, news cache and learning dataset/registry metadata. No trained model is included; full restore is not implemented."}),
                 )
             }
             ("POST", "/v1/shutdown") => {
@@ -529,6 +535,7 @@ pub fn run_core() -> Result<()> {
     let research = research::Research::load(&db)?;
     let backtests = backtest::Service::new(&db)?;
     let news = news::Service::new(&db)?;
+    let learning = learning::Service::new(&db)?;
     let token = if dir.join("telegram.sealed").exists() {
         Some(secrets::read(&dir.join("telegram.sealed"))?)
     } else {
@@ -551,6 +558,7 @@ pub fn run_core() -> Result<()> {
         research,
         backtests,
         news,
+        learning,
     };
     engine.event(
         "core_started",
