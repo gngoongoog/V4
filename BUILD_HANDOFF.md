@@ -2,7 +2,7 @@
 
 ## Active task / user steering 2026-10-14
 
-User explicitly deferred automated strategy testing and Windows packaging while the remaining analytical brains are being built. The current increment therefore uses compile-only gates.
+User explicitly deferred automated strategy testing and Windows packaging while the remaining analytical brains are being built. Current increments therefore use compile-only gates.
 
 ## Current development checkpoint
 
@@ -32,20 +32,34 @@ Broker-supported MT5 Market Book depth is integrated and compile-only run `38521
 - it does NOT claim executed order flow, footprint delta, hidden liquidity or exchange-wide volume;
 - DOM is shown as an observational specialist and does not alter setup scoring, Meta, Shadow or execution.
 
-### Macro / News Context Brain v1 — current increment
+### Macro / News Context Brain v1
 
-Official Fed/ECB RSS cache now has a bounded macro-context brain:
+Macro/News integration compile-only run `38522309782` passed Domain + Runtime, Python gateway syntax and native Desktop compilation.
 
-- source freshness is mandatory; failed/stale feeds are not treated as current context;
-- counts official headlines inside 15m and 60m windows and highlights monetary-policy/inflation/employment topics published within 30m;
+- official Fed/ECB source freshness is mandatory; failed/stale feeds are not treated as current context;
+- counts headlines inside 15m and 60m windows and highlights monetary-policy/inflation/employment topics published within 30m;
 - state is `STALE`, `QUIET`, `RECENT_NEWS` or `ATTENTION`;
-- it never derives BUY/SELL or sentiment from headline text and does not pretend the RSS feed is a future economic calendar;
-- the News dashboard shows the macro context and Telegram `/news` includes it before cached headlines;
+- never derives BUY/SELL or sentiment from headline text and does not pretend RSS is a future economic calendar;
+- News dashboard and Telegram `/news` expose the context;
 - Meta, Shadow, historical strategy decisions and broker execution remain unchanged.
 
-This commit requests a `[build-only]` gate for Macro/News integration. Automated strategy tests, chronological evaluation and Windows packaging remain deferred for this increment.
+### Learning Foundation v1 — current increment
 
-Do not describe candle tick-volume/profile proxies as exchange volume or order flow. Do not describe Gann/DOM/Macro evidence as a win probability.
+A leakage-aware learning data foundation is now wired into Core, with no trained model or prediction path:
+
+- `learning_snapshots` stores at most one immutable closed-bar feature snapshot per account/server/symbol/currency + M1 bar;
+- feature schema is `gold-m1-feature-v1` and uses reproducible closed-bar data only: Trend, Regime, Structure, Volatility, Meta-v2 candidate state, M1/M5/M15 momentum, Gann geometry, zone geometry, setup metadata, tick-activity/profile proxies and session context;
+- live quote projection, DOM and News/Macro are deliberately excluded from v1 training features because historical replay parity for those feeds is not yet available;
+- labels are never written immediately. `learning_labels` is inserted only after exact future M1 sequences exist for 5/15/30 minutes;
+- each horizon stores final ATR-normalized return, MFE, MAE and a neutral/up/down class using ±0.20 ATR; missing or gapped future minutes are not shifted or fabricated;
+- model registry tables exist (`learning_models`, `learning_slots`) with reserved `champion` and `challenger` slots, but contain no trained model by default;
+- `/v1/learning` exposes dataset/registry status; `/v1/learning/export` writes matured rows only in deterministic order;
+- backup schema now includes learning dataset/registry metadata while explicitly declaring `trained_model_included=false`;
+- `training_enabled=false`, `prediction_enabled=false` and `live_self_modification=false` remain explicit invariants.
+
+This commit requests a `[build-only]` gate for Learning Foundation v1. Automated strategy tests, statistical effectiveness claims, chronological model evaluation and Windows packaging remain deferred by user instruction.
+
+Do not describe candle tick-volume/profile proxies as exchange volume or order flow. Do not describe Gann/DOM/Macro evidence as a win probability. Do not call the learning foundation an AI model until an actual versioned trained artifact exists.
 
 ## Previous verified research baseline
 
@@ -58,8 +72,8 @@ Research CI: https://github.com/gngoongoog/V4/actions/runs/38516269617 — PASS.
 - Native Slint desktop compilation passed on Linux for the verified baseline.
 - Native MT5 history/Telegram/DOM delivery on the user's laptop: NOT RUN.
 
-## Next after the Macro compile gate
+## Next after the Learning Foundation compile gate
 
-The analytical/feed layer is now broad enough to move toward the learning foundation without promoting any new brain into live execution. Next build the dataset/model registry plumbing first: immutable feature snapshots, outcome labels only after the future is known, versioned model metadata, offline training interface and champion/challenger slots. It must start with no trained model and no autonomous live self-modification. Chronological held-out/rolling evaluation is still required before any learned model can influence Shadow.
+If compilation passes, build the offline trainer contract and model registry operations without allowing prediction to affect Shadow: deterministic dataset identity, explicit train/validation/holdout windows, simple interpretable baseline model first, metrics persisted with model metadata, then challenger registration. Champion promotion must remain manual and impossible unless chronological held-out evaluation criteria are satisfied. Only after this foundation is validated should ONNX/runtime inference be added.
 
 Keep live Shadow's source legacy Meta until real broker-data evaluation is reviewed. The user will perform native laptop/MT5/Telegram acceptance later. No broker execution is enabled. Never commit credentials, private runtime databases/logs, transport chunks or ZIP-only source.
