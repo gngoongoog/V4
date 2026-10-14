@@ -16,8 +16,8 @@ jobs:
           python-version: '3.13'
       - name: Check domain and runtime compilation only
         run: cargo check -p braintrade-domain -p braintrade-runtime --locked
-      - name: Check gateway Python syntax only
-        run: python3 -m py_compile gateway/mt5_gateway.py
+      - name: Check Python gateway and offline trainer syntax only
+        run: python3 -m py_compile gateway/mt5_gateway.py scripts/train_linear_baseline.py
       - name: Install native font build dependency
         run: |
           sudo apt-get update
