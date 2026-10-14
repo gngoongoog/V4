@@ -217,6 +217,9 @@ impl Status {
             self.analysis.current = false;
             self.analysis.action = "WAIT".into();
             self.analysis.reason = "MT5 data unavailable or stale".into();
+            if let Some(opportunities) = self.analysis.opportunities.as_mut() {
+                opportunities.withdraw("بيانات MT5 الحالية غير متاحة أو قديمة");
+            }
             self.paper.quote_current = false;
         }
         if let Some(t) = &self.telemetry {
@@ -230,6 +233,9 @@ impl Status {
                 if !self.analysis.gates.contains(&gate) {
                     self.analysis.gates.push(gate);
                 }
+                if let Some(opportunities) = self.analysis.opportunities.as_mut() {
+                    opportunities.expire(now, false);
+                }
             }
             if t.market
                 .as_ref()
@@ -239,6 +245,9 @@ impl Status {
                 self.analysis.action = "WAIT".into();
                 self.analysis.reason =
                     "Candle snapshot unavailable or older than 15 seconds".into();
+                if let Some(opportunities) = self.analysis.opportunities.as_mut() {
+                    opportunities.withdraw("بيانات الشموع غير متاحة أو أقدم من 15 ثانية");
+                }
             }
         }
     }
@@ -248,10 +257,18 @@ impl Status {
             self.version, self.state, self.gateway_fresh
         );
         if command == "/help" || command == "/start" {
-            return "/status — System status\n/report — Today (Baghdad)\n/positions — MT5 positions\n/health — Connection health\n/brains — Analysis and decision\n/paper — Virtual trades only\n/news — Official cached headlines\n/backtest — Latest saved historical test\n/help — Commands".into();
+            return "/status — System status\n/report — Today (Baghdad)\n/positions — MT5 positions\n/health — Connection health\n/brains — Analysis and decision\n/opportunities — Market setups with Entry/SL/TP when valid\n/paper — Virtual trades only\n/news — Official cached headlines\n/backtest — Latest saved historical test\n/help — Commands".into();
         }
         if command == "/brains" {
             return self.analysis.text();
+        }
+        if command == "/opportunities" {
+            return self
+                .analysis
+                .opportunities
+                .as_ref()
+                .map(|value| value.signals_text())
+                .unwrap_or_else(|| "لا توجد خريطة فرص حالية؛ انتظر بيانات شموع مكتملة من MT5.".into());
         }
         if command == "/paper" {
             return self.paper.text();
