@@ -90,6 +90,14 @@ pub struct Position {
     pub sl: f64,
     pub tp: f64,
 }
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DomLevel {
+    pub side: String,
+    pub price: f64,
+    pub volume: f64,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Telemetry {
     pub connected: bool,
@@ -113,6 +121,8 @@ pub struct Telemetry {
     pub volume_step: Option<f64>,
     pub tick_size: Option<f64>,
     pub dom_available: bool,
+    #[serde(default)]
+    pub dom: Vec<DomLevel>,
     #[serde(default)]
     pub volume_max: Option<f64>,
     #[serde(default)]
@@ -155,6 +165,14 @@ impl Telemetry {
                 ]
                 .iter()
                 .all(|v| v.is_finite())
+            })
+            && self.dom.len() <= 200
+            && self.dom.iter().all(|level| {
+                matches!(level.side.as_str(), "buy" | "sell")
+                    && level.price.is_finite()
+                    && level.price > 0.0
+                    && level.volume.is_finite()
+                    && level.volume > 0.0
             })
     }
 }
