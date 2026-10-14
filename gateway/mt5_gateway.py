@@ -25,6 +25,51 @@ class MarketCache:
             self.data=collect_market(mt5,key[2],now)
         return self.data
 
+class DomCache:
+    """Optional MT5 Market Book subscription. It never fabricates depth."""
+    def __init__(self):
+        self.key=None
+        self.active=False
+    def release(self,mt5):
+        if self.active and self.key is not None:
+            try:
+                mt5.market_book_release(self.key[2])
+            except Exception:
+                pass
+        self.key=None
+        self.active=False
+    def read(self,mt5,key):
+        if self.key!=key:
+            self.release(mt5)
+            self.key=key
+            try:
+                self.active=bool(mt5.market_book_add(key[2]))
+            except Exception:
+                self.active=False
+        if not self.active:
+            return False,[]
+        try:
+            book=mt5.market_book_get(key[2])
+            if not book:
+                return False,[]
+            buy_types={getattr(mt5,'BOOK_TYPE_BUY',2),getattr(mt5,'BOOK_TYPE_BUY_MARKET',4)}
+            sell_types={getattr(mt5,'BOOK_TYPE_SELL',1),getattr(mt5,'BOOK_TYPE_SELL_MARKET',3)}
+            rows=[]
+            for level in book:
+                kind=getattr(level,'type',None)
+                side='buy' if kind in buy_types else 'sell' if kind in sell_types else None
+                if side is None:
+                    continue
+                price=float(getattr(level,'price',0.0))
+                real=float(getattr(level,'volume_real',0.0) or 0.0)
+                volume=real if real>0 else float(getattr(level,'volume',0.0) or 0.0)
+                if math.isfinite(price) and math.isfinite(volume) and price>0 and volume>0:
+                    rows.append(dict(side=side,price=price,volume=volume))
+            rows.sort(key=lambda row:(0 if row['side']=='buy' else 1,-row['price'] if row['side']=='buy' else row['price']))
+            return bool(rows),rows[:100]
+        except Exception:
+            return False,[]
+
 def collect_market(mt5,symbol,now):
     data=dict(captured_ms=int(now.timestamp()*1000),m1=[],m5=[],m15=[],error="")
     errors=[]
@@ -48,7 +93,7 @@ def empty_snapshot(error: str) -> dict:
                 demo=False, balance=0.0, equity=0.0, positions=[], pending_orders=0,
                 today_net=None, today_deals=None, report_day="", bid=None, ask=None,
                 tick_age_ms=None, symbol="", volume_min=None, volume_step=None,
-                tick_size=None, dom_available=False,volume_max=None,tick_value_loss=None,tick_value_profit=None,market=None,point=None)
+                tick_size=None, dom_available=False,dom=[],volume_max=None,tick_value_loss=None,tick_value_profit=None,market=None,point=None)
 
 
 def day_range(now: datetime):
@@ -65,7 +110,7 @@ def deal_summary(deals, mt5):
     return net, len(trading)
 
 
-def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None) -> dict:
+def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, dom_cache=None) -> dict:
     now = now or datetime.now(timezone.utc)
     terminal = mt5.terminal_info()
     account = mt5.account_info()
@@ -83,7 +128,9 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None) ->
         mt5.symbol_select(symbol, True)
         info = mt5.symbol_info(symbol)
     tick = mt5.symbol_info_tick(symbol) if info is not None else None
-    market=market_cache.read(mt5,(account.login,account.server,symbol),now) if market_cache is not None and info is not None else None
+    key=(account.login,account.server,symbol)
+    market=market_cache.read(mt5,key,now) if market_cache is not None and info is not None else None
+    dom_available,dom=dom_cache.read(mt5,key) if dom_cache is not None and info is not None else (False,[])
     # Re-read account identity after collection to reject account-switch races.
     current = mt5.account_info()
     if current is None or (current.login, current.server) != (account.login, account.server):
@@ -107,7 +154,8 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None) ->
                   tick_age_ms=max(0, int(now.timestamp() * 1000) - tick.time_msc) if tick and tick.time_msc<=int(now.timestamp()*1000)+2000 else None,
                   volume_min=info.volume_min if info else None,
                   volume_step=info.volume_step if info else None,
-                  tick_size=info.trade_tick_size if info else None,volume_max=getattr(info,'volume_max',None),tick_value_loss=getattr(info,'trade_tick_value_loss',None),tick_value_profit=getattr(info,'trade_tick_value_profit',None),market=market,point=getattr(info,'point',None))
+                  tick_size=info.trade_tick_size if info else None,dom_available=dom_available,dom=dom,
+                  volume_max=getattr(info,'volume_max',None),tick_value_loss=getattr(info,'trade_tick_value_loss',None),tick_value_profit=getattr(info,'trade_tick_value_profit',None),market=market,point=getattr(info,'point',None))
     return result
 
 
@@ -186,6 +234,7 @@ def main():
     retry_at = 0.0
     core_failures = 0
     market_cache=MarketCache()
+    dom_cache=DomCache()
     def api(path, payload=None):
         request = urllib.request.Request(BASE+path,
             data=json.dumps(payload, allow_nan=False).encode('utf-8') if payload is not None else None,
@@ -203,13 +252,15 @@ def main():
                         # Saved terminal login is used; no password is held here.
                         initialized = mt5.initialize(path, timeout=5000) if path else mt5.initialize(timeout=5000)
                         retry_at = time.monotonic() + 5
-                    snapshot = collect(mt5, symbol,market_cache=market_cache) if initialized else empty_snapshot(
+                    snapshot = collect(mt5, symbol,market_cache=market_cache,dom_cache=dom_cache) if initialized else empty_snapshot(
                         "MT5 connection failed. Set terminal64.exe path and sign in inside MT5.")
                     if initialized and not snapshot["connected"]:
+                        dom_cache.release(mt5)
                         mt5.shutdown()
                         initialized = False
                 except Exception:
                     snapshot = empty_snapshot("MT5 read failed; retrying connection.")
+                    dom_cache.release(mt5)
                     mt5.shutdown()
                     initialized = False
                     retry_at = time.monotonic() + 5
@@ -234,6 +285,7 @@ def main():
             time.sleep(1)
     finally:
         if mt5 is not None:
+            dom_cache.release(mt5)
             mt5.shutdown()
         lock.close()
 
