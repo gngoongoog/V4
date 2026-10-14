@@ -277,3 +277,145 @@ pub fn evaluate(
         note: "كل نافذة تعيد ضبط دفتر الصفقات ورأس المال الافتراضي. الإحماء يقرأ الماضي السابق فقط، ولا يسمح بأي دخول قبل بداية النافذة. التجميع يجمع نتائج نوافذ مستقلة ولا يمثل منحنى رأس مال متصل أو إثبات ربحية.".into(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Candle, RiskConfig};
+    use crate::backtest::{Contract, HistoryBar};
+
+    const BASE: u64 = 1_728_000_000; // exact UTC day boundary
+
+    fn fixture(days: usize) -> History {
+        let count = days * DAY as usize / 60;
+        History {
+            symbol: "TEST".into(),
+            server: "FIXTURE".into(),
+            login: 7,
+            currency: "USD".into(),
+            captured_ms: (BASE + count as u64 * 60) * 1000,
+            contract: Contract {
+                point: 0.01,
+                tick_size: 0.01,
+                tick_loss: 1.0,
+                tick_profit: 1.0,
+                volume_min: 0.01,
+                volume_step: 0.01,
+                volume_max: 10.0,
+            },
+            bars: (0..count)
+                .map(|i| {
+                    let wave = ((i % 240) as f64 - 120.0) * 0.002;
+                    let p = 2000.0 + i as f64 * 0.003 + wave;
+                    HistoryBar {
+                        candle: Candle {
+                            time: BASE + i as u64 * 60,
+                            open: p,
+                            high: p + 0.18,
+                            low: p - 0.16,
+                            close: p + 0.04,
+                            tick_volume: 80 + (i % 40) as u64,
+                        },
+                        spread_points: 2,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    fn options() -> Options {
+        Options {
+            strategy: Strategy::MetaV1,
+            from: BASE + 3 * DAY,
+            to: BASE + 10 * DAY,
+            initial_equity: 10_000.0,
+            spread_floor: 0.02,
+            risk: RiskConfig::default(),
+        }
+    }
+
+    #[test]
+    fn holdout_is_non_overlapping_and_each_report_is_bounded() {
+        let h = fixture(12);
+        let o = options();
+        let e = evaluate(
+            &h,
+            &o,
+            &EvaluationPlan::Holdout { holdout_percent: 30 },
+            &AtomicBool::new(false),
+            &AtomicUsize::new(0),
+        )
+        .unwrap();
+        assert_eq!(e.windows.len(), 2);
+        assert_eq!(e.windows[0].window.role, WindowRole::Development);
+        assert_eq!(e.windows[1].window.role, WindowRole::Holdout);
+        assert_eq!(e.windows[0].window.to, e.windows[1].window.from);
+        for row in &e.windows {
+            for result in [&row.meta_v1, &row.meta_v2] {
+                assert!(result.first_test_bar >= row.window.from);
+                assert!(result.last_test_bar < row.window.to);
+            }
+        }
+        assert_eq!(e.meta_v1.windows, 2);
+        assert_eq!(e.meta_v2.windows, 2);
+    }
+
+    #[test]
+    fn future_mutation_cannot_change_completed_development_window() {
+        let h = fixture(12);
+        let o = options();
+        let plan = EvaluationPlan::Holdout { holdout_percent: 30 };
+        let original = evaluate(&h, &o, &plan, &AtomicBool::new(false), &AtomicUsize::new(0)).unwrap();
+        let split = original.windows[0].window.to;
+        let mut changed = h.clone();
+        for bar in changed.bars.iter_mut().filter(|b| b.candle.time >= split) {
+            bar.candle.open += 500.0;
+            bar.candle.high += 500.0;
+            bar.candle.low += 500.0;
+            bar.candle.close += 500.0;
+            bar.spread_points = 50_000;
+        }
+        let replay = evaluate(&changed, &o, &plan, &AtomicBool::new(false), &AtomicUsize::new(0)).unwrap();
+        assert_eq!(
+            serde_json::to_value(&original.windows[0].meta_v1).unwrap(),
+            serde_json::to_value(&replay.windows[0].meta_v1).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&original.windows[0].meta_v2).unwrap(),
+            serde_json::to_value(&replay.windows[0].meta_v2).unwrap()
+        );
+    }
+
+    #[test]
+    fn rolling_definitions_are_exact_and_ordered() {
+        let o = options();
+        let rows = windows(
+            &o,
+            &EvaluationPlan::Rolling {
+                development_days: 2,
+                holdout_days: 1,
+                step_days: 2,
+            },
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 6);
+        assert_eq!(rows[0].from, BASE + 3 * DAY);
+        assert_eq!(rows[0].to, BASE + 5 * DAY);
+        assert_eq!(rows[1].from, BASE + 5 * DAY);
+        assert_eq!(rows[1].to, BASE + 6 * DAY);
+        assert_eq!(rows[2].from, BASE + 5 * DAY);
+        assert_eq!(rows[5].to, BASE + 10 * DAY);
+        assert!(rows.windows(2).all(|w| w[0].cycle <= w[1].cycle));
+    }
+
+    #[test]
+    fn insufficient_warmup_and_non_meta_are_rejected() {
+        let h = fixture(12);
+        let mut o = options();
+        o.from = BASE + DAY;
+        assert!(evaluate(&h, &o, &EvaluationPlan::default(), &AtomicBool::new(false), &AtomicUsize::new(0)).is_err());
+        o = options();
+        o.strategy = Strategy::CesV1;
+        assert!(evaluate(&h, &o, &EvaluationPlan::default(), &AtomicBool::new(false), &AtomicUsize::new(0)).is_err());
+    }
+}
