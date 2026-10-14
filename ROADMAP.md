@@ -1,50 +1,68 @@
 # BrainTrade OS — Roadmap
 
-GitHub `gngoongoog/V4` is canonical. The broader ARCHITECTURE.md is a design,
-not a completed feature inventory. Read BUILD_HANDOFF.md before editing.
+GitHub `gngoongoog/V4` is canonical. Read `BUILD_HANDOFF.md` and `docs/QUALITY_AUDIT.md` before editing.
 
-## Current source checkpoint
+## Current completed research foundation
 
-- Historical Meta v1/v2/CES/KTE engines, partial fills and detailed saved ledgers exist.
-- Trend/Regime and Structure/Volatility feed a selectable historical Meta v2
-  candidate. Candidate gates and engine admission outcomes are persisted.
-- Same-data experiments retain their baseline and expose checked cost-aware
-  comparisons in the native report and exports. Legacy Meta controls Shadow.
-- Offline per-trade candlestick review is implemented; current validation is
-  recorded in BUILD_HANDOFF.md and docs/validation.json.
-- Windows package delivery remains deferred. Last delivered portable: 0.2.0.
+- Historical Meta v1/v2, CES v1 and KTE v1 with frozen saved data, offline replay, experiments and detailed ledgers.
+- Offline per-trade candlestick review and deterministic report/export replay.
+- Observational Trend, Regime, Structure, Volatility, Gann, broker DOM Depth and Macro/News context.
+- Persisted chronological Meta v1/v2 evaluation over immutable saved sources.
+- Learning snapshots/labels/export, deterministic offline baseline trainer and immutable challenger registry.
+- Manual challenger review eligibility, read-only challenger inference and exact matured-label prediction outcome scoring.
+- Repository quality guards for broker read-only behavior, no learned execution/promotion route, source/package hygiene, SQLite FK integrity and Windows CI on `development`.
 
-## Next code work — chronological evaluation
+Legacy Meta still controls live Shadow. No broker execution exists.
 
-1. Add an offline chronological evaluation path over frozen saved History: explicit
-   development/holdout or rolling windows; no random split and no automatic tuning.
-2. Run Meta v1/v2 on matching windows and costs. Allow warmup before each boundary
-   but disallow trades before it; close and reset the ledger at window boundaries.
-3. Persist window definitions, input/algorithm identity, metrics and aggregate
-   comparisons. Label synthetic, in-sample and held-out results distinctly.
-4. Test split boundaries, prefix causality, insufficient data and reproducibility.
-5. Keep Shadow on legacy Meta until real-data evaluation is reviewed.
+## Next scientific layer — challenger performance review
 
-Historical Meta v2 selection, same-data comparison, decision persistence and
-legacy-report replay guards are implemented. See BUILD_HANDOFF.md for exact
-verification. No real-data effectiveness or profitability conclusion is established.
+Build a **manual research review policy** over persisted scored prediction outcomes. It must remain observational and must not create/activate a champion.
 
-## Laptop acceptance (when available)
+1. Require immutable model/dataset/review identity and sufficiently large scored samples per target/context.
+2. Evaluate class support, confusion, balanced accuracy, macro-F1, log loss, Brier and calibration with explicit small-sample rejection/warnings.
+3. Add chronological/regime/context slices without selecting thresholds from the same held-out evidence being judged.
+4. Persist a signed/versioned review record with exact input outcome IDs / boundaries and reason codes.
+5. Expose read-only status/report APIs and a native UI review surface.
+6. Add deterministic tests for insufficient samples, missing classes, duplicated/reordered outcomes, context mismatch and reproducibility.
+7. Keep `promotion_enabled=false`, `shadow_effect=false`, `broker_effect=false` everywhere.
 
-- Native Windows UI and MT5 historical retrieval against the user's broker.
-- All pages and supported analysis timeframes.
-- Telegram delivery after credentials are configured locally.
+A favorable review may say “eligible for human consideration” only. Champion activation remains a later, separate design and validation stage.
 
-## Later research
+## Real-data research and walk-forward work
 
-- Gann, actual feed-supported order flow/DOM, volume profile.
-- Historical news/event context and replay.
-- Walk-forward evaluation, model/experiment registry and trained ML/ONNX.
-- Portfolio/correlation risk and full restore/recovery workflow.
+- Collect enough real broker completed-bar observations and exact matured labels.
+- Compare baseline/challenger behavior across chronological windows and market regimes.
+- Extend walk-forward evaluation without leakage, random shuffling or automatic parameter selection on holdout results.
+- Add ablation checks to distinguish real signal contribution from correlated duplicate features.
+- Only after reproducible evidence exists, consider a versioned model packaging path such as ONNX for more complex offline-trained challengers.
 
-## Execution, after explicit validation
+## Native acceptance
 
-- Broker order state machine, idempotent intents, reconciliation and protections.
-- Partial execution/reconnect recovery fixtures and account-mode handling.
+When the Windows laptop/MT5 environment is available:
 
-A module is complete only when code, verification and state documentation agree.
+- Run the full native acceptance checklist against the user's actual demo broker/account.
+- Verify historical retrieval, Market Book availability/absence behavior, account switching, restart persistence and all UI pages.
+- Test private Telegram delivery only after credentials are configured locally.
+- Treat GitHub Windows packaging as build validation only; it is not broker acceptance.
+
+## Data/market extensions
+
+- True feed-supported order flow and volume profile only when the data source actually provides those fields; do not relabel candle tick volume or CFD Market Book as global exchange flow.
+- Correlation/portfolio research with aligned timestamps and explicit availability masks.
+- Historical news/event replay with first-observed timestamps and no-lookahead joins.
+
+## Reliability / release work
+
+- Full backup restore with manifest/hash/schema validation, staged restore and rollback.
+- Decide when to normalize the 0.4.0 research milestone to a Cargo/package version bump; regenerate/validate `Cargo.lock` as part of that release step.
+- Enable GitHub branch protection / required CI checks for `main` and preferably `development` when repository settings access is available.
+- Promote a safe/resumable `development` checkpoint to `main` only after deliberate review; do not fast-forward merely because CI is green.
+
+## Execution — only after separate explicit validation
+
+- Broker order state machine with persistent idempotent intent IDs.
+- Reconciliation after timeout/restart; never blind-resubmit an unknown order.
+- Hard deterministic risk gate, broker contract checks, hedging/netting behavior and partial-fill fixtures.
+- Demo acceptance before any optional live mode.
+
+No deadline or profitability guarantee is implied. A module is complete only when code, verification and state documentation agree.
