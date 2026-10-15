@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 pub mod backtest;
+pub mod trading;
+pub mod studio;
+pub mod wyckoff;
 #[path = "backtest/evaluation.rs"]
 pub mod evaluation;
 pub mod ces;
@@ -32,6 +35,8 @@ pub struct Config {
     pub telegram_enabled: bool,
     #[serde(default)]
     pub risk: RiskConfig,
+    #[serde(default)]
+    pub trading: trading::TradingConfig,
 }
 
 impl Default for Config {
@@ -44,12 +49,14 @@ impl Default for Config {
             telegram_chat_id: String::new(),
             telegram_enabled: false,
             risk: RiskConfig::default(),
+            trading: trading::TradingConfig::default(),
         }
     }
 }
 impl Config {
     pub fn validate(&self) -> Result<(), String> {
         self.risk.validate()?;
+        self.trading.validate()?;
         if self.schema != 1 {
             return Err("Unsupported config schema".into());
         }
@@ -118,6 +125,8 @@ pub struct Telemetry {
     pub bid: Option<f64>,
     pub ask: Option<f64>,
     pub tick_age_ms: Option<u64>,
+    #[serde(default)]
+    pub quote_time_ms: Option<u64>,
     pub symbol: String,
     pub volume_min: Option<f64>,
     pub volume_step: Option<f64>,
