@@ -1,0 +1,36 @@
+name: One-shot 0.7 version sync
+on:
+  push:
+    branches: [feature/version-0.7-preview]
+permissions:
+  contents: write
+jobs:
+  sync:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/version-0.7-preview
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Synchronize current-development version text
+        run: python3 scripts/sync-development-version.py
+      - name: Regenerate workspace lockfile
+        run: cargo generate-lockfile
+      - name: Verify generated tree
+        run: |
+          python3 -m unittest tests.test_release_consistency -v || true
+          git diff --check
+      - name: Commit generated version synchronization
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock crates/desktop/ui/main.slint docs/EXECUTION_AND_ROLES.md docs/TRADING_MODES_AND_STUDIO.md docs/QUICKSTART_AR.md docs/ARCHITECTURE.md
+          if git diff --cached --quiet; then
+            echo "Version files already synchronized."
+          else
+            git commit -m "Synchronize 0.7.0 generated version files"
+            git push origin HEAD:feature/version-0.7-preview
+          fi
