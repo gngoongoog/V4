@@ -45,8 +45,8 @@ impl TradingConfig {
                 return Err(format!("{name} must be {min}–{max}"));
             }
         }
-        if !(1..=3600).contains(&self.sniper_cooldown_seconds) {
-            return Err("Cooldown must be 1–3600 seconds".into());
+        if !(0..=3600).contains(&self.sniper_cooldown_seconds) {
+            return Err("Cooldown must be 0–3600 seconds".into());
         }
         Ok(())
     }

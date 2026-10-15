@@ -2,7 +2,7 @@ use super::*;
 
 /// Pivots become knowable only after two completed bars to their right.
 /// No pivot, zone or retest is assigned an earlier confirmation time.
-pub(super) fn map(s:&[Candle], tf:&str, seconds:u64)->(Vec<Swing>,Vec<Zone>) {
+pub(crate) fn map(s:&[Candle], tf:&str, seconds:u64)->(Vec<Swing>,Vec<Zone>) {
     let mut swings=Vec::new();let mut zones:Vec<Zone>=Vec::new();
     for i in 16..s.len()-2 {
         let a=atr(&s[..=i]); if a<=0. {continue;}

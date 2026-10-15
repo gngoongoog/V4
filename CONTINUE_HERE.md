@@ -1,7 +1,9 @@
-# Continue BrainTrade OS 0.5.0
+# Continue BrainTrade OS — 0.6.0 execution work in progress
 
-Canonical repository gngoongoog/V4, active branch development. Fetch remote first; the local workspace can reset to an older snapshot. The 0.5.0 tested code checkpoint is `a5961ff85b41e50e18a7c8295244d115f9fcfd3d`; Research `38689840746` and Windows `38689840745` passed. Later documentation-only commits record evidence.
+Canonical repository gngoongoog/V4, active branch development. User explicitly authorized actual Demo execution, later manual Live selection, independent brain controls and removal of optional portfolio/strategy risk restrictions on 2026-10-15. Preserve transport identity/idempotence and broker contract correctness.
 
-Read BUILD_HANDOFF.md, docs/TRADING_MODES_AND_STUDIO.md and docs/validation.json. Four Shadow modes, fee calculator, 21-frame strategy synthesis, Wyckoff prospective learning and 17 native pages are complete for this release. The delivered Windows ZIP includes tested executable/runtime, exact source, Arabic guide and checksums.
+Current checkpoint adds 14 independent strategy identities, durable Core broker intents, a separate non-restored gateway send journal, Demo/Live binding, broker-owned closing/reconciliation, per-brain results and a native Execution page. Optional risk limits default off. News and statistical challengers remain research sources without fabricated standalone trading rules.
 
-Next acceptance: user's Windows/MT5 environment and optional Telegram setup locally. No broker execution or automated promotion exists. Preserve real forward samples; do not tune on an exposed holdout. Keep all changes on development and save checkpoints before session boundaries.
+Local Core/domain test compilation and desktop compilation pass; 12 fake-MT5 execution tests pass. Full integration, rejection/partial-fill/account switching/restore tests, Windows package and final delivery are still IN PROGRESS. Do not present this checkpoint as a verified release. Last delivered Windows version is 0.5.0 at a5961ff plus documentation commit 187e327.
+
+Next: real-Core execution harness and ownership/latency coverage, update source contracts/version/docs, build all native pages and Windows CI, inspect package, save final download. All current broker testing uses synthetic MT5 responses, not the user's broker account.

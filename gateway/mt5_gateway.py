@@ -1,8 +1,4 @@
-"""Read-only MT5 bootstrap gateway. Never submits, modifies or closes orders.
-
-The initial gateway polls account snapshots. It is not the future tick/FLASH
-transport; that requires a separately validated native/MQL5 adapter.
-"""
+"""MT5 snapshots and explicitly selected independent-brain broker execution."""
 from __future__ import annotations
 import json
 import math
@@ -157,8 +153,10 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
     result = empty_snapshot(" ".join(errors))
     result.update(connected=True, login=account.login, server=account.server,
                   currency=account.currency, demo=account.trade_mode == mt5.ACCOUNT_TRADE_MODE_DEMO,
+                  account_trade_mode=int(account.trade_mode),margin_mode=getattr(account,"margin_mode",None),
+                  trade_allowed=bool(getattr(account,"trade_allowed",False) and getattr(terminal,"trade_allowed",False) and not getattr(terminal,"tradeapi_disabled",False)),trade_expert=bool(getattr(account,"trade_expert",False)),
                   balance=account.balance, equity=account.equity,
-                  positions=[dict(ticket=p.ticket, symbol=p.symbol,
+                  positions=[dict(ticket=p.ticket, symbol=p.symbol,magic=getattr(p,"magic",0),identifier=getattr(p,"identifier",p.ticket),opened_ms=getattr(p,"time_msc",0),
                                   side="BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL",
                                   volume=p.volume, price_open=p.price_open,
                                   price_current=p.price_current, profit=p.profit, sl=p.sl, tp=p.tp)
@@ -256,6 +254,8 @@ def main():
             headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
         with opener.open(request,timeout=4) as response:
             return json.load(response)
+    from execution import BrokerExecutor
+    executor=BrokerExecutor(directory / 'broker-journal.sqlite')
     try:
         while True:
             if mt5 is None:
@@ -289,13 +289,17 @@ def main():
                 poll_seconds = 1.0
                 if initialized and snapshot['connected']:
                     try:
+                        poll_seconds=min(poll_seconds,executor.cycle(mt5,api))
+                    except (OSError, ValueError, RuntimeError):
+                        pass  # Durable journal reconciles any interrupted submission.
+                    try:
                         job = api('/v1/gateway/history/request').get('job')
                         if job is not None:
                             api('/v1/gateway/history/chunk', collect_history_chunk(mt5, job))
                         else:
                             from studio_feed import collect_frame
                             request=api('/v1/gateway/research/request')
-                            poll_seconds=max(0.25,min(1.0,request.get('poll_ms',1000)/1000.0))
+                            poll_seconds=min(poll_seconds,max(0.25,min(1.0,request.get('poll_ms',1000)/1000.0)))
                             if request.get('job') is not None:
                                 api('/v1/gateway/research/frame',collect_frame(mt5,request['job']))
                     except (OSError, ValueError):
@@ -306,6 +310,7 @@ def main():
                     return
             time.sleep(locals().get("poll_seconds",1.0))
     finally:
+        executor.close()
         if mt5 is not None:
             dom_cache.release(mt5)
             mt5.shutdown()

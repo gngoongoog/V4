@@ -151,7 +151,7 @@ pub struct LabReport {
     pub risk: RiskConfig,
     pub contract: Contract,
 }
-fn signal(g: &Genome, b: &[FrameBar]) -> i8 {
+pub fn signal(g: &Genome, b: &[FrameBar]) -> i8 {
     if b.len() < 100 {
         return 0;
     }

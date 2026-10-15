@@ -6,7 +6,7 @@ fn rsi(s:&[Candle])->f64 {
     for w in changes.windows(2) {let d=w[1].close-w[0].close;up+=d.max(0.);down+=(-d).max(0.);}
     if up+down<=f64::EPSILON {50.}else{100.*up/(up+down)}
 }
-pub(super) fn momentum(s:&[Candle],tf:&str,swings:&[Swing])->Momentum {
+pub(crate) fn momentum(s:&[Candle],tf:&str,swings:&[Swing])->Momentum {
     let n=s.len();let a=atr(s);let last=s[n-1].close;
     let (roc3,roc8,acc)=if a>0. {((last-s[n-4].close)/a,(last-s[n-9].close)/a,
         (last-s[n-4].close-(s[n-4].close-s[n-7].close))/a)}else{(0.,0.,0.)};
@@ -25,11 +25,11 @@ pub(super) fn momentum(s:&[Candle],tf:&str,swings:&[Swing])->Momentum {
     }
     Momentum {timeframe:tf.into(),direction,roc3_atr:roc3,roc8_atr:roc8,acceleration_atr:acc,rsi14:r,strength,divergence}
 }
-pub(super) fn activity(s:&[Candle])->Option<f64> {
+pub(crate) fn activity(s:&[Candle])->Option<f64> {
     let n=s.len();let baseline=s[n-21..n-1].iter().map(|c|c.tick_volume as f64).sum::<f64>()/20.;
     if baseline<=0. || s[n-1].tick_volume==0 {None}else{Some((s[n-1].tick_volume as f64/baseline).min(20.))}
 }
-pub(super) fn profile(s:&[Candle])->Profile {
+pub(crate) fn profile(s:&[Candle])->Profile {
     // Deliberate proxy: distribute each candle's tick activity uniformly across
     // its range. OHLC cannot identify the actual volume traded at a given price.
     let s=&s[s.len().saturating_sub(120)..];
@@ -52,7 +52,7 @@ pub(super) fn profile(s:&[Candle])->Profile {
     }
     out.available=true;out.poc=low+(poc as f64+0.5)*width;out.value_low=low+l as f64*width;out.value_high=low+(r+1) as f64*width;out
 }
-pub(super) fn session(s:&[Candle])->SessionContext {
+pub(crate) fn session(s:&[Candle])->SessionContext {
     let day=s.last().unwrap().time/86400*86400;let bars:Vec<_>=s.iter().filter(|c|c.time>=day).collect();
     let total=bars.iter().map(|c|c.tick_volume as f64).sum::<f64>();
     SessionContext {day_utc:day,open:bars[0].open,high:bars.iter().map(|c|c.high).fold(f64::NEG_INFINITY,f64::max),

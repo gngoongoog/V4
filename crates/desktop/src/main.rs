@@ -12,6 +12,7 @@ mod backup;
 mod news;
 mod render;
 mod studio;
+mod execution;
 
 enum Task {
     Action(String),
@@ -21,6 +22,7 @@ enum Task {
 }
 
 fn paint(ui: &Dashboard, status: Status) {
+    ui.set_execution_active(status.execution_enabled);
     ui.set_brains(status.analysis.text().into());
     let opportunities = status.analysis.opportunities.as_ref();
     ui.set_opportunities(opportunities.map(|value| value.signals_text()).unwrap_or_else(||
@@ -130,6 +132,7 @@ fn run_ui() -> anyhow::Result<()> {
     evaluation::setup(&ui);
     let _learning_timer = learning::setup(&ui);
     let _studio_timer=studio::setup(&ui);
+    let _execution_timer=execution::setup(&ui);
     let (tx, rx) = mpsc::channel::<Task>();
     let sender = tx.clone();
     let weak = ui.as_weak();

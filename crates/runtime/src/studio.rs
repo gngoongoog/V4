@@ -76,6 +76,9 @@ CREATE TABLE IF NOT EXISTS wyckoff_observations(context TEXT NOT NULL,timeframe 
             })
             .collect()
     }
+    pub fn execution_frames(&self, t: &Telemetry, now: u64) -> BTreeMap<String, Vec<braintrade_domain::studio::FrameBar>> {
+        self.frames.iter().filter(|((k,_),f)| k==&context(t) && f.live(now)).map(|((_,tf),f)|(tf.clone(),f.bars.clone())).collect()
+    }
     pub fn cancel(&mut self) {
         self.queue.clear();
         if let Some(w) = &self.worker {

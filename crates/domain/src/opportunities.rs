@@ -3,11 +3,11 @@
 use crate::{research::{size_lots, TrendBrain, RegimeBrain, Vote}, Candle, MarketData, RiskConfig, Telemetry};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
-mod zones;
-mod features;
+pub(crate) mod zones;
+pub(crate) mod features;
 mod setups;
-mod gann;
-mod dom;
+pub(crate) mod gann;
+pub(crate) mod dom;
 #[cfg(test)]
 mod tests;
 pub use gann::GannFrame;

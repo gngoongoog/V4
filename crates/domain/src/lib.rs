@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 pub mod backtest;
 pub mod trading;
+pub mod execution;
 pub mod studio;
 pub mod wyckoff;
 #[path = "backtest/evaluation.rs"]
@@ -89,6 +90,9 @@ impl Config {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Position {
+    #[serde(default)] pub magic: u64,
+    #[serde(default)] pub identifier: u64,
+    #[serde(default)] pub opened_ms: u64,
     pub ticket: u64,
     pub symbol: String,
     pub side: String,
@@ -115,6 +119,10 @@ pub struct Telemetry {
     pub server: String,
     pub currency: String,
     pub demo: bool,
+    #[serde(default)] pub account_trade_mode: Option<i32>,
+    #[serde(default)] pub margin_mode: Option<i32>,
+    #[serde(default)] pub trade_allowed: bool,
+    #[serde(default)] pub trade_expert: bool,
     pub balance: f64,
     pub equity: f64,
     pub positions: Vec<Position>,
@@ -214,7 +222,7 @@ impl Default for Status {
             gateway_fresh: false,
             last_received_ms: None,
             telemetry: None,
-            message: "Research release: analysis and SHADOW simulation; no broker orders".into(),
+            message: "Choose a brain and bind the Demo account on the Execution page".into(),
             telegram_status: "Not configured".into(),
             analysis: Analysis::default(),
             paper: PaperSummary::default(),
@@ -223,7 +231,7 @@ impl Default for Status {
 }
 impl Status {
     pub fn refresh(&mut self, now: u64) {
-        self.execution_enabled = false;
+        if !self.requested_run {self.execution_enabled = false;}
         if !self.requested_run { self.analysis.action="WAIT".into(); self.analysis.clear_plan(); }
         if let Some(opportunities) = self.analysis.opportunities.as_mut() {
             opportunities.expire(now, true);
@@ -250,6 +258,7 @@ impl Status {
             RunState::Degraded
         };
         if !self.gateway_fresh {
+            self.execution_enabled=false;
             self.analysis.clear_plan();
             self.analysis.current = false;
             self.analysis.action = "WAIT".into();
@@ -292,8 +301,8 @@ impl Status {
     }
     pub fn report(&self, command: &str) -> String {
         let heading = format!(
-            "BRAINTRADE OS {}\nState: {:?}\nMT5 fresh: {}\nExecution: unavailable in this release",
-            self.version, self.state, self.gateway_fresh
+            "BRAINTRADE OS {}\nState: {:?}\nMT5 fresh: {}\nBroker execution enabled: {}",
+            self.version, self.state, self.gateway_fresh, self.execution_enabled
         );
         if command == "/help" || command == "/start" {
             return "/status — System status\n/report — Today (Baghdad)\n/positions — MT5 positions\n/health — Connection health\n/brains — Analysis and decision\n/opportunities — Market setups with Entry/SL/TP when valid\n/paper — Virtual trades only\n/news — Official cached headlines\n/backtest — Latest saved historical test\n/help — Commands".into();
