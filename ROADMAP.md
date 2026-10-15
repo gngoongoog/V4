@@ -8,7 +8,7 @@ Verified executable/source checkpoint: `fdc63d4d05df89e27607641bd197b9e6ead936e9
 
 Research CI `38803539711`: PASS. Windows CI/package `38803539405`: PASS. The reviewed 0.6.0 line was promoted to `main` through PR #13 without history rewriting.
 
-The promoted 0.6 source contains bound-account execution code, 14 execution identities, coordinator/advisor/SOLO/RETURNING membership, four trading modes, adaptive member weighting, schema-12 backup/restore support and an 18-page native dashboard. Startup/restart is STOPPED. CI uses a simulated MT5 object and does not establish native broker acceptance.
+The promoted 0.6 source contains bound-account execution code, 14 execution identities, coordinator/advisor/SOLO/RETURNING membership, four trading modes, adaptive member weighting, schema-12 backup/restore support and an 18-page native dashboard. Startup/restart is STOPPED. CI uses a simulated MT5 object and does not establish native broker acceptance; native MT5 demo acceptance remains a separate target-machine gate.
 
 Imported ML challengers remain research-only. There is no automatic Champion promotion or learned-model broker activation.
 
