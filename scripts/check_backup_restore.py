@@ -67,11 +67,14 @@ def main():
 
             created = api("/v1/backup", {})
             name = created["name"]
-            assert created["schema"] == 11
+            assert created["schema"] == 12
             assert (root / "backups" / name / "manifest.json").is_file()
             manifest = json.loads((root / "backups" / name / "manifest.json").read_text())
             assert manifest["restore_implemented"] is True
             assert manifest["secrets_included"] is False
+            assert manifest["broker_execution_included"] is True
+            assert manifest["coordinator_samples_included"] is True
+            assert manifest["gateway_send_journal_restored"] is False
             assert manifest["hash_algorithm"] == "fnv1a64-v1"
 
             listing = api("/v1/backups")
