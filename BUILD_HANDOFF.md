@@ -1,19 +1,20 @@
-# BrainTrade OS 0.6.0 Preview — verified development checkpoint
+# BrainTrade OS 0.6.0 Preview — verified development candidate
 
 Canonical repository: `gngoongoog/V4`.
 
-Current verified development source: `a60d8201a52630a577e8120d5f4c852f9743a9d3`.
+Verified executable/source checkpoint: `fdc63d4d05df89e27607641bd197b9e6ead936e9` (tree `8593783f43a4892cdc724ed5d112607ef7cee006`).
 
-Validation on that exact source:
+Validation on that exact checkpoint:
 
-- Research CI: PASS — run `38770422025`.
-- Windows CI/package: PASS — run `38770422066`.
-- Windows artifact: `BrainTrade-Windows-x64-v0.6.0-Preview`, SHA-256 `8bd9a7f120826d5ab6d02af2936998d914e5e372bcd332ee8ee2753bad2279bc`.
+- Research CI: PASS — run `38803539711`.
+- Windows CI/package: PASS — run `38803539405`.
+- Windows artifact: `BrainTrade-Windows-x64-v0.6.0-Preview`, 33,948,849 bytes, SHA-256 `3f7a945a4f9c1ab1ce3e008880722c3dc078a54018a8f622133c604420665779`.
+- Windows native-validation artifact: 1,785,325 bytes, SHA-256 `64725943777396d8c974c825a0319554b7f6536213709fd4d76edd49c6a6c66d`.
 - Simulated MT5 execution integration: PASS; the harness does not connect to a broker.
 - Native broker/account acceptance: NOT PERFORMED.
 - Telegram live delivery: NOT PERFORMED.
 
-Implemented in the 0.6 development line:
+Implemented in the 0.6 line:
 
 - 14 execution identities with coordinator/advisor/SOLO/RETURNING membership.
 - Four trading modes: Scalping, Swing, Expert/adaptive and live-quote Sniper.
@@ -22,23 +23,29 @@ Implemented in the 0.6 development line:
 - Native dashboard with 18 pages.
 - Startup and restart are STOPPED; a secondary SOLO toggle does not arm global START.
 
-Latest fixes before this checkpoint:
+Latest verified recovery/execution hardening:
 
 - reconciled fills stay blocked until the owned position is actually observed;
 - exact submitted broker volume is persisted;
 - Sniper applies the configured broker-cost threshold;
-- schema-12 restore keeps the durable gateway send journal outside rollback so an old backup cannot recreate a sent-order journal entry.
+- unknown intents stay scoped to the bound account across an account switch;
+- split fills reconcile cumulatively without a top-up or duplicate resend;
+- a reused durable intent ID with changed execution identity fails closed;
+- schema-12 restore keeps the durable gateway send journal outside rollback, and regression coverage verifies the journal survives restore unchanged.
 
-Repository state:
+Release/promotion state:
 
-- `main` is still the older promoted 0.4 research checkpoint.
-- `development` contains the 0.6 work and must not be fast-forwarded blindly because the branches have diverged by the prior merge topology.
-- The next promotion should use a reviewed merge/PR after the 0.6 documentation and CI state are reconciled.
+- `development` contains the reviewed 0.6 candidate.
+- `main` and `development` have a divergent historical merge topology; never force-update or rewrite either branch to promote 0.6.
+- PR #13 is the deliberate promotion path from `development` to `main`.
+- Release-record/documentation commits may sit on top of the tested source checkpoint. They must not silently change runtime behavior; `docs/validation.json` records the executable checkpoint and artifact evidence.
 
-Next safe engineering work:
+Next engineering work after promotion:
 
-1. Keep release/version/validation files mutually consistent and guarded by CI.
-2. Reconcile `main` and `development` through a reviewed merge rather than rewriting history.
-3. Continue deterministic simulation/regression coverage for restart, account switching, reconciliation, backups and UI state.
-4. Run the native demo-account acceptance checklist only on the target Windows/MT5 installation; record its result separately from CI.
-5. Keep imported ML challenger activation and any automatic promotion disabled unless a separately reviewed design and fresh evidence justify it.
+1. Run the native Windows + real Demo MT5 acceptance checklist on the target installation and record it separately from CI.
+2. Test private Telegram delivery using only local credentials that never enter the repository.
+3. Enable branch protection / required checks for `main` and preferably `development` when repository administration policy is available.
+4. Design and validate portfolio-wide exposure management as a separate execution change; do not imply it is already present.
+5. Continue genuine out-of-sample evidence, ablation, correlation/portfolio research and historical-event replay without weakening the current no-lookahead boundaries.
+
+No CI result, package build or simulated broker fixture establishes profitability, guaranteed latency or native broker acceptance.
