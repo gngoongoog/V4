@@ -68,6 +68,10 @@ def main():
             else:raise AssertionError('Invalid Telegram config accepted')
             api('/v1/config',{'config':config})
             assert not api('/v1/status')['gateway_fresh']
+            # Saving connection/config settings intentionally disarms global START.
+            # Re-arming must always be explicit before new virtual or broker entries.
+            assert api('/v1/status')['state']=='stopped'
+            assert api('/v1/start',{})['state']=='starting'
             now=int(time.time()*1000)
             def bars(seconds):
                 boundary=now//1000//seconds*seconds
