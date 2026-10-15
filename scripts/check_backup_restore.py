@@ -64,6 +64,12 @@ def main():
             risk = dict(config["risk"])
             risk["risk_percent"] = 0.31
             api("/v1/risk", risk)
+            portfolio_saved = dict(enabled=True, max_positions=2, max_lots=0.25, max_risk_percent=1.5)
+            api("/v1/execution/portfolio", portfolio_saved)
+            current_portfolio = api("/v1/execution")["portfolio"]
+            assert current_portfolio["enabled"] is True
+            assert current_portfolio["limits"]["max_positions"] == 2
+            assert abs(current_portfolio["limits"]["max_lots"] - 0.25) < 1e-12
 
             created = api("/v1/backup", {})
             name = created["name"]
@@ -99,6 +105,8 @@ def main():
             risk["risk_percent"] = 0.42
             api("/v1/risk", risk)
             assert api("/v1/config")["config"]["risk"]["risk_percent"] == 0.42
+            api("/v1/execution/portfolio", dict(enabled=False, max_positions=7, max_lots=7.0, max_risk_percent=7.0))
+            assert api("/v1/execution")["portfolio"]["enabled"] is False
 
             staged = api("/v1/backup/restore/stage", {"name": name})
             assert staged["staged"] is True
@@ -113,6 +121,11 @@ def main():
             assert not status["execution_enabled"]
             restored = api("/v1/config")["config"]
             assert restored["risk"]["risk_percent"] == 0.31
+            restored_portfolio = api("/v1/execution")["portfolio"]
+            assert restored_portfolio["enabled"] is True
+            assert restored_portfolio["limits"]["max_positions"] == 2
+            assert abs(restored_portfolio["limits"]["max_lots"] - 0.25) < 1e-12
+            assert abs(restored_portfolio["limits"]["max_risk_percent"] - 1.5) < 1e-12
             assert api("/v1/backup/restore/status")["pending"] is False
             last = json.loads((root / "restore.last.json").read_text())
             assert last["status"] == "applied" and last["source"] == name
@@ -128,7 +141,7 @@ def main():
             api("/v1/shutdown", {})
             process.wait(timeout=5)
             assert process.returncode == 0
-            print("PASS: backup schema/hash validation, traversal/corruption rejection, staged restart restore, pre-restore rollback snapshot, secret exclusion, restored config and audit result")
+            print("PASS: backup schema/hash validation, traversal/corruption rejection, staged restart restore, pre-restore rollback snapshot, secret exclusion, restored config + portfolio exposure limits and audit result")
         finally:
             if process is not None and process.poll() is None:
                 process.terminate()
