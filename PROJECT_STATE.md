@@ -1,19 +1,19 @@
-# BrainTrade OS — project state after 0.6.0 promotion
+# BrainTrade OS — project state: 0.7.0 development preview
 
-## Stable promoted baseline
+## Promoted baseline: 0.6.0
 
 The verified 0.6.0 executable/source checkpoint is `fdc63d4d05df89e27607641bd197b9e6ead936e9` (tree `8593783f43a4892cdc724ed5d112607ef7cee006`). Research CI `38803539711` and Windows CI/package `38803539405` passed on that checkpoint, and PR #13 promoted the reviewed line to `main` without history rewriting.
 
-The 0.6 baseline includes 14 execution identities, coordinator/advisor/SOLO/RETURNING roles, Scalping/Swing/Expert/Sniper modes, persistent broker intents/reconciliation, schema-12 backup support, adaptive member weighting, the historical research/learning pipeline and an 18-page native dashboard. Recovery hardening covers unknown-intent account isolation, cumulative split-fill reconciliation without top-up/resend, durable-intent identity mismatch fail-closed behavior and preservation of `broker-journal.sqlite` outside staged restore.
+Authoritative release evidence remains `docs/validation.json`, archived unchanged as `docs/validation-v0.6.0.json`.
 
-## Development beyond 0.6
+## Current development: 0.7.0
 
-Portfolio Exposure v1 was merged through PR #16 to `development` as `fd8490e6f33f3bd61e655829c12e7824462694a1`. The exact feature head `f36b9c1c7bd265675f5802efa8d2eddfc27c1ee8` passed Linux and Windows jobs in run `38807773183` before merge.
+The workspace has moved to `0.7.0` Development Preview. Its validation state is separate in `docs/development-validation.json`; while that record says `pending-ci`, no tested 0.7 commit or successful 0.7 CI is being claimed.
 
-The portfolio gate is OFF by default. When enabled it aggregates BrainTrade-owned positions and unresolved open intents, prevents double counting once a broker position is visible, deterministically admits simultaneous queued entries, and can cap total exposure slots, total lots and estimated stop risk as a percentage of equity. Unknown aggregate stop risk blocks only new entries; exits, broker SL/TP, timed management and reconciliation continue. The settings are persisted, included in backup/restore and editable while STOPPED from the native Execution page.
+Portfolio Exposure v1 was merged through PR #16 to `development` as `fd8490e6f33f3bd61e655829c12e7824462694a1`. Exact feature head `f36b9c1c7bd265675f5802efa8d2eddfc27c1ee8` passed Linux and Windows run `38807773183`. The aggregate gate is OFF by default, prevents double counting once a position is visible, and can cap total exposure slots, lots and estimated stop-risk percentage. Unknown aggregate stop risk blocks only new entries; exits and reconciliation continue.
 
-Current release evidence for the promoted 0.6 line remains `docs/validation.json`; the post-0.6 preparation branch archives the same evidence as `docs/validation-v0.6.0.json` before introducing a new development-version validation record.
+The 0.7 line is also separating development-version evidence from promoted-release evidence and removing hard-coded package version assumptions from CI.
 
-Release boundary remains unchanged: startup/restart is STOPPED, imported ML challengers remain research-only with no automatic promotion, CI execution acceptance is simulated, native MT5 Demo acceptance has not yet been performed on the target machine, and live Telegram delivery is still pending.
+Operational boundary remains unchanged: startup/restart is STOPPED; imported ML challengers remain research-only; CI execution acceptance is simulated; native MT5 demo acceptance and live Telegram delivery remain pending outside CI.
 
-See `BUILD_HANDOFF.md` for the current continuation point, `ROADMAP.md` for remaining work and `docs/EXECUTION_AND_ROLES.md` for execution semantics.
+See `BUILD_HANDOFF.md`, `CONTINUE_HERE.md`, `ROADMAP.md`, `docs/EXECUTION_AND_ROLES.md`, `docs/validation.json` and `docs/development-validation.json` before continuing.
