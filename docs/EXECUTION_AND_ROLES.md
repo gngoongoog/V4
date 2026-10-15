@@ -1,4 +1,4 @@
-# BrainTrade OS 0.6.0 — broker execution and membership
+# BrainTrade OS 0.7.0 Development Preview — broker execution and membership
 
 The bound Demo MT5 account can receive actual orders when global START is active. Initial startup/restart is STOPPED; execution is initially unbound. The account type is checked against the broker: Demo=0, Live=2. Live must be selected and rebound explicitly while stopped and without unresolved intents or owned positions. Changing accounts never silently transfers ownership.
 
