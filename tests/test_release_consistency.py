@@ -38,6 +38,12 @@ class ReleaseConsistencyTests(unittest.TestCase):
         self.assertIn('VERSION = tomllib.loads((ROOT / "Cargo.toml")', source)
         self.assertIsNone(re.search(r'^VERSION\s*=\s*["\']\d', source, re.MULTILINE))
 
+    def test_windows_preview_artifact_upload_is_version_agnostic(self):
+        source = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+        self.assertIn("name: BrainTrade-Windows-x64-Preview", source)
+        self.assertIn("path: release/BrainTrade-Windows-x64-v*-Preview.zip", source)
+        self.assertIsNone(re.search(r"BrainTrade-Windows-x64-v\d+\.\d+\.\d+", source))
+
     def test_no_audit_placeholders_are_tracked(self):
         self.assertFalse((ROOT / "docs" / "NOOP_DO_NOT_USE").exists())
         self.assertFalse((ROOT / "docs" / ".audit-tmp-ignore-placeholder").exists())
