@@ -3,7 +3,6 @@
 #[path = "execution_legacy.rs"]
 mod legacy;
 
-pub use legacy::Settings;
 use anyhow::Result;
 use braintrade_domain::{
     execution::BrainConfig,
@@ -76,7 +75,10 @@ impl Service {
     fn enrich_roles(mut value: Value) -> Value {
         if let Some(brains) = value.get_mut("brains").and_then(Value::as_array_mut) {
             for brain in brains {
-                let id = brain["config"]["id"].as_str().unwrap_or_default();
+                let id = brain["config"]["id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
                 let solo = id != "system" && brain["config"]["enabled"] == true;
                 brain["role"] = json!(if id == "system" {
                     "coordinator"
