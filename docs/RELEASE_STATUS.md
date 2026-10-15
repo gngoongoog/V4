@@ -1,7 +1,9 @@
-# 0.5.0 Preview release status
+# BrainTrade OS 0.5.0 Preview — verified Windows build
 
-Current source includes four Shadow modes, commission/spread calculator, 21-frame strategy synthesis and prospective Wyckoff learning, with 17 native pages.
+Tested executable/source checkpoint: `a5961ff85b41e50e18a7c8295244d115f9fcfd3d`. Research `38689840746` and Windows `38689840745` both passed. Full evidence: validation.json and BUILD_HANDOFF.md.
 
-Final full Research/Windows workflows are required for the delivery code commit. Local 55 domain + 41 runtime tests, 35 Python tests, desktop compile, real-Core lifecycle/research/studio/restart and backup/restore checks passed. Native render and Windows portable verification are in progress. Exact final evidence will be recorded in validation.json.
+55 domain + 41 runtime Rust tests, 35 Python tests, real-Core old/new integration, persistence/backup restore, report interactions and all 17 native pages at two sizes passed. Packaged Windows startup/DPAPI, four mode settings, fee calculator, restoration and all 34 complete frames passed.
 
-Previous 0.4.0 evidence remains separately archived. Actual laptop MT5 broker/DOM and private Telegram acceptance are pending. Broker execution and automatic learned-strategy promotion are not implemented.
+Open BrainTrade.exe after extracting the full portable. Select terminal64.exe in Settings. See README_AR.md in the package. New pages: modes/costs, strategy studio and Wyckoff learning.
+
+This release operates in analysis/Shadow. No real MT5 orders or automatic model promotion. Actual user laptop MT5/Telegram acceptance and adequate forward observations remain pending.

@@ -38,7 +38,7 @@ Current release candidate: **0.5.0 Preview**. Exact tested executable boundary i
 - Backup manifest schema 11 includes historical/chronological/learning registry/review/prediction/scoring/performance-review audit state. Validated staged restart restore, rollback snapshots and native controls are implemented.
 - Source/package hygiene excludes secrets, runtime DB/log state, archives and generated dependency/cache trees.
 - Previous release evidence is preserved in `docs/validation-v0.4.0.json`; it does not validate the 0.5.0 changes.
-- Current 0.5.0 packaging and CI status: `docs/validation.json`.
+- Tested 0.5.0 checkpoint `a5961ff85b41e50e18a7c8295244d115f9fcfd3d` passed Research `38689840746` and Windows `38689840745`; full evidence in `docs/validation.json`.
 
 ## Known limitations / pending
 
