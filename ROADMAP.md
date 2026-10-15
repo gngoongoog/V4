@@ -46,14 +46,15 @@ PR #16 introduces a separate, default-OFF portfolio entry gate across all 14 exe
 - Optional maximum combined positions/intents, maximum combined lots and maximum estimated stop-risk percentage of current equity.
 - Fail closed for new entries when aggregate stop risk cannot be established; never block exits or reconciliation.
 - Persist portfolio settings in SQLite and verify staged backup/restore returns them exactly.
-- Expose aggregate exposure through `/v1/execution`; the native Execution page displays current exposure state.
-- Stopped-only `/v1/execution/portfolio` configuration API. A dedicated native editor for these fields remains the UI follow-up before declaring the desktop workflow complete.
+- Expose aggregate exposure through `/v1/execution`.
+- Stopped-only `/v1/execution/portfolio` configuration API.
+- Native Execution-page editor for enable/disable, maximum exposure slots, maximum lots and maximum stop-risk percentage, with values reloaded from Core after save.
 
 The 0.6 release evidence in `docs/validation.json` remains immutable evidence for the promoted 0.6 source and must not be silently relabeled as validation of this new development feature.
 
 ## Immediate engineering work
 
-1. Finish PR #16 CI/review and add the native portfolio-limit editor.
+1. Finish PR #16 final Linux/Windows CI and merge only after the exact final head is green.
 2. Start the post-0.6 development version line (0.7 Preview) only after release/version/workflow/document guards are reconciled together.
 3. Run the native Windows + Demo MT5 acceptance checklist on the target machine and record it separately from CI.
 4. Test private Telegram delivery only with local credentials that never enter the repository.
@@ -71,7 +72,6 @@ The 0.6 release evidence in `docs/validation.json` remains immutable evidence fo
 
 - Native broker acceptance on the user's actual MT5 installation.
 - Live Telegram acceptance.
-- Native editor for portfolio exposure limits.
 - Imported ML Champion activation or automatic promotion.
 - Any profitability, HFT-latency or execution-quality guarantee.
 
