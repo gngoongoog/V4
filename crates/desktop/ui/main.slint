@@ -15,10 +15,29 @@ component Card inherits Rectangle {
 }
 export component Dashboard inherits Window {
     init => { Palette.color-scheme = ColorScheme.dark; }
-    title: "BRAINTRADE OS | Research 0.4.0";
+    title: "BRAINTRADE OS | Research 0.5.0";
     preferred-width: 1120px; preferred-height: 820px; min-width: 880px; min-height: 700px;
     background: #0b1220;
     in-out property <int> page: 0;
+    in-out property <int> trade-mode: 2;
+    in-out property <string> sniper-target: "50";
+    in-out property <string> sniper-stop: "80";
+    in-out property <string> sniper-cooldown: "30";
+    in-out property <string> pip-points: "10";
+    in-out property <string> cost-fraction: "0.45";
+    in-out property <string> preview-lots: "0.1";
+    in property <bool> studio-busy: false;
+    in property <string> studio-message: "";
+    in property <string> cost-detail: "7 لكل لوت × 0.1 = 0.70 من عملة الحساب. السبريد يحتاج اتصال MT5.";
+    in property <string> studio-summary: "بانتظار تحميل الفريمات";
+    in property <string> studio-report: "اختر نتيجة محفوظة بعد انتهاء التقييم. نحتاج 400 شمعة فعلية لكل فريم على الأقل.";
+    in property <string> wyckoff-detail: "بانتظار الشموع المكتملة";
+    in property <[string]> studio-frames;
+    in-out property <int> studio-tf: 0;
+    in property <[string]> studio-reports;
+    in property <[string]> studio-ids;
+    in-out property <int> studio-report-index: 0;
+    callback studio-action(string);
     in property <string> state: "CONNECTING";
     in property <string> connection: "Waiting for core";
     in property <string> balance: "—";
@@ -126,7 +145,7 @@ export component Dashboard inherits Window {
             spacing: 12px;
             VerticalLayout {
                 Text { text: "BRAINTRADE OS"; color: #f5f7fd; font-size: 26px; font-weight: 800; }
-                Text { text: "مركز التحكم  /  RESEARCH 0.4.0"; color: #8d9cb4; font-size: 13px; }
+                Text { text: "مركز التحكم  /  RESEARCH 0.5.0"; color: #8d9cb4; font-size: 13px; }
             }
             Rectangle { horizontal-stretch: 1; background: transparent; }
             Text { text: root.state; color: root.online ? #5be0be : #f0c578; font-size: 16px; vertical-alignment: center; }
@@ -164,6 +183,63 @@ export component Dashboard inherits Window {
             Button { text: "خريطة العقول والمناطق"; clicked => { root.page = 12; } }
             Button { text: "التعلم ومراجعة النماذج"; clicked => { root.page = 11; root.learning-action("refresh"); } }
         }
+        HorizontalLayout { spacing: 8px;
+            Button { text: "أوضاع التداول والتكلفة"; clicked => { root.page = 14; root.studio-action("config"); } }
+            Button { text: "مختبر الاستراتيجيات"; clicked => { root.page = 15; root.studio-action("refresh"); } }
+            Button { text: "وايكوف والتعلم"; clicked => { root.page = 16; root.studio-action("refresh"); } }
+        }
+        if root.page == 14: ScrollView { VerticalBox { spacing: 10px;
+            Text { text: "أوضاع التداول — محاكاة SHADOW"; font-size: 20px; color: #eaf0fb; }
+            ComboBox { model: ["Scalping / سكالبنك", "Swing / سوينك", "Expert / الخبير", "Sniper / القناص"]; current-index <=> root.trade-mode; }
+            Text { text: root.trade-mode == 0 ? "M1 + M5؛ زخم مؤكد، وقف 1.2 ATR وهدف 1.4R، أقصى احتفاظ 15 دقيقة." : root.trade-mode == 1 ? "H1 + H4 + D1؛ اتجاهات متوافقة، وقف 2 ATR وهدف 2.5R، أقصى احتفاظ 3 أيام. السواب غير محسوب." : root.trade-mode == 2 ? "Meta الحالي: توافق M1/M5/M15، وقف 1.5 ATR وهدف 2R، أقصى احتفاظ 30 دقيقة." : "اختراق M1 مكتمل مع تأكيد M5. هدف صافي بالنقاط، مهلة دقيقتين، انتظار بوابة 250ms زائد المعالجة؛ ليس ضمان سرعة تنفيذ."; color: #acbad0; wrap: word-wrap; }
+            Text { text: "العمولة ذهاب وإياب لكل 1.00 لوت — بعملة الحساب. أدخل مجموع عمولة الدخول والخروج."; color: #d5deed; wrap: word-wrap; }
+            HorizontalBox {
+                LineEdit { text <=> root.commission-lot; placeholder-text: "7"; }
+                Text { text: "نقاط في pip واحد"; color: #acbad0; vertical-alignment: center; }
+                LineEdit { text <=> root.pip-points; }
+            }
+            Text { text: "القناص: هدف صافي بالنقاط / وقف بالنقاط / انتظار بالثواني / أقصى حصة تكلفة"; color: #acbad0; wrap: word-wrap; }
+            HorizontalBox {
+                LineEdit { text <=> root.sniper-target; placeholder-text: "الهدف"; }
+                LineEdit { text <=> root.sniper-stop; placeholder-text: "الوقف"; }
+                LineEdit { text <=> root.sniper-cooldown; placeholder-text: "الانتظار"; }
+                LineEdit { text <=> root.cost-fraction; placeholder-text: "0.45"; }
+            }
+            Text { text: "حصة التكلفة = التكلفة ÷ (التكلفة + الهدف الصافي). عند تجاوز الحد ينتظر القناص. تعريف pip قابل للتعديل لاختلاف المعادن والمؤشرات."; color: #acbad0; wrap: word-wrap; }
+            Button { text: "حفظ الوضع والعمولة"; enabled: !root.studio-busy && root.state == "STOPPED"; clicked => { root.studio-action("save"); } }
+            Text { text: "أوقف النظام لتبديل الوضع. الصفقة الافتراضية المفتوحة تحتفظ بهدفها ووقفها ومدتها الأصلية."; color: #f0c578; wrap: word-wrap; }
+            HorizontalBox {
+                Text { text: "اللوت للحساب"; color: #d5deed; vertical-alignment: center; }
+                LineEdit { text <=> root.preview-lots; }
+                Button { text: "احسب العمولة والسبريد"; enabled: !root.studio-busy; clicked => { root.studio-action("cost"); } }
+            }
+            Text { text: root.cost-detail; color: #6bdbc5; wrap: word-wrap; }
+            Text { text: root.studio-message; color: #f0c578; wrap: word-wrap; }
+        } }
+        if root.page == 15: ScrollView { VerticalBox { spacing: 10px;
+            Text { text: "مختبر توليد الاستراتيجيات"; font-size: 20px; color: #eaf0fb; }
+            Text { text: "يبني 40 تركيباً من الاختراق والارتداد والاتجاه واختبارات وايكوف، ثم يرتبها بالتدريب والتحقق الزمني. الاختبار النهائي محفوظ ولا يختار الاستراتيجية. لا تفعيل تلقائي للنتائج."; color: #acbad0; wrap: word-wrap; }
+            ComboBox { model: root.studio-frames; current-index <=> root.studio-tf; }
+            HorizontalBox {
+                Button { text: "توليد وتقييم"; enabled: !root.studio-busy; clicked => { root.studio-action("run"); } }
+                Button { text: "تعلم تلقائي"; enabled: !root.studio-busy; clicked => { root.studio-action("auto_on"); } }
+                Button { text: "إيقاف وإلغاء"; enabled: !root.studio-busy; clicked => { root.studio-action("cancel"); } }
+            }
+            Text { text: "التعلم التلقائي ينتظر اختباراً نهائياً جديداً. يدعم فريمات MT5 الـ21 ولا يعوض التاريخ المفقود ببيانات مصطنعة."; color: #acbad0; wrap: word-wrap; }
+            Text { text: root.studio-message; color: #f0c578; wrap: word-wrap; }
+            ComboBox { model: root.studio-reports; current-index <=> root.studio-report-index; }
+            Button { text: "فتح النتيجة المحفوظة"; enabled: !root.studio-busy && root.studio-reports.length > 0; clicked => { root.studio-action("report"); } }
+            Text { text: root.studio-report; color: #d5deed; wrap: word-wrap; horizontal-alignment: left; }
+            Text { text: root.studio-summary; color: #acbad0; wrap: word-wrap; horizontal-alignment: left; }
+        } }
+        if root.page == 16: ScrollView { VerticalBox { spacing: 10px;
+            Text { text: "عقل وايكوف — الرصد وقياس النتيجة"; font-size: 20px; color: #eaf0fb; }
+            ComboBox { model: root.studio-frames; current-index <=> root.studio-tf; selected => { root.studio-action("refresh"); } }
+            Button { text: "تحديث التحليل"; enabled: !root.studio-busy; clicked => { root.studio-action("refresh"); } }
+            Text { text: "يرصد Spring / Upthrust واختبارهما وSOS → LPS وSOW → LPSY. يحفظ أول إشارة ثم يقيس الصافي بعد 12 شمعة لاحقة مع التكلفة. التعلم رصد بحثي، وليس أوامر تنفيذ."; color: #acbad0; wrap: word-wrap; }
+            Text { text: root.wyckoff-detail; color: #d5deed; wrap: word-wrap; horizontal-alignment: left; }
+            Text { text: root.studio-message; color: #f0c578; wrap: word-wrap; }
+        } }
         if root.page == 13: ScrollView { VerticalBox { spacing: 12px;
             Text { text: "النسخ الاحتياطية والاستعادة"; color: #eaf0fb; font-size: 20px; }
             Text { text: "تشمل الإعدادات والسجل والشموع والمحاكاة والتقييم والتعلم. لا تشمل أسرار Telegram. الاستعادة تستبدل هذه البيانات، وتحفظ نسخة تراجع تلقائياً، ثم تتطلب إعادة فتح التطبيق."; color: #d5deed; wrap: word-wrap; }
@@ -237,7 +313,7 @@ export component Dashboard inherits Window {
         }
         if root.page == 3: VerticalLayout {
             spacing: 16px; alignment: start; vertical-stretch: 1;
-            Text { text: "BRAINTRADE OS 0.4.0"; color: #eaf0fb; font-size: 24px; }
+            Text { text: "BRAINTRADE OS 0.5.0"; color: #eaf0fb; font-size: 24px; }
             Text { text: "عقول تحليلية، مختبر تاريخي، تقييم زمني وتعلم بحثي للمراقبة. التنفيذ الفعلي والترقية التلقائية غير مفعّلين."; color: #acbad0; wrap: word-wrap; }
             Text { text: "Windows x64 • Core + Desktop + MT5 bootstrap"; color: #acbad0; }
             AboutSlint { max-height: 110px; }

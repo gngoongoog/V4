@@ -165,6 +165,7 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
                              for p in positions], pending_orders=len(orders), today_net=net,
                   today_deals=count, report_day=report_day, symbol=symbol,
                   bid=tick.bid if tick else None, ask=tick.ask if tick else None,
+                  quote_time_ms=int(tick.time_msc) if tick else None,
                   tick_age_ms=max(0, int(now.timestamp() * 1000) - tick.time_msc) if tick and tick.time_msc<=int(now.timestamp()*1000)+2000 else None,
                   volume_min=info.volume_min if info else None,
                   volume_step=info.volume_step if info else None,
@@ -285,18 +286,25 @@ def main():
                 with opener.open(request, timeout=4) as response:
                     response.read()
                 core_failures = 0
+                poll_seconds = 1.0
                 if initialized and snapshot['connected']:
                     try:
                         job = api('/v1/gateway/history/request').get('job')
                         if job is not None:
                             api('/v1/gateway/history/chunk', collect_history_chunk(mt5, job))
+                        else:
+                            from studio_feed import collect_frame
+                            request=api('/v1/gateway/research/request')
+                            poll_seconds=max(0.25,min(1.0,request.get('poll_ms',1000)/1000.0))
+                            if request.get('job') is not None:
+                                api('/v1/gateway/research/frame',collect_frame(mt5,request['job']))
                     except (OSError, ValueError):
                         pass  # Live snapshot succeeded; an obsolete history job may have been cancelled.
             except (OSError, ValueError):
                 core_failures += 1
                 if core_failures >= 3:
                     return
-            time.sleep(1)
+            time.sleep(locals().get("poll_seconds",1.0))
     finally:
         if mt5 is not None:
             dom_cache.release(mt5)

@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{fs::{self, File}, io::Read, path::{Path, PathBuf}};
 
-const SCHEMA:u64=10;
+const SCHEMA:u64=11;
 const HASH:&str="fnv1a64-v1";
 const PENDING:&str="restore.pending.json";
 
@@ -69,7 +69,7 @@ fn create_named(db:&Connection,root:&Path,config:&Config,now:u64,prefix:&str)->R
     let m=json!({"schema":SCHEMA,"version":braintrade_domain::VERSION,"created_ms":now,
         "kind":"settings-audit-candles-decisions-shadow-backtests-chronological-evaluations-news-learning-dataset-registry-review-eligibility-read-only-predictions-scored-outcomes-challenger-performance-review",
         "hash_algorithm":HASH,"files":{"events.sqlite":record(&dp)?,"config.json":record(&cp)?},
-        "secrets_included":false,"learning_included":true,"chronological_evaluations_included":true,"trained_model_included":true,
+        "secrets_included":false,"strategy_studio_included":true,"wyckoff_learning_included":true,"learning_included":true,"chronological_evaluations_included":true,"trained_model_included":true,
         "learning_review_records_included":true,"learning_predictions_included":true,"learning_prediction_outcomes_included":true,
         "learning_performance_reviews_included":true,"read_only_inference_only":true,"shadow_model_effect":false,"promotion_enabled":false,
         "restore_implemented":true,"restore_strategy":"validate-stage-restart-rollback",

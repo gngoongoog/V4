@@ -11,6 +11,7 @@ mod learning;
 mod backup;
 mod news;
 mod render;
+mod studio;
 
 enum Task {
     Action(String),
@@ -128,6 +129,7 @@ fn run_ui() -> anyhow::Result<()> {
     news::setup(&ui);
     evaluation::setup(&ui);
     let _learning_timer = learning::setup(&ui);
+    let _studio_timer=studio::setup(&ui);
     let (tx, rx) = mpsc::channel::<Task>();
     let sender = tx.clone();
     let weak = ui.as_weak();
@@ -141,7 +143,7 @@ fn run_ui() -> anyhow::Result<()> {
     let weak = ui.as_weak();
     ui.on_save_settings(move ||{if let Some(ui)=weak.upgrade(){
         ui.set_busy(true);
-        let body=json!({"config":Config{schema:1,mt5_path:ui.get_mt5_path().to_string(),symbol:ui.get_symbol().to_string(),telegram_user_id:ui.get_telegram_user().to_string(),telegram_chat_id:ui.get_telegram_chat().to_string(),telegram_enabled:ui.get_telegram_enabled(),risk:RiskConfig::default()},"telegram_token":ui.get_telegram_token().to_string(),"clear_telegram_token":ui.get_clear_token()});
+        let body=json!({"config":Config{schema:1,mt5_path:ui.get_mt5_path().to_string(),symbol:ui.get_symbol().to_string(),telegram_user_id:ui.get_telegram_user().to_string(),telegram_chat_id:ui.get_telegram_chat().to_string(),telegram_enabled:ui.get_telegram_enabled(),risk:RiskConfig::default(),trading:Default::default()},"telegram_token":ui.get_telegram_token().to_string(),"clear_telegram_token":ui.get_clear_token()});
         let _=sender.send(Task::Save(body));
     }});
     let sender = tx.clone();
@@ -236,6 +238,7 @@ fn run_ui() -> anyhow::Result<()> {
                         Task::Save(mut v) => (
                             client.get("/v1/config").and_then(|current| {
                                 v["config"]["risk"] = current["config"]["risk"].clone();
+                                v["config"]["trading"] = current["config"]["trading"].clone();
                                 client.post("/v1/config", v)
                             }),
                             true,

@@ -71,7 +71,7 @@ def main():
                         time.sleep(0.1)
                 else:
                     raise AssertionError("Packaged Core startup timeout")
-                assert status["version"] == "0.4.0" and status["state"] == "stopped", status
+                assert status["version"] == "0.5.0" and status["state"] == "stopped", status
                 assert status["execution_enabled"] is False
                 assert api("/v1/learning")["champion"] is None
                 assert api("/v1/opportunities/history")["setups"] == []
@@ -117,7 +117,7 @@ def main():
                 frames = directory / "test-output" / "native-ui"
                 expected = {}
                 for width, height, suffix in [(1120, 820, ""), (880, 700, "-small")]:
-                    for page in range(14):
+                    for page in range(17):
                         expected[f"dashboard-page-{page}{suffix}.ppm"] = (width, height)
                 assert {path.name for path in frames.glob("*.ppm")} == set(expected)
                 for name, (width, height) in expected.items():

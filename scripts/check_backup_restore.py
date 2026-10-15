@@ -67,7 +67,7 @@ def main():
 
             created = api("/v1/backup", {})
             name = created["name"]
-            assert created["schema"] == 10
+            assert created["schema"] == 11
             assert (root / "backups" / name / "manifest.json").is_file()
             manifest = json.loads((root / "backups" / name / "manifest.json").read_text())
             assert manifest["restore_implemented"] is True
