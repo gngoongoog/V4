@@ -58,7 +58,17 @@ class BrokerExecutor:
         if account_identity(mt5.account_info()) != expected(cmd):
             return result
         if matches and not pending:
-            result = dict(result, state='observed', reason='Broker history confirms execution; no resend', deals=[int(d.ticket) for d in matches])
+            # History proves a fill, not a synchronized Core position snapshot. Keep
+            # Core's filled/partial barrier until it sees the position or its final exit.
+            submitted = result.get('request') or cmd.get('broker_request')
+            if not submitted:
+                return dict(result, reason='Fill found but submitted volume unavailable; reconciliation remains pending')
+            volume = sum(float(getattr(d, 'volume', 0)) for d in matches)
+            if not math.isfinite(volume) or volume <= 0:
+                return result
+            state = 'partial' if volume + 1e-8 < submitted['volume'] else 'filled'
+            result = dict(result, state=state, reason='Broker history confirms fill; await Core position reconciliation; no resend',
+                          request=submitted, deal=int(matches[0].ticket), deals=[int(d.ticket) for d in matches])
             return self._save(cmd, result)
         return result
 
@@ -148,7 +158,7 @@ class BrokerExecutor:
             current=mt5.account_info()
             if account_identity(current)!=expected(cmd) or current.trade_mode!=target_mode or clock_ms()>cmd['expires_ms']:
                 raise ValueError('Account changed or intent expired during validation')
-            self.db.execute('INSERT INTO sends(id,request,result,created_ms) VALUES(?,?,NULL,?)',(cmd['id'],json.dumps(cmd,allow_nan=False),clock_ms()))
+            self.db.execute('INSERT INTO sends(id,request,result,created_ms) VALUES(?,?,NULL,?)',(cmd['id'],json.dumps(dict(cmd,broker_request=request),allow_nan=False),clock_ms()))
             self.db.commit()
             result['request']=request
             sent=time.perf_counter()

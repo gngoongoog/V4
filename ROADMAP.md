@@ -11,7 +11,7 @@ GitHub `gngoongoog/V4` is canonical. Read `BUILD_HANDOFF.md` and `docs/validatio
 - Learning snapshots/labels/export, offline baseline trainer and immutable challenger registry.
 - Manual challenger review eligibility, read-only inference and exact matured-label scoring.
 - **Challenger Performance Review Policy v1** over immutable scored outcomes, with fixed evidence gates, baselines, chronological/context/regime slices, calibration/stability/drift checks, immutable review records/reason codes, read-only API/UI, and no Champion/Shadow/broker effect.
-- Repository guards for read-only MT5 behavior, no learned execution/promotion route, source/package hygiene, SQLite FK integrity and Windows CI.
+- Repository guards for confined journaled MT5 execution, no imported-ML promotion route, source/package hygiene, SQLite FK integrity and Windows CI.
 
 Validated executable checkpoint: `42c8c6dfda42acfa02de733f3acb93ff639075cc`.
 
@@ -48,12 +48,16 @@ When the target Windows/MT5 environment is available:
 - Enable GitHub branch protection / required CI checks for `main` and preferably `development` when repository administration access is available.
 - Promote a safe `development` checkpoint to `main` only after deliberate review.
 
-## Execution — only after separate explicit design and validation
+## Execution delivered in 0.6.0
 
-- Persistent broker order state machine with idempotent intent IDs.
-- Reconciliation after timeout/restart; never blind-resubmit an unknown order.
-- Deterministic risk gate, broker contract checks, hedging/netting behavior and partial-fill fixtures.
-- Demo acceptance before any optional live mode.
-- Champion activation/promotion, if ever added, must be a separate manual architecture and validation stage.
+- Persistent broker intent state machine, gateway journal, timeout/restart reconciliation and partial-fill handling.
+- Exact account and owned-ticket checks; hedging/netting behavior; optional lot/risk/daily/drawdown/spread budgets off by default.
+- Four coordinated modes: Scalping, Swing, adaptive Expert and live-quote Sniper, including current spread and proportional commission.
+- Fourteen configured execution identities, actual SOLO exclusion from advisor votes, returning-position ownership and automatic rejoin after settlement.
+- Prospective 12-bar outcomes and persisted adaptive member weights. Imported ML challengers remain separate research outputs.
+- Dedicated native Execution page; current desktop contains 18 pages.
+- Source and packaged-Windows synthetic acceptance. The exact verified source and CI evidence are recorded in docs/validation.json.
 
-No deadline or profitability guarantee is implied. A module is complete only when code, verification and state documentation agree.
+Actual Demo broker and Telegram acceptance remain manual on the user's Windows installation. Portfolio-wide exposure management and imported ML champion activation need separate implementation and validation; they are not implied by member weight adaptation.
+
+No deadline, latency or profitability guarantee is implied. A module is complete only when code, verification and state documentation agree.

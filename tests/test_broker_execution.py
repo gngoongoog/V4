@@ -47,7 +47,16 @@ class ExecutionTests(unittest.TestCase):
         self.ex.close();self.ex=BrokerExecutor(self.path);self.assertEqual(self.send()['state'],'filled');self.assertEqual(len(self.mt.sends),1)
     def test_timeout_never_retries_and_later_history_reconciles(self):
         self.mt.raise_send=True;self.assertEqual(self.send()['state'],'unknown');self.mt.raise_send=False;self.assertEqual(self.send()['state'],'unknown');self.assertEqual(len(self.mt.sends),1)
-        self.mt.deals=[N(ticket=77,magic=self.cmd['magic'],symbol='XAUUSD',comment='BT:'+self.cmd['id'][:20])];self.assertEqual(self.send()['state'],'observed');self.assertEqual(len(self.mt.sends),1)
+        self.mt.deals=[N(ticket=77,magic=self.cmd['magic'],symbol='XAUUSD',volume=.1,comment='BT:'+self.cmd['id'][:20])];self.assertEqual(self.send()['state'],'filled');self.assertEqual(len(self.mt.sends),1)
+    def test_partial_close_reconciliation_retains_submitted_volume_after_crash(self):
+        self.cmd.update(kind='close',position=1)
+        self.mt.positions=[N(ticket=1,magic=self.cmd['magic'],symbol='XAUUSD',volume=.1,type=0)]
+        self.mt.raise_send=True;self.assertEqual(self.send()['state'],'unknown')
+        self.ex.db.execute('UPDATE sends SET result=NULL');self.ex.db.commit()
+        self.ex.close();self.ex=BrokerExecutor(self.path)
+        self.mt.deals=[N(ticket=77,magic=self.cmd['magic'],symbol='XAUUSD',volume=.04,comment='BT:'+self.cmd['id'][:20])]
+        result=self.send();self.assertEqual(result['state'],'partial');self.assertEqual(result['request']['volume'],.1)
+        self.assertEqual(result['deal'],77);self.assertEqual(len(self.mt.sends),1)
     def test_crash_between_journal_and_send_stays_unknown(self):
         import json
         self.ex.db.execute('INSERT INTO sends VALUES(?,?,NULL,?)',(self.cmd['id'],json.dumps(self.cmd),clock_ms()));self.ex.db.commit();self.assertEqual(self.send()['state'],'unknown');self.assertFalse(self.mt.sends)

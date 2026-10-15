@@ -77,8 +77,13 @@ def check(exe=None):
             assert all(m['id']!='trend' for m in members), members
             api('/v1/start',{});publish()
             cmd=api('/v1/execution/gateway')['command'];assert cmd['brain']=='trend' and cmd['lots']==.1,cmd
-            result=submit(cmd);assert result['state']=='filled',result
+            broker.raise_send=True
+            result=submit(cmd);assert result['state']=='unknown',result
             submit(cmd);assert len(broker.sends)==1
+            broker.raise_send=False
+            broker.deals=[N(ticket=77,magic=410603,symbol='XAUUSD',volume=.1,comment='BT:'+cmd['id'][:20])]
+            result=submit(cmd);assert result['state']=='filled',result
+            assert len(broker.sends)==1
             entry=dict(ticket=77,position_id=55,symbol='XAUUSD',magic=410603,entry=0,profit=0.,commission=-.35,swap=0.,fee=0.)
             sync=dict(login=17,server='Demo',currency='USD',until_ms=clock_ms(),deals=[entry])
             api('/v1/execution/sync',sync);publish()
@@ -125,7 +130,7 @@ def check(exe=None):
             report=dict(result='PASS',version='0.6.0',broker='simulated; no native MT5 acceptance',checks=[
                 '14 identities; default coordinator and advisors','SOLO exclusion; no implicit global START',
                 'standalone M1 trend against opposing M5','optional risk caps off',
-                'Core+gateway single submission','entry history does not release fill barrier',
+                'Core+gateway single submission','unknown-to-fill history retains position barrier','entry history does not release fill barrier',
                 'pending return and frozen timeout exit while STOPPED','advisor rejoins actual votes after close',
                 'manual-exit ownership; actual fees; history deduplication','queued decision invalidation',
                 'dispatched revision checked before send','unknown intent persists without resend',
