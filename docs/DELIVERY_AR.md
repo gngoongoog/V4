@@ -1,5 +1,7 @@
-# BrainTrade OS 0.6.0 Preview
+# BrainTrade OS 0.7.0 Development Preview
 
-Current source contains actual bound-account broker execution, 14 identities, adaptive coordinator membership, SOLO/return transitions, four modes and an 18-page native dashboard. Optional risk limits are off by default; start/restart is STOPPED. See docs/EXECUTION_AND_ROLES.md and docs/QUICKSTART_AR.md.
+الإصدار المرقّى والمثبت حالياً هو 0.6.0، ودليله يبقى محفوظاً في `docs/validation.json` و`docs/validation-v0.6.0.json`. أما خط التطوير الحالي فهو 0.7.0، وله سجل مستقل في `docs/development-validation.json` حتى لا نعيد تسمية اختبارات 0.6 وكأنها اختبارات 0.7.
 
-Release verification is in progress. Do not treat the previous 0.5.0 evidence as validation of 0.6.0. The authoritative completed checks and build source will be recorded in docs/validation.json. Previous release evidence is preserved in docs/validation-v0.5.0.json. Native broker/Telegram acceptance has not been performed in the build environment.
+0.7 يتضمن Portfolio Exposure v1 فوق بنية التنفيذ السابقة: حد اختياري ومعطل افتراضياً للتعرض الإجمالي عبر جميع العقول، إضافة إلى حدود كل عقل الموجودة سابقاً. تشغيل/إعادة تشغيل النظام يبقى STOPPED، وSOLO لا يشغّل START تلقائياً.
+
+أي حالة `pending-ci` في سجل 0.7 تعني أن هذه النسخة لم تعتمد بعد كـcheckpoint مختبر. لا تتحول إلى `verified` إلا بعد نجاح Research وWindows على نفس SHA. اختبار MT5 الحقيقي على جهاز المستخدم وتسليم Telegram الحقيقي يبقيان منفصلين عن CI ولا يجوز اعتبار المحاكاة بديلاً عنهما.
