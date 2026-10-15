@@ -10,18 +10,9 @@ The promoted line contains bound-account execution, 14 execution identities, coo
 
 ## Current 0.7.0 Development Preview
 
-`0.7.0` is the current development line. `docs/development-validation.json` begins `pending-ci`; it must not inherit successful 0.6 SHA/run claims. `docs/validation.json` and `docs/validation-v0.6.0.json` remain the immutable promoted-release evidence.
+`0.7.0` is CI-verified at test checkout `ba399ad206b1fe3231a10dbbd270de75145fd2e4` (same tree as PR head `e0547cab6ccce8d41944750f88d0089dc689ff29`). Research `38817498736` and Windows/Linux `38817498472` passed on that checkpoint; `docs/development-validation.json` records its own evidence. Historical 0.6 release records remain unchanged.
 
-Portfolio Exposure v1 is merged through PR #16. Exact feature head `f36b9c1c7bd265675f5802efa8d2eddfc27c1ee8` passed Linux + Windows run `38807773183`. The gate is default-OFF and caps aggregate new-entry exposure by slots, lots and estimated stop-risk percentage while preserving exits/reconciliation.
-
-Current 0.7 engineering boundary work:
-
-- align Cargo workspace + lockfile + current-development UI/docs;
-- keep historical 0.6 release records unchanged;
-- make preview artifact upload version-agnostic;
-- run Research validation on pull requests so release evidence belongs to the exact PR SHA;
-- cancel stale concurrent runs for superseded PR heads;
-- freeze `docs/development-validation.json` only after exact-head Research + Windows success.
+Completed 0.7 engineering work: workspace/lockfile/UI version alignment with external dependency pins preserved; version-agnostic portable checks/artifacts; Research PR validation; stale-run cancellation; and exact-source evidence. Portfolio Exposure v1 is included, OFF by default, with persisted aggregate entry limits and a stopped-only native editor.
 
 ## Completed research foundation
 
@@ -35,12 +26,10 @@ Current 0.7 engineering boundary work:
 
 ## Immediate engineering work
 
-1. Complete and verify the `0.7.0` version boundary on an exact PR head with Research + Windows CI.
-2. Record that exact 0.7 source SHA/runs/artifacts in `docs/development-validation.json`; do not relabel 0.6 evidence.
-3. Run native Windows + Demo MT5 acceptance using `docs/ACCEPTANCE.md` and record it separately from CI.
-4. Test private Telegram delivery only with local credentials.
-5. Enable branch protection / required checks for `main` and preferably `development` when repository administration access is available.
-6. Begin aligned multi-symbol correlation/exposure research with timestamp availability masks before considering any correlation-driven execution rule.
+1. Run native Windows + Demo MT5 acceptance using `docs/ACCEPTANCE.md` and record it separately from CI.
+2. Test private Telegram delivery only with local credentials.
+3. Enable branch protection / required checks for `main` and preferably `development` when repository administration access is available.
+4. Begin aligned multi-symbol correlation/exposure research with timestamp availability masks before considering any correlation-driven execution rule.
 
 ## Scientific work still open
 
