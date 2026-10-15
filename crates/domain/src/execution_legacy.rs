@@ -372,12 +372,29 @@ pub fn evaluate(
         && [s.stop_distance, s.target_distance]
             .iter()
             .all(|v| v.is_finite() && *v > 0.);
+    if s.ready && b.id=="system" && c.trading.mode==TradingMode::Sniper {
+        match trading::costs(t,c,b.lots,now) {
+            Ok(cost) if cost.total/(cost.total+cost.desired_net_target_money)<=c.trading.max_cost_fraction => {},
+            Ok(_) => {s.ready=false;s.reason.push_str("; حصة التكلفة تتجاوز الحد المختار للقناص");},
+            Err(error) => {s.ready=false;s.reason.push_str(&format!("; {error}"));}
+        }
+    }
     s
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sniper_broker_policy_obeys_current_cost_fraction() {
+        let now=1_800_000_020_000;
+        let t=Telemetry{connected:true,symbol:"XAUUSD".into(),market:Some(crate::research::tests::fixture(now,false)),tick_age_ms:Some(0),quote_time_ms:Some(now),bid:Some(2055.8),ask:Some(2055.81),point:Some(0.01),tick_size:Some(0.01),tick_value_profit:Some(1.),tick_value_loss:Some(1.),..Default::default()};
+        let mut c=Config::default();c.trading.mode=TradingMode::Sniper;
+        let b=BrainConfig::default();let frames=BTreeMap::new();
+        assert!(evaluate(&b,&t,&c,&frames,None,now).ready);
+        c.trading.max_cost_fraction=0.01;
+        let s=evaluate(&b,&t,&c,&frames,None,now);assert!(!s.ready);assert!(s.reason.contains("حصة التكلفة"));
+    }
     #[test]
     fn identity_and_user_controls() {
         let mut b = BrainConfig::default();

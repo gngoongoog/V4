@@ -14,13 +14,12 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
     let settings = &v["settings"];
     ui.set_exec_summary(
         format!(
-            "{} | حساب {} / {}\nالتنفيذ: {} | مطابق للحساب: {}\n{}",
+            "{} | حساب {} / {}\nالتنفيذ: {} | مطابق للحساب: {}",
             settings["target"].as_str().unwrap_or("demo"),
             settings["login"],
             settings["server"].as_str().unwrap_or("—"),
             v["armed"],
-            v["account_matches"],
-            v["note"].as_str().unwrap_or("")
+            v["account_matches"]
         )
         .into(),
     );

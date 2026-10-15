@@ -75,6 +75,10 @@ pub fn render() -> anyhow::Result<()> {
     ui.set_wyckoff_detail("RENDER FIXTURE — ليس تحليلاً حقيقياً\nM1 | C → D محتملة\nSpring + Test | دعم 98 | مقاومة 102\nالحجم: tick_activity_proxy\nاختبار أقل نشاطاً بعد اختراق الدعم والعودة\nنتائج مقاسة: 0 | ينتظر 12 شمعة لاحقة".into());
     ui.set_exec_summary("RENDER FIXTURE — Demo / stopped / no broker connected".into());
     ui.set_exec_role("advisor".into());
+    ui.set_exec_names(slint::ModelRc::new(slint::VecModel::from(braintrade_domain::execution::BRAINS.iter().map(|b|slint::SharedString::from(b.1)).collect::<Vec<_>>())));
+    ui.set_exec_frames(slint::ModelRc::new(slint::VecModel::from(vec!["M1".into(),"M5".into(),"H1".into()])));
+    ui.set_exec_selected(3);
+    ui.set_exec_detail("RENDER FIXTURE — لا أوامر سوق حقيقية\nالترند | عضو تابع للرئيسي\nSTART/STOP مستقل عن زر العضوية".into());
     ui.show()?;
     for (width, height, suffix) in [(1120, 820, ""), (880, 700, "-small")] {
         window.set_size(slint::PhysicalSize::new(width, height));
