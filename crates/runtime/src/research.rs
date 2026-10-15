@@ -555,6 +555,16 @@ pub fn decision_history(db: &Connection) -> Result<Value> {
 mod tests {
     use super::*;
     use braintrade_domain::{Candle, MarketData};
+    #[test]
+    fn sniper_cost_gate_and_frozen_hold_survive_mode_change() {
+        let now=1_800_000_000_000;let mut t=snapshot(now);t.point=Some(0.01);t.quote_time_ms=Some(now);
+        let last=t.market.as_mut().unwrap().m1.last_mut().unwrap();last.close=2055.5;last.high=2055.6;t.bid=Some(2055.5);t.ask=Some(2055.51);
+        let mut c=Config::default();c.trading.mode=TradingMode::Sniper;c.trading.sniper_target_points=5.;let mut db=Connection::open_in_memory().unwrap();let mut e=Research::load(&db).unwrap();
+        let(a,_)=e.update(&mut db,&t,&c,true,now).unwrap();assert!(a.gates.iter().any(|s|s.contains("entry costs")),"{:?}",a);assert!(!e.has_open_position(&t));
+        c.trading.sniper_target_points=200.;t.quote_time_ms=Some(now+1);let(a,_)=e.update(&mut db,&t,&c,true,now+1).unwrap();assert_eq!(a.action,"SHADOW_BUY","{:?}",a);
+        let p=e.books[&context(&t)].position.as_ref().unwrap();let(stop,target)=(p.stop,p.target);assert_eq!(p.max_hold_ms,120_000);
+        let mut restarted=Research::load(&db).unwrap();c.trading.mode=TradingMode::Swing;restarted.update(&mut db,&t,&c,false,now+60_000).unwrap();let p=restarted.books[&context(&t)].position.as_ref().unwrap();assert_eq!((p.stop,p.target,p.max_hold_ms),(stop,target,120_000));let(_,summary)=restarted.update(&mut db,&t,&c,false,now+120_002).unwrap();assert_eq!(summary.trades,1);assert!(!restarted.has_open_position(&t));
+    }
     fn snapshot(now: u64) -> Telemetry {
         let bars = |seconds: u64| {
             (0..180)

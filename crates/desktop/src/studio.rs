@@ -1,15 +1,197 @@
 use super::*;
-use braintrade_domain::{studio::TIMEFRAMES,trading::{TradingConfig,TradingMode}};
+use braintrade_domain::{
+    studio::TIMEFRAMES,
+    trading::{TradingConfig, TradingMode},
+};
 use std::fmt::Write;
-fn number(s:slint::SharedString)->anyhow::Result<f64>{let v=s.trim().parse::<f64>()?;anyhow::ensure!(v.is_finite(),"Use a finite decimal number");Ok(v)}
-fn selected_tf(ui:&Dashboard)->String{if ui.get_studio_tf()<=0{"ALL".into()}else{TIMEFRAMES.get((ui.get_studio_tf()-1)as usize).unwrap_or(&"ALL").to_string()}}
-fn load(ui:&Dashboard,c:&Config){ui.set_trade_mode(match c.trading.mode{TradingMode::Scalping=>0,TradingMode::Swing=>1,TradingMode::Expert=>2,TradingMode::Sniper=>3});ui.set_sniper_target(c.trading.sniper_target_points.to_string().into());ui.set_sniper_stop(c.trading.sniper_stop_points.to_string().into());ui.set_sniper_cooldown(c.trading.sniper_cooldown_seconds.to_string().into());ui.set_pip_points(c.trading.pip_points.to_string().into());ui.set_cost_fraction(c.trading.max_cost_fraction.to_string().into());ui.set_commission_lot(c.risk.commission_per_lot.to_string().into());}
-fn report(v:&Value)->String{let mut out=format!("{} | {}\n{}\nقاعدة {} | نافذة {} | وقف {} ATR | هدف {}R\nتركيبات {} | فاصل {} شمعة\n",v["timeframe"],v["algorithm"],v["context"],v["selected"]["family"],v["selected"]["lookback"],v["selected"]["stop_atr"],v["selected"]["reward"],v["trials"],v["purge_bars"]);for(key,name)in[("training","التدريب"),("validation","التحقق للاختيار"),("test","الاختبار النهائي")]{let m=&v[key];let _=writeln!(out,"{name}: {} صفقات / {} رابحة | صافي {:.3}R | تراجع {:.3}R",m["trades"],m["wins"],m["net_r"].as_f64().unwrap_or(0.),m["max_drawdown_r"].as_f64().unwrap_or(0.));}let _=writeln!(out,"اختبار UTC epoch: {} → {}\nأهلية مراجعة بحثية: {}\n{}",v["test_start"],v["test_end"],v["eligible_for_review"],v["note"].as_str().unwrap_or(""));out}
-fn paint(ui:&Dashboard,v:&Value,tf:&str){let mut out=format!("الحساب: {}\nمتصل: {} | تعلم تلقائي: {} | يعمل على: {} | طابور: {}\n{}\n",v["context"],v["connected"],v["auto"],v["working"],v["queued"],v["last_error"].as_str().unwrap_or(""));let mut w=String::from("وايكوف — النطاق والاختبار على الشموع المكتملة\nالمرحلة تقديرية؛ tick_activity_proxy يعني نشاط ticks وليس حجماً حقيقياً.\n\n");
- for f in v["frames"].as_array().into_iter().flatten(){let name=f["timeframe"].as_str().unwrap_or("");let _=writeln!(out,"{name}: {} شمعة | حديث: {} | {}",f["bars"],f["live"],f["error"].as_str().unwrap_or(""));if tf!="ALL"&&name!=tf{continue;}let a=&f["wyckoff"];let evidence=a["evidence"].as_array().map(|a|a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n")).unwrap_or_default();let _=writeln!(w,"{name} | حديث: {} | {}\n{} | {} | اتجاه {}\nدعم {} | مقاومة {} | حجم {}\n{evidence}",f["live"],f["error"].as_str().unwrap_or(""),a["phase"].as_str().unwrap_or("غير متاح"),a["event"].as_str().unwrap_or("—"),a["side"],a["support"],a["resistance"],a["volume_source"].as_str().unwrap_or("—"));if let Some(m)=v["wyckoff_learning"].as_array().and_then(|r|r.iter().find(|m|m["timeframe"]==name)){let _=writeln!(w,"تعلم لاحق: {} مقاسة / {} تنتظر | رابحة {}\nمتوسط صافي/لوت {} | تكرار نجاح مملّس {:.1}%\nدليل كافٍ موجب: {}\n",m["scored"],m["pending"],m["wins"],m["mean_net_per_lot"],100.*m["smoothed_win_rate"].as_f64().unwrap_or(0.),m["research_evidence_positive"]);}else{w.push_str("لم تنضج نتائج مستقبلية بعد؛ القياس بعد 12 شمعة لاحقة.\n\n");}}
- ui.set_studio_summary(out.into());ui.set_wyckoff_detail(w.into());let reports=v["reports"].as_array().cloned().unwrap_or_default();let ids:Vec<slint::SharedString>=reports.iter().map(|r|r["id"].as_str().unwrap_or("").into()).collect();let names:Vec<slint::SharedString>=reports.iter().map(|r|format!("{} | {} | {}",r["report"]["timeframe"].as_str().unwrap_or(""),r["created_ms"],r["id"].as_str().unwrap_or("")).into()).collect();ui.set_studio_ids(std::rc::Rc::new(slint::VecModel::from(ids)).into());ui.set_studio_reports(std::rc::Rc::new(slint::VecModel::from(names)).into());
+fn number(s: slint::SharedString) -> anyhow::Result<f64> {
+    let v = s.trim().parse::<f64>()?;
+    anyhow::ensure!(v.is_finite(), "Use a finite decimal number");
+    Ok(v)
 }
-pub fn setup(ui:&Dashboard)->slint::Timer{let names:Vec<slint::SharedString>=std::iter::once("ALL").chain(TIMEFRAMES).map(Into::into).collect();ui.set_studio_frames(std::rc::Rc::new(slint::VecModel::from(names)).into());let(tx,rx)=mpsc::channel::<(String,Value,String)>();let sender=tx.clone();let weak=ui.as_weak();ui.on_studio_action(move|action|{if let Some(ui)=weak.upgrade(){if ui.get_studio_busy(){return;}let action=action.to_string();let tf=selected_tf(&ui);let body=(||->anyhow::Result<Value>{Ok(match action.as_str(){"save"=>{let trading=TradingConfig{mode:match ui.get_trade_mode(){0=>TradingMode::Scalping,1=>TradingMode::Swing,3=>TradingMode::Sniper,_=>TradingMode::Expert},sniper_target_points:number(ui.get_sniper_target())?,sniper_stop_points:number(ui.get_sniper_stop())?,sniper_cooldown_seconds:ui.get_sniper_cooldown().trim().parse()?,pip_points:number(ui.get_pip_points())?,max_cost_fraction:number(ui.get_cost_fraction())?};trading.validate().map_err(anyhow::Error::msg)?;json!({"trading":trading,"commission_per_lot":number(ui.get_commission_lot())?})},"cost"=>json!({"lots":number(ui.get_preview_lots())?,"commission_per_lot":number(ui.get_commission_lot())?,"pip_points":number(ui.get_pip_points())?}),"report"=>{use slint::Model;json!({"id":ui.get_studio_ids().row_data(ui.get_studio_report_index().max(0)as usize).unwrap_or_default().to_string()})},"auto_on"=>json!({"enabled":true}),_=>json!({"timeframe":tf})})})();match body{Ok(body)=>{ui.set_studio_busy(true);let _=sender.send((action,body,tf));},Err(e)=>ui.set_studio_message(format!("تحقق من الأرقام: {e}").into())}}});
- let timer=slint::Timer::default();let weak=ui.as_weak();timer.start(slint::TimerMode::Repeated,Duration::from_secs(4),move||{if let Some(ui)=weak.upgrade(){if (15..=16).contains(&ui.get_page())&&!ui.get_studio_busy(){ui.set_studio_busy(true);let _=tx.send(("poll".into(),json!({}),selected_tf(&ui)));}}});
- let weak=ui.as_weak();std::thread::spawn(move||{while let Ok((action,body,tf))=rx.recv(){let result=(||->anyhow::Result<Value>{let c=Client::new(&data_dir())?;match action.as_str(){"config"=>c.get("/v1/config"),"save"=>{c.post("/v1/trading/settings",body)?;c.get("/v1/config")},"cost"=>c.post("/v1/trading/preview",body),"report"=>c.post("/v1/studio/report",body),"run"=>c.post("/v1/studio/run",body),"cancel"=>c.post("/v1/studio/cancel",body),"auto_on"=>c.post("/v1/studio/auto",body),_=>c.get("/v1/studio")}})();let _=weak.upgrade_in_event_loop(move|ui|{ui.set_studio_busy(false);match result{Err(e)=>ui.set_studio_message(format!("تعذر الطلب: {e}").into()),Ok(v)=>match action.as_str(){"config"|"save"=>{if let Ok(c)=serde_json::from_value::<Config>(v["config"].clone()){load(&ui,&c);}ui.set_studio_message(if action=="save"{"حُفظ الوضع والتكلفة. شغّل النظام لتطبيقه على الإشارات الجديدة."}else{"تم تحميل الإعدادات المحفوظة"}.into());},"cost"=>{let c=&v["costs"];let text=if c.is_null(){format!("العمولة: {:.4}\n{}",v["commission"].as_f64().unwrap_or(0.),v["error"].as_str().unwrap_or(""))}else{let n=|key:&str|c[key].as_f64().unwrap_or(0.);format!("{} | {:.3} لوت\nالعمولة ذهاب وإياب: {:.4}\nالسبريد الفعلي: {:.2} نقطة / {:.2} pip = {:.4}\nانزلاق الدخول والخروج: {:.4}\nإجمالي التكلفة: {:.4}\nحركة التعادل من سعر bid: {:.2} نقطة / {:.2} pip\nآخر حساب يدوي؛ اضغط احسب لتحديث السعر.",c["currency"].as_str().unwrap_or(""),n("lots"),n("commission"),n("spread_points"),n("spread_pips"),n("spread_money"),n("slippage_money"),n("total"),n("break_even_points"),n("break_even_pips"))};ui.set_cost_detail(text.into());},"report"=>ui.set_studio_report(report(&v).into()),"poll"|"refresh"=>paint(&ui,&v,&tf),_=>ui.set_studio_message(serde_json::to_string_pretty(&v).unwrap_or_default().into())}});}});timer
+fn selected_tf(ui: &Dashboard) -> String {
+    if ui.get_studio_tf() <= 0 {
+        "ALL".into()
+    } else {
+        TIMEFRAMES
+            .get((ui.get_studio_tf() - 1) as usize)
+            .unwrap_or(&"ALL")
+            .to_string()
+    }
+}
+fn load(ui: &Dashboard, c: &Config) {
+    ui.set_trade_mode(match c.trading.mode {
+        TradingMode::Scalping => 0,
+        TradingMode::Swing => 1,
+        TradingMode::Expert => 2,
+        TradingMode::Sniper => 3,
+    });
+    ui.set_sniper_target(c.trading.sniper_target_points.to_string().into());
+    ui.set_sniper_stop(c.trading.sniper_stop_points.to_string().into());
+    ui.set_sniper_cooldown(c.trading.sniper_cooldown_seconds.to_string().into());
+    ui.set_pip_points(c.trading.pip_points.to_string().into());
+    ui.set_cost_fraction(c.trading.max_cost_fraction.to_string().into());
+    ui.set_commission_lot(c.risk.commission_per_lot.to_string().into());
+}
+fn report(v: &Value) -> String {
+    let mut out = format!(
+        "{} | {}\n{}\nقاعدة {} | نافذة {} | وقف {} ATR | هدف {}R\nتركيبات {} | فاصل {} شمعة\n",
+        v["timeframe"],
+        v["algorithm"],
+        v["context"],
+        v["selected"]["family"],
+        v["selected"]["lookback"],
+        v["selected"]["stop_atr"],
+        v["selected"]["reward"],
+        v["trials"],
+        v["purge_bars"]
+    );
+    for (key, name) in [
+        ("training", "التدريب"),
+        ("validation", "التحقق للاختيار"),
+        ("test", "الاختبار النهائي"),
+    ] {
+        let m = &v[key];
+        let _ = writeln!(
+            out,
+            "{name}: {} صفقات / {} رابحة | صافي {:.3}R | تراجع {:.3}R",
+            m["trades"],
+            m["wins"],
+            m["net_r"].as_f64().unwrap_or(0.),
+            m["max_drawdown_r"].as_f64().unwrap_or(0.)
+        );
+    }
+    let _ = writeln!(
+        out,
+        "اختبار UTC epoch: {} → {}\nأهلية مراجعة بحثية: {}\n{}",
+        v["test_start"],
+        v["test_end"],
+        v["eligible_for_review"],
+        v["note"].as_str().unwrap_or("")
+    );
+    out
+}
+fn paint(ui: &Dashboard, v: &Value, tf: &str) {
+    let mut out = format!(
+        "الحساب: {}\nمتصل: {} | تعلم تلقائي: {} | يعمل على: {} | طابور: {}\n{}\n",
+        v["context"],
+        v["connected"],
+        v["auto"],
+        v["working"],
+        v["queued"],
+        v["last_error"].as_str().unwrap_or("")
+    );
+    let mut w=String::from("وايكوف — النطاق والاختبار على الشموع المكتملة\nالمرحلة تقديرية؛ tick_activity_proxy يعني نشاط ticks وليس حجماً حقيقياً.\n\n");
+    for f in v["frames"].as_array().into_iter().flatten() {
+        let name = f["timeframe"].as_str().unwrap_or("");
+        let _ = writeln!(
+            out,
+            "{name}: {} شمعة | حديث: {} | {}",
+            f["bars"],
+            f["live"],
+            f["error"].as_str().unwrap_or("")
+        );
+        if tf != "ALL" && name != tf {
+            continue;
+        }
+        let a = &f["wyckoff"];
+        let evidence = a["evidence"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        let _ = writeln!(
+            w,
+            "{name} | حديث: {} | {}\n{} | {} | اتجاه {}\nدعم {} | مقاومة {} | حجم {}\n{evidence}",
+            f["live"],
+            f["error"].as_str().unwrap_or(""),
+            a["phase"].as_str().unwrap_or("غير متاح"),
+            a["event"].as_str().unwrap_or("—"),
+            a["side"],
+            a["support"],
+            a["resistance"],
+            a["volume_source"].as_str().unwrap_or("—")
+        );
+        if let Some(m) = v["wyckoff_learning"]
+            .as_array()
+            .and_then(|r| r.iter().find(|m| m["timeframe"] == name))
+        {
+            let _=writeln!(w,"تعلم لاحق: {} مقاسة / {} تنتظر | رابحة {}\nمتوسط صافي/لوت {} | تكرار نجاح مملّس {:.1}%\nدليل كافٍ موجب: {}\n",m["scored"],m["pending"],m["wins"],m["mean_net_per_lot"],100.*m["smoothed_win_rate"].as_f64().unwrap_or(0.),m["research_evidence_positive"]);
+        } else {
+            w.push_str("لم تنضج نتائج مستقبلية بعد؛ القياس بعد 12 شمعة لاحقة.\n\n");
+        }
+    }
+    ui.set_studio_summary(out.into());
+    ui.set_wyckoff_detail(w.into());
+    let reports = v["reports"].as_array().cloned().unwrap_or_default();
+    let ids: Vec<slint::SharedString> = reports
+        .iter()
+        .map(|r| r["id"].as_str().unwrap_or("").into())
+        .collect();
+    let names: Vec<slint::SharedString> = reports
+        .iter()
+        .map(|r| {
+            format!(
+                "{} | {} | {}",
+                r["report"]["timeframe"].as_str().unwrap_or(""),
+                r["created_ms"],
+                r["id"].as_str().unwrap_or("")
+            )
+            .into()
+        })
+        .collect();
+    ui.set_studio_ids(std::rc::Rc::new(slint::VecModel::from(ids)).into());
+    ui.set_studio_reports(std::rc::Rc::new(slint::VecModel::from(names)).into());
+}
+pub fn setup(ui: &Dashboard) -> slint::Timer {
+    let names: Vec<slint::SharedString> = std::iter::once("ALL")
+        .chain(TIMEFRAMES)
+        .map(Into::into)
+        .collect();
+    ui.set_studio_frames(std::rc::Rc::new(slint::VecModel::from(names)).into());
+    let (tx, rx) = mpsc::channel::<(String, Value, String)>();
+    let sender = tx.clone();
+    let weak = ui.as_weak();
+    ui.on_studio_action(move|action|{if let Some(ui)=weak.upgrade(){if ui.get_studio_busy(){return;}let action=action.to_string();let tf=selected_tf(&ui);let body=(||->anyhow::Result<Value>{Ok(match action.as_str(){"save"=>{let trading=TradingConfig{mode:match ui.get_trade_mode(){0=>TradingMode::Scalping,1=>TradingMode::Swing,3=>TradingMode::Sniper,_=>TradingMode::Expert},sniper_target_points:number(ui.get_sniper_target())?,sniper_stop_points:number(ui.get_sniper_stop())?,sniper_cooldown_seconds:ui.get_sniper_cooldown().trim().parse()?,pip_points:number(ui.get_pip_points())?,max_cost_fraction:number(ui.get_cost_fraction())?};trading.validate().map_err(anyhow::Error::msg)?;json!({"trading":trading,"commission_per_lot":number(ui.get_commission_lot())?})},"cost"=>json!({"lots":number(ui.get_preview_lots())?,"commission_per_lot":number(ui.get_commission_lot())?,"pip_points":number(ui.get_pip_points())?}),"report"=>{use slint::Model;json!({"id":ui.get_studio_ids().row_data(ui.get_studio_report_index().max(0)as usize).unwrap_or_default().to_string()})},"auto_on"=>json!({"enabled":true}),_=>json!({"timeframe":tf})})})();match body{Ok(body)=>{ui.set_studio_busy(true);let _=sender.send((action,body,tf));},Err(e)=>ui.set_studio_message(format!("تحقق من الأرقام: {e}").into())}}});
+    let timer = slint::Timer::default();
+    let weak = ui.as_weak();
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_secs(4),
+        move || {
+            if let Some(ui) = weak.upgrade() {
+                if (15..=16).contains(&ui.get_page()) && !ui.get_studio_busy() {
+                    ui.set_studio_busy(true);
+                    let _ = tx.send(("poll".into(), json!({}), selected_tf(&ui)));
+                }
+            }
+        },
+    );
+    let weak = ui.as_weak();
+    std::thread::spawn(move || {
+        while let Ok((action, body, tf)) = rx.recv() {
+            let result = (|| -> anyhow::Result<Value> {
+                let c = Client::new(&data_dir())?;
+                match action.as_str() {
+                    "config" => c.get("/v1/config"),
+                    "save" => {
+                        c.post("/v1/trading/settings", body)?;
+                        c.get("/v1/config")
+                    }
+                    "cost" => c.post("/v1/trading/preview", body),
+                    "report" => c.post("/v1/studio/report", body),
+                    "run" => c.post("/v1/studio/run", body),
+                    "cancel" => c.post("/v1/studio/cancel", body),
+                    "auto_on" => c.post("/v1/studio/auto", body),
+                    _ => c.get("/v1/studio"),
+                }
+            })();
+            let _=weak.upgrade_in_event_loop(move|ui|{ui.set_studio_busy(false);match result{Err(e)=>ui.set_studio_message(format!("تعذر الطلب: {e}").into()),Ok(v)=>match action.as_str(){"config"|"save"=>{if let Ok(c)=serde_json::from_value::<Config>(v["config"].clone()){load(&ui,&c);}ui.set_studio_message(if action=="save"{"حُفظ الوضع والتكلفة. شغّل النظام لتطبيقه على الإشارات الجديدة."}else{"تم تحميل الإعدادات المحفوظة"}.into());},"cost"=>{let c=&v["costs"];let text=if c.is_null(){format!("العمولة: {:.4}\n{}",v["commission"].as_f64().unwrap_or(0.),v["error"].as_str().unwrap_or(""))}else{let n=|key:&str|c[key].as_f64().unwrap_or(0.);format!("{} | {:.3} لوت\nالعمولة ذهاب وإياب: {:.4}\nالسبريد الفعلي: {:.2} نقطة / {:.2} pip = {:.4}\nانزلاق الدخول والخروج: {:.4}\nإجمالي التكلفة: {:.4}\nحركة التعادل من سعر bid: {:.2} نقطة / {:.2} pip\nآخر حساب يدوي؛ اضغط احسب لتحديث السعر.",c["currency"].as_str().unwrap_or(""),n("lots"),n("commission"),n("spread_points"),n("spread_pips"),n("spread_money"),n("slippage_money"),n("total"),n("break_even_points"),n("break_even_pips"))};ui.set_cost_detail(text.into());},"report"=>ui.set_studio_report(report(&v).into()),"poll"|"refresh"=>paint(&ui,&v,&tf),_=>ui.set_studio_message(serde_json::to_string_pretty(&v).unwrap_or_default().into())}}});
+        }
+    });
+    timer
 }

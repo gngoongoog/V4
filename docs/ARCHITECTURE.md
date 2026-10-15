@@ -43,7 +43,7 @@ There is no champion activation, auto-promotion, live self-modification or learn
 
 SQLite uses WAL + synchronous FULL. Foreign keys are explicitly enabled and checked on startup. Runtime tables include audit/control state, market research state, historical reports/history, chronological evidence and learning audit records.
 
-Backup schema 10 includes research/learning state and excludes secrets. Restore validates exact members, version/schema, checksums/config/SQLite integrity; stages a source plus rollback snapshot; and applies before SQLite startup under the Core lock. STOP is required. Native controls expose validation, staging and the last result. Sealed validation uses a read-only immutable URI and rejects unexpected files without deleting them. Restore never enables execution.
+Backup schema 11 includes research/learning state and excludes secrets. Restore validates exact members, version/schema, checksums/config/SQLite integrity; stages a source plus rollback snapshot; and applies before SQLite startup under the Core lock. STOP is required. Native controls expose validation, staging and the last result. Sealed validation uses a read-only immutable URI and rejects unexpected files without deleting them. Restore never enables execution.
 
 ## 7. IPC/security boundary
 
@@ -80,6 +80,6 @@ Execution must persist intent before external side effects, treat send timeouts 
 
 ## 11. Release/version boundary
 
-Current release candidate: **0.4.0 Preview**. Cargo, lockfile, desktop and Windows package versions are aligned. The user has requested Windows delivery; use BUILD_HANDOFF.md and docs/validation.json for the exact final validation boundary.
+Current release candidate: **0.5.0 Preview**. Cargo, lockfile, desktop and Windows package versions are aligned. The user has requested Windows delivery; use BUILD_HANDOFF.md and docs/validation.json for the exact final validation boundary.
 
 No architecture item or test result is a profitability, latency or win-rate guarantee.

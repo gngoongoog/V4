@@ -1,8 +1,8 @@
-# BRAINTRADE OS — 0.4.0 Preview
+# BRAINTRADE OS — 0.5.0 Preview
 
 Canonical source: `gngoongoog/V4`. `development` contains active research work; `main` remains the last deliberately promoted stable/resumable checkpoint.
 
-Current release candidate: **0.4.0 Preview**. Cargo, lockfile, desktop and Windows package versions are aligned. The user has requested Windows delivery; use BUILD_HANDOFF.md and docs/validation.json for the exact final validation boundary.
+Current release candidate: **0.5.0 Preview**. Cargo, lockfile, desktop and Windows package versions are aligned. The user has requested Windows delivery; use BUILD_HANDOFF.md and docs/validation.json for the exact final validation boundary.
 
 ## Windows launch
 
@@ -10,9 +10,13 @@ Extract the complete portable ZIP and open **BrainTrade.exe**. Python and the ga
 are bundled. In Settings, choose the installed MT5 `terminal64.exe`, save the exact
 broker symbol and reconnect. See `docs/QUICKSTART_AR.md` for the Arabic guide.
 
-The dashboard has 14 pages, including dedicated Opportunities, Market Map and
+The dashboard has 17 pages, including dedicated Opportunities, Market Map and
 Learning/review and Backup/Restore surfaces. No separate server command or Python installation is
 needed by the end user.
+
+## Added in 0.5.0
+
+Four cost-aware Shadow modes, proportional commission/break-even calculator, 21-timeframe broker feed, asynchronous 40-rule strategy synthesis with purged chronological testing and prospective Wyckoff learning. Three dedicated pages bring the desktop to 17. Exact behavior: `docs/TRADING_MODES_AND_STUDIO.md`.
 
 ## Implemented now
 
@@ -26,12 +30,12 @@ needed by the end user.
 - Learning Foundation: immutable completed-bar snapshots, delayed exact 5/15/30-minute labels, deterministic dataset export, offline linear-softmax baseline trainer and immutable challenger registry.
 - Manual challenger review-eligibility records, read-only challenger inference using the exact stored feature payload, and matured prediction outcome scoring with descriptive out-of-sample metrics.
 - Official Fed/ECB RSS cache and private read-only Telegram query handlers.
-- Backup schema 10 includes research/learning state; native validated restore stages a restart with rollback protection and preserves local secrets.
+- Backup schema 11 includes research/learning state; native validated restore stages a restart with rollback protection and preserves local secrets.
 - Fixed Challenger performance-review policy with immutable evidence-bound reviews and native freeze/report controls.
 
 ## Non-negotiable safety boundary
 
-Legacy rule-based Meta remains the live Shadow entry source. Learned challengers are audit telemetry only. There is no champion-promotion endpoint and no broker execution route. The Python MT5 bridge does not call `order_send`, modify or close broker positions. Historical/ML metrics are not profitability guarantees.
+The selected Expert/Scalping/Swing/Sniper profile drives Shadow entries. Learned challengers are audit telemetry only. There is no champion-promotion endpoint and no broker execution route. The Python MT5 bridge does not call `order_send`, modify or close broker positions. Historical/ML metrics are not profitability guarantees.
 
 ## Validation and quality
 

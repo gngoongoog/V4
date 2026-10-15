@@ -1,3 +1,12 @@
+# 0.5.0 Preview
+
+- Four materially distinct Shadow modes, frozen open-position rules and cost-aware Sniper gating.
+- Proportional round-trip commission, actual spread and break-even calculator.
+- Bounded 21-timeframe broker feed with account/contract/closure validation.
+- Asynchronous 40-rule synthesis, purged train/validation/test, immutable datasets and no holdout reuse.
+- Causal Wyckoff events and delayed prospective cost-adjusted outcomes.
+- Three new native pages, backup schema 11 and 34-frame native render acceptance.
+
 # 0.4.0 portable release candidate — 2026-10-14
 
 ## 2026-10-14 — Integrated restore and review controls

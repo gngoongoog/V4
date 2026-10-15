@@ -1,3 +1,9 @@
+# 0.5.0 extension audit
+
+Trading modes preserve open-position geometry and costs across mode changes/restarts. Sniper checks quote timestamp, cooldown and cost fraction. Higher-frame reads validate account/contract/closure and never synthesize unavailable history. Strategy jobs freeze costs at queue time, use purged chronological splits and refuse exposed test reuse. Wyckoff observations mature only after future bars; duplicate signals remain immutable. New pages are included in 34-frame native acceptance. Exact current validation is in validation.json.
+
+The following audit records the previous 0.4.0 release and is retained as historical evidence only.
+
 # BrainTrade OS — Quality Audit
 
 Audit date: 2026-10-14. Canonical repository: `gngoongoog/V4`.

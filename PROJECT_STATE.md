@@ -2,16 +2,16 @@
 
 Canonical repository: `gngoongoog/V4`. Stable/resumable branch: `main`. Active research branch: `development`.
 
-Current release candidate: **0.4.0 Preview**. Exact tested executable boundary is in `BUILD_HANDOFF.md` and `docs/validation.json`.
+Current release candidate: **0.5.0 Preview**. Exact tested executable boundary is in `BUILD_HANDOFF.md` and `docs/validation.json`.
 
 ## Implemented
 
 ### Core / desktop / MT5 boundary
 
 - Independent Rust Core with authenticated loopback IPC and native Slint desktop.
-- 14 native pages including Opportunities/history, Market Map and Learning/model review and Backup/Restore.
+- 17 native pages including Opportunities/history, Market Map and Learning/model review and Backup/Restore.
 - Read-only MT5 account/positions/orders/history/quotes/Market Book access.
-- Persistent deterministic Shadow simulation and risk limits; Legacy Meta remains the Shadow entry source.
+- Persistent deterministic Shadow simulation and risk limits; the selected mode drives Shadow entries.
 - STOP/stale-data handling withdraws new quote plans; repository guards reject broker-write APIs.
 
 ### Historical / observational research
@@ -35,10 +35,10 @@ Current release candidate: **0.4.0 Preview**. Exact tested executable boundary i
 ### Persistence / packaging / CI
 
 - SQLite WAL + synchronous FULL, foreign keys enabled and startup integrity checked.
-- Backup manifest schema 10 includes historical/chronological/learning registry/review/prediction/scoring/performance-review audit state. Validated staged restart restore, rollback snapshots and native controls are implemented.
+- Backup manifest schema 11 includes historical/chronological/learning registry/review/prediction/scoring/performance-review audit state. Validated staged restart restore, rollback snapshots and native controls are implemented.
 - Source/package hygiene excludes secrets, runtime DB/log state, archives and generated dependency/cache trees.
-- Validated executable checkpoint `42c8c6dfda42acfa02de733f3acb93ff639075cc` passed Research workflow `38601402760` and Windows workflow `38601402734`.
-- Original GitHub artifact (outer ZIP): `BrainTrade-Windows-x64-v0.4.0-Preview`.
+- Previous release evidence is preserved in `docs/validation-v0.4.0.json`; it does not validate the 0.5.0 changes.
+- Current 0.5.0 packaging and CI status: `docs/validation.json`.
 
 ## Known limitations / pending
 
