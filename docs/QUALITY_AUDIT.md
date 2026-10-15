@@ -1,51 +1,59 @@
+> Historical 0.5.0 audit. For the 0.6.0 execution extension, use EXECUTION_AND_ROLES.md and validation.json; the read-only gateway boundary below no longer describes the current release.
+
+# 0.5.0 extension audit
+
+Trading modes preserve open-position geometry and costs across mode changes/restarts. Sniper checks quote timestamp, cooldown and cost fraction. Higher-frame reads validate account/contract/closure and never synthesize unavailable history. Strategy jobs freeze costs at queue time, use purged chronological splits and refuse exposed test reuse. Wyckoff observations mature only after future bars; duplicate signals remain immutable. New pages are included in 34-frame native acceptance. Exact current validation is in validation.json. Code `a5961ff85b41e50e18a7c8295244d115f9fcfd3d` passed Research `38689840746` and Windows `38689840745`, including all 34 complete native frames.
+
+The following audit records the previous 0.4.0 release and is retained as historical evidence only.
+
 # BrainTrade OS — Quality Audit
 
 Audit date: 2026-10-14. Canonical repository: `gngoongoog/V4`.
 
-This document records the repository-wide consistency review across the Rust workspace, native desktop, read-only MT5 gateway, historical research, learning pipeline, persistence, packaging, CI and documentation. It is not a profitability or live-trading approval.
+This audit covers the Rust workspace, native desktop, read-only MT5 gateway, historical research, learning pipeline, persistence, packaging, CI and documentation. It is not a profitability or live-trading approval.
 
-## Architecture and data-flow checks
+## Architecture / safety
 
 - `crates/domain` owns deterministic research/backtest/opportunity contracts.
-- `crates/runtime` owns persistence, Core IPC, Shadow, historical services, chronological evaluation, learning registry/review/inference/scoring and backup metadata.
+- `crates/runtime` owns persistence, Core IPC, Shadow, historical services, chronological evaluation and learning review/inference/scoring/performance-review audit services.
 - `crates/desktop` consumes Core APIs and renders native Slint pages; it does not own broker execution.
-- `gateway/mt5_gateway.py` remains read-only. Repository contract tests reject broker-write APIs such as `order_send` and `TRADE_ACTION_*`.
-- The learning live path is ordered as completed-bar observation -> read-only challenger inference -> matured-label scoring -> publish status. Learned outputs do not feed legacy Meta, opportunities, risk, lot sizing, Shadow execution or MT5 orders.
+- `gateway/mt5_gateway.py` remains read-only; repository contracts reject broker-write APIs.
+- Learning live order is completed-bar observation -> read-only challenger inference -> matured-label scoring -> performance-review audit/status. None of these learned outputs feed Legacy Meta, opportunities, risk, lot sizing, Shadow execution or MT5 orders.
 
-## Persistence integrity
+## Persistence / package integrity
 
-SQLite startup explicitly enables `PRAGMA foreign_keys=ON` and runs `foreign_key_check`. A unit test verifies orphan inserts are rejected. WAL/FULL synchronous behavior remains in place. Backup manifest schema 8 includes settings/audit, historical data, chronological evidence, learning registry/review, read-only predictions and scored outcomes. Full restore is still intentionally not implemented.
+- SQLite uses WAL/FULL synchronous behavior, explicitly enables foreign keys and runs startup `foreign_key_check`.
+- Backup manifest schema 10 includes settings/audit, historical data, chronological evidence, learning registry/review, predictions, scored outcomes and performance-review records. Validated staged restart restore, rollback snapshots and native controls are implemented.
+- Source/package paths exclude secrets, runtime DB/log state, `.import`, archives and generated dependency/cache/venv trees.
 
-## Source/package hygiene
+## Current validation boundary — PASS
 
-Both `scripts/source_archive.py` and portable `source_copy()` defensively exclude runtime state, `.import`, archives, secrets, generated dependency trees and caches while preserving real source such as `crates/runtime` and `.env.example`. Tests cover output-inside-source-tree behavior and exclusions for `.ci`, `node_modules`, virtual environments, Python caches, SQLite/log/key/certificate files and ZIP/7z/RAR artifacts. `test_project_contract.py` also fails CI if these artifacts become tracked later.
+Executable/code checkpoint: `42c8c6dfda42acfa02de733f3acb93ff639075cc`.
 
-## Validation boundary — PASS
+- Research run `38601402760`: **PASS** including Rust/Core/Python, real-Core smoke, browser checks, Desktop compile/all-page render and artifact upload.
+- Windows run `38601402734`: **PASS** including Linux duplicate validation, Windows workspace/Python tests, release portable packaging, packaged runtime/native checks and artifact uploads.
+- Original GitHub artifact (outer ZIP): `BrainTrade-Windows-x64-v0.4.0-Preview`, 33,345,482 bytes, SHA-256 `2d8115e64c91cf39231577a2f662bf80430646af61c0579aa108ffbd1fd84585`.
 
-Executable/code checkpoint: `a74f7ca87497d8e1c923523050acb6bbf293bd7d`.
+Documentation-only commits after this checkpoint do not change executable behavior. Native acceptance on the user's own Windows/MT5 broker environment remains separate.
 
-- Research validation run `38544897072`: **PASS** including Rust/Core/Python, real-Core smoke, browser checks, Desktop compile/all-page headless render and artifact upload.
-- Windows build/tests run `38544897241`: **PASS** including Linux duplicate validation, Windows portable packaging and artifact upload.
-- Windows artifact: `BrainTrade-Windows-x64-v0.3.0-Preview`, 32,991,252 bytes, SHA-256 `b417c82c5f105624292bef10061f9254cfb0a6949aed899ad116e30a85e04a76`.
+## Challenger performance-review audit result
 
-Documentation-only commits after that checkpoint do not change executable behavior. Native acceptance on the user's own Windows/MT5 broker environment remains separate from CI.
-
-## Findings fixed during this audit
-
-- Windows CI now runs on `development`, not only `main`/PR.
-- Source packaging exclusions were hardened and aligned between both export paths.
-- SQLite foreign-key enforcement became explicit and tested.
-- Permanent project-contract tests now guard read-only broker access, no promotion/execution routes, causal learning order, shared schemas, CI coverage and repository hygiene.
-- Project documentation was reconciled with already implemented Gann/DOM opportunities, chronological evaluation, manual review eligibility, read-only inference and prediction outcome scoring.
+`challenger-performance-review-v1` is implemented as an observational/manual policy over immutable scored outcomes. It uses fixed sample/class/context/window/regime gates, majority/uniform baselines, balanced accuracy/macro-F1/log-loss/Brier/ECE, chronological stability and distribution-drift checks. Exact evidence identities, outcome IDs, boundaries and reason codes are persisted. A favorable result is only `review_candidate` for human consideration. Champion creation, promotion, Shadow/risk effect and broker effect remain disabled.
 
 ## Open limitations / not defects
 
-- `main` and `development` are currently unprotected GitHub branches; required status checks are not enforced by branch protection. Until repository settings are changed, discipline depends on the documented branch policy and CI review.
-- `development` is intentionally ahead of `main`; promotion to `main` should happen only after a deliberate safe-checkpoint review.
-- The research milestone is called 0.4.0 while the Cargo/Windows package version remains 0.3.0. This is documented intentionally; normalize package/version numbers only as part of an explicit release bump with `Cargo.lock` validation.
-- Native Windows + the user's real MT5 broker history, live Telegram delivery, full restore, broker execution, portfolio execution risk and autonomous champion promotion are not validated/implemented.
-- Historical/synthetic metrics are implementation evidence, not proof of profitability or future win rate.
+- `main` and `development` are unprotected; required status checks are not enforced by branch protection.
+- Native Windows + actual MT5 broker history/Market Book and live Telegram delivery have not been accepted on the user's machine.
+- Real out-of-sample evidence is not yet large enough by definition to claim candidate effectiveness simply because the policy exists.
+- True feed-supported order flow/volume profile, portfolio execution risk, broker execution/reconciliation and autonomous champion promotion are not implemented.
+- Historical/synthetic metrics are implementation evidence, not proof of future profitability or win rate.
 
 ## Next quality gate
 
-The next scientific layer is an explicit Challenger Performance Review Policy over sufficiently large immutable scored out-of-sample samples. It may produce a manual review recommendation only; it must not auto-promote a Champion or influence Shadow/broker execution.
+Accumulate fresh real out-of-sample scored evidence under the fixed review policy and run the native user-laptop MT5/broker + Telegram acceptance checklist. Do not turn a favorable research review into automatic trading authority.
+
+## Final integration checks
+
+Sealed backup validation is read-only and rejects unexpected sidecars without deleting them. Native restore requires STOP, creates rollback state and exposes the last outcome. Performance-review creation binds the displayed model/evidence; the v2 fingerprint includes regime slices.
+
+An earlier Windows render invocation returned before all frames were produced. The final harness waits and requires all 28 exact-size pixel payloads; this corrected check passed.

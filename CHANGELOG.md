@@ -1,4 +1,43 @@
+# 0.5.0 Preview
+
+- Four materially distinct Shadow modes, frozen open-position rules and cost-aware Sniper gating.
+- Proportional round-trip commission, actual spread and break-even calculator.
+- Bounded 21-timeframe broker feed with account/contract/closure validation.
+- Asynchronous 40-rule synthesis, purged train/validation/test, immutable datasets and no holdout reuse.
+- Causal Wyckoff events and delayed prospective cost-adjusted outcomes.
+- Three new native pages, backup schema 11 and 34-frame native render acceptance.
+
+# 0.4.0 portable release candidate — 2026-10-14
+
+## 2026-10-14 — Integrated restore and review controls
+
+- Native backup/restore page and immutable performance-review actions, bringing the dashboard to 14 pages.
+- Sealed SQLite validation is read-only; unexpected sidecars and symlink directories are rejected without deleting data.
+- Restore requires STOP, keeps a rollback snapshot and exposes the last result. Windows packaged acceptance now verifies restore/restart and DPAPI-key preservation.
+- Performance-review creation binds the displayed model and evidence signature; v2 fingerprints include regime slices.
+- Restored atomic-config and foreign-key regression tests.
+- Windows render validation waits for process exit and verifies all 28 exact-size frames before reporting success.
+
+- Compared both repositories and retained V4 as the fuller source.
+- Added Opportunities, Market Map and Learning pages, with all existing learning actions available from the dashboard.
+- Added first-observed opportunity history and export; historical records are explicitly not current quotes.
+- STOP immediately withdraws quote plans; stale maps cannot present old levels as current.
+- Opportunity cache reacts to corrected history on any timeframe.
+- Normalized Cargo/UI/portable version to 0.4.0; added source commit to package metadata.
+- Added packaged Windows startup/DPAPI/config/backup/shutdown and native-render verification.
+- Validated executable checkpoint `74e6387e3f66b8035f5ce55db92561ec1809ebf4`: Research run `38586058214` PASS and Windows run `38586058215` PASS.
+- Windows artifact: `BrainTrade-Windows-x64-v0.4.0-Preview`, 33,229,148 bytes, SHA-256 `e9e09749359a8bfd4cc14959d141d1c8485bf3fe427887413f4b2c5274db0237`.
+
 # Changelog
+
+## 2026-10-14 — challenger performance review policy
+
+- Added `challenger-performance-review-v1` over immutable scored challenger outcomes.
+- Added fixed sample/class/context/window/regime evidence gates, majority/uniform baselines, calibration, chronological stability and class-distribution drift checks.
+- Added deterministic exact-evidence identity, outcome IDs/boundaries/reason codes and immutable review records.
+- Added read-only status/list/create/report APIs and Learning-page visibility.
+- Bumped backup manifest schema to 9 to include performance-review records.
+- Kept Champion creation, automatic promotion, Shadow/risk influence and broker execution disabled.
 
 ## 2026-10-14 — learning audit pipeline and repository quality reconciliation
 
@@ -46,7 +85,7 @@
 - Persistent reports/raw inputs and deterministic offline replay.
 - Same-data experiments and CSV/JSON/HTML exports with equity curve.
 - Official Fed/ECB RSS page/cache and Telegram read-only handlers.
-- Cargo and current Windows preview package metadata still use 0.3.0 during the 0.4.0 research milestone.
+- Historical package metadata used 0.3.0 during the earlier research milestone; the current candidate is aligned at 0.4.0.
 
 ## 0.2.0 — last declared delivered Windows portable preview
 

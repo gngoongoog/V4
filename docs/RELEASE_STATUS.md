@@ -1,21 +1,15 @@
-# Development release status
+# BrainTrade OS 0.6.0 Preview
 
-BrainTrade OS is currently a **research-source checkpoint**, not a newly declared end-user release.
+The verified executable/source checkpoint for the 0.6 development candidate is `fdc63d4d05df89e27607641bd197b9e6ead936e9` (tree `8593783f43a4892cdc724ed5d112607ef7cee006`). Research CI `38803539711` and Windows CI/package `38803539405` both passed on that checkpoint.
 
-- Research milestone name: **0.4.0 development**.
-- Cargo/workspace and Windows preview package metadata: **0.3.0**.
-- Last declared delivered Windows portable: **0.2.0 Preview**.
+The packaged Windows artifact is `BrainTrade-Windows-x64-v0.6.0-Preview` (33,948,849 bytes, SHA-256 `3f7a945a4f9c1ab1ce3e008880722c3dc078a54018a8f622133c604420665779`). The Windows native-validation artifact is 1,785,325 bytes with SHA-256 `64725943777396d8c974c825a0319554b7f6536213709fd4d76edd49c6a6c66d`.
 
-Current `development` includes historical Meta v1/v2, CES and KTE; deterministic replay/exports and trade review; observational Trend/Regime/Structure/Volatility/Gann/DOM/Macro-News layers; persisted chronological evaluation; and the Learning Foundation through challenger registration, manual review eligibility, read-only inference and matured prediction outcome scoring.
+Implemented: 14 execution identities, coordinator/advisor/SOLO/RETURNING roles, Scalping/Swing/Expert/Sniper modes, persistent intent/reconciliation state, schema-12 backup support, adaptive member weighting, the historical research/learning pipeline, and an 18-page native dashboard.
 
-Legacy Meta remains the live Shadow decision source. No broker-order route or champion activation exists.
+Recovery hardening covers unknown-intent account isolation, split-fill reconciliation without top-up/resend, durable-intent identity mismatch fail-closed behavior, and preservation of the gateway send journal outside staged backup restore.
 
-Repository-wide quality work includes explicit SQLite foreign-key enforcement/checks, source/package secret/generated-artifact hygiene, permanent project-contract tests and Windows CI coverage on `development`.
+Release boundary: startup/restart is STOPPED. Imported ML challengers remain research-only and cannot auto-promote. CI execution acceptance is simulated and never connects to a broker. Native MT5 demo-account acceptance and live Telegram delivery have not been performed in the build environment.
 
-Executable checkpoint `a74f7ca87497d8e1c923523050acb6bbf293bd7d` passed Research workflow `38544897072` and Windows workflow `38544897241`. The Windows job successfully packaged desktop/Core/gateway and uploaded artifact `BrainTrade-Windows-x64-v0.3.0-Preview` (32,991,252 bytes; SHA-256 `b417c82c5f105624292bef10061f9254cfb0a6949aed899ad116e30a85e04a76`).
+Promotion to `main` must use the reviewed PR path rather than force-updating the diverged branches. Release-record/documentation commits may sit on top of the tested checkpoint without changing runtime behavior.
 
-That is CI build/package validation only. Native acceptance against the user's actual Windows + MT5 demo broker, real broker history/Market Book behavior and live Telegram credentials remains pending.
-
-Full restore, broker execution/reconciliation, portfolio execution risk and autonomous promotion remain unimplemented. GitHub branch protection/required checks are not enabled yet.
-
-No CI, backtest, Shadow or machine-learning metric is a profitability or future win-rate guarantee.
+See `docs/validation.json` for machine-readable evidence and `docs/EXECUTION_AND_ROLES.md` for execution semantics.

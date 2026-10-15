@@ -1,9 +1,6 @@
 use super::*;
-#[path = "evaluation.rs"]
-mod evaluation;
 use slint::{ModelRc, VecModel};
 pub fn setup(ui: &Dashboard) {
-    evaluation::setup(ui);
     let (tx, rx) = mpsc::channel::<String>();
     ui.on_news_action(move |a| {
         let _ = tx.send(a.to_string());
@@ -114,7 +111,11 @@ pub fn setup(ui: &Dashboard) {
                 Err(_) => {
                     client = None;
                     let _ = weak.upgrade_in_event_loop(|ui| {
-                        ui.set_news_status("الاتصال بالمحرك غير متاح؛ Macro Brain والعناوين الحالية مسحوبة".into())
+                        ui.set_news_status("الاتصال بالمحرك غير متاح؛ Macro Brain والعناوين الحالية مسحوبة".into());
+                        ui.set_news_items(ModelRc::new(VecModel::from(Vec::<NewsRow>::new())));
+                        ui.set_news_sources("تعذر التحقق من حداثة المصادر".into());
+                        ui.set_news_empty(true);
+                        ui.set_news_refreshing(false);
                     });
                 }
             }

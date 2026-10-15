@@ -1,72 +1,51 @@
-# BrainTrade OS — Build Handoff
+# BrainTrade OS 0.6.0 Preview — verified development candidate
 
-## Active checkpoint — 2026-10-14
+Canonical repository: `gngoongoog/V4`.
 
-Canonical repository: `gngoongoog/V4`. Active branch: `development`; `main` remains the older deliberately promoted stable checkpoint. Resume from repository state and current Git heads, never from old ZIPs or chat-only scratch state.
+Verified executable/source checkpoint: `fdc63d4d05df89e27607641bd197b9e6ead936e9` (tree `8593783f43a4892cdc724ed5d112607ef7cee006`).
 
-## Executable/code verification boundary
+Validation on that exact checkpoint:
 
-Current code checkpoint: `a74f7ca87497d8e1c923523050acb6bbf293bd7d` (`Guard generated directories in repository contract`).
+- Research CI: PASS — run `38803539711`.
+- Windows CI/package: PASS — run `38803539405`.
+- Windows artifact: `BrainTrade-Windows-x64-v0.6.0-Preview`, 33,948,849 bytes, SHA-256 `3f7a945a4f9c1ab1ce3e008880722c3dc078a54018a8f622133c604420665779`.
+- Windows native-validation artifact: 1,785,325 bytes, SHA-256 `64725943777396d8c974c825a0319554b7f6536213709fd4d76edd49c6a6c66d`.
+- Simulated MT5 execution integration: PASS; the harness does not connect to a broker.
+- Native broker/account acceptance: NOT PERFORMED.
+- Telegram live delivery: NOT PERFORMED.
 
-Research workflow `38544897072`: **PASS** — Rust domain/runtime tests, Core build, Python tests, real-Core smoke, offline browser checks, native Desktop compile, all-page headless render and artifact upload all completed successfully.
+Implemented in the 0.6 line:
 
-Windows workflow `38544897241`: **PASS** — Linux duplicate validation, real Windows portable packaging and artifact upload all completed successfully. Artifact: `BrainTrade-Windows-x64-v0.3.0-Preview`, 32,991,252 bytes, SHA-256 `b417c82c5f105624292bef10061f9254cfb0a6949aed899ad116e30a85e04a76`.
+- 14 execution identities with coordinator/advisor/SOLO/RETURNING membership.
+- Four trading modes: Scalping, Swing, Expert/adaptive and live-quote Sniper.
+- Persistent execution intents, reconciliation, partial-fill handling, exact account/ticket ownership checks and schema-12 backup support.
+- Adaptive member weighting from prospective 12-bar outcomes; imported ML challengers remain a separate research-only pipeline with no automatic promotion.
+- Native dashboard with 18 pages.
+- Startup and restart are STOPPED; a secondary SOLO toggle does not arm global START.
 
-Commits after `a74f7ca...` are documentation/reconciliation only unless a newer code checkpoint is explicitly recorded here. GitHub Windows packaging success is not native acceptance on the user's own MT5/broker environment.
+Latest verified recovery/execution hardening:
 
-## Non-negotiable safety boundary
+- reconciled fills stay blocked until the owned position is actually observed;
+- exact submitted broker volume is persisted;
+- Sniper applies the configured broker-cost threshold;
+- unknown intents stay scoped to the bound account across an account switch;
+- split fills reconcile cumulatively without a top-up or duplicate resend;
+- a reused durable intent ID with changed execution identity fails closed;
+- schema-12 restore keeps the durable gateway send journal outside rollback, and regression coverage verifies the journal survives restore unchanged.
 
-- MT5 gateway is read-only: no broker order-send/modify/close path is implemented.
-- Live Shadow entry decisions still come from deterministic legacy Meta.
-- Trend/Regime/Structure/Volatility, Market Opportunities, Gann, DOM, Macro/News, Meta v2 and learned challenger outputs are observational/audit-only live.
-- No Champion model, promotion endpoint, automatic promotion or live self-modification exists.
-- Prediction scoring cannot alter Analysis.action, Meta, opportunities, risk, lot sizing, Shadow or broker behavior.
-- DOM means broker-provided resting Market Book depth only; tick-volume/profile values are proxies, not global exchange order flow.
+Release/promotion state:
 
-## Implemented research / analytical stack
+- `development` contains the reviewed 0.6 candidate.
+- `main` and `development` have a divergent historical merge topology; never force-update or rewrite either branch to promote 0.6.
+- PR #13 is the deliberate promotion path from `development` to `main`.
+- Release-record/documentation commits may sit on top of the tested source checkpoint. They must not silently change runtime behavior; `docs/validation.json` records the executable checkpoint and artifact evidence.
 
-- Historical Meta v1, Meta v2, CES and KTE over saved immutable History with deterministic replay and same-data experiments.
-- KTE TP1/TP2/TP3 partial ledger, break-even, ATR trailing, time limits, cooldown and conservative OHLC ambiguity handling; one saved ledger drives detailed report/CSV/JSON/HTML outputs.
-- Trend v1, Regime v1, Structure v1, Volatility v1.
-- Market Opportunities: structural zones/support/resistance/swings, multi-timeframe momentum/divergence, tick-activity/profile proxies, sessions, setup detection and current-quote Entry/SL/TP1/TP2/TP3 projection with stale-value withdrawal.
-- Gann Geometry v1 observational context.
-- Broker-supported DOM Depth observational context.
-- Fed/ECB Macro/News Context observational risk context.
-- Chronological evaluation over immutable saved histories with causal holdout/rolling windows, persisted source/evidence identity and native Desktop review.
+Next engineering work after promotion:
 
-## Learning pipeline — implemented
+1. Run the native Windows + real Demo MT5 acceptance checklist on the target installation and record it separately from CI.
+2. Test private Telegram delivery using only local credentials that never enter the repository.
+3. Enable branch protection / required checks for `main` and preferably `development` when repository administration policy is available.
+4. Design and validate portfolio-wide exposure management as a separate execution change; do not imply it is already present.
+5. Continue genuine out-of-sample evidence, ablation, correlation/portfolio research and historical-event replay without weakening the current no-lookahead boundaries.
 
-1. `learning_snapshots` stores immutable completed-bar features using `gold-m1-feature-v1`.
-2. `learning_labels` matures exact 5/15/30-minute outcomes using `gold-m1-outcome-v1`; gaps are never shifted or fabricated.
-3. Deterministic dataset export feeds offline `scripts/train_linear_baseline.py` with chronological splits, 30-row purge and train-only normalization.
-4. `/v1/learning/register` stores immutable `unreviewed_challenger` artifacts; no Champion is created.
-5. `manual-review-eligibility-v1` requires compatible persisted chronological evidence for every training context before an immutable review record may be created.
-6. Read-only challenger inference consumes the exact stored feature payload; Rust/Python parity fixtures guard feature ordering/normalization/class probabilities.
-7. `learning_predictions` stores immutable predictions tied to model/dataset/review/context/bar identity.
-8. `prediction-outcome-scoring-v1` waits for the exact matured target horizon and stores immutable realized outcomes.
-9. Scoring aggregates sample/class support, confusion, accuracy, balanced accuracy, macro-F1, log-loss, Brier, confidence and 10-bin ECE. Current sample floors are reporting warnings only; `promotion_eligible=false`.
-10. Backup schema 8 includes current research/chronological/learning registry/review/prediction/scoring audit state; full restore remains unimplemented.
-
-## Quality audit / repository hardening
-
-- SQLite explicitly enables foreign keys and runs startup `foreign_key_check`; regression coverage rejects orphan rows.
-- Project contract tests fail on broker-write APIs, unsafe model promotion/execution coupling and forbidden tracked runtime/generated artifacts.
-- Windows workflow now runs on `development`.
-- Source-only ZIP and portable `Source/` copy exclude secrets, runtime DB/log state, `.import`, old archives, `.ci`, dependency/cache/venv/node_modules trees while preserving normal source such as `crates/runtime`.
-- Source ZIP freezes its source file list before creating the temporary archive, preventing self-inclusion for an output placed inside the source tree.
-- Windows dependency metadata is resolved for the MSVC target actually used by CI.
-- GitHub branch protection remains disabled; use expected-SHA/non-force writes, CI and PR/checkpoint discipline.
-
-## Current documentation reconciliation
-
-`README.md`, `PROJECT_STATE.md`, `ROADMAP.md`, `CONTINUE_HERE.md`, `CHANGELOG.md`, `docs/QUALITY_AUDIT.md`, `docs/ARCHITECTURE.md`, `docs/RESEARCH.md`, `docs/LEARNING.md`, `docs/BRANCH_POLICY.md`, `docs/RELEASE_STATUS.md` and related acceptance/quickstart docs have been reconciled with the implemented pipeline. This handoff and `docs/validation.json` carry the exact code/CI boundary.
-
-## Exact next action
-
-Begin the **Challenger Performance Review Policy** as a separate read-only scientific layer over immutable scored outcomes.
-
-The policy must require sufficiently large samples and per-class support, multiple chronological/context windows, transparent baselines, calibration/stability/drift checks and immutable evidence linkage. It may output `insufficient_evidence`, `review_candidate` or `reject`; it must not create a Champion, auto-promote or influence Shadow/risk/broker execution.
-
-After that layer is fully tested, the next separate acceptance gate is native user-laptop MT5/broker + Telegram verification. Broker Demo/Live execution remains a later architecture track.
-
-Never commit credentials, private runtime DB/logs, `.import`, encoded chunks, generated dependency trees or ZIP-only source.
+No CI result, package build or simulated broker fixture establishes profitability, guaranteed latency or native broker acceptance.

@@ -72,6 +72,7 @@ fn validate_artifact(a:&Value)->Result<(String,String,String)>{
     if a["dataset"]["used_rows"].as_u64().unwrap_or(0)<600{bail!("Registered baseline must contain at least 600 post-purge rows");}
     let splits=a["dataset"]["split"].as_array().filter(|v|!v.is_empty()).ok_or_else(||anyhow::anyhow!("Missing chronological split metadata"))?;
     if splits.iter().any(|s|s["purge_rows_each_side"].as_u64().unwrap_or(0)<30){bail!("Split purge must be at least 30 rows per side");}
+    if splits.iter().any(|s|s["holdout_last_bar"].as_u64().is_none_or(|last|last<s["holdout_first_bar"].as_u64().unwrap_or(u64::MAX))){bail!("Model requires an exact holdout_last_bar boundary; re-export/retrain older artifacts");}
     if a["training"]["random_split"]!=false||a["training"]["purged_chronological_split"]!=true||a["training"]["automatic_promotion"]!=false{bail!("Training contract violates chronological/manual-promotion policy");}
     let classes=a["model"]["classes"].as_array().ok_or_else(||anyhow::anyhow!("Missing classes"))?;
     if classes.len()!=3||classes[0].as_i64()!=Some(-1)||classes[1].as_i64()!=Some(0)||classes[2].as_i64()!=Some(1){bail!("Model classes must be [-1,0,1]");}

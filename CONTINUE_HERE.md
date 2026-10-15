@@ -1,35 +1,13 @@
-# Continue Here
+# BrainTrade OS 0.6.0 Preview
 
-GitHub is the canonical memory for BrainTrade OS. Resume from repository state, not conversational memory or old ZIP files.
+Current 0.6 source contains actual bound-account broker execution, 14 identities, adaptive coordinator membership, SOLO/RETURNING transitions, four modes and an 18-page native dashboard. Optional risk limits are off by default; start/restart is STOPPED.
 
-## Read before editing
+Verified executable/source checkpoint: `fdc63d4d05df89e27607641bd197b9e6ead936e9` (tree `8593783f43a4892cdc724ed5d112607ef7cee006`). Research CI `38803539711` and Windows CI/package `38803539405` passed. The authoritative artifact hashes and release boundaries are in `docs/validation.json`.
 
-1. `BUILD_HANDOFF.md` — exact tested code checkpoint, validation and next action.
-2. `PROJECT_STATE.md` — implemented vs pending state.
-3. `ROADMAP.md` — ordered future work.
-4. `docs/QUALITY_AUDIT.md` — repository-wide quality findings and open limitations.
-5. `CHANGELOG.md` — completed milestones.
-6. `docs/CONTINUITY_PROTOCOL.md` — checkpoint/resume rules.
-7. Recent commits on `development` and the comparison with `main`.
+Recovery coverage now includes account-switch isolation for unknown intents, cumulative split-fill reconciliation without resend, intent-identity mismatch fail-closed behavior and preservation of the durable gateway send journal across staged backup restore.
 
-## Current checkpoint
+CI broker acceptance is simulated and never connects to a broker. Native MT5 Demo acceptance and live Telegram delivery remain unperformed and must be recorded separately.
 
-The active branch contains the 0.4.0 research milestone while Cargo/Windows preview metadata remain 0.3.0 until an explicit release bump.
+If PR #13 is still open, use it as the reviewed promotion path from `development` to `main`; never force-update the diverged histories. If promotion is already complete, the next operational gate is native Windows + Demo MT5 acceptance using `docs/ACCEPTANCE.md`, followed by private Telegram delivery testing.
 
-Implemented research layers include Meta v1/v2, CES, KTE, offline trade review, Trend/Regime/Structure/Volatility, Gann, broker DOM Depth, Macro/News context, persisted chronological evaluation, Learning Foundation snapshots/labels/export/trainer/registry, manual review eligibility, read-only challenger inference and exact matured-label prediction scoring.
-
-Legacy Meta remains the live Shadow decision source. Learned outputs are audit telemetry only. There is no champion activation and no broker-order route.
-
-The repository audit also hardened SQLite foreign-key integrity, source/package hygiene, generated-file guards and Windows CI coverage on `development`.
-
-## Exact next action
-
-Follow `BUILD_HANDOFF.md`. The next scientific layer is a manual challenger performance-review policy over sufficiently large scored out-of-sample samples. It must remain read-only and must not auto-promote a champion or influence Shadow/broker execution.
-
-## Non-negotiable continuation rule
-
-- Commit coherent checkpoints to `development` and validate the changed area.
-- Promote to `main` only after a deliberate safe-checkpoint review.
-- Never claim a test passed unless it ran on the referenced code checkpoint.
-- Never commit credentials, tokens, private runtime DB/logs, generated dependency trees, `.import`, encoded chunks or ZIP-only source.
-- If documentation follows a tested code commit, clearly separate the documentation head from the executable validation boundary.
+Do not enable imported-ML automatic promotion or claim portfolio-wide exposure management unless those are implemented and separately validated.

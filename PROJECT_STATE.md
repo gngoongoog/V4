@@ -1,69 +1,13 @@
-# BrainTrade OS — Project State
+# BrainTrade OS 0.6.0 Preview
 
-Canonical repository: `gngoongoog/V4`. Stable/resumable branch: `main`. Active research branch: `development`.
+The verified executable/source checkpoint for the 0.6 development candidate is `fdc63d4d05df89e27607641bd197b9e6ead936e9` (tree `8593783f43a4892cdc724ed5d112607ef7cee006`). Research CI `38803539711` and Windows CI/package `38803539405` both passed on that checkpoint.
 
-The project is in the **0.4.0 research milestone**, while Cargo and Windows preview package metadata remain **0.3.0** until an explicit release-version bump. No new end-user Windows release is declared; the last delivered portable remains **0.2.0 Preview**.
+Implemented: 14 execution identities, coordinator/advisor/SOLO/RETURNING roles, Scalping/Swing/Expert/Sniper modes, persistent intent/reconciliation state, schema-12 backup support, adaptive member weighting, the historical research/learning pipeline, and an 18-page native dashboard.
 
-## Implemented
+Recovery hardening now explicitly covers unknown-intent account isolation, cumulative split-fill reconciliation without top-up/resend, durable-intent identity mismatch fail-closed behavior, and preservation of `broker-journal.sqlite` outside staged backup restore.
 
-### Core / desktop / MT5 boundary
+Release boundary: startup/restart is STOPPED. Imported ML challengers remain research-only and cannot auto-promote. CI execution acceptance is simulated and never connects to a broker. Native MT5 demo-account acceptance and live Telegram delivery have not been performed in the build environment.
 
-- Independent Rust Core with authenticated loopback IPC and native Slint desktop.
-- Start, Stop, reconnect and full-exit lifecycle controls.
-- Read-only MT5 account/positions/orders/history/quotes/Market Book access.
-- Persistent rule-based Shadow simulation and deterministic risk limits.
-- Explicit repository contract tests reject broker-write APIs and learned-model execution/promotion routes.
+The reviewed promotion path is PR #13 from `development` to `main`; branches must not be force-updated or history-rewritten. Release-record/documentation commits may sit on top of the tested source checkpoint without changing runtime behavior.
 
-### Historical research
-
-- Meta v1, Meta v2 candidate, CES v1 and KTE v1 historical engines.
-- Frozen input/options, exact saved History, offline replay and same-data experiments.
-- KTE three-leg fills, TP1 break-even, TP2 ATR trailing, TP3 final close, 45/90-minute limits, cooldown and conservative stop-first ambiguity.
-- Saved ledger drives report JSON/text, trades/fills/stops/targets/equity CSV and self-contained HTML trade review.
-- Persisted chronological Meta v1/v2 holdout/rolling evaluation over immutable saved backtest sources.
-
-### Live observational analysis
-
-- Trend, Regime, Structure, Volatility and Meta v2 candidate.
-- Market Opportunities with structural zones/setups, Gann geometry and broker-supported DOM Depth.
-- Macro/News context from official Fed/ECB RSS freshness state.
-- These newer brains remain observational. Legacy Meta still controls Shadow entries.
-
-### Learning Foundation
-
-- Immutable `gold-m1-feature-v1` completed-bar snapshots.
-- Exact delayed `gold-m1-outcome-v1` labels at 5/15/30 minutes; missing/gapped horizons are not shifted or fabricated.
-- Deterministic dataset export and offline class-weighted linear-softmax baseline trainer.
-- Immutable challenger registry with dataset identity and chronological split metadata.
-- Persisted chronological evaluation evidence and manual review-eligibility records.
-- Read-only challenger inference using the exact stored learning feature payload.
-- Immutable matured prediction outcomes and descriptive scoring by model/target: accuracy, balanced accuracy, macro-F1, log loss, Brier score, confidence/calibration and class/confusion support.
-- No champion promotion, Shadow effect, broker effect or live self-modification.
-
-### Persistence / packaging / CI
-
-- SQLite WAL + synchronous FULL, explicit `foreign_keys=ON`, startup `foreign_key_check`, and a unit test that rejects orphan foreign-key inserts.
-- Backup schema 8 includes historical/chronological/learning registry/review/prediction/scoring audit state; secrets are excluded. Full restore is not implemented.
-- Both source export paths exclude runtime state, secrets, archives, generated dependency trees/caches and `.import`; tests preserve real source such as `crates/runtime`.
-- Research CI and Windows CI run on `development`; Windows package CI is a validation artifact, not native broker acceptance or a declared release.
-
-## Validation boundary
-
-The latest executable checkpoint being validated is recorded in `BUILD_HANDOFF.md`, with run IDs and final PASS/FAIL state mirrored in `docs/validation.json`. Documentation-only reconciliation after that checkpoint does not alter executable behavior.
-
-## Known limitations / pending
-
-- Native Windows + real MT5 broker-history acceptance and live Telegram delivery with local credentials.
-- Real-broker-data scientific evaluation large enough to judge candidate effectiveness.
-- Explicit challenger performance-review policy over sufficiently large scored out-of-sample samples.
-- True feed-supported order flow / volume profile beyond broker Market Book and candle tick-volume proxies.
-- Portfolio/correlation execution risk, full backup restore and multi-account migration.
-- Broker order state machine, reconciliation and live/demo execution.
-- Automated champion promotion remains intentionally absent.
-- `main` and `development` currently have no GitHub branch protection / required-status enforcement.
-
-No profitability, win-rate or broker-latency guarantee is established by synthetic fixtures, CI, backtests or model metrics.
-
-## Continuity
-
-GitHub normal files/folders are the source of truth. Never reconstruct over newer code from an old ZIP. Never commit credentials, tokens, private runtime databases/logs, generated dependency trees, `.import`, encoded chunks or ZIP-only source.
+See `docs/validation.json` for the tested commit, CI runs and Windows artifact hashes, and `docs/EXECUTION_AND_ROLES.md` for execution semantics.

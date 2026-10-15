@@ -71,7 +71,7 @@ pub fn assess(t: &Telemetry) -> DomBrain {
     let microprice = (best_ask * bid_depth + best_bid * ask_depth) / total;
 
     out.available = true;
-    out.levels = bids.len() + asks.len();
+    out.levels = bids.len().min(5) + asks.len().min(5);
     out.best_bid = Some(best_bid);
     out.best_ask = Some(best_ask);
     out.bid_depth = bid_depth;

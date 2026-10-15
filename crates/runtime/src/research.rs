@@ -3,13 +3,15 @@ use anyhow::Result;
 use braintrade_domain::{
     opportunities::{self, MarketBrains},
     research::{analyze, size_lots},
-    Analysis, Config, PaperSummary, Telemetry,
+    trading::{self,TradingMode}, Candle,
+    Analysis, Config, MarketData, PaperSummary, Telemetry,
 };
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
+fn default_hold()->u64 {1_800_000}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PaperPosition {
     side: i8,
@@ -24,6 +26,10 @@ struct PaperPosition {
     slippage: f64,
     opened_ms: u64,
     interrupted: bool,
+    #[serde(default="default_hold")]
+    max_hold_ms:u64,
+    #[serde(default)]
+    mode:TradingMode,
 }
 impl PaperPosition {
     fn pnl(&self, exit: f64) -> f64 {
@@ -49,6 +55,12 @@ struct Book {
     drawdown_locked: bool,
     last_bar: u64,
     last_quote_ms: u64,
+    #[serde(default)]
+    mode:TradingMode,
+    #[serde(default)]
+    last_entry_ms:u64,
+    #[serde(default)]
+    decision_tick_ms:u64,
     recorded: [u64; 3],
     trades: u64,
     wins: u64,
@@ -83,6 +95,7 @@ impl Book {
             drawdown_locked: false,
             last_bar: 0,
             last_quote_ms: 0,
+            mode:TradingMode::Expert,last_entry_ms:0,decision_tick_ms:0,
             recorded: [0; 3],
             trades: 0,
             wins: 0,
@@ -107,7 +120,7 @@ impl Book {
         PaperSummary {context:context.into(),quote_current:quote.is_some(),equity:unrealized.map(|p|self.starting_equity+self.realized+p),realized:self.realized,unrealized,
             trades:self.trades,wins:self.wins,interrupted_trades:self.interrupted_trades,
             open:self.position.as_ref().map(|p|format!("VIRTUAL {} | {:.4} lots\nEntry {:.5} | SL {:.5} | TP {:.5}\n{}",if p.side==1 {"BUY"} else {"SELL"},p.lots,p.entry,p.stop,p.target,
-                if p.interrupted {"Data gap detected; missed intragap exits unknown."} else {"Open virtual position"})).unwrap_or("No open virtual position".into()),
+                format!("{:?} | max hold {}s | {}",p.mode,p.max_hold_ms/1000,if p.interrupted {"Data gap detected; missed intragap exits unknown."} else {"Open virtual position"}))).unwrap_or("No open virtual position".into()),
             recent:self.recent.clone(),note:format!("Daily lock: {} | Drawdown lock: {}. STOP blocks new entries; virtual exits continue while Core runs.",self.daily_locked,self.drawdown_locked)}
     }
 }
@@ -116,6 +129,8 @@ pub struct Research {
     books: BTreeMap<String, Book>,
     #[serde(skip)]
     opportunity_cache: BTreeMap<String, MarketBrains>,
+    #[serde(skip)]
+    opportunity_inputs: BTreeMap<String, MarketData>,
 }
 impl Research {
     pub fn has_open_position(&self, telemetry: &Telemetry) -> bool {
@@ -128,6 +143,7 @@ impl Research {
             CREATE TABLE IF NOT EXISTS candles(context TEXT NOT NULL,timeframe TEXT NOT NULL,bar_time INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,timeframe,bar_time));
             CREATE TABLE IF NOT EXISTS decisions(id INTEGER PRIMARY KEY,context TEXT NOT NULL,bar_time INTEGER NOT NULL,timestamp_ms INTEGER NOT NULL,payload TEXT NOT NULL,UNIQUE(context,bar_time));
             CREATE TABLE IF NOT EXISTS paper_events(id INTEGER PRIMARY KEY,context TEXT NOT NULL,timestamp_ms INTEGER NOT NULL,kind TEXT NOT NULL,payload TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS mode_decisions(id INTEGER PRIMARY KEY,context TEXT NOT NULL,timestamp_ms INTEGER NOT NULL,payload TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS opportunity_setups(context TEXT NOT NULL,setup_id TEXT NOT NULL,bar_time INTEGER NOT NULL,first_seen_ms INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,setup_id));")?;
         let mut stmt = db.prepare("SELECT payload FROM research_checkpoint WHERE id=1")?;
         let rows = stmt
@@ -151,7 +167,9 @@ impl Research {
         let needs_scan = self
             .opportunity_cache
             .get(key)
-            .is_none_or(|cached| cached.bar_time != a.bar_time || !cached.current);
+            .is_none_or(|cached| cached.bar_time != a.bar_time || !cached.current)
+            || self.opportunity_inputs.get(key).is_none_or(|previous|
+                previous.m1 != market.m1 || previous.m5 != market.m5 || previous.m15 != market.m15);
         if needs_scan {
             let scan = opportunities::scan(
                 market,
@@ -161,6 +179,7 @@ impl Research {
                 now,
             );
             self.opportunity_cache.insert(key.to_owned(), scan);
+            self.opportunity_inputs.insert(key.to_owned(), market.clone());
         }
     }
     /// Call on a clone. Publish only after checkpoint, decision and ledger transaction commits.
@@ -172,7 +191,10 @@ impl Research {
         run: bool,
         now: u64,
     ) -> Result<(Analysis, PaperSummary)> {
-        let mut a = analyze(t.market.as_ref(), &t.symbol, now);
+        self.update_with_frames(db,t,c,run,now,&BTreeMap::new())
+    }
+    pub fn update_with_frames(&mut self,db:&mut Connection,t:&Telemetry,c:&Config,run:bool,now:u64,frames:&BTreeMap<String,Vec<Candle>>)->Result<(Analysis,PaperSummary)> {
+        let mut a=analyze(t.market.as_ref(),&t.symbol,now);
         let key = context(t);
         let display = format!("{} / {} / {} / {}", t.login, t.server, t.symbol, t.currency);
         let quote = valid_quote(t);
@@ -187,11 +209,13 @@ impl Research {
             a.gates.push("Account equity must be positive".into());
             return Ok((a, PaperSummary::default()));
         }
-        self.refresh_opportunity_cache(&key, t, &a, now);
+        self.refresh_opportunity_cache(&key,t,&a,now);
+        a=trading::select(a,t,c,frames,now);
         let b = self
             .books
             .entry(key.clone())
             .or_insert_with(|| Book::new(t.equity, now));
+        if b.mode!=c.trading.mode {b.mode=c.trading.mode;b.last_bar=0;}
         let Some((bid, ask)) = quote else {
             a.action = "WAIT".into();
             a.gates
@@ -254,7 +278,7 @@ impl Research {
             } else {
                 ask <= p.target
             };
-            let timeout = now.saturating_sub(p.opened_ms) >= 30 * 60 * 1000;
+            let timeout = now.saturating_sub(p.opened_ms) >= p.max_hold_ms;
             if stop || target || timeout {
                 let why = if stop {
                     "SL"
@@ -292,7 +316,9 @@ impl Research {
                 closed = true;
             }
         }
-        let new_bar = a.current && a.bar_time > b.last_bar && run;
+        let sniper=c.trading.mode==TradingMode::Sniper;let new_tick=t.quote_time_ms.is_some_and(|q|q>b.decision_tick_ms);let cooldown=now.saturating_sub(b.last_entry_ms)>=c.trading.sniper_cooldown_seconds*1000;
+        let new_bar=a.current&&run&&if sniper{new_tick&&cooldown}else{a.bar_time>b.last_bar};
+        if sniper&&!cooldown {a.gates.push("Sniper cooldown active".into());}if sniper&&!new_tick {a.gates.push("Waiting for new broker tick".into());}
         if !run {
             a.gates
                 .push("System stopped — new virtual entries disabled".into());
@@ -318,9 +344,9 @@ impl Research {
             a.gates
                 .push("An exit occurred; no re-entry on the same quote".into());
         }
-        if a.current && a.bar_time <= b.last_bar {
+        if !sniper && a.current && a.bar_time <= b.last_bar {
             a.gates
-                .push("This M1 bar has already been evaluated".into());
+                .push("This mode bar has already been evaluated".into());
         }
 
         // Market opportunities are observational and quote-aware. Their closed-bar map is cached
@@ -329,7 +355,7 @@ impl Research {
             let opportunity_gates = a
                 .gates
                 .iter()
-                .filter(|gate| gate.as_str() != "This M1 bar has already been evaluated")
+                .filter(|gate| gate.as_str() != "This mode bar has already been evaluated")
                 .cloned()
                 .collect::<Vec<_>>();
             let available = (equity
@@ -355,9 +381,7 @@ impl Research {
                 a.gates
                     .push("Spread exceeds configured ATR fraction".into());
             }
-            if t.market
-                .as_ref()
-                .and_then(|m| m.m1.last())
+            if (if c.trading.mode==TradingMode::Swing {frames.get("H1").and_then(|b|b.last())}else{t.market.as_ref().and_then(|m|m.m1.last())})
                 .is_some_and(|last| ((ask + bid) / 2.0 - last.close).abs() > 2.0 * atr)
             {
                 a.gates
@@ -383,16 +407,19 @@ impl Research {
             if let Some((tick, loss, profit, min, step, max)) = specs {
                 let slip = tick * c.risk.slippage_ticks;
                 let entry = if side == 1 { ask + slip } else { bid - slip };
+                let (stop_distance,mut target_distance)=c.trading.geometry(atr,t.point.unwrap_or(0.));
+                if sniper {match trading::costs(t,c,1.,now) {Ok(cost)=>{if cost.total/(cost.total+cost.desired_net_target_money)>c.trading.max_cost_fraction {a.gates.push("Sniper entry costs exceed configured share of movement".into());}},Err(e)=>a.gates.push(e)}target_distance+=c.risk.commission_per_lot/profit*tick+slip;}
                 let stop = if side == 1 {
-                    ((entry - 1.5 * atr) / tick).floor() * tick
+                    ((entry - stop_distance) / tick).floor() * tick
                 } else {
-                    ((entry + 1.5 * atr) / tick).ceil() * tick
+                    ((entry + stop_distance) / tick).ceil() * tick
                 };
                 let target = if side == 1 {
-                    ((entry + 2.0 * (entry - stop).abs()) / tick).ceil() * tick
+                    ((entry + if c.trading.mode==TradingMode::Expert {2.0*(entry-stop).abs()}else{target_distance}) / tick).ceil() * tick
                 } else {
-                    ((entry - 2.0 * (entry - stop).abs()) / tick).floor() * tick
+                    ((entry - if c.trading.mode==TradingMode::Expert {2.0*(entry-stop).abs()}else{target_distance}) / tick).floor() * tick
                 };
+                if (side==1&&stop>=bid)||(side==-1&&stop<=ask) {a.gates.push("Stop must exceed entry spread and slippage".into());}
                 let loss_per_lot = ((entry - stop).abs() + slip) / tick * loss.max(profit)
                     + c.risk.commission_per_lot;
                 let available = (equity - b.day_start * (1.0 - c.risk.daily_loss_percent / 100.0))
@@ -429,12 +456,13 @@ impl Research {
                             slippage: slip,
                             opened_ms: now,
                             interrupted: false,
+                            max_hold_ms:c.trading.hold_ms(),mode:c.trading.mode,
                         };
                         ledger.push((
                             "open",
                             json!({"position":p,"risk":c.risk,"bar_time":a.bar_time}),
                         ));
-                        b.position = Some(p);
+                        b.position = Some(p);b.last_entry_ms=now;
                         a.action = format!("SHADOW_{raw}");
                         a.reason =
                             "Virtual position opened from current quote; no broker order sent"
@@ -454,6 +482,13 @@ impl Research {
         }
         if new_bar {
             b.last_bar = a.bar_time;
+            if sniper {b.decision_tick_ms=t.quote_time_ms.unwrap_or(0);}
+        }
+        // A Shadow entry on this quote must not leave a concurrent READY plan visible.
+        if b.position.is_some() {
+            if let Some(opportunities)=a.opportunities.as_mut() {
+                opportunities.pause("توجد صفقة افتراضية مفتوحة؛ أرقام الفرص الجديدة مسحوبة");
+            }
         }
         let summary = b.summary(&display, quote);
         let tx = db.transaction()?;
@@ -487,6 +522,7 @@ impl Research {
         if new_bar {
             tx.execute("INSERT OR IGNORE INTO decisions(context,bar_time,timestamp_ms,payload) VALUES(?1,?2,?3,?4)",params![key,a.bar_time,now,json!({"analysis":a,"risk":c.risk,"bid":bid,"ask":ask,"mode":"shadow"}).to_string()])?;
         }
+        if new_bar&&matches!(raw.as_str(),"BUY"|"SELL") {tx.execute("INSERT INTO mode_decisions(context,timestamp_ms,payload) VALUES(?1,?2,?3)",params![key,now,json!({"analysis":a,"trading":c.trading,"risk":c.risk,"quote_time_ms":t.quote_time_ms,"bid":bid,"ask":ask}).to_string()])?;}
         for (kind, payload) in ledger {
             tx.execute(
                 "INSERT INTO paper_events(context,timestamp_ms,kind,payload) VALUES(?1,?2,?3,?4)",
@@ -497,6 +533,16 @@ impl Research {
         tx.commit()?;
         Ok((a, summary))
     }
+}
+pub fn opportunity_history(db: &Connection) -> Result<Value> {
+    let mut statement = db.prepare("SELECT context,setup_id,bar_time,first_seen_ms,payload FROM opportunity_setups ORDER BY first_seen_ms DESC,setup_id DESC LIMIT 100")?;
+    let rows = statement.query_map([], |row| {
+        let raw: String = row.get(4)?;
+        Ok(json!({"context":row.get::<_,String>(0)?,"setup_id":row.get::<_,String>(1)?,
+            "bar_time":row.get::<_,u64>(2)?,"first_seen_ms":row.get::<_,u64>(3)?,
+            "setup":serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null)}))
+    })?.collect::<std::result::Result<Vec<_>,_>>()?;
+    Ok(json!({"setups":rows,"scope":"First observation only; historical plans are never current quotes or broker orders."}))
 }
 pub fn decision_history(db: &Connection) -> Result<Value> {
     let mut q = db.prepare(
@@ -509,6 +555,16 @@ pub fn decision_history(db: &Connection) -> Result<Value> {
 mod tests {
     use super::*;
     use braintrade_domain::{Candle, MarketData};
+    #[test]
+    fn sniper_cost_gate_and_frozen_hold_survive_mode_change() {
+        let now=1_800_000_000_000;let mut t=snapshot(now);t.point=Some(0.01);t.quote_time_ms=Some(now);
+        let last=t.market.as_mut().unwrap().m1.last_mut().unwrap();last.close=2055.5;last.high=2055.6;t.bid=Some(2055.8);t.ask=Some(2055.81);
+        let mut c=Config::default();c.trading.mode=TradingMode::Sniper;c.trading.sniper_target_points=5.;let mut db=Connection::open_in_memory().unwrap();let mut e=Research::load(&db).unwrap();
+        let(a,_)=e.update(&mut db,&t,&c,true,now).unwrap();assert!(a.gates.iter().any(|s|s.contains("entry costs")),"{:?}",a);assert!(!e.has_open_position(&t));
+        c.trading.sniper_target_points=200.;t.quote_time_ms=Some(now+1);let(a,_)=e.update(&mut db,&t,&c,true,now+1).unwrap();assert_eq!(a.action,"SHADOW_BUY","{:?}",a);
+        let p=e.books[&context(&t)].position.as_ref().unwrap();let(stop,target)=(p.stop,p.target);assert_eq!(p.max_hold_ms,120_000);
+        let mut restarted=Research::load(&db).unwrap();c.trading.mode=TradingMode::Swing;restarted.update(&mut db,&t,&c,false,now+60_000).unwrap();let p=restarted.books[&context(&t)].position.as_ref().unwrap();assert_eq!((p.stop,p.target,p.max_hold_ms),(stop,target,120_000));let(_,summary)=restarted.update(&mut db,&t,&c,false,now+120_002).unwrap();assert_eq!(summary.trades,1);assert!(!restarted.has_open_position(&t));
+    }
     fn snapshot(now: u64) -> Telemetry {
         let bars = |seconds: u64| {
             (0..180)
@@ -551,6 +607,22 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+    #[test]
+    fn opportunity_cache_refreshes_corrected_history_not_capture_timestamp() {
+        let now=1_700_000_000_000;
+        let mut db=Connection::open_in_memory().unwrap();
+        let mut research=Research::load(&db).unwrap();let mut t=snapshot(now);
+        let c=Config::default();let key=context(&t);
+        research.update(&mut db,&t,&c,false,now).unwrap();
+        let first=research.opportunity_cache[&key].computed_ms;
+        t.market.as_mut().unwrap().captured_ms=now+1;
+        research.update(&mut db,&t,&c,false,now+1).unwrap();
+        assert_eq!(research.opportunity_cache[&key].computed_ms,first);
+        t.market.as_mut().unwrap().m5[160].high+=0.2;
+        research.update(&mut db,&t,&c,false,now+2).unwrap();
+        assert_eq!(research.opportunity_cache[&key].computed_ms,now+2);
+        assert!(serde_json::to_value(&research).unwrap().get("opportunity_inputs").is_none());
     }
     #[test]
     fn restart_dedup_and_exit_while_stopped() {

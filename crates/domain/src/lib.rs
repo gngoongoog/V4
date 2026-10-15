@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 pub mod backtest;
+pub mod trading;
+pub mod execution;
+pub mod studio;
+pub mod wyckoff;
 #[path = "backtest/evaluation.rs"]
 pub mod evaluation;
 pub mod ces;
@@ -32,6 +36,8 @@ pub struct Config {
     pub telegram_enabled: bool,
     #[serde(default)]
     pub risk: RiskConfig,
+    #[serde(default)]
+    pub trading: trading::TradingConfig,
 }
 
 impl Default for Config {
@@ -44,12 +50,14 @@ impl Default for Config {
             telegram_chat_id: String::new(),
             telegram_enabled: false,
             risk: RiskConfig::default(),
+            trading: trading::TradingConfig::default(),
         }
     }
 }
 impl Config {
     pub fn validate(&self) -> Result<(), String> {
         self.risk.validate()?;
+        self.trading.validate()?;
         if self.schema != 1 {
             return Err("Unsupported config schema".into());
         }
@@ -82,6 +90,9 @@ impl Config {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Position {
+    #[serde(default)] pub magic: u64,
+    #[serde(default)] pub identifier: u64,
+    #[serde(default)] pub opened_ms: u64,
     pub ticket: u64,
     pub symbol: String,
     pub side: String,
@@ -108,6 +119,10 @@ pub struct Telemetry {
     pub server: String,
     pub currency: String,
     pub demo: bool,
+    #[serde(default)] pub account_trade_mode: Option<i32>,
+    #[serde(default)] pub margin_mode: Option<i32>,
+    #[serde(default)] pub trade_allowed: bool,
+    #[serde(default)] pub trade_expert: bool,
     pub balance: f64,
     pub equity: f64,
     pub positions: Vec<Position>,
@@ -118,6 +133,8 @@ pub struct Telemetry {
     pub bid: Option<f64>,
     pub ask: Option<f64>,
     pub tick_age_ms: Option<u64>,
+    #[serde(default)]
+    pub quote_time_ms: Option<u64>,
     pub symbol: String,
     pub volume_min: Option<f64>,
     pub volume_step: Option<f64>,
@@ -205,7 +222,7 @@ impl Default for Status {
             gateway_fresh: false,
             last_received_ms: None,
             telemetry: None,
-            message: "Research release: analysis and SHADOW simulation; no broker orders".into(),
+            message: "Choose a brain and bind the Demo account on the Execution page".into(),
             telegram_status: "Not configured".into(),
             analysis: Analysis::default(),
             paper: PaperSummary::default(),
@@ -214,7 +231,14 @@ impl Default for Status {
 }
 impl Status {
     pub fn refresh(&mut self, now: u64) {
-        self.execution_enabled = false;
+        if !self.requested_run {self.execution_enabled = false;}
+        if !self.requested_run { self.analysis.action="WAIT".into(); self.analysis.clear_plan(); }
+        if let Some(opportunities) = self.analysis.opportunities.as_mut() {
+            opportunities.expire(now, true);
+            if !self.requested_run {
+                opportunities.pause("النظام متوقف؛ أرقام الدخول مسحوبة حتى التشغيل وتحديث السعر");
+            }
+        }
         self.gateway_fresh = self
             .last_received_ms
             .map(|t| now.saturating_sub(t) <= FRESH_MS)
@@ -234,6 +258,8 @@ impl Status {
             RunState::Degraded
         };
         if !self.gateway_fresh {
+            self.execution_enabled=false;
+            self.analysis.clear_plan();
             self.analysis.current = false;
             self.analysis.action = "WAIT".into();
             self.analysis.reason = "MT5 data unavailable or stale".into();
@@ -248,6 +274,7 @@ impl Status {
                 .is_none_or(|age| age.saturating_add(elapsed) > 3000)
             {
                 self.paper.quote_current = false;
+                self.analysis.clear_plan();
                 self.analysis.action = "WAIT".into();
                 let gate = "Quote unavailable or older than 3 seconds".to_string();
                 if !self.analysis.gates.contains(&gate) {
@@ -261,7 +288,8 @@ impl Status {
                 .as_ref()
                 .is_none_or(|m| now.saturating_sub(m.captured_ms) > 15000)
             {
-                self.analysis.current = false;
+                self.analysis.clear_plan();
+            self.analysis.current = false;
                 self.analysis.action = "WAIT".into();
                 self.analysis.reason =
                     "Candle snapshot unavailable or older than 15 seconds".into();
@@ -273,8 +301,8 @@ impl Status {
     }
     pub fn report(&self, command: &str) -> String {
         let heading = format!(
-            "BRAINTRADE OS {}\nState: {:?}\nMT5 fresh: {}\nExecution: unavailable in this release",
-            self.version, self.state, self.gateway_fresh
+            "BRAINTRADE OS {}\nState: {:?}\nMT5 fresh: {}\nBroker execution enabled: {}",
+            self.version, self.state, self.gateway_fresh, self.execution_enabled
         );
         if command == "/help" || command == "/start" {
             return "/status — System status\n/report — Today (Baghdad)\n/positions — MT5 positions\n/health — Connection health\n/brains — Analysis and decision\n/opportunities — Market setups with Entry/SL/TP when valid\n/paper — Virtual trades only\n/news — Official cached headlines\n/backtest — Latest saved historical test\n/help — Commands".into();

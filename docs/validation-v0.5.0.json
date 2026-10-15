@@ -1,0 +1,86 @@
+{
+  "version": "0.5.0",
+  "repository": "gngoongoog/V4",
+  "branch": "development",
+  "tested_executable_commit": "a5961ff85b41e50e18a7c8295244d115f9fcfd3d",
+  "validation_boundary": "Executable and runtime behavior validated at tested_executable_commit. Subsequent documentation-only commit records evidence without changing the executable/runtime.",
+  "research_ci": {
+    "run_id": 38689840746,
+    "status": "PASS",
+    "rust_domain_tests_passed": 55,
+    "rust_runtime_tests_passed": 41,
+    "ignored_live_network_tests": 1,
+    "python_tests_passed": 35,
+    "real_core_smoke": "PASS",
+    "studio_modes_costs_chronology_restart": "PASS",
+    "backup_restore": "PASS",
+    "offline_report_interactions": "PASS",
+    "desktop_compile": "PASS",
+    "all_native_pages_render": "PASS"
+  },
+  "windows_ci": {
+    "run_id": 38689840745,
+    "status": "PASS",
+    "workspace_and_python_tests": "PASS",
+    "embedded_runtime_import": "PASS",
+    "packaged_native_acceptance": {
+      "version": "0.5.0",
+      "result": "PASS",
+      "checks": [
+        "packaged Core startup",
+        "DPAPI IPC",
+        "stopped/read-only default",
+        "learning API",
+        "four mode settings and restart",
+        "proportional fee calculator",
+        "21-frame studio API",
+        "opportunity history",
+        "config save",
+        "backup",
+        "staged restore and restart",
+        "rollback snapshot",
+        "DPAPI key preserved",
+        "shutdown",
+        "all 34 complete native frames"
+      ],
+      "native_pages": 17,
+      "rendered_frames": 34,
+      "native_mt5_acceptance": "not performed"
+    },
+    "native_pages_rendered": 17,
+    "complete_render_frames": 34,
+    "sizes": [
+      [
+        1120,
+        820
+      ],
+      [
+        880,
+        700
+      ]
+    ],
+    "artifact": {
+      "id": 11951589562,
+      "name": "BrainTrade-Windows-x64-v0.5.0-Preview",
+      "size_in_bytes": 33664382,
+      "url": "https://api.github.com/repos/gngoongoog/V4/actions/artifacts/11951589562",
+      "archive_download_url": "https://api.github.com/repos/gngoongoog/V4/actions/artifacts/11951589562/zip",
+      "expired": false,
+      "created_at": "2026-10-15T06:11:49Z",
+      "expires_at": "2027-01-13T05:59:59Z",
+      "updated_at": "2026-10-15T06:11:49Z",
+      "digest": "sha256:1e69f82f2b2fbcdd1ea8469c1ff83abd2d043f79f8c54938a982503ad75d8cdb",
+      "workflow_run": {
+        "id": 38689840745,
+        "repository_id": 1050772379,
+        "head_repository_id": 1050772379,
+        "head_branch": "development",
+        "head_sha": "a5961ff85b41e50e18a7c8295244d115f9fcfd3d"
+      }
+    }
+  },
+  "native_mt5_user_laptop": "NOT_PERFORMED",
+  "live_telegram_acceptance": "NOT_PERFORMED",
+  "execution_enabled": false,
+  "generated_strategy_promotion": false
+}

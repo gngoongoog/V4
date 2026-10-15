@@ -144,7 +144,13 @@ impl Default for Analysis {
     }
 }
 impl Analysis {
+    pub fn clear_plan(&mut self) {
+        self.entry=None; self.stop=None; self.target=None; self.lots=None; self.estimated_risk=None;
+    }
     pub fn text(&self) -> String {
+        if !self.current {
+            return format!("{} | WAIT\nالتحليل الحالي غير متاح: {}\nالمستويات والتوقعات القديمة مسحوبة حتى وصول بيانات حديثة.", self.symbol, reason_ar(&self.reason));
+        }
         let votes = self
             .votes
             .iter()

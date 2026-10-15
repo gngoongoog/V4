@@ -1,8 +1,4 @@
-"""Read-only MT5 bootstrap gateway. Never submits, modifies or closes orders.
-
-The initial gateway polls account snapshots. It is not the future tick/FLASH
-transport; that requires a separately validated native/MQL5 adapter.
-"""
+"""MT5 snapshots and explicitly selected independent-brain broker execution."""
 from __future__ import annotations
 import json
 import math
@@ -30,6 +26,7 @@ class DomCache:
     def __init__(self):
         self.key=None
         self.active=False
+        self.next_retry=0.0
     def release(self,mt5):
         if self.active and self.key is not None:
             try:
@@ -38,10 +35,13 @@ class DomCache:
                 pass
         self.key=None
         self.active=False
+        self.next_retry=0.0
     def read(self,mt5,key):
         if self.key!=key:
             self.release(mt5)
             self.key=key
+        if not self.active and time.monotonic() >= self.next_retry:
+            self.next_retry=time.monotonic()+30.0
             try:
                 self.active=bool(mt5.market_book_add(key[2]))
             except Exception:
@@ -52,8 +52,8 @@ class DomCache:
             book=mt5.market_book_get(key[2])
             if not book:
                 return False,[]
-            buy_types={getattr(mt5,'BOOK_TYPE_BUY',2),getattr(mt5,'BOOK_TYPE_BUY_MARKET',4)}
-            sell_types={getattr(mt5,'BOOK_TYPE_SELL',1),getattr(mt5,'BOOK_TYPE_SELL_MARKET',3)}
+            buy_types={getattr(mt5,'BOOK_TYPE_BUY',2)}
+            sell_types={getattr(mt5,'BOOK_TYPE_SELL',1)}
             rows=[]
             for level in book:
                 kind=getattr(level,'type',None)
@@ -66,7 +66,17 @@ class DomCache:
                 if math.isfinite(price) and math.isfinite(volume) and price>0 and volume>0:
                     rows.append(dict(side=side,price=price,volume=volume))
             rows.sort(key=lambda row:(0 if row['side']=='buy' else 1,-row['price'] if row['side']=='buy' else row['price']))
-            return bool(rows),rows[:100]
+            # Preserve both sides even when one side has more than 100 rows.
+            # Multiple rows at one price are one level for nearest-depth analysis.
+            levels={}
+            for row in rows:
+                identity=(row['side'],row['price'])
+                levels[identity]=levels.get(identity,0.0)+row['volume']
+            bids=[dict(side=side,price=price,volume=volume) for (side,price),volume in levels.items() if side=='buy' and math.isfinite(volume)]
+            asks=[dict(side=side,price=price,volume=volume) for (side,price),volume in levels.items() if side=='sell' and math.isfinite(volume)]
+            bids.sort(key=lambda row:-row['price']);asks.sort(key=lambda row:row['price'])
+            depth=bids[:50]+asks[:50]
+            return bool(bids and asks),depth
         except Exception:
             return False,[]
 
@@ -143,14 +153,17 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
     result = empty_snapshot(" ".join(errors))
     result.update(connected=True, login=account.login, server=account.server,
                   currency=account.currency, demo=account.trade_mode == mt5.ACCOUNT_TRADE_MODE_DEMO,
+                  account_trade_mode=int(account.trade_mode),margin_mode=getattr(account,"margin_mode",None),
+                  trade_allowed=bool(getattr(account,"trade_allowed",False) and getattr(terminal,"trade_allowed",False) and not getattr(terminal,"tradeapi_disabled",False)),trade_expert=bool(getattr(account,"trade_expert",False)),
                   balance=account.balance, equity=account.equity,
-                  positions=[dict(ticket=p.ticket, symbol=p.symbol,
+                  positions=[dict(ticket=p.ticket, symbol=p.symbol,magic=getattr(p,"magic",0),identifier=getattr(p,"identifier",p.ticket),opened_ms=getattr(p,"time_msc",0),
                                   side="BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL",
                                   volume=p.volume, price_open=p.price_open,
                                   price_current=p.price_current, profit=p.profit, sl=p.sl, tp=p.tp)
                              for p in positions], pending_orders=len(orders), today_net=net,
                   today_deals=count, report_day=report_day, symbol=symbol,
                   bid=tick.bid if tick else None, ask=tick.ask if tick else None,
+                  quote_time_ms=int(tick.time_msc) if tick else None,
                   tick_age_ms=max(0, int(now.timestamp() * 1000) - tick.time_msc) if tick and tick.time_msc<=int(now.timestamp()*1000)+2000 else None,
                   volume_min=info.volume_min if info else None,
                   volume_step=info.volume_step if info else None,
@@ -241,6 +254,8 @@ def main():
             headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
         with opener.open(request,timeout=4) as response:
             return json.load(response)
+    from execution import BrokerExecutor
+    executor=BrokerExecutor(directory / 'broker-journal.sqlite')
     try:
         while True:
             if mt5 is None:
@@ -271,19 +286,31 @@ def main():
                 with opener.open(request, timeout=4) as response:
                     response.read()
                 core_failures = 0
+                poll_seconds = 1.0
                 if initialized and snapshot['connected']:
+                    try:
+                        poll_seconds=min(poll_seconds,executor.cycle(mt5,api))
+                    except (OSError, ValueError, RuntimeError):
+                        pass  # Durable journal reconciles any interrupted submission.
                     try:
                         job = api('/v1/gateway/history/request').get('job')
                         if job is not None:
                             api('/v1/gateway/history/chunk', collect_history_chunk(mt5, job))
+                        else:
+                            from studio_feed import collect_frame
+                            request=api('/v1/gateway/research/request')
+                            poll_seconds=min(poll_seconds,max(0.25,min(1.0,request.get('poll_ms',1000)/1000.0)))
+                            if request.get('job') is not None:
+                                api('/v1/gateway/research/frame',collect_frame(mt5,request['job']))
                     except (OSError, ValueError):
                         pass  # Live snapshot succeeded; an obsolete history job may have been cancelled.
             except (OSError, ValueError):
                 core_failures += 1
                 if core_failures >= 3:
                     return
-            time.sleep(1)
+            time.sleep(locals().get("poll_seconds",1.0))
     finally:
+        executor.close()
         if mt5 is not None:
             dom_cache.release(mt5)
             mt5.shutdown()

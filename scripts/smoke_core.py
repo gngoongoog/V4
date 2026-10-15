@@ -68,6 +68,10 @@ def main():
             else:raise AssertionError('Invalid Telegram config accepted')
             api('/v1/config',{'config':config})
             assert not api('/v1/status')['gateway_fresh']
+            # Saving connection/config settings intentionally disarms global START.
+            # Re-arming must always be explicit before new virtual or broker entries.
+            assert api('/v1/status')['state']=='stopped'
+            assert api('/v1/start',{})['state']=='starting'
             now=int(time.time()*1000)
             def bars(seconds):
                 boundary=now//1000//seconds*seconds
@@ -85,7 +89,9 @@ def main():
             assert api('/v1/stop',{})['state']=='stopped'
             snapshot.update(bid=target+.1,ask=target+.2);api('/v1/gateway/snapshot',snapshot)
             paper=api('/v1/status')['paper'];assert paper['trades']==1 and paper['realized']>0
+            assert isinstance(api('/v1/opportunities/history')['setups'], list)
             export=Path(api('/v1/export',{})['path'])
+            assert (export/'opportunity_setups.jsonl').exists()
             assert len((export/'decisions.jsonl').read_text().splitlines())==1
             assert len((export/'paper_events.jsonl').read_text().splitlines())==2
             assert len((export/'candles.jsonl').read_text().splitlines())==540

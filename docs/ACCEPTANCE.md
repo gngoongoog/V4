@@ -18,8 +18,8 @@ These checks require a Windows x64 host with a real MT5 installation and a demo 
 - Match completed M1/M5/M15 broker candles and freshness behavior.
 - Confirm stale/missing/disagreeing inputs show WAIT/withdrawn evidence rather than synthetic data.
 - Verify Start/Stop semantics and persisted virtual Shadow state after Core restart.
-- Confirm live Shadow entries still come from legacy Meta and observational Gann/DOM/Macro/Meta-v2/Learning outputs do not change Shadow action, risk or lot sizing.
-- Confirm actual MT5 positions/orders veto virtual entries where designed and no broker order is sent.
+- Confirm the selected mode drives Shadow; imported ML challengers remain research-only. Broker coordinator results are separate from this virtual ledger.
+- Confirm actual MT5 positions/orders veto virtual entries where designed. With execution unbound or STOPPED, no new broker entries should be sent. Bound START can submit broker orders.
 
 ## Historical research
 
@@ -51,9 +51,24 @@ These checks require a Windows x64 host with a real MT5 installation and a demo 
 
 - Create backup while Core runs and verify SQLite integrity and expected manifest fields.
 - Confirm secrets are excluded.
-- Confirm the application does not falsely present full restore as implemented.
+- After STOP, validate and stage a backup, confirm replacement, reopen the app and verify the result.
+- Confirm rollback snapshot exists, local Telegram/IPC secrets remain unchanged, and corrupt or incompatible backups are rejected.
 - Restart and verify historical/evaluation/learning audit state survives.
 
-## Still future / separate acceptance
+## Demo broker execution and roles — manual acceptance still pending
 
-Broker execution, hard execution risk, reconciliation, partial live fills, portfolio execution risk, full restore/migration and any champion activation require separate designs and acceptance plans. None are enabled by the current research checkpoint.
+- Bind the intended Demo login/server/currency, confirm Algo Trading is permitted in MT5 and start the system.
+- Verify a coordinator order appears in MT5 with the recorded magic, requested volume and SL/TP; compare the actual broker result and fees with the Execution ledger.
+- Select an advisor, press SOLO and verify exclusion from the coordinator member list; its own trade must use its own magic and settings.
+- Return it with an open position. It should show RETURNING, continue its original exit management and rejoin only after settlement. Changing membership must not turn START on.
+- Verify STOP prevents new entry, while timed exits and broker SL/TP retain their ownership. Full Exit stops client-side timed exits.
+- Exercise broker rejection, partial fill, disconnection and restart on Demo; an uncertain result must never cause a blind duplicate submission.
+- Compare actual fee entries, swaps and manual exits against position-attributed totals. Fees without position IDs need separate accounting.
+- Verify configured commission proportionality, actual spread and Sniper cost threshold. Measure observed queue/check/send times on this machine; 100 ms is a polling sleep, not an execution guarantee.
+- On hedging accounts, verify separate brain positions. On netting accounts, verify exclusive ownership of the symbol.
+- Verify all four modes. Swing needs actual H1/H4/D1 history; Sniper needs a fresh tick crossing the completed-bar range. WAIT without a valid strategy signal is expected.
+- After enough prospective member outcomes mature, verify sample counts/weights survive restart and remain isolated by account/mode/frame.
+
+## Separate future work
+
+Portfolio-level execution risk, cross-version/multi-account migration and imported ML champion activation are not implemented. Existing working databases migrate additively; sealed backup restore is restricted to the same app version/schema.

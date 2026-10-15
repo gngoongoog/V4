@@ -462,6 +462,19 @@ fn probabilities(artifact: &Value, flat: &BTreeMap<String, f64>) -> Result<([f64
     Ok((probs, CLASSES[winner]))
 }
 
+/// Labels used during training/validation/holdout extend up to 30 minutes beyond
+/// their feature bars. Require a later bar in a known context before live scoring.
+fn after_training_evidence(artifact: &Value, context: &str, bar_time: u64) -> Result<bool> {
+    let splits=artifact["dataset"]["split"].as_array().context("Model chronological boundaries missing; retrain artifact")?;
+    let mut latest=0u64; let mut known=false;
+    for split in splits {
+        known |= split["context"].as_str()==Some(context);
+        let last=split["holdout_last_bar"].as_u64().context("Model holdout_last_bar missing; retrain artifact")?;
+        latest=latest.max(last.checked_add(1800).context("Model timestamp overflow")?);
+    }
+    Ok(known && !splits.is_empty() && bar_time>latest)
+}
+
 fn infer_from_payload(
     db: &Connection,
     context: &str,
@@ -477,6 +490,7 @@ fn infer_from_payload(
     {
         bail!("Challenger dataset identity changed after registration");
     }
+    if !after_training_evidence(&challenger.artifact,context,bar_time)? { return Ok(false); }
     let flat = flatten(features)?;
     let (probs, predicted_class) = probabilities(&challenger.artifact, &flat)?;
     let target = challenger.artifact["target"]
@@ -672,7 +686,7 @@ mod tests {
             "eligible_for_promotion":false,
             "feature_schema":FEATURE_SCHEMA,
             "target":"15m.direction_0_2atr",
-            "dataset":{"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+            "dataset":{"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","split":[{"context":"ctx","holdout_last_bar":1}]},
             "model":{
                 "classes":[-1,0,1],
                 "feature_names":names,
@@ -717,19 +731,29 @@ mod tests {
         let fixture = fixture();
         let flat = flatten(&fixture["features"]).unwrap();
         let db = db(&flat);
-        assert!(!infer_from_payload(&db, "ctx", 60, &fixture["features"], 1000).unwrap());
+        assert!(!infer_from_payload(&db, "ctx", 1860, &fixture["features"], 1000).unwrap());
         assert_eq!(db.query_row("SELECT COUNT(*) FROM learning_predictions",[],|row|row.get::<_,i64>(0)).unwrap(),0);
         db.execute(
             "INSERT INTO learning_review_records VALUES('r1','m1',1,?1,'[]',?2,'')",
             params![REVIEW_POLICY,json!({"eligible_for_manual_review":true,"eligible_for_promotion":false}).to_string()],
         )
         .unwrap();
-        assert!(infer_from_payload(&db, "ctx", 60, &fixture["features"], 1000).unwrap());
+        assert!(infer_from_payload(&db, "ctx", 1860, &fixture["features"], 1000).unwrap());
         let (class, confidence):(i64,f64)=db.query_row("SELECT predicted_class,confidence FROM learning_predictions",[],|row|Ok((row.get(0)?,row.get(1)?))).unwrap();
         assert_eq!(class,1);
         assert!(confidence>0.65);
-        assert!(infer_from_payload(&db, "ctx", 60, &fixture["features"], 1001).unwrap());
+        assert!(infer_from_payload(&db, "ctx", 1860, &fixture["features"], 1001).unwrap());
         assert_eq!(db.query_row("SELECT COUNT(*) FROM learning_predictions",[],|row|row.get::<_,i64>(0)).unwrap(),1);
+    }
+
+    #[test]
+    fn inference_rejects_training_overlap_unknown_context_and_missing_bounds() {
+        let mut a=json!({"dataset":{"split":[{"context":"ctx","holdout_last_bar":1000},{"context":"other","holdout_last_bar":2000}]}});
+        assert!(!after_training_evidence(&a,"ctx",3800).unwrap());
+        assert!(after_training_evidence(&a,"ctx",3801).unwrap());
+        assert!(!after_training_evidence(&a,"unknown",3801).unwrap());
+        a["dataset"]["split"][0].as_object_mut().unwrap().remove("holdout_last_bar");
+        assert!(after_training_evidence(&a,"ctx",3801).is_err());
     }
 
     #[test]

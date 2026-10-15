@@ -1,0 +1,122 @@
+{
+  "version": "0.4.0",
+  "repository": "gngoongoog/V4",
+  "branch": "development",
+  "tested_executable_commit": "42c8c6dfda42acfa02de733f3acb93ff639075cc",
+  "validation_boundary": "Executable/source behavior is validated at tested_executable_commit. Later documentation-only commits do not change executable behavior.",
+  "research_ci": {
+    "run_id": 38601402760,
+    "status": "PASS",
+    "rust_domain_runtime_tests": "PASS",
+    "core_build": "PASS",
+    "python_tests": "PASS",
+    "real_core_smoke": "PASS",
+    "browser_report_checks": "PASS",
+    "desktop_compile": "PASS",
+    "desktop_headless_all_pages": "PASS",
+    "artifact_upload": "PASS",
+    "rust_domain_tests_passed": 49,
+    "rust_runtime_tests_passed": 39,
+    "ignored_network_tests": 1,
+    "python_tests_passed": 32,
+    "backup_restore_integration": "PASS",
+    "native_pages_rendered": 14,
+    "render_sizes": [
+      [
+        1120,
+        820
+      ],
+      [
+        880,
+        700
+      ]
+    ]
+  },
+  "windows_ci": {
+    "run_id": 38601402734,
+    "status": "PASS",
+    "linux_duplicate_validation": "PASS",
+    "windows_package": "PASS",
+    "artifact_upload": "PASS",
+    "artifact_name": "BrainTrade-Windows-x64-v0.4.0-Preview",
+    "artifact_bytes": 33345482,
+    "artifact_sha256": "2d8115e64c91cf39231577a2f662bf80430646af61c0579aa108ffbd1fd84585",
+    "native_validation_artifact": "windows-native-validation",
+    "artifact_id": 11915201695,
+    "artifact_digest_scope": "Original GitHub Actions outer ZIP; final documentation-only repack has a separate delivery SHA-256.",
+    "packaged_staged_restore_restart": "PASS",
+    "rollback_snapshot_and_ipc_key_preservation": "PASS",
+    "native_frames_complete": 28
+  },
+  "capabilities": {
+    "historical_strategies": [
+      "Meta v1",
+      "Meta v2 candidate",
+      "CES v1",
+      "KTE v1"
+    ],
+    "observational_brains": [
+      "Trend v1",
+      "Regime v1",
+      "Structure v1",
+      "Volatility v1",
+      "Meta v2 candidate",
+      "Market Opportunities",
+      "Gann Geometry v1",
+      "broker DOM Depth",
+      "Macro/News Context"
+    ],
+    "chronological_evaluation": true,
+    "learning_snapshots_labels_export": true,
+    "offline_linear_baseline_trainer": true,
+    "immutable_challenger_registry": true,
+    "manual_review_eligibility": true,
+    "read_only_challenger_inference": true,
+    "prediction_outcome_scoring": true,
+    "challenger_performance_review": true,
+    "challenger_performance_policy": "challenger-performance-review-v1",
+    "backup_schema": 10,
+    "full_restore": true,
+    "native_pages": 14,
+    "native_backup_restore_controls": true,
+    "native_performance_review_controls": true,
+    "performance_review_evidence_signature": "fnv64-v2"
+  },
+  "learning_safety": {
+    "live_training": false,
+    "champion_exists_by_design": false,
+    "automatic_promotion": false,
+    "live_self_modification": false,
+    "shadow_model_effect": false,
+    "risk_model_effect": false,
+    "broker_model_effect": false,
+    "performance_review_human_consideration_only": true,
+    "performance_review_promotion_enabled": false
+  },
+  "broker_execution": {
+    "order_send_modify_close_path": false,
+    "demo_execution_state_machine": false,
+    "live_execution": false,
+    "shadow_decision_source": "legacy Meta"
+  },
+  "integrity": {
+    "sqlite_foreign_keys": "ENFORCED_AND_STARTUP_CHECKED",
+    "source_archive_hygiene": "TESTED",
+    "portable_source_copy_hygiene": "TESTED",
+    "generated_directory_contract_guard": "TESTED",
+    "branch_protection_main": false,
+    "branch_protection_development": false,
+    "sealed_backup_validation": "READ_ONLY_REJECTS_UNEXPECTED_MEMBERS",
+    "review_freeze_subject_binding": "MODEL_AND_EVIDENCE_SIGNATURE"
+  },
+  "native_acceptance": {
+    "user_windows_laptop": "NOT_RUN",
+    "real_mt5_broker_history": "NOT_RUN",
+    "real_market_book": "NOT_RUN",
+    "telegram_live_delivery": "NOT_RUN"
+  },
+  "profitability_claim": false,
+  "tradingview_equivalence_claim": false,
+  "next_stage": "Accumulate real out-of-sample scored evidence and run native user-laptop MT5/broker + Telegram acceptance; no Champion or trading effect.",
+  "channel": "Preview"
+}

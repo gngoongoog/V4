@@ -72,3 +72,16 @@ Routes:
 ## 10. Next layer
 
 The next scientific layer is a separate manual challenger performance-review policy over sufficiently large persisted scored outcomes. It must bind exact immutable evidence, reject insufficient/context-mismatched samples and produce at most a human-review recommendation. Champion activation and any Shadow/broker influence remain later, separate design/validation work.
+
+## Prospective inference boundary (0.4.0)
+
+Registered model split metadata must include `holdout_last_bar`. Inference only
+accepts known model contexts and feature bars strictly later than the maximum
+holdout boundary across **all** contexts plus 30 minutes (the maximum label horizon).
+This prevents in-sample observations or labels used to build/evaluate the artifact
+from being scored as prospective evidence. Older artifacts lacking the boundary
+must be retrained/re-exported; they are not silently granted inference eligibility.
+
+## Native performance review
+
+The Learning page exposes current performance details, freezes immutable reviews and opens saved reports by ID from the review list. POST /v1/learning/performance-review/create requires model_id, evidence_signature and optional note (500 characters). A changed subject or evidence set is rejected. Fingerprint v2 includes regime slices and exact serialized metrics; fixed v1 policy thresholds remain unchanged. No Champion or trading effect is enabled.

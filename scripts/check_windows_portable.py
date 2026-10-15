@@ -1,0 +1,156 @@
+"""Run the packaged Windows executable/Core with isolated temporary app data.
+Uses Windows DPAPI for the same IPC key format as the real desktop.
+Does not configure Telegram, submit orders, or touch existing application data.
+"""
+from __future__ import annotations
+import argparse
+import ctypes
+from ctypes import wintypes
+import json
+import os
+import shutil
+from pathlib import Path
+import subprocess
+import tempfile
+import time
+import urllib.request
+
+
+def unseal(path: Path) -> str:
+    class Blob(ctypes.Structure):
+        _fields_ = [("size", wintypes.DWORD), ("data", ctypes.POINTER(ctypes.c_ubyte))]
+    raw = path.read_bytes()
+    memory = (ctypes.c_ubyte * len(raw)).from_buffer_copy(raw)
+    source, output = Blob(len(raw), memory), Blob()
+    crypt = ctypes.WinDLL("crypt32", use_last_error=True)
+    crypt.CryptUnprotectData.argtypes = [ctypes.POINTER(Blob), ctypes.c_void_p, ctypes.c_void_p,
+                                        ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(Blob)]
+    crypt.CryptUnprotectData.restype = wintypes.BOOL
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel.LocalFree.restype = ctypes.c_void_p
+    if not crypt.CryptUnprotectData(ctypes.byref(source), None, None, None, None, 0, ctypes.byref(output)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return ctypes.string_at(output.data, output.size).decode("utf-8")
+    finally:
+        kernel.LocalFree(output.data)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--exe", type=Path, required=True)
+    parser.add_argument("--output", type=Path, default=Path("test-output/windows-portable-smoke.json"))
+    args = parser.parse_args()
+    if os.name != "nt":
+        raise SystemExit("This acceptance harness requires Windows")
+    executable = args.exe.resolve()
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with tempfile.TemporaryDirectory(prefix="braintrade-windows-check-") as folder:
+        directory = Path(folder)
+        environment = dict(os.environ, BRAINTRADE_DATA_DIR=folder, BRAINTRADE_NEWS_OFFLINE="1")
+        environment.pop("BRAINTRADE_GATEWAY_SCRIPT", None)
+        with (directory / "native-stderr.log").open("wb") as log:
+            process = subprocess.Popen([str(executable), "--core"], env=environment, stderr=log)
+            key = ""
+            def api(path, body=None):
+                request = urllib.request.Request("http://127.0.0.1:18741" + path,
+                    data=None if body is None else json.dumps(body).encode(),
+                    headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
+                with opener.open(request, timeout=5) as response:
+                    return json.load(response)
+            try:
+                for _ in range(100):
+                    try:
+                        key = unseal(directory / "ipc.key")
+                        status = api("/v1/status")
+                        break
+                    except (OSError, ValueError):
+                        if process.poll() is not None:
+                            raise AssertionError("Packaged Core exited before startup")
+                        time.sleep(0.1)
+                else:
+                    raise AssertionError("Packaged Core startup timeout")
+                assert status["version"] == "0.6.0" and status["state"] == "stopped", status
+                assert status["execution_enabled"] is False
+                assert api("/v1/learning")["champion"] is None
+                assert api("/v1/opportunities/history")["setups"] == []
+                assert api("/v1/stop", {})["state"] == "stopped"
+                config = api("/v1/config")["config"]
+                api("/v1/config", {"config": config})
+                assert len(api("/v1/studio")["frames"]) == 21
+                for mode in ("scalping", "swing", "expert", "sniper"):
+                    trading = dict(config["trading"], mode=mode)
+                    api("/v1/trading/settings", {"trading": trading, "commission_per_lot": 7.0})
+                    assert api("/v1/config")["config"]["trading"]["mode"] == mode
+                fees = api("/v1/trading/preview", {"lots": 0.1, "commission_per_lot": 7.0, "pip_points": 10.0})
+                assert abs(fees["commission"] - 0.70) < 1e-10
+                assert "costs" not in fees  # No actual broker quote in packaged acceptance.
+
+                assert (directory / "config.json").is_file()
+                risk = dict(config["risk"])
+                risk["risk_percent"] = 0.31
+                api("/v1/risk", risk)
+                backup = Path(api("/v1/backup", {})["path"])
+                assert (backup / "events.sqlite").is_file()
+                assert api("/v1/backup/restore/validate", {"name": backup.name})["valid"]
+                risk["risk_percent"] = 0.42
+                api("/v1/risk", risk)
+                original_key = (directory / "ipc.key").read_bytes()
+                staged = api("/v1/backup/restore/stage", {"name": backup.name})
+                assert staged["staged"] and staged["secrets_restored"] is False
+                assert process.wait(timeout=15) == 0
+                process = subprocess.Popen([str(executable), "--core"], env=environment, stderr=log)
+                for _ in range(100):
+                    try:
+                        status = api("/v1/status")
+                        break
+                    except OSError:
+                        if process.poll() is not None:
+                            raise AssertionError("Packaged Core exited during restore")
+                        time.sleep(0.1)
+                else:
+                    raise AssertionError("Packaged Core restore timeout")
+                assert status["state"] == "stopped" and not status["execution_enabled"]
+                assert api("/v1/config")["config"]["risk"]["risk_percent"] == 0.31
+                assert api("/v1/config")["config"]["trading"]["mode"] == "sniper"
+                restored = api("/v1/backup/restore/status")
+                assert restored["pending"] is False and restored["last_result"]["status"] == "applied"
+                assert (directory / "ipc.key").read_bytes() == original_key
+                assert all(item["valid"] for item in api("/v1/backups")["backups"])
+                api("/v1/shutdown", {})
+                assert process.wait(timeout=15) == 0
+                # Windows GUI-subsystem binaries may outlive a PowerShell invocation.
+                # subprocess.run waits for completion before validating/uploading frames.
+                subprocess.run([str(executable), "--render-check"], env=environment,
+                               cwd=directory, check=True, timeout=180)
+                frames = directory / "test-output" / "native-ui"
+                expected = {}
+                for width, height, suffix in [(1120, 820, ""), (880, 700, "-small")]:
+                    for page in range(18):
+                        expected[f"dashboard-page-{page}{suffix}.ppm"] = (width, height)
+                assert {path.name for path in frames.glob("*.ppm")} == set(expected)
+                for name, (width, height) in expected.items():
+                    raw = (frames / name).read_bytes()
+                    header = f"P6\n{width} {height}\n255\n".encode()
+                    assert raw.startswith(header) and len(raw) == len(header) + width * height * 3, name
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(frames, args.output.parent / "native-ui", dirs_exist_ok=True)
+                args.output.write_text(json.dumps({"version": status["version"], "result": "PASS",
+                    "checks": ["packaged Core startup", "DPAPI IPC", "stopped/unbound default",
+                               "learning API", "four mode settings and restart", "proportional fee calculator", "21-frame studio API", "opportunity history", "config save", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "shutdown", "all 36 complete native frames"],
+                    "native_pages": 18, "rendered_frames": len(expected),
+                    "native_mt5_acceptance": "not performed"}, indent=2), encoding="utf-8")
+            finally:
+                if process.poll() is None:
+                    try:
+                        api("/v1/shutdown", {})
+                        process.wait(timeout=10)
+                    except Exception:
+                        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], check=False,
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if process.returncode not in (None, 0):
+                    print((directory / "native-stderr.log").read_text(encoding="utf-8", errors="replace"))
+
+if __name__ == "__main__":
+    main()

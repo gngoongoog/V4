@@ -21,13 +21,19 @@ pub fn render() -> anyhow::Result<()> {
     ui.set_state("STOPPED".into());
     ui.set_connection("MT5 is not connected / بانتظار الاتصال".into());
     ui.set_diagnostics(
-        "Set your terminal path in Settings. No trade execution in this release.".into(),
+        "Set the terminal path in Settings, bind the Demo account, then START.".into(),
     );
-    ui.set_feedback("Research 0.3.0 • RENDER FIXTURE / no live data".into());
+    ui.set_feedback("Research 0.6.0 • RENDER FIXTURE / no live data".into());
     ui.set_regime("UPTREND".into());
     ui.set_decision("WAIT".into());
     ui.set_brains("RENDER FIXTURE / بيانات فحص فقط\nTrend M1: BUY | evidence 0.72\nTrend M5: BUY | evidence 0.61\nTrend M15: BUY | evidence 0.58\nMomentum M1: BUY\nStructure M1: NEUTRAL\n\nالنظام متوقف؛ لا مداخل افتراضية جديدة\nقوة الدليل ليست نسبة نجاح".into());
     ui.set_paper("SHADOW / محاكاة فقط\nRENDER FIXTURE / no live data\nVirtual equity: 1000.00 | realized: 0.00\nClosed virtual trades: 0\n\nNo open virtual position\n\nSpread, configured commission and slippage included.\nNo MT5 orders.".into());
+    ui.set_opportunities("RENDER FIXTURE — لا توجد فرصة حالية\nمنطقة طلب | انتظار تأكيد\nالدخول والوقف والأهداف مسحوبة أثناء الإيقاف".into());
+    ui.set_market_map("RENDER FIXTURE\nعقل المناطق: support / demand\nعقل الزخم: RSI 52 / اتجاه محايد\nGann: observational\nDOM: غير متاح — لا يتم اختلاق عمق السوق\nملف النشاط: ticks proxy فقط".into());
+    ui.set_learning_summary("RENDER FIXTURE\nعينات: 900 | نتائج ناضجة: 870 | انتظار: 30\nChallenger: نموذج توضيحي فقط\nالتوقعات للمراقبة؛ لا تأثير على Shadow أو MT5".into());
+    ui.set_learning_detail("لا بيانات سوق حقيقية ضمن فحص رسم الواجهة".into());
+    ui.set_backup_names(slint::ModelRc::new(slint::VecModel::from(vec!["foundation-fixture".into()])));
+    ui.set_backup_detail("RENDER FIXTURE — نسخة توضيحية فقط\nصالحة للاستعادة\nآخر نتيجة: applied\nأسرار Telegram لم تتغير".into());
     ui.set_bt_from("2026-10-01".into());
     ui.set_bt_to("2026-10-08".into());
     ui.set_bt_status("RENDER FIXTURE / لا توجد نتائج سوق حقيقية".into());
@@ -63,12 +69,22 @@ pub fn render() -> anyhow::Result<()> {
 
     let output = std::path::Path::new("test-output").join("native-ui");
     std::fs::create_dir_all(&output)?;
+    ui.set_studio_frames(std::rc::Rc::new(slint::VecModel::from(vec!["ALL".into(),"M1".into(),"H1".into()])).into());
+    ui.set_studio_summary("RENDER FIXTURE — بيانات اصطناعية\nM1: 600 شمعة | H1: 600 شمعة\n40 تركيباً؛ اختبار نهائي محفوظ".into());
+    ui.set_cost_detail("RENDER FIXTURE / USD\n0.1 لوت × 7 = 0.70 عمولة\nسبريد 2 نقطة = 0.20\nانزلاق 0.40 | إجمالي 1.30\nالتعادل 13 نقطة / 1.3 pip".into());
+    ui.set_wyckoff_detail("RENDER FIXTURE — ليس تحليلاً حقيقياً\nM1 | C → D محتملة\nSpring + Test | دعم 98 | مقاومة 102\nالحجم: tick_activity_proxy\nاختبار أقل نشاطاً بعد اختراق الدعم والعودة\nنتائج مقاسة: 0 | ينتظر 12 شمعة لاحقة".into());
+    ui.set_exec_summary("RENDER FIXTURE — Demo / stopped / no broker connected".into());
+    ui.set_exec_role("advisor".into());
+    ui.set_exec_names(slint::ModelRc::new(slint::VecModel::from(braintrade_domain::execution::BRAINS.iter().map(|b|slint::SharedString::from(b.1)).collect::<Vec<_>>())));
+    ui.set_exec_frames(slint::ModelRc::new(slint::VecModel::from(vec!["M1".into(),"M5".into(),"H1".into()])));
+    ui.set_exec_selected(3);
+    ui.set_exec_detail("RENDER FIXTURE — لا أوامر سوق حقيقية\nالترند | عضو تابع للرئيسي\nSTART/STOP مستقل عن زر العضوية".into());
     ui.show()?;
     for (width, height, suffix) in [(1120, 820, ""), (880, 700, "-small")] {
         window.set_size(slint::PhysicalSize::new(width, height));
-        for page in 0..10 {
+        for page in 0..18 {
             ui.set_page(page);
-            ui.set_events("#1 | core_started\nversion: 0.3.0 • execution_enabled: false\n\nUI render check — not live trading data".into());
+            ui.set_events("#1 | core_started\nversion: 0.6.0 • execution_enabled: false\n\nUI render check — not live trading data".into());
             slint::platform::update_timers_and_animations();
             ui.window().request_redraw();
             let mut pixels = vec![Rgb8Pixel::default(); (width * height) as usize];

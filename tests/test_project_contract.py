@@ -75,7 +75,7 @@ class ProjectContractTests(unittest.TestCase):
                 bad.append(str(relative))
         self.assertEqual(bad, [], f"Forbidden tracked artifacts: {bad}")
 
-    def test_mt5_gateway_remains_read_only(self):
+    def test_broker_writes_are_confined_to_journaled_execution_adapter(self):
         gateway = (ROOT / "gateway" / "mt5_gateway.py").read_text(encoding="utf-8")
         forbidden = (
             "order_send(",
@@ -87,6 +87,12 @@ class ProjectContractTests(unittest.TestCase):
         self.assertEqual(found, [], f"Broker-write API appeared in gateway: {found}")
         self.assertIn("positions_get()", gateway)
         self.assertIn("orders_get()", gateway)
+        adapter=(ROOT / "gateway/execution.py").read_text(encoding="utf-8")
+        self.assertIn("executor.cycle(mt5,api)",gateway)
+        self.assertIn("mt5.order_send(request)",adapter)
+        self.assertLess(adapter.index("INSERT INTO sends"),adapter.index("mt5.order_send(request)"))
+        self.assertIn("account_identity(current)!=expected(cmd)",adapter)
+        self.assertIn("if not authorize(cmd['id'])",adapter)
 
     def test_learning_pipeline_is_wired_in_causal_order(self):
         runtime = (ROOT / "crates" / "runtime" / "src" / "lib.rs").read_text(
@@ -157,6 +163,23 @@ class ProjectContractTests(unittest.TestCase):
         for path in json_files:
             with self.subTest(path=path.name):
                 json.loads(path.read_text(encoding="utf-8"))
+
+    def test_release_versions_and_dashboard_routes_are_consistent(self):
+        import tomllib
+        workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
+        lock = tomllib.loads((ROOT / "Cargo.lock").read_text(encoding="utf-8"))
+        packages = [p for p in lock["package"] if p["name"].startswith("braintrade-")]
+        self.assertEqual(len(packages), 3)
+        self.assertTrue(all(p["version"] == workspace for p in packages))
+        ui = (ROOT / "crates/desktop/ui/main.slint").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github/workflows/windows.yml").read_text(encoding="utf-8")
+        self.assertIn("Research " + workspace, ui)
+        self.assertIn("v" + workspace + "-Preview", workflow)
+        main = (ROOT / "crates/desktop/src/main.rs").read_text(encoding="utf-8")
+        for module in ("backtest", "news", "evaluation", "learning"):
+            self.assertIn(module + "::setup(&ui)", main)
+        for page in (10, 11, 12):
+            self.assertIn(f"if root.page == {page}:", ui)
 
     def test_windows_ci_covers_development(self):
         workflow = (

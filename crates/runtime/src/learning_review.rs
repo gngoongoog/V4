@@ -338,7 +338,7 @@ fn create(db: &mut Connection, request: ReviewRequest, now: u64) -> Result<Value
     if !id_ok(&request.model_id) {
         bail!("Invalid challenger model id");
     }
-    if request.note.len() > 500 {
+    if request.note.chars().count() > 500 {
         bail!("Reviewer note is too long");
     }
     if request.evaluation_ids.is_empty() || request.evaluation_ids.len() > 32 {

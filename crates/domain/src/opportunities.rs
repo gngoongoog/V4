@@ -3,11 +3,13 @@
 use crate::{research::{size_lots, TrendBrain, RegimeBrain, Vote}, Candle, MarketData, RiskConfig, Telemetry};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
-mod zones;
-mod features;
+pub(crate) mod zones;
+pub(crate) mod features;
 mod setups;
-mod gann;
-mod dom;
+pub(crate) mod gann;
+pub(crate) mod dom;
+#[cfg(test)]
+mod tests;
 pub use gann::GannFrame;
 pub use dom::DomBrain;
 
@@ -162,21 +164,35 @@ pub fn scan(m: &MarketData, symbol: &str, trend: &TrendBrain, regime: &RegimeBra
 }
 
 impl MarketBrains {
+    pub fn pause(&mut self, reason: &str) {
+        self.quote_ms = None;
+        for s in &mut self.setups {
+            s.clear_quote();
+            if !matches!(s.state.as_str(), "UNAVAILABLE" | "EXPIRED") {
+                s.state = "BLOCKED".into();
+            }
+            if !s.gates.iter().any(|gate| gate == reason) { s.gates.push(reason.into()); }
+        }
+    }
     pub fn withdraw(&mut self, reason: &str) {
         self.current=false; self.quote_ms=None; self.note=reason.into(); self.dom=DomBrain::default();
         for s in &mut self.setups { s.clear_quote(); s.state="UNAVAILABLE".into(); s.gates=vec![reason.into()]; }
     }
     pub fn expire(&mut self, now:u64, quote_fresh:bool) {
-        if !quote_fresh { self.dom=DomBrain::default(); }
+        if !quote_fresh {
+            self.quote_ms=None; self.dom=DomBrain::default();
+            self.specialists.retain(|v| v.name != "DOM Depth Brain / عقل عمق السوق");
+        }
         for s in &mut self.setups {
-            if now > s.expires_ms || !quote_fresh {
-                s.clear_quote(); s.state=if now>s.expires_ms {"EXPIRED"}else{"WAIT_QUOTE"}.into();
-                s.gates=vec![if now>s.expires_ms {"انتهت صلاحية شمعة الإشارة"}else{"نحتاج سعراً حديثاً"}.into()];
+            if now >= s.expires_ms || !quote_fresh {
+                s.clear_quote(); s.state=if now>=s.expires_ms {"EXPIRED"}else{"WAIT_QUOTE"}.into();
+                s.gates=vec![if now>=s.expires_ms {"انتهت صلاحية شمعة الإشارة"}else{"نحتاج سعراً حديثاً"}.into()];
             }
         }
     }
     /// Re-price ideas on the current quote; never modifies the closed-bar cache.
     pub fn price(&mut self, t:&Telemetry, risk:&RiskConfig, budget:f64, gates:&[String], now:u64) {
+        if !self.current { self.withdraw("خريطة الشموع غير صالحة؛ انتظر تحديث البيانات"); return; }
         self.dom=dom::assess(t);
         self.specialists.retain(|vote| vote.name != "DOM Depth Brain / عقل عمق السوق");
         self.specialists.push(Vote {
@@ -195,7 +211,7 @@ impl MarketBrains {
         for s in &mut self.setups {
             s.clear_quote(); s.gates=s.signal_gates.clone(); s.gates.extend_from_slice(gates);
             s.state="BLOCKED".into();
-            if now>s.expires_ms {s.state="EXPIRED".into();s.gates.push("انتهت صلاحية الإشارة؛ انتظر شمعة جديدة".into());continue;}
+            if now>=s.expires_ms {s.state="EXPIRED".into();s.gates.push("انتهت صلاحية الإشارة؛ انتظر شمعة جديدة".into());continue;}
             let Some((bid,ask,tick,loss,profit,min,step,max))=specs else {
                 s.state="WAIT_QUOTE".into();s.gates.push("سعر حديث ومواصفات tick واللوت مطلوبة".into());continue;
             };
@@ -243,6 +259,7 @@ impl MarketBrains {
         }
     }
     pub fn signals_text(&self)->String {
+        if !self.current { return format!("{}\n{}\nأرقام الفرص مسحوبة لحين وصول بيانات صالحة.", self.symbol, self.note); }
         let mut out=format!("{}\n{}\n{}\n",self.symbol,self.headline(),self.note);
         if self.dom.available {
             let _=writeln!(out,"DOM حي: imbalance {:+.2} | bid depth {:.2} / ask depth {:.2} | أقرب {} مستويات مرصودة\n{}",self.dom.imbalance,self.dom.bid_depth,self.dom.ask_depth,self.dom.levels,self.dom.note);
@@ -262,6 +279,7 @@ impl MarketBrains {
         out.push_str("\nخطط تحليلية من بيانات MT5؛ لا إرسال أوامر. تُحدّث مع السعر وقد تنتهي صلاحيتها.\n");out
     }
     pub fn map_text(&self)->String {
+        if !self.current { return format!("الخريطة غير متاحة حالياً: {}", self.note); }
         let mut out=String::new();
         for v in &self.specialists {let _=writeln!(out,"{} | اتجاه {} | قوة {:.2}\n{}\n",v.name,v.direction,v.evidence,v.reason);}
         for m in &self.momentum {let _=writeln!(out,"{}: RSI {:.1} | زخم 3 {:.2} ATR / 8 {:.2} ATR | تسارع {:.2} | تباعد {}",m.timeframe,m.rsi14,m.roc3_atr,m.roc8_atr,m.acceleration_atr,m.divergence);}
