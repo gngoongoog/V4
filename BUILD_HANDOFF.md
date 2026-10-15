@@ -1,6 +1,8 @@
-# BrainTrade OS 0.6.0 Preview — verified development candidate
+# BrainTrade OS — promoted 0.6.0 + post-0.6 development handoff
 
 Canonical repository: `gngoongoog/V4`.
+
+## Promoted 0.6.0 baseline
 
 Verified executable/source checkpoint: `fdc63d4d05df89e27607641bd197b9e6ead936e9` (tree `8593783f43a4892cdc724ed5d112607ef7cee006`).
 
@@ -14,38 +16,38 @@ Validation on that exact checkpoint:
 - Native broker/account acceptance: NOT PERFORMED.
 - Telegram live delivery: NOT PERFORMED.
 
-Implemented in the 0.6 line:
+The reviewed 0.6 line was promoted to `main` through PR #13 without rewriting branch history. Its release evidence remains in `docs/validation.json`, with an immutable archival copy at `docs/validation-v0.6.0.json` on the post-0.6 preparation branch.
 
-- 14 execution identities with coordinator/advisor/SOLO/RETURNING membership.
-- Four trading modes: Scalping, Swing, Expert/adaptive and live-quote Sniper.
-- Persistent execution intents, reconciliation, partial-fill handling, exact account/ticket ownership checks and schema-12 backup support.
-- Adaptive member weighting from prospective 12-bar outcomes; imported ML challengers remain a separate research-only pipeline with no automatic promotion.
-- Native dashboard with 18 pages.
-- Startup and restart are STOPPED; a secondary SOLO toggle does not arm global START.
+## Current post-0.6 development
 
-Latest verified recovery/execution hardening:
+PR #16 was merged to `development` as merge commit `fd8490e6f33f3bd61e655829c12e7824462694a1`. Its exact tested feature head was `f36b9c1c7bd265675f5802efa8d2eddfc27c1ee8`.
 
-- reconciled fills stay blocked until the owned position is actually observed;
-- exact submitted broker volume is persisted;
-- Sniper applies the configured broker-cost threshold;
-- unknown intents stay scoped to the bound account across an account switch;
-- split fills reconcile cumulatively without a top-up or duplicate resend;
-- a reused durable intent ID with changed execution identity fails closed;
-- schema-12 restore keeps the durable gateway send journal outside rollback, and regression coverage verifies the journal survives restore unchanged.
+Run `38807773183` passed both Linux and Windows jobs on that exact feature head, including Rust tests, Python contracts, smoke, backup/restore, Studio, simulated execution integration, release packaging and Windows artifact upload.
 
-Release/promotion state:
+Feature-build artifacts from that run, before the post-0.6 version bump:
 
-- `development` contains the reviewed 0.6 candidate.
-- `main` and `development` have a divergent historical merge topology; never force-update or rewrite either branch to promote 0.6.
-- PR #13 is the deliberate promotion path from `development` to `main`.
-- Release-record/documentation commits may sit on top of the tested source checkpoint. They must not silently change runtime behavior; `docs/validation.json` records the executable checkpoint and artifact evidence.
+- `BrainTrade-Windows-x64-v0.6.0-Preview`: 34,007,016 bytes; SHA-256 `e4acfc271c0d9a5ba480647f8b5ae907b39692dd700bdb25906c7a9ee9662d96`.
+- `windows-native-validation`: 1,785,267 bytes; SHA-256 `6daacbba781834ce9243ab681b3cda3308a3b5dbf3af80346754ea59aaf8eff0`.
 
-Next engineering work after promotion:
+Portfolio Exposure v1 is now implemented in `development` and remains OFF by default. When enabled, it applies one aggregate entry budget across all BrainTrade execution identities: maximum combined positions/unresolved opens, combined lots and estimated stop-risk percentage of current equity. Unknown aggregate stop risk fails closed for new entries. Existing positions, closes, broker SL/TP, timed exits and reconciliation are never blocked by this gate. Settings persist in SQLite, survive staged backup/restore and are editable only while STOPPED from the native Execution page.
 
-1. Run the native Windows + real Demo MT5 acceptance checklist on the target installation and record it separately from CI.
-2. Test private Telegram delivery using only local credentials that never enter the repository.
-3. Enable branch protection / required checks for `main` and preferably `development` when repository administration policy is available.
-4. Design and validate portfolio-wide exposure management as a separate execution change; do not imply it is already present.
-5. Continue genuine out-of-sample evidence, ablation, correlation/portfolio research and historical-event replay without weakening the current no-lookahead boundaries.
+The Windows preview artifact workflow on `release/0.7-preview` has also been prepared to use a version-agnostic upload name/path so future Cargo version changes do not require another hard-coded workflow rename.
 
-No CI result, package build or simulated broker fixture establishes profitability, guaranteed latency or native broker acceptance.
+## Operational boundaries
+
+- Startup/restart remains STOPPED.
+- Secondary SOLO never arms global START.
+- Native MT5 Demo acceptance on the target machine is still pending and must be recorded separately from CI.
+- Live Telegram delivery is still pending and must use local credentials that never enter the repository.
+- Imported ML challengers remain research-only; there is no automatic Champion promotion or broker activation.
+- CI/package/simulated-MT5 evidence does not establish profitability, guaranteed latency or native broker execution quality.
+
+## Next engineering work
+
+1. Reconcile the post-0.6 version line and current-development validation records without relabeling 0.6 evidence as 0.7 evidence.
+2. Run the native Windows + Demo MT5 acceptance checklist on the target installation.
+3. Test private Telegram delivery with local-only credentials.
+4. Enable required checks / branch protection for `main` and preferably `development` when repository administration access is available.
+5. Continue out-of-sample evidence, ablation, aligned correlation/portfolio research and historical-event replay while preserving no-lookahead boundaries.
+
+Do not force-update or rewrite `main`/`development` history.
