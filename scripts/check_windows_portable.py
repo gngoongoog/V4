@@ -78,6 +78,15 @@ def main():
                 assert api("/v1/stop", {})["state"] == "stopped"
                 config = api("/v1/config")["config"]
                 api("/v1/config", {"config": config})
+                assert len(api("/v1/studio")["frames"]) == 21
+                for mode in ("scalping", "swing", "expert", "sniper"):
+                    trading = dict(config["trading"], mode=mode)
+                    api("/v1/trading/settings", {"trading": trading, "commission_per_lot": 7.0})
+                    assert api("/v1/config")["config"]["trading"]["mode"] == mode
+                fees = api("/v1/trading/preview", {"lots": 0.1, "commission_per_lot": 7.0, "pip_points": 10.0})
+                assert abs(fees["commission"] - 0.70) < 1e-10
+                assert "costs" not in fees  # No actual broker quote in packaged acceptance.
+
                 assert (directory / "config.json").is_file()
                 risk = dict(config["risk"])
                 risk["risk_percent"] = 0.31
@@ -104,6 +113,7 @@ def main():
                     raise AssertionError("Packaged Core restore timeout")
                 assert status["state"] == "stopped" and not status["execution_enabled"]
                 assert api("/v1/config")["config"]["risk"]["risk_percent"] == 0.31
+                assert api("/v1/config")["config"]["trading"]["mode"] == "sniper"
                 restored = api("/v1/backup/restore/status")
                 assert restored["pending"] is False and restored["last_result"]["status"] == "applied"
                 assert (directory / "ipc.key").read_bytes() == original_key
@@ -128,8 +138,8 @@ def main():
                 shutil.copytree(frames, args.output.parent / "native-ui", dirs_exist_ok=True)
                 args.output.write_text(json.dumps({"version": status["version"], "result": "PASS",
                     "checks": ["packaged Core startup", "DPAPI IPC", "stopped/read-only default",
-                               "learning API", "opportunity history", "config save", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "shutdown", "all 28 complete native frames"],
-                    "native_pages": 14, "rendered_frames": len(expected),
+                               "learning API", "four mode settings and restart", "proportional fee calculator", "21-frame studio API", "opportunity history", "config save", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "shutdown", "all 34 complete native frames"],
+                    "native_pages": 17, "rendered_frames": len(expected),
                     "native_mt5_acceptance": "not performed"}, indent=2), encoding="utf-8")
             finally:
                 if process.poll() is None:

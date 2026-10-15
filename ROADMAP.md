@@ -15,7 +15,7 @@ GitHub `gngoongoog/V4` is canonical. Read `BUILD_HANDOFF.md` and `docs/validatio
 
 Validated executable checkpoint: `42c8c6dfda42acfa02de733f3acb93ff639075cc`.
 
-Legacy Meta still controls live Shadow. No broker execution exists.
+Expert uses legacy Meta; selected Scalping/Swing/Sniper profiles also drive Shadow. Research synthesis and Wyckoff learning remain observational. No broker execution exists.
 
 ## Immediate next scientific work — real OOS evidence
 
