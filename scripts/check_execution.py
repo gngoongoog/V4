@@ -1,9 +1,10 @@
 """Real Core + simulated MT5 acceptance. Never connects to or submits to a broker."""
 from __future__ import annotations
-import argparse, json, os, subprocess, sys, tempfile, time, urllib.request, urllib.error
+import argparse, json, os, subprocess, sys, tempfile, time, tomllib, urllib.request, urllib.error
 from pathlib import Path
 from types import SimpleNamespace as N
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = tomllib.loads((ROOT/'Cargo.toml').read_text(encoding='utf-8'))['workspace']['package']['version']
 sys.path[:0] = [str(ROOT/'gateway'), str(ROOT/'tests'), str(ROOT/'scripts')]
 from mt5_gateway import empty_snapshot
 from execution import BrokerExecutor, clock_ms
@@ -127,7 +128,7 @@ def check(exe=None):
             assert not api('/v1/status')['execution_enabled'];assert api('/v1/execution/gateway')['command'] is None
             assert brain('trend')['stats']['deals']==0
             api('/v1/shutdown',{});process.wait(timeout=10)
-            report=dict(result='PASS',version='0.6.0',broker='simulated; no native MT5 acceptance',checks=[
+            report=dict(result='PASS',version=VERSION,broker='simulated; no native MT5 acceptance',checks=[
                 '14 identities; default coordinator and advisors','SOLO exclusion; no implicit global START',
                 'standalone M1 trend against opposing M5','optional risk caps off',
                 'Core+gateway single submission','unknown-to-fill history retains position barrier','entry history does not release fill barrier',
