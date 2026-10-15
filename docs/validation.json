@@ -1,6 +1,52 @@
 {
   "version": "0.6.0",
-  "status": "release candidate; final native CI pending",
-  "native_mt5_acceptance": "not performed",
+  "status": "CI-verified source and packaged Windows preview; native broker and Telegram acceptance remain pending",
+  "tested_commit": "a60d8201a52630a577e8120d5f4c852f9743a9d3",
+  "research_ci": {
+    "run_id": 38770422025,
+    "conclusion": "success",
+    "url": "https://github.com/gngoongoog/V4/actions/runs/38770422025"
+  },
+  "windows_ci": {
+    "run_id": 38770422066,
+    "conclusion": "success",
+    "url": "https://github.com/gngoongoog/V4/actions/runs/38770422066"
+  },
+  "windows_artifacts": [
+    {
+      "name": "BrainTrade-Windows-x64-v0.6.0-Preview",
+      "size_bytes": 33942044,
+      "sha256": "8bd9a7f120826d5ab6d02af2936998d914e5e372bcd332ee8ee2753bad2279bc"
+    },
+    {
+      "name": "windows-native-validation",
+      "size_bytes": 1785325,
+      "sha256": "75a35b83160c9e47ac16977a71285fcdba7092ca80b1f7c29314178ddfe33d67"
+    }
+  ],
+  "verified_checks": [
+    "Rust domain/runtime tests",
+    "Core build",
+    "Python tests and project contracts",
+    "real-Core smoke harness",
+    "browser/offline report checks",
+    "native desktop compile and headless render",
+    "Windows portable packaging",
+    "simulated MT5 execution integration with no broker connection"
+  ],
+  "execution_boundary": {
+    "broker_execution_code_present": true,
+    "startup_restart_state": "STOPPED",
+    "simulated_acceptance_only": true,
+    "native_mt5_acceptance": "not performed",
+    "telegram_live_delivery": "not performed",
+    "imported_ml_automatic_promotion": false
+  },
+  "latest_execution_fixes": [
+    "reconciled fills remain behind the position-observation barrier",
+    "exact submitted broker volume is persisted",
+    "Sniper uses the configured broker-cost threshold",
+    "schema-12 backups preserve the execution database while the durable gateway send journal remains outside restore rollback"
+  ],
   "prior_release_evidence": "validation-v0.5.0.json"
 }
