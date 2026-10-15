@@ -12,14 +12,26 @@ fn number(s: slint::SharedString) -> anyhow::Result<f64> {
 }
 fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
     let settings = &v["settings"];
+    let portfolio = &v["portfolio"];
+    let portfolio_risk = portfolio["estimated_stop_risk_percent_equity"]
+        .as_f64()
+        .map(|value| format!("{value:.2}%"))
+        .unwrap_or_else(|| "غير معروف".into());
     ui.set_exec_summary(
         format!(
-            "{} | حساب {} / {}\nالتنفيذ: {} | مطابق للحساب: {}",
+            "{} | حساب {} / {}\nالتنفيذ: {} | مطابق للحساب: {}\nحماية المحفظة: {} | تعرض {} / {} | لوت {:.4} / {:.4} | خطر وقف {} / {}%",
             settings["target"].as_str().unwrap_or("demo"),
             settings["login"],
             settings["server"].as_str().unwrap_or("—"),
             v["armed"],
-            v["account_matches"]
+            v["account_matches"],
+            if portfolio["enabled"] == true { "مفعلة" } else { "معطلة" },
+            portfolio["exposure_slots"],
+            portfolio["limits"]["max_positions"],
+            portfolio["lots"].as_f64().unwrap_or(0.0),
+            portfolio["limits"]["max_lots"].as_f64().unwrap_or(0.0),
+            portfolio_risk,
+            portfolio["limits"]["max_risk_percent"].as_f64().unwrap_or(0.0),
         )
         .into(),
     );
@@ -59,6 +71,15 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
         .unwrap_or_default();
     ui.set_exec_detail(format!("{} | Magic {}\n{} | اتجاه {} | جاهز للإرسال: {}\n{}\nآخر حساب للعقل: {} ميكروثانية (ليس زمن الوسيط)\n{}",b["name"].as_str().unwrap_or(""),b["magic"],a["reason"].as_str().unwrap_or("بانتظار تحديث MT5"),a["side"],s["ready"],gates,s["decision_us"],if config["use_risk_limits"]==true{"الحدود الاختيارية مفعّلة"}else{"الحدود الاختيارية معطلة؛ اللوت ثابت كما اخترته"}).into());
     let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "حماية المحفظة: {} | صفقات ظاهرة {} | أوامر دخول غير محسومة {} | إجمالي لوت {:.4} | خطر الوقف {}\n",
+        if portfolio["enabled"] == true { "مفعلة" } else { "معطلة افتراضياً" },
+        portfolio["open_positions"],
+        portfolio["unresolved_open_intents"],
+        portfolio["lots"].as_f64().unwrap_or(0.0),
+        portfolio_risk,
+    );
     for b in v["brains"].as_array().into_iter().flatten() {
         let stats = &b["stats"];
         let _ = writeln!(
