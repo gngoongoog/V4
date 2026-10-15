@@ -108,8 +108,8 @@ impl Service {
         status: &Status,
         now: u64,
     ) -> Result<Value> {
-        // System is not a SOLO strategy. Preserve its numeric settings if the UI saves
-        // them, but force the coordinator bit on and let global START/STOP own activation.
+        // A brain role change must never arm global START implicitly. START/STOP is a
+        // separate master control. The `enabled` bit on a non-system brain means SOLO.
         if method == "POST" && path == "/v1/execution/brain" {
             let mut config: BrainConfig = serde_json::from_slice(body)?;
             if config.id == "system" {
@@ -121,6 +121,17 @@ impl Service {
                 result["note"] = json!("العقل الرئيسي يتبع START/STOP ولا يحتاج زر تداول منفرد.");
                 return Ok(result);
             }
+            let solo = config.enabled;
+            let mut result = self.inner.route(method, path, body, db, status, now)?;
+            result["start"] = json!(false);
+            result["role"] = json!(if solo { "solo" } else { "advisor" });
+            result["solo_enabled"] = json!(solo);
+            result["note"] = json!(if solo {
+                "تم تفعيل التداول المنفرد لهذا العقل. START العام يبقى منفصلاً."
+            } else {
+                "تم إلغاء التداول المنفرد؛ العقل عاد للمشاركة مع العقل الرئيسي."
+            });
+            return Ok(result);
         }
 
         let value = self.inner.route(method, path, body, db, status, now)?;
