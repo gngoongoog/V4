@@ -1,0 +1,20 @@
+{
+  "version": "0.7.0",
+  "status": "pending-ci",
+  "source_state": "development preview",
+  "tested_commit": null,
+  "tested_tree": null,
+  "research_ci": null,
+  "windows_ci": null,
+  "windows_artifacts": [],
+  "release_evidence": "validation.json",
+  "release_version": "0.6.0",
+  "execution_boundary": {
+    "startup_restart_state": "STOPPED",
+    "simulated_acceptance_only": true,
+    "native_mt5_acceptance": "not performed",
+    "telegram_live_delivery": "not performed",
+    "imported_ml_automatic_promotion": false
+  },
+  "note": "Pending means no 0.7 CI success is claimed yet. Replace tested_commit/tested_tree and CI fields only after the exact 0.7 source head completes the required Research and Windows checks. Promoted 0.6 evidence remains immutable in docs/validation.json and docs/validation-v0.6.0.json."
+}
