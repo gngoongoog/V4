@@ -1,74 +1,54 @@
 # BrainTrade OS — Roadmap
 
-GitHub `gngoongoog/V4` is canonical. Read `BUILD_HANDOFF.md`, `PROJECT_STATE.md` and the validation records before editing.
+GitHub `gngoongoog/V4` is canonical. Read `BUILD_HANDOFF.md`, `PROJECT_STATE.md` and both release/development validation records before editing.
 
-## Promoted 0.6 checkpoint
+## Promoted 0.6.0 checkpoint
 
-Verified executable/source checkpoint: `fdc63d4d05df89e27607641bd197b9e6ead936e9` (tree `8593783f43a4892cdc724ed5d112607ef7cee006`).
+Verified executable/source checkpoint: `fdc63d4d05df89e27607641bd197b9e6ead936e9` (tree `8593783f43a4892cdc724ed5d112607ef7cee006`). Research CI `38803539711`: PASS. Windows CI/package `38803539405`: PASS. PR #13 promoted the reviewed 0.6.0 line to `main` without history rewriting.
 
-Research CI `38803539711`: PASS. Windows CI/package `38803539405`: PASS. The reviewed 0.6.0 line was promoted to `main` through PR #13 without history rewriting.
+The promoted line contains bound-account execution, 14 execution identities, coordinator/advisor/SOLO/RETURNING membership, Scalping/Swing/Expert/Sniper, adaptive member weighting, schema-12 backup/restore and the 18-page native dashboard. Startup/restart is STOPPED. CI uses simulated MT5; native MT5 demo acceptance remains a separate target-machine gate.
 
-The promoted 0.6 source contains bound-account execution code, 14 execution identities, coordinator/advisor/SOLO/RETURNING membership, four trading modes, adaptive member weighting, schema-12 backup/restore support and an 18-page native dashboard. Startup/restart is STOPPED. CI uses a simulated MT5 object and does not establish native broker acceptance; native MT5 demo acceptance remains a separate target-machine gate.
+## Current 0.7.0 Development Preview
 
-Imported ML challengers remain research-only. There is no automatic Champion promotion or learned-model broker activation.
+`0.7.0` is the current development line. `docs/development-validation.json` begins `pending-ci`; it must not inherit successful 0.6 SHA/run claims. `docs/validation.json` and `docs/validation-v0.6.0.json` remain the immutable promoted-release evidence.
+
+Portfolio Exposure v1 is merged through PR #16. Exact feature head `f36b9c1c7bd265675f5802efa8d2eddfc27c1ee8` passed Linux + Windows run `38807773183`. The gate is default-OFF and caps aggregate new-entry exposure by slots, lots and estimated stop-risk percentage while preserving exits/reconciliation.
+
+Current 0.7 engineering boundary work:
+
+- align Cargo workspace + lockfile + current-development UI/docs;
+- keep historical 0.6 release records unchanged;
+- make preview artifact upload version-agnostic;
+- run Research validation on pull requests so release evidence belongs to the exact PR SHA;
+- cancel stale concurrent runs for superseded PR heads;
+- freeze `docs/development-validation.json` only after exact-head Research + Windows success.
 
 ## Completed research foundation
 
-- Historical Meta v1/v2, CES v1 and KTE v1 with immutable saved inputs, replay, experiments and detailed ledgers.
-- Offline candlestick trade review and deterministic exports.
-- Observational Trend, Regime, Structure, Volatility, Gann, broker DOM Depth and Macro/News context.
-- Persisted chronological evaluation.
-- Learning snapshots/labels/export, offline baseline trainer and immutable challenger registry.
-- Manual challenger review eligibility, read-only inference, exact matured-label scoring and performance-review policy.
-- Repository guards for source/package hygiene, SQLite FK integrity, causal learning order and Windows CI.
-
-## Completed 0.6 engineering work
-
-- Durable execution intent state, gateway send journal, timeout/restart reconciliation and partial-fill handling.
-- Exact account/ticket ownership checks and hedging/netting ownership rules.
-- Four modes: Scalping, Swing, Expert/adaptive and live-quote Sniper.
-- Fourteen configured identities with SOLO exclusion, RETURNING ownership and automatic rejoin after settlement.
-- Prospective 12-bar outcomes and persisted adaptive member weights.
-- Backup schema 12 with application-state rollback while the durable gateway send journal remains outside restore rollback.
-- Reconciled fills remain behind the broker-position observation barrier and preserve exact submitted volume.
-- Unknown intents remain bound to the original account across account switches.
-- Split fills reconcile cumulatively without automatic top-up or duplicate submission.
-- Reusing an intent ID with changed execution identity fails closed.
-- Backup/restore regression coverage verifies `broker-journal.sqlite` remains outside rollback and unchanged.
-
-## Completed post-0.6 engineering — portfolio exposure v1
-
-PR #16 merged to `development` as `fd8490e6f33f3bd61e655829c12e7824462694a1`. Exact feature head `f36b9c1c7bd265675f5802efa8d2eddfc27c1ee8` passed Linux and Windows run `38807773183`.
-
-Implemented scope:
-
-- Default-OFF aggregate entry gate across all BrainTrade execution identities.
-- Aggregate visible owned positions and unresolved open intents before admitting new entries.
-- De-duplicate a filled/partial intent after the corresponding owned position becomes visible.
-- Deterministic admission order for simultaneously queued entries.
-- Optional maximum combined positions/intents, maximum combined lots and maximum estimated stop-risk percentage of current equity.
-- Fail closed for new entries when aggregate stop risk cannot be established; never block exits, SL/TP, timed management or reconciliation.
-- Persist portfolio settings in SQLite and restore them through staged backup/restore.
-- Expose aggregate state through `/v1/execution` and a STOPPED-only `/v1/execution/portfolio` configuration endpoint.
-- Native Execution-page editor for enable/disable, exposure slots, lots and stop-risk percentage.
-
-The feature-build artifacts are evidence for the exact PR #16 head, not a new numbered release. Promoted 0.6 evidence remains separate and is archived as `docs/validation-v0.6.0.json` on the post-0.6 preparation line.
+- Historical Meta v1/v2, CES v1 and KTE v1 with immutable inputs, replay, experiments and ledgers.
+- Offline candlestick review and deterministic exports.
+- Trend, Regime, Structure, Volatility, Gann, broker DOM Depth and Macro/News context.
+- Chronological evaluation and no-lookahead research guards.
+- Learning snapshots/labels/export, offline baseline trainer, challenger registry and manual review/performance evidence.
+- Durable execution intent/reconciliation, partial-fill handling and account isolation.
+- Portfolio Exposure v1 persistence, backup/restore and native editor.
 
 ## Immediate engineering work
 
-1. Reconcile the post-0.6 development version line and validation model without relabeling old 0.6 CI as new-version evidence.
-2. Run the native Windows + Demo MT5 acceptance checklist on the target machine and record it separately from CI.
-3. Test private Telegram delivery only with local credentials that never enter the repository.
-4. Enable branch protection / required checks for `main` and preferably `development` when repository administration policy is available.
-5. Add the next research-quality portfolio layer: aligned multi-symbol correlation/exposure research with timestamp availability masks before any correlation-based execution rule is considered.
+1. Complete and verify the `0.7.0` version boundary on an exact PR head with Research + Windows CI.
+2. Record that exact 0.7 source SHA/runs/artifacts in `docs/development-validation.json`; do not relabel 0.6 evidence.
+3. Run native Windows + Demo MT5 acceptance using `docs/ACCEPTANCE.md` and record it separately from CI.
+4. Test private Telegram delivery only with local credentials.
+5. Enable branch protection / required checks for `main` and preferably `development` when repository administration access is available.
+6. Begin aligned multi-symbol correlation/exposure research with timestamp availability masks before considering any correlation-driven execution rule.
 
 ## Scientific work still open
 
-- Accumulate real completed-bar observations and matured labels for genuine out-of-sample evaluation.
+- Accumulate genuine completed-bar observations and matured labels for out-of-sample evaluation.
 - Add ablation checks to separate useful signal from correlated duplicate features.
-- Add aligned correlation/portfolio research with explicit missing-data availability masks and no forward filling across unavailable source intervals.
+- Add aligned correlation/portfolio research with explicit missing-data masks and no forward filling across unavailable intervals.
 - Add historical news/event replay with first-observed timestamps and no-lookahead joins.
-- True feed-supported order flow and volume profile only when the source provides those fields.
+- True feed-supported order flow and volume profile only when the source actually provides those fields.
 
 ## Explicitly not complete
 
