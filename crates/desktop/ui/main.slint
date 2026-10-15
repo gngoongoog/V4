@@ -34,7 +34,8 @@ export component Dashboard inherits Window {
     in-out property <string> exec-report;
     in-out property <bool> exec-risk: false;
     in property <bool> exec-enabled: false;
-    in property <string> exec-summary: "اختر العقل ثم تشغيل تداول منفرد. الحساب الافتراضي Demo.";
+    in property <string> exec-role: "coordinator";
+    in property <string> exec-summary: "اربط حساب Demo ثم START. العقول أعضاء افتراضياً؛ زر منفرد يغيّر عضوية العقل المختار.";
     in property <string> exec-detail;
     in property <string> exec-ledger;
     in property <string> exec-message;
@@ -43,7 +44,7 @@ export component Dashboard inherits Window {
     in-out property <int> trade-mode: 2;
     in-out property <string> sniper-target: "50";
     in-out property <string> sniper-stop: "80";
-    in-out property <string> sniper-cooldown: "30";
+    in-out property <string> sniper-cooldown: "0";
     in-out property <string> pip-points: "10";
     in-out property <string> cost-fraction: "0.45";
     in-out property <string> preview-lots: "0.1";
@@ -220,7 +221,7 @@ export component Dashboard inherits Window {
             }
             Text { text: "الربط يثبت رقم الحساب والخادم ونوعه. انتقالك إلى حساب آخر لا يفعّل التداول عليه تلقائيًا."; color: #acbad0; wrap: word-wrap; }
             ComboBox { model: root.exec-names; current-index <=> root.exec-selected; selected(value) => { root.execution-action("select"); } }
-            Text { text: root.exec-enabled ? "هذا العقل مشغّل؛ قراره مستقل عن تصويت البقية" : "هذا العقل للمراقبة؛ اضغط تشغيل منفرد لإرسال صفقاته"; color: root.exec-enabled ? #5be0be : #f0c578; wrap: word-wrap; }
+            Text { text: root.exec-role == "coordinator" ? "العقل الرئيسي المتعلم — يتبع START/STOP والوضع المختار" : root.exec-role == "returning" ? "بانتظار الرجوع: يكمل إدارة صفقته الحالية ثم يعود تابعاً للرئيسي" : root.exec-role == "solo" ? "منفرد: مستبعد من تصويت المنظومة ويتداول بقراره" : "عضو في المنظومة: يرسل تحليله للرئيسي ولا يفتح صفقة باسمه"; color: root.exec-enabled ? #5be0be : #f0c578; wrap: word-wrap; }
             HorizontalBox {
                 Text { text: "الفريم"; color: #acbad0; vertical-alignment: center; }
                 ComboBox { model: root.exec-frames; current-index <=> root.exec-frame; }
@@ -238,9 +239,9 @@ export component Dashboard inherits Window {
             CheckBox { text: "تفعيل حدود المخاطرة واللوت والسبريد الاختيارية من صفحة المخاطرة"; checked <=> root.exec-risk; }
             LineEdit { text <=> root.exec-report; placeholder-text: "للعقل المولّد فقط: معرّف تقرير محفوظ من مختبر الاستراتيجيات"; }
             HorizontalBox {
-                Button { text: "تشغيل تداول منفرد"; enabled: !root.exec-busy; clicked => { root.execution-action("enable"); } }
+                Button { text: "تشغيل تداول منفرد"; enabled: !root.exec-busy && root.exec-selected != 0 && !root.exec-enabled; clicked => { root.execution-action("enable"); } }
                 Button { text: "حفظ إعدادات العقل"; enabled: !root.exec-busy; clicked => { root.execution-action("save"); } }
-                Button { text: "إيقاف دخول هذا العقل"; enabled: !root.exec-busy; clicked => { root.execution-action("disable"); } }
+                Button { text: "إرجاع للمنظومة"; enabled: !root.exec-busy && root.exec-selected != 0 && root.exec-enabled; clicked => { root.execution-action("disable"); } }
             }
             HorizontalBox {
                 Button { text: "إغلاق صفقات هذا العقل"; enabled: !root.exec-busy; clicked => { root.execution-action("close"); } }
@@ -255,7 +256,7 @@ export component Dashboard inherits Window {
         if root.page == 14: ScrollView { VerticalBox { spacing: 10px;
             Text { text: "أوضاع التداول — SHADOW وعقل النظام المستقل"; font-size: 20px; color: #eaf0fb; }
             ComboBox { model: ["Scalping / سكالبنك", "Swing / سوينك", "Expert / الخبير", "Sniper / القناص"]; current-index <=> root.trade-mode; }
-            Text { text: root.trade-mode == 0 ? "M1 + M5؛ زخم مؤكد، وقف 1.2 ATR وهدف 1.4R، أقصى احتفاظ 15 دقيقة." : root.trade-mode == 1 ? "H1 + H4 + D1؛ اتجاهات متوافقة، وقف 2 ATR وهدف 2.5R، أقصى احتفاظ 3 أيام. السواب غير محسوب." : root.trade-mode == 2 ? "Meta الحالي: توافق M1/M5/M15، وقف 1.5 ATR وهدف 2R، أقصى احتفاظ 30 دقيقة." : "اختراق M1 مكتمل مع تأكيد M5. هدف صافي بالنقاط، مهلة دقيقتين، انتظار بوابة 250ms زائد المعالجة؛ ليس ضمان سرعة تنفيذ."; color: #acbad0; wrap: word-wrap; }
+            Text { text: root.trade-mode == 0 ? "M1 + M5؛ زخم مؤكد، وقف 1.2 ATR وهدف 1.4R، أقصى احتفاظ 15 دقيقة." : root.trade-mode == 1 ? "H1 + H4 + D1؛ اتجاهات متوافقة، وقف 2 ATR وهدف 2.5R، أقصى احتفاظ 3 أيام. السواب غير محسوب." : root.trade-mode == 2 ? "Meta الحالي: توافق M1/M5/M15، وقف 1.5 ATR وهدف 2R، أقصى احتفاظ 30 دقيقة." : "اختراق لحظي بالسعر لنطاق 6 شموع M1 مكتملة مع اتجاه M5. مهلة دقيقتين؛ انتظار 100ms عند تفعيل التنفيذ، يضاف وقت MT5 والمعالجة."; color: #acbad0; wrap: word-wrap; }
             Text { text: "العمولة ذهاب وإياب لكل 1.00 لوت — بعملة الحساب. أدخل مجموع عمولة الدخول والخروج."; color: #d5deed; wrap: word-wrap; }
             HorizontalBox {
                 LineEdit { text <=> root.commission-lot; placeholder-text: "7"; }
@@ -378,7 +379,7 @@ export component Dashboard inherits Window {
         if root.page == 3: VerticalLayout {
             spacing: 16px; alignment: start; vertical-stretch: 1;
             Text { text: "BRAINTRADE OS 0.5.0"; color: #eaf0fb; font-size: 24px; }
-            Text { text: "عقول تحليلية، مختبر تاريخي، تقييم زمني وتعلم بحثي للمراقبة. التنفيذ الفعلي والترقية التلقائية غير مفعّلين."; color: #acbad0; wrap: word-wrap; }
+            Text { text: "عقول تحليلية، مختبر تاريخي، تقييم زمني وتعلم بحثي للمراقبة. تنفيذ Demo/Live مرتبط بالحساب؛ اختيار الاستراتيجيات المولّدة يدوي، وأوزان الأعضاء تتعلم من نتائج لاحقة."; color: #acbad0; wrap: word-wrap; }
             Text { text: "Windows x64 • Core + Desktop + MT5 bootstrap"; color: #acbad0; }
             AboutSlint { max-height: 110px; }
         }

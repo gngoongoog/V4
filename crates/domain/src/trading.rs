@@ -27,7 +27,7 @@ impl Default for TradingConfig {
             mode: TradingMode::Expert,
             sniper_target_points: 50.,
             sniper_stop_points: 80.,
-            sniper_cooldown_seconds: 30,
+            sniper_cooldown_seconds: 0,
             pip_points: 10.,
             max_cost_fraction: 0.45,
         }
@@ -214,25 +214,25 @@ pub fn select(
     a.atr = Some(atr);
     let side = direction(fast);
     let n = fast.len();
-    let last = &fast[n - 1];
     let aligned =
         side != 0 && direction(confirm) == side && higher.is_none_or(|v| direction(v) == side);
     let trigger = if c.trading.mode == TradingMode::Sniper {
-        let p = &fast[n - 7..n - 1];
+        let p = &fast[n - 6..n];
         let edge = if side == 1 {
             p.iter().map(|b| b.high).fold(f64::NEG_INFINITY, f64::max)
         } else {
             p.iter().map(|b| b.low).fold(f64::INFINITY, f64::min)
         };
-        (last.close - edge) * side as f64 > 0. && (last.close - last.open) * side as f64 > atr * 0.2
+        let live = if side==1 {t.bid}else{t.ask};
+        live.is_some_and(|price|(price-edge)*side as f64>atr*0.05)
     } else {
-        (last.close - fast[n - 4].close) * side as f64 > atr * 0.3
+        (fast[n - 1].close - fast[n - 4].close) * side as f64 > atr * 0.3
     };
     a.reason = format!(
         "{:?}: confirmed trend + {}",
         c.trading.mode,
         if c.trading.mode == TradingMode::Sniper {
-            "six-bar breakout"
+            "live-quote breakout of six completed bars"
         } else {
             "three-bar momentum"
         }

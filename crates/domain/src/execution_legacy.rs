@@ -104,6 +104,7 @@ pub struct Signal {
     pub hold_ms: u64,
     pub reason: String,
     pub ready: bool,
+    #[serde(default)] pub coordination:Option<serde_json::Value>,
 }
 fn empty(b: &BrainConfig, why: &str) -> Signal {
     Signal {
@@ -116,6 +117,7 @@ fn empty(b: &BrainConfig, why: &str) -> Signal {
         hold_ms: b.max_hold_seconds * 1000,
         reason: why.into(),
         ready: false,
+        coordination:None,
     }
 }
 

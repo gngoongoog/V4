@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 
 pub struct Service {
     inner: legacy::Service,
+    learner:crate::coordinator_learning::Learner,
 }
 
 impl Service {
@@ -26,7 +27,7 @@ impl Service {
         if let Some(system) = inner.brains.iter_mut().find(|brain| brain.id == "system") {
             system.enabled = true;
         }
-        Ok(Self { inner })
+        Ok(Self { inner,learner:crate::coordinator_learning::Learner::new(db)? })
     }
 
     fn account_matches(&self, status: &Status) -> bool {
@@ -66,13 +67,17 @@ impl Service {
         if let Some(system) = self.inner.brains.iter_mut().find(|brain| brain.id == "system") {
             system.enabled = true;
         }
+        let available=crate::coordinator_learning::available_frames(telemetry,frames,now);
+        self.inner.weights=self.learner.observe(db,telemetry,config,&self.inner.brains,&available,run,now)?;
         // Legacy engine still owns durable broker intents/reconciliation. With `system`
         // forced on, it represents coordinated execution; every other `enabled` flag now
         // means SOLO override only.
         self.inner.observe(db, telemetry, config, run, frames, now)
     }
 
-    fn enrich_roles(mut value: Value) -> Value {
+    fn enrich_roles(mut value: Value, db:&Connection,status:&Status) -> Result<Value> {
+        let key=status.telemetry.as_ref().map(crate::coordinator_learning::context).unwrap_or_default();
+
         if let Some(brains) = value.get_mut("brains").and_then(Value::as_array_mut) {
             for brain in brains {
                 let id = brain["config"]["id"]
@@ -80,23 +85,29 @@ impl Service {
                     .unwrap_or_default()
                     .to_owned();
                 let solo = id != "system" && brain["config"]["enabled"] == true;
+                let in_flight:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",rusqlite::params![key,id],|r|r.get(0))?;
+                let open=status.telemetry.as_ref().is_some_and(|t|t.positions.iter().any(|p|Some(p.magic)==braintrade_domain::execution::magic(&id)&&p.symbol==t.symbol));
+                let returning=id!="system"&&!solo&&(in_flight||open);
+                brain["return_pending"]=json!(returning);
                 brain["role"] = json!(if id == "system" {
                     "coordinator"
                 } else if solo {
                     "solo"
+                } else if returning {
+                    "returning"
                 } else {
                     "advisor"
                 });
                 brain["solo_enabled"] = json!(solo);
-                brain["participates_in_coordinator"] = json!(id != "system" && !solo);
+                brain["participates_in_coordinator"] = json!(id != "system" && !solo && !returning);
                 if id == "system" {
                     brain["config"]["enabled"] = json!(true);
                 }
             }
         }
-        value["execution_model"] = json!("coordinator-with-solo-overrides-v1");
-        value["note"] = json!("العقل الرئيسي يعمل مع START. العقول الثانوية تشارك كمستشارين افتراضياً؛ تفعيل SOLO يفصل العقل المختار فقط، وإطفاؤه يعيده للمنظومة الجماعية. صفقات SOLO تبقى مملوكة للعقل عبر Magic مستقل.");
-        value
+        value["execution_model"] = json!("adaptive-member-coordinator-v1");
+        value["note"] = json!("العقل الرئيسي يعمل مع START. العقول الثانوية تشارك كمستشارين افتراضياً؛ تفعيل SOLO يفصل العقل المختار فقط، وإطفاؤه يعيده بعد تسوية صفقة SOLO المفتوحة. التعلم يحدّث وزن العضو بعد 12 شمعة لاحقة؛ أول 20 عينة تستخدم وزناً محايداً. START/STOP منفصلان عن زر العضوية.");
+        Ok(value)
     }
 
     pub fn route(
@@ -136,7 +147,7 @@ impl Service {
 
         let value = self.inner.route(method, path, body, db, status, now)?;
         if method == "GET" && path == "/v1/execution" {
-            Ok(Self::enrich_roles(value))
+            Self::enrich_roles(value,db,status)
         } else {
             Ok(value)
         }

@@ -35,6 +35,7 @@ impl Default for Settings {
 pub struct Service {
     pub settings: Settings,
     pub brains: Vec<BrainConfig>,
+    pub weights:BTreeMap<String,braintrade_domain::execution::LearnedWeight>,
     signals: BTreeMap<String, Value>,
     last_sync_ms: u64,
     history_until_ms: u64,
@@ -91,6 +92,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             settings,
             brains,
             signals: BTreeMap::new(),
+            weights:BTreeMap::new(),
             last_sync_ms: 0,
             history_until_ms: 0,
         })
@@ -155,7 +157,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             .map(serde_json::to_value)
             .transpose()?
             .unwrap_or(Value::Null);
-        let p = json!({"id":id,"context":key,"brain":b.id,"kind":kind,"login":t.login,"server":t.server,"currency":t.currency,"target":self.settings.target,"symbol":t.symbol,"magic":execution::magic(&b.id),"position":position,"lots":b.lots,"deviation_points":self.settings.deviation_points,"created_ms":now,"max_quote_age_ms":3000,"expires_ms":if kind=="open"{now+3000}else{now+30_000},"signal":s});
+        let p = json!({"id":id,"context":key,"brain":b.id,"kind":kind,"login":t.login,"server":t.server,"currency":t.currency,"target":self.settings.target,"symbol":t.symbol,"magic":execution::magic(&b.id),"position":position,"lots":b.lots,"deviation_points":self.settings.deviation_points,"created_ms":now,"max_quote_age_ms":signal.map(|s|if s.key.starts_with("tick:"){1000}else{3000}).unwrap_or(3000),"expires_ms":if kind=="open"{now+3000}else{now+30_000},"signal":s});
         db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload) VALUES(?1,?2,?3,?4,?5,'queued',?6)",params![id,key,b.id,kind,now,p.to_string()])?;
         Ok(())
     }
@@ -169,6 +171,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         now: u64,
     ) -> Result<()> {
         if !self.matches(t) {
+            self.signals.clear();
             return Ok(());
         }
         let key = ctx(t);
@@ -191,12 +194,9 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     .iter()
                     .any(|p| p.ticket == q["position"].as_u64().unwrap_or(0))
             };
-            let deal_seen: bool = db.query_row(
-                "SELECT EXISTS(SELECT 1 FROM broker_deals WHERE context=?1 AND ticket=?2)",
-                params![key, r["deal"].as_u64().unwrap_or(0)],
-                |r| r.get(0),
-            )?;
-            if visible || deal_seen {
+            let confirmed_closed:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_deals d JOIN broker_deals e ON e.context=d.context AND e.position_id=d.position_id WHERE d.context=?1 AND d.ticket=?2 AND CAST(json_extract(e.payload,'$.entry') AS INTEGER) IN (1,3))",params![key,r["deal"].as_u64().unwrap_or(0)],|r|r.get(0))?;
+            let partial_close_seen=!is_open&&r["state"]=="partial"&&t.positions.iter().find(|p|p.ticket==q["position"].as_u64().unwrap_or(0)).is_some_and(|p|p.volume+1e-8<r["request"]["volume"].as_f64().unwrap_or(0.));
+            if visible||(is_open&&confirmed_closed)||partial_close_seen {
                 db.execute(
                     "UPDATE broker_commands SET state='observed' WHERE id=?1",
                     [q["id"].as_str().unwrap()],
@@ -241,62 +241,26 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     self.queue(db, t, &b, "close", None, p.ticket, now)?;
                 }
             }
-            let mut genome = None;
-            let mut available = frames.clone();
-            if b.id == "generated" && !b.report_id.is_empty() {
-                let raw: Option<String> = db
-                    .query_row(
-                        "SELECT payload FROM studio_runs WHERE id=?1 AND context=?2",
-                        params![b.report_id, key],
-                        |r| r.get(0),
-                    )
-                    .optional()?;
-                if let Some(raw) = raw {
-                    let report: LabReport = serde_json::from_str(&raw)?;
-                    if report.timeframe == b.timeframe {
-                        genome = Some(report.selected);
-                    }
-                }
-            }
-            // Legacy primary frames arrive every quote; they must satisfy closure/freshness independently.
-            if let Some(m) = &t.market {
-                if now >= m.captured_ms && now - m.captured_ms <= 15_000 {
-                    for (tf, sec, bs) in
-                        [("M1", 60, &m.m1), ("M5", 300, &m.m5), ("M15", 900, &m.m15)]
-                    {
-                        if bs.len() >= 100
-                            && bs.last().is_some_and(|x| {
-                                x.time + sec <= now / 1000
-                                    && now / 1000 - (x.time + sec) <= sec + 20
-                            })
-                            && bs[bs.len() - 30..]
-                                .windows(2)
-                                .all(|w| w[1].time == w[0].time + sec)
-                        {
-                            if available
-                                .get(tf)
-                                .and_then(|v| v.last())
-                                .is_none_or(|v| v.candle.time < bs.last().unwrap().time)
-                            {
-                                available.insert(
-                                    tf.into(),
-                                    bs.iter()
-                                        .map(|c| FrameBar {
-                                            candle: c.clone(),
-                                            spread_points: 0,
-                                            real_volume: 0,
-                                        })
-                                        .collect(),
-                                );
-                            }
-                        }
-                    }
-                }
-            }
+            let genome=crate::coordinator_learning::genome(db,&b,t)?;
+            let available=crate::coordinator_learning::available_frames(t,frames,now);
             let started = std::time::Instant::now();
-            let mut signal = execution::evaluate(&b, t, c, &available, genome.as_ref(), now);
+            let base=execution::evaluate(&b,t,c,&available,genome.as_ref(),now);
+            let signal=if b.id=="system" {
+                let mut votes=vec![];
+                for member in self.brains.iter().filter(|m|m.id!="system"&&!m.enabled) {
+                    // Returning SOLO positions finish under their original owner before rejoining.
+                    let in_flight:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,member.id],|r|r.get(0))?;
+                    if in_flight||t.positions.iter().any(|p|p.magic==execution::magic(&member.id).unwrap()&&p.symbol==t.symbol){continue;}
+                    let g=crate::coordinator_learning::genome(db,member,t)?;
+                    let vote=execution::evaluate(member,t,c,&available,g.as_ref(),now);
+                    votes.push((member.clone(),vote,self.weights.get(&member.id).cloned().unwrap_or_default()));
+                }
+                execution::coordinate(base,c,votes)
+            }else{base};
             let decision_us = started.elapsed().as_micros() as u64;
             let mut gates = vec![];
+            if t.margin_mode!=Some(2)&&db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain<>?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,b.id],|r|r.get::<_,bool>(0))?{gates.push("Netting: أمر لعقل آخر لم تتم تسويته");}
+
             if !run {
                 gates.push("النظام متوقف");
             }
@@ -364,7 +328,6 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 self.queue(&tx, t, &b, "open", Some(&signal), 0, now)?;
                 tx.execute("INSERT INTO broker_signal_log(context,brain,timestamp_ms,payload) VALUES(?1,?2,?3,?4)",params![key,b.id,now,result.to_string()])?;
                 tx.commit()?;
-                signal.ready = false;
             }
         }
         Ok(())
@@ -510,7 +473,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     return Ok(json!({"command":null,"history_from_ms":0}));
                 };
                 db.execute("UPDATE broker_commands SET state='expired' WHERE state='queued' AND CAST(json_extract(payload,'$.expires_ms') AS INTEGER)<?1",[now])?;
-                let commands=json_rows(db,"SELECT json_set(payload,'$.state',state) FROM broker_commands WHERE context=?1 AND state IN ('queued','dispatched','unknown','placed') ORDER BY CASE kind WHEN 'close' THEN 0 ELSE 1 END,created_ms LIMIT 1",&key)?;
+                let commands=json_rows(db,"SELECT json_set(payload,'$.state',state) FROM broker_commands WHERE context=?1 AND state IN ('queued','dispatched','unknown','placed') ORDER BY CASE WHEN state IN ('queued','dispatched') THEN 0 ELSE 1 END,CASE kind WHEN 'close' THEN 0 ELSE 1 END,created_ms LIMIT 1",&key)?;
                 let mut command = commands.first().cloned();
                 if let Some(cmd) = &command {
                     let id = cmd["id"].as_str().unwrap();
@@ -603,18 +566,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     if pid == 0 || d["symbol"] != t.symbol {
                         continue;
                     }
-                    let owner:Option<String>=execution::brain_for_magic(d["magic"].as_u64().unwrap_or(0)).map(str::to_string).or(tx.query_row("SELECT brain FROM broker_observations WHERE context=?1 AND position_id=?2",params![key,pid],|r|r.get(0)).optional()?);
+                    let owner:Option<String>=execution::brain_for_magic(d["magic"].as_u64().unwrap_or(0)).map(str::to_string).or(tx.query_row("SELECT brain FROM broker_observations WHERE context=?1 AND position_id=?2 UNION ALL SELECT brain FROM broker_deals WHERE context=?1 AND position_id=?2 LIMIT 1",params![key,pid],|r|r.get(0)).optional()?);
                     if let Some(owner) = owner {
-                        tx.execute(
-                            "INSERT OR IGNORE INTO broker_observations VALUES(?1,?2,?3,?4,0,?5)",
-                            params![
-                                key,
-                                pid,
-                                owner,
-                                d["time_msc"].as_u64().unwrap_or(0),
-                                d.to_string()
-                            ],
-                        )?;
                         let mut d = d.clone();
                         d["brain"] = json!(owner);
                         tx.execute(

@@ -1,95 +1,52 @@
-//! Coordinated execution facade.
-//! Secondary brains remain independently testable in execution_legacy.rs, while the
-//! `system` brain acts as the main coordinator and consumes their directional evidence.
+//! Main coordinator consumes only current advisor members. SOLO bypasses coordination.
 #[path = "execution_legacy.rs"]
 mod legacy;
-
 pub use legacy::{brain_for_magic, magic, BrainConfig, Signal, BRAINS};
-use crate::{studio::{FrameBar, Genome}, Config, Telemetry};
+use crate::{studio::{FrameBar, Genome}, trading::TradingMode, Config, Telemetry};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Clone, Copy)]
-struct AdvisorSpec {
-    id: &'static str,
-    timeframe: &'static str,
-    weight: f64,
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct LearnedWeight {pub samples:u64,pub wins:u64,pub mean_net_per_lot:f64}
+impl LearnedWeight {
+    /// Shrunk forward-outcome frequency, bounded and neutral before 20 matured observations.
+    /// This is an adaptive evidence weight, not a calibrated trade-success probability.
+    pub fn weight(&self)->f64 {
+        if self.samples<20 {1.0} else {let p=(self.wins as f64+10.)/(self.samples as f64+20.);(0.5+p).clamp(0.5,1.5)}
+    }
+}
+pub fn evaluate(b:&BrainConfig,t:&Telemetry,c:&Config,frames:&BTreeMap<String,Vec<FrameBar>>,genome:Option<&Genome>,now:u64)->Signal {legacy::evaluate(b,t,c,frames,genome,now)}
+
+pub fn coordinate(mut primary:Signal,c:&Config,votes:Vec<(BrainConfig,Signal,LearnedWeight)>)->Signal {
+    let mut buy=0.;let mut sell=0.;let mut members=vec![];
+    for (b,s,w) in votes.into_iter().filter(|(b,_,_)|b.id!="system"&&!b.enabled) {
+        let weight=w.weight();
+        if s.ready {if s.side==1{buy+=weight;}else if s.side==-1{sell+=weight;}}
+        members.push(serde_json::json!({"id":b.id,"timeframe":b.timeframe,"side":s.side,"ready":s.ready,"weight":weight,"samples":w.samples,"wins":w.wins,"mean_net_per_lot":w.mean_net_per_lot,"reason":s.reason}));
+    }
+    let net=if buy+sell>0. {(buy-sell)/(buy+sell)}else{0.};
+    let expert=c.trading.mode==TradingMode::Expert;
+    // Expert selects direction from actual members. Other modes retain their market trigger
+    // and use the same adaptive member evidence for conflict resolution.
+    if expert {
+        primary.side=if net>=0.20{1}else if net<= -0.20{-1}else{0};
+        primary.ready=primary.side!=0&&primary.stop_distance>0.&&primary.target_distance>0.&&members.iter().any(|v|v["ready"]==true);
+    } else if primary.ready {
+        let against=if primary.side==1{sell}else{buy};let with=if primary.side==1{buy}else{sell};
+        if against>=2.&&against>with+0.5 {primary.ready=false;}
+    }
+    primary.reason=format!("{} | المنسق: شراء {:.2} / بيع {:.2}؛ {} أعضاء؛ أوزان تعلم من نتائج لاحقة فقط",primary.reason,buy,sell,members.len());
+    primary.coordination=Some(serde_json::json!({"version":"adaptive-member-coordinator-v1","buy":buy,"sell":sell,"net":net,"members":members,"weight_horizon":"12 later completed bars of each member timeframe","minimum_weight_samples":20}));
+    primary
 }
 
-const ADVISORS: [AdvisorSpec; 12] = [
-    AdvisorSpec { id: "trend", timeframe: "M5", weight: 1.4 },
-    AdvisorSpec { id: "momentum", timeframe: "M1", weight: 1.0 },
-    AdvisorSpec { id: "structure", timeframe: "M1", weight: 1.3 },
-    AdvisorSpec { id: "zones", timeframe: "M5", weight: 1.1 },
-    AdvisorSpec { id: "gann", timeframe: "M5", weight: 0.7 },
-    AdvisorSpec { id: "wyckoff", timeframe: "M5", weight: 1.1 },
-    AdvisorSpec { id: "dom", timeframe: "M1", weight: 0.8 },
-    AdvisorSpec { id: "profile", timeframe: "M5", weight: 0.7 },
-    AdvisorSpec { id: "gann_dom_profile", timeframe: "M5", weight: 0.6 },
-    AdvisorSpec { id: "ces", timeframe: "M1", weight: 0.9 },
-    AdvisorSpec { id: "kte", timeframe: "M1", weight: 1.0 },
-    AdvisorSpec { id: "regime", timeframe: "M5", weight: 1.2 },
-];
-
-/// The selected trading profile remains the trigger generator. Specialist brains are a
-/// transparent confirmation/veto layer: they can block a weak/conflicted coordinated
-/// order, but they do not silently invent a main-brain entry when the selected profile
-/// itself has no eligible signal. SOLO execution bypasses this function because each
-/// secondary brain is evaluated directly by the runtime under its own identity.
-pub fn evaluate(
-    config: &BrainConfig,
-    telemetry: &Telemetry,
-    global: &Config,
-    frames: &BTreeMap<String, Vec<FrameBar>>,
-    genome: Option<&Genome>,
-    now: u64,
-) -> Signal {
-    let mut primary = legacy::evaluate(config, telemetry, global, frames, genome, now);
-    if config.id != "system" || !primary.ready || !matches!(primary.side, -1 | 1) {
-        return primary;
+#[cfg(test)] mod tests {
+    use super::*;
+    fn signal(id:&str,side:i8)->Signal {Signal{brain:id.into(),side,key:"k".into(),bar_time:1,stop_distance:1.,target_distance:2.,hold_ms:1000,reason:"fixture".into(),ready:side!=0,coordination:None}}
+    #[test]fn solo_removed_from_votes_and_returned_member_restored(){
+        let c=Config::default();let a=BrainConfig{id:"trend".into(),..Default::default()};let mut b=BrainConfig{id:"gann".into(),enabled:true,..Default::default()};
+        let r=coordinate(signal("system",0),&c,vec![(a.clone(),signal("trend",1),Default::default()),(b.clone(),signal("gann",-1),Default::default())]);assert_eq!(r.side,1);assert_eq!(r.coordination.unwrap()["members"].as_array().unwrap().len(),1);
+        b.enabled=false;let r=coordinate(signal("system",0),&c,vec![(a,signal("trend",1),Default::default()),(b,signal("gann",-1),Default::default())]);assert!(!r.ready);assert_eq!(r.side,0);
     }
-
-    let mut supporting = 0.0f64;
-    let mut opposing = 0.0f64;
-    let mut support_names = Vec::new();
-    let mut oppose_names = Vec::new();
-    let mut neutral = 0usize;
-
-    for spec in ADVISORS {
-        let mut advisor = config.clone();
-        advisor.id = spec.id.into();
-        advisor.enabled = false;
-        advisor.timeframe = spec.timeframe.into();
-        advisor.report_id.clear();
-        let signal = legacy::evaluate(&advisor, telemetry, global, frames, None, now);
-        if signal.ready && signal.side == primary.side {
-            supporting += spec.weight;
-            support_names.push(spec.id);
-        } else if signal.ready && signal.side == -primary.side {
-            opposing += spec.weight;
-            oppose_names.push(spec.id);
-        } else {
-            neutral += 1;
-        }
-    }
-
-    // The coordinator is deliberately a veto layer over the selected trading mode.
-    // A single specialist cannot cancel a valid mode trigger; material conflicting
-    // evidence must outweigh support. This keeps Sniper responsive while still using
-    // the broader brain set instead of treating every specialist as an autonomous bot.
-    let conflicted = opposing >= 2.0 && opposing > supporting + 0.5;
-    let evidence = format!(
-        "Coordinator: support {:.1} [{}] | oppose {:.1} [{}] | neutral {}",
-        supporting,
-        if support_names.is_empty() { "none".into() } else { support_names.join(",") },
-        opposing,
-        if oppose_names.is_empty() { "none".into() } else { oppose_names.join(",") },
-        neutral
-    );
-    if conflicted {
-        primary.ready = false;
-        primary.reason = format!("{} | {} | BLOCKED: specialist opposition dominates", primary.reason, evidence);
-    } else {
-        primary.reason = format!("{} | {} | coordinated trigger retained", primary.reason, evidence);
-    }
-    primary
+    #[test]fn weights_need_forward_evidence_and_are_bounded(){assert_eq!(LearnedWeight{samples:19,wins:19,mean_net_per_lot:3.}.weight(),1.);assert!(LearnedWeight{samples:30,wins:25,mean_net_per_lot:3.}.weight()>1.);assert!(LearnedWeight{samples:30,wins:5,mean_net_per_lot:-3.}.weight()<1.);}
 }

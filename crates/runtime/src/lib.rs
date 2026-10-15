@@ -1,5 +1,6 @@
 mod backup;
 mod execution;
+mod coordinator_learning;
 mod studio;
 mod backtest;
 mod evaluation;
@@ -91,6 +92,7 @@ struct Event{id:i64,timestamp_ms:u64,kind:String,detail:Value}
 impl Engine{
     fn event(&self,kind:&str,detail:Value)->Result<()>{self.db.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,?2,?3)",params![now_ms(),kind,detail.to_string()])?;Ok(())}
     fn launch_gateway(&mut self)->Result<()>{
+        if std::env::var("BRAINTRADE_GATEWAY_DISABLED").as_deref()==Ok("1"){return Ok(());}
         if let Some(child)=self.gateway.as_mut(){if child.try_wait()?.is_none(){return Ok(());}}
         let exe=std::env::current_exe()?;let base=exe.parent().context("Executable parent missing")?;let packed=base.join("runtime").join(if cfg!(windows){"BrainTradeGateway.exe"}else{"BrainTradeGateway"});let embedded_python=base.join("runtime").join("python").join("python.exe");let embedded_script=base.join("runtime").join("gateway").join("mt5_gateway.py");
         let mut command=if packed.exists(){Command::new(packed)}else if cfg!(windows)&&embedded_python.is_file()&&embedded_script.is_file(){let mut c=Command::new(embedded_python);c.arg(embedded_script);c}else{let script=std::env::var_os("BRAINTRADE_GATEWAY_SCRIPT").map(PathBuf::from);let Some(script)=script else{bail!("Gateway executable missing. Build the Windows distribution or set BRAINTRADE_GATEWAY_SCRIPT for development.");};let mut c=Command::new(std::env::var_os("BRAINTRADE_PYTHON").unwrap_or("python".into()));c.arg(script);c};

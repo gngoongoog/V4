@@ -29,6 +29,7 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
     };
     let config = &b["config"];
     ui.set_exec_enabled(config["enabled"] == true);
+    ui.set_exec_role(b["role"].as_str().unwrap_or("advisor").into());
     if load {
         ui.set_exec_target(if settings["target"] == "live" { 1 } else { 0 });
         ui.set_exec_deviation(settings["deviation_points"].to_string().into());
@@ -65,17 +66,14 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
             out,
             "{} | {} | مغلقة {} / رابحة {} | صافي مسجل {:.2} | عائم {:.2}",
             b["name"].as_str().unwrap_or(""),
-            if b["config"]["enabled"] == true {
-                "مشغّل"
-            } else {
-                "متوقف"
-            },
+            match b["role"].as_str().unwrap_or(""){ "coordinator"=>"الرئيسي", "solo"=>"منفرد", "returning"=>"بانتظار الرجوع",_=>"عضو في المنظومة"},
             stats["closed_positions"],
             stats["wins"],
             stats["net_booked"].as_f64().unwrap_or(0.),
             stats["floating"].as_f64().unwrap_or(0.)
         );
     }
+    if let Some(members)=a["coordination"]["members"].as_array(){out.push_str("\nالأعضاء الحاليون وأوزان التعلم:\n");for member in members {let _=writeln!(out,"{} {} | اتجاه {} | وزن {:.3} | عينات {} | متوسط صافي/لوت {:.3}",member["id"].as_str().unwrap_or(""),member["timeframe"].as_str().unwrap_or(""),member["side"],member["weight"].as_f64().unwrap_or(1.),member["samples"],member["mean_net_per_lot"].as_f64().unwrap_or(0.));}}
     out.push_str("\nأحدث الأوامر — الأزمنة مقاسة على جهازك:\n");
     for cmd in v["commands"].as_array().into_iter().flatten().take(20) {
         let q = &cmd["request"];
