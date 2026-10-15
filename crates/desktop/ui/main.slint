@@ -33,6 +33,10 @@ export component Dashboard inherits Window {
     in-out property <string> exec-deviation: "20";
     in-out property <string> exec-report;
     in-out property <bool> exec-risk: false;
+    in-out property <bool> portfolio-enabled: false;
+    in-out property <string> portfolio-max-positions: "3";
+    in-out property <string> portfolio-max-lots: "0.30";
+    in-out property <string> portfolio-max-risk: "2.0";
     in property <bool> exec-enabled: false;
     in property <string> exec-role: "coordinator";
     in property <string> exec-summary: "اربط حساب Demo ثم START. العقول أعضاء افتراضياً؛ زر منفرد يغيّر عضوية العقل المختار.";
@@ -243,6 +247,17 @@ export component Dashboard inherits Window {
             Text { text: "عقل النظام يستخدم هندسة الوضع المختار. KTE يستخدم وقفه البنيوي؛ الاستراتيجية المولدة تستخدم إعدادات تقريرها."; color: #acbad0; wrap: word-wrap; }
             CheckBox { text: "تفعيل حدود المخاطرة واللوت والسبريد الاختيارية من صفحة المخاطرة"; checked <=> root.exec-risk; }
             LineEdit { text <=> root.exec-report; placeholder-text: "للعقل المولّد فقط: معرّف تقرير محفوظ من مختبر الاستراتيجيات"; }
+            Rectangle { height: 1px; background: #263145; }
+            Text { text: "حماية المحفظة — حد إجمالي عبر جميع العقول"; color: #eaf0fb; font-size: 18px; }
+            CheckBox { text: "تفعيل Portfolio Exposure Gate للدخولات الجديدة"; checked <=> root.portfolio-enabled; }
+            Text { text: "أقصى عدد صفقات/أوامر غير محسومة • أقصى مجموع لوت • أقصى خطر وقف % من Equity"; color: #acbad0; wrap: word-wrap; }
+            HorizontalBox {
+                LineEdit { text <=> root.portfolio-max-positions; placeholder-text: "3"; }
+                LineEdit { text <=> root.portfolio-max-lots; placeholder-text: "0.30"; }
+                LineEdit { text <=> root.portfolio-max-risk; placeholder-text: "2.0"; }
+                Button { text: "حفظ حماية المحفظة"; enabled: !root.exec-busy && root.state == "STOPPED"; clicked => { root.execution-action("portfolio"); } }
+            }
+            Text { text: "غيّر هذه الحدود فقط أثناء STOP. إذا تعذر حساب خطر وقف أي تعرض قائم، يمنع دخول جديد عند تفعيل الحماية؛ الإغلاقات وSL/TP والمصالحة لا تُمنع."; color: #f0c578; wrap: word-wrap; }
             HorizontalBox {
                 Button { text: "إغلاق صفقات هذا العقل"; enabled: !root.exec-busy; clicked => { root.execution-action("close"); } }
                 Button { text: "تحديث النتائج والأوامر"; enabled: !root.exec-busy; clicked => { root.execution-action("poll"); } }
