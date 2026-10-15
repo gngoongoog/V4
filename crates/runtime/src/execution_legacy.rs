@@ -2,7 +2,7 @@
 use anyhow::{bail, Context, Result};
 use braintrade_domain::{
     execution::{self, BrainConfig, Signal, BRAINS},
-    studio::{FrameBar, LabReport},
+    studio::FrameBar,
     Config, Status, Telemetry,
 };
 use rusqlite::{params, Connection, OptionalExtension};
@@ -19,6 +19,7 @@ pub struct Settings {
     pub currency: String,
     pub bound_ms: u64,
     pub deviation_points: u32,
+    pub revision: u64,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -29,6 +30,7 @@ impl Default for Settings {
             currency: String::new(),
             bound_ms: 0,
             deviation_points: 20,
+            revision: 0,
         }
     }
 }
@@ -53,6 +55,7 @@ fn json_rows(db: &Connection, sql: &str, key: &str) -> Result<Vec<Value>> {
 impl Service {
     pub fn new(db: &Connection) -> Result<Self> {
         db.execute_batch("CREATE TABLE IF NOT EXISTS execution_settings(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS execution_equity(context TEXT PRIMARY KEY,peak REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS brain_configs(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS broker_commands(id TEXT PRIMARY KEY,context TEXT NOT NULL,brain TEXT NOT NULL,kind TEXT NOT NULL,created_ms INTEGER NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS broker_commands_context ON broker_commands(context,brain,created_ms);
@@ -157,7 +160,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             .map(serde_json::to_value)
             .transpose()?
             .unwrap_or(Value::Null);
-        let p = json!({"id":id,"context":key,"brain":b.id,"kind":kind,"login":t.login,"server":t.server,"currency":t.currency,"target":self.settings.target,"symbol":t.symbol,"magic":execution::magic(&b.id),"position":position,"lots":b.lots,"deviation_points":self.settings.deviation_points,"created_ms":now,"max_quote_age_ms":signal.map(|s|if s.key.starts_with("tick:"){1000}else{3000}).unwrap_or(3000),"expires_ms":if kind=="open"{now+3000}else{now+30_000},"signal":s});
+        let p = json!({"id":id,"revision":self.settings.revision,"context":key,"brain":b.id,"kind":kind,"login":t.login,"server":t.server,"currency":t.currency,"target":self.settings.target,"symbol":t.symbol,"magic":execution::magic(&b.id),"position":position,"lots":b.lots,"deviation_points":self.settings.deviation_points,"created_ms":now,"max_quote_age_ms":signal.map(|s|if s.key.starts_with("tick:"){1000}else{3000}).unwrap_or(3000),"expires_ms":if kind=="open"{now+3000}else{now+30_000},"signal":s});
         db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload) VALUES(?1,?2,?3,?4,?5,'queued',?6)",params![id,key,b.id,kind,now,p.to_string()])?;
         Ok(())
     }
@@ -175,6 +178,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             return Ok(());
         }
         let key = ctx(t);
+        db.execute("INSERT INTO execution_equity VALUES(?1,?2) ON CONFLICT(context) DO UPDATE SET peak=MAX(peak,excluded.peak)",params![key,t.equity])?;
+        let peak:f64=db.query_row("SELECT peak FROM execution_equity WHERE context=?1",[&key],|r|r.get(0))?;
         // A fill acknowledgement is not a reconciled position snapshot. Keep the
         // brain blocked until the broker exposes its position or its deal history.
         let acknowledged=json_rows(db,"SELECT json_object('request',json(payload),'result',json(result)) FROM broker_commands WHERE context=?1 AND state IN ('filled','partial')",&key)?;
@@ -291,6 +296,9 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 gates.push("فاصل الدخول المختار");
             }
             if b.use_risk_limits {
+                if peak>0. && (peak-t.equity)/peak*100. >= c.risk.max_drawdown_percent {
+                    gates.push("حد التراجع الاختياري من أعلى Equity مرصود لهذا الحساب والرمز");
+                }
                 if b.lots > c.risk.max_lots {
                     gates.push("حد اللوت الاختياري");
                 }
@@ -380,7 +388,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                                 })
                         })
                         .collect();
-                    brains.push(json!({"config":b,"name":BRAINS.iter().find(|v|v.0==b.id).unwrap().1,"magic":magic,"latest":self.signals.get(&b.id),"stats":{"deals":own.len(),"closed_positions":closed.len(),"wins":closed.iter().filter(|(_,p)|**p>0.).count(),"net_booked":net,"floating":positions.iter().filter(|p|p.magic==magic).map(|p|p.profit).sum::<f64>(),"open_positions":positions.iter().filter(|p|p.magic==magic).count()}}));
+                    brains.push(json!({"config":b,"name":BRAINS.iter().find(|v|v.0==b.id).unwrap().1,"magic":magic,"latest":self.signals.get(&b.id).filter(|v|t.is_some_and(|t|self.matches(t))&&now.saturating_sub(v["evaluated_ms"].as_u64().unwrap_or(0))<=3000),"stats":{"deals":own.len(),"closed_positions":closed.len(),"wins":closed.iter().filter(|(_,p)|**p>0.).count(),"net_booked":net,"floating":positions.iter().filter(|p|p.magic==magic).map(|p|p.profit).sum::<f64>(),"open_positions":positions.iter().filter(|p|p.magic==magic).count()}}));
                 }
                 let commands=json_rows(db,"SELECT json_object('request',json(payload),'state',state,'result',json(result)) FROM broker_commands WHERE context=?1 ORDER BY created_ms DESC LIMIT 100",&key)?;
                 Ok(
@@ -435,14 +443,17 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         }
                     }
                 }
-                db.execute(
-                    "INSERT OR REPLACE INTO brain_configs VALUES(?1,?2)",
-                    params![b.id, serde_json::to_string(&b)?],
-                )?;
-                let enabled = b.enabled;
-                if !enabled {
-                    db.execute("UPDATE broker_commands SET state='cancelled' WHERE brain=?1 AND kind='open' AND state='queued'",[&b.id])?;
-                }
+                // Invalidate queued decisions on changed membership/parameters. Dispatched
+                // commands remain reconcilable, but must pass this revision at final authorization.
+                let tx=db.unchecked_transaction()?;
+                tx.execute("INSERT OR REPLACE INTO brain_configs VALUES(?1,?2)",params![b.id,serde_json::to_string(&b)?])?;
+                let mut settings=self.settings.clone();settings.revision+=1;
+                tx.execute("INSERT OR REPLACE INTO execution_settings VALUES(1,?1)",[serde_json::to_string(&settings)?])?;
+                tx.execute("UPDATE broker_commands SET state='cancelled' WHERE kind='open' AND state='queued'",[])?;
+                tx.commit()?;
+                self.settings=settings;
+                self.signals.clear();
+                let enabled=b.enabled;
                 let index = self.brains.iter().position(|x| x.id == b.id).unwrap();
                 self.brains[index] = b;
                 Ok(json!({"ok":true,"start":enabled}))
@@ -509,7 +520,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     && t.is_some_and(|t| self.matches(t) && ctx(t) == cmd["context"])
                     && now <= cmd["expires_ms"].as_u64().unwrap_or(0)
                     && (cmd["kind"] == "close"
-                        || (self.enabled(status)
+                        || (cmd["revision"].as_u64()==Some(self.settings.revision)
+                            && self.enabled(status)
                             && self
                                 .brains
                                 .iter()

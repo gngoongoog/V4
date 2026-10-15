@@ -1,9 +1,5 @@
-# BrainTrade OS 0.5.0 Preview — verified Windows build
+# BrainTrade OS 0.6.0 Preview
 
-Tested executable/source checkpoint: `a5961ff85b41e50e18a7c8295244d115f9fcfd3d`. Research `38689840746` and Windows `38689840745` both passed. Full evidence: validation.json and BUILD_HANDOFF.md.
+Current source contains actual bound-account broker execution, 14 identities, adaptive coordinator membership, SOLO/return transitions, four modes and an 18-page native dashboard. Optional risk limits are off by default; start/restart is STOPPED. See docs/EXECUTION_AND_ROLES.md and docs/QUICKSTART_AR.md.
 
-55 domain + 41 runtime Rust tests, 35 Python tests, real-Core old/new integration, persistence/backup restore, report interactions and all 17 native pages at two sizes passed. Packaged Windows startup/DPAPI, four mode settings, fee calculator, restoration and all 34 complete frames passed.
-
-Open BrainTrade.exe after extracting the full portable. Select terminal64.exe in Settings. See README_AR.md in the package. New pages: modes/costs, strategy studio and Wyckoff learning.
-
-This release operates in analysis/Shadow. No real MT5 orders or automatic model promotion. Actual user laptop MT5/Telegram acceptance and adequate forward observations remain pending.
+Release verification is in progress. Do not treat the previous 0.5.0 evidence as validation of 0.6.0. The authoritative completed checks and build source will be recorded in docs/validation.json. Previous release evidence is preserved in docs/validation-v0.5.0.json. Native broker/Telegram acceptance has not been performed in the build environment.

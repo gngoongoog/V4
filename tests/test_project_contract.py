@@ -75,7 +75,7 @@ class ProjectContractTests(unittest.TestCase):
                 bad.append(str(relative))
         self.assertEqual(bad, [], f"Forbidden tracked artifacts: {bad}")
 
-    def test_mt5_gateway_remains_read_only(self):
+    def test_broker_writes_are_confined_to_journaled_execution_adapter(self):
         gateway = (ROOT / "gateway" / "mt5_gateway.py").read_text(encoding="utf-8")
         forbidden = (
             "order_send(",
@@ -87,6 +87,12 @@ class ProjectContractTests(unittest.TestCase):
         self.assertEqual(found, [], f"Broker-write API appeared in gateway: {found}")
         self.assertIn("positions_get()", gateway)
         self.assertIn("orders_get()", gateway)
+        adapter=(ROOT / "gateway/execution.py").read_text(encoding="utf-8")
+        self.assertIn("executor.cycle(mt5,api)",gateway)
+        self.assertIn("mt5.order_send(request)",adapter)
+        self.assertLess(adapter.index("INSERT INTO sends"),adapter.index("mt5.order_send(request)"))
+        self.assertIn("account_identity(current)!=expected(cmd)",adapter)
+        self.assertIn("if not authorize(cmd['id'])",adapter)
 
     def test_learning_pipeline_is_wired_in_causal_order(self):
         runtime = (ROOT / "crates" / "runtime" / "src" / "lib.rs").read_text(

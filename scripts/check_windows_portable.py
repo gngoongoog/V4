@@ -71,7 +71,7 @@ def main():
                         time.sleep(0.1)
                 else:
                     raise AssertionError("Packaged Core startup timeout")
-                assert status["version"] == "0.5.0" and status["state"] == "stopped", status
+                assert status["version"] == "0.6.0" and status["state"] == "stopped", status
                 assert status["execution_enabled"] is False
                 assert api("/v1/learning")["champion"] is None
                 assert api("/v1/opportunities/history")["setups"] == []
@@ -127,7 +127,7 @@ def main():
                 frames = directory / "test-output" / "native-ui"
                 expected = {}
                 for width, height, suffix in [(1120, 820, ""), (880, 700, "-small")]:
-                    for page in range(17):
+                    for page in range(18):
                         expected[f"dashboard-page-{page}{suffix}.ppm"] = (width, height)
                 assert {path.name for path in frames.glob("*.ppm")} == set(expected)
                 for name, (width, height) in expected.items():
@@ -137,9 +137,9 @@ def main():
                 args.output.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(frames, args.output.parent / "native-ui", dirs_exist_ok=True)
                 args.output.write_text(json.dumps({"version": status["version"], "result": "PASS",
-                    "checks": ["packaged Core startup", "DPAPI IPC", "stopped/read-only default",
-                               "learning API", "four mode settings and restart", "proportional fee calculator", "21-frame studio API", "opportunity history", "config save", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "shutdown", "all 34 complete native frames"],
-                    "native_pages": 17, "rendered_frames": len(expected),
+                    "checks": ["packaged Core startup", "DPAPI IPC", "stopped/unbound default",
+                               "learning API", "four mode settings and restart", "proportional fee calculator", "21-frame studio API", "opportunity history", "config save", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "shutdown", "all 36 complete native frames"],
+                    "native_pages": 18, "rendered_frames": len(expected),
                     "native_mt5_acceptance": "not performed"}, indent=2), encoding="utf-8")
             finally:
                 if process.poll() is None:

@@ -558,7 +558,7 @@ mod tests {
     #[test]
     fn sniper_cost_gate_and_frozen_hold_survive_mode_change() {
         let now=1_800_000_000_000;let mut t=snapshot(now);t.point=Some(0.01);t.quote_time_ms=Some(now);
-        let last=t.market.as_mut().unwrap().m1.last_mut().unwrap();last.close=2055.5;last.high=2055.6;t.bid=Some(2055.5);t.ask=Some(2055.51);
+        let last=t.market.as_mut().unwrap().m1.last_mut().unwrap();last.close=2055.5;last.high=2055.6;t.bid=Some(2055.8);t.ask=Some(2055.81);
         let mut c=Config::default();c.trading.mode=TradingMode::Sniper;c.trading.sniper_target_points=5.;let mut db=Connection::open_in_memory().unwrap();let mut e=Research::load(&db).unwrap();
         let(a,_)=e.update(&mut db,&t,&c,true,now).unwrap();assert!(a.gates.iter().any(|s|s.contains("entry costs")),"{:?}",a);assert!(!e.has_open_position(&t));
         c.trading.sniper_target_points=200.;t.quote_time_ms=Some(now+1);let(a,_)=e.update(&mut db,&t,&c,true,now+1).unwrap();assert_eq!(a.action,"SHADOW_BUY","{:?}",a);

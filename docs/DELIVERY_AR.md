@@ -1,7 +1,5 @@
-# تسليم BrainTrade OS 0.5.0 Preview
+# BrainTrade OS 0.6.0 Preview
 
-فك ضغط الحزمة كاملة ثم افتح BrainTrade.exe. من الإعدادات اختر terminal64.exe وحدد رمز الذهب كما يظهر عند الوسيط. افتح صفحة «أوضاع التداول والتكلفة» لاختيار الوضع وحساب العمولة. تفاصيل الاستراتيجيات والتعلم في الصفحتين الجديدتين، ودليل التشغيل في QUICKSTART_AR.md.
+Current source contains actual bound-account broker execution, 14 identities, adaptive coordinator membership, SOLO/return transitions, four modes and an 18-page native dashboard. Optional risk limits are off by default; start/restart is STOPPED. See docs/EXECUTION_AND_ROLES.md and docs/QUICKSTART_AR.md.
 
-الحزمة تضم المحرك والبوابة وPython ولا تحتاج تثبيتها منفصلة. تحقّق من validation.json لمعرفة نتيجة بناء الحزمة؛ المستندات القديمة لا تثبت إصداراً جديداً.
-
-الأوضاع تعمل على المحاكاة Shadow. لا تفتح الحزمة صفقات MT5 حقيقية. نتائج المختبر ووايكوف بحثية تحتاج بيانات مستقبلية كافية.
+Release verification is in progress. Do not treat the previous 0.5.0 evidence as validation of 0.6.0. The authoritative completed checks and build source will be recorded in docs/validation.json. Previous release evidence is preserved in docs/validation-v0.5.0.json. Native broker/Telegram acceptance has not been performed in the build environment.

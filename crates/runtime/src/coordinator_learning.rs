@@ -46,3 +46,18 @@ impl Learner {
         }Ok(out)
     }
 }
+
+#[cfg(test)] mod tests {
+    use super::*;
+    use braintrade_domain::Candle;
+    fn bars(end:u64)->Vec<FrameBar>{(0..180).map(|i|{let time=end-(179-i)*60;let p=100.+time as f64/600.;FrameBar{candle:Candle{time,open:p,close:p+0.1,high:p+0.3,low:p-0.3,tick_volume:100},spread_points:1,real_volume:0}}).collect()}
+    #[test] fn causal_maturation_idempotence_restart_and_context_isolation(){
+        let db=Connection::open_in_memory().unwrap();let mut l=Learner::new(&db).unwrap();let c=Config::default();let b=BrainConfig{id:"trend".into(),..Default::default()};let mut now=1_800_000_000_000;
+        let mut t=Telemetry{connected:true,symbol:c.symbol.clone(),login:1,server:"TEST".into(),currency:"USD".into(),tick_size:Some(0.01),point:Some(0.01),tick_value_profit:Some(1.),tick_value_loss:Some(1.),tick_age_ms:Some(0),quote_time_ms:Some(now),..Default::default()};
+        let mut f=BTreeMap::from([("M1".into(),bars(now/1000-60))]);let price=f["M1"].last().unwrap().candle.close;t.bid=Some(price);t.ask=Some(price+0.01);
+        let w=l.observe(&db,&t,&c,&[b.clone()],&f,true,now).unwrap();assert_eq!(w["trend"].samples,0);l.observe(&db,&t,&c,&[b.clone()],&f,true,now).unwrap();assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_samples",[],|r|r.get::<_,u64>(0)).unwrap(),1);
+        now+=11*60_000;t.quote_time_ms=Some(now);f.insert("M1".into(),bars(now/1000-60));assert_eq!(l.observe(&db,&t,&c,&[b.clone()],&f,false,now).unwrap()["trend"].samples,0);
+        now+=60_000;t.quote_time_ms=Some(now);f.insert("M1".into(),bars(now/1000-60));let w=l.observe(&db,&t,&c,&[b.clone()],&f,false,now).unwrap();assert_eq!(w["trend"].samples,1);assert_eq!(w["trend"].wins,1);
+        let mut restarted=Learner::new(&db).unwrap();assert_eq!(restarted.observe(&db,&t,&c,&[b.clone()],&f,false,now).unwrap()["trend"].samples,1);t.login=2;assert_eq!(restarted.observe(&db,&t,&c,&[b],&f,false,now).unwrap()["trend"].samples,0);
+    }
+}

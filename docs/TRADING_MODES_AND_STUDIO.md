@@ -1,23 +1,23 @@
-# Trading modes and learning studio — 0.5.0
+# Trading modes and learning studio — 0.6.0
 
-All modes drive **Shadow simulation**, not broker orders. The MT5 gateway remains read-only. Generated strategies and Wyckoff learning are research outputs without automatic promotion.
+All four modes drive the coordinated broker policy after account binding and START, alongside the separate Shadow research ledger. See `EXECUTION_AND_ROLES.md` for actual membership and execution. Generated strategy activation is manual; no automatic ML promotion.
 
 | Mode | Completed inputs and trigger | Stop / target | Maximum hold |
 |---|---|---|---|
-| Expert | Original Meta M1/M5/M15 consensus | 1.5 ATR / 2R | 30 minutes |
+| Expert | Adaptive active-member coordinator (legacy Meta remains in Shadow) | 1.5 ATR / 2R | 30 minutes |
 | Scalping | M1 trend + three-bar momentum, M5 confirmation | 1.2 ATR / 1.4R | 15 minutes |
 | Swing | H1 momentum/trend, H4 and D1 confirmation | 2 ATR / 2.5R | 3 days |
-| Sniper | M1 six-bar breakout, M5 confirmation, new quote ≤1 second | User point distances; net target includes fees | 2 minutes |
+| Sniper | Live quote breakout of six completed M1 bars, M5 confirmation, new quote ≤1 second | User point distances; net target includes fees | 2 minutes |
 
-Switch modes while STOPPED. An open position retains its original stop, target, commission, slippage and maximum holding duration across changes/restarts. Existing checkpoints default to Expert's original duration. Account identity, one-position rule, broker positions/orders, risk budgets, daily/drawdown locks and lot limits still apply. STOP prevents new entries while virtual exits continue.
+Switch modes while STOPPED. An open position retains its original stop, target, commission, slippage and maximum holding duration across changes/restarts. Existing checkpoints default to Expert's original duration. Broker ownership and one-position-per-brain settlement apply. Optional risk budgets default off per brain; Shadow retains its research risk model. STOP prevents new entries while existing exit management continues.
 
 ## Commission and spread
 
 Commission is **round-trip per 1.00 lot, in account currency**: 7 × 0.1 = 0.70. If a broker quotes one side, enter entry plus exit. Risk and mode pages share the same setting. The calculator uses fresh MT5 bid/ask and broker point/tick specifications; it shows spread points/pips/money, commission, assumed two-sided slippage, total cost and approximate bid-to-bid break-even. Offline it calculates commission alone and marks spread/total unavailable. Display is labeled as the last manual calculation.
 
-Pip size is explicitly configurable in points (default 10); metals and indices do not have a universal pip convention. Asymmetric tick values use the larger value for cost estimates and the profit tick value for break-even. Spread is paid through executable bid/ask, never subtracted twice from PnL. Sniper targets compensate commission and exit slippage once. Its cost gate is `cost / (cost + desired net target money)`; default maximum 0.45. The stop must exceed entry spread/slippage. Default entry cooldown is 30 seconds. No re-entry on the same exit quote.
+Pip size is explicitly configurable in points (default 10); metals and indices do not have a universal pip convention. Asymmetric tick values use the larger value for cost estimates and the profit tick value for break-even. Spread is paid through executable bid/ask, never subtracted twice from PnL. Sniper targets compensate commission and exit slippage once. Its cost gate is `cost / (cost + desired net target money)`; default maximum 0.45. The stop must exceed entry spread/slippage. Default broker entry cooldown is 0 seconds; each broker tick intent is processed once.
 
-Sniper requests 250ms **sleep between full gateway polling cycles**, versus one second normally. Account/history reads, IPC and processing add latency. This is not tick-complete/high-frequency transport, and it does not guarantee execution speed or profitable quick trades. Overnight swaps, nonlinear/minimum commission tiers and future contract changes are not modeled. Gaps can exceed planned loss.
+Broker execution requests 100ms **sleep between full gateway polling cycles**; Shadow-only Sniper polling uses 250ms. Account/history reads, IPC and processing add latency. This is not tick-complete/high-frequency transport, and it does not guarantee execution speed or profitable quick trades. Overnight swaps, nonlinear/minimum commission tiers and future contract changes are not modeled. Gaps can exceed planned loss.
 
 ## All native MT5 timeframes
 
@@ -41,7 +41,7 @@ Broker real volume is used only when positive across the relevant window; otherw
 
 ## Persistence and APIs
 
-A backwards-compatible defaulted `Config.trading` object preserves existing working configs. Backup schema 11 includes prior state plus studio frame snapshots, immutable report datasets, settings, forward Wyckoff observations and mode decisions. Existing working databases gain tables automatically; sealed restore still requires exact app version/schema. The existing research export now includes `mode_decisions.jsonl`.
+A backwards-compatible defaulted `Config.trading` object preserves existing working configs. Backup schema 12 includes prior state plus studio frame snapshots, immutable report datasets, settings, forward Wyckoff observations and mode decisions. Existing working databases gain tables automatically; sealed restore still requires exact app version/schema. The existing research export now includes `mode_decisions.jsonl`.
 
 - `/v1/trading/settings`, `/v1/trading/preview`: validated profile/commission settings and current quote cost calculation.
 - `/v1/gateway/research/request`, `/frame`: bounded account-bound frame reads.

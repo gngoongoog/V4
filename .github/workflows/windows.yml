@@ -19,8 +19,8 @@ jobs:
         run: ./scripts/build-windows.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: BrainTrade-Windows-x64-v0.5.0-Preview
-          path: release/BrainTrade-Windows-x64-v0.5.0-Preview.zip
+          name: BrainTrade-Windows-x64-v0.6.0-Preview
+          path: release/BrainTrade-Windows-x64-v0.6.0-Preview.zip
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -37,3 +37,4 @@ jobs:
       - run: python3 scripts/smoke_core.py
       - run: python3 scripts/check_backup_restore.py
       - run: python3 scripts/check_studio.py
+      - run: python3 scripts/check_execution.py

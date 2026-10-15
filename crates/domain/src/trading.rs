@@ -256,6 +256,18 @@ pub fn select(
 mod tests {
     use super::*;
     #[test]
+    fn sniper_reacts_to_live_quote_without_a_new_bar() {
+        let now=1_800_000_000_000;
+        let bars:Vec<Candle>=(0..180).map(|i|Candle{time:now/1000-(180-i)*60,open:100.+i as f64*0.3,high:100.4+i as f64*0.3,low:99.6+i as f64*0.3,close:100.1+i as f64*0.3,tick_volume:100}).collect();
+        let mut t=Telemetry{connected:true,bid:Some(154.),ask:Some(154.01),tick_age_ms:Some(0),quote_time_ms:Some(now),market:Some(crate::MarketData{captured_ms:now,m1:bars.clone(),m5:bars.clone(),m15:bars,error:String::new()}),..Default::default()};
+        let mut c=Config::default();c.trading.mode=TradingMode::Sniper;
+        let base=Analysis{current:true,..Default::default()};
+        let wait=select(base.clone(),&t,&c,&BTreeMap::new(),now);assert_eq!(wait.action,"WAIT");
+        t.bid=Some(154.2);t.ask=Some(154.21);
+        let buy=select(base.clone(),&t,&c,&BTreeMap::new(),now);assert_eq!(buy.action,"BUY");assert_eq!(wait.bar_time,buy.bar_time);
+        t.quote_time_ms=Some(now-1001);assert!(!select(base,&t,&c,&BTreeMap::new(),now).gates.is_empty());
+    }
+    #[test]
     fn proportional_costs_without_double_spread() {
         let t = Telemetry {
             connected: true,

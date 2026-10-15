@@ -21,9 +21,9 @@ pub fn render() -> anyhow::Result<()> {
     ui.set_state("STOPPED".into());
     ui.set_connection("MT5 is not connected / بانتظار الاتصال".into());
     ui.set_diagnostics(
-        "Set your terminal path in Settings. No trade execution in this release.".into(),
+        "Set the terminal path in Settings, bind the Demo account, then START.".into(),
     );
-    ui.set_feedback("Research 0.5.0 • RENDER FIXTURE / no live data".into());
+    ui.set_feedback("Research 0.6.0 • RENDER FIXTURE / no live data".into());
     ui.set_regime("UPTREND".into());
     ui.set_decision("WAIT".into());
     ui.set_brains("RENDER FIXTURE / بيانات فحص فقط\nTrend M1: BUY | evidence 0.72\nTrend M5: BUY | evidence 0.61\nTrend M15: BUY | evidence 0.58\nMomentum M1: BUY\nStructure M1: NEUTRAL\n\nالنظام متوقف؛ لا مداخل افتراضية جديدة\nقوة الدليل ليست نسبة نجاح".into());
@@ -73,12 +73,14 @@ pub fn render() -> anyhow::Result<()> {
     ui.set_studio_summary("RENDER FIXTURE — بيانات اصطناعية\nM1: 600 شمعة | H1: 600 شمعة\n40 تركيباً؛ اختبار نهائي محفوظ".into());
     ui.set_cost_detail("RENDER FIXTURE / USD\n0.1 لوت × 7 = 0.70 عمولة\nسبريد 2 نقطة = 0.20\nانزلاق 0.40 | إجمالي 1.30\nالتعادل 13 نقطة / 1.3 pip".into());
     ui.set_wyckoff_detail("RENDER FIXTURE — ليس تحليلاً حقيقياً\nM1 | C → D محتملة\nSpring + Test | دعم 98 | مقاومة 102\nالحجم: tick_activity_proxy\nاختبار أقل نشاطاً بعد اختراق الدعم والعودة\nنتائج مقاسة: 0 | ينتظر 12 شمعة لاحقة".into());
+    ui.set_exec_summary("RENDER FIXTURE — Demo / stopped / no broker connected".into());
+    ui.set_exec_role("advisor".into());
     ui.show()?;
     for (width, height, suffix) in [(1120, 820, ""), (880, 700, "-small")] {
         window.set_size(slint::PhysicalSize::new(width, height));
-        for page in 0..17 {
+        for page in 0..18 {
             ui.set_page(page);
-            ui.set_events("#1 | core_started\nversion: 0.5.0 • execution_enabled: false\n\nUI render check — not live trading data".into());
+            ui.set_events("#1 | core_started\nversion: 0.6.0 • execution_enabled: false\n\nUI render check — not live trading data".into());
             slint::platform::update_timers_and_animations();
             ui.window().request_redraw();
             let mut pixels = vec![Rgb8Pixel::default(); (width * height) as usize];
