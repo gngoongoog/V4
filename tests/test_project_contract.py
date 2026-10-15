@@ -174,7 +174,8 @@ class ProjectContractTests(unittest.TestCase):
         ui = (ROOT / "crates/desktop/ui/main.slint").read_text(encoding="utf-8")
         workflow = (ROOT / ".github/workflows/windows.yml").read_text(encoding="utf-8")
         self.assertIn("Research " + workspace, ui)
-        self.assertIn("v" + workspace + "-Preview", workflow)
+        self.assertIn("name: BrainTrade-Windows-x64-Preview", workflow)
+        self.assertIn("path: release/BrainTrade-Windows-x64-v*-Preview.zip", workflow)
         main = (ROOT / "crates/desktop/src/main.rs").read_text(encoding="utf-8")
         for module in ("backtest", "news", "evaluation", "learning"):
             self.assertIn(module + "::setup(&ui)", main)
