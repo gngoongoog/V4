@@ -1,14 +1,14 @@
 # BrainTrade OS — Roadmap
 
-GitHub `gngoongoog/V4` is canonical. Read `BUILD_HANDOFF.md` and `docs/validation.json` before editing.
+GitHub `gngoongoog/V4` is canonical. Read `BUILD_HANDOFF.md`, `PROJECT_STATE.md` and the validation records before editing.
 
 ## Promoted 0.6 checkpoint
 
 Verified executable/source checkpoint: `fdc63d4d05df89e27607641bd197b9e6ead936e9` (tree `8593783f43a4892cdc724ed5d112607ef7cee006`).
 
-Research CI `38803539711`: PASS. Windows CI/package `38803539405`: PASS. The reviewed 0.6 line has been promoted to `main` through PR #13 without history rewriting.
+Research CI `38803539711`: PASS. Windows CI/package `38803539405`: PASS. The reviewed 0.6.0 line was promoted to `main` through PR #13 without history rewriting.
 
-The promoted 0.6 source contains bound-account execution code, 14 execution identities, coordinator/advisor/SOLO/RETURNING membership, four trading modes, adaptive member weighting, schema-12 backup/restore support and an 18-page native dashboard. Startup/restart is STOPPED. The CI execution harness uses a simulated MT5 object and never connects to a broker; native MT5 demo acceptance remains separate and pending.
+The promoted 0.6 source contains bound-account execution code, 14 execution identities, coordinator/advisor/SOLO/RETURNING membership, four trading modes, adaptive member weighting, schema-12 backup/restore support and an 18-page native dashboard. Startup/restart is STOPPED. CI uses a simulated MT5 object and does not establish native broker acceptance.
 
 Imported ML challengers remain research-only. There is no automatic Champion promotion or learned-model broker activation.
 
@@ -36,35 +36,37 @@ Imported ML challengers remain research-only. There is no automatic Champion pro
 - Reusing an intent ID with changed execution identity fails closed.
 - Backup/restore regression coverage verifies `broker-journal.sqlite` remains outside rollback and unchanged.
 
-## Current development — portfolio exposure v1
+## Completed post-0.6 engineering — portfolio exposure v1
 
-PR #16 introduces a separate, default-OFF portfolio entry gate across all 14 execution identities. Current implemented scope on the feature branch:
+PR #16 merged to `development` as `fd8490e6f33f3bd61e655829c12e7824462694a1`. Exact feature head `f36b9c1c7bd265675f5802efa8d2eddfc27c1ee8` passed Linux and Windows run `38807773183`.
 
-- Aggregate visible BrainTrade positions and unresolved open intents before admitting new entries.
+Implemented scope:
+
+- Default-OFF aggregate entry gate across all BrainTrade execution identities.
+- Aggregate visible owned positions and unresolved open intents before admitting new entries.
 - De-duplicate a filled/partial intent after the corresponding owned position becomes visible.
-- Deterministic admission order for simultaneously queued entries from different brains.
+- Deterministic admission order for simultaneously queued entries.
 - Optional maximum combined positions/intents, maximum combined lots and maximum estimated stop-risk percentage of current equity.
-- Fail closed for new entries when aggregate stop risk cannot be established; never block exits or reconciliation.
-- Persist portfolio settings in SQLite and verify staged backup/restore returns them exactly.
-- Expose aggregate exposure through `/v1/execution`.
-- Stopped-only `/v1/execution/portfolio` configuration API.
-- Native Execution-page editor for enable/disable, maximum exposure slots, maximum lots and maximum stop-risk percentage, with values reloaded from Core after save.
+- Fail closed for new entries when aggregate stop risk cannot be established; never block exits, SL/TP, timed management or reconciliation.
+- Persist portfolio settings in SQLite and restore them through staged backup/restore.
+- Expose aggregate state through `/v1/execution` and a STOPPED-only `/v1/execution/portfolio` configuration endpoint.
+- Native Execution-page editor for enable/disable, exposure slots, lots and stop-risk percentage.
 
-The 0.6 release evidence in `docs/validation.json` remains immutable evidence for the promoted 0.6 source and must not be silently relabeled as validation of this new development feature.
+The feature-build artifacts are evidence for the exact PR #16 head, not a new numbered release. Promoted 0.6 evidence remains separate and is archived as `docs/validation-v0.6.0.json` on the post-0.6 preparation line.
 
 ## Immediate engineering work
 
-1. Finish PR #16 final Linux/Windows CI and merge only after the exact final head is green.
-2. Start the post-0.6 development version line (0.7 Preview) only after release/version/workflow/document guards are reconciled together.
-3. Run the native Windows + Demo MT5 acceptance checklist on the target machine and record it separately from CI.
-4. Test private Telegram delivery only with local credentials that never enter the repository.
-5. Enable branch protection / required checks for `main` and preferably `development` when repository administration policy is available.
+1. Reconcile the post-0.6 development version line and validation model without relabeling old 0.6 CI as new-version evidence.
+2. Run the native Windows + Demo MT5 acceptance checklist on the target machine and record it separately from CI.
+3. Test private Telegram delivery only with local credentials that never enter the repository.
+4. Enable branch protection / required checks for `main` and preferably `development` when repository administration policy is available.
+5. Add the next research-quality portfolio layer: aligned multi-symbol correlation/exposure research with timestamp availability masks before any correlation-based execution rule is considered.
 
 ## Scientific work still open
 
 - Accumulate real completed-bar observations and matured labels for genuine out-of-sample evaluation.
 - Add ablation checks to separate useful signal from correlated duplicate features.
-- Add correlation/portfolio research with aligned timestamps and availability masks.
+- Add aligned correlation/portfolio research with explicit missing-data availability masks and no forward filling across unavailable source intervals.
 - Add historical news/event replay with first-observed timestamps and no-lookahead joins.
 - True feed-supported order flow and volume profile only when the source provides those fields.
 
@@ -73,6 +75,7 @@ The 0.6 release evidence in `docs/validation.json` remains immutable evidence fo
 - Native broker acceptance on the user's actual MT5 installation.
 - Live Telegram acceptance.
 - Imported ML Champion activation or automatic promotion.
+- Correlation-driven broker execution policy.
 - Any profitability, HFT-latency or execution-quality guarantee.
 
 A module is complete only when code, verification and state documentation agree.
