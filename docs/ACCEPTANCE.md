@@ -64,11 +64,29 @@ These checks require a Windows x64 host with a real MT5 installation and a demo 
 - Verify STOP prevents new entry, while timed exits and broker SL/TP retain their ownership. Full Exit stops client-side timed exits.
 - Exercise broker rejection, partial fill, disconnection and restart on Demo; an uncertain result must never cause a blind duplicate submission.
 - Compare actual fee entries, swaps and manual exits against position-attributed totals. Fees without position IDs need separate accounting.
-- Verify configured commission proportionality, actual spread and Sniper cost threshold. Measure observed queue/check/send times on this machine; 100 ms is a polling sleep, not an execution guarantee.
+- Verify configured commission proportionality, actual spread and Sniper cost threshold.
 - On hedging accounts, verify separate brain positions. On netting accounts, verify exclusive ownership of the symbol.
 - Verify all four modes. Swing needs actual H1/H4/D1 history; Sniper needs a fresh tick crossing the completed-bar range. WAIT without a valid strategy signal is expected.
 - After enough prospective member outcomes mature, verify sample counts/weights survive restart and remain isolated by account/mode/frame.
 
+## Sniper fast-lane latency — target-machine characterization required
+
+- In Sniper mode confirm the gateway hot loop is active while full account/position reconciliation and research/history collection remain on their slower schedules.
+- Collect at least several hundred Demo execution samples and preserve `queue_to_gateway_ms`, `authorize_ms`, `journal_ms`, `pre_send_ms`, `queue_to_send_ms`, `send_ms` and `total_ms` from broker results.
+- Compute P50/P95/P99 separately for `queue_to_send_ms` and `send_ms`. The engineering target is **20 ms or less for BrainTrade-local queue-to-send latency** on the target machine; this is not a broker-fill or network guarantee.
+- Confirm tick-keyed Sniper entries report `fast_path=true` and `order_check_skipped=true`; non-Sniper/bar-based entries must keep the normal broker `order_check` path.
+- Verify `PRAGMA synchronous=FULL` journal persistence still completes before every `order_send`; low latency must not permit a blind duplicate after crash, timeout or uncertain broker acknowledgement.
+- Compare fresh quote time, command creation time and the final `order_send` result. If local P95/P99 exceeds the target, use the component timings to identify whether Core authorization, durable journal I/O or local MT5 calls dominate before changing any safety boundary.
+- Treat MT5/broker acknowledgement and fill latency separately. No fixed end-to-end latency may be claimed from CI or from the local 5 ms polling target.
+
+## Portfolio Exposure v1 acceptance
+
+- Portfolio Exposure v1 is implemented and OFF by default; confirm upgrading or restarting does not silently enable it.
+- While STOPPED, enable it and configure aggregate maximum positions/intents, lots and estimated stop-risk percentage.
+- Verify new entries that would exceed any enabled portfolio limit are cancelled while existing positions, broker SL/TP, timed exits and reconciliation continue.
+- Verify unknown aggregate stop risk fails closed for new entries rather than being treated as zero risk.
+- Confirm settings survive restart and backup/restore according to the current schema.
+
 ## Separate future work
 
-Portfolio-level execution risk, cross-version/multi-account migration and imported ML champion activation are not implemented. Existing working databases migrate additively; sealed backup restore is restricted to the same app version/schema.
+Cross-version/multi-account migration, correlation-driven broker execution policy and imported ML champion activation are not implemented. Aligned multi-symbol correlation/exposure **research** remains a separate evidence step before any correlation-driven execution policy. Existing working databases migrate additively; sealed backup restore is restricted to the same app version/schema.
