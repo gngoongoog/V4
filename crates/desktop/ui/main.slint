@@ -1,4 +1,5 @@
 import { AboutSlint, Palette, ComboBox, Button, LineEdit, CheckBox, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
+import { CorrelationPage } from "./correlation.slint";
 export struct NewsRow {title:string,detail:string,url:string}
 
 component Card inherits Rectangle {
@@ -161,6 +162,28 @@ export component Dashboard inherits Window {
     in property <bool> news-empty: true;
     callback news-action(string);
     callback open-news(string);
+    in property <[string]> corr-sources;
+    in property <[string]> corr-source-ids;
+    in-out property <int> corr-source-a: -1;
+    in-out property <int> corr-source-b: -1;
+    in-out property <int> corr-source-c: -1;
+    in-out property <int> corr-source-d: -1;
+    in-out property <int> corr-source-e: -1;
+    in-out property <int> corr-source-f: -1;
+    in-out property <int> corr-source-g: -1;
+    in-out property <int> corr-source-h: -1;
+    in-out property <string> corr-min-overlap: "30";
+    in property <[string]> corr-reports;
+    in property <[string]> corr-report-ids;
+    in-out property <int> corr-report-selected: -1;
+    in property <bool> corr-busy: false;
+    in property <string> corr-status: "اضغط تحديث لتحميل نتائج Backtest المحفوظة";
+    in property <string> corr-title: "لا يوجد تقرير correlation معروض";
+    in property <string> corr-matrix: "اختر مصدرين على الأقل ثم شغّل التحليل.";
+    in property <string> corr-portfolio: "";
+    in property <string> corr-provenance: "";
+    in property <string> corr-boundary: "RESEARCH ONLY — لا تأثير على أوامر MT5 أو Portfolio Exposure.";
+    callback correlation-action(string);
     callback save-risk();
     callback action(string);
     callback save-settings();
@@ -214,6 +237,32 @@ export component Dashboard inherits Window {
             Button { text: "مختبر الاستراتيجيات"; clicked => { root.page = 15; root.studio-action("refresh"); } }
             Button { text: "وايكوف والتعلم"; clicked => { root.page = 16; root.studio-action("refresh"); } }
             Button { text: "التنفيذ المنفرد"; clicked => { root.page = 17; root.execution-action("refresh"); } }
+        }
+        HorizontalLayout { spacing: 8px;
+            Button { text: "ارتباط الرموز / Correlation"; enabled: !root.corr-busy; clicked => { root.page = 18; root.correlation-action("refresh"); } }
+        }
+        if root.page == 18: CorrelationPage {
+            vertical-stretch: 1;
+            sources: root.corr-sources;
+            source-a <=> root.corr-source-a;
+            source-b <=> root.corr-source-b;
+            source-c <=> root.corr-source-c;
+            source-d <=> root.corr-source-d;
+            source-e <=> root.corr-source-e;
+            source-f <=> root.corr-source-f;
+            source-g <=> root.corr-source-g;
+            source-h <=> root.corr-source-h;
+            min-overlap <=> root.corr-min-overlap;
+            reports: root.corr-reports;
+            report-selected <=> root.corr-report-selected;
+            busy: root.corr-busy;
+            status: root.corr-status;
+            title: root.corr-title;
+            matrix: root.corr-matrix;
+            portfolio: root.corr-portfolio;
+            provenance: root.corr-provenance;
+            boundary: root.corr-boundary;
+            action(value) => { root.correlation-action(value); }
         }
         if root.page == 17: ScrollView { VerticalBox { spacing: 10px;
             Text { text: "تنفيذ MT5 — لكل عقل قراره وصفقاته"; color: #eaf0fb; font-size: 20px; }
