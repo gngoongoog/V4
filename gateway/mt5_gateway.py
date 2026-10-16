@@ -372,10 +372,11 @@ def main():
     next_config_refresh=0.0
     normal_poll_seconds=1.0
 
-    def api(path, payload=None):
+    def api(path, payload=None, method=None):
         request = urllib.request.Request(BASE+path,
             data=json.dumps(payload, allow_nan=False).encode('utf-8') if payload is not None else None,
-            headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+            headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+            method=method)
         with opener.open(request,timeout=4) as response:
             return json.load(response)
 
@@ -445,7 +446,7 @@ def main():
                                     continue
                                 latest_snapshot=native_snapshot
                                 try:
-                                    work=api('/v1/execution/pulse',pulse_payload(latest_snapshot))
+                                    work=api('/v1/execution/pulse',pulse_payload(latest_snapshot),method='PUT')
                                     normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api,work=work)))
                                     command_polled=True
                                     core_failures=0
@@ -474,7 +475,7 @@ def main():
                             if changed:
                                 latest_snapshot=fast_snapshot
                                 try:
-                                    work=api('/v1/execution/pulse',pulse_payload(latest_snapshot))
+                                    work=api('/v1/execution/pulse',pulse_payload(latest_snapshot),method='PUT')
                                     normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api,work=work)))
                                     command_polled=True
                                     core_failures=0
