@@ -133,7 +133,7 @@ bool SendPendingQuoteTicks()
    else
       from_msc = (ulong)old_msc;
 
-   int batch = MathMax(32,MathMin(4096,InpMaxBatch));
+   int batch = (int)MathMax(32,MathMin(4096,InpMaxBatch));
    MqlTick ticks[];
    ResetLastError();
    int copied = CopyTicks(_Symbol,ticks,COPY_TICKS_ALL,from_msc,(uint)batch);
@@ -186,13 +186,16 @@ bool SendPendingQuoteTicks()
      }
 
    // Cursor advancement is committed only after the corresponding quote batch
-   // was accepted into the pipe buffer. If the write fails, the next OnTick can
-   // recover the same terminal-cached ticks rather than silently dropping them.
+   // was fully accepted into the pipe buffer. With FILE_ANSI the documented
+   // FileWriteString byte count equals this ASCII payload's character count, so
+   // a short write is treated exactly like a failed write and retried from the
+   // unchanged terminal-cache cursor.
    if(forwarded > 0)
      {
       ResetLastError();
+      uint expected = (uint)StringLen(payload);
       uint written = FileWriteString(g_pipe,payload);
-      if(written == 0)
+      if(written != expected)
         {
          g_failed_ticks += forwarded;
          ClosePipe();
