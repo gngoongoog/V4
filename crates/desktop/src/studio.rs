@@ -188,7 +188,34 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
                     _ => c.get("/v1/studio"),
                 }
             })();
-            let _=weak.upgrade_in_event_loop(move|ui|{ui.set_studio_busy(false);match result{Err(e)=>ui.set_studio_message(format!("تعذر الطلب: {e}").into()),Ok(v)=>match action.as_str(){"config"|"save"=>{if let Ok(c)=serde_json::from_value::<Config>(v["config"].clone()){load(&ui,&c);}if let Some(amount)=v["commission_editor"]["amount"].as_f64(){ui.set_commission_lot(amount.to_string().into());}ui.set_commission_basis(if v["commission_editor"]["basis"]=="per_side"{1}else{0});let scoped=v["commission_editor"]["saved"]==true;let roundtrip=v["commission_editor"]["round_trip_per_lot"].as_f64().unwrap_or(0.);ui.set_studio_message(if action=="save"{if scoped{format!("حُفظ الوضع وعمولة الحساب/الرمز. التكلفة الكاملة لكل لوت = {roundtrip:.4}")}else{format!("حُفظ الوضع والعمولة الافتراضية. التكلفة الكاملة لكل لوت = {roundtrip:.4}")}}else if scoped{format!("تم تحميل عمولة الحساب والرمز الحاليين؛ ذهاب وإياب = {roundtrip:.4} لكل لوت")}else{format!("تم تحميل الإعدادات الافتراضية؛ ذهاب وإياب = {roundtrip:.4} لكل لوت")}.into());},"cost"=>{let c=&v["costs"];let text=if c.is_null(){format!("العمولة: {:.4}\n{}",v["commission"].as_f64().unwrap_or(0.),v["error"].as_str().unwrap_or(""))}else{let n=|key:&str|c[key].as_f64().unwrap_or(0.);format!("{} | {:.3} لوت\nالعمولة ذهاب وإياب: {:.4}\nالسبريد الفعلي: {:.2} نقطة / {:.2} pip = {:.4}\nانزلاق الدخول والخروج: {:.4}\nإجمالي التكلفة: {:.4}\nحركة التعادل من سعر bid: {:.2} نقطة / {:.2} pip\nآخر حساب يدوي؛ اضغط احسب لتحديث السعر.",c["currency"].as_str().unwrap_or(""),n("lots"),n("commission"),n("spread_points"),n("spread_pips"),n("spread_money"),n("slippage_money"),n("total"),n("break_even_points"),n("break_even_pips"))};ui.set_cost_detail(text.into());},"report"=>ui.set_studio_report(report(&v).into()),"poll"|"refresh"=>paint(&ui,&v,&tf),_=>ui.set_studio_message(serde_json::to_string_pretty(&v).unwrap_or_default().into())}}});
+            let _=weak.upgrade_in_event_loop(move|ui|{
+                ui.set_studio_busy(false);
+                match result {
+                    Err(e)=>ui.set_studio_message(format!("تعذر الطلب: {e}").into()),
+                    Ok(v)=>match action.as_str(){
+                        "config"|"save"=>{
+                            if let Ok(c)=serde_json::from_value::<Config>(v["config"].clone()){load(&ui,&c);}
+                            if let Some(amount)=v["commission_editor"]["amount"].as_f64(){ui.set_commission_lot(amount.to_string().into());}
+                            ui.set_commission_basis(if v["commission_editor"]["basis"]=="per_side"{1}else{0});
+                            let scoped=v["commission_editor"]["saved"]==true;
+                            let roundtrip=v["commission_editor"]["round_trip_per_lot"].as_f64().unwrap_or(0.);
+                            let message=if action=="save"{
+                                if scoped{format!("حُفظ الوضع وعمولة الحساب/الرمز. التكلفة الكاملة لكل لوت = {roundtrip:.4}")}
+                                else{format!("حُفظ الوضع والعمولة الافتراضية. التكلفة الكاملة لكل لوت = {roundtrip:.4}")}
+                            }else if scoped{
+                                format!("تم تحميل عمولة الحساب والرمز الحاليين؛ ذهاب وإياب = {roundtrip:.4} لكل لوت")
+                            }else{
+                                format!("تم تحميل الإعدادات الافتراضية؛ ذهاب وإياب = {roundtrip:.4} لكل لوت")
+                            };
+                            ui.set_studio_message(message.into());
+                        },
+                        "cost"=>{let c=&v["costs"];let text=if c.is_null(){format!("العمولة: {:.4}\n{}",v["commission"].as_f64().unwrap_or(0.),v["error"].as_str().unwrap_or(""))}else{let n=|key:&str|c[key].as_f64().unwrap_or(0.);format!("{} | {:.3} لوت\nالعمولة ذهاب وإياب: {:.4}\nالسبريد الفعلي: {:.2} نقطة / {:.2} pip = {:.4}\nانزلاق الدخول والخروج: {:.4}\nإجمالي التكلفة: {:.4}\nحركة التعادل من سعر bid: {:.2} نقطة / {:.2} pip\nآخر حساب يدوي؛ اضغط احسب لتحديث السعر.",c["currency"].as_str().unwrap_or(""),n("lots"),n("commission"),n("spread_points"),n("spread_pips"),n("spread_money"),n("slippage_money"),n("total"),n("break_even_points"),n("break_even_pips"))};ui.set_cost_detail(text.into());},
+                        "report"=>ui.set_studio_report(report(&v).into()),
+                        "poll"|"refresh"=>paint(&ui,&v,&tf),
+                        _=>ui.set_studio_message(serde_json::to_string_pretty(&v).unwrap_or_default().into())
+                    }
+                }
+            });
         }
     });
     timer
