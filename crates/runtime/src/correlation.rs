@@ -1,0 +1,444 @@
+use anyhow::{bail, Context, Result};
+use braintrade_domain::{
+    backtest::History,
+    correlation::{self, CorrelationConfig, Input, Report},
+};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::collections::BTreeSet;
+
+const MAX_SOURCES: usize = 8;
+const MAX_LISTED_BACKTESTS: i64 = 100;
+const MAX_LISTED_REPORTS: i64 = 50;
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnalyzeRequest {
+    source_ids: Vec<String>,
+    #[serde(default = "default_min_overlap")]
+    min_overlap: usize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Selection {
+    id: String,
+}
+
+struct SavedSource {
+    id: String,
+    from: u64,
+    to: u64,
+    history: History,
+}
+
+fn default_min_overlap() -> usize {
+    CorrelationConfig::default().min_overlap
+}
+
+pub fn init(db: &Connection) -> Result<()> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS correlation_reports(
+            id TEXT PRIMARY KEY,
+            created_ms INTEGER NOT NULL,
+            min_overlap INTEGER NOT NULL,
+            report TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS correlation_sources(
+            report_id TEXT NOT NULL REFERENCES correlation_reports(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            backtest_id TEXT NOT NULL REFERENCES backtest_runs(id),
+            PRIMARY KEY(report_id,ordinal),
+            UNIQUE(report_id,backtest_id)
+        );
+        CREATE INDEX IF NOT EXISTS correlation_reports_created_idx
+            ON correlation_reports(created_ms DESC,id DESC);
+        CREATE INDEX IF NOT EXISTS correlation_sources_backtest_idx
+            ON correlation_sources(backtest_id);",
+    )?;
+    Ok(())
+}
+
+fn validate_id(id: &str, label: &str) -> Result<()> {
+    if id.trim().is_empty() || id.len() > 160 {
+        bail!("{label} is empty or too long");
+    }
+    Ok(())
+}
+
+fn load_sources(db: &Connection, request: &AnalyzeRequest) -> Result<Vec<SavedSource>> {
+    if !(2..=MAX_SOURCES).contains(&request.source_ids.len()) {
+        bail!("Correlation research requires 2..={MAX_SOURCES} saved backtests");
+    }
+    let mut unique = BTreeSet::new();
+    let mut sources = Vec::with_capacity(request.source_ids.len());
+    for id in &request.source_ids {
+        validate_id(id, "Backtest source ID")?;
+        if !unique.insert(id.as_str()) {
+            bail!("Duplicate backtest source ID");
+        }
+        let row: Option<(u64, u64, String)> = db
+            .query_row(
+                "SELECT json_extract(report,'$.options.from'),
+                        json_extract(report,'$.options.to'),
+                        history
+                   FROM backtest_runs WHERE id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let (from, to, history_json) = row.with_context(|| format!("Saved backtest not found: {id}"))?;
+        let history: History = serde_json::from_str(&history_json)
+            .with_context(|| format!("Saved backtest history is invalid: {id}"))?;
+        history.validate().map_err(anyhow::Error::msg)?;
+        sources.push(SavedSource { id: id.clone(), from, to, history });
+    }
+    Ok(sources)
+}
+
+fn summarize(report: &Report) -> Value {
+    let symbols = report.sources.iter().map(|source| source.symbol.clone()).collect::<Vec<_>>();
+    let available_pairs = report.pairs.iter().filter(|pair| pair.available).count();
+    json!({
+        "id": report.identity,
+        "algorithm": report.algorithm,
+        "from": report.from,
+        "to": report.to,
+        "min_overlap": report.min_overlap,
+        "symbols": symbols,
+        "pair_count": report.pairs.len(),
+        "available_pairs": available_pairs,
+        "portfolio": report.portfolio,
+        "execution_effect": report.execution_effect,
+        "forward_fill": report.forward_fill,
+        "research_only": true
+    })
+}
+
+fn analyze(db: &Connection, body: &[u8], now_ms: u64) -> Result<Value> {
+    let request: AnalyzeRequest = serde_json::from_slice(body)?;
+    let config = CorrelationConfig { min_overlap: request.min_overlap };
+    config.validate().map_err(anyhow::Error::msg)?;
+    let saved = load_sources(db, &request)?;
+    let inputs = saved
+        .iter()
+        .map(|source| Input {
+            source_id: &source.id,
+            from: source.from,
+            to: source.to,
+            history: &source.history,
+        })
+        .collect::<Vec<_>>();
+    let report = correlation::analyze(inputs, config).map_err(anyhow::Error::msg)?;
+    if report.execution_effect || report.forward_fill {
+        bail!("Correlation research boundary violation");
+    }
+    let payload = serde_json::to_string(&report)?;
+    let tx = db.unchecked_transaction()?;
+    tx.execute(
+        "INSERT OR IGNORE INTO correlation_reports(id,created_ms,min_overlap,report)
+         VALUES(?1,?2,?3,?4)",
+        params![report.identity, now_ms, report.min_overlap as u64, payload],
+    )?;
+    for (ordinal, source) in report.sources.iter().enumerate() {
+        tx.execute(
+            "INSERT OR IGNORE INTO correlation_sources(report_id,ordinal,backtest_id)
+             VALUES(?1,?2,?3)",
+            params![report.identity, ordinal as u64, source.source_id],
+        )?;
+    }
+    tx.commit()?;
+    let created_ms: u64 = db.query_row(
+        "SELECT created_ms FROM correlation_reports WHERE id=?1",
+        [&report.identity],
+        |row| row.get(0),
+    )?;
+    Ok(json!({"ok":true,"created_ms":created_ms,"summary":summarize(&report)}))
+}
+
+fn sources(db: &Connection) -> Result<Value> {
+    let mut statement = db.prepare(
+        "SELECT id,created_ms,
+                json_extract(report,'$.symbol'),
+                json_extract(report,'$.options.from'),
+                json_extract(report,'$.options.to'),
+                json_extract(history,'$.server'),
+                json_extract(history,'$.login'),
+                json_extract(history,'$.currency')
+           FROM backtest_runs
+          ORDER BY created_ms DESC,id DESC LIMIT ?1",
+    )?;
+    let rows = statement
+        .query_map([MAX_LISTED_BACKTESTS], |row| {
+            Ok(json!({
+                "id": row.get::<_, String>(0)?,
+                "created_ms": row.get::<_, u64>(1)?,
+                "symbol": row.get::<_, String>(2)?,
+                "from": row.get::<_, u64>(3)?,
+                "to": row.get::<_, u64>(4)?,
+                "server": row.get::<_, String>(5)?,
+                "login": row.get::<_, u64>(6)?,
+                "currency": row.get::<_, String>(7)?
+            }))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(json!({
+        "sources": rows,
+        "research_only": true,
+        "requires_saved_backtests": true,
+        "live_feed_used": false
+    }))
+}
+
+fn reports(db: &Connection) -> Result<Value> {
+    let mut statement = db.prepare(
+        "SELECT id,created_ms,report FROM correlation_reports
+         ORDER BY created_ms DESC,id DESC LIMIT ?1",
+    )?;
+    let rows = statement
+        .query_map([MAX_LISTED_REPORTS], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, u64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut items = Vec::with_capacity(rows.len());
+    for (id, created_ms, raw) in rows {
+        let report: Report = serde_json::from_str(&raw)
+            .with_context(|| format!("Stored correlation report is invalid: {id}"))?;
+        items.push(json!({"created_ms":created_ms,"summary":summarize(&report)}));
+    }
+    Ok(json!({"reports":items,"research_only":true}))
+}
+
+fn report(db: &Connection, body: &[u8]) -> Result<Value> {
+    let selection: Selection = serde_json::from_slice(body)?;
+    validate_id(&selection.id, "Correlation report ID")?;
+    let row: Option<(u64, String)> = db
+        .query_row(
+            "SELECT created_ms,report FROM correlation_reports WHERE id=?1",
+            [&selection.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let (created_ms, raw) = row.context("Correlation report not found")?;
+    let report: Report = serde_json::from_str(&raw)?;
+    let mut statement = db.prepare(
+        "SELECT ordinal,backtest_id FROM correlation_sources
+         WHERE report_id=?1 ORDER BY ordinal",
+    )?;
+    let provenance = statement
+        .query_map([&selection.id], |row| {
+            Ok(json!({"ordinal":row.get::<_,u64>(0)?,"backtest_id":row.get::<_,String>(1)?}))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(json!({
+        "id": selection.id,
+        "created_ms": created_ms,
+        "report": report,
+        "provenance": provenance,
+        "research_only": true,
+        "broker_effect": false
+    }))
+}
+
+fn state(db: &Connection) -> Result<Value> {
+    let reports: u64 = db.query_row("SELECT COUNT(*) FROM correlation_reports", [], |row| row.get(0))?;
+    let sources: u64 = db.query_row("SELECT COUNT(*) FROM backtest_runs", [], |row| row.get(0))?;
+    Ok(json!({
+        "algorithm": correlation::ALGORITHM,
+        "saved_reports": reports,
+        "saved_backtests": sources,
+        "research_only": true,
+        "execution_effect": false,
+        "forward_fill": false,
+        "live_feed_used": false
+    }))
+}
+
+pub fn route(method: &str, path: &str, body: &[u8], db: &Connection, now_ms: u64) -> Result<Value> {
+    match (method, path) {
+        ("GET", "/v1/research/correlation") => state(db),
+        ("GET", "/v1/research/correlation/sources") => sources(db),
+        ("GET", "/v1/research/correlation/reports") => reports(db),
+        ("POST", "/v1/research/correlation/analyze") => analyze(db, body, now_ms),
+        ("POST", "/v1/research/correlation/report") => report(db, body),
+        _ => bail!("Unknown correlation research route"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use braintrade_domain::{
+        backtest::{Contract, HistoryBar},
+        Candle,
+    };
+
+    const T0: u64 = 1_800_000_000;
+
+    fn contract() -> Contract {
+        Contract {
+            point: 0.01,
+            tick_size: 0.01,
+            tick_loss: 1.0,
+            tick_profit: 1.0,
+            volume_min: 0.01,
+            volume_step: 0.01,
+            volume_max: 100.0,
+        }
+    }
+
+    fn history(symbol: &str, login: u64, returns: &[f64]) -> History {
+        let mut closes = vec![100.0];
+        for value in returns {
+            closes.push(*closes.last().unwrap() * value.exp());
+        }
+        let bars = closes
+            .into_iter()
+            .enumerate()
+            .map(|(index, close)| HistoryBar {
+                candle: Candle {
+                    time: T0 + index as u64 * 60,
+                    open: close,
+                    high: close,
+                    low: close,
+                    close,
+                    tick_volume: 100,
+                },
+                spread_points: 10,
+            })
+            .collect::<Vec<_>>();
+        let last = T0 + returns.len() as u64 * 60;
+        History {
+            symbol: symbol.into(),
+            server: "Demo".into(),
+            login,
+            currency: "USD".into(),
+            captured_ms: (last + 60) * 1000,
+            contract: contract(),
+            bars,
+        }
+    }
+
+    fn database() -> Connection {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "PRAGMA foreign_keys=ON;
+             CREATE TABLE backtest_runs(
+                id TEXT PRIMARY KEY,
+                created_ms INTEGER NOT NULL,
+                report TEXT NOT NULL,
+                history TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+        init(&db).unwrap();
+        db
+    }
+
+    fn save(db: &Connection, id: &str, symbol: &str, login: u64, returns: &[f64]) {
+        let history = history(symbol, login, returns);
+        let report = json!({
+            "symbol": symbol,
+            "options": {"from":T0,"to":T0+(returns.len() as u64+1)*60}
+        });
+        db.execute(
+            "INSERT INTO backtest_runs(id,created_ms,report,history) VALUES(?1,?2,?3,?4)",
+            params![id, 1u64, report.to_string(), serde_json::to_string(&history).unwrap()],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn analysis_persists_report_and_exact_provenance() {
+        let db = database();
+        save(&db, "a", "AAA", 7, &[0.01, 0.02, -0.01, 0.03]);
+        save(&db, "b", "BBB", 7, &[0.02, 0.04, -0.02, 0.06]);
+        let body = json!({"source_ids":["a","b"],"min_overlap":4}).to_string();
+        let result = route("POST", "/v1/research/correlation/analyze", body.as_bytes(), &db, 100).unwrap();
+        assert_eq!(result["summary"]["execution_effect"], false);
+        assert_eq!(result["summary"]["forward_fill"], false);
+        let count: u64 = db.query_row("SELECT COUNT(*) FROM correlation_reports", [], |row| row.get(0)).unwrap();
+        let provenance: u64 = db.query_row("SELECT COUNT(*) FROM correlation_sources", [], |row| row.get(0)).unwrap();
+        assert_eq!((count, provenance), (1, 2));
+        let id = result["summary"]["id"].as_str().unwrap();
+        let detail = route(
+            "POST",
+            "/v1/research/correlation/report",
+            json!({"id":id}).to_string().as_bytes(),
+            &db,
+            0,
+        )
+        .unwrap();
+        assert_eq!(detail["provenance"][0]["backtest_id"], "a");
+        assert_eq!(detail["provenance"][1]["backtest_id"], "b");
+        assert_eq!(detail["broker_effect"], false);
+    }
+
+    #[test]
+    fn repeated_analysis_is_deduplicated_across_request_order() {
+        let db = database();
+        save(&db, "a", "AAA", 7, &[0.01, 0.02, -0.01, 0.03]);
+        save(&db, "b", "BBB", 7, &[0.02, 0.04, -0.02, 0.06]);
+        let first = route(
+            "POST",
+            "/v1/research/correlation/analyze",
+            json!({"source_ids":["a","b"],"min_overlap":3}).to_string().as_bytes(),
+            &db,
+            100,
+        )
+        .unwrap();
+        let second = route(
+            "POST",
+            "/v1/research/correlation/analyze",
+            json!({"source_ids":["b","a"],"min_overlap":3}).to_string().as_bytes(),
+            &db,
+            999,
+        )
+        .unwrap();
+        assert_eq!(first["summary"]["id"], second["summary"]["id"]);
+        assert_eq!(second["created_ms"], 100);
+        let count: u64 = db.query_row("SELECT COUNT(*) FROM correlation_reports", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn missing_source_and_mixed_account_are_rejected() {
+        let db = database();
+        save(&db, "a", "AAA", 7, &[0.01, 0.02, 0.03]);
+        let missing = route(
+            "POST",
+            "/v1/research/correlation/analyze",
+            json!({"source_ids":["a","missing"],"min_overlap":2}).to_string().as_bytes(),
+            &db,
+            1,
+        )
+        .unwrap_err();
+        assert!(missing.to_string().contains("not found"));
+        save(&db, "b", "BBB", 8, &[0.01, 0.02, 0.03]);
+        let mixed = route(
+            "POST",
+            "/v1/research/correlation/analyze",
+            json!({"source_ids":["a","b"],"min_overlap":2}).to_string().as_bytes(),
+            &db,
+            1,
+        )
+        .unwrap_err();
+        assert!(mixed.to_string().contains("same account"));
+    }
+
+    #[test]
+    fn source_listing_uses_saved_backtests_only() {
+        let db = database();
+        save(&db, "a", "AAA", 7, &[0.01, 0.02]);
+        save(&db, "b", "BBB", 7, &[0.02, 0.01]);
+        let value = route("GET", "/v1/research/correlation/sources", &[], &db, 0).unwrap();
+        assert_eq!(value["sources"].as_array().unwrap().len(), 2);
+        assert_eq!(value["live_feed_used"], false);
+        assert_eq!(value["research_only"], true);
+    }
+}
