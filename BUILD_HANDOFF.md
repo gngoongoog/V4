@@ -1,26 +1,38 @@
 # BrainTrade OS — verified 0.7.0 Development Preview
 
-Canonical repository: `gngoongoog/V4`. Verified executable/source checkout: `ba399ad206b1fe3231a10dbbd270de75145fd2e4` (tree `74cf92a0681b556c0b45462b511b11b2f7f5c62a`). This is GitHub’s PR test merge of head `e0547cab6ccce8d41944750f88d0089dc689ff29` into `58631430ccb823b63b22c344989a7c0e9ba93855`; its complete tree is identical to that PR head.
+Canonical repository: `gngoongoog/V4`. Current `development` runtime/source merge checkpoint: `7b127bf03fb45044ee53dc2366a6d0c53e7c59d8` (tree `10d1d6bee091b02fa1d044336649e645bce1b177`). PR #20 head `58e41284334d6778a3bfd2aa7eb5dd9cca5628fd` has the same tree and passed exact-head Research and Windows/Linux CI before merge. A later documentation-only evidence commit may record the completed post-merge checks; it does not change runtime provenance.
 
-Research validation: PASS — https://github.com/gngoongoog/V4/actions/runs/38817498736
+Current verified test scale is 61 domain Rust tests, 47 runtime Rust tests and 78 Python tests, with one explicit public-network news test intentionally ignored. Core lifecycle, backup/restore, Studio, simulated MT5 execution, offline report interactions, browser review, native selector compilation and 18-page native rendering passed in CI.
 
-Windows build/package and Linux integration: PASS — https://github.com/gngoongoog/V4/actions/runs/38817498472
+## What is implemented
 
-The exact source passed 61 domain Rust tests, 47 runtime Rust tests and 60 Python tests. One explicit public-network news test is intentionally ignored. Core, backup/restore, Studio, offline reports and simulated MT5 execution integrations passed. All 18 native pages were rendered at two sizes on both platforms. Portable Windows startup, DPAPI IPC, embedded Python/MetaTrader5 imports and PE dependencies passed.
+- 14 execution identities with coordinator/advisor/SOLO/RETURNING roles.
+- Scalping, Swing, Expert and Sniper modes.
+- Durable broker intent/reconciliation, split-fill handling, account isolation and no blind resend after an uncertain broker result.
+- Portfolio Exposure v1, OFF by default, with aggregate slots/lots/estimated stop-risk gates that never block exits or reconciliation.
+- Sniper Fast Lane with measured internal timing fields and a fast broker dispatch path for tick entries/owned closes while preserving durable journal persistence before `order_send`.
+- Native Sniper MT5 bridge: `OnTick` wake + `CopyTicks(..., COPY_TICKS_ALL)` recovery, authenticated local named pipe, bounded FIFO, source-order quote delivery, same-millisecond event separation and automatic 5 ms Python quote-polling fallback.
+- The MQL5 bridge is transport-only and contains no order submission API. Broker ownership stays in `gateway/execution.py`.
+- Historical Meta v1/v2, CES v1 and KTE v1 research, deterministic replay/exports and chronological evaluation.
+- Learning snapshots/labels/export, offline challenger registry/evidence and read-only inference without automatic Champion promotion.
+- Native 18-page desktop and Windows portable package with embedded Python/MetaTrader5 runtime.
 
-The package includes 14 execution identities; Scalping, Swing, Expert and live-quote Sniper; actual coordinator/advisor/SOLO/RETURNING membership; proportional commissions; Wyckoff; 21-timeframe strategy generation; durable execution reconciliation; and the native dashboard. Expert adaptation uses prospective statistical outcomes, not an automatically promoted imported ML model.
+## Sniper latency boundary
 
-Portfolio Exposure v1 is included and OFF by default. Its stopped-only editor is on the Execution page. When enabled it caps aggregate BrainTrade entry slots, lots and estimated stop risk; it never blocks exits or reconciliation. Optional per-brain risk budgets are also OFF by default. Required account binding, broker permissions, valid volumes/quotes and duplicate prevention remain enforced.
+The target is **<=20 ms for BrainTrade-local queue-to-send latency** on an appropriate target Windows machine. This must be characterized from `queue_to_gateway_ms`, `authorize_ms`, `journal_ms`, `pre_send_ms`, `queue_to_send_ms`, `send_ms` and `total_ms`, using P50/P95/P99. It is not a guarantee of MT5/broker acknowledgement, fill latency, network latency, profitability or capture of every upstream broker event.
+
+The native `CopyTicks` path reduces quote-observation loss caused by coalesced NewTick events by recovering terminal-cached ticks. It forwards Bid/Ask changes relevant to execution and leaves pure Last/volume-only ticks out of Sniper decisions. Target-machine acceptance remains mandatory.
 
 ## Evidence and delivery
 
-`docs/development-validation.json` records this 0.7 checkpoint and artifact hashes. The 0.6 promoted history in `docs/validation.json`, `docs/validation-v0.6.0.json` and `docs/RELEASE_STATUS.md` stays unchanged. Later delivery documentation must not be presented as a newly compiled executable. The delivery ZIP records the executable source and the documentation commit separately and includes the complete source tree.
+`docs/development-validation.json` is the machine-readable development evidence record. Promoted 0.6 evidence in `docs/validation.json`, `docs/validation-v0.6.0.json` and `docs/RELEASE_STATUS.md` is immutable historical evidence and must not be replaced with 0.7 data.
 
-## Next steps
+Startup/restart remains STOPPED. Native MT5 Demo acceptance and private Telegram live delivery are not performed by CI. Imported ML automatic promotion is not implemented.
 
-1. On the target Windows machine, follow `docs/QUICKSTART_AR.md` and perform native MT5 demo acceptance using `docs/ACCEPTANCE.md`.
-2. Test private Telegram reports with credentials stored only on that machine.
-3. Review/promote the 0.7 development branch through the normal PR path; never rewrite `main` or `development` history.
-4. Continue genuine out-of-sample accumulation, ablation, aligned multi-symbol correlation research and historical-event replay with first-observed timestamps.
+## Next repository phase
 
-Startup/restart is STOPPED. SOLO never starts global execution automatically. STOP blocks new entries while owned timed exits continue with Core active; Full Exit stops client-side management, while broker-attached SL/TP remain with the broker. Native MT5 demo acceptance and live Telegram delivery have not been performed in CI. Imported ML challengers remain research-only, with no automatic Champion promotion. CI does not establish profitability, guaranteed latency or broker execution quality.
+After evidence/state synchronization, begin aligned multi-symbol correlation/exposure **research only**. Align exact M1 timestamps across saved source runs, preserve explicit per-symbol availability masks, never forward-fill missing intervals, calculate pairwise statistics only on valid intersections and persist deterministic source identity. Do not connect correlation results to broker execution until separate prospective evidence and review exist.
+
+## Target-machine work still pending
+
+Follow `docs/QUICKSTART_AR.md` and `docs/ACCEPTANCE.md` on Windows with the intended Demo account. Compile/attach `MT5/Experts/BrainTradeSniperBridge.mq5`, verify native-to-fallback transitions, same-millisecond quote ordering, pipe interruption recovery, real fees/rejections/partial fills, and collect native/fallback latency distributions. Then test private Telegram using only local credentials.
