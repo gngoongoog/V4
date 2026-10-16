@@ -188,6 +188,16 @@ class ProjectContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("development", workflow)
 
+    def test_ci_validates_exact_pr_heads_and_cancels_stale_runs(self):
+        windows = (ROOT / ".github" / "workflows" / "windows.yml").read_text(encoding="utf-8")
+        research = (ROOT / ".github" / "workflows" / "research.yml").read_text(encoding="utf-8")
+        self.assertIn("pull_request:", windows)
+        self.assertIn("pull_request:", research)
+        self.assertIn("cancel-in-progress: true", windows)
+        self.assertIn("cancel-in-progress: true", research)
+        self.assertIn("github.event.pull_request.number", windows)
+        self.assertIn("github.event.pull_request.number", research)
+
 
 if __name__ == "__main__":
     unittest.main()

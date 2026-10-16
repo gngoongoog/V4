@@ -23,7 +23,13 @@ pub fn render() -> anyhow::Result<()> {
     ui.set_diagnostics(
         "Set the terminal path in Settings, bind the Demo account, then START.".into(),
     );
-    ui.set_feedback("Research 0.6.0 • RENDER FIXTURE / no live data".into());
+    ui.set_feedback(
+        format!(
+            "Research {} • RENDER FIXTURE / no live data",
+            env!("CARGO_PKG_VERSION")
+        )
+        .into(),
+    );
     ui.set_regime("UPTREND".into());
     ui.set_decision("WAIT".into());
     ui.set_brains("RENDER FIXTURE / بيانات فحص فقط\nTrend M1: BUY | evidence 0.72\nTrend M5: BUY | evidence 0.61\nTrend M15: BUY | evidence 0.58\nMomentum M1: BUY\nStructure M1: NEUTRAL\n\nالنظام متوقف؛ لا مداخل افتراضية جديدة\nقوة الدليل ليست نسبة نجاح".into());
@@ -84,7 +90,13 @@ pub fn render() -> anyhow::Result<()> {
         window.set_size(slint::PhysicalSize::new(width, height));
         for page in 0..18 {
             ui.set_page(page);
-            ui.set_events("#1 | core_started\nversion: 0.6.0 • execution_enabled: false\n\nUI render check — not live trading data".into());
+            ui.set_events(
+                format!(
+                    "#1 | core_started\nversion: {} • execution_enabled: false\n\nUI render check — not live trading data",
+                    env!("CARGO_PKG_VERSION")
+                )
+                .into(),
+            );
             slint::platform::update_timers_and_animations();
             ui.window().request_redraw();
             let mut pixels = vec![Rgb8Pixel::default(); (width * height) as usize];

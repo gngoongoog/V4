@@ -1,4 +1,4 @@
-# Trading modes and learning studio — 0.6.0
+# Trading modes and learning studio — 0.7.0 Development Preview
 
 All four modes drive the coordinated broker policy after account binding and START, alongside the separate Shadow research ledger. See `EXECUTION_AND_ROLES.md` for actual membership and execution. Generated strategy activation is manual; no automatic ML promotion.
 

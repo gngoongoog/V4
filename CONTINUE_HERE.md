@@ -1,17 +1,7 @@
-# BrainTrade OS — continue from post-0.6 development
+# Continue from verified BrainTrade 0.7.0 Development Preview
 
-The reviewed 0.6.0 line is already promoted to `main` through PR #13. Its verified runtime checkpoint is `fdc63d4d05df89e27607641bd197b9e6ead936e9`; Research CI `38803539711` and Windows CI/package `38803539405` passed on that checkpoint. Do not rewrite `main` or `development` history.
+The 0.7 test checkout `ba399ad206b1fe3231a10dbbd270de75145fd2e4` (identical tree to PR head `e0547cab6ccce8d41944750f88d0089dc689ff29`) passed Research `38817498736` and Windows/Linux `38817498472`. Read `BUILD_HANDOFF.md` and `docs/development-validation.json`; do not restart the version bump or reuse old 0.6 artifact evidence.
 
-Portfolio Exposure v1 is no longer pending: PR #16 merged to `development` as `fd8490e6f33f3bd61e655829c12e7824462694a1`. Exact feature head `f36b9c1c7bd265675f5802efa8d2eddfc27c1ee8` passed Linux + Windows run `38807773183` before merge.
+Portfolio Exposure v1, four modes, SOLO/return, adaptive coordinator weights, execution recovery and the 18-page dashboard are implemented. The ZIP delivery updates documentation/evidence only; executable provenance remains the tested source above.
 
-Portfolio protection is OFF by default. When enabled it caps aggregate BrainTrade entry exposure across all identities by combined positions/unresolved opens, lots and estimated stop-risk percentage. Unknown aggregate stop risk fails closed for new entries only. Exits, SL/TP, timed management and reconciliation stay active. Configure it while STOPPED from the native Execution page.
-
-The next repository task is the post-0.6 development/release boundary: preserve `docs/validation.json` as the promoted 0.6 evidence, retain `docs/validation-v0.6.0.json` as its archive, and only create a new-version validation record after that new-version code is actually tested. The Windows preview artifact upload has already been made version-agnostic on `release/0.7-preview`.
-
-Operational gates still pending outside CI:
-
-- native Windows + real Demo MT5 acceptance using `docs/ACCEPTANCE.md`;
-- private Telegram delivery with local-only credentials;
-- repository required checks / branch protection when administration access is available.
-
-Scientific work still open includes genuine out-of-sample accumulation, ablation, aligned correlation/portfolio research and historical-event replay with first-observed timestamps. Imported ML models remain research-only; do not auto-promote them or claim profitability, HFT latency or native broker acceptance from CI evidence.
+Next user step: native Windows + Demo MT5 acceptance with `docs/QUICKSTART_AR.md` and `docs/ACCEPTANCE.md`, then private Telegram delivery using local credentials. Neither has been performed by CI. Next repository step: review/promote the 0.7 PR normally, preserving 0.6 historical evidence and branch history. Scientific work still open is listed in `ROADMAP.md`; do not claim automatic imported ML promotion, profitability or HFT latency.
