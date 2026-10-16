@@ -127,11 +127,17 @@ def check(exe=None):
             snapshot['login']=99;publish()
             assert not api('/v1/status')['execution_enabled'];assert api('/v1/execution/gateway')['command'] is None
             assert brain('trend')['stats']['deals']==0
-            # 0.8 pulse and one-click Demo; no additional broker submission.
+            # 0.8 real Core -> journaled adapter -> simulated broker, including Sniper close.
+            configure('momentum',enabled=False)
             configure('trend',enabled=False,use_risk_limits=True,cooldown_seconds=60)
             api('/v1/execution/portfolio',dict(enabled=True,max_positions=1,max_lots=.01,max_risk_percent=.5))
-            config=api('/v1/config')['config'];config['trading'].update(mode='sniper',max_cost_fraction=.1,sniper_cooldown_seconds=60)
+            config=api('/v1/config')['config'];config['trading'].update(mode='sniper',max_cost_fraction=.1,sniper_cooldown_seconds=60,sniper_max_hold_seconds=1)
             api('/v1/trading/settings',dict(trading=config['trading'],commission_per_lot=7.))
+            profile=dict(login=99,server='Demo',symbol='XAUUSD',currency='USD')
+            api('/v1/trading/settings',dict(trading=config['trading'],commission_per_lot=1.5,commission_basis='per_side',account=profile,label='Demo ECN'))
+            editor=api('/v1/trading/settings')['commission_editor'];assert editor['saved'] and editor['round_trip_per_lot']==3.
+            preview=api('/v1/trading/preview',dict(commission_per_lot=3.5,commission_basis='per_side',lots=.1,pip_points=10.))
+            assert abs(preview['commission']-.7)<1e-9
             api('/v1/demo/start',{})
             state=api('/v1/execution')
             assert state['settings']['login']==99 and state['settings']['target']=='demo'
@@ -139,8 +145,28 @@ def check(exe=None):
             assert all(not b['config']['use_risk_limits'] and b['config']['cooldown_seconds']==0 for b in state['brains'])
             assert brain('expansion')['magic']==410614
             config=api('/v1/config')['config'];assert config['trading']['max_cost_fraction']==0 and config['trading']['sniper_cooldown_seconds']==0
-            snapshot.update(quote_time_ms=clock_ms(),tick_age_ms=0)
+            snapshot['market']['m5']=bars(300,1);snapshot['market']['m15']=bars(900,1)
+            snapshot.update(quote_time_ms=clock_ms(),tick_age_ms=0,bid=2054.3,ask=2054.4,trade_stops_level=5)
+            snapshot['market']['captured_ms']=clock_ms()
+            broker.account.login=99;broker.tick.bid=2054.3;broker.tick.ask=2054.4
             pulse=api('/v1/gateway/pulse',snapshot);assert pulse['poll_ms']==20
+            sniper=pulse['command'];assert sniper['brain']=='system' and sniper['kind']=='open',sniper
+            assert sniper['sniper_costs']['commission_per_lot']==3.,sniper
+            result=submit(sniper);assert result['state']=='filled',result
+            assert result['check_skipped'];assert len(broker.sends)==3
+            assert abs(result['pricing']['commission']-.03)<1e-8,result
+            position=dict(ticket=9007,identifier=9007,magic=410600,opened_ms=clock_ms(),symbol='XAUUSD',side='BUY',volume=.01,price_open=2054.4,price_current=2054.3,profit=-.1,sl=result['request']['sl'],tp=result['request']['tp'])
+            snapshot['positions']=[position];broker.positions=[N(**dict(position,type=0))]
+            api('/v1/gateway/pulse',snapshot)
+            assert api('/v1/execution')['diagnostics']['open_acknowledgements']==1
+            api('/v1/stop',{});time.sleep(1.1)
+            snapshot.update(quote_time_ms=clock_ms(),tick_age_ms=0)
+            closing=api('/v1/gateway/pulse',snapshot)['command']
+            assert closing['kind']=='close' and closing['position']==9007,closing
+            assert submit(closing)['state']=='filled';assert len(broker.sends)==4
+            assert api('/v1/execution')['diagnostics']['close_acknowledgements']==1
+            snapshot['positions']=[];broker.positions=[]
+            api('/v1/gateway/pulse',snapshot)
             cached=dict(snapshot,market=None);api('/v1/gateway/pulse',cached)
             assert api('/v1/status')['telemetry']['market'] is not None
             api('/v1/gateway/analysis',{})
@@ -159,7 +185,7 @@ def check(exe=None):
                 'pending return and frozen timeout exit while STOPPED','advisor rejoins actual votes after close',
                 'manual-exit ownership; actual fees; history deduplication','queued decision invalidation',
                 'dispatched revision checked before send','unknown intent persists without resend',
-                'restart stopped; config/PnL persistence','account isolation','Demo auto-binding clears optional gates','20 ms Sniper pulse target','market cache account isolation','Live start binding validation'])
+                'restart stopped; config/PnL persistence','account isolation','Demo auto-binding clears optional gates','20 ms Sniper pulse target','account commission profiles and per-side conversion','Sniper open through actual Core and mocked MT5 order_send','Sniper timed close while stopped','execution diagnostics distinguish acknowledgements','market cache account isolation','Live start binding validation'])
             out=ROOT/'test-output/execution-integration.json';out.parent.mkdir(exist_ok=True);out.write_text(json.dumps(report,indent=2))
             print(json.dumps(report))
         finally:

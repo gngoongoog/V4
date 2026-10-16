@@ -4,7 +4,7 @@
 #[path = "execution_legacy.rs"]
 mod legacy;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use braintrade_domain::{
     execution::{self, BrainConfig},
     studio::FrameBar,

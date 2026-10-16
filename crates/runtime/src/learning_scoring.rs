@@ -1,9 +1,8 @@
 //! Out-of-sample scoring for read-only challenger predictions.
 //! Outcomes are descriptive audit evidence only and never authorize promotion or trading influence.
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
 
 const VERSION: &str = "prediction-outcome-scoring-v1";
 const LABEL_SCHEMA: &str = "gold-m1-outcome-v1";

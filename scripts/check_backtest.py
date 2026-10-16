@@ -29,7 +29,10 @@ def check(api, snapshot):
     api('/v1/backtest/start',request)
     rejected('/v1/gateway/history/chunk',dict(old,bars=[],error=''))
     assert api('/v1/backtest')['state']=='loading', 'Late old chunk killed new job'
-    rejected('/v1/start',{})
+    # History runs in a read-only worker; START no longer waits for research.
+    assert api('/v1/start',{})['requested_run']
+    assert api('/v1/backtest')['state']=='loading'
+    api('/v1/stop',{})
     wrong=api('/v1/gateway/history/request')['job']
     rejected('/v1/gateway/history/chunk',dict(wrong,server='WRONG SERVER',bars=[],error=''))
     assert api('/v1/backtest')['state']=='error'

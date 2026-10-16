@@ -527,6 +527,7 @@ fn infer_from_payload(
     Ok(true)
 }
 
+#[cfg(test)]
 fn fnv64(flat: &BTreeMap<String, f64>) -> String {
     let mut hash = 0xcbf29ce484222325u64;
     for (name, value) in flat {

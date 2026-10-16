@@ -6,7 +6,7 @@ pub fn setup(ui:&Dashboard)->slint::Timer {
         let action=action.to_string();
         let body=if action=="save"{
             let symbols=ui.get_correlation_symbols().split([',','،']).map(str::trim).filter(|v|!v.is_empty()).map(str::to_owned).collect::<Vec<_>>();
-            json!({"enabled":ui.get_correlation_enabled(),"symbols":symbols,"timeframe":["M1","M5","M15","H1"][ui.get_correlation_frame().clamp(0,3) as usize]})
+    json!({"enabled":ui.get_correlation_enabled(),"symbols":symbols,"timeframe":(["M1","M5","M15","H1"][ui.get_correlation_frame().clamp(0,3) as usize])})
         }else if action=="replay"{json!({"at":ui.get_replay_at().trim(),"hours":ui.get_replay_hours().trim().parse::<u64>().unwrap_or(0)})}else{json!({})};
         ui.set_desk_busy(true);let _=sender.send((action,body));
     });

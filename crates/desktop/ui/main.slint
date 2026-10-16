@@ -77,6 +77,13 @@ export component Dashboard inherits Window {
     in-out property <string> sniper-target: "50";
     in-out property <string> sniper-stop: "80";
     in-out property <string> sniper-cooldown: "0";
+    in-out property <string> sniper-hold: "120";
+    in-out property <int> commission-basis: 0;
+    in-out property <bool> commission-scoped: true;
+    in-out property <string> commission-account: "null";
+    in-out property <string> commission-label;
+    in-out property <string> commission-context;
+    in-out property <string> exec-diagnostics;
     in-out property <string> pip-points: "10";
     in-out property <string> cost-fraction: "0";
     in-out property <string> preview-lots: "0.1";
@@ -143,6 +150,7 @@ export component Dashboard inherits Window {
     in-out property <string> spread-limit: "0.25";
     in-out property <string> max-lots: "0.10";
     in-out property <string> commission-lot: "7";
+    in-out property <string> risk-commission-lot: "7";
     in-out property <string> slippage-ticks: "2";
     in-out property <string> bt-from;
     in-out property <string> bt-to;
@@ -333,6 +341,7 @@ export component Dashboard inherits Window {
                 Button { text: "تحديث النتائج والأوامر"; enabled: !root.exec-busy; clicked => { root.execution-action("poll"); } }
             }
             Text { text: root.exec-message; color: #f0c578; wrap: word-wrap; }
+            Text { text: root.exec-diagnostics; color: #6bdbc5; wrap: word-wrap; }
             Text { text: root.exec-detail; color: #d1ddef; wrap: word-wrap; }
             CheckBox { text: "عرض نتائج جميع العقول وسجل التنفيذ"; checked <=> root.exec-show-ledger; }
             if root.exec-show-ledger: Text { text: root.exec-ledger; color: #acbad0; wrap: word-wrap; }
@@ -341,8 +350,15 @@ export component Dashboard inherits Window {
         if root.page == 14: ScrollView { VerticalBox { spacing: 10px;
             Text { text: "أوضاع تشغيل المنظومة — المنسق الرئيسي"; font-size: 20px; color: #eaf0fb; }
             ComboBox { model: ["Scalping / سكالبنك", "Swing / سوينك", "Expert / الخبير المتعلم", "Sniper / القناص"]; current-index <=> root.trade-mode; }
-            Text { text: root.trade-mode == 0 ? "M1 + M5؛ زخم مؤكد، وقف 1.2 ATR وهدف 1.4R، أقصى احتفاظ 15 دقيقة." : root.trade-mode == 1 ? "H1 + H4 + D1؛ اتجاهات متوافقة، وقف 2 ATR وهدف 2.5R، أقصى احتفاظ 3 أيام. السواب غير محسوب." : root.trade-mode == 2 ? "الخبير: تصويت الأعضاء بأوزان تتعلم من نتائج لاحقة؛ يستبعد العقول المنفردة. وقف 1.5 ATR وهدف 2R؛ مهلة 30 دقيقة." : "اختراق لحظي بالسعر لنطاق 6 شموع M1 مكتملة مع اتجاه M5. مهلة دقيقتين؛ دورة مستهدفة 20ms أثناء التنفيذ؛ الزمن المقاس يظهر أعلى الواجهة، وسرعة الوسيط مستقلة."; color: #acbad0; wrap: word-wrap; }
-            Text { text: "العمولة ذهاب وإياب لكل 1.00 لوت — بعملة الحساب. أدخل مجموع عمولة الدخول والخروج."; color: #d5deed; wrap: word-wrap; }
+            Text { text: root.trade-mode == 0 ? "M1 + M5؛ زخم مؤكد، وقف 1.2 ATR وهدف 1.4R، أقصى احتفاظ 15 دقيقة." : root.trade-mode == 1 ? "H1 + H4 + D1؛ اتجاهات متوافقة، وقف 2 ATR وهدف 2.5R، أقصى احتفاظ 3 أيام. السواب غير محسوب." : root.trade-mode == 2 ? "الخبير: تصويت الأعضاء بأوزان تتعلم من نتائج لاحقة؛ يستبعد العقول المنفردة. وقف 1.5 ATR وهدف 2R؛ مهلة 30 دقيقة." : "اختراق لحظي بالسعر لنطاق 6 شموع M1 مكتملة مع اتجاه M5. مدة الاحتفاظ تحددها أدناه؛ دورة مستهدفة 20ms أثناء التنفيذ؛ الزمن المقاس يظهر أعلى الواجهة، وسرعة الوسيط مستقلة."; color: #acbad0; wrap: word-wrap; }
+            Text { text: "تكلفة الحساب — بعملة الحساب لكل 1.00 لوت"; color: #d5deed; }
+            Text { text: root.commission-context; color: #6bdbc5; wrap: word-wrap; }
+            CheckBox { text: "حفظ العمولة لهذا الحساب والرمز؛ وإلا تُحفظ كقيمة افتراضية"; checked <=> root.commission-scoped; enabled: root.commission-account != "null"; }
+            HorizontalBox {
+                ComboBox { model: ["عمولة الدخول والخروج معاً", "عمولة جهة واحدة — يضاعفها النظام"]; current-index <=> root.commission-basis; }
+                LineEdit { text <=> root.commission-label; placeholder-text: "اسم اختياري: ECN أو Standard"; }
+                Button { text: "تحميل حساب MT5 الحالي"; enabled: !root.studio-busy; clicked => { root.studio-action("config"); } }
+            }
             HorizontalBox {
                 LineEdit { text <=> root.commission-lot; placeholder-text: "7"; }
                 Text { text: "نقاط في pip واحد"; color: #acbad0; vertical-alignment: center; }
@@ -355,6 +371,11 @@ export component Dashboard inherits Window {
                 LineEdit { text <=> root.sniper-cooldown; placeholder-text: "الانتظار"; }
                 LineEdit { text <=> root.cost-fraction; placeholder-text: "0 = بلا حد"; }
             }
+            HorizontalBox {
+                Text { text: "أقصى احتفاظ للقناص بالثواني"; color: #d5deed; vertical-alignment: center; }
+                LineEdit { text <=> root.sniper-hold; placeholder-text: "120"; }
+            }
+            Text { text: "السبريد يُقرأ لحظة إرسال الأمر. الهدف يشمل العمولة واحتياط انزلاق الجهتين؛ الوقف يتسع تلقائياً إذا تطلب حد الوسيط ذلك. راقب الوقف الفعلي في سجل الأمر."; color: #acbad0; wrap: word-wrap; }
             Text { text: "حصة التكلفة = التكلفة ÷ (التكلفة + الهدف الصافي). القيمة 0 تلغي هذا الفلتر؛ عند اختيار حد موجب ينتظر القناص إن تجاوزه. تعريف pip قابل للتعديل لاختلاف المعادن والمؤشرات."; color: #acbad0; wrap: word-wrap; }
             Button { text: "حفظ الوضع والعمولة"; enabled: !root.studio-busy && root.state == "STOPPED"; clicked => { root.studio-action("save"); } }
             Text { text: "أوقف النظام لتبديل الوضع. الصفقات المفتوحة تحتفظ بهدفها ووقفها ومدتها الأصلية. المحاكاة لها سجل منفصل."; color: #f0c578; wrap: word-wrap; }
@@ -495,7 +516,7 @@ export component Dashboard inherits Window {
             HorizontalBox { Text { text: "حد التراجع من القمة % (0.1–30)"; color: #d5deed; } LineEdit { text <=> root.drawdown-limit; } }
             HorizontalBox { Text { text: "أقصى سبريد كنسبة ATR (0.01–1)"; color: #d5deed; } LineEdit { text <=> root.spread-limit; } }
             HorizontalBox { Text { text: "سقف اللوت (0.001–100)"; color: #d5deed; } LineEdit { text <=> root.max-lots; } }
-            HorizontalBox { Text { text: "عمولة ذهاب وإياب / لوت / عملة الحساب"; color: #d5deed; } LineEdit { text <=> root.commission-lot; } }
+            HorizontalBox { Text { text: "العمولة الافتراضية ذهاب وإياب / لوت؛ ملف الحساب يتقدم عليها"; color: #d5deed; wrap: word-wrap; } LineEdit { text <=> root.risk-commission-lot; } }
             HorizontalBox { Text { text: "انزلاق مفترض لكل جانب / ticks (0–1000)"; color: #d5deed; } LineEdit { text <=> root.slippage-ticks; } }
             Button { text: "حفظ إعدادات المخاطرة"; enabled: !root.busy; clicked => { root.save-risk(); } }
             Text { text: "SL = 1.5 ATR؛ الهدف ضعف مسافة SL؛ خروج زمني بعد 30 دقيقة. صفقة افتراضية واحدة لكل حساب ورمز. STOP يمنع الدخول ويبقي مخارج المحاكاة فعالة أثناء عمل المحرك."; color: #acbad0; wrap: word-wrap; }

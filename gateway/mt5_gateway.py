@@ -169,7 +169,7 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
                   volume_min=info.volume_min if info else None,
                   volume_step=info.volume_step if info else None,
                   tick_size=info.trade_tick_size if info else None,dom_available=dom_available,dom=dom,
-                  volume_max=getattr(info,'volume_max',None),tick_value_loss=getattr(info,'trade_tick_value_loss',None),tick_value_profit=getattr(info,'trade_tick_value_profit',None),market=market,point=getattr(info,'point',None))
+                  volume_max=getattr(info,'volume_max',None),tick_value_loss=getattr(info,'trade_tick_value_loss',None),tick_value_profit=getattr(info,'trade_tick_value_profit',None),market=market,point=getattr(info,'point',None),trade_stops_level=max(0,int(getattr(info,'trade_stops_level',0))))
     return result
 
 

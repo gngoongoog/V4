@@ -24,6 +24,27 @@ def expected(cmd):
 def values(obj):
     return obj._asdict() if hasattr(obj, '_asdict') else vars(obj)
 
+def sniper_distances(info, tick, pricing):
+    """Reprice the frozen net objective using the quote that will be submitted.
+
+    TP is measured from executable entry, so spread is not added a second time.
+    Stops are widened only for this explicit Sniper policy, to broker geometry.
+    """
+    commission, slip, target_points, stop_points = (float(pricing[k]) for k in
+        ('commission_per_lot', 'slippage_ticks', 'target_points', 'stop_points'))
+    profit, loss = float(info.trade_tick_value_profit), float(info.trade_tick_value_loss)
+    if any(not math.isfinite(v) or v < 0 for v in (commission, slip)) or any(
+            not math.isfinite(v) or v <= 0 for v in (profit, loss, target_points, stop_points)):
+        raise ValueError('Invalid Sniper costs or tick value')
+    spread = tick.ask-tick.bid
+    minimum = max(0, getattr(info, 'trade_stops_level', 0))*info.point + info.trade_tick_size
+    reserve = (commission + 2*slip*max(profit, loss))/profit*info.trade_tick_size
+    stop = max(stop_points*info.point, spread+minimum)
+    target = max(target_points*info.point+reserve, minimum-spread)
+    if not all(math.isfinite(v) and v > 0 for v in (stop, target)):
+        raise ValueError('Sniper price geometry overflow')
+    return stop, target
+
 class BrokerExecutor:
     def __init__(self, path):
         self.db = sqlite3.connect(path)
@@ -142,13 +163,19 @@ class BrokerExecutor:
                 request['position']=cmd['position']
             else:
                 stop=float(cmd['signal']['stop_distance']);target=float(cmd['signal']['target_distance']);step=info.trade_tick_size
+                if cmd.get('sniper_costs') is not None:
+                    stop, target = sniper_distances(info, tick, cmd['sniper_costs'])
+                    result['pricing'] = dict(cmd['sniper_costs'], spread_points=(tick.ask-tick.bid)/info.point,
+                                             stop_distance=stop, target_distance=target,
+                                             commission=cmd['sniper_costs']['commission_per_lot']*lots,
+                                             quote_time_ms=tick.time_msc)
                 if not all(math.isfinite(v) and v>0 for v in (stop,target)):
                     raise ValueError('Invalid stop/target geometry')
                 request['sl']=(math.floor((price-side*stop)/step) if side==1 else math.ceil((price-side*stop)/step))*step
                 request['tp']=(math.ceil((price+side*target)/step) if side==1 else math.floor((price+side*target)/step))*step
                 exit_price=tick.bid if side==1 else tick.ask
                 minimum=max(0,getattr(info,'trade_stops_level',0))*info.point
-                if request['sl']<=0 or request['tp']<=0 or (exit_price-request['sl'])*side<minimum or (request['tp']-exit_price)*side<minimum:
+                if request['sl']<=0 or request['tp']<=0 or (exit_price-request['sl'])*side+step*1e-8<minimum or (request['tp']-exit_price)*side+step*1e-8<minimum:
                     raise ValueError('Stop/target too close for current spread or broker stops level')
             result['check_ms'] = 0.0
             result['check_skipped'] = bool(cmd.get('fast_path', False))

@@ -29,9 +29,19 @@ fn load(ui: &Dashboard, c: &Config) {
     ui.set_sniper_target(c.trading.sniper_target_points.to_string().into());
     ui.set_sniper_stop(c.trading.sniper_stop_points.to_string().into());
     ui.set_sniper_cooldown(c.trading.sniper_cooldown_seconds.to_string().into());
+    ui.set_sniper_hold(c.trading.sniper_max_hold_seconds.to_string().into());
     ui.set_pip_points(c.trading.pip_points.to_string().into());
     ui.set_cost_fraction(c.trading.max_cost_fraction.to_string().into());
     ui.set_commission_lot(c.risk.commission_per_lot.to_string().into());
+}
+fn load_commission(ui:&Dashboard,v:&Value) {
+    let p=&v["commission_editor"];let account=&p["account"];
+    ui.set_commission_account(account.to_string().into());
+    ui.set_commission_scoped(!account.is_null());
+    ui.set_commission_label(p["label"].as_str().unwrap_or("").into());
+    ui.set_commission_basis(if p["basis"]=="per_side"{1}else{0});
+    ui.set_commission_lot(p["amount"].as_f64().unwrap_or(7.).to_string().into());
+    ui.set_commission_context(if account.is_null(){"لا يوجد حساب متصل؛ الحفظ يغيّر العمولة الافتراضية.".into()}else{format!("{} / {} / {} / {} — {}",account["login"],account["server"].as_str().unwrap_or(""),account["symbol"].as_str().unwrap_or(""),account["currency"].as_str().unwrap_or(""),if p["saved"]==true{"عمولة محفوظة لهذا الحساب"}else{"يستخدم العمولة الافتراضية حتى تحفظ ملفه"}).into()});
 }
 fn report(v: &Value) -> String {
     let mut out = format!(
@@ -156,7 +166,7 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
     let (tx, rx) = mpsc::channel::<(String, Value, String)>();
     let sender = tx.clone();
     let weak = ui.as_weak();
-    ui.on_studio_action(move|action|{if let Some(ui)=weak.upgrade(){if ui.get_studio_busy(){return;}let action=action.to_string();let tf=selected_tf(&ui);let body=(||->anyhow::Result<Value>{Ok(match action.as_str(){"save"=>{let trading=TradingConfig{mode:match ui.get_trade_mode(){0=>TradingMode::Scalping,1=>TradingMode::Swing,3=>TradingMode::Sniper,_=>TradingMode::Expert},sniper_target_points:number(ui.get_sniper_target())?,sniper_stop_points:number(ui.get_sniper_stop())?,sniper_cooldown_seconds:ui.get_sniper_cooldown().trim().parse()?,pip_points:number(ui.get_pip_points())?,max_cost_fraction:number(ui.get_cost_fraction())?};trading.validate().map_err(anyhow::Error::msg)?;json!({"trading":trading,"commission_per_lot":number(ui.get_commission_lot())?})},"cost"=>json!({"lots":number(ui.get_preview_lots())?,"commission_per_lot":number(ui.get_commission_lot())?,"pip_points":number(ui.get_pip_points())?}),"report"=>{use slint::Model;json!({"id":ui.get_studio_ids().row_data(ui.get_studio_report_index().max(0)as usize).unwrap_or_default().to_string()})},"auto_on"=>json!({"enabled":true}),_=>json!({"timeframe":tf})})})();match body{Ok(body)=>{ui.set_studio_busy(true);let _=sender.send((action,body,tf));},Err(e)=>ui.set_studio_message(format!("تحقق من الأرقام: {e}").into())}}});
+    ui.on_studio_action(move|action|{if let Some(ui)=weak.upgrade(){if ui.get_studio_busy(){return;}let action=action.to_string();let tf=selected_tf(&ui);let body=(||->anyhow::Result<Value>{Ok(match action.as_str(){"save"=>{let trading=TradingConfig{mode:match ui.get_trade_mode(){0=>TradingMode::Scalping,1=>TradingMode::Swing,3=>TradingMode::Sniper,_=>TradingMode::Expert},sniper_target_points:number(ui.get_sniper_target())?,sniper_stop_points:number(ui.get_sniper_stop())?,sniper_cooldown_seconds:ui.get_sniper_cooldown().trim().parse()?,sniper_max_hold_seconds:ui.get_sniper_hold().trim().parse()?,pip_points:number(ui.get_pip_points())?,max_cost_fraction:number(ui.get_cost_fraction())?};trading.validate().map_err(anyhow::Error::msg)?;json!({"trading":trading,"commission_per_lot":number(ui.get_commission_lot())?,"commission_basis":if ui.get_commission_basis()==1{"per_side"}else{"round_trip"},"account":if ui.get_commission_scoped(){serde_json::from_str::<Value>(&ui.get_commission_account())?}else{Value::Null},"label":ui.get_commission_label().to_string()})},"cost"=>json!({"lots":number(ui.get_preview_lots())?,"commission_per_lot":number(ui.get_commission_lot())?,"pip_points":number(ui.get_pip_points())?,"commission_basis":if ui.get_commission_basis()==1{"per_side"}else{"round_trip"}}),"report"=>{use slint::Model;json!({"id":ui.get_studio_ids().row_data(ui.get_studio_report_index().max(0)as usize).unwrap_or_default().to_string()})},"auto_on"=>json!({"enabled":true}),_=>json!({"timeframe":tf})})})();match body{Ok(body)=>{ui.set_studio_busy(true);let _=sender.send((action,body,tf));},Err(e)=>ui.set_studio_message(format!("تحقق من الأرقام: {e}").into())}}});
     let timer = slint::Timer::default();
     let weak = ui.as_weak();
     timer.start(
@@ -177,10 +187,9 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
             let result = (|| -> anyhow::Result<Value> {
                 let c = Client::new(&data_dir())?;
                 match action.as_str() {
-                    "config" => c.get("/v1/config"),
+                    "config" => c.get("/v1/trading/settings"),
                     "save" => {
-                        c.post("/v1/trading/settings", body)?;
-                        c.get("/v1/config")
+                        c.post("/v1/trading/settings", body)
                     }
                     "cost" => c.post("/v1/trading/preview", body),
                     "report" => c.post("/v1/studio/report", body),
@@ -190,7 +199,7 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
                     _ => c.get("/v1/studio"),
                 }
             })();
-            let _=weak.upgrade_in_event_loop(move|ui|{ui.set_studio_busy(false);match result{Err(e)=>ui.set_studio_message(format!("تعذر الطلب: {e}").into()),Ok(v)=>match action.as_str(){"config"|"save"=>{if let Ok(c)=serde_json::from_value::<Config>(v["config"].clone()){load(&ui,&c);}ui.set_studio_message(if action=="save"{"حُفظ الوضع والتكلفة. شغّل النظام لتطبيقه على الإشارات الجديدة."}else{"تم تحميل الإعدادات المحفوظة"}.into());},"cost"=>{let c=&v["costs"];let text=if c.is_null(){format!("العمولة: {:.4}\n{}",v["commission"].as_f64().unwrap_or(0.),v["error"].as_str().unwrap_or(""))}else{let n=|key:&str|c[key].as_f64().unwrap_or(0.);format!("{} | {:.3} لوت\nالعمولة ذهاب وإياب: {:.4}\nالسبريد الفعلي: {:.2} نقطة / {:.2} pip = {:.4}\nانزلاق الدخول والخروج: {:.4}\nإجمالي التكلفة: {:.4}\nحركة التعادل من سعر bid: {:.2} نقطة / {:.2} pip\nآخر حساب يدوي؛ اضغط احسب لتحديث السعر.",c["currency"].as_str().unwrap_or(""),n("lots"),n("commission"),n("spread_points"),n("spread_pips"),n("spread_money"),n("slippage_money"),n("total"),n("break_even_points"),n("break_even_pips"))};ui.set_cost_detail(text.into());},"report"=>ui.set_studio_report(report(&v).into()),"poll"|"refresh"=>paint(&ui,&v,&tf),_=>ui.set_studio_message(serde_json::to_string_pretty(&v).unwrap_or_default().into())}}});
+            let _=weak.upgrade_in_event_loop(move|ui|{ui.set_studio_busy(false);match result{Err(e)=>ui.set_studio_message(format!("تعذر الطلب: {e}").into()),Ok(v)=>match action.as_str(){"config"|"save"=>{if let Ok(c)=serde_json::from_value::<Config>(v["config"].clone()){load(&ui,&c);load_commission(&ui,&v);}ui.set_studio_message(if action=="save"{"حُفظ الوضع والتكلفة. شغّل النظام لتطبيقه على الإشارات الجديدة."}else{"تم تحميل الإعدادات المحفوظة"}.into());},"cost"=>{let c=&v["costs"];let text=if c.is_null(){format!("العمولة: {:.4}\n{}",v["commission"].as_f64().unwrap_or(0.),v["error"].as_str().unwrap_or(""))}else{let n=|key:&str|c[key].as_f64().unwrap_or(0.);format!("{} | {:.3} لوت\nالعمولة ذهاب وإياب: {:.4}\nالسبريد الفعلي: {:.2} نقطة / {:.2} pip = {:.4}\nانزلاق الدخول والخروج: {:.4}\nإجمالي التكلفة: {:.4}\nحركة التعادل من سعر السوق قبل الدخول: {:.2} نقطة / {:.2} pip\nآخر حساب يدوي؛ اضغط احسب لتحديث السعر.",c["currency"].as_str().unwrap_or(""),n("lots"),n("commission"),n("spread_points"),n("spread_pips"),n("spread_money"),n("slippage_money"),n("total"),n("break_even_points"),n("break_even_pips"))};ui.set_cost_detail(text.into());},"report"=>ui.set_studio_report(report(&v).into()),"poll"|"refresh"=>paint(&ui,&v,&tf),_=>ui.set_studio_message(serde_json::to_string_pretty(&v).unwrap_or_default().into())}}});
         }
     });
     timer

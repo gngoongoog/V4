@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 pub mod backtest;
 pub mod trading;
+pub mod commission;
 pub mod execution;
 pub mod studio;
 pub mod wyckoff;
@@ -38,6 +39,8 @@ pub struct Config {
     pub risk: RiskConfig,
     #[serde(default)]
     pub trading: trading::TradingConfig,
+    #[serde(default)]
+    pub commission_profiles: Vec<commission::Profile>,
 }
 
 impl Default for Config {
@@ -51,6 +54,7 @@ impl Default for Config {
             telegram_enabled: false,
             risk: RiskConfig::default(),
             trading: trading::TradingConfig::default(),
+            commission_profiles: Vec::new(),
         }
     }
 }
@@ -58,6 +62,11 @@ impl Config {
     pub fn validate(&self) -> Result<(), String> {
         self.risk.validate()?;
         self.trading.validate()?;
+        if self.commission_profiles.len()>256 {return Err("Too many commission profiles".into());}
+        for (i,p) in self.commission_profiles.iter().enumerate() {
+            p.validate()?;
+            if self.commission_profiles[..i].iter().any(|other|other.account==p.account) {return Err("Duplicate commission account profile".into());}
+        }
         if self.schema != 1 {
             return Err("Unsupported config schema".into());
         }
@@ -153,6 +162,8 @@ pub struct Telemetry {
     pub market: Option<MarketData>,
     #[serde(default)]
     pub point: Option<f64>,
+    #[serde(default)]
+    pub trade_stops_level: u32,
 }
 impl Telemetry {
     pub fn validate(&self) -> bool {

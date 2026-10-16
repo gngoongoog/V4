@@ -9,7 +9,6 @@ use std::{collections::HashSet, fs, io::Write, path::Path};
 const FEATURE_SCHEMA: &str = "gold-m1-feature-v1";
 const LABEL_SCHEMA: &str = "gold-m1-outcome-v1";
 const MODEL_SCHEMA: &str = "braintrade-linear-softmax-v1";
-const HORIZONS: [u64; 3] = [5, 15, 30];
 
 #[derive(Default)]
 pub struct Service {

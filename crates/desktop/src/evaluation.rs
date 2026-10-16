@@ -8,7 +8,7 @@ struct Request {
 }
 
 fn preserve_selection(
-    ui: &Dashboard,
+    _ui: &Dashboard,
     old_index: i32,
     old_model: ModelRc<SharedString>,
     ids: &[String],

@@ -1,7 +1,7 @@
 {
   "version": "0.8.0",
-  "status": "pending-ci",
-  "source_state": "0.8 source-only preview with research desk continuation",
+  "status": "validation-in-progress",
+  "source_state": "Demo/Sniper cost and account-profile continuation",
   "tested_commit": null,
   "tested_tree": null,
   "research_ci": null,
@@ -17,7 +17,7 @@
     "telegram_live_delivery": "not performed",
     "imported_ml_automatic_promotion": false
   },
-  "note": "Source checks only. No Cargo build/test, CI, Windows package or native MT5 order was run. Prior 0.7 evidence does not certify these changes.",
+  "note": "Build verification resumed by user request on 2026-10-16. Local Core and simulated execution passed; desktop/Windows checks remain in progress. No native MT5 or Telegram delivery.",
   "source_checks": {
     "python_passed": 76,
     "python_excluded": [
@@ -29,6 +29,16 @@
       "Aligned correlation masks and account isolation",
       "Actual SQLite news as-of replay query",
       "Read-only worker correlation routing"
-    ]
+    ],
+    "note": "Archived checks from the preceding source-only checkpoint; see local_checks and subsequent CI evidence."
+  },
+  "local_checks": {
+    "domain_rust_passed": 64,
+    "runtime_rust_passed": 52,
+    "runtime_rust_ignored": 1,
+    "python_passed": 80,
+    "core_build": "passed",
+    "execution_integration": "passed with simulated MT5, including Sniper open/close",
+    "desktop": "in progress"
   }
 }

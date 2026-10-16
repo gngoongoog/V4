@@ -183,6 +183,7 @@ impl Research {
         }
     }
     /// Call on a clone. Publish only after checkpoint, decision and ledger transaction commits.
+    #[cfg(test)]
     pub fn update(
         &mut self,
         db: &mut Connection,
@@ -407,17 +408,29 @@ impl Research {
             if let Some((tick, loss, profit, min, step, max)) = specs {
                 let slip = tick * c.risk.slippage_ticks;
                 let entry = if side == 1 { ask + slip } else { bid - slip };
-                let (stop_distance,mut target_distance)=c.trading.geometry(atr,t.point.unwrap_or(0.));
-                if sniper {match trading::costs(t,c,1.,now) {Ok(cost)=>{if c.trading.max_cost_fraction>0. && cost.total/(cost.total+cost.desired_net_target_money)>c.trading.max_cost_fraction {a.gates.push("Sniper entry costs exceed configured share of movement".into());}},Err(e)=>a.gates.push(e)}target_distance+=c.risk.commission_per_lot/profit*tick+slip;}
+                let (mut stop_distance,mut target_distance)=c.trading.geometry(atr,t.point.unwrap_or(0.));
+                if sniper {
+                    match trading::costs(t,c,1.,now) {
+                        Ok(cost)=>{if c.trading.max_cost_fraction>0. && cost.total/(cost.total+cost.desired_net_target_money)>c.trading.max_cost_fraction {a.gates.push("Sniper entry costs exceed configured share of movement".into());}},
+                        Err(e)=>a.gates.push(e)
+                    }
+                    match trading::sniper_geometry(t,c,now) {
+                        Ok((stop,target))=>{stop_distance=stop;target_distance=target;},
+                        Err(e)=>a.gates.push(e)
+                    }
+                }
+                // Sniper's broker levels are anchored to the executable quote;
+                // the paper fill already includes entry slippage.
+                let anchor=if sniper {if side==1{ask}else{bid}}else{entry};
                 let stop = if side == 1 {
-                    ((entry - stop_distance) / tick).floor() * tick
+                    ((anchor - stop_distance) / tick).floor() * tick
                 } else {
-                    ((entry + stop_distance) / tick).ceil() * tick
+                    ((anchor + stop_distance) / tick).ceil() * tick
                 };
                 let target = if side == 1 {
-                    ((entry + if c.trading.mode==TradingMode::Expert {2.0*(entry-stop).abs()}else{target_distance}) / tick).ceil() * tick
+                    ((anchor + if c.trading.mode==TradingMode::Expert {2.0*(entry-stop).abs()}else{target_distance}) / tick).ceil() * tick
                 } else {
-                    ((entry - if c.trading.mode==TradingMode::Expert {2.0*(entry-stop).abs()}else{target_distance}) / tick).floor() * tick
+                    ((anchor - if c.trading.mode==TradingMode::Expert {2.0*(entry-stop).abs()}else{target_distance}) / tick).floor() * tick
                 };
                 if (side==1&&stop>=bid)||(side==-1&&stop<=ask) {a.gates.push("Stop must exceed entry spread and slippage".into());}
                 let loss_per_lot = ((entry - stop).abs() + slip) / tick * loss.max(profit)
@@ -559,7 +572,7 @@ mod tests {
     fn sniper_cost_gate_and_frozen_hold_survive_mode_change() {
         let now=1_800_000_000_000;let mut t=snapshot(now);t.point=Some(0.01);t.quote_time_ms=Some(now);
         let last=t.market.as_mut().unwrap().m1.last_mut().unwrap();last.close=2055.5;last.high=2055.6;t.bid=Some(2055.8);t.ask=Some(2055.81);
-        let mut c=Config::default();c.trading.mode=TradingMode::Sniper;c.trading.sniper_target_points=5.;let mut db=Connection::open_in_memory().unwrap();let mut e=Research::load(&db).unwrap();
+        let mut c=Config::default();c.trading.mode=TradingMode::Sniper;c.trading.sniper_target_points=5.;c.trading.max_cost_fraction=0.35;let mut db=Connection::open_in_memory().unwrap();let mut e=Research::load(&db).unwrap();
         let(a,_)=e.update(&mut db,&t,&c,true,now).unwrap();assert!(a.gates.iter().any(|s|s.contains("entry costs")),"{:?}",a);assert!(!e.has_open_position(&t));
         c.trading.sniper_target_points=200.;t.quote_time_ms=Some(now+1);let(a,_)=e.update(&mut db,&t,&c,true,now+1).unwrap();assert_eq!(a.action,"SHADOW_BUY","{:?}",a);
         let p=e.books[&context(&t)].position.as_ref().unwrap();let(stop,target)=(p.stop,p.target);assert_eq!(p.max_hold_ms,120_000);

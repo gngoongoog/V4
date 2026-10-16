@@ -8,9 +8,9 @@ Verified executable/source checkpoint: `fdc63d4d05df89e27607641bd197b9e6ead936e9
 
 The promoted line contains bound-account execution, 14 execution identities, coordinator/advisor/SOLO/RETURNING membership, Scalping/Swing/Expert/Sniper, adaptive member weighting, schema-12 backup/restore and the 18-page native dashboard. Startup/restart is STOPPED. CI uses simulated MT5; native MT5 demo acceptance remains a separate target-machine gate.
 
-## Current 0.8.0 source-only preview
+## Current 0.8.0 development preview
 
-Fast pulse/IPC, isolated history reader, one-click Demo, expansion brain and dashboard regrouping are in source. The continuation adds aligned multi-symbol correlation, first-observed news revision replay, and prospective leave-one-member-out diagnostics, with three dashboard pages (21 total). See `docs/RESEARCH_DESK.md` and `docs/PROJECT_COMPLETION_AR.md`. The user requested no build; `docs/development-validation.json` records only source checks. Next engineering verification needs an explicitly requested build, then native MT5 demo acceptance. No new Windows package was produced.
+Fast pulse/IPC, isolated history reader, one-click Demo, expansion brain and dashboard regrouping are in source. The continuation adds aligned multi-symbol correlation, first-observed news revision replay, and prospective leave-one-member-out diagnostics, with three dashboard pages (21 total). See `docs/RESEARCH_DESK.md` and `docs/PROJECT_COMPLETION_AR.md`. Build verification resumed at the user’s request on 16 October 2026. Account commission profiles, Sniper cost/geometry updates and execution diagnostics are now implemented. See `docs/development-validation.json` for current evidence; native MT5 demo acceptance remains separate.
 
 ## Archived 0.7.0 Development Preview
 

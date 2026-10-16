@@ -18,6 +18,7 @@ pub struct TradingConfig {
     pub sniper_target_points: f64,
     pub sniper_stop_points: f64,
     pub sniper_cooldown_seconds: u64,
+    pub sniper_max_hold_seconds: u64,
     pub pip_points: f64,
     pub max_cost_fraction: f64,
 }
@@ -28,6 +29,7 @@ impl Default for TradingConfig {
             sniper_target_points: 50.,
             sniper_stop_points: 80.,
             sniper_cooldown_seconds: 0,
+            sniper_max_hold_seconds: 120,
             pip_points: 10.,
             max_cost_fraction: 0.0,
         }
@@ -48,6 +50,7 @@ impl TradingConfig {
         if !(0..=3600).contains(&self.sniper_cooldown_seconds) {
             return Err("Cooldown must be 0–3600 seconds".into());
         }
+        if !(1..=3600).contains(&self.sniper_max_hold_seconds) {return Err("Sniper holding time must be 1–3600 seconds".into());}
         Ok(())
     }
     pub fn hold_ms(&self) -> u64 {
@@ -55,7 +58,7 @@ impl TradingConfig {
             TradingMode::Expert => 1_800_000,
             TradingMode::Scalping => 900_000,
             TradingMode::Swing => 259_200_000,
-            TradingMode::Sniper => 120_000,
+            TradingMode::Sniper => self.sniper_max_hold_seconds * 1000,
         }
     }
     pub fn geometry(&self, atr: f64, point: f64) -> (f64, f64) {
@@ -69,6 +72,18 @@ impl TradingConfig {
             ),
         }
     }
+}
+/// Distances from executable entry. Spread is already paid in ask/bid entry;
+/// adding it again to TP would double-count it. Two-sided slippage is a reserve.
+pub fn sniper_geometry(t:&Telemetry,c:&Config,now:u64)->Result<(f64,f64),String> {
+    let preview=costs(t,c,1.,now)?;
+    let point=t.point.unwrap();let tick=t.tick_size.unwrap();let profit=t.tick_value_profit.unwrap();
+    let spread=t.ask.unwrap()-t.bid.unwrap();
+    let minimum=t.trade_stops_level as f64*point+tick;
+    let stop=(c.trading.sniper_stop_points*point).max(spread+minimum);
+    let target=(c.trading.sniper_target_points*point+(preview.commission+preview.slippage_money)/profit*tick).max(minimum-spread);
+    if !stop.is_finite() || !target.is_finite() {return Err("Sniper geometry overflow".into());}
+    Ok((stop,target))
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct CostPreview {
@@ -86,8 +101,8 @@ pub struct CostPreview {
 }
 pub fn costs(t: &Telemetry, c: &Config, lots: f64, now: u64) -> Result<CostPreview, String> {
     c.validate()?;
-    if !lots.is_finite() || lots <= 0. || lots > 100. {
-        return Err("Lots must be positive and at most 100".into());
+    if !lots.is_finite() || lots <= 0. {
+        return Err("Lots must be finite and positive".into());
     }
     if !t.connected
         || t.tick_age_ms.is_none_or(|v| v > 3000)
@@ -285,6 +300,17 @@ mod tests {
         assert!((p.total - 1.3).abs() < 1e-9);
         assert!((p.break_even_points - 13.).abs() < 1e-8);
         assert!(costs(&t, &Config::default(), 0., 1000).is_err());
+    }
+    #[test]
+    fn sniper_net_target_two_sided_costs_and_broker_geometry() {
+        let t=Telemetry{connected:true,bid:Some(2000.),ask:Some(2000.4),point:Some(0.01),tick_size:Some(0.01),tick_value_profit:Some(1.),tick_value_loss:Some(2.),tick_age_ms:Some(0),quote_time_ms:Some(1000),trade_stops_level:5,..Default::default()};
+        let mut c=Config::default();c.trading.sniper_stop_points=5.;
+        let(stop,target)=sniper_geometry(&t,&c,1000).unwrap();
+        assert!((stop-0.46).abs()<1e-9);assert!((target-0.65).abs()<1e-9);
+        assert!((target/0.01-7.-8.-50.).abs()<1e-9);
+        c.trading.sniper_max_hold_seconds=7;c.trading.mode=TradingMode::Sniper;
+        assert_eq!(c.trading.hold_ms(),7000);
+        c.trading.sniper_max_hold_seconds=0;assert!(c.validate().is_err());
     }
     #[test]
     fn swing_requires_actual_higher_frames() {

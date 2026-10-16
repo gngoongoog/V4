@@ -170,6 +170,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         signal: Option<&Signal>,
         position: u64,
         now: u64,
+        config: Option<&Config>,
     ) -> Result<()> {
         let key = ctx(t);
         let id = uuid::Uuid::new_v4().simple().to_string();
@@ -177,7 +178,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             .map(serde_json::to_value)
             .transpose()?
             .unwrap_or(Value::Null);
-        let p = json!({"id":id,"fast_path":true,"revision":self.settings.revision,"context":key,"brain":b.id,"kind":kind,"login":t.login,"server":t.server,"currency":t.currency,"target":self.settings.target,"symbol":t.symbol,"magic":execution::magic(&b.id),"position":position,"lots":b.lots,"deviation_points":self.settings.deviation_points,"created_ms":now,"max_quote_age_ms":signal.map(|s|if s.key.starts_with("tick:"){1000}else{3000}).unwrap_or(3000),"expires_ms":if kind=="open"{now+3000}else{now+30_000},"signal":s});
+        let sniper_costs=config.filter(|_|kind=="open"&&b.id=="system"&&signal.is_some_and(|s|s.key.starts_with("tick:"))).map(|c|json!({"commission_per_lot":c.risk.commission_per_lot,"slippage_ticks":c.risk.slippage_ticks,"target_points":c.trading.sniper_target_points,"stop_points":c.trading.sniper_stop_points}));
+        let p = json!({"id":id,"sniper_costs":sniper_costs,"fast_path":true,"revision":self.settings.revision,"context":key,"brain":b.id,"kind":kind,"login":t.login,"server":t.server,"currency":t.currency,"target":self.settings.target,"symbol":t.symbol,"magic":execution::magic(&b.id),"position":position,"lots":b.lots,"deviation_points":self.settings.deviation_points,"created_ms":now,"max_quote_age_ms":signal.map(|s|if s.key.starts_with("tick:"){1000}else{3000}).unwrap_or(3000),"expires_ms":if kind=="open"{now+3000}else{now+30_000},"signal":s});
         db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload) VALUES(?1,?2,?3,?4,?5,'queued',?6)",params![id,key,b.id,kind,now,p.to_string()])?;
         Ok(())
     }
@@ -231,10 +233,11 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         for b in &self.brains {
             let started=std::time::Instant::now();
             let bar=available.get(&b.timeframe).and_then(|v|v.last()).map(|v|v.candle.time).unwrap_or(0);
-            let cache_key=format!("{}:{}:{}:{}:{:?}",key,b.timeframe,bar,self.settings.revision,c.trading.mode);
+            let cache_key=format!("{}:{}:{}:{}:{:?}:{}",key,b.timeframe,bar,self.settings.revision,c.trading.mode,t.market.as_ref().map(|m|m.captured_ms).unwrap_or(0));
             let live=matches!(b.id.as_str(),"dom"|"gann_dom_profile"|"kte"|"expansion")||(b.id=="system"&&c.trading.mode==braintrade_domain::trading::TradingMode::Sniper);
             let fresh=t.tick_age_ms.is_some_and(|v|v<=3000)&&t.quote_time_ms.is_some_and(|v|v<=now+2000&&now.saturating_sub(v)<=3000);
-            let cached=self.policy_cache.get(&b.id).filter(|(k,at,_)|!live&&fresh&&*k==cache_key&&now.saturating_sub(*at)<1000);
+            let advisory_sniper=b.id!="system"&&!b.enabled&&c.trading.mode==braintrade_domain::trading::TradingMode::Sniper;
+            let cached=self.policy_cache.get(&b.id).filter(|(k,at,_)|(!live||advisory_sniper)&&fresh&&*k==cache_key&&now.saturating_sub(*at)<if advisory_sniper{500}else{1000});
             let signal=if let Some((_,_,signal))=cached {signal.clone()}else{
                 let genome=crate::coordinator_learning::genome(db,b,t)?;
                 let signal=execution::evaluate(b,t,c,&available,genome.as_ref(),now);
@@ -278,12 +281,12 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     && now.saturating_sub(p.opened_ms) >= frozen
                     && now.saturating_sub(last_close) > 250
                 {
-                    self.queue(db, t, &b, "close", None, p.ticket, now)?;
+                    self.queue(db, t, &b, "close", None, p.ticket, now, None)?;
                 }
             }
             let started = std::time::Instant::now();
             let base=policies[&b.id].clone();
-            let signal=if b.id=="system" {
+            let signal=if b.id=="system" && c.trading.mode!=braintrade_domain::trading::TradingMode::Sniper {
                 let mut votes=vec![];
                 for member in self.brains.iter().filter(|m|m.id!="system"&&!m.enabled) {
                     // Returning SOLO positions finish under their original owner before rejoining.
@@ -365,7 +368,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     "INSERT OR IGNORE INTO broker_seen VALUES(?1,?2,?3)",
                     params![key, b.id, signal.key],
                 )?;
-                self.queue(&tx, t, &b, "open", Some(&signal), 0, now)?;
+                self.queue(&tx, t, &b, "open", Some(&signal), 0, now, Some(c))?;
                 tx.execute("INSERT INTO broker_signal_log(context,brain,timestamp_ms,payload) VALUES(?1,?2,?3,?4)",params![key,b.id,now,result.to_string()])?;
                 tx.commit()?;
             }
@@ -507,7 +510,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     .iter()
                     .filter(|p| p.magic == execution::magic(id).unwrap() && p.symbol == t.symbol)
                 {
-                    self.queue(db, t, b, "close", None, p.ticket, now)?;
+                    self.queue(db, t, b, "close", None, p.ticket, now, None)?;
                 }
                 Ok(json!({"ok":true}))
             }

@@ -14,6 +14,7 @@ fn number(s: slint::SharedString) -> anyhow::Result<f64> {
 }
 
 fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
+    ui.set_exec_diagnostics(v["diagnostics"]["text"].as_str().unwrap_or("").into());
     let settings = &v["settings"];
     let portfolio = &v["portfolio"];
     let portfolio_risk = portfolio["estimated_stop_risk_percent_equity"]
@@ -117,6 +118,9 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
     for cmd in v["commands"].as_array().into_iter().flatten().take(20) {
         let q = &cmd["request"];
         let r = &cmd["result"];
+        if let Some(p)=r.get("pricing") {
+            let _=writeln!(out,"تسعير القناص عند الإرسال: سبريد {} نقطة | عمولة {} | مسافة وقف {} / هدف {}",p["spread_points"],p["commission"],p["stop_distance"],p["target_distance"]);
+        }
         let _ = writeln!(
             out,
             "{} | {} | {} | {}\n{} | انتظار {}ms / فحص {}ms / رد MT5 {}ms\n",

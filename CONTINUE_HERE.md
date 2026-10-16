@@ -1,10 +1,10 @@
-# Current source: BrainTrade 0.8.0 — not built
+# Current source: BrainTrade 0.8.0 — Demo/Sniper validation in progress
 
-Latest continuation: correlation, observed news replay and prospective member ablation are implemented with pages 18–20. Current source has 21 pages. See `docs/RESEARCH_DESK.md` and `docs/PROJECT_COMPLETION_AR.md`. Verification: 76 Python checks, Rust syntax only, interpreted Slint only; no binary build or broker acceptance.
+The user requested resumed building and execution verification on 16 October 2026; this supersedes the previous no-build instruction. Work remains on `feature/fast-execution-ui`. Native broker acceptance is still separate from simulated integration.
 
-Continue from branch `feature/fast-execution-ui`, based on the delivered 0.7 preview. The user explicitly requested **no build**: do not run Cargo build/test, create a Windows package or trigger CI unless later requested.
+This continuation adds account/symbol commission profiles (round-trip or per-side), cost-correct Sniper levels refreshed at send, broker minimum-stop adjustment, configurable Sniper holding time, and execution diagnostics. It fixes research-desk desktop compilation and preserves commission profiles when general settings are saved.
 
-Current changes are described in `docs/FAST_EXECUTION_UI.md`; source verification and exclusions are in `docs/development-validation.json`. Persistent IPC, read-only MT5 worker, fast pulse, Demo start, expansion brain (15 identities) and the five-section UI are implemented in source. No native MT5 order or latency acceptance has been performed. Rust type-checking and target Windows rendering remain pending.
+Local evidence before CI: 64 domain + 52 runtime Rust tests passed (one public-network test ignored), 80 Python tests passed, and actual compiled Core + simulated MT5 open/close/reconciliation integration passed. Windows packaging and full desktop verification are pending. Current source has 21 pages and 15 execution identities.
 
 The following is archived 0.7 delivery history. Its tests/artifact do not certify 0.8.
 

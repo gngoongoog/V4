@@ -15,7 +15,7 @@ class Broker:
     def __init__(self):
         self.account=N(login=17,server='Demo',currency='USD',trade_mode=0,margin_mode=2,trade_allowed=True,trade_expert=True)
         self.terminal=N(connected=True,trade_allowed=True,tradeapi_disabled=False)
-        self.info=N(point=.01,trade_tick_size=.01,volume_min=.01,volume_step=.01,volume_max=100.,filling_mode=3,trade_exemode=2,trade_stops_level=5)
+        self.info=N(point=.01,trade_tick_size=.01,trade_tick_value_profit=1.,trade_tick_value_loss=1.,volume_min=.01,volume_step=.01,volume_max=100.,filling_mode=3,trade_exemode=2,trade_stops_level=5)
         self.tick=N(bid=2000.,ask=2000.10,time_msc=clock_ms())
         self.positions=[];self.orders=[];self.deals=[];self.sends=[];self.code=10009;self.raise_send=False;self.check_code=0;self.on_check=None
     def account_info(self):return self.account
@@ -85,5 +85,33 @@ class ExecutionTests(unittest.TestCase):
         self.mt.info.filling_mode=2;self.mt.code=10019;self.assertEqual(self.send()['state'],'rejected');self.assertEqual(self.mt.sends[0]['type_filling'],1)
     def test_missing_journal_unknown_never_becomes_new_order(self):
         self.cmd['state']='unknown';self.assertEqual(self.send()['state'],'unknown');self.assertFalse(self.mt.sends)
+
+    def test_sniper_prices_net_objective_for_buy_and_sell_at_send_quote(self):
+        self.cmd['fast_path']=True
+        self.cmd['sniper_costs']=dict(commission_per_lot=7.,slippage_ticks=2.,target_points=50.,stop_points=5.)
+        self.mt.tick.ask=2000.40  # spread changed since Core's decision
+        self.mt.info.trade_tick_value_loss=2.
+        for side in (1,-1):
+            self.cmd['id']=str(side)*32;self.cmd['signal']['side']=side
+            result=self.send();self.assertEqual(result['state'],'filled',result)
+            request=self.mt.sends[-1];entry=self.mt.tick.ask if side==1 else self.mt.tick.bid
+            exit_quote=self.mt.tick.bid if side==1 else self.mt.tick.ask
+            self.assertGreaterEqual((exit_quote-request['sl'])*side, .05-1e-9)
+            gross=(request['tp']-entry)*side/.01*.1
+            self.assertGreaterEqual(gross-.7-.8,5.-1e-8)  # target net + both slip reserves
+            self.assertLess(gross-.7-.8,5.+.100001)  # at most one rounding tick; no double spread
+            self.assertAlmostEqual(result['pricing']['commission'],.7)
+            self.assertAlmostEqual(result['pricing']['spread_points'],40.)
+
+    def test_sniper_uses_broker_minimum_when_target_is_tiny(self):
+        self.cmd['sniper_costs']=dict(commission_per_lot=0.,slippage_ticks=0.,target_points=1.,stop_points=1.)
+        self.mt.info.trade_stops_level=100
+        result=self.send();self.assertEqual(result['state'],'filled',result)
+        self.assertGreaterEqual(self.mt.sends[-1]['tp']-self.mt.tick.bid,1.)
+        self.assertGreaterEqual(self.mt.tick.bid-self.mt.sends[-1]['sl'],1.)
+
+    def test_sniper_invalid_costs_never_submit(self):
+        self.cmd['sniper_costs']=dict(commission_per_lot=-7.,slippage_ticks=2.,target_points=50.,stop_points=80.)
+        self.assertEqual(self.send()['state'],'rejected');self.assertFalse(self.mt.sends)
 
 if __name__=='__main__':unittest.main()

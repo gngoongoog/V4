@@ -142,6 +142,7 @@ pub fn evaluate(
     if b.id == "system" {
         let candles = frames
             .iter()
+            .filter(|(k,_)|c.trading.mode==TradingMode::Swing && matches!(k.as_str(),"H1"|"H4"|"D1"))
             .map(|(k, v)| (k.clone(), v.iter().map(|b| b.candle.clone()).collect()))
             .collect();
         let base=if c.trading.mode==TradingMode::Expert {
@@ -182,9 +183,10 @@ pub fn evaluate(
             format!("bar:{}", s.bar_time)
         };
         if c.trading.mode == TradingMode::Sniper {
-            s.target_distance += c.risk.commission_per_lot / t.tick_value_profit.unwrap_or(0.)
-                * t.tick_size.unwrap_or(0.)
-                + c.risk.slippage_ticks * t.tick_size.unwrap_or(0.);
+            match trading::sniper_geometry(t,c,now) {
+                Ok((stop,target))=>{s.stop_distance=stop;s.target_distance=target;},
+                Err(error)=>{s.reason=error;return s;}
+            }
         }
     } else {
         let Some(bars) = frames.get(&b.timeframe) else {
@@ -393,7 +395,7 @@ pub fn evaluate(
         && [s.stop_distance, s.target_distance]
             .iter()
             .all(|v| v.is_finite() && *v > 0.);
-    if s.ready && b.id=="system" && c.trading.mode==TradingMode::Sniper {
+    if s.ready && b.id=="system" && c.trading.mode==TradingMode::Sniper && c.trading.max_cost_fraction>0. {
         match trading::costs(t,c,b.lots,now) {
             Ok(cost) if c.trading.max_cost_fraction==0. || cost.total/(cost.total+cost.desired_net_target_money)<=c.trading.max_cost_fraction => {},
             Ok(_) => {s.ready=false;s.reason.push_str("; حصة التكلفة تتجاوز الحد المختار للقناص");},

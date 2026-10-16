@@ -3,7 +3,7 @@
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 const POLICY: &str = "manual-review-eligibility-v1";
