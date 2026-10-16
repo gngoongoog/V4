@@ -67,14 +67,12 @@ def main():
             bars = []
             for index, close in enumerate(closes):
                 bars.append({
-                    "candle": {
-                        "time": T0 + index * 60,
-                        "open": close,
-                        "high": close,
-                        "low": close,
-                        "close": close,
-                        "tick_volume": 100,
-                    },
+                    "time": T0 + index * 60,
+                    "open": close,
+                    "high": close,
+                    "low": close,
+                    "close": close,
+                    "tick_volume": 100,
                     "spread_points": 10,
                 })
             last = T0 + len(returns) * 60
