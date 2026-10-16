@@ -3,6 +3,8 @@
 //! The previous 0.6 engine is preserved in execution_legacy.rs and still owns durable broker intents.
 #[path = "execution_legacy.rs"]
 mod legacy;
+#[path = "execution_pulse.rs"]
+mod pulse;
 
 use anyhow::{Context, Result};
 use braintrade_domain::{
@@ -13,7 +15,10 @@ use braintrade_domain::{
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Instant,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -285,6 +290,7 @@ pub struct Service {
     learner: crate::coordinator_learning::Learner,
     portfolio: PortfolioLimits,
     portfolio_state: Value,
+    fast: Option<pulse::FastContext>,
 }
 
 impl Service {
@@ -322,6 +328,7 @@ impl Service {
             learner: crate::coordinator_learning::Learner::new(db)?,
             portfolio,
             portfolio_state,
+            fast: None,
         })
     }
 
@@ -388,6 +395,9 @@ impl Service {
         // before the gateway can retrieve them. Exits and reconciliation states are untouched.
         let current = enforce_portfolio(db, telemetry, config, &self.portfolio)?;
         self.portfolio_state = current.json(&self.portfolio, telemetry.equity);
+        // Cache only data already accepted by the regular reconciled snapshot path. Fast
+        // pulses may overlay a newer quote but can never replace account/position state.
+        self.fast = Some(pulse::FastContext::new(telemetry, config, frames));
         Ok(())
     }
 
@@ -447,6 +457,55 @@ impl Service {
         status: &Status,
         now: u64,
     ) -> Result<Value> {
+        // PUT intentionally avoids the generic POST audit write on every market tick.
+        // The pulse only changes the cached quote, then runs execution/reconciliation
+        // logic and returns gateway work in the same response. Final authorization and
+        // the gateway's synchronous durable send journal still happen before order_send.
+        if method == "PUT" && path == "/v1/execution/pulse" {
+            anyhow::ensure!(
+                status.gateway_fresh,
+                "A fresh reconciled MT5 snapshot is required before Sniper pulse"
+            );
+            let started = Instant::now();
+            let next = self
+                .fast
+                .as_ref()
+                .context("Sniper pulse cache is not ready")?
+                .apply(body, now)?;
+            if let Some(system) = self.inner.brains.iter_mut().find(|brain| brain.id == "system") {
+                system.enabled = true;
+            }
+            self.inner.observe(
+                db,
+                &next.telemetry,
+                &next.config,
+                status.requested_run,
+                next.frames.as_ref(),
+                now,
+            )?;
+            let current = enforce_portfolio(db, &next.telemetry, &next.config, &self.portfolio)?;
+            self.portfolio_state = current.json(&self.portfolio, next.telemetry.equity);
+
+            let mut pulse_status = status.clone();
+            pulse_status.telemetry = Some(next.telemetry.clone());
+            pulse_status.last_received_ms = Some(now);
+            pulse_status.gateway_fresh = true;
+            pulse_status.execution_enabled = self.enabled(&pulse_status);
+            self.fast = Some(next);
+
+            let mut work = self.inner.route(
+                "GET",
+                "/v1/execution/gateway",
+                &[],
+                db,
+                &pulse_status,
+                now,
+            )?;
+            work["pulse_fast_path"] = json!(true);
+            work["pulse_to_work_us"] = json!(started.elapsed().as_micros() as u64);
+            return Ok(work);
+        }
+
         if method == "POST" && path == "/v1/execution/portfolio" {
             anyhow::ensure!(!status.requested_run, "أوقف النظام قبل تغيير حدود المحفظة");
             let candidate: PortfolioLimits = serde_json::from_slice(body)?;
