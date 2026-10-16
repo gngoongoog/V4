@@ -18,7 +18,6 @@ pub struct TradingConfig {
     pub sniper_target_points: f64,
     pub sniper_stop_points: f64,
     pub sniper_cooldown_seconds: u64,
-    pub sniper_max_hold_seconds: u64,
     pub pip_points: f64,
     pub max_cost_fraction: f64,
 }
@@ -29,7 +28,6 @@ impl Default for TradingConfig {
             sniper_target_points: 50.,
             sniper_stop_points: 80.,
             sniper_cooldown_seconds: 0,
-            sniper_max_hold_seconds: 120,
             pip_points: 10.,
             max_cost_fraction: 0.45,
         }
@@ -50,9 +48,6 @@ impl TradingConfig {
         if !(0..=3600).contains(&self.sniper_cooldown_seconds) {
             return Err("Cooldown must be 0–3600 seconds".into());
         }
-        if !(1..=3600).contains(&self.sniper_max_hold_seconds) {
-            return Err("Sniper holding time must be 1–3600 seconds".into());
-        }
         Ok(())
     }
     pub fn hold_ms(&self) -> u64 {
@@ -60,7 +55,7 @@ impl TradingConfig {
             TradingMode::Expert => 1_800_000,
             TradingMode::Scalping => 900_000,
             TradingMode::Swing => 259_200_000,
-            TradingMode::Sniper => self.sniper_max_hold_seconds * 1000,
+            TradingMode::Sniper => 120_000,
         }
     }
     pub fn geometry(&self, atr: f64, point: f64) -> (f64, f64) {
@@ -290,17 +285,6 @@ mod tests {
         assert!((p.total - 1.3).abs() < 1e-9);
         assert!((p.break_even_points - 13.).abs() < 1e-8);
         assert!(costs(&t, &Config::default(), 0., 1000).is_err());
-    }
-    #[test]
-    fn sniper_holding_time_is_configurable_and_bounded() {
-        let mut c=Config::default();
-        c.trading.mode=TradingMode::Sniper;
-        c.trading.sniper_max_hold_seconds=7;
-        assert_eq!(c.trading.hold_ms(),7000);
-        c.trading.sniper_max_hold_seconds=0;
-        assert!(c.validate().is_err());
-        c.trading.sniper_max_hold_seconds=3601;
-        assert!(c.validate().is_err());
     }
     #[test]
     fn swing_requires_actual_higher_frames() {
