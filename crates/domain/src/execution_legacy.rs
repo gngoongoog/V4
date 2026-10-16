@@ -7,7 +7,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const BRAINS: [(&str, &str); 14] = [
+pub const BRAINS: [(&str, &str); 15] = [
     ("system", "النظام — الوضع المختار"),
     ("gann", "جان الهندسي"),
     ("wyckoff", "وايكوف"),
@@ -22,6 +22,7 @@ pub const BRAINS: [(&str, &str); 14] = [
     ("kte", "KTE — الاندفاع والارتداد"),
     ("regime", "حالة السوق — اتجاه أو نطاق"),
     ("generated", "استراتيجية مولّدة مختارة"),
+    ("expansion", "انطلاق التذبذب — ضغط ثم اختراق لحظي"),
 ];
 pub fn magic(id: &str) -> Option<u64> {
     BRAINS
@@ -200,14 +201,14 @@ pub fn evaluate(
         s.stop_distance = b.stop_atr * atr;
         s.target_distance = b.reward_risk * s.stop_distance;
         let trend = trading::direction(&series);
-        let (swings, zones) = crate::opportunities::zones::map(
+        let (swings, zones) = if matches!(b.id.as_str(),"gann"|"zones"|"gann_dom_profile") {crate::opportunities::zones::map(
             &series,
             &b.timeframe,
             crate::studio::seconds(&b.timeframe).unwrap(),
-        );
-        let gann = crate::opportunities::gann::assess(&series, &b.timeframe, &swings);
-        let dom = crate::opportunities::dom::assess(t);
-        let profile = crate::opportunities::features::profile(&series);
+        )}else{(vec![],vec![])};
+        let gann = if matches!(b.id.as_str(),"gann"|"gann_dom_profile"){crate::opportunities::gann::assess(&series, &b.timeframe, &swings)}else{Default::default()};
+        let dom = if matches!(b.id.as_str(),"dom"|"gann_dom_profile"){crate::opportunities::dom::assess(t)}else{Default::default()};
+        let profile = if matches!(b.id.as_str(),"profile"|"gann_dom_profile"){crate::opportunities::features::profile(&series)}else{Default::default()};
         let profile_side = if profile.available
             && prev.close <= profile.value_high
             && last.close > profile.value_high
@@ -354,6 +355,21 @@ pub fn evaluate(
                 }
                 format!("كفاءة الاتجاه {er:.2}؛ اتباع اتجاه أو ارتداد نطاق")
             }
+            "expansion" => {
+                let recent=&series[n-8..];let baseline=&series[n-32..n-8];
+                let small=recent.iter().map(|b|b.high-b.low).sum::<f64>()/8.;
+                let normal=baseline.iter().map(|b|b.high-b.low).sum::<f64>()/24.;
+                let high=recent.iter().map(|b|b.high).fold(f64::NEG_INFINITY,f64::max);
+                let low=recent.iter().map(|b|b.low).fold(f64::INFINITY,f64::min);
+                let buffer=t.tick_size.unwrap_or(0.).max(atr*0.03);
+                let fresh=t.tick_age_ms.is_some_and(|age|age<=1000)&&t.quote_time_ms.is_some_and(|v|now.saturating_sub(v)<=1000);
+                if fresh && normal>0. && small<=normal*0.85 {
+                    // Both executable sides must clear the range: a widening ask alone is not a buy breakout.
+                    s.side=if t.bid.is_some_and(|v|v>high+buffer){1}else if t.ask.is_some_and(|v|v<low-buffer){-1}else{0};
+                }
+                s.key=format!("tick:{}",t.quote_time_ms.unwrap_or(0));
+                format!("ضغط 8 شموع مقابل 24 سابقة ({:.2})؛ اختراق نطاق {:.5} — {:.5}",small/normal.max(1e-12),low,high)
+            }
             "generated" => {
                 if let Some(g) = genome {
                     s.side = crate::studio::signal(g, bars);
@@ -374,7 +390,7 @@ pub fn evaluate(
             .all(|v| v.is_finite() && *v > 0.);
     if s.ready && b.id=="system" && c.trading.mode==TradingMode::Sniper {
         match trading::costs(t,c,b.lots,now) {
-            Ok(cost) if cost.total/(cost.total+cost.desired_net_target_money)<=c.trading.max_cost_fraction => {},
+            Ok(cost) if c.trading.max_cost_fraction==0. || cost.total/(cost.total+cost.desired_net_target_money)<=c.trading.max_cost_fraction => {},
             Ok(_) => {s.ready=false;s.reason.push_str("; حصة التكلفة تتجاوز الحد المختار للقناص");},
             Err(error) => {s.ready=false;s.reason.push_str(&format!("; {error}"));}
         }
@@ -394,6 +410,21 @@ mod tests {
         assert!(evaluate(&b,&t,&c,&frames,None,now).ready);
         c.trading.max_cost_fraction=0.01;
         let s=evaluate(&b,&t,&c,&frames,None,now);assert!(!s.ready);assert!(s.reason.contains("حصة التكلفة"));
+    }
+    #[test]
+    fn expansion_requires_compression_and_executable_breakout() {
+        let now=1_800_000_020_000;
+        let bars:Vec<FrameBar>=(0..100).map(|i|{let range=if i>=92{0.2}else{1.};FrameBar{candle:Candle{time:now/1000-(100-i)*60,open:100.,close:100.,high:100.+range,low:100.-range,tick_volume:100},spread_points:1,real_volume:0}}).collect();
+        let frames=BTreeMap::from([("M1".into(),bars)]);
+        let mut t=Telemetry{connected:true,symbol:"XAUUSD".into(),tick_age_ms:Some(0),quote_time_ms:Some(now),bid:Some(100.4),ask:Some(100.42),tick_size:Some(0.01),..Default::default()};
+        let b=BrainConfig{id:"expansion".into(),..Default::default()};let c=Config::default();
+        assert_eq!(magic("generated"),Some(410613));assert_eq!(magic("expansion"),Some(410614));
+        let buy=evaluate(&b,&t,&c,&frames,None,now);assert!(buy.ready);assert_eq!(buy.side,1);
+        t.bid=Some(100.1);assert!(!evaluate(&b,&t,&c,&frames,None,now).ready);
+        t.bid=Some(99.5);t.ask=Some(99.6);assert_eq!(evaluate(&b,&t,&c,&frames,None,now).side,-1);
+        t.tick_age_ms=Some(1001);assert!(!evaluate(&b,&t,&c,&frames,None,now).ready);
+        t.tick_age_ms=Some(0);let mut wide=frames.clone();for bar in wide.get_mut("M1").unwrap(){bar.candle.high=101.;bar.candle.low=99.;}
+        t.bid=Some(102.);t.ask=Some(102.02);assert!(!evaluate(&b,&t,&c,&wide,None,now).ready);
     }
     #[test]
     fn identity_and_user_controls() {

@@ -29,7 +29,7 @@ impl Default for TradingConfig {
             sniper_stop_points: 80.,
             sniper_cooldown_seconds: 0,
             pip_points: 10.,
-            max_cost_fraction: 0.45,
+            max_cost_fraction: 0.0,
         }
     }
 }
@@ -39,7 +39,7 @@ impl TradingConfig {
             ("Target points", self.sniper_target_points, 1., 100_000.),
             ("Stop points", self.sniper_stop_points, 1., 100_000.),
             ("Points per pip", self.pip_points, 1., 1000.),
-            ("Cost fraction", self.max_cost_fraction, 0.01, 0.9),
+            ("Cost fraction (0 disables)", self.max_cost_fraction, 0.0, 1.0),
         ] {
             if !v.is_finite() || !(min..=max).contains(&v) {
                 return Err(format!("{name} must be {min}–{max}"));

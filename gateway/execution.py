@@ -10,7 +10,7 @@ import math
 import sqlite3
 import time
 
-MAGIC_MIN, MAGIC_MAX = 410600, 410613
+MAGIC_MIN, MAGIC_MAX = 410600, 410614
 
 def clock_ms():
     return int(time.time() * 1000)
@@ -32,6 +32,8 @@ class BrokerExecutor:
         self.db.execute('CREATE TABLE IF NOT EXISTS sends(id TEXT PRIMARY KEY, request TEXT NOT NULL, result TEXT, created_ms INTEGER NOT NULL)')
         self.db.commit()
         self.next_history = 0.0
+        self.reconcile_id = None
+        self.next_reconcile = 0.0
 
     def close(self):
         self.db.close()
@@ -148,10 +150,13 @@ class BrokerExecutor:
                 minimum=max(0,getattr(info,'trade_stops_level',0))*info.point
                 if request['sl']<=0 or request['tp']<=0 or (exit_price-request['sl'])*side<minimum or (request['tp']-exit_price)*side<minimum:
                     raise ValueError('Stop/target too close for current spread or broker stops level')
-            check_start=time.perf_counter(); checked=mt5.order_check(request)
-            result['check_ms']=(time.perf_counter()-check_start)*1000
-            if checked is None or checked.retcode!=0:
-                raise ValueError('Broker order_check: '+str(getattr(checked,'comment','unavailable')))
+            result['check_ms'] = 0.0
+            result['check_skipped'] = bool(cmd.get('fast_path', False))
+            if not result['check_skipped']:
+                check_start=time.perf_counter(); checked=mt5.order_check(request)
+                result['check_ms']=(time.perf_counter()-check_start)*1000
+                if checked is None or checked.retcode!=0:
+                    raise ValueError('Broker order_check: '+str(getattr(checked,'comment','unavailable')))
             if not authorize(cmd['id']):
                 return dict(result,state='cancelled',reason='Core withdrew authorization before send')
             # Identity is re-read immediately before journaling and sending.
@@ -181,14 +186,19 @@ class BrokerExecutor:
             result['total_ms']=(time.perf_counter()-started)*1000
             return result
 
-    def cycle(self,mt5,api):
-        work=api('/v1/execution/gateway')
+    def cycle(self,mt5,api,work=None,include_history=True):
+        if work is None:
+            work=api('/v1/execution/gateway')
         command=work.get('command')
-        if command:
+        reconcile = command and command.get('state') in ('unknown', 'placed')
+        ready = not reconcile or command['id'] != self.reconcile_id or time.monotonic() >= self.next_reconcile
+        if command and ready:
+            if reconcile:
+                self.reconcile_id = command['id']; self.next_reconcile = time.monotonic()+1
             result=self.execute(mt5,command,lambda intent:api('/v1/execution/authorize',{'id':intent}).get('authorized',False))
             api('/v1/execution/result',result)
         start=work.get('history_from_ms',0);identity=work.get('account')
-        if start and identity and time.monotonic()>=self.next_history:
+        if include_history and start and identity and time.monotonic()>=self.next_history:
             self.next_history=time.monotonic()+5
             wanted=(identity['login'],identity['server'],identity['currency'])
             until=min(clock_ms(),start+86_400_000)

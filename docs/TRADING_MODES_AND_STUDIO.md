@@ -1,4 +1,4 @@
-# Trading modes and learning studio — 0.7.0 Development Preview
+# Trading modes and learning studio — 0.8.0 Source Preview
 
 All four modes drive the coordinated broker policy after account binding and START, alongside the separate Shadow research ledger. See `EXECUTION_AND_ROLES.md` for actual membership and execution. Generated strategy activation is manual; no automatic ML promotion.
 
@@ -15,9 +15,9 @@ Switch modes while STOPPED. An open position retains its original stop, target, 
 
 Commission is **round-trip per 1.00 lot, in account currency**: 7 × 0.1 = 0.70. If a broker quotes one side, enter entry plus exit. Risk and mode pages share the same setting. The calculator uses fresh MT5 bid/ask and broker point/tick specifications; it shows spread points/pips/money, commission, assumed two-sided slippage, total cost and approximate bid-to-bid break-even. Offline it calculates commission alone and marks spread/total unavailable. Display is labeled as the last manual calculation.
 
-Pip size is explicitly configurable in points (default 10); metals and indices do not have a universal pip convention. Asymmetric tick values use the larger value for cost estimates and the profit tick value for break-even. Spread is paid through executable bid/ask, never subtracted twice from PnL. Sniper targets compensate commission and exit slippage once. Its cost gate is `cost / (cost + desired net target money)`; default maximum 0.45. The stop must exceed entry spread/slippage. Default broker entry cooldown is 0 seconds; each broker tick intent is processed once.
+Pip size is explicitly configurable in points (default 10); metals and indices do not have a universal pip convention. Asymmetric tick values use the larger value for cost estimates and the profit tick value for break-even. Spread is paid through executable bid/ask, never subtracted twice from PnL. Sniper targets compensate commission and exit slippage once. Its cost gate is `cost / (cost + desired net target money)`; default 0 disables this optional gate; positive values enable it. The stop must exceed entry spread/slippage. Default broker entry cooldown is 0 seconds; each broker tick intent is processed once.
 
-Broker execution requests 100ms **sleep between full gateway polling cycles**; Shadow-only Sniper polling uses 250ms. Account/history reads, IPC and processing add latency. This is not tick-complete/high-frequency transport, and it does not guarantee execution speed or profitable quick trades. Overnight swaps, nonlinear/minimum commission tiers and future contract changes are not modeled. Gaps can exceed planned loss.
+Active Sniper targets a 20 ms start-to-start gateway cycle (50 ms for other active modes). The dashboard reports measured cycle/Core latency, and the execution ledger includes broker send timing. Processing, terminal and broker delays can exceed this target. Research reads use a separate process; periodic Core research can still add jitter. This is not tick-complete transport. Overnight swaps, nonlinear/minimum commission tiers and future contract changes are not modeled.
 
 ## All native MT5 timeframes
 

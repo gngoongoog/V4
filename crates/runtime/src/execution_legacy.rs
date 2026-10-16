@@ -39,6 +39,7 @@ pub struct Service {
     pub brains: Vec<BrainConfig>,
     pub weights:BTreeMap<String,braintrade_domain::execution::LearnedWeight>,
     signals: BTreeMap<String, Value>,
+    policy_cache: BTreeMap<String,(String,u64,Signal)>,
     last_sync_ms: u64,
     history_until_ms: u64,
 }
@@ -95,6 +96,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             settings,
             brains,
             signals: BTreeMap::new(),
+            policy_cache:BTreeMap::new(),
             weights:BTreeMap::new(),
             last_sync_ms: 0,
             history_until_ms: 0,
@@ -134,6 +136,20 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         self.last_sync_ms = 0;
         self.save(db)
     }
+    pub fn prepare_demo(&mut self,db:&Connection,status:&Status,now:u64)->Result<()> {
+        let t=status.telemetry.as_ref().filter(|t|status.gateway_fresh&&t.connected&&t.account_trade_mode==Some(0)).context("اتصل بحساب MT5 تجريبي أولاً")?;
+        let changed=!self.matches(t)||self.settings.target!="demo";
+        let mut settings=self.settings.clone();settings.target="demo".into();settings.login=t.login;settings.server=t.server.clone();settings.currency=t.currency.clone();settings.revision+=1;
+        if changed {settings.bound_ms=now;}
+        let mut brains=self.brains.clone();
+        let tx=db.unchecked_transaction()?;
+        for b in &mut brains {b.use_risk_limits=false;b.cooldown_seconds=0;if b.id=="system"{b.enabled=true;}tx.execute("INSERT OR REPLACE INTO brain_configs VALUES(?1,?2)",params![b.id,serde_json::to_string(b)?])?;}
+        tx.execute("INSERT OR REPLACE INTO execution_settings VALUES(1,?1)",[serde_json::to_string(&settings)?])?;
+        self.cancel_entries(&tx)?;tx.commit()?;
+        self.settings=settings;self.brains=brains;self.signals.clear();self.policy_cache.clear();
+        if changed {self.history_until_ms=now;self.last_sync_ms=0;}
+        Ok(())
+    }
     pub fn pending(&self, db: &Connection) -> Result<bool> {
         Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE state IN ('queued','dispatched','unknown','placed','filled','partial'))",[],|r|r.get(0))?)
     }
@@ -160,7 +176,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             .map(serde_json::to_value)
             .transpose()?
             .unwrap_or(Value::Null);
-        let p = json!({"id":id,"revision":self.settings.revision,"context":key,"brain":b.id,"kind":kind,"login":t.login,"server":t.server,"currency":t.currency,"target":self.settings.target,"symbol":t.symbol,"magic":execution::magic(&b.id),"position":position,"lots":b.lots,"deviation_points":self.settings.deviation_points,"created_ms":now,"max_quote_age_ms":signal.map(|s|if s.key.starts_with("tick:"){1000}else{3000}).unwrap_or(3000),"expires_ms":if kind=="open"{now+3000}else{now+30_000},"signal":s});
+        let p = json!({"id":id,"fast_path":true,"revision":self.settings.revision,"context":key,"brain":b.id,"kind":kind,"login":t.login,"server":t.server,"currency":t.currency,"target":self.settings.target,"symbol":t.symbol,"magic":execution::magic(&b.id),"position":position,"lots":b.lots,"deviation_points":self.settings.deviation_points,"created_ms":now,"max_quote_age_ms":signal.map(|s|if s.key.starts_with("tick:"){1000}else{3000}).unwrap_or(3000),"expires_ms":if kind=="open"{now+3000}else{now+30_000},"signal":s});
         db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload) VALUES(?1,?2,?3,?4,?5,'queued',?6)",params![id,key,b.id,kind,now,p.to_string()])?;
         Ok(())
     }
@@ -178,7 +194,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             return Ok(());
         }
         let key = ctx(t);
-        db.execute("INSERT INTO execution_equity VALUES(?1,?2) ON CONFLICT(context) DO UPDATE SET peak=MAX(peak,excluded.peak)",params![key,t.equity])?;
+        db.execute("INSERT INTO execution_equity VALUES(?1,?2) ON CONFLICT(context) DO UPDATE SET peak=excluded.peak WHERE excluded.peak>peak",params![key,t.equity])?;
         let peak:f64=db.query_row("SELECT peak FROM execution_equity WHERE context=?1",[&key],|r|r.get(0))?;
         // A fill acknowledgement is not a reconciled position snapshot. Keep the
         // brain blocked until the broker exposes its position or its deal history.
@@ -207,6 +223,24 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     [q["id"].as_str().unwrap()],
                 )?;
             }
+        }
+        let available=crate::coordinator_learning::available_frames(t,frames,now);
+        let mut policies=BTreeMap::new();
+        let mut costs=BTreeMap::new();
+        for b in &self.brains {
+            let started=std::time::Instant::now();
+            let bar=available.get(&b.timeframe).and_then(|v|v.last()).map(|v|v.candle.time).unwrap_or(0);
+            let cache_key=format!("{}:{}:{}:{}",key,b.timeframe,bar,self.settings.revision);
+            let live=matches!(b.id.as_str(),"system"|"dom"|"gann_dom_profile"|"kte"|"expansion");
+            let fresh=t.tick_age_ms.is_some_and(|v|v<=3000)&&t.quote_time_ms.is_some_and(|v|v<=now+2000&&now.saturating_sub(v)<=3000);
+            let cached=self.policy_cache.get(&b.id).filter(|(k,at,_)|!live&&fresh&&*k==cache_key&&now.saturating_sub(*at)<1000);
+            let signal=if let Some((_,_,signal))=cached {signal.clone()}else{
+                let genome=crate::coordinator_learning::genome(db,b,t)?;
+                let signal=execution::evaluate(b,t,c,&available,genome.as_ref(),now);
+                self.policy_cache.insert(b.id.clone(),(cache_key,now,signal.clone()));signal
+            };
+            costs.insert(b.id.clone(),started.elapsed().as_micros() as u64);
+            policies.insert(b.id.clone(),signal);
         }
         for b in self.brains.clone() {
             let magic = execution::magic(&b.id).unwrap();
@@ -241,28 +275,25 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     && frozen > 0
                     && p.opened_ms > 0
                     && now.saturating_sub(p.opened_ms) >= frozen
-                    && now.saturating_sub(last_close) > 5000
+                    && now.saturating_sub(last_close) > 250
                 {
                     self.queue(db, t, &b, "close", None, p.ticket, now)?;
                 }
             }
-            let genome=crate::coordinator_learning::genome(db,&b,t)?;
-            let available=crate::coordinator_learning::available_frames(t,frames,now);
             let started = std::time::Instant::now();
-            let base=execution::evaluate(&b,t,c,&available,genome.as_ref(),now);
+            let base=policies[&b.id].clone();
             let signal=if b.id=="system" {
                 let mut votes=vec![];
                 for member in self.brains.iter().filter(|m|m.id!="system"&&!m.enabled) {
                     // Returning SOLO positions finish under their original owner before rejoining.
                     let in_flight:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,member.id],|r|r.get(0))?;
                     if in_flight||t.positions.iter().any(|p|p.magic==execution::magic(&member.id).unwrap()&&p.symbol==t.symbol){continue;}
-                    let g=crate::coordinator_learning::genome(db,member,t)?;
-                    let vote=execution::evaluate(member,t,c,&available,g.as_ref(),now);
+                    let vote=policies[&member.id].clone();
                     votes.push((member.clone(),vote,self.weights.get(&member.id).cloned().unwrap_or_default()));
                 }
                 execution::coordinate(base,c,votes)
             }else{base};
-            let decision_us = started.elapsed().as_micros() as u64;
+            let decision_us = costs[&b.id]+started.elapsed().as_micros() as u64;
             let mut gates = vec![];
             if t.margin_mode!=Some(2)&&db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain<>?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,b.id],|r|r.get::<_,bool>(0))?{gates.push("Netting: أمر لعقل آخر لم تتم تسويته");}
 
@@ -484,7 +515,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     return Ok(json!({"command":null,"history_from_ms":0}));
                 };
                 db.execute("UPDATE broker_commands SET state='expired' WHERE state='queued' AND CAST(json_extract(payload,'$.expires_ms') AS INTEGER)<?1",[now])?;
-                let commands=json_rows(db,"SELECT json_set(payload,'$.state',state) FROM broker_commands WHERE context=?1 AND state IN ('queued','dispatched','unknown','placed') ORDER BY CASE WHEN state IN ('queued','dispatched') THEN 0 ELSE 1 END,CASE kind WHEN 'close' THEN 0 ELSE 1 END,created_ms LIMIT 1",&key)?;
+                let commands=json_rows(db,"SELECT json_set(payload,'$.state',state) FROM broker_commands WHERE context=?1 AND state IN ('queued','dispatched','unknown','placed') ORDER BY CASE kind WHEN 'close' THEN 0 ELSE 1 END,CASE WHEN state IN ('queued','dispatched') THEN 0 ELSE 1 END,created_ms LIMIT 1",&key)?;
                 let mut command = commands.first().cloned();
                 if let Some(cmd) = &command {
                     let id = cmd["id"].as_str().unwrap();

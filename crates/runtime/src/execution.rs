@@ -285,6 +285,9 @@ pub struct Service {
     learner: crate::coordinator_learning::Learner,
     portfolio: PortfolioLimits,
     portfolio_state: Value,
+    portfolio_context: String,
+    next_portfolio_ms: u64,
+    learning_context: String,
 }
 
 impl Service {
@@ -322,6 +325,9 @@ impl Service {
             learner: crate::coordinator_learning::Learner::new(db)?,
             portfolio,
             portfolio_state,
+            portfolio_context: String::new(),
+            next_portfolio_ms: 0,
+            learning_context: String::new(),
         })
     }
 
@@ -370,24 +376,39 @@ impl Service {
         if let Some(system) = self.inner.brains.iter_mut().find(|brain| brain.id == "system") {
             system.enabled = true;
         }
-        let available = crate::coordinator_learning::available_frames(telemetry, frames, now);
-        self.inner.weights = self.learner.observe(
-            db,
-            telemetry,
-            config,
-            &self.inner.brains,
-            &available,
-            run,
-            now,
-        )?;
+        let context=crate::coordinator_learning::context(telemetry);
+        let learning_context=format!("{}:{:?}",context,config.trading.mode);
+        if self.learning_context!=learning_context {self.inner.weights.clear();}
         // Legacy engine still owns durable broker intents/reconciliation. With `system`
         // forced on, it represents coordinated execution; every other `enabled` flag means SOLO.
         self.inner
             .observe(db, telemetry, config, run, frames, now)?;
         // Apply one global entry budget after all brains have proposed their queued opens and
         // before the gateway can retrieve them. Exits and reconciliation states are untouched.
-        let current = enforce_portfolio(db, telemetry, config, &self.portfolio)?;
-        self.portfolio_state = current.json(&self.portfolio, telemetry.equity);
+        if self.portfolio.enabled || self.portfolio_context!=context || now>=self.next_portfolio_ms {
+            let current = enforce_portfolio(db, telemetry, config, &self.portfolio)?;
+            self.portfolio_state = current.json(&self.portfolio, telemetry.equity);
+            self.portfolio_context=context;self.next_portfolio_ms=now+500;
+        }
+        Ok(())
+    }
+
+    pub fn validate_live_start(&self,status:&Status)->Result<()> {
+        anyhow::ensure!(self.inner.settings.target=="live"&&status.gateway_fresh&&self.account_matches(status),"اربط الحساب الحقيقي من إدارة العقول أولاً");
+        Ok(())
+    }
+
+    pub fn prepare_demo(&mut self,db:&Connection,status:&Status,now:u64)->Result<()> {
+        self.inner.prepare_demo(db,status,now)?;
+        self.portfolio.enabled=false;self.save_portfolio(db)?;
+        self.next_portfolio_ms=0;self.inner.weights.clear();self.learning_context.clear();
+        Ok(())
+    }
+
+    pub fn learn(&mut self,db:&Connection,t:&Telemetry,c:&Config,run:bool,frames:&BTreeMap<String,Vec<FrameBar>>,now:u64)->Result<()> {
+        let available=crate::coordinator_learning::available_frames(t,frames,now);
+        self.inner.weights=self.learner.observe(db,t,c,&self.inner.brains,&available,run,now)?;
+        self.learning_context=format!("{}:{:?}",crate::coordinator_learning::context(t),c.trading.mode);
         Ok(())
     }
 

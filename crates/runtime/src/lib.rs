@@ -84,7 +84,7 @@ impl Client{
     pub fn post(&self,path:&str,body:Value)->Result<Value>{let response=self.http.post(format!("{BASE}{path}")).bearer_auth(&self.key).json(&body).send()?;let code=response.status();let value:Value=response.json()?;if !code.is_success(){bail!("{}",value["error"].as_str().unwrap_or("Request failed"));}Ok(value)}
 }
 pub(crate) struct Shared{pub status:Status,pub config:Config,pub token:Option<String>}
-struct Engine{dir:PathBuf,shared:Arc<Mutex<Shared>>,db:Connection,gateway:Option<Child>,gateway_retry_ms:u64,shutting_down:bool,research:research::Research,backtests:backtest::Service,evaluations:evaluation::Service,news:news::Service,learning:learning::Service,inference:learning_inference::Service,scoring:learning_scoring::Service,studio:studio::Service,execution:execution::Service}
+struct Engine{dir:PathBuf,shared:Arc<Mutex<Shared>>,db:Connection,gateway:Option<Child>,gateway_retry_ms:u64,maintenance_at:u64,shutting_down:bool,research:research::Research,backtests:backtest::Service,evaluations:evaluation::Service,news:news::Service,learning:learning::Service,inference:learning_inference::Service,scoring:learning_scoring::Service,studio:studio::Service,execution:execution::Service}
 #[derive(Deserialize)]
 struct ConfigRequest{config:Config,#[serde(default)]telegram_token:String,#[serde(default)]clear_telegram_token:bool}
 #[derive(Serialize)]
@@ -101,8 +101,68 @@ impl Engine{
         self.gateway=Some(command.spawn().context("Could not launch MT5 gateway")?);self.event("gateway_started",json!({}))?;Ok(())
     }
     fn stop_gateway(&mut self){if let Some(mut child)=self.gateway.take(){let _=child.kill();let _=child.wait();}}
-    fn tick(&mut self){let cfg=self.shared.lock().unwrap().config.clone();self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
+    fn tick(&mut self){if now_ms()<self.maintenance_at{return;}self.maintenance_at=now_ms()+250;let cfg=self.shared.lock().unwrap().config.clone();self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
     fn route(&mut self,method:&str,path:&str,body:&[u8])->Result<Value>{
+        if method=="POST" && path=="/v1/gateway/pulse" {
+            let mut telemetry:Telemetry=serde_json::from_slice(body)?;
+            if !telemetry.validate(){bail!("Invalid telemetry");}
+            let (config,run)={
+                let mut shared=self.shared.lock().unwrap();
+                let same=shared.status.telemetry.as_ref().is_some_and(|old|old.connected&&telemetry.connected&&old.login==telemetry.login&&old.server==telemetry.server&&old.symbol==telemetry.symbol&&old.currency==telemetry.currency);
+                if same && telemetry.market.is_none(){telemetry.market=shared.status.telemetry.as_ref().and_then(|old|old.market.clone());}
+                if !same {shared.status.analysis=Default::default();shared.status.paper=Default::default();}
+                (shared.config.clone(),shared.status.requested_run)
+            };
+            let observed=now_ms();
+            let started=std::time::Instant::now();
+            let frames=self.studio.execution_frames(&telemetry,observed);
+            self.execution.observe(&self.db,&telemetry,&config,run,&frames,observed)?;
+            let status={
+                let mut shared=self.shared.lock().unwrap();
+                let changed=shared.status.telemetry.as_ref().map(|t|t.connected)!=Some(telemetry.connected);
+                if changed {self.event("gateway_connection",json!({"connected":telemetry.connected}))?;}
+                shared.status.message=if telemetry.error.is_empty(){"MT5 connected".into()}else{telemetry.error.clone()};
+                shared.status.telemetry=Some(telemetry);shared.status.last_received_ms=Some(observed);
+                shared.status.refresh(now_ms());shared.status.execution_enabled=self.execution.enabled(&shared.status);
+                shared.status.clone()
+            };
+            let mut work=self.execution.route("GET","/v1/execution/gateway",b"",&self.db,&status,now_ms())?;
+            let active=status.execution_enabled||status.telemetry.as_ref().is_some_and(|t|t.positions.iter().any(|p|braintrade_domain::execution::brain_for_magic(p.magic).is_some()));
+            work["poll_ms"]=json!(if active&&config.trading.mode==braintrade_domain::trading::TradingMode::Sniper{20}else if active{50}else{250});
+            work["core_execution_us"]=json!(started.elapsed().as_micros() as u64);
+            return Ok(work);
+        }
+        if method=="POST" && path=="/v1/gateway/analysis" {
+            let (config,status)={let mut shared=self.shared.lock().unwrap();shared.status.refresh(now_ms());(shared.config.clone(),shared.status.clone())};
+            if let Some(t)=status.telemetry.as_ref().filter(|t|status.gateway_fresh&&t.connected){
+                let observed=now_ms();let frames=self.studio.live_frames(t,observed);
+                let mut next=self.research.clone();
+                let (analysis,paper)=next.update_with_frames(&mut self.db,t,&config,status.requested_run,observed,&frames)?;
+                self.learning.observe(&mut self.db,t,&analysis,observed);self.inference.observe(&self.db,t,&analysis,observed);self.scoring.observe(&self.db,observed);
+                let execution_frames=self.studio.execution_frames(t,observed);
+                self.execution.learn(&self.db,t,&config,status.requested_run,&execution_frames,observed)?;
+                self.research=next;
+                let mut shared=self.shared.lock().unwrap();shared.status.analysis=analysis;shared.status.paper=paper;
+            }
+            return Ok(json!({"ok":true}));
+        }
+        if method=="POST" && path=="/v1/live/start" {
+            let status={let mut shared=self.shared.lock().unwrap();shared.status.refresh(now_ms());shared.status.clone()};
+            self.execution.validate_live_start(&status)?;
+            return self.route("POST","/v1/start",body);
+        }
+        if method=="POST" && path=="/v1/demo/start" {
+            let status={let mut shared=self.shared.lock().unwrap();shared.status.refresh(now_ms());shared.status.clone()};
+            self.execution.prepare_demo(&self.db,&status,now_ms())?;
+            let mut shared=self.shared.lock().unwrap();let mut config=shared.config.clone();
+            config.trading.max_cost_fraction=0.;config.trading.sniper_cooldown_seconds=0;
+            atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&config)?)?;
+            shared.config=config;shared.status.requested_run=true;shared.status.message="Demo execution started".into();
+            shared.status.refresh(now_ms());shared.status.execution_enabled=self.execution.enabled(&shared.status);
+            self.event("demo_started",json!({"login":status.telemetry.as_ref().map(|t|t.login),"optional_limits":false}))?;
+            return Ok(serde_json::to_value(&shared.status)?);
+        }
+
         if path.starts_with("/v1/execution") {
             let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
             let result=self.execution.route(method,path,body,&self.db,&status,now_ms())?;
@@ -175,7 +235,7 @@ impl Engine{
                 {let mut s=self.shared.lock().unwrap();s.config=request.config;s.token=effective;s.status.gateway_fresh=false;s.status.last_received_ms=None;s.status.telemetry=None;s.status.analysis=Default::default();s.status.paper=Default::default();s.status.message="Settings saved; reconnecting MT5".into();}
                 self.event("settings_changed",json!({"secrets":"redacted"}))?;if self.backtests.loading(){self.backtests.cancel();}self.stop_gateway();self.gateway_retry_ms=0;Ok(json!({"ok":true}))
             },
-            ("POST","/v1/start")=>{if self.backtests.loading(){bail!("جلب التاريخ قيد العمل؛ انتظر أو ألغِ الاختبار قبل تشغيل المحاكاة");}self.event("monitoring_requested",json!({"execution":false}))?;let mut s=self.shared.lock().unwrap();s.status.requested_run=true;s.status.message="System started. Enabled independent brains may send broker orders to the bound account.".into();s.status.refresh(now_ms());Ok(serde_json::to_value(&s.status)?)},
+            ("POST","/v1/start")=>{self.event("monitoring_requested",json!({"execution":false}))?;let mut s=self.shared.lock().unwrap();s.status.requested_run=true;s.status.message="System started. Enabled independent brains may send broker orders to the bound account.".into();s.status.refresh(now_ms());Ok(serde_json::to_value(&s.status)?)},
             ("POST","/v1/stop")=>{self.execution.cancel_entries(&self.db)?;self.event("monitoring_stopped",json!({"positions_unchanged":true}))?;let mut s=self.shared.lock().unwrap();s.status.requested_run=false;s.status.analysis.action="WAIT".into();s.status.analysis.gates.push("System stopped — new virtual entries disabled".into());s.status.message="New entries stopped. Existing owned positions retain broker SL/TP and timed exits while Core runs.".into();s.status.refresh(now_ms());Ok(serde_json::to_value(&s.status)?)},
             ("POST","/v1/reconnect")=>{self.stop_gateway();self.gateway_retry_ms=0;{let mut s=self.shared.lock().unwrap();s.status.last_received_ms=None;s.status.telemetry=None;s.status.refresh(now_ms());}self.event("reconnect_requested",json!({}))?;Ok(json!({"ok":true}))},
             ("POST","/v1/gateway/snapshot")=>{
@@ -191,7 +251,7 @@ impl Engine{
 pub fn run_core()->Result<()>{
     let dir=data_dir();fs::create_dir_all(&dir)?;
     #[cfg(unix)] {use std::os::unix::fs::PermissionsExt;fs::set_permissions(&dir,fs::Permissions::from_mode(0o700))?;}
-    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let mut engine=Engine{dir,shared:shared.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,research,backtests,evaluations,news,learning,inference,scoring,studio,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
+    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let mut engine=Engine{dir,shared:shared.clone(),db,gateway:None,gateway_retry_ms:0,maintenance_at:0,shutting_down:false,research,backtests,evaluations,news,learning,inference,scoring,studio,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
     while !engine.shutting_down{engine.tick();let Some(mut request)=server.recv_timeout(Duration::from_millis(250))? else{continue;};let authenticated=request.headers().iter().any(|h|h.field.equiv("Authorization")&&h.value.as_str()==format!("Bearer {key}"));let origin=request.headers().iter().any(|h|h.field.equiv("Origin"));if !authenticated||origin{let _=request.respond(tiny_http::Response::from_string("{\"error\":\"Unauthorized\"}").with_status_code(401));continue;}if request.body_length().is_none()&&request.method().as_str()=="POST"{let _=request.respond(tiny_http::Response::empty(411));continue;}if request.body_length().unwrap_or(0)>2_000_000{let _=request.respond(tiny_http::Response::empty(413));continue;}let mut body=Vec::new();if request.as_reader().read_to_end(&mut body).is_err(){continue;}let result=engine.route(request.method().as_str(),request.url(),&body);let(code,value)=match result{Ok(v)=>(200,v),Err(e)=>(400,json!({"error":e.to_string()}))};let response=tiny_http::Response::from_string(value.to_string()).with_status_code(code).with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());let _=request.respond(response);}
     engine.stop_gateway();engine.backtests.cancel();engine.evaluations.cancel();engine.event("core_stopped",json!({}))?;drop(lock);Ok(())
 }

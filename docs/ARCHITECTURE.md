@@ -83,6 +83,6 @@ CI packaging and simulated MT5 integration are not native acceptance against the
 
 ## 11. Release/version boundary
 
-Promoted release: **0.6.0**. Current development: **0.7.0 Development Preview**. Development Cargo, lockfile, desktop and Windows package versions must stay aligned. Use `docs/validation.json` for promoted-release evidence and `docs/development-validation.json` for the exact current-development validation boundary.
+Promoted release: **0.6.0**. Current development: **0.8.0 source-only preview (not built)**. Development Cargo, lockfile, desktop and Windows package versions must stay aligned. Use `docs/validation.json` for promoted-release evidence and `docs/development-validation.json` for the exact current-development validation boundary.
 
 No architecture item or test result is a profitability, latency or win-rate guarantee.

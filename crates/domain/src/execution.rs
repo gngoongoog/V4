@@ -27,11 +27,11 @@ pub fn coordinate(mut primary:Signal,c:&Config,votes:Vec<(BrainConfig,Signal,Lea
     let net=if buy+sell>0. {(buy-sell)/(buy+sell)}else{0.};
     let expert=c.trading.mode==TradingMode::Expert;
     // Expert selects direction from actual members. Other modes retain their market trigger
-    // and use the same adaptive member evidence for conflict resolution.
+    // and use adaptive member evidence for conflict resolution, except Sniper which executes its own tick trigger.
     if expert {
         primary.side=if net>=0.20{1}else if net<= -0.20{-1}else{0};
         primary.ready=primary.side!=0&&primary.stop_distance>0.&&primary.target_distance>0.&&members.iter().any(|v|v["ready"]==true);
-    } else if primary.ready {
+    } else if primary.ready && c.trading.mode!=TradingMode::Sniper {
         let against=if primary.side==1{sell}else{buy};let with=if primary.side==1{buy}else{sell};
         if against>=2.&&against>with+0.5 {primary.ready=false;}
     }

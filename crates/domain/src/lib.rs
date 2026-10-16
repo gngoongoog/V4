@@ -113,6 +113,7 @@ pub struct DomLevel {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Telemetry {
+    #[serde(default)] pub gateway_metrics: serde_json::Value,
     pub connected: bool,
     pub error: String,
     pub login: u64,

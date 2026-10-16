@@ -15,10 +15,25 @@ component Card inherits Rectangle {
 }
 export component Dashboard inherits Window {
     init => { Palette.color-scheme = ColorScheme.dark; }
-    title: "BRAINTRADE OS | Research 0.7.0";
+    title: "BRAINTRADE OS | Research 0.8.0";
     preferred-width: 1120px; preferred-height: 820px; min-width: 880px; min-height: 700px;
     background: #0b1220;
     in-out property <int> page: 0;
+    in-out property <bool> exec-advanced: false;
+    in-out property <bool> exec-show-ledger: false;
+    in property <string> latency: "بانتظار قياس الاتصال";
+    property <int> section: root.page == 0 ? 0 : (root.page == 17 || root.page == 14 || root.page == 6 || root.page == 5) ? 1 : (root.page == 4 || root.page == 10 || root.page == 12 || root.page == 16 || root.page == 8) ? 2 : (root.page == 7 || root.page == 9 || root.page == 15 || root.page == 11) ? 3 : 4;
+    property <string> page-title: root.page == 0 ? "نظرة عامة" : root.page == 17 ? "إدارة العقول والتداول" : root.page == 14 ? "الأوضاع والعمولة" : root.page == 6 ? "الحدود الاختيارية" : root.page == 5 ? "سجل المحاكاة" : root.page == 4 ? "تحليل السوق" : root.page == 10 ? "فرص السوق" : root.page == 12 ? "خريطة المناطق" : root.page == 16 ? "وايكوف" : root.page == 8 ? "الأخبار" : root.page == 7 ? "الاختبار التاريخي" : root.page == 9 ? "التقييم الزمني" : root.page == 15 ? "مختبر الاستراتيجيات" : root.page == 11 ? "التعلم" : root.page == 1 ? "الإعدادات" : root.page == 13 ? "النسخ والاستعادة" : root.page == 2 ? "سجل النظام" : "حول التطبيق";
+    function navigate(next-page: int) {
+        root.page = next-page;
+        if next-page == 17 { root.execution-action("refresh"); }
+        if next-page == 14 { root.studio-action("config"); }
+        if next-page == 15 || next-page == 16 { root.studio-action("refresh"); }
+        if next-page == 9 { root.evaluation-action("refresh"); }
+        if next-page == 11 { root.learning-action("refresh"); }
+        if next-page == 13 { root.backup-action("refresh"); }
+        if next-page == 2 { root.action("events"); }
+    }
     in property <bool> execution-active: false;
     in property <bool> exec-busy: false;
     in property <[string]> exec-names;
@@ -50,7 +65,7 @@ export component Dashboard inherits Window {
     in-out property <string> sniper-stop: "80";
     in-out property <string> sniper-cooldown: "0";
     in-out property <string> pip-points: "10";
-    in-out property <string> cost-fraction: "0.45";
+    in-out property <string> cost-fraction: "0";
     in-out property <string> preview-lots: "0.1";
     in property <bool> studio-busy: false;
     in property <string> studio-message: "";
@@ -165,65 +180,70 @@ export component Dashboard inherits Window {
     callback action(string);
     callback save-settings();
     callback browse-mt5();
-    VerticalLayout {
-        padding: 24px; spacing: 16px;
-        HorizontalLayout {
-            spacing: 12px;
-            VerticalLayout {
-                Text { text: "BRAINTRADE OS"; color: #f5f7fd; font-size: 26px; font-weight: 800; }
-                Text { text: "مركز التحكم  /  RESEARCH 0.7.0"; color: #8d9cb4; font-size: 13px; }
+    HorizontalLayout {
+      padding: 0px; spacing: 0px;
+      Rectangle {
+        width: 176px; background: #101a2a;
+        VerticalLayout { padding: 16px; spacing: 12px;
+            Text { text: "BRAINTRADE"; color: #f5f7fd; font-size: 19px; font-weight: 800; }
+            Text { text: "مركز التداول"; color: #8d9cb4; font-size: 13px; }
+            Rectangle { height: 14px; background: transparent; }
+            Button { text: root.section == 0 ? "●  الرئيسية" : "الرئيسية"; clicked => { root.navigate(0); } }
+            Button { text: root.section == 1 ? "●  التداول" : "التداول"; clicked => { root.navigate(17); } }
+            Button { text: root.section == 2 ? "●  السوق والتحليل" : "السوق والتحليل"; clicked => { root.navigate(4); } }
+            Button { text: root.section == 3 ? "●  البحث والتعلم" : "البحث والتعلم"; clicked => { root.navigate(15); } }
+            Button { text: root.section == 4 ? "●  النظام" : "النظام"; clicked => { root.navigate(1); } }
+            Rectangle { vertical-stretch: 1; background: transparent; }
+            Text { text: root.online ? "●  MT5 متصل" : "○  انتظار MT5"; color: root.online ? #5be0be : #f0c578; }
+            Text { text: "Development Preview"; color: #7f8fa7; font-size: 11px; }
+        }
+      }
+      VerticalLayout {
+        padding: 20px; spacing: 12px;
+        HorizontalLayout { spacing: 12px;
+            VerticalLayout { spacing: 4px;
+                Text { text: root.page-title; color: #f5f7fd; font-size: 25px; font-weight: 700; }
+                Text { text: root.execution-active ? "التداول فعّال على الحساب المرتبط" : "جاهز للتحليل — التداول متوقف"; color: #8d9cb4; font-size: 12px; }
             }
             Rectangle { horizontal-stretch: 1; background: transparent; }
-            Text { text: root.state; color: root.online ? #5be0be : #f0c578; font-size: 16px; vertical-alignment: center; }
+            Button { text: root.exec-target == 0 ? "تشغيل الديمو" : "تشغيل الحقيقي"; enabled: !root.busy && !root.execution-active; clicked => { root.action(root.exec-target == 0 ? "demo/start" : "live/start"); } }
+            Button { text: "إيقاف"; enabled: !root.busy; clicked => { root.action("stop"); } }
         }
-        Rectangle {
-            background: #242337; border-radius: 8px; height: 46px;
-            Text { x: 14px; width: parent.width - 28px; height: parent.height; text: root.execution-active ? "تنفيذ MT5 فعّال — العقول المشغّلة تتداول على الحساب المرتبط" : "التنفيذ متوقف — اختر حساب الديمو والعقل من صفحة التنفيذ المنفرد"; color: #eedaa5; vertical-alignment: center; horizontal-alignment: center; }
+        Rectangle { height: 36px; background: #151f30; border-radius: 8px;
+            HorizontalLayout { padding-left: 12px; padding-right: 12px; spacing: 12px;
+                Text { text: root.state; color: root.online ? #5be0be : #f0c578; vertical-alignment: center; }
+                Text { text: root.latency; color: #acbad0; vertical-alignment: center; horizontal-alignment: right; horizontal-stretch: 1; }
+            }
         }
-        HorizontalLayout {
-            spacing: 10px;
-            Button { text: "تشغيل النظام  START"; enabled: !root.busy; clicked => { root.action("start"); } }
-            Button { text: "إيقاف النظام  STOP"; enabled: !root.busy; clicked => { root.action("stop"); } }
-            Button { text: "إعادة الاتصال بـ MT5"; enabled: !root.busy; clicked => { root.action("reconnect"); } }
-            Rectangle { horizontal-stretch: 1; background: transparent; }
-            Text { text: root.decision; color: #6bdbc5; vertical-alignment: center; }
+        if root.section == 1: ComboBox {
+            model: ["العقول والتداول المنفرد", "أوضاع التداول والعمولة", "الحدود الاختيارية", "سجل المحاكاة"];
+            current-index: root.page == 17 ? 0 : root.page == 14 ? 1 : root.page == 6 ? 2 : 3;
+            selected(value) => { root.navigate(self.current-index == 0 ? 17 : self.current-index == 1 ? 14 : self.current-index == 2 ? 6 : 5); }
         }
-        VerticalLayout {spacing: 6px;
-          HorizontalLayout {spacing: 8px;
-            Button { text: "العقول والتحليل"; clicked => { root.page = 4; } }
-            Button { text: "المحاكاة"; clicked => { root.page = 5; } }
-            Button { text: "الاختبار التاريخي"; clicked => { root.page = 7; } }
-            Button { text: "المخاطرة"; clicked => { root.page = 6; } }
-            Button {text: "الأخبار الرسمية"; clicked => {root.page = 8;} }
-          }
-          HorizontalLayout {spacing: 8px;
-            Button { text: "التقييم الزمني"; clicked => { root.page = 9; root.evaluation-action("refresh"); } }
-            Button { text: "الرئيسية"; clicked => { root.page = 0; } }
-            Button { text: "الإعدادات"; clicked => { root.page = 1; } }
-            Button { text: "السجل"; clicked => { root.page = 2; root.action("events"); } }
-            Button { text: "حول"; clicked => { root.page = 3; } }
-          }
+        if root.section == 2: ComboBox {
+            model: ["تحليل السوق", "الفرص", "خريطة المناطق", "وايكوف", "الأخبار"];
+            current-index: root.page == 4 ? 0 : root.page == 10 ? 1 : root.page == 12 ? 2 : root.page == 16 ? 3 : 4;
+            selected(value) => { root.navigate(self.current-index == 0 ? 4 : self.current-index == 1 ? 10 : self.current-index == 2 ? 12 : self.current-index == 3 ? 16 : 8); }
         }
-        HorizontalLayout { spacing: 8px;
-            Button { text: "فرص السوق"; clicked => { root.page = 10; } }
-            Button { text: "خريطة العقول والمناطق"; clicked => { root.page = 12; } }
-            Button { text: "التعلم ومراجعة النماذج"; clicked => { root.page = 11; root.learning-action("refresh"); } }
+        if root.section == 3: ComboBox {
+            model: ["مختبر الاستراتيجيات", "التعلم", "الاختبار التاريخي", "التقييم الزمني"];
+            current-index: root.page == 15 ? 0 : root.page == 11 ? 1 : root.page == 7 ? 2 : 3;
+            selected(value) => { root.navigate(self.current-index == 0 ? 15 : self.current-index == 1 ? 11 : self.current-index == 2 ? 7 : 9); }
         }
-        HorizontalLayout { spacing: 8px;
-            Button { text: "أوضاع التداول والتكلفة"; clicked => { root.page = 14; root.studio-action("config"); } }
-            Button { text: "مختبر الاستراتيجيات"; clicked => { root.page = 15; root.studio-action("refresh"); } }
-            Button { text: "وايكوف والتعلم"; clicked => { root.page = 16; root.studio-action("refresh"); } }
-            Button { text: "التنفيذ المنفرد"; clicked => { root.page = 17; root.execution-action("refresh"); } }
+        if root.section == 4: ComboBox {
+            model: ["الإعدادات والاتصال", "النسخ والاستعادة", "سجل النظام", "حول التطبيق"];
+            current-index: root.page == 1 ? 0 : root.page == 13 ? 1 : root.page == 2 ? 2 : 3;
+            selected(value) => { root.navigate(self.current-index == 0 ? 1 : self.current-index == 1 ? 13 : self.current-index == 2 ? 2 : 3); }
         }
         if root.page == 17: ScrollView { VerticalBox { spacing: 10px;
-            Text { text: "تنفيذ MT5 — لكل عقل قراره وصفقاته"; color: #eaf0fb; font-size: 20px; }
+            Text { text: "لكل عقل إعداداته ونتائجه"; color: #eaf0fb; font-size: 20px; }
             Text { text: root.exec-summary; color: #8ddfc6; wrap: word-wrap; }
             HorizontalBox {
                 ComboBox { model: ["Demo / حساب تجريبي", "Live / أموال حقيقية"]; current-index <=> root.exec-target; }
                 LineEdit { text <=> root.exec-deviation; placeholder-text: "انحراف التنفيذ بالنقاط"; }
-                Button { text: "ربط الحساب الحالي"; enabled: !root.exec-busy; clicked => { root.execution-action("bind"); } }
+                Button { text: root.exec-target == 0 ? "ربط تلقائي مع التشغيل" : "ربط الحساب الحقيقي"; enabled: !root.exec-busy && root.exec-target == 1; clicked => { root.execution-action("bind"); } }
             }
-            Text { text: "الربط يثبت رقم الحساب والخادم ونوعه. انتقالك إلى حساب آخر لا يفعّل التداول عليه تلقائيًا."; color: #acbad0; wrap: word-wrap; }
+            Text { text: "زر تشغيل الديمو يربط حساب MT5 التجريبي الحالي ويبدأ التداول. اختر العقل لتعديل اللوت أو تفعيل التداول المنفرد."; color: #acbad0; wrap: word-wrap; }
             ComboBox { model: root.exec-names; current-index <=> root.exec-selected; selected(value) => { root.execution-action("select"); } }
             HorizontalBox {
                 Button { text: "تشغيل تداول منفرد"; enabled: !root.exec-busy && root.exec-selected != 0 && !root.exec-enabled; clicked => { root.execution-action("enable"); } }
@@ -237,6 +257,8 @@ export component Dashboard inherits Window {
                 Text { text: "اللوت الثابت"; color: #acbad0; vertical-alignment: center; }
                 LineEdit { text <=> root.exec-lots; }
             }
+            CheckBox { text: "عرض الإعدادات المتقدمة"; checked <=> root.exec-advanced; }
+            if root.exec-advanced: VerticalBox {
             Text { text: "الوقف ATR / الهدف R / أقصى احتفاظ بالثواني (0 بلا مهلة) / فاصل دخول بالثواني"; color: #acbad0; wrap: word-wrap; }
             HorizontalBox {
                 LineEdit { text <=> root.exec-stop; }
@@ -258,20 +280,21 @@ export component Dashboard inherits Window {
                 Button { text: "حفظ حماية المحفظة"; enabled: !root.exec-busy && root.state == "STOPPED"; clicked => { root.execution-action("portfolio"); } }
             }
             Text { text: "غيّر هذه الحدود فقط أثناء STOP. إذا تعذر حساب خطر وقف أي تعرض قائم، يمنع دخول جديد عند تفعيل الحماية؛ الإغلاقات وSL/TP والمصالحة لا تُمنع."; color: #f0c578; wrap: word-wrap; }
+            }
             HorizontalBox {
                 Button { text: "إغلاق صفقات هذا العقل"; enabled: !root.exec-busy; clicked => { root.execution-action("close"); } }
                 Button { text: "تحديث النتائج والأوامر"; enabled: !root.exec-busy; clicked => { root.execution-action("poll"); } }
             }
             Text { text: root.exec-message; color: #f0c578; wrap: word-wrap; }
             Text { text: root.exec-detail; color: #d1ddef; wrap: word-wrap; }
-            Text { text: "نتائج مستقلة لكل عقل وسجل التنفيذ"; color: #eaf0fb; font-size: 18px; }
-            Text { text: root.exec-ledger; color: #acbad0; wrap: word-wrap; }
+            CheckBox { text: "عرض نتائج جميع العقول وسجل التنفيذ"; checked <=> root.exec-show-ledger; }
+            if root.exec-show-ledger: Text { text: root.exec-ledger; color: #acbad0; wrap: word-wrap; }
             Text { text: "حساب Hedging يسمح باستقلال صفقات عدة عقول. Netting يسمح بمالك واحد للرمز حتى إغلاقه. الأخبار وتوقعات النماذج الإحصائية تبقى مصادر بحث، وليست استراتيجيات مكتملة للتداول المنفرد."; color: #acbad0; wrap: word-wrap; }
         } }
         if root.page == 14: ScrollView { VerticalBox { spacing: 10px;
             Text { text: "أوضاع تشغيل المنظومة — المنسق الرئيسي"; font-size: 20px; color: #eaf0fb; }
             ComboBox { model: ["Scalping / سكالبنك", "Swing / سوينك", "Expert / الخبير المتعلم", "Sniper / القناص"]; current-index <=> root.trade-mode; }
-            Text { text: root.trade-mode == 0 ? "M1 + M5؛ زخم مؤكد، وقف 1.2 ATR وهدف 1.4R، أقصى احتفاظ 15 دقيقة." : root.trade-mode == 1 ? "H1 + H4 + D1؛ اتجاهات متوافقة، وقف 2 ATR وهدف 2.5R، أقصى احتفاظ 3 أيام. السواب غير محسوب." : root.trade-mode == 2 ? "الخبير: تصويت الأعضاء بأوزان تتعلم من نتائج لاحقة؛ يستبعد العقول المنفردة. وقف 1.5 ATR وهدف 2R؛ مهلة 30 دقيقة." : "اختراق لحظي بالسعر لنطاق 6 شموع M1 مكتملة مع اتجاه M5. مهلة دقيقتين؛ انتظار 100ms عند تفعيل التنفيذ، يضاف وقت MT5 والمعالجة."; color: #acbad0; wrap: word-wrap; }
+            Text { text: root.trade-mode == 0 ? "M1 + M5؛ زخم مؤكد، وقف 1.2 ATR وهدف 1.4R، أقصى احتفاظ 15 دقيقة." : root.trade-mode == 1 ? "H1 + H4 + D1؛ اتجاهات متوافقة، وقف 2 ATR وهدف 2.5R، أقصى احتفاظ 3 أيام. السواب غير محسوب." : root.trade-mode == 2 ? "الخبير: تصويت الأعضاء بأوزان تتعلم من نتائج لاحقة؛ يستبعد العقول المنفردة. وقف 1.5 ATR وهدف 2R؛ مهلة 30 دقيقة." : "اختراق لحظي بالسعر لنطاق 6 شموع M1 مكتملة مع اتجاه M5. مهلة دقيقتين؛ دورة مستهدفة 20ms أثناء التنفيذ؛ الزمن المقاس يظهر أعلى الواجهة، وسرعة الوسيط مستقلة."; color: #acbad0; wrap: word-wrap; }
             Text { text: "العمولة ذهاب وإياب لكل 1.00 لوت — بعملة الحساب. أدخل مجموع عمولة الدخول والخروج."; color: #d5deed; wrap: word-wrap; }
             HorizontalBox {
                 LineEdit { text <=> root.commission-lot; placeholder-text: "7"; }
@@ -283,9 +306,9 @@ export component Dashboard inherits Window {
                 LineEdit { text <=> root.sniper-target; placeholder-text: "الهدف"; }
                 LineEdit { text <=> root.sniper-stop; placeholder-text: "الوقف"; }
                 LineEdit { text <=> root.sniper-cooldown; placeholder-text: "الانتظار"; }
-                LineEdit { text <=> root.cost-fraction; placeholder-text: "0.45"; }
+                LineEdit { text <=> root.cost-fraction; placeholder-text: "0 = بلا حد"; }
             }
-            Text { text: "حصة التكلفة = التكلفة ÷ (التكلفة + الهدف الصافي). عند تجاوز الحد ينتظر القناص. تعريف pip قابل للتعديل لاختلاف المعادن والمؤشرات."; color: #acbad0; wrap: word-wrap; }
+            Text { text: "حصة التكلفة = التكلفة ÷ (التكلفة + الهدف الصافي). القيمة 0 تلغي هذا الفلتر؛ عند اختيار حد موجب ينتظر القناص إن تجاوزه. تعريف pip قابل للتعديل لاختلاف المعادن والمؤشرات."; color: #acbad0; wrap: word-wrap; }
             Button { text: "حفظ الوضع والعمولة"; enabled: !root.studio-busy && root.state == "STOPPED"; clicked => { root.studio-action("save"); } }
             Text { text: "أوقف النظام لتبديل الوضع. الصفقات المفتوحة تحتفظ بهدفها ووقفها ومدتها الأصلية. المحاكاة لها سجل منفصل."; color: #f0c578; wrap: word-wrap; }
             HorizontalBox {
@@ -378,6 +401,7 @@ export component Dashboard inherits Window {
                 LineEdit { text <=> root.telegram-token; input-type: password; placeholder-text: "Bot token — leave blank to keep saved token"; }
                 Text { text: root.token-saved ? "Token saved securely with Windows DPAPI" : "No bot token saved"; color: #8d9cb4; }
                 CheckBox { text: "حذف التوكن المحفوظ / Remove saved token"; checked <=> root.clear-token; }
+                Button { text: "إعادة الاتصال الآن"; enabled: !root.busy; clicked => { root.action("reconnect"); } }
                 Button { text: "حفظ الإعدادات وإعادة الاتصال"; enabled: !root.busy; clicked => { root.save-settings(); } }
                 Text { text: "إغلاق الواجهة يبقي المحرك شغالاً. الخروج الكامل يوقف البرنامج ولا يغلق صفقات MT5."; color: #acbad0; wrap: word-wrap; }
             }
@@ -393,13 +417,14 @@ export component Dashboard inherits Window {
         }
         if root.page == 3: VerticalLayout {
             spacing: 16px; alignment: start; vertical-stretch: 1;
-            Text { text: "BRAINTRADE OS 0.7.0"; color: #eaf0fb; font-size: 24px; }
+            Text { text: "BRAINTRADE OS 0.8.0"; color: #eaf0fb; font-size: 24px; }
             Text { text: "عقول تحليلية، مختبر تاريخي، تقييم زمني وتعلم بحثي للمراقبة. تنفيذ Demo/Live مرتبط بالحساب؛ اختيار الاستراتيجيات المولّدة يدوي، وأوزان الأعضاء تتعلم من نتائج لاحقة."; color: #acbad0; wrap: word-wrap; }
             Text { text: "Windows x64 • Core + Desktop + MT5 bootstrap"; color: #acbad0; }
             AboutSlint { max-height: 110px; }
         }
         if root.page == 4: VerticalLayout {
             spacing: 12px;
+            Button { text: "عقل انطلاق التذبذب: ضغط ثم اختراق لحظي"; clicked => { root.exec-selected = 14; root.navigate(17); } }
             HorizontalLayout { spacing: 12px;
                 Card { label: "REGIME / حالة السوق"; value: root.regime; }
                 Card { label: "META / القرار الحالي"; value: root.decision; }
@@ -572,12 +597,12 @@ export component Dashboard inherits Window {
             Text { text: root.learning-detail; color: #acbad0; wrap: word-wrap; horizontal-alignment: left; }
         } }
         Rectangle { height: 1px; background: #263145; }
-        Text { text: root.feedback; color: #f0c578; wrap: word-wrap; min-height: 36px; }
+        Text { text: root.feedback; color: #f0c578; wrap: word-wrap; min-height: 22px; }
         HorizontalLayout {
-            Text { text: "Closing this window keeps Core running."; color: #7f8fa7; vertical-alignment: center; }
+            Text { text: "إغلاق النافذة يبقي المحرك شغالاً."; color: #7f8fa7; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; background: transparent; }
-            Button { text: "النسخ والاستعادة"; enabled: !root.backup-busy; clicked => { root.page = 13; root.backup-action("refresh"); } }
             Button { text: "خروج كامل"; enabled: !root.busy; clicked => { root.action("shutdown"); } }
         }
+    }
     }
 }

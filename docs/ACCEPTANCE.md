@@ -64,7 +64,7 @@ These checks require a Windows x64 host with a real MT5 installation and a demo 
 - Verify STOP prevents new entry, while timed exits and broker SL/TP retain their ownership. Full Exit stops client-side timed exits.
 - Exercise broker rejection, partial fill, disconnection and restart on Demo; an uncertain result must never cause a blind duplicate submission.
 - Compare actual fee entries, swaps and manual exits against position-attributed totals. Fees without position IDs need separate accounting.
-- Verify configured commission proportionality, actual spread and Sniper cost threshold. Measure observed queue/check/send times on this machine; 100 ms is a polling sleep, not an execution guarantee.
+- Verify configured commission proportionality, actual spread and Sniper cost threshold. Measure observed queue/check/send times on this machine; 20 ms is the active Sniper cycle target, not a broker execution guarantee.
 - On hedging accounts, verify separate brain positions. On netting accounts, verify exclusive ownership of the symbol.
 - Verify all four modes. Swing needs actual H1/H4/D1 history; Sniper needs a fresh tick crossing the completed-bar range. WAIT without a valid strategy signal is expected.
 - After enough prospective member outcomes mature, verify sample counts/weights survive restart and remain isolated by account/mode/frame.

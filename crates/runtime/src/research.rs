@@ -408,7 +408,7 @@ impl Research {
                 let slip = tick * c.risk.slippage_ticks;
                 let entry = if side == 1 { ask + slip } else { bid - slip };
                 let (stop_distance,mut target_distance)=c.trading.geometry(atr,t.point.unwrap_or(0.));
-                if sniper {match trading::costs(t,c,1.,now) {Ok(cost)=>{if cost.total/(cost.total+cost.desired_net_target_money)>c.trading.max_cost_fraction {a.gates.push("Sniper entry costs exceed configured share of movement".into());}},Err(e)=>a.gates.push(e)}target_distance+=c.risk.commission_per_lot/profit*tick+slip;}
+                if sniper {match trading::costs(t,c,1.,now) {Ok(cost)=>{if c.trading.max_cost_fraction>0. && cost.total/(cost.total+cost.desired_net_target_money)>c.trading.max_cost_fraction {a.gates.push("Sniper entry costs exceed configured share of movement".into());}},Err(e)=>a.gates.push(e)}target_distance+=c.risk.commission_per_lot/profit*tick+slip;}
                 let stop = if side == 1 {
                     ((entry - stop_distance) / tick).floor() * tick
                 } else {

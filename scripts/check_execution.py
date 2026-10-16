@@ -69,7 +69,7 @@ def check(exe=None):
             api('/v1/trading/settings',dict(trading=config['trading'],commission_per_lot=7.))
             config['risk']['max_lots']=.01;api('/v1/risk',config['risk'])
             publish();api('/v1/execution/settings',dict(target='demo',deviation_points=20))
-            assert len(api('/v1/execution')['brains'])==14
+            assert len(api('/v1/execution')['brains'])==15
             assert brain('system')['role']=='coordinator' and brain('trend')['role']=='advisor'
             configure('trend',enabled=True,lots=.1,max_hold_seconds=2)
             publish();assert not api('/v1/status')['requested_run'];assert api('/v1/execution/gateway')['command'] is None

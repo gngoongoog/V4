@@ -21,24 +21,7 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
         .map(|value| format!("{value:.2}%"))
         .unwrap_or_else(|| "غير معروف".into());
 
-    ui.set_exec_summary(
-        format!(
-            "{} | حساب {} / {}\nالتنفيذ: {} | مطابق للحساب: {}\nحماية المحفظة: {} | تعرض {} / {} | لوت {:.4} / {:.4} | خطر وقف {} / {}%",
-            settings["target"].as_str().unwrap_or("demo"),
-            settings["login"],
-            settings["server"].as_str().unwrap_or("—"),
-            v["armed"],
-            v["account_matches"],
-            if portfolio["enabled"] == true { "مفعلة" } else { "معطلة" },
-            portfolio["exposure_slots"],
-            portfolio["limits"]["max_positions"],
-            portfolio["lots"].as_f64().unwrap_or(0.0),
-            portfolio["limits"]["max_lots"].as_f64().unwrap_or(0.0),
-            portfolio_risk,
-            portfolio["limits"]["max_risk_percent"].as_f64().unwrap_or(0.0),
-        )
-        .into(),
-    );
+    ui.set_exec_summary(format!("{} | حساب {} / {} | {}",if settings["target"]=="live"{"حقيقي"}else{"تجريبي"},settings["login"],settings["server"].as_str().unwrap_or("—"),if v["armed"]==true{"التداول فعّال"}else if v["account_matches"]==true{"مرتبط — اضغط تشغيل"}else{"بانتظار ربط الحساب"}).into());
 
     let Some(b) = v["brains"].as_array().and_then(|bs| bs.get(index)) else {
         return;

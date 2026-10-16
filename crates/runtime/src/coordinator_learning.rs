@@ -16,9 +16,9 @@ pub fn genome(db:&Connection,b:&BrainConfig,t:&Telemetry)->Result<Option<braintr
     let raw:Option<String>=db.query_row("SELECT payload FROM studio_runs WHERE id=?1 AND context=?2 AND timeframe=?3",params![b.report_id,context(t),b.timeframe],|r|r.get(0)).optional()?;
     raw.map(|s|Ok(serde_json::from_str::<LabReport>(&s)?.selected)).transpose()
 }
-pub struct Learner {last:BTreeMap<String,u64>,weights:BTreeMap<String,LearnedWeight>}
+pub struct Learner {captured:BTreeMap<String,u64>,last:BTreeMap<String,u64>,weights:BTreeMap<String,LearnedWeight>}
 impl Learner {
-    pub fn new(db:&Connection)->Result<Self>{db.execute_batch("CREATE TABLE IF NOT EXISTS coordinator_samples(source TEXT NOT NULL,bar INTEGER NOT NULL,payload TEXT NOT NULL,outcome TEXT,PRIMARY KEY(source,bar));CREATE INDEX IF NOT EXISTS coordinator_pending ON coordinator_samples(source,outcome);")?;Ok(Self{last:BTreeMap::new(),weights:BTreeMap::new()})}
+    pub fn new(db:&Connection)->Result<Self>{db.execute_batch("CREATE TABLE IF NOT EXISTS coordinator_samples(source TEXT NOT NULL,bar INTEGER NOT NULL,payload TEXT NOT NULL,outcome TEXT,PRIMARY KEY(source,bar));CREATE INDEX IF NOT EXISTS coordinator_pending ON coordinator_samples(source,outcome);")?;Ok(Self{captured:BTreeMap::new(),last:BTreeMap::new(),weights:BTreeMap::new()})}
     pub fn observe(&mut self,db:&Connection,t:&Telemetry,c:&Config,brains:&[BrainConfig],frames:&BTreeMap<String,Vec<FrameBar>>,run:bool,now:u64)->Result<BTreeMap<String,LearnedWeight>> {
         let mut out=BTreeMap::new();
         for b in brains.iter().filter(|b|b.id!="system") {
@@ -34,12 +34,12 @@ impl Learner {
                 let weight:LearnedWeight=db.query_row("SELECT COUNT(*),COALESCE(SUM(CASE WHEN json_extract(outcome,'$.net')>0 THEN 1 ELSE 0 END),0),COALESCE(AVG(json_extract(outcome,'$.net')),0) FROM coordinator_samples WHERE source=?1 AND json_extract(outcome,'$.state')='scored'",[&source],|r|Ok(LearnedWeight{samples:r.get(0)?,wins:r.get(1)?,mean_net_per_lot:r.get(2)?}))?;
                 self.weights.insert(source.clone(),weight);self.last.insert(source.clone(),bar);
             }
-            if run {
+            if run && self.captured.get(&source)!=Some(&bar) {
                 let signal=execution::evaluate(b,t,c,frames,genome(db,b,t)?.as_ref(),now);
                 if signal.ready&&[t.tick_size,t.point,t.tick_value_loss,t.tick_value_profit,t.bid,t.ask].iter().all(|v|v.is_some_and(|x|x>0.&&x.is_finite())) {
                     let side=signal.side as f64;let slip=t.tick_size.unwrap()*c.risk.slippage_ticks;let entry=if side>0.{t.ask.unwrap()+slip}else{t.bid.unwrap()-slip};
                     let p=json!({"brain":b.id,"timeframe":b.timeframe,"side":signal.side,"entry":entry,"quote_ms":t.quote_time_ms,"observed_ms":now,"spread":t.ask.unwrap()-t.bid.unwrap(),"point":t.point,"tick":t.tick_size,"profit":t.tick_value_profit,"loss":t.tick_value_loss,"slippage":slip,"commission":c.risk.commission_per_lot,"signal":signal});
-                    db.execute("INSERT OR IGNORE INTO coordinator_samples VALUES(?1,?2,?3,NULL)",params![source,bar,p.to_string()])?;
+                    db.execute("INSERT OR IGNORE INTO coordinator_samples VALUES(?1,?2,?3,NULL)",params![source,bar,p.to_string()])?;self.captured.insert(source.clone(),bar);
                 }
             }
             out.insert(b.id.clone(),self.weights.get(&source).cloned().unwrap_or_default());

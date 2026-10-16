@@ -1,4 +1,4 @@
-# BrainTrade OS 0.7.0 Development Preview — broker execution and membership
+# BrainTrade OS 0.8.0 Source Preview — broker execution and membership
 
 The bound Demo MT5 account can receive actual orders when global START is active. Initial startup/restart is STOPPED; execution is initially unbound. The account type is checked against the broker: Demo=0, Live=2. Live must be selected and rebound explicitly while stopped and without unresolved intents or owned positions. Changing accounts never silently transfers ownership.
 
@@ -34,7 +34,7 @@ Portfolio settings are persisted in the Core SQLite state and therefore particip
 
 Broker deal profit, commission, swap and fee are recorded and deduplicated by ticket. Manual exits with magic zero are attributed by the known position identifier. Fees without a usable position ID cannot automatically be assigned to a brain. The calculator's commission is a round-trip estimate per full lot in account currency; actual results use broker-reported fees.
 
-The gateway requests 100 ms between execution cycles. This is a polling sleep, not a promised decision/order latency. Account/history calls, analysis, network and broker work add time. Sniper evaluates a live bid/ask breakout of the last six completed M1 bars with M5 agreement; it does not wait for the next candle close. Target and stop use broker points, with commission/exit slippage compensation in the target. The selected maximum cost fraction also applies to the actual Sniper broker policy; a cost-heavy entry remains WAIT. Broker-attached SL/TP can act independently of UI polling. Decision microseconds and queue/check/send milliseconds are measured on actual operations. The dashboard refresh interval is separate. This is not an HFT or tick-complete feed.
+The gateway uses persistent local HTTP, a combined quote/command pulse and a separate read-only process for history/candles. Active Sniper targets 20 ms start-to-start polling; other active modes target 50 ms and idle monitoring 250 ms. Processing time is subtracted from sleep, with no hard deadline guarantee. Research/learning still uses the single Core and may cause periodic jitter. Cold terminal startup and broker execution are independent. Dashboard cycle p50/p95 and Core timings are observed values; `send_ms` remains in the execution ledger. Sniper keeps its tick trigger without advisor conflict veto; its optional cost fraction is disabled at 0. Broker SL/TP remains attached and exits are dequeued before new entries. Fast-path commands skip `order_check`, but retain contract validation, final authorization, account identity and durable pre-send journal. Uncertain sends are never replayed.
 
 ## Persistence and verification
 
@@ -43,3 +43,9 @@ Backup schema 12 includes configurations, broker intents/deals/observations, ada
 `python scripts/check_execution.py` runs a real Core against a simulated MT5 object in isolated temporary storage. `scripts/check_backup_restore.py` additionally verifies that portfolio limits survive a staged restore/restart. `--exe BrainTrade.exe` checks the packaged Windows Core, including DPAPI IPC. These are not native broker acceptance. Latest recorded release CI evidence belongs in `docs/validation.json`; feature-branch CI must remain separate until a new release checkpoint is recorded.
 
 Official transport references: https://www.mql5.com/en/docs/python_metatrader5/mt5ordersend_py and https://www.mql5.com/en/docs/python_metatrader5/mt5ordercheck_py.
+
+## One-click Demo and expansion brain
+
+`POST /v1/demo/start` requires a fresh actual MT5 Demo account, binds it, enables the coordinator and clears optional per-brain risk/cooldown, portfolio and Sniper cost-fraction gates. Existing SOLO choices remain. `live/start` requires a separately bound Live account. Startup still waits for START.
+
+`expansion` is appended as Magic 410614, preserving all prior ownership IDs. It compares the average range of 8 completed bars with the preceding 24, requires a ratio no greater than 0.85, then checks fresh executable bid above the range (buy) or ask below it (sell), with max(tick size, 0.03 ATR) buffer. It uses the chosen timeframe, fixed lots and ATR geometry. It can advise or run SOLO, has its own ledger, and joins prospective member learning. This is a deterministic policy, not evidence of profitability.

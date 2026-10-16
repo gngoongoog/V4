@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 import sys
 import time
-import urllib.request
 from datetime import datetime, timedelta, timezone
 
 BASE = "http://127.0.0.1:18741"
@@ -14,10 +13,10 @@ BAGHDAD = timezone(timedelta(hours=3))
 
 class MarketCache:
     def __init__(self):
-        self.key=None; self.data=None; self.next_read=0.0
+        self.key=None; self.data=None; self.next_read=0.0; self.minute=None
     def read(self,mt5,key,now):
-        if self.key!=key or time.monotonic()>=self.next_read:
-            self.key=key;self.next_read=time.monotonic()+5.0
+        if self.key!=key or self.minute!=int(now.timestamp())//60 or time.monotonic()>=self.next_read:
+            self.key=key;self.minute=int(now.timestamp())//60;self.next_read=time.monotonic()+5.0
             self.data=collect_market(mt5,key[2],now)
         return self.data
 
@@ -120,7 +119,7 @@ def deal_summary(deals, mt5):
     return net, len(trading)
 
 
-def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, dom_cache=None) -> dict:
+def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, dom_cache=None, summary_cache=None) -> dict:
     now = now or datetime.now(timezone.utc)
     terminal = mt5.terminal_info()
     account = mt5.account_info()
@@ -131,14 +130,16 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
     if positions is None or orders is None:
         return empty_snapshot("MT5 position/order reconciliation failed; account snapshot withheld.")
     start, end, report_day = day_range(now)
-    deals = mt5.history_deals_get(start, end)
-    net, count = deal_summary(deals, mt5)
+    key=(account.login,account.server,symbol,account.currency)
+    if summary_cache is None:
+        net, count = deal_summary(mt5.history_deals_get(start, end), mt5)
+    else:
+        net, count = summary_cache.daily(key, report_day)
     info = mt5.symbol_info(symbol)
     if info is not None and not info.visible:
         mt5.symbol_select(symbol, True)
         info = mt5.symbol_info(symbol)
     tick = mt5.symbol_info_tick(symbol) if info is not None else None
-    key=(account.login,account.server,symbol)
     market=market_cache.read(mt5,key,now) if market_cache is not None and info is not None else None
     dom_available,dom=dom_cache.read(mt5,key) if dom_cache is not None and info is not None else (False,[])
     # Re-read account identity after collection to reject account-switch races.
@@ -148,7 +149,7 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
     errors = []
     if info is None:
         errors.append(f"Symbol {symbol} is unavailable; choose its exact broker name in Settings.")
-    if deals is None:
+    if net is None:
         errors.append("Deal history unavailable; daily PnL is unknown.")
     result = empty_snapshot(" ".join(errors))
     result.update(connected=True, login=account.login, server=account.server,
@@ -238,79 +239,113 @@ def main():
     config = json.loads(config_path.read_text("utf-8")) if config_path.exists() else {}
     path = config.get("mt5_path", "")
     symbol = config.get("symbol", "XAUUSD")
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    from fast_io import CoreClient, CachedMetadata, ReadWorker, LoopMetrics
+    from execution import BrokerExecutor
+    api, cache, worker, metrics = CoreClient(token), CachedMetadata(), ReadWorker(path), LoopMetrics()
+    executor = BrokerExecutor(directory / 'broker-journal.sqlite')
+    dom_cache = DomCache()
     try:
         import MetaTrader5 as mt5
     except ImportError:
         mt5 = None
-    initialized = False
-    retry_at = 0.0
-    core_failures = 0
-    market_cache=MarketCache()
-    dom_cache=DomCache()
-    def api(path, payload=None):
-        request = urllib.request.Request(BASE+path,
-            data=json.dumps(payload, allow_nan=False).encode('utf-8') if payload is not None else None,
-            headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
-        with opener.open(request,timeout=4) as response:
-            return json.load(response)
-    from execution import BrokerExecutor
-    executor=BrokerExecutor(directory / 'broker-journal.sqlite')
+    initialized, retry_at, core_failures = False, 0., 0
+    next_metadata = next_deals = next_jobs = next_analysis = 0.
+    market_stamp = None
+    last_read = ''
     try:
         while True:
+            started = time.perf_counter()
+            core_ms = execution_ms = 0.
+            poll_ms = 500
             if mt5 is None:
                 snapshot = empty_snapshot("MT5 bridge dependency unavailable. Use the complete Windows package.")
             else:
                 try:
                     if not initialized and time.monotonic() >= retry_at:
-                        # Official initialize() starts the terminal if necessary.
-                        # Saved terminal login is used; no password is held here.
                         initialized = mt5.initialize(path, timeout=5000) if path else mt5.initialize(timeout=5000)
-                        retry_at = time.monotonic() + 5
-                    snapshot = collect(mt5, symbol,market_cache=market_cache,dom_cache=dom_cache) if initialized else empty_snapshot(
+                        retry_at = time.monotonic() + 1
+                    snapshot = collect(mt5, symbol, market_cache=cache, dom_cache=dom_cache, summary_cache=cache) if initialized else empty_snapshot(
                         "MT5 connection failed. Set terminal64.exe path and sign in inside MT5.")
-                    if initialized and not snapshot["connected"]:
-                        dom_cache.release(mt5)
-                        mt5.shutdown()
-                        initialized = False
+                    if initialized and not snapshot['connected']:
+                        terminal = mt5.terminal_info()
+                        if terminal is None or not terminal.connected:
+                            dom_cache.release(mt5)
+                            mt5.shutdown()
+                            initialized = False
                 except Exception:
                     snapshot = empty_snapshot("MT5 read failed; retrying connection.")
                     dom_cache.release(mt5)
                     mt5.shutdown()
                     initialized = False
-                    retry_at = time.monotonic() + 5
+                    retry_at = time.monotonic() + 1
+            snapshot_ms = (time.perf_counter()-started)*1000
+            snapshot['gateway_metrics'] = metrics.last
+            identity = (snapshot['login'], snapshot['server'], symbol, snapshot['currency'])
+            market = snapshot.get('market')
+            stamp = (identity, market['captured_ms']) if market else None
+            if stamp is not None and stamp == market_stamp:
+                snapshot['market'] = None  # Core reuses only the matching account/symbol cache.
             try:
-                body = json.dumps(snapshot, allow_nan=False).encode("utf-8")
-                request = urllib.request.Request(BASE + "/v1/gateway/snapshot", data=body,
-                          headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
-                with opener.open(request, timeout=4) as response:
-                    response.read()
+                sent = time.perf_counter()
+                work = api('/v1/gateway/pulse', snapshot)
+                core_ms = (time.perf_counter()-sent)*1000
+                market_stamp = stamp
                 core_failures = 0
-                poll_seconds = 1.0
+                poll_ms = work.get('poll_ms', 250) if snapshot['connected'] else 500
                 if initialized and snapshot['connected']:
+                    sent = time.perf_counter()
+                    executor.cycle(mt5, api, work=work, include_history=False)
+                    execution_ms = (time.perf_counter()-sent)*1000
+                response = worker.poll()
+                if response and not response.get('error') and snapshot['connected'] and tuple(response['identity']) == identity:
                     try:
-                        poll_seconds=min(poll_seconds,executor.cycle(mt5,api))
-                    except (OSError, ValueError, RuntimeError):
-                        pass  # Durable journal reconciles any interrupted submission.
-                    try:
-                        job = api('/v1/gateway/history/request').get('job')
-                        if job is not None:
-                            api('/v1/gateway/history/chunk', collect_history_chunk(mt5, job))
+                        kind, result = response['kind'], response['result']
+                        if kind == 'metadata':
+                            cache.update(result)
                         else:
-                            from studio_feed import collect_frame
-                            request=api('/v1/gateway/research/request')
-                            poll_seconds=min(poll_seconds,max(0.25,min(1.0,request.get('poll_ms',1000)/1000.0)))
-                            if request.get('job') is not None:
-                                api('/v1/gateway/research/frame',collect_frame(mt5,request['job']))
+                            api({'deals':'/v1/execution/sync', 'frame':'/v1/gateway/research/frame', 'history':'/v1/gateway/history/chunk'}[kind], result)
                     except (OSError, ValueError):
-                        pass  # Live snapshot succeeded; an obsolete history job may have been cancelled.
-            except (OSError, ValueError):
+                        pass  # A completed read can belong to a cancelled research job.
+                now = time.monotonic()
+                if initialized and snapshot['connected'] and not worker.busy:
+                    job = None
+                    # Alternate metadata with other reads: a slow history read cannot starve research forever.
+                    if now >= next_metadata and last_read != 'metadata':
+                        job = dict(kind='metadata'); next_metadata = now+1
+                    elif work.get('history_from_ms') and now >= next_deals and last_read != 'deals':
+                        account = work.get('account') or {}
+                        if (account.get('login'), account.get('server'), account.get('currency')) == (identity[0],identity[1],identity[3]):
+                            start = work['history_from_ms']
+                            job = dict(kind='deals', from_ms=start, until_ms=min(int(time.time()*1000), start+86_400_000))
+                            next_deals = now+2
+                    if job is None and now >= next_jobs:
+                        next_jobs = now+.25
+                        request = api('/v1/gateway/history/request').get('job')
+                        if request is not None:
+                            job = dict(kind='history', job=request)
+                        else:
+                            request = api('/v1/gateway/research/request').get('job')
+                            if request is not None:
+                                job = dict(kind='frame', job=request)
+                    if job is None and now >= next_metadata:
+                        job = dict(kind='metadata'); next_metadata = now+1
+                    if job is not None:
+                        worker.submit(dict(job, identity=identity))
+                        last_read = job['kind']
+                if now >= next_analysis:
+                    next_analysis = now+1
+                    api('/v1/gateway/analysis', {})
+            except (OSError, ValueError, RuntimeError):
+                api.close()
+                market_stamp = None
                 core_failures += 1
                 if core_failures >= 3:
                     return
-            time.sleep(locals().get("poll_seconds",1.0))
+            time.sleep(metrics.finish(started, snapshot_ms, core_ms, execution_ms, poll_ms))
     finally:
+        worker.close()
         executor.close()
+        api.close()
         if mt5 is not None:
             dom_cache.release(mt5)
             mt5.shutdown()
