@@ -1,11 +1,12 @@
 """Windows-only native MT5 OnTick wake/feed for Sniper mode.
 
-The MQL5 Expert Advisor sends authenticated tick packets through a local named
-pipe.  The bridge keeps the pipe transport isolated from broker execution: the
+The MQL5 Expert Advisor sends authenticated quote-tick packets through a local
+named pipe. The bridge keeps transport isolated from broker execution: the
 existing Python gateway remains the only component allowed to submit orders.
 
-On non-Windows hosts the parser/mailbox stay available for deterministic tests
-while the pipe server is disabled.
+BT2 adds a monotonic per-source tick event ID so multiple quote changes sharing
+one MT5 `time_msc` remain distinct. BT1 is still accepted for an already
+attached older bridge and maps to the first event slot of that millisecond.
 """
 from __future__ import annotations
 
@@ -19,7 +20,9 @@ import threading
 import time
 
 PIPE_NAME = r"\\.\pipe\BrainTradeSniperV1"
-PROTOCOL = "BT1"
+PROTOCOL = "BT2"
+LEGACY_PROTOCOL = "BT1"
+EVENT_FACTOR = 1_000_000
 TOKEN_RELATIVE = Path("MQL5") / "Files" / "BrainTrade" / "sniper.token"
 MAX_PACKET_BYTES = 512
 MAX_PENDING_BYTES = 8192
@@ -28,6 +31,10 @@ DEFAULT_QUEUE_LIMIT = 8192
 
 def clock_ms() -> int:
     return int(time.time() * 1000)
+
+
+def base_event_id(time_msc: int) -> int:
+    return int(time_msc) * EVENT_FACTOR
 
 
 def session_token_path(data_path: str | os.PathLike[str]) -> Path:
@@ -49,7 +56,7 @@ def write_session_token(data_path: str | os.PathLike[str], token: str) -> Path:
 
 
 def parse_packet(raw: bytes | str, token: str, received_ms: int | None = None) -> dict:
-    """Validate one ASCII `BT1|token|login|symbol|time_msc|bid|ask` packet."""
+    """Validate BT2 or the backwards-compatible BT1 native quote packet."""
     if isinstance(raw, bytes):
         if len(raw) > MAX_PACKET_BYTES:
             raise ValueError("Native tick packet is too large")
@@ -57,24 +64,39 @@ def parse_packet(raw: bytes | str, token: str, received_ms: int | None = None) -
             raw = raw.decode("ascii")
         except UnicodeDecodeError as exc:
             raise ValueError("Native tick packet must be ASCII") from exc
-    if len(raw.encode("ascii", errors="ignore")) > MAX_PACKET_BYTES:
+    try:
+        encoded = raw.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError("Native tick packet must be ASCII") from exc
+    if len(encoded) > MAX_PACKET_BYTES:
         raise ValueError("Native tick packet is too large")
-    line = raw.strip("\r\n")
-    fields = line.split("|")
-    if len(fields) != 7 or fields[0] != PROTOCOL:
+    fields = raw.strip("\r\n").split("|")
+    if not fields or fields[0] not in (PROTOCOL, LEGACY_PROTOCOL):
+        raise ValueError("Native tick protocol mismatch")
+    modern = fields[0] == PROTOCOL
+    if (modern and len(fields) != 8) or (not modern and len(fields) != 7):
         raise ValueError("Native tick protocol mismatch")
     if not token or not secrets.compare_digest(fields[1], token):
         raise ValueError("Native tick session token mismatch")
     try:
         login = int(fields[2])
         time_msc = int(fields[4])
-        bid = float(fields[5])
-        ask = float(fields[6])
+        if modern:
+            event_id = int(fields[5])
+            bid = float(fields[6])
+            ask = float(fields[7])
+        else:
+            event_id = base_event_id(time_msc)
+            bid = float(fields[5])
+            ask = float(fields[6])
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError("Native tick numeric field is invalid") from exc
     symbol = fields[3]
     if login <= 0 or time_msc <= 0:
         raise ValueError("Native tick identity/time is invalid")
+    base = base_event_id(time_msc)
+    if event_id < base or event_id >= base + EVENT_FACTOR:
+        raise ValueError("Native tick event ID does not match quote millisecond")
     if not symbol or len(symbol) > 64 or any(ch in symbol for ch in "|\r\n\x00"):
         raise ValueError("Native tick symbol is invalid")
     if not all(math.isfinite(value) and value > 0 for value in (bid, ask)) or ask < bid:
@@ -83,6 +105,7 @@ def parse_packet(raw: bytes | str, token: str, received_ms: int | None = None) -
         "login": login,
         "symbol": symbol,
         "time_msc": time_msc,
+        "event_id": event_id,
         "bid": bid,
         "ask": ask,
         "received_ms": clock_ms() if received_ms is None else int(received_ms),
@@ -166,8 +189,8 @@ class _WindowsPipeServer:
         self._stop.set()
         self.mailbox.wake()
         self.mailbox.set_connected(False)
-        # The worker is daemonized because a synchronous ConnectNamedPipe may be
-        # waiting for MT5. Process shutdown remains bounded even with no client.
+        # A synchronous ConnectNamedPipe may be waiting for MT5. The thread is
+        # daemonized so process shutdown remains bounded even with no client.
 
     def _kernel(self):
         from ctypes import wintypes
