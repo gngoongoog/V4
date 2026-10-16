@@ -12,6 +12,7 @@ const MAX_SOURCES: usize = 8;
 const MAX_LISTED_BACKTESTS: i64 = 100;
 const MAX_LISTED_REPORTS: i64 = 50;
 const EXPORT_FORMAT: &str = "correlation-export-v1";
+const REPLAY_FLOAT_TOLERANCE: f64 = 1e-12;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -121,6 +122,120 @@ fn calculate(saved: &[SavedSource], min_overlap: usize) -> Result<Report> {
         bail!("Correlation research boundary violation");
     }
     Ok(report)
+}
+
+fn nearly_equal(left: f64, right: f64) -> bool {
+    if left == right {
+        return true;
+    }
+    if !left.is_finite() || !right.is_finite() {
+        return false;
+    }
+    let scale = 1.0f64.max(left.abs()).max(right.abs());
+    (left - right).abs() <= REPLAY_FLOAT_TOLERANCE * scale
+}
+
+fn optional_nearly_equal(left: Option<f64>, right: Option<f64>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => nearly_equal(left, right),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn verify_replay(stored: &Report, replayed: &Report) -> Result<()> {
+    if stored.algorithm != correlation::ALGORITHM || replayed.algorithm != correlation::ALGORITHM {
+        bail!("Correlation deterministic replay mismatch: algorithm changed");
+    }
+    if stored.identity_algorithm != correlation::IDENTITY_ALGORITHM
+        || replayed.identity_algorithm != correlation::IDENTITY_ALGORITHM
+    {
+        bail!("Correlation deterministic replay mismatch: identity algorithm changed");
+    }
+    if stored.identity != replayed.identity {
+        bail!("Correlation deterministic replay mismatch: input identity changed");
+    }
+    if stored.from != replayed.from
+        || stored.to != replayed.to
+        || stored.min_overlap != replayed.min_overlap
+        || stored.sources != replayed.sources
+        || stored.execution_effect != replayed.execution_effect
+        || stored.forward_fill != replayed.forward_fill
+    {
+        bail!("Correlation deterministic replay mismatch: report structure changed");
+    }
+    if stored.execution_effect || stored.forward_fill {
+        bail!("Correlation deterministic replay mismatch: research boundary changed");
+    }
+    if stored.minutes.len() != replayed.minutes.len() {
+        bail!("Correlation deterministic replay mismatch: aligned minute count changed");
+    }
+    for (stored_minute, replayed_minute) in stored.minutes.iter().zip(&replayed.minutes) {
+        if stored_minute.time != replayed_minute.time
+            || stored_minute.available != replayed_minute.available
+            || stored_minute.returns.len() != replayed_minute.returns.len()
+        {
+            bail!("Correlation deterministic replay mismatch: aligned minute structure changed");
+        }
+        if stored_minute
+            .returns
+            .iter()
+            .zip(&replayed_minute.returns)
+            .any(|(left, right)| !optional_nearly_equal(*left, *right))
+        {
+            bail!("Correlation deterministic replay mismatch: aligned return changed beyond tolerance");
+        }
+    }
+    if stored.pairs.len() != replayed.pairs.len() {
+        bail!("Correlation deterministic replay mismatch: pair count changed");
+    }
+    for (stored_pair, replayed_pair) in stored.pairs.iter().zip(&replayed.pairs) {
+        if stored_pair.left != replayed_pair.left
+            || stored_pair.right != replayed_pair.right
+            || stored_pair.overlap != replayed_pair.overlap
+            || stored_pair.available != replayed_pair.available
+            || stored_pair.reason != replayed_pair.reason
+            || !optional_nearly_equal(stored_pair.correlation, replayed_pair.correlation)
+            || !optional_nearly_equal(stored_pair.covariance, replayed_pair.covariance)
+            || !optional_nearly_equal(stored_pair.left_stddev, replayed_pair.left_stddev)
+            || !optional_nearly_equal(stored_pair.right_stddev, replayed_pair.right_stddev)
+        {
+            bail!("Correlation deterministic replay mismatch: pair statistics changed");
+        }
+    }
+    let stored_portfolio = &stored.portfolio;
+    let replayed_portfolio = &replayed.portfolio;
+    if stored_portfolio.overlap != replayed_portfolio.overlap
+        || stored_portfolio.available != replayed_portfolio.available
+        || stored_portfolio.reason != replayed_portfolio.reason
+        || !optional_nearly_equal(stored_portfolio.volatility, replayed_portfolio.volatility)
+        || !optional_nearly_equal(
+            stored_portfolio.diversification_ratio,
+            replayed_portfolio.diversification_ratio,
+        )
+    {
+        bail!("Correlation deterministic replay mismatch: portfolio statistics changed");
+    }
+    match (&stored_portfolio.covariance, &replayed_portfolio.covariance) {
+        (None, None) => {}
+        (Some(stored_matrix), Some(replayed_matrix)) => {
+            if stored_matrix.len() != replayed_matrix.len() {
+                bail!("Correlation deterministic replay mismatch: portfolio covariance shape changed");
+            }
+            for (stored_row, replayed_row) in stored_matrix.iter().zip(replayed_matrix) {
+                if stored_row.len() != replayed_row.len()
+                    || stored_row
+                        .iter()
+                        .zip(replayed_row)
+                        .any(|(left, right)| !nearly_equal(*left, *right))
+                {
+                    bail!("Correlation deterministic replay mismatch: portfolio covariance changed");
+                }
+            }
+        }
+        _ => bail!("Correlation deterministic replay mismatch: portfolio covariance availability changed"),
+    }
+    Ok(())
 }
 
 fn summarize(report: &Report) -> Value {
@@ -278,9 +393,7 @@ fn replay(db: &Connection, body: &[u8]) -> Result<Value> {
     let stored = stored_report(db, &selection.id)?;
     let saved = load_sources(db, &stored.source_ids)?;
     let replayed = calculate(&saved, stored.report.min_overlap)?;
-    if replayed != stored.report {
-        bail!("Correlation deterministic replay mismatch: stored sources or report changed");
-    }
+    verify_replay(&stored.report, &replayed)?;
     Ok(json!({
         "ok": true,
         "id": stored.report.identity,
@@ -308,9 +421,8 @@ fn export(db: &Connection, body: &[u8]) -> Result<Value> {
     let selection: Selection = serde_json::from_slice(body)?;
     let stored = stored_report(db, &selection.id)?;
     let replayed = calculate(&load_sources(db, &stored.source_ids)?, stored.report.min_overlap)?;
-    if replayed != stored.report {
-        bail!("Correlation export refused because deterministic replay does not match the stored report");
-    }
+    verify_replay(&stored.report, &replayed)
+        .context("Correlation export refused because deterministic replay does not match the stored report")?;
     let provenance = stored.source_ids.iter().enumerate()
         .map(|(ordinal, id)| json!({"ordinal":ordinal,"backtest_id":id}))
         .collect::<Vec<_>>();
