@@ -6,6 +6,7 @@ use slint::ComponentHandle;
 use std::{sync::mpsc, time::Duration};
 slint::include_modules!();
 mod backtest;
+mod correlation;
 mod evaluation;
 mod learning;
 mod backup;
@@ -127,6 +128,7 @@ fn main() {
 fn run_ui() -> anyhow::Result<()> {
     let ui = Dashboard::new()?;
     backtest::setup(&ui);
+    correlation::setup(&ui);
     backup::setup(&ui);
     news::setup(&ui);
     evaluation::setup(&ui);
