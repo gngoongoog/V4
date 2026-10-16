@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace as NS
 import sys
+import tempfile
 import unittest
 
 ROOT = Path(__file__).parents[1]
@@ -69,6 +70,28 @@ class SniperFastLaneTests(unittest.TestCase):
         self.assertFalse(changed)
         self.assertIsNone(signature)
 
+    def test_pulse_payload_excludes_heavy_reconciled_state(self):
+        snapshot = {
+            "login": 17,
+            "server": "Demo",
+            "currency": "USD",
+            "symbol": "XAUUSD",
+            "bid": 2500.1,
+            "ask": 2500.3,
+            "quote_time_ms": 2001,
+            "tick_age_ms": 2,
+            "positions": [{"ticket": 1}],
+            "market": {"m1": [1]},
+            "dom": [{"price": 1}],
+        }
+        payload = gateway.pulse_payload(snapshot)
+        self.assertEqual(set(payload), {
+            "login", "server", "currency", "symbol", "bid", "ask", "quote_time_ms", "tick_age_ms"
+        })
+        self.assertNotIn("positions", payload)
+        self.assertNotIn("market", payload)
+        self.assertNotIn("dom", payload)
+
     def test_only_tick_entries_and_owned_closes_use_fast_dispatch(self):
         tick_open = {"kind": "open", "signal": {"key": "tick:123"}}
         bar_open = {"kind": "open", "signal": {"key": "bar:123"}}
@@ -78,6 +101,37 @@ class SniperFastLaneTests(unittest.TestCase):
         self.assertFalse(execution.is_fast_path(bar_open))
         self.assertEqual(execution.FAST_QUEUE_TARGET_MS, 20)
 
+    def test_prefetched_pulse_work_skips_second_gateway_fetch_and_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            executor = execution.BrokerExecutor(Path(directory) / "journal.sqlite")
+            calls = []
+            try:
+                def api(path, payload=None):
+                    calls.append((path, payload))
+                    raise AssertionError("prefetched no-command pulse must not call Core again")
+
+                delay = executor.cycle(None, api, work={
+                    "command": None,
+                    "history_from_ms": 123,
+                    "account": {"login": 17, "server": "Demo", "currency": "USD"},
+                    "poll_ms": 100,
+                    "pulse_fast_path": True,
+                    "pulse_to_work_us": 350,
+                })
+                self.assertEqual(calls, [])
+                self.assertAlmostEqual(delay, 0.1)
+            finally:
+                executor.close()
+
+    def test_pulse_uses_put_and_execution_only_core_endpoint(self):
+        gateway_source = (ROOT / "gateway" / "mt5_gateway.py").read_text(encoding="utf-8")
+        core_source = (ROOT / "crates" / "runtime" / "src" / "execution.rs").read_text(encoding="utf-8")
+        self.assertIn("/v1/execution/pulse", gateway_source)
+        self.assertIn("method='PUT'", gateway_source)
+        self.assertIn('method == "PUT" && path == "/v1/execution/pulse"', core_source)
+        self.assertIn('work["pulse_fast_path"]', core_source)
+        self.assertIn('work["pulse_to_work_us"]', core_source)
+
     def test_durable_journal_and_regular_order_check_remain_present(self):
         source = (ROOT / "gateway" / "execution.py").read_text(encoding="utf-8")
         self.assertIn("PRAGMA synchronous=FULL", source)
@@ -85,6 +139,7 @@ class SniperFastLaneTests(unittest.TestCase):
         self.assertIn("mt5.order_send(request)", source)
         self.assertIn("mt5.order_check(request)", source)
         self.assertIn("order_check_skipped", source)
+        self.assertIn("authorize(cmd['id'])", source)
         self.assertLess(source.index("self.db.commit()", source.index("INSERT INTO sends")), source.index("mt5.order_send(request)"))
 
 
