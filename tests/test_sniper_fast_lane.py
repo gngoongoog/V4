@@ -1,9 +1,11 @@
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace as NS
+import sys
 import unittest
 
 ROOT = Path(__file__).parents[1]
+sys.path.insert(0, str(ROOT / "gateway"))
 
 
 def load(name, path):
