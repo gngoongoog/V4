@@ -127,15 +127,39 @@ def check(exe=None):
             snapshot['login']=99;publish()
             assert not api('/v1/status')['execution_enabled'];assert api('/v1/execution/gateway')['command'] is None
             assert brain('trend')['stats']['deals']==0
+            # 0.8 pulse and one-click Demo; no additional broker submission.
+            configure('trend',enabled=False,use_risk_limits=True,cooldown_seconds=60)
+            api('/v1/execution/portfolio',dict(enabled=True,max_positions=1,max_lots=.01,max_risk_percent=.5))
+            config=api('/v1/config')['config'];config['trading'].update(mode='sniper',max_cost_fraction=.1,sniper_cooldown_seconds=60)
+            api('/v1/trading/settings',dict(trading=config['trading'],commission_per_lot=7.))
+            api('/v1/demo/start',{})
+            state=api('/v1/execution')
+            assert state['settings']['login']==99 and state['settings']['target']=='demo'
+            assert not state['portfolio']['enabled']
+            assert all(not b['config']['use_risk_limits'] and b['config']['cooldown_seconds']==0 for b in state['brains'])
+            assert brain('expansion')['magic']==410614
+            config=api('/v1/config')['config'];assert config['trading']['max_cost_fraction']==0 and config['trading']['sniper_cooldown_seconds']==0
+            snapshot.update(quote_time_ms=clock_ms(),tick_age_ms=0)
+            pulse=api('/v1/gateway/pulse',snapshot);assert pulse['poll_ms']==20
+            cached=dict(snapshot,market=None);api('/v1/gateway/pulse',cached)
+            assert api('/v1/status')['telemetry']['market'] is not None
+            api('/v1/gateway/analysis',{})
+            api('/v1/stop',{})
+            try:api('/v1/live/start',{})
+            except urllib.error.HTTPError as error:assert error.code==400
+            else:raise AssertionError('Demo binding must not be labelled Live')
+            switched=dict(cached,login=100);api('/v1/gateway/pulse',switched)
+            assert api('/v1/status')['telemetry']['market'] is None
+            assert not api('/v1/status')['execution_enabled']
             api('/v1/shutdown',{});process.wait(timeout=10)
             report=dict(result='PASS',version=VERSION,broker='simulated; no native MT5 acceptance',checks=[
-                '14 identities; default coordinator and advisors','SOLO exclusion; no implicit global START',
+                '15 identities; default coordinator and advisors','SOLO exclusion; no implicit global START',
                 'standalone M1 trend against opposing M5','optional risk caps off',
                 'Core+gateway single submission','unknown-to-fill history retains position barrier','entry history does not release fill barrier',
                 'pending return and frozen timeout exit while STOPPED','advisor rejoins actual votes after close',
                 'manual-exit ownership; actual fees; history deduplication','queued decision invalidation',
                 'dispatched revision checked before send','unknown intent persists without resend',
-                'restart stopped; config/PnL persistence','account isolation'])
+                'restart stopped; config/PnL persistence','account isolation','Demo auto-binding clears optional gates','20 ms Sniper pulse target','market cache account isolation','Live start binding validation'])
             out=ROOT/'test-output/execution-integration.json';out.parent.mkdir(exist_ok=True);out.write_text(json.dumps(report,indent=2))
             print(json.dumps(report))
         finally:

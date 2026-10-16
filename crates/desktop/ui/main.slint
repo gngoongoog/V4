@@ -241,10 +241,10 @@ export component Dashboard inherits Window {
             HorizontalBox {
                 ComboBox { model: ["Demo / حساب تجريبي", "Live / أموال حقيقية"]; current-index <=> root.exec-target; }
                 LineEdit { text <=> root.exec-deviation; placeholder-text: "انحراف التنفيذ بالنقاط"; }
-                Button { text: root.exec-target == 0 ? "ربط تلقائي مع التشغيل" : "ربط الحساب الحقيقي"; enabled: !root.exec-busy && root.exec-target == 1; clicked => { root.execution-action("bind"); } }
+                Button { text: root.exec-target == 0 ? "حفظ إعداد الاتصال" : "ربط الحساب الحقيقي"; enabled: !root.exec-busy && !root.execution-active; clicked => { root.execution-action("bind"); } }
             }
             Text { text: "زر تشغيل الديمو يربط حساب MT5 التجريبي الحالي ويبدأ التداول. اختر العقل لتعديل اللوت أو تفعيل التداول المنفرد."; color: #acbad0; wrap: word-wrap; }
-            ComboBox { model: root.exec-names; current-index <=> root.exec-selected; selected(value) => { root.execution-action("select"); } }
+            ComboBox { enabled: !root.exec-busy; model: root.exec-names; current-index <=> root.exec-selected; selected(value) => { root.execution-action("select"); } }
             HorizontalBox {
                 Button { text: "تشغيل تداول منفرد"; enabled: !root.exec-busy && root.exec-selected != 0 && !root.exec-enabled; clicked => { root.execution-action("enable"); } }
                 Button { text: "حفظ إعدادات العقل"; enabled: !root.exec-busy; clicked => { root.execution-action("save"); } }
@@ -253,7 +253,7 @@ export component Dashboard inherits Window {
             Text { text: root.exec-role == "coordinator" ? "العقل الرئيسي المتعلم — يتبع START/STOP والوضع المختار" : root.exec-role == "returning" ? "بانتظار الرجوع: يكمل إدارة صفقته الحالية ثم يعود تابعاً للرئيسي" : root.exec-role == "solo" ? "منفرد: مستبعد من تصويت المنظومة ويتداول بقراره" : "عضو في المنظومة: يرسل تحليله للرئيسي ولا يفتح صفقة باسمه"; color: root.exec-enabled ? #5be0be : #f0c578; wrap: word-wrap; }
             HorizontalBox {
                 Text { text: "الفريم"; color: #acbad0; vertical-alignment: center; }
-                ComboBox { model: root.exec-frames; current-index <=> root.exec-frame; }
+                ComboBox { enabled: !root.exec-busy; model: root.exec-frames; current-index <=> root.exec-frame; }
                 Text { text: "اللوت الثابت"; color: #acbad0; vertical-alignment: center; }
                 LineEdit { text <=> root.exec-lots; }
             }
@@ -424,7 +424,7 @@ export component Dashboard inherits Window {
         }
         if root.page == 4: VerticalLayout {
             spacing: 12px;
-            Button { text: "عقل انطلاق التذبذب: ضغط ثم اختراق لحظي"; clicked => { root.exec-selected = 14; root.navigate(17); } }
+            Button { text: "عقل انطلاق التذبذب: ضغط ثم اختراق لحظي"; enabled: !root.exec-busy; clicked => { root.exec-selected = 14; root.navigate(17); } }
             HorizontalLayout { spacing: 12px;
                 Card { label: "REGIME / حالة السوق"; value: root.regime; }
                 Card { label: "META / القرار الحالي"; value: root.decision; }

@@ -401,6 +401,7 @@ impl Service {
     pub fn prepare_demo(&mut self,db:&Connection,status:&Status,now:u64)->Result<()> {
         self.inner.prepare_demo(db,status,now)?;
         self.portfolio.enabled=false;self.save_portfolio(db)?;
+        self.portfolio_state["enabled"]=json!(false);
         self.next_portfolio_ms=0;self.inner.weights.clear();self.learning_context.clear();
         Ok(())
     }

@@ -295,7 +295,7 @@ fn trend(series: &[Candle]) -> (i8, f64) {
 /// Uses only complete bars available at this timestamp; no future indexing.
 /// Trend/Regime brains are observational in v1: the legacy Meta decision path is intentionally
 /// unchanged until a separate regression/ablation checkpoint validates the integration.
-pub fn analyze(market: Option<&MarketData>, symbol: &str, now: u64) -> Analysis {
+pub fn candle_readiness(market: Option<&MarketData>, symbol: &str, now: u64) -> Analysis {
     let mut result = Analysis {
         symbol: symbol.into(),
         evaluated_ms: now,
@@ -339,6 +339,16 @@ pub fn analyze(market: Option<&MarketData>, symbol: &str, now: u64) -> Analysis 
     result.current = true;
     result.bar_time = market.m1.last().unwrap().time;
     result.atr = Some(volatility);
+
+    result.reason="Completed candle snapshot ready".into();
+    result
+}
+
+pub fn analyze(market: Option<&MarketData>, symbol: &str, now: u64) -> Analysis {
+    let mut result=candle_readiness(market,symbol,now);
+    if !result.current {return result;}
+    let market=market.unwrap();
+    let volatility=result.atr.unwrap();
 
     let (trend_brain, regime_brain) = regime::assess(&market.m1, &market.m5, &market.m15);
     result.regime = regime_brain.label.clone();

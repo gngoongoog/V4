@@ -144,8 +144,13 @@ pub fn evaluate(
             .iter()
             .map(|(k, v)| (k.clone(), v.iter().map(|b| b.candle.clone()).collect()))
             .collect();
+        let base=if c.trading.mode==TradingMode::Expert {
+            crate::research::analyze(t.market.as_ref(),&t.symbol,now)
+        }else{
+            crate::research::candle_readiness(t.market.as_ref(),&t.symbol,now)
+        };
         let a = trading::select(
-            crate::research::analyze(t.market.as_ref(), &t.symbol, now),
+            base,
             t,
             c,
             &candles,

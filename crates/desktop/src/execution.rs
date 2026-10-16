@@ -164,7 +164,7 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
                     let b = BrainConfig {
                         id: id.into(),
                         enabled: action == "enable" || ui.get_exec_enabled(),
-                        timeframe: FRAMES[ui.get_exec_frame().max(0) as usize].into(),
+                        timeframe: FRAMES[(ui.get_exec_frame().max(0) as usize).min(FRAMES.len()-1)].into(),
                         lots: number(ui.get_exec_lots())?,
                         stop_atr: number(ui.get_exec_stop())?,
                         reward_risk: number(ui.get_exec_reward())?,

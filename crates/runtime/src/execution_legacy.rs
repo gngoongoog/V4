@@ -230,8 +230,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         for b in &self.brains {
             let started=std::time::Instant::now();
             let bar=available.get(&b.timeframe).and_then(|v|v.last()).map(|v|v.candle.time).unwrap_or(0);
-            let cache_key=format!("{}:{}:{}:{}",key,b.timeframe,bar,self.settings.revision);
-            let live=matches!(b.id.as_str(),"system"|"dom"|"gann_dom_profile"|"kte"|"expansion");
+            let cache_key=format!("{}:{}:{}:{}:{:?}",key,b.timeframe,bar,self.settings.revision,c.trading.mode);
+            let live=matches!(b.id.as_str(),"dom"|"gann_dom_profile"|"kte"|"expansion")||(b.id=="system"&&c.trading.mode==braintrade_domain::trading::TradingMode::Sniper);
             let fresh=t.tick_age_ms.is_some_and(|v|v<=3000)&&t.quote_time_ms.is_some_and(|v|v<=now+2000&&now.saturating_sub(v)<=3000);
             let cached=self.policy_cache.get(&b.id).filter(|(k,at,_)|!live&&fresh&&*k==cache_key&&now.saturating_sub(*at)<1000);
             let signal=if let Some((_,_,signal))=cached {signal.clone()}else{

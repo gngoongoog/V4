@@ -23,7 +23,7 @@
     "python_excluded": [
       "test_backup_journal_boundary: requires compiled Core"
     ],
-    "rust": "syntax parsed; no type-check or execution",
-    "slint": "loaded with prebuilt Python Slint interpreter; Rust bindings not built"
+    "rust": "50 Rust source files parsed without syntax errors; no type-check or execution",
+    "slint": "Prebuilt Python Slint 1.16.0b1 interpreter loaded UI successfully; Rust bindings and rendering not built"
   }
 }

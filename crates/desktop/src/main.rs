@@ -24,7 +24,7 @@ enum Task {
 fn paint(ui: &Dashboard, status: Status) {
     ui.set_execution_active(status.execution_enabled);
     let metrics=status.telemetry.as_ref().filter(|_|status.gateway_fresh).map(|t|&t.gateway_metrics);
-    ui.set_latency(metrics.filter(|m|m["cycle_ms"].is_number()).map(|m|format!("دورة {:.0}ms • p95 {:.0}ms • Core {:.0}ms",m["cycle_ms"].as_f64().unwrap_or(0.),m["p95_ms"].as_f64().unwrap_or(0.),m["core_ms"].as_f64().unwrap_or(0.))).unwrap_or_else(||"بانتظار قياس الاتصال".into()).into());
+    ui.set_latency(metrics.filter(|m|m["cycle_ms"].is_number()).map(|m|format!("فاصل {:.0}ms • معالجة p95 {:.0}ms • Core {:.0}ms",m["interval_ms"].as_f64().unwrap_or(0.),m["p95_ms"].as_f64().unwrap_or(0.),m["core_ms"].as_f64().unwrap_or(0.))).unwrap_or_else(||"بانتظار قياس الاتصال".into()).into());
     ui.set_brains(status.analysis.text().into());
     let opportunities = status.analysis.opportunities.as_ref();
     ui.set_opportunities(opportunities.map(|value| value.signals_text()).unwrap_or_else(||

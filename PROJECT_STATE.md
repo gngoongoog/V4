@@ -1,3 +1,13 @@
+# Current source: BrainTrade 0.8.0 — not built
+
+Continue from branch `feature/fast-execution-ui`, based on the delivered 0.7 preview. The user explicitly requested **no build**: do not run Cargo build/test, create a Windows package or trigger CI unless later requested.
+
+Current changes are described in `docs/FAST_EXECUTION_UI.md`; source verification and exclusions are in `docs/development-validation.json`. Persistent IPC, read-only MT5 worker, fast pulse, Demo start, expansion brain (15 identities) and the five-section UI are implemented in source. No native MT5 order or latency acceptance has been performed. Rust type-checking and target Windows rendering remain pending.
+
+The following is archived 0.7 delivery history. Its tests/artifact do not certify 0.8.
+
+---
+
 # BrainTrade OS — project state: verified 0.7.0 Development Preview
 
 Canonical repository: `gngoongoog/V4`. Verified executable/source checkout: `ba399ad206b1fe3231a10dbbd270de75145fd2e4` (tree `74cf92a0681b556c0b45462b511b11b2f7f5c62a`). This is GitHub’s PR test merge of head `e0547cab6ccce8d41944750f88d0089dc689ff29` into `58631430ccb823b63b22c344989a7c0e9ba93855`; its complete tree is identical to that PR head.
@@ -14,7 +24,7 @@ Portfolio Exposure v1 is included and OFF by default. Its stopped-only editor is
 
 ## Evidence and delivery
 
-`docs/development-validation.json` records this 0.7 checkpoint and artifact hashes. The 0.6 promoted history in `docs/validation.json`, `docs/validation-v0.6.0.json` and `docs/RELEASE_STATUS.md` stays unchanged. Later delivery documentation must not be presented as a newly compiled executable. The delivery ZIP records the executable source and the documentation commit separately and includes the complete source tree.
+`docs/validation-v0.7.0.json` records this 0.7 checkpoint and artifact hashes. The 0.6 promoted history in `docs/validation.json`, `docs/validation-v0.6.0.json` and `docs/RELEASE_STATUS.md` stays unchanged. Later delivery documentation must not be presented as a newly compiled executable. The delivery ZIP records the executable source and the documentation commit separately and includes the complete source tree.
 
 ## Next steps
 
