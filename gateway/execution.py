@@ -5,6 +5,10 @@ is reconciled, never blindly retried. Sniper tick entries use a measured fast
 path that removes the broker ``order_check`` round trip after equivalent local
 contract validation, while retaining account binding, ownership checks,
 authorization and the durable pre-send journal.
+
+The Sniper pulse path may prefetch Core work in the same quote request. Reusing
+that work removes one localhost request from the critical path; final Core
+authorization and the durable send journal remain mandatory before order_send.
 """
 from __future__ import annotations
 from datetime import datetime, timezone
@@ -132,6 +136,9 @@ class BrokerExecutor:
             fast_queue_target_ms=FAST_QUEUE_TARGET_MS,
             queue_target_met=queue_ms <= FAST_QUEUE_TARGET_MS,
         )
+        if cmd.get('_core_pulse_us') is not None:
+            result['core_pulse_us'] = cmd['_core_pulse_us']
+            result['prefetched_work'] = True
         try:
             if clock_ms()>cmd['expires_ms']:
                 raise ValueError('Intent expired before submission')
@@ -259,12 +266,20 @@ class BrokerExecutor:
             result['total_ms']=(time.perf_counter()-started)*1000
             return result
 
-    def cycle(self,mt5,api):
-        work=api('/v1/execution/gateway')
+    def cycle(self,mt5,api,work=None):
+        """Execute one Core work item, optionally reusing work prefetched by a pulse."""
+        work=api('/v1/execution/gateway') if work is None else work
         command=work.get('command')
         if command:
+            if work.get('pulse_to_work_us') is not None:
+                command=dict(command)
+                command['_core_pulse_us']=work['pulse_to_work_us']
             result=self.execute(mt5,command,lambda intent:api('/v1/execution/authorize',{'id':intent}).get('authorized',False))
             api('/v1/execution/result',result)
+        # Pulse work deliberately defers history synchronization to a later normal
+        # cycle so broker history cannot delay the next latency-sensitive quote.
+        if work.get('pulse_fast_path'):
+            return work.get('poll_ms',100)/1000
         start=work.get('history_from_ms',0);identity=work.get('account')
         if start and identity and time.monotonic()>=self.next_history:
             self.next_history=time.monotonic()+5
