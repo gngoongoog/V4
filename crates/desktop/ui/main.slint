@@ -19,11 +19,22 @@ export component Dashboard inherits Window {
     preferred-width: 1120px; preferred-height: 820px; min-width: 880px; min-height: 700px;
     background: #0b1220;
     in-out property <int> page: 0;
+    in property <bool> desk-busy: false;
+    in property <string> desk-message;
+    in-out property <bool> correlation-enabled: true;
+    in-out property <string> correlation-symbols: "EURUSD, USDJPY";
+    in-out property <int> correlation-frame: 1;
+    in property <string> correlation-text: "بانتظار شموع الرموز من MT5";
+    in-out property <string> replay-at;
+    in-out property <string> replay-hours: "24";
+    in property <string> replay-text: "اختر الوقت أو اتركه فارغًا لعرض المتاح حاليًا";
+    in property <string> ablation-text: "تبدأ المراقبة أثناء تشغيل وضع الخبير، ثم تنتظر 12 شمعة M1 لاحقة";
+    callback desk-action(string);
     in-out property <bool> exec-advanced: false;
     in-out property <bool> exec-show-ledger: false;
     in property <string> latency: "بانتظار قياس الاتصال";
-    property <int> section: root.page == 0 ? 0 : (root.page == 17 || root.page == 14 || root.page == 6 || root.page == 5) ? 1 : (root.page == 4 || root.page == 10 || root.page == 12 || root.page == 16 || root.page == 8) ? 2 : (root.page == 7 || root.page == 9 || root.page == 15 || root.page == 11) ? 3 : 4;
-    property <string> page-title: root.page == 0 ? "نظرة عامة" : root.page == 17 ? "إدارة العقول والتداول" : root.page == 14 ? "الأوضاع والعمولة" : root.page == 6 ? "الحدود الاختيارية" : root.page == 5 ? "سجل المحاكاة" : root.page == 4 ? "تحليل السوق" : root.page == 10 ? "فرص السوق" : root.page == 12 ? "خريطة المناطق" : root.page == 16 ? "وايكوف" : root.page == 8 ? "الأخبار" : root.page == 7 ? "الاختبار التاريخي" : root.page == 9 ? "التقييم الزمني" : root.page == 15 ? "مختبر الاستراتيجيات" : root.page == 11 ? "التعلم" : root.page == 1 ? "الإعدادات" : root.page == 13 ? "النسخ والاستعادة" : root.page == 2 ? "سجل النظام" : "حول التطبيق";
+    property <int> section: root.page == 0 ? 0 : (root.page == 17 || root.page == 14 || root.page == 6 || root.page == 5) ? 1 : (root.page == 4 || root.page == 10 || root.page == 12 || root.page == 16 || root.page == 8) ? 2 : (root.page == 7 || root.page == 9 || root.page == 15 || root.page == 11 || root.page == 18 || root.page == 19 || root.page == 20) ? 3 : 4;
+    property <string> page-title: root.page == 18 ? "ارتباط الرموز والتعرض" : root.page == 19 ? "إعادة عرض الأخبار" : root.page == 20 ? "مساهمة العقول" : root.page == 0 ? "نظرة عامة" : root.page == 17 ? "إدارة العقول والتداول" : root.page == 14 ? "الأوضاع والعمولة" : root.page == 6 ? "الحدود الاختيارية" : root.page == 5 ? "سجل المحاكاة" : root.page == 4 ? "تحليل السوق" : root.page == 10 ? "فرص السوق" : root.page == 12 ? "خريطة المناطق" : root.page == 16 ? "وايكوف" : root.page == 8 ? "الأخبار" : root.page == 7 ? "الاختبار التاريخي" : root.page == 9 ? "التقييم الزمني" : root.page == 15 ? "مختبر الاستراتيجيات" : root.page == 11 ? "التعلم" : root.page == 1 ? "الإعدادات" : root.page == 13 ? "النسخ والاستعادة" : root.page == 2 ? "سجل النظام" : "حول التطبيق";
     function navigate(next-page: int) {
         root.page = next-page;
         if next-page == 17 { root.execution-action("refresh"); }
@@ -33,6 +44,8 @@ export component Dashboard inherits Window {
         if next-page == 11 { root.learning-action("refresh"); }
         if next-page == 13 { root.backup-action("refresh"); }
         if next-page == 2 { root.action("events"); }
+        if next-page == 18 { root.desk-action("correlation"); }
+        if next-page == 20 { root.desk-action("ablation"); }
     }
     in property <bool> execution-active: false;
     in property <bool> exec-busy: false;
@@ -226,15 +239,49 @@ export component Dashboard inherits Window {
             selected(value) => { root.navigate(self.current-index == 0 ? 4 : self.current-index == 1 ? 10 : self.current-index == 2 ? 12 : self.current-index == 3 ? 16 : 8); }
         }
         if root.section == 3: ComboBox {
-            model: ["مختبر الاستراتيجيات", "التعلم", "الاختبار التاريخي", "التقييم الزمني"];
-            current-index: root.page == 15 ? 0 : root.page == 11 ? 1 : root.page == 7 ? 2 : 3;
-            selected(value) => { root.navigate(self.current-index == 0 ? 15 : self.current-index == 1 ? 11 : self.current-index == 2 ? 7 : 9); }
+            model: ["مختبر الاستراتيجيات", "التعلم", "الاختبار التاريخي", "التقييم الزمني", "ارتباط الرموز", "أرشيف الأخبار", "مساهمة العقول"];
+            current-index: root.page == 15 ? 0 : root.page == 11 ? 1 : root.page == 7 ? 2 : root.page == 9 ? 3 : root.page == 18 ? 4 : root.page == 19 ? 5 : 6;
+            selected(value) => { root.navigate(self.current-index == 0 ? 15 : self.current-index == 1 ? 11 : self.current-index == 2 ? 7 : self.current-index == 3 ? 9 : self.current-index == 4 ? 18 : self.current-index == 5 ? 19 : 20); }
         }
         if root.section == 4: ComboBox {
             model: ["الإعدادات والاتصال", "النسخ والاستعادة", "سجل النظام", "حول التطبيق"];
             current-index: root.page == 1 ? 0 : root.page == 13 ? 1 : root.page == 2 ? 2 : 3;
             selected(value) => { root.navigate(self.current-index == 0 ? 1 : self.current-index == 1 ? 13 : self.current-index == 2 ? 2 : 3); }
         }
+        if root.page == 18: ScrollView { VerticalBox { spacing: 12px;
+            Text { text: "ارتباط العوائد على أوقات متطابقة"; color: #eaf0fb; font-size: 20px; }
+            Text { text: "رمز التداول الحالي يُضاف تلقائيًا. أدخل حتى 5 رموز إضافية بأسمائها الدقيقة لدى الوسيط، وافصل بينها بفاصلة. التحديث قرابة دقيقة."; color: #acbad0; wrap: word-wrap; }
+            LineEdit { text <=> root.correlation-symbols; placeholder-text: "EURUSD, USDJPY"; }
+            HorizontalBox {
+                ComboBox { model: ["M1", "M5", "M15", "H1"]; current-index <=> root.correlation-frame; }
+                CheckBox { text: "تشغيل جمع البيانات"; checked <=> root.correlation-enabled; }
+                Button { text: "حفظ"; enabled: !root.desk-busy; clicked => { root.desk-action("save"); } }
+                Button { text: "تحديث العرض"; enabled: !root.desk-busy; clicked => { root.desk-action("correlation-poll"); } }
+            }
+            Text { text: root.desk-message; color: #f0c578; wrap: word-wrap; }
+            Text { text: root.correlation-text; color: #d5deed; wrap: word-wrap; }
+            Text { text: "+1 تحرك متشابه و−1 متعاكس ضمن العينة. يلزم 60 عائدًا متزامنًا؛ الفراغات لا تُملأ. الارتباط وصف للعينة ولا يفتح أو يمنع صفقة."; color: #acbad0; wrap: word-wrap; }
+        } }
+        if root.page == 19: ScrollView { VerticalBox { spacing: 12px;
+            Text { text: "ماذا كان النظام يعرف في ذلك الوقت؟"; color: #eaf0fb; font-size: 20px; }
+            Text { text: "يحفظ الأرشيف وقت وصول الخبر وتعديلات العنوان. تاريخ نشر قديم لا يجعله متاحًا للنظام قبل وصوله. يبدأ الأرشيف من تشغيل هذا التحديث."; color: #acbad0; wrap: word-wrap; }
+            LineEdit { text <=> root.replay-at; placeholder-text: "2026-10-16T13:00:00+03:00 — فارغ = الآن"; }
+            HorizontalBox {
+                Text { text: "ساعات الرصد السابقة"; color: #acbad0; vertical-alignment: center; }
+                LineEdit { text <=> root.replay-hours; }
+                Button { text: "عرض المتاح وقتها"; enabled: !root.desk-busy; clicked => { root.desk-action("replay"); } }
+            }
+            Text { text: root.desk-message; color: #f0c578; wrap: word-wrap; }
+            Text { text: root.replay-text; color: #d5deed; wrap: word-wrap; }
+            Text { text: "أرشيف مصادر الأخبار الرسمية فقط؛ لا يغيّر صفقات النظام ولا يختلق أخبارًا لفترات سابقة."; color: #acbad0; wrap: word-wrap; }
+        } }
+        if root.page == 20: ScrollView { VerticalBox { spacing: 12px;
+            Text { text: "مقارنة المنظومة الكاملة بحذف عقل واحد"; color: #eaf0fb; font-size: 20px; }
+            Text { text: "أثناء وضع الخبير تُثبت الأصوات والأوزان والأسعار والتكلفة. بعد 12 شمعة M1 مكتملة يقارن اتجاه المنظومة باتجاهها دون كل عضو، على نفس البيانات."; color: #acbad0; wrap: word-wrap; }
+            Button { text: "تحديث النتائج"; enabled: !root.desk-busy; clicked => { root.desk-action("ablation"); } }
+            Text { text: root.desk-message; color: #f0c578; wrap: word-wrap; }
+            Text { text: root.ablation-text; color: #d5deed; wrap: word-wrap; }
+        } }
         if root.page == 17: ScrollView { VerticalBox { spacing: 10px;
             Text { text: "لكل عقل إعداداته ونتائجه"; color: #eaf0fb; font-size: 20px; }
             Text { text: root.exec-summary; color: #8ddfc6; wrap: word-wrap; }

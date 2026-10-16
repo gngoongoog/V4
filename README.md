@@ -1,5 +1,7 @@
 # BRAINTRADE OS — 0.8.0 Source Preview
 
+The research desk now includes aligned symbol correlation, observed-news replay and prospective member ablation. [What was added and what remains (Arabic)](docs/PROJECT_COMPLETION_AR.md) · [Technical scope](docs/RESEARCH_DESK.md).
+
 Native Windows desktop with an embedded Core and Python MT5 bridge. Launch `BrainTrade.exe`; set the broker terminal path, connect the saved Demo account, bind it on Execution and press START. Initial startup and restart are STOPPED.
 
 The 18-page dashboard includes four modes (Scalping, Swing, adaptive Expert, live-quote Sniper), proportional commission and live spread calculation, account/position status, analysis and opportunity history, market map, Shadow research, risk settings, historical backtests, chronological evaluation, imported-model research, official news, Telegram queries, backups, 21-timeframe strategy generation, Wyckoff forward learning and broker execution.

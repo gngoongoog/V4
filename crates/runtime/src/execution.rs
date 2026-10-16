@@ -292,6 +292,7 @@ pub struct Service {
 
 impl Service {
     pub fn new(db: &Connection) -> Result<Self> {
+        crate::ablation::init(db)?;
         let mut inner = legacy::Service::new(db)?;
         // `system` is the coordinated main brain. It is controlled by global START/STOP,
         // not by the per-brain SOLO switch. Keep it enabled in memory even when an older
@@ -410,6 +411,7 @@ impl Service {
         let available=crate::coordinator_learning::available_frames(t,frames,now);
         self.inner.weights=self.learner.observe(db,t,c,&self.inner.brains,&available,run,now)?;
         self.learning_context=format!("{}:{:?}",crate::coordinator_learning::context(t),c.trading.mode);
+        crate::ablation::observe(db,t,c,run,self.inner.coordinator_evidence(),&available,now)?;
         Ok(())
     }
 

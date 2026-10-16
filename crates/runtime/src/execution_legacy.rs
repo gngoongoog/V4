@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         if changed {self.history_until_ms=now;self.last_sync_ms=0;}
         Ok(())
     }
+    pub fn coordinator_evidence(&self)->Option<&Value>{self.signals.get("system")}
     pub fn pending(&self, db: &Connection) -> Result<bool> {
         Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE state IN ('queued','dispatched','unknown','placed','filled','partial'))",[],|r|r.get(0))?)
     }

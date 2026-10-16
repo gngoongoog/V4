@@ -249,7 +249,7 @@ def main():
     except ImportError:
         mt5 = None
     initialized, retry_at, core_failures = False, 0., 0
-    next_metadata = next_deals = next_jobs = next_analysis = 0.
+    next_metadata = next_deals = next_jobs = next_analysis = next_context = 0.
     market_stamp = None
     last_read = ''
     try:
@@ -303,7 +303,7 @@ def main():
                         if kind == 'metadata':
                             cache.update(result)
                         else:
-                            api({'deals':'/v1/execution/sync', 'frame':'/v1/gateway/research/frame', 'history':'/v1/gateway/history/chunk'}[kind], result)
+                            api({'deals':'/v1/execution/sync', 'frame':'/v1/gateway/research/frame', 'history':'/v1/gateway/history/chunk', 'correlation':'/v1/gateway/context/report'}[kind], result)
                     except (OSError, ValueError):
                         pass  # A completed read can belong to a cancelled research job.
                 now = time.monotonic()
@@ -312,6 +312,11 @@ def main():
                     # Alternate metadata with other reads: a slow history read cannot starve research forever.
                     if now >= next_metadata and last_read != 'metadata':
                         job = dict(kind='metadata'); next_metadata = now+1
+                    elif now >= next_context:
+                        next_context = now+60
+                        request = api('/v1/gateway/context/request').get('job')
+                        if request is not None:
+                            job = dict(kind='correlation', job=request)
                     elif work.get('history_from_ms') and now >= next_deals and last_read != 'deals':
                         account = work.get('account') or {}
                         if (account.get('login'), account.get('server'), account.get('currency')) == (identity[0],identity[1],identity[3]):

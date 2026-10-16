@@ -91,6 +91,8 @@ class ProjectContractTests(unittest.TestCase):
         self.assertIn("executor.cycle(mt5, api, work=work, include_history=False)",gateway)
         reader=(ROOT / "gateway/fast_io.py").read_text(encoding="utf-8")
         self.assertFalse(any(token in reader for token in forbidden))
+        context_reader=(ROOT / "gateway/correlation_feed.py").read_text(encoding="utf-8")
+        self.assertFalse(any(token in context_reader for token in forbidden))
         self.assertIn("mt5.order_send(request)",adapter)
         self.assertLess(adapter.index("INSERT INTO sends"),adapter.index("mt5.order_send(request)"))
         self.assertIn("account_identity(current)!=expected(cmd)",adapter)

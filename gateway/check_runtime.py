@@ -9,7 +9,10 @@ def main():
     try:
         import numpy
         import MetaTrader5
-        report.update(numpy=numpy.__version__, mt5=MetaTrader5.__version__, ok=True)
+        import fast_io
+        import correlation_feed
+        import multiprocessing
+        report.update(numpy=numpy.__version__, mt5=MetaTrader5.__version__, ok=True, research_modules=True)
     except Exception as error:
         report["error"] = type(error).__name__ + ": " + str(error)
     text = json.dumps(report, ensure_ascii=False, indent=2)

@@ -165,7 +165,7 @@ def main():
         extract_checked(download(asset, cache), output / asset["destination"])
     (output / "runtime/python/python313._pth").write_text("python313.zip\n.\nLib/site-packages\n../gateway\nimport site\n", encoding="ascii")
     (output / "runtime/gateway").mkdir(parents=True)
-    for file in ("mt5_gateway.py", "fast_io.py", "studio_feed.py", "execution.py", "check_runtime.py"):
+    for file in ("mt5_gateway.py", "fast_io.py", "correlation_feed.py", "studio_feed.py", "execution.py", "check_runtime.py"):
         shutil.copy2(ROOT / "gateway" / file, output / "runtime/gateway" / file)
     for source, target in (("QUICKSTART_AR.md", "README_AR.md"), ("RELEASE_STATUS.md", "RELEASE_STATUS.md"), ("THIRD_PARTY.md", "THIRD_PARTY.md")):
         shutil.copy2(ROOT / "docs" / source, output / target)

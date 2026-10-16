@@ -10,7 +10,7 @@ The promoted line contains bound-account execution, 14 execution identities, coo
 
 ## Current 0.8.0 source-only preview
 
-Fast pulse/IPC, isolated history reader, one-click Demo, expansion brain and dashboard regrouping are in source. The user requested no build; `docs/development-validation.json` records only source checks. Next engineering verification needs an explicitly requested build, then native MT5 demo acceptance. No new Windows package was produced.
+Fast pulse/IPC, isolated history reader, one-click Demo, expansion brain and dashboard regrouping are in source. The continuation adds aligned multi-symbol correlation, first-observed news revision replay, and prospective leave-one-member-out diagnostics, with three dashboard pages (21 total). See `docs/RESEARCH_DESK.md` and `docs/PROJECT_COMPLETION_AR.md`. The user requested no build; `docs/development-validation.json` records only source checks. Next engineering verification needs an explicitly requested build, then native MT5 demo acceptance. No new Windows package was produced.
 
 ## Archived 0.7.0 Development Preview
 
@@ -33,14 +33,14 @@ Completed 0.7 engineering work: workspace/lockfile/UI version alignment with ext
 1. Run native Windows + Demo MT5 acceptance using `docs/ACCEPTANCE.md` and record it separately from CI.
 2. Test private Telegram delivery only with local credentials.
 3. Enable branch protection / required checks for `main` and preferably `development` when repository administration access is available.
-4. Begin aligned multi-symbol correlation/exposure research with timestamp availability masks before considering any correlation-driven execution rule.
+4. Collect and evaluate the new correlation and ablation observations before considering correlation-driven execution or automatic member selection.
 
 ## Scientific work still open
 
 - Accumulate genuine completed-bar observations and matured labels for out-of-sample evaluation.
-- Add ablation checks to separate useful signal from correlated duplicate features.
-- Add aligned correlation/portfolio research with explicit missing-data masks and no forward filling across unavailable intervals.
-- Add historical news/event replay with first-observed timestamps and no-lookahead joins.
+- Evaluate the implemented prospective ablation diagnostics on accumulated data; add non-overlapping/out-of-sample uncertainty analysis before selection.
+- Extend the implemented aligned-correlation research to validated cross-asset monetary exposure and portfolio execution only after evidence supports a rule.
+- Extend the implemented first-observed news replay with event-return attribution and news-conditioned backtests; collect archive coverage first.
 - True feed-supported order flow and volume profile only when the source actually provides those fields.
 
 ## Explicitly not complete

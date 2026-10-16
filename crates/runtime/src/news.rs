@@ -292,6 +292,7 @@ fn stamp(ms: u64) -> String {
 }
 impl Service {
     pub fn new(db: &Connection) -> Result<Self> {
+        crate::news_archive::init(db)?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS news_cache(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);")?;
         use rusqlite::OptionalExtension;
         let row: Option<String> = db
@@ -394,10 +395,12 @@ impl Service {
             };
             match rx.try_recv() {
                 Ok(u) => {
+                    let archived=match &u.result {Ok(items)=>crate::news_archive::record(db,u.id,items,now),Err(_)=>Ok(())};
                     self.apply(u);
                     if let Err(e) = self.persist(db) {
                         self.storage_error = format!("تعذر حفظ الأخبار: {e}");
                     }
+                    if let Err(e)=archived {self.storage_error=format!("تعذر أرشفة وقت رصد الأخبار: {e}");}
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.rx = None;

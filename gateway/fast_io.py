@@ -99,6 +99,9 @@ def read_job(mt5, job, market_cache):
         result = collect_frame(mt5, job['job'])
     elif kind == 'history':
         result = collect_history_chunk(mt5, job['job'])
+    elif kind == 'correlation':
+        from correlation_feed import collect_correlation
+        result = collect_correlation(mt5, job['job'])
     elif kind == 'deals':
         start, until = job['from_ms'], job['until_ms']
         rows = mt5.history_deals_get(datetime.fromtimestamp(start/1000, timezone.utc), datetime.fromtimestamp(until/1000, timezone.utc))

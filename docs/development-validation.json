@@ -1,7 +1,7 @@
 {
   "version": "0.8.0",
   "status": "pending-ci",
-  "source_state": "source-only development preview; no project build requested",
+  "source_state": "0.8 source-only preview with research desk continuation",
   "tested_commit": null,
   "tested_tree": null,
   "research_ci": null,
@@ -19,11 +19,16 @@
   },
   "note": "Source checks only. No Cargo build/test, CI, Windows package or native MT5 order was run. Prior 0.7 evidence does not certify these changes.",
   "source_checks": {
-    "python_passed": 67,
+    "python_passed": 76,
     "python_excluded": [
       "test_backup_journal_boundary: requires compiled Core"
     ],
-    "rust": "50 Rust source files parsed without syntax errors; no type-check or execution",
-    "slint": "Prebuilt Python Slint 1.16.0b1 interpreter loaded UI successfully; Rust bindings and rendering not built"
+    "rust": "54 Rust source files parsed without syntax errors; no type-check or execution",
+    "slint": "Prebuilt Python Slint 1.16.0b1 interpreter loaded 21-page UI; native bindings/rendering not built",
+    "new_checks": [
+      "Aligned correlation masks and account isolation",
+      "Actual SQLite news as-of replay query",
+      "Read-only worker correlation routing"
+    ]
   }
 }

@@ -1,5 +1,7 @@
 # Current source: BrainTrade 0.8.0 — not built
 
+Latest continuation: correlation, observed news replay and prospective member ablation are implemented with pages 18–20. Current source has 21 pages. See `docs/RESEARCH_DESK.md` and `docs/PROJECT_COMPLETION_AR.md`. Verification: 76 Python checks, Rust syntax only, interpreted Slint only; no binary build or broker acceptance.
+
 Continue from branch `feature/fast-execution-ui`, based on the delivered 0.7 preview. The user explicitly requested **no build**: do not run Cargo build/test, create a Windows package or trigger CI unless later requested.
 
 Current changes are described in `docs/FAST_EXECUTION_UI.md`; source verification and exclusions are in `docs/development-validation.json`. Persistent IPC, read-only MT5 worker, fast pulse, Demo start, expansion brain (15 identities) and the five-section UI are implemented in source. No native MT5 order or latency acceptance has been performed. Rust type-checking and target Windows rendering remain pending.

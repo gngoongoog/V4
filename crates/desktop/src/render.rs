@@ -85,10 +85,13 @@ pub fn render() -> anyhow::Result<()> {
     ui.set_exec_frames(slint::ModelRc::new(slint::VecModel::from(vec!["M1".into(),"M5".into(),"H1".into()])));
     ui.set_exec_selected(3);
     ui.set_exec_detail("RENDER FIXTURE — لا أوامر سوق حقيقية\nالترند | عضو تابع للرئيسي\nSTART/STOP مستقل عن زر العضوية".into());
+    ui.set_correlation_text("RENDER FIXTURE — ارتباط XAUUSD ↔ EURUSD: غير متاح\nلا توجد عوائد سوق فعلية ضمن فحص الرسم".into());
+    ui.set_replay_text("RENDER FIXTURE — أرشيف فارغ، دون أخبار مصطنعة".into());
+    ui.set_ablation_text("RENDER FIXTURE — انتظار نتائج مستقبلية؛ لا أرباح مفترضة".into());
     ui.show()?;
     for (width, height, suffix) in [(1120, 820, ""), (880, 700, "-small")] {
         window.set_size(slint::PhysicalSize::new(width, height));
-        for page in 0..18 {
+        for page in 0..21 {
             ui.set_page(page);
             ui.set_events(
                 format!(
