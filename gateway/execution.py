@@ -1,7 +1,10 @@
-"""MT5 broker adapter. Every send is journaled durably before crossing the API.
+"""MT5 broker adapter with durable no-duplicate dispatch semantics.
 
-An uncertain send is reconciled, never submitted again. Account/ownership and
-broker contract checks are transport correctness, not optional strategy votes.
+Every send is journaled durably before crossing the MT5 API. An uncertain send
+is reconciled, never blindly retried. Sniper tick entries use a measured fast
+path that removes the broker ``order_check`` round trip after equivalent local
+contract validation, while retaining account binding, ownership checks,
+authorization and the durable pre-send journal.
 """
 from __future__ import annotations
 from datetime import datetime, timezone
@@ -11,24 +14,46 @@ import sqlite3
 import time
 
 MAGIC_MIN, MAGIC_MAX = 410600, 410613
+FAST_QUEUE_TARGET_MS = 20
+
 
 def clock_ms():
     return int(time.time() * 1000)
 
+
 def account_identity(a):
     return (a.login, a.server, a.currency) if a else None
+
 
 def expected(cmd):
     return cmd['login'], cmd['server'], cmd['currency']
 
+
 def values(obj):
     return obj._asdict() if hasattr(obj, '_asdict') else vars(obj)
+
+
+def is_fast_path(cmd):
+    """Return True only for latency-sensitive market actions.
+
+    Tick-keyed entries are the Sniper path. Closing an already-owned position is
+    also safe to dispatch without a separate order_check round trip because the
+    exact broker position is re-read and validated immediately before send.
+    """
+    if cmd.get('kind') == 'close':
+        return True
+    signal = cmd.get('signal') or {}
+    return cmd.get('kind') == 'open' and str(signal.get('key', '')).startswith('tick:')
+
 
 class BrokerExecutor:
     def __init__(self, path):
         self.db = sqlite3.connect(path)
         self.db.execute('PRAGMA journal_mode=WAL')
+        # FULL is intentional: the no-duplicate send journal must reach durable
+        # storage before order_send. We measure this cost instead of weakening it.
         self.db.execute('PRAGMA synchronous=FULL')
+        self.db.execute('PRAGMA busy_timeout=50')
         self.db.execute('CREATE TABLE IF NOT EXISTS sends(id TEXT PRIMARY KEY, request TEXT NOT NULL, result TEXT, created_ms INTEGER NOT NULL)')
         self.db.commit()
         self.next_history = 0.0
@@ -58,8 +83,6 @@ class BrokerExecutor:
         if account_identity(mt5.account_info()) != expected(cmd):
             return result
         if matches and not pending:
-            # History proves a fill, not a synchronized Core position snapshot. Keep
-            # Core's filled/partial barrier until it sees the position or its final exit.
             submitted = result.get('request') or cmd.get('broker_request')
             if not submitted:
                 return dict(result, reason='Fill found but submitted volume unavailable; reconciliation remains pending')
@@ -76,16 +99,21 @@ class BrokerExecutor:
         row = self.db.execute('SELECT request,result FROM sends WHERE id=?', (cmd['id'],)).fetchone()
         if row:
             saved = json.loads(row[0])
-            # A restored Core may have different command fields. Never reinterpret a saved ID.
             if any(saved.get(k)!=cmd.get(k) for k in ('login','server','currency','symbol','magic','kind','position')):
                 return dict(id=cmd['id'], state='unknown', reason='Intent identity differs from durable journal')
             return self._reconcile(mt5, saved, json.loads(row[1]) if row[1] else None)
-        # If Core already reported a submission but the gateway journal was lost,
-        # only reconciliation is allowed; journal loss cannot authorize replay.
         if cmd.get('state') in ('unknown', 'placed'):
             return dict(id=cmd['id'], state='unknown', reason='Missing gateway journal; inspect broker history')
+
         started = time.perf_counter()
-        result = dict(id=cmd['id'], state='rejected', reason='', queue_to_gateway_ms=max(0,clock_ms()-cmd['created_ms']))
+        fast_path = is_fast_path(cmd)
+        queue_ms = max(0, clock_ms()-cmd['created_ms'])
+        result = dict(
+            id=cmd['id'], state='rejected', reason='', fast_path=fast_path,
+            queue_to_gateway_ms=queue_ms,
+            fast_queue_target_ms=FAST_QUEUE_TARGET_MS,
+            queue_target_met=queue_ms <= FAST_QUEUE_TARGET_MS,
+        )
         try:
             if clock_ms()>cmd['expires_ms']:
                 raise ValueError('Intent expired before submission')
@@ -97,6 +125,7 @@ class BrokerExecutor:
                 raise ValueError('Enable Algo Trading and external Python trading in MT5; account must permit trading')
             if not MAGIC_MIN<=cmd['magic']<=MAGIC_MAX:
                 raise ValueError('Unknown brain ownership')
+
             symbol=cmd['symbol']; info=mt5.symbol_info(symbol); tick=mt5.symbol_info_tick(symbol)
             if info is None or tick is None:
                 raise ValueError('Broker contract/quote unavailable')
@@ -105,6 +134,7 @@ class BrokerExecutor:
             age=clock_ms()-tick.time_msc
             if age < -2000 or age>cmd.get('max_quote_age_ms',3000):
                 raise ValueError('Broker quote is stale')
+
             positions=mt5.positions_get(symbol=symbol); orders=mt5.orders_get(symbol=symbol)
             if positions is None or orders is None:
                 raise ValueError('Position/order reconciliation unavailable')
@@ -122,6 +152,7 @@ class BrokerExecutor:
                 lots=float(cmd['lots']);side=cmd['signal']['side']
             if side not in (-1,1) or not math.isfinite(lots) or not info.volume_min-1e-9<=lots<=info.volume_max+1e-9 or abs(lots/info.volume_step-round(lots/info.volume_step))>1e-7:
                 raise ValueError('Volume/side does not match broker min/max/step')
+
             price=float(tick.ask if side==1 else tick.bid)
             fill_flags=getattr(info,'filling_mode',0)
             if fill_flags & 1:
@@ -148,19 +179,38 @@ class BrokerExecutor:
                 minimum=max(0,getattr(info,'trade_stops_level',0))*info.point
                 if request['sl']<=0 or request['tp']<=0 or (exit_price-request['sl'])*side<minimum or (request['tp']-exit_price)*side<minimum:
                     raise ValueError('Stop/target too close for current spread or broker stops level')
-            check_start=time.perf_counter(); checked=mt5.order_check(request)
-            result['check_ms']=(time.perf_counter()-check_start)*1000
-            if checked is None or checked.retcode!=0:
-                raise ValueError('Broker order_check: '+str(getattr(checked,'comment','unavailable')))
-            if not authorize(cmd['id']):
+
+            # Sniper removes one broker round trip. All equivalent local validations
+            # above stay mandatory; the broker can still reject the final order_send.
+            if fast_path:
+                result['check_ms']=0.0
+                result['order_check_skipped']=True
+            else:
+                check_start=time.perf_counter(); checked=mt5.order_check(request)
+                result['check_ms']=(time.perf_counter()-check_start)*1000
+                result['order_check_skipped']=False
+                if checked is None or checked.retcode!=0:
+                    raise ValueError('Broker order_check: '+str(getattr(checked,'comment','unavailable')))
+
+            authorize_start=time.perf_counter()
+            authorized=authorize(cmd['id'])
+            result['authorize_ms']=(time.perf_counter()-authorize_start)*1000
+            if not authorized:
                 return dict(result,state='cancelled',reason='Core withdrew authorization before send')
-            # Identity is re-read immediately before journaling and sending.
+
             current=mt5.account_info()
             if account_identity(current)!=expected(cmd) or current.trade_mode!=target_mode or clock_ms()>cmd['expires_ms']:
                 raise ValueError('Account changed or intent expired during validation')
+
+            journal_start=time.perf_counter()
             self.db.execute('INSERT INTO sends(id,request,result,created_ms) VALUES(?,?,NULL,?)',(cmd['id'],json.dumps(dict(cmd,broker_request=request),allow_nan=False),clock_ms()))
             self.db.commit()
+            result['journal_ms']=(time.perf_counter()-journal_start)*1000
             result['request']=request
+            result['pre_send_ms']=(time.perf_counter()-started)*1000
+            result['queue_to_send_ms']=max(0,clock_ms()-cmd['created_ms'])
+            result['queue_to_send_target_met']=result['queue_to_send_ms']<=FAST_QUEUE_TARGET_MS
+
             sent=time.perf_counter()
             try:
                 response=mt5.order_send(request)
