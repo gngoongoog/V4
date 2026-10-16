@@ -6,8 +6,12 @@ CopyTicks; when that bridge is absent or stale, the proven 5 ms Python quote
 polling path remains as a fallback. Account reconciliation, deal history, DOM,
 candle history and research collection stay on slower bounded schedules.
 
-Broker execution remains in execution.py. The MQL5 bridge transports quotes
-only and never owns order submission.
+Latency-sensitive quote changes use a minimal Sniper pulse endpoint. The Core
+runs execution-only work and returns any broker command in the same response,
+removing a second localhost work-fetch from the critical path. Full reconciled
+snapshots continue on their slower schedule. Broker execution remains in
+execution.py; the MQL5 bridge transports quotes only and never owns order
+submission.
 """
 from __future__ import annotations
 import json
@@ -69,7 +73,7 @@ class DomCache:
         if not self.active:
             return False,[]
         try:
-            book=mt5.market_book_get(key[2])
+            book=mt5.market_book_get(self.key[2])
             if not book:
                 return False,[]
             buy_types={getattr(mt5,'BOOK_TYPE_BUY',2)}
@@ -196,6 +200,13 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
 def sniper_enabled(config: dict) -> bool:
     trading = config.get('trading') or {}
     return str(trading.get('mode', '')).strip().lower() == 'sniper'
+
+
+def pulse_payload(snapshot: dict) -> dict:
+    """Minimal quote-only payload; reconciled account state stays cached in Core."""
+    return {key:snapshot.get(key) for key in (
+        'login','server','currency','symbol','bid','ask','quote_time_ms','tick_age_ms'
+    )}
 
 
 def quote_signature(snapshot: dict):
@@ -424,9 +435,8 @@ def main():
                             native.bind_terminal(mt5.terminal_info())
                     if initialized:
                         # Drain authenticated quote events before slower account/candle work.
-                        # Every distinct quote state is published in source order and command
-                        # pickup follows immediately, so same-millisecond quote changes are
-                        # not collapsed by Core's millisecond-keyed Sniper contract.
+                        # Each distinct quote is evaluated through the execution-only pulse
+                        # and any command is returned in that same localhost response.
                         if sniper and latest_snapshot and latest_snapshot.get('connected'):
                             packets=native.drain(int(latest_snapshot.get('login') or 0),symbol,NATIVE_BATCH_MAX)
                             for packet in packets:
@@ -434,13 +444,18 @@ def main():
                                 if not changed:
                                     continue
                                 latest_snapshot=native_snapshot
-                                publish(latest_snapshot)
-                                core_failures=0
                                 try:
-                                    normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api)))
+                                    work=api('/v1/execution/pulse',pulse_payload(latest_snapshot))
+                                    normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api,work=work)))
                                     command_polled=True
+                                    core_failures=0
                                 except (OSError,ValueError,RuntimeError):
-                                    pass
+                                    # Compatibility/failure fallback: publish the full cached
+                                    # state and let the normal work poll preserve behavior.
+                                    try:
+                                        publish(latest_snapshot);core_failures=0
+                                    except (OSError,ValueError):
+                                        core_failures+=1
 
                         full_interval=SNIPER_FULL_SNAPSHOT_SECONDS if sniper else max(0.5,min(1.0,normal_poll_seconds))
                         full_due=latest_snapshot is None or mono >= next_full_snapshot
@@ -453,12 +468,21 @@ def main():
                             core_failures=0
                         elif sniper and latest_snapshot.get('connected') and not native.recent(maximum_age_ms=NATIVE_RECENT_MS):
                             # Native EA is optional. If it is absent/stale the exact
-                            # v0.7 5 ms polling path remains active as a fallback.
+                            # v0.7 5 ms polling source remains active, but quote handling
+                            # now uses the same execution-only pulse as the native source.
                             fast_snapshot,changed,_=refresh_fast_tick(latest_snapshot,mt5,symbol)
                             if changed:
                                 latest_snapshot=fast_snapshot
-                                publish(latest_snapshot)
-                                core_failures=0
+                                try:
+                                    work=api('/v1/execution/pulse',pulse_payload(latest_snapshot))
+                                    normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api,work=work)))
+                                    command_polled=True
+                                    core_failures=0
+                                except (OSError,ValueError,RuntimeError):
+                                    try:
+                                        publish(latest_snapshot);core_failures=0
+                                    except (OSError,ValueError):
+                                        core_failures+=1
                         if initialized and latest_snapshot and not latest_snapshot.get('connected'):
                             dom_cache.release(mt5);mt5.shutdown();initialized=False
                     elif mono >= next_full_snapshot:
