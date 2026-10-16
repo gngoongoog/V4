@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 const MAX_SOURCES: usize = 8;
 const MAX_LISTED_BACKTESTS: i64 = 100;
 const MAX_LISTED_REPORTS: i64 = 50;
+const EXPORT_FORMAT: &str = "correlation-export-v1";
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -31,6 +32,12 @@ struct SavedSource {
     from: u64,
     to: u64,
     history: History,
+}
+
+struct StoredReport {
+    created_ms: u64,
+    report: Report,
+    source_ids: Vec<String>,
 }
 
 fn default_min_overlap() -> usize {
@@ -67,13 +74,13 @@ fn validate_id(id: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn load_sources(db: &Connection, request: &AnalyzeRequest) -> Result<Vec<SavedSource>> {
-    if !(2..=MAX_SOURCES).contains(&request.source_ids.len()) {
+fn load_sources(db: &Connection, source_ids: &[String]) -> Result<Vec<SavedSource>> {
+    if !(2..=MAX_SOURCES).contains(&source_ids.len()) {
         bail!("Correlation research requires 2..={MAX_SOURCES} saved backtests");
     }
     let mut unique = BTreeSet::new();
-    let mut sources = Vec::with_capacity(request.source_ids.len());
-    for id in &request.source_ids {
+    let mut sources = Vec::with_capacity(source_ids.len());
+    for id in source_ids {
         validate_id(id, "Backtest source ID")?;
         if !unique.insert(id.as_str()) {
             bail!("Duplicate backtest source ID");
@@ -97,6 +104,25 @@ fn load_sources(db: &Connection, request: &AnalyzeRequest) -> Result<Vec<SavedSo
     Ok(sources)
 }
 
+fn calculate(saved: &[SavedSource], min_overlap: usize) -> Result<Report> {
+    let config = CorrelationConfig { min_overlap };
+    config.validate().map_err(anyhow::Error::msg)?;
+    let inputs = saved
+        .iter()
+        .map(|source| Input {
+            source_id: &source.id,
+            from: source.from,
+            to: source.to,
+            history: &source.history,
+        })
+        .collect::<Vec<_>>();
+    let report = correlation::analyze(inputs, config).map_err(anyhow::Error::msg)?;
+    if report.execution_effect || report.forward_fill {
+        bail!("Correlation research boundary violation");
+    }
+    Ok(report)
+}
+
 fn summarize(report: &Report) -> Value {
     let symbols = report.sources.iter().map(|source| source.symbol.clone()).collect::<Vec<_>>();
     let available_pairs = report.pairs.iter().filter(|pair| pair.available).count();
@@ -116,24 +142,41 @@ fn summarize(report: &Report) -> Value {
     })
 }
 
+fn stored_report(db: &Connection, id: &str) -> Result<StoredReport> {
+    validate_id(id, "Correlation report ID")?;
+    let row: Option<(u64, String)> = db
+        .query_row(
+            "SELECT created_ms,report FROM correlation_reports WHERE id=?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let (created_ms, raw) = row.context("Correlation report not found")?;
+    let report: Report = serde_json::from_str(&raw)
+        .with_context(|| format!("Stored correlation report is invalid: {id}"))?;
+    if report.identity != id {
+        bail!("Stored correlation identity does not match its database key");
+    }
+    if report.execution_effect || report.forward_fill {
+        bail!("Stored correlation report violates the research-only boundary");
+    }
+    let mut statement = db.prepare(
+        "SELECT ordinal,backtest_id FROM correlation_sources
+         WHERE report_id=?1 ORDER BY ordinal",
+    )?;
+    let source_ids = statement
+        .query_map([id], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if source_ids.len() != report.sources.len() || source_ids.len() < 2 {
+        bail!("Stored correlation provenance is incomplete");
+    }
+    Ok(StoredReport { created_ms, report, source_ids })
+}
+
 fn analyze(db: &Connection, body: &[u8], now_ms: u64) -> Result<Value> {
     let request: AnalyzeRequest = serde_json::from_slice(body)?;
-    let config = CorrelationConfig { min_overlap: request.min_overlap };
-    config.validate().map_err(anyhow::Error::msg)?;
-    let saved = load_sources(db, &request)?;
-    let inputs = saved
-        .iter()
-        .map(|source| Input {
-            source_id: &source.id,
-            from: source.from,
-            to: source.to,
-            history: &source.history,
-        })
-        .collect::<Vec<_>>();
-    let report = correlation::analyze(inputs, config).map_err(anyhow::Error::msg)?;
-    if report.execution_effect || report.forward_fill {
-        bail!("Correlation research boundary violation");
-    }
+    let saved = load_sources(db, &request.source_ids)?;
+    let report = calculate(&saved, request.min_overlap)?;
     let payload = serde_json::to_string(&report)?;
     let tx = db.unchecked_transaction()?;
     tx.execute(
@@ -216,32 +259,86 @@ fn reports(db: &Connection) -> Result<Value> {
 
 fn report(db: &Connection, body: &[u8]) -> Result<Value> {
     let selection: Selection = serde_json::from_slice(body)?;
-    validate_id(&selection.id, "Correlation report ID")?;
-    let row: Option<(u64, String)> = db
-        .query_row(
-            "SELECT created_ms,report FROM correlation_reports WHERE id=?1",
-            [&selection.id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()?;
-    let (created_ms, raw) = row.context("Correlation report not found")?;
-    let report: Report = serde_json::from_str(&raw)?;
-    let mut statement = db.prepare(
-        "SELECT ordinal,backtest_id FROM correlation_sources
-         WHERE report_id=?1 ORDER BY ordinal",
-    )?;
-    let provenance = statement
-        .query_map([&selection.id], |row| {
-            Ok(json!({"ordinal":row.get::<_,u64>(0)?,"backtest_id":row.get::<_,String>(1)?}))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let stored = stored_report(db, &selection.id)?;
+    let provenance = stored.source_ids.iter().enumerate()
+        .map(|(ordinal, id)| json!({"ordinal":ordinal,"backtest_id":id}))
+        .collect::<Vec<_>>();
     Ok(json!({
         "id": selection.id,
-        "created_ms": created_ms,
-        "report": report,
+        "created_ms": stored.created_ms,
+        "report": stored.report,
         "provenance": provenance,
         "research_only": true,
         "broker_effect": false
+    }))
+}
+
+fn replay(db: &Connection, body: &[u8]) -> Result<Value> {
+    let selection: Selection = serde_json::from_slice(body)?;
+    let stored = stored_report(db, &selection.id)?;
+    let saved = load_sources(db, &stored.source_ids)?;
+    let replayed = calculate(&saved, stored.report.min_overlap)?;
+    if replayed != stored.report {
+        bail!("Correlation deterministic replay mismatch: stored sources or report changed");
+    }
+    Ok(json!({
+        "ok": true,
+        "id": stored.report.identity,
+        "matches_stored_report": true,
+        "summary": summarize(&replayed),
+        "research_only": true,
+        "broker_effect": false,
+        "live_feed_used": false
+    }))
+}
+
+fn csv_cell(value: &str) -> String {
+    if value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_owned()
+    }
+}
+
+fn optional_number(value: Option<f64>) -> String {
+    value.map(|number| number.to_string()).unwrap_or_default()
+}
+
+fn export(db: &Connection, body: &[u8]) -> Result<Value> {
+    let selection: Selection = serde_json::from_slice(body)?;
+    let stored = stored_report(db, &selection.id)?;
+    let replayed = calculate(&load_sources(db, &stored.source_ids)?, stored.report.min_overlap)?;
+    if replayed != stored.report {
+        bail!("Correlation export refused because deterministic replay does not match the stored report");
+    }
+    let provenance = stored.source_ids.iter().enumerate()
+        .map(|(ordinal, id)| json!({"ordinal":ordinal,"backtest_id":id}))
+        .collect::<Vec<_>>();
+    let report_json = serde_json::to_string_pretty(&stored.report)? + "\n";
+    let provenance_json = serde_json::to_string_pretty(&provenance)? + "\n";
+    let mut pairs_csv = String::from("left,right,overlap,available,correlation,covariance,left_stddev,right_stddev,reason\n");
+    for pair in &stored.report.pairs {
+        pairs_csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{}\n",
+            csv_cell(&pair.left), csv_cell(&pair.right), pair.overlap, pair.available,
+            optional_number(pair.correlation), optional_number(pair.covariance),
+            optional_number(pair.left_stddev), optional_number(pair.right_stddev),
+            csv_cell(&pair.reason),
+        ));
+    }
+    Ok(json!({
+        "ok": true,
+        "id": stored.report.identity,
+        "format": EXPORT_FORMAT,
+        "deterministic_replay_verified": true,
+        "files": [
+            {"name":"report.json","content_type":"application/json","content":report_json},
+            {"name":"provenance.json","content_type":"application/json","content":provenance_json},
+            {"name":"pairs.csv","content_type":"text/csv","content":pairs_csv}
+        ],
+        "research_only": true,
+        "broker_effect": false,
+        "live_feed_used": false
     }))
 }
 
@@ -255,7 +352,9 @@ fn state(db: &Connection) -> Result<Value> {
         "research_only": true,
         "execution_effect": false,
         "forward_fill": false,
-        "live_feed_used": false
+        "live_feed_used": false,
+        "deterministic_replay": true,
+        "export_format": EXPORT_FORMAT
     }))
 }
 
@@ -266,6 +365,8 @@ pub fn route(method: &str, path: &str, body: &[u8], db: &Connection, now_ms: u64
         ("GET", "/v1/research/correlation/reports") => reports(db),
         ("POST", "/v1/research/correlation/analyze") => analyze(db, body, now_ms),
         ("POST", "/v1/research/correlation/report") => report(db, body),
+        ("POST", "/v1/research/correlation/replay") => replay(db, body),
+        ("POST", "/v1/research/correlation/export") => export(db, body),
         _ => bail!("Unknown correlation research route"),
     }
 }
@@ -340,6 +441,22 @@ mod tests {
         db
     }
 
+    fn file_database(path: &std::path::Path) -> Connection {
+        let db = Connection::open(path).unwrap();
+        db.execute_batch(
+            "PRAGMA foreign_keys=ON;
+             CREATE TABLE IF NOT EXISTS backtest_runs(
+                id TEXT PRIMARY KEY,
+                created_ms INTEGER NOT NULL,
+                report TEXT NOT NULL,
+                history TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+        init(&db).unwrap();
+        db
+    }
+
     fn save(db: &Connection, id: &str, symbol: &str, login: u64, returns: &[f64]) {
         let history = history(symbol, login, returns);
         let report = json!({
@@ -353,19 +470,26 @@ mod tests {
         .unwrap();
     }
 
+    fn analyze_fixture(db: &Connection) -> String {
+        save(db, "a", "AAA", 7, &[0.01, 0.02, -0.01, 0.03]);
+        save(db, "b", "BBB", 7, &[0.02, 0.04, -0.02, 0.06]);
+        route(
+            "POST",
+            "/v1/research/correlation/analyze",
+            json!({"source_ids":["a","b"],"min_overlap":4}).to_string().as_bytes(),
+            db,
+            100,
+        )
+        .unwrap()["summary"]["id"].as_str().unwrap().to_owned()
+    }
+
     #[test]
     fn analysis_persists_report_and_exact_provenance() {
         let db = database();
-        save(&db, "a", "AAA", 7, &[0.01, 0.02, -0.01, 0.03]);
-        save(&db, "b", "BBB", 7, &[0.02, 0.04, -0.02, 0.06]);
-        let body = json!({"source_ids":["a","b"],"min_overlap":4}).to_string();
-        let result = route("POST", "/v1/research/correlation/analyze", body.as_bytes(), &db, 100).unwrap();
-        assert_eq!(result["summary"]["execution_effect"], false);
-        assert_eq!(result["summary"]["forward_fill"], false);
+        let id = analyze_fixture(&db);
         let count: u64 = db.query_row("SELECT COUNT(*) FROM correlation_reports", [], |row| row.get(0)).unwrap();
         let provenance: u64 = db.query_row("SELECT COUNT(*) FROM correlation_sources", [], |row| row.get(0)).unwrap();
         assert_eq!((count, provenance), (1, 2));
-        let id = result["summary"]["id"].as_str().unwrap();
         let detail = route(
             "POST",
             "/v1/research/correlation/report",
@@ -385,21 +509,13 @@ mod tests {
         save(&db, "a", "AAA", 7, &[0.01, 0.02, -0.01, 0.03]);
         save(&db, "b", "BBB", 7, &[0.02, 0.04, -0.02, 0.06]);
         let first = route(
-            "POST",
-            "/v1/research/correlation/analyze",
-            json!({"source_ids":["a","b"],"min_overlap":3}).to_string().as_bytes(),
-            &db,
-            100,
-        )
-        .unwrap();
+            "POST", "/v1/research/correlation/analyze",
+            json!({"source_ids":["a","b"],"min_overlap":3}).to_string().as_bytes(), &db, 100,
+        ).unwrap();
         let second = route(
-            "POST",
-            "/v1/research/correlation/analyze",
-            json!({"source_ids":["b","a"],"min_overlap":3}).to_string().as_bytes(),
-            &db,
-            999,
-        )
-        .unwrap();
+            "POST", "/v1/research/correlation/analyze",
+            json!({"source_ids":["b","a"],"min_overlap":3}).to_string().as_bytes(), &db, 999,
+        ).unwrap();
         assert_eq!(first["summary"]["id"], second["summary"]["id"]);
         assert_eq!(second["created_ms"], 100);
         let count: u64 = db.query_row("SELECT COUNT(*) FROM correlation_reports", [], |row| row.get(0)).unwrap();
@@ -411,23 +527,15 @@ mod tests {
         let db = database();
         save(&db, "a", "AAA", 7, &[0.01, 0.02, 0.03]);
         let missing = route(
-            "POST",
-            "/v1/research/correlation/analyze",
-            json!({"source_ids":["a","missing"],"min_overlap":2}).to_string().as_bytes(),
-            &db,
-            1,
-        )
-        .unwrap_err();
+            "POST", "/v1/research/correlation/analyze",
+            json!({"source_ids":["a","missing"],"min_overlap":2}).to_string().as_bytes(), &db, 1,
+        ).unwrap_err();
         assert!(missing.to_string().contains("not found"));
         save(&db, "b", "BBB", 8, &[0.01, 0.02, 0.03]);
         let mixed = route(
-            "POST",
-            "/v1/research/correlation/analyze",
-            json!({"source_ids":["a","b"],"min_overlap":2}).to_string().as_bytes(),
-            &db,
-            1,
-        )
-        .unwrap_err();
+            "POST", "/v1/research/correlation/analyze",
+            json!({"source_ids":["a","b"],"min_overlap":2}).to_string().as_bytes(), &db, 1,
+        ).unwrap_err();
         assert!(mixed.to_string().contains("same account"));
     }
 
@@ -440,5 +548,55 @@ mod tests {
         assert_eq!(value["sources"].as_array().unwrap().len(), 2);
         assert_eq!(value["live_feed_used"], false);
         assert_eq!(value["research_only"], true);
+    }
+
+    #[test]
+    fn deterministic_replay_survives_database_restart() {
+        let path = std::env::temp_dir().join(format!("braintrade-correlation-{}.sqlite", uuid::Uuid::new_v4()));
+        let id = {
+            let db = file_database(&path);
+            analyze_fixture(&db)
+        };
+        {
+            let db = file_database(&path);
+            let result = route(
+                "POST", "/v1/research/correlation/replay",
+                json!({"id":id}).to_string().as_bytes(), &db, 0,
+            ).unwrap();
+            assert_eq!(result["matches_stored_report"], true);
+            assert_eq!(result["broker_effect"], false);
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn replay_detects_mutated_source_history() {
+        let db = database();
+        let id = analyze_fixture(&db);
+        let mut changed = history("AAA", 7, &[0.01, 0.02, -0.01, 0.20]);
+        changed.captured_ms += 1;
+        db.execute("UPDATE backtest_runs SET history=?1 WHERE id='a'", [serde_json::to_string(&changed).unwrap()]).unwrap();
+        let error = route(
+            "POST", "/v1/research/correlation/replay",
+            json!({"id":id}).to_string().as_bytes(), &db, 0,
+        ).unwrap_err();
+        assert!(error.to_string().contains("replay mismatch"));
+    }
+
+    #[test]
+    fn export_is_deterministic_and_replay_verified() {
+        let db = database();
+        let id = analyze_fixture(&db);
+        let request = json!({"id":id}).to_string();
+        let first = route("POST", "/v1/research/correlation/export", request.as_bytes(), &db, 0).unwrap();
+        let second = route("POST", "/v1/research/correlation/export", request.as_bytes(), &db, 999).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first["format"], EXPORT_FORMAT);
+        assert_eq!(first["deterministic_replay_verified"], true);
+        assert_eq!(first["files"][0]["name"], "report.json");
+        assert_eq!(first["files"][1]["name"], "provenance.json");
+        assert_eq!(first["files"][2]["name"], "pairs.csv");
+        assert!(first["files"][2]["content"].as_str().unwrap().starts_with("left,right,overlap"));
+        assert_eq!(first["broker_effect"], false);
     }
 }
