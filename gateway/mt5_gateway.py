@@ -1,16 +1,29 @@
-"""MT5 snapshots and explicitly selected independent-brain broker execution."""
+"""MT5 snapshots and explicitly selected independent-brain broker execution.
+
+Sniper mode uses an adaptive fast lane: cheap quote refresh and broker-command
+polling run at millisecond cadence while account reconciliation, deal history,
+DOM, candle history and research collection stay on slower bounded schedules.
+The MT5 Python bridge is still polling-based, so this improves local reaction
+latency without claiming that every broker tick or network round trip is below
+any fixed threshold.
+"""
 from __future__ import annotations
 import json
 import math
 import os
 from pathlib import Path
-import sys
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
 BASE = "http://127.0.0.1:18741"
 BAGHDAD = timezone(timedelta(hours=3))
+SNIPER_LOOP_SECONDS = 0.005
+SNIPER_FULL_SNAPSHOT_SECONDS = 0.250
+SNIPER_BACKGROUND_SECONDS = 0.500
+CONFIG_REFRESH_SECONDS = 0.500
+NORMAL_MIN_LOOP_SECONDS = 0.050
+
 
 class MarketCache:
     def __init__(self):
@@ -20,6 +33,7 @@ class MarketCache:
             self.key=key;self.next_read=time.monotonic()+5.0
             self.data=collect_market(mt5,key[2],now)
         return self.data
+
 
 class DomCache:
     """Optional MT5 Market Book subscription. It never fabricates depth."""
@@ -66,8 +80,6 @@ class DomCache:
                 if math.isfinite(price) and math.isfinite(volume) and price>0 and volume>0:
                     rows.append(dict(side=side,price=price,volume=volume))
             rows.sort(key=lambda row:(0 if row['side']=='buy' else 1,-row['price'] if row['side']=='buy' else row['price']))
-            # Preserve both sides even when one side has more than 100 rows.
-            # Multiple rows at one price are one level for nearest-depth analysis.
             levels={}
             for row in rows:
                 identity=(row['side'],row['price'])
@@ -79,6 +91,7 @@ class DomCache:
             return bool(bids and asks),depth
         except Exception:
             return False,[]
+
 
 def collect_market(mt5,symbol,now):
     data=dict(captured_ms=int(now.timestamp()*1000),m1=[],m5=[],m15=[],error="")
@@ -141,7 +154,6 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
     key=(account.login,account.server,symbol)
     market=market_cache.read(mt5,key,now) if market_cache is not None and info is not None else None
     dom_available,dom=dom_cache.read(mt5,key) if dom_cache is not None and info is not None else (False,[])
-    # Re-read account identity after collection to reject account-switch races.
     current = mt5.account_info()
     if current is None or (current.login, current.server) != (account.login, account.server):
         return empty_snapshot("Account changed during snapshot; waiting for reconciliation.")
@@ -170,6 +182,36 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
                   tick_size=info.trade_tick_size if info else None,dom_available=dom_available,dom=dom,
                   volume_max=getattr(info,'volume_max',None),tick_value_loss=getattr(info,'trade_tick_value_loss',None),tick_value_profit=getattr(info,'trade_tick_value_profit',None),market=market,point=getattr(info,'point',None))
     return result
+
+
+def sniper_enabled(config: dict) -> bool:
+    trading = config.get('trading') or {}
+    return str(trading.get('mode', '')).strip().lower() == 'sniper'
+
+
+def refresh_fast_tick(snapshot: dict, mt5, symbol: str, now_ms: int | None = None):
+    """Overlay only the newest observable MT5 quote onto a reconciled snapshot.
+
+    Returns (snapshot_copy, changed, signature). It intentionally does not touch
+    account/positions/orders/DOM/history; those stay on the slower full snapshot.
+    Final broker execution re-reads account identity, positions and the live tick.
+    """
+    if not snapshot or not snapshot.get('connected'):
+        return snapshot, False, None
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return snapshot, False, None
+    bid=float(getattr(tick,'bid',0.0)); ask=float(getattr(tick,'ask',0.0)); tms=int(getattr(tick,'time_msc',0) or 0)
+    if not all(math.isfinite(v) and v>0 for v in (bid,ask)) or ask < bid or tms <= 0:
+        return snapshot, False, None
+    now_ms = int(time.time()*1000) if now_ms is None else int(now_ms)
+    if tms > now_ms + 2000:
+        return snapshot, False, None
+    signature=(tms,bid,ask)
+    previous=(snapshot.get('quote_time_ms'),snapshot.get('bid'),snapshot.get('ask'))
+    updated=dict(snapshot)
+    updated.update(bid=bid,ask=ask,quote_time_ms=tms,tick_age_ms=max(0,now_ms-tms))
+    return updated, signature != previous, signature
 
 
 def collect_history_chunk(mt5, job, now=None):
@@ -233,11 +275,11 @@ def main():
     try:
         lock = lock_gateway(directory)
     except OSError:
-        return  # Existing gateway will exit if its parent core becomes unavailable.
+        return
     config_path = directory / "config.json"
-    config = json.loads(config_path.read_text("utf-8")) if config_path.exists() else {}
-    path = config.get("mt5_path", "")
-    symbol = config.get("symbol", "XAUUSD")
+    runtime_config = json.loads(config_path.read_text("utf-8")) if config_path.exists() else {}
+    path = runtime_config.get("mt5_path", "")
+    symbol = runtime_config.get("symbol", "XAUUSD")
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         import MetaTrader5 as mt5
@@ -248,67 +290,125 @@ def main():
     core_failures = 0
     market_cache=MarketCache()
     dom_cache=DomCache()
+    latest_snapshot=None
+    next_full_snapshot=0.0
+    next_background=0.0
+    next_config_refresh=0.0
+    normal_poll_seconds=1.0
+
     def api(path, payload=None):
         request = urllib.request.Request(BASE+path,
             data=json.dumps(payload, allow_nan=False).encode('utf-8') if payload is not None else None,
             headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
         with opener.open(request,timeout=4) as response:
             return json.load(response)
+
+    def publish(snapshot):
+        body = json.dumps(snapshot, allow_nan=False).encode("utf-8")
+        request = urllib.request.Request(BASE + "/v1/gateway/snapshot", data=body,
+                  headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+        with opener.open(request, timeout=4) as response:
+            response.read()
+
+    def background_work():
+        try:
+            job = api('/v1/gateway/history/request').get('job')
+            if job is not None:
+                api('/v1/gateway/history/chunk', collect_history_chunk(mt5, job))
+                return
+            from studio_feed import collect_frame
+            request=api('/v1/gateway/research/request')
+            if request.get('job') is not None:
+                api('/v1/gateway/research/frame',collect_frame(mt5,request['job']))
+        except (OSError, ValueError):
+            pass
+
     from execution import BrokerExecutor
     executor=BrokerExecutor(directory / 'broker-journal.sqlite')
     try:
         while True:
+            loop_started=time.perf_counter()
+            mono=time.monotonic()
+            if mono >= next_config_refresh:
+                next_config_refresh=mono+CONFIG_REFRESH_SECONDS
+                try:
+                    if config_path.exists():
+                        candidate=json.loads(config_path.read_text("utf-8"))
+                        if isinstance(candidate,dict):
+                            runtime_config=candidate
+                except (OSError,ValueError,TypeError):
+                    pass
+            sniper=sniper_enabled(runtime_config)
+
             if mt5 is None:
-                snapshot = empty_snapshot("MT5 bridge dependency unavailable. Use the complete Windows package.")
+                latest_snapshot = empty_snapshot("MT5 bridge dependency unavailable. Use the complete Windows package.")
+                if mono >= next_full_snapshot:
+                    next_full_snapshot=mono+1.0
+                    try:
+                        publish(latest_snapshot);core_failures=0
+                    except (OSError,ValueError):
+                        core_failures+=1
             else:
                 try:
-                    if not initialized and time.monotonic() >= retry_at:
-                        # Official initialize() starts the terminal if necessary.
-                        # Saved terminal login is used; no password is held here.
+                    if not initialized and mono >= retry_at:
                         initialized = mt5.initialize(path, timeout=5000) if path else mt5.initialize(timeout=5000)
-                        retry_at = time.monotonic() + 5
-                    snapshot = collect(mt5, symbol,market_cache=market_cache,dom_cache=dom_cache) if initialized else empty_snapshot(
-                        "MT5 connection failed. Set terminal64.exe path and sign in inside MT5.")
-                    if initialized and not snapshot["connected"]:
-                        dom_cache.release(mt5)
-                        mt5.shutdown()
-                        initialized = False
+                        retry_at = mono + 5
+                        next_full_snapshot=0.0
+                    if initialized:
+                        full_interval=SNIPER_FULL_SNAPSHOT_SECONDS if sniper else max(0.5,min(1.0,normal_poll_seconds))
+                        full_due=latest_snapshot is None or mono >= next_full_snapshot
+                        if full_due:
+                            latest_snapshot=collect(mt5,symbol,market_cache=market_cache,dom_cache=dom_cache)
+                            next_full_snapshot=mono+full_interval
+                            publish(latest_snapshot)
+                            core_failures=0
+                        elif sniper and latest_snapshot.get('connected'):
+                            fast_snapshot,changed,_=refresh_fast_tick(latest_snapshot,mt5,symbol)
+                            if changed:
+                                latest_snapshot=fast_snapshot
+                                publish(latest_snapshot)
+                                core_failures=0
+                        if initialized and latest_snapshot and not latest_snapshot.get('connected'):
+                            dom_cache.release(mt5);mt5.shutdown();initialized=False
+                    elif mono >= next_full_snapshot:
+                        latest_snapshot=empty_snapshot("MT5 connection failed. Set terminal64.exe path and sign in inside MT5.")
+                        next_full_snapshot=mono+1.0
+                        publish(latest_snapshot)
                 except Exception:
-                    snapshot = empty_snapshot("MT5 read failed; retrying connection.")
+                    latest_snapshot=empty_snapshot("MT5 read failed; retrying connection.")
                     dom_cache.release(mt5)
-                    mt5.shutdown()
-                    initialized = False
-                    retry_at = time.monotonic() + 5
+                    try:
+                        mt5.shutdown()
+                    except Exception:
+                        pass
+                    initialized=False
+                    retry_at=time.monotonic()+5
+                    next_full_snapshot=0.0
+
             try:
-                body = json.dumps(snapshot, allow_nan=False).encode("utf-8")
-                request = urllib.request.Request(BASE + "/v1/gateway/snapshot", data=body,
-                          headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
-                with opener.open(request, timeout=4) as response:
-                    response.read()
-                core_failures = 0
-                poll_seconds = 1.0
-                if initialized and snapshot['connected']:
+                if initialized and latest_snapshot and latest_snapshot.get('connected'):
+                    # Command pickup happens every hot-loop iteration, immediately after
+                    # any new Sniper tick was published to Core.
                     try:
-                        poll_seconds=min(poll_seconds,executor.cycle(mt5,api))
-                    except (OSError, ValueError, RuntimeError):
-                        pass  # Durable journal reconciles any interrupted submission.
-                    try:
-                        job = api('/v1/gateway/history/request').get('job')
-                        if job is not None:
-                            api('/v1/gateway/history/chunk', collect_history_chunk(mt5, job))
-                        else:
-                            from studio_feed import collect_frame
-                            request=api('/v1/gateway/research/request')
-                            poll_seconds=min(poll_seconds,max(0.25,min(1.0,request.get('poll_ms',1000)/1000.0)))
-                            if request.get('job') is not None:
-                                api('/v1/gateway/research/frame',collect_frame(mt5,request['job']))
-                    except (OSError, ValueError):
-                        pass  # Live snapshot succeeded; an obsolete history job may have been cancelled.
-            except (OSError, ValueError):
-                core_failures += 1
+                        normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api)))
+                    except (OSError,ValueError,RuntimeError):
+                        pass
+                    mono=time.monotonic()
+                    background_interval=SNIPER_BACKGROUND_SECONDS if sniper else max(0.25,normal_poll_seconds)
+                    if mono >= next_background:
+                        next_background=mono+background_interval
+                        background_work()
                 if core_failures >= 3:
                     return
-            time.sleep(locals().get("poll_seconds",1.0))
+            except (OSError,ValueError):
+                core_failures+=1
+                if core_failures >= 3:
+                    return
+
+            target=SNIPER_LOOP_SECONDS if sniper and initialized else normal_poll_seconds
+            elapsed=time.perf_counter()-loop_started
+            if target > elapsed:
+                time.sleep(target-elapsed)
     finally:
         executor.close()
         if mt5 is not None:
