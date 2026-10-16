@@ -1,8 +1,8 @@
-import { Dashboard as BaseDashboard } from "./main.slint";
+import { Dashboard } from "./main.slint";
 import { CorrelationPage } from "./correlation.slint";
 import { Button } from "std-widgets.slint";
 
-export component Dashboard inherits BaseDashboard {
+component CorrelationDashboard inherits Dashboard {
     in property <[string]> corr-sources;
     in property <[string]> corr-source-ids;
     in-out property <int> corr-source-a: -1;
@@ -75,3 +75,5 @@ export component Dashboard inherits BaseDashboard {
         }
     }
 }
+
+export { CorrelationDashboard as Dashboard }
