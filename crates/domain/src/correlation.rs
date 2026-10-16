@@ -124,8 +124,8 @@ pub fn analyze(mut inputs: Vec<Input<'_>>, config: CorrelationConfig) -> Result<
     let mut source_ids = BTreeSet::new();
     let mut symbols = BTreeSet::new();
     for input in &inputs {
-        if !source_ids.insert(input.source_id) { return Err("Duplicate correlation source ID".into()); }
-        if !symbols.insert(input.history.symbol.as_str()) { return Err("Correlation v1 requires distinct symbols".into()); }
+        if !source_ids.insert(input.source_id.to_owned()) { return Err("Duplicate correlation source ID".into()); }
+        if !symbols.insert(input.history.symbol.clone()) { return Err("Correlation v1 requires distinct symbols".into()); }
     }
     let first = inputs[0].history;
     if inputs.iter().any(|v| {
@@ -323,10 +323,10 @@ mod tests {
     use crate::{backtest::{Contract, HistoryBar}, Candle};
 
     const T0: u64 = 1_800_000_000;
-    fn contract() -> Contract { Contract { point:.01, tick_size:.01, tick_loss:1., tick_profit:1., volume_min:.01, volume_step:.01, volume_max:100. } }
+    fn contract() -> Contract { Contract { point:0.01, tick_size:0.01, tick_loss:1.0, tick_profit:1.0, volume_min:0.01, volume_step:0.01, volume_max:100.0 } }
     fn history(symbol: &str, returns: &[f64], missing: &[usize]) -> History {
         let mut closes = vec![100.0];
-        for r in returns { closes.push(closes.last().unwrap() * r.exp()); }
+        for r in returns { closes.push(*closes.last().unwrap() * r.exp()); }
         let bars = closes.into_iter().enumerate().filter(|(i, _)| !missing.contains(i)).map(|(i, close)| HistoryBar {
             candle: Candle { time:T0+i as u64*60, open:close, high:close, low:close, close, tick_volume:100 }, spread_points:10
         }).collect::<Vec<_>>();
@@ -339,7 +339,7 @@ mod tests {
 
     #[test]
     fn perfect_positive_and_negative_correlation() {
-        let a_returns=[.01,.02,-.01,.03,-.02,.015];
+        let a_returns=[0.01,0.02,-0.01,0.03,-0.02,0.015];
         let b_returns=a_returns.map(|v|v*2.0);
         let c_returns=a_returns.map(|v|-v);
         let a=history("A",&a_returns,&[]); let b=history("B",&b_returns,&[]); let c=history("C",&c_returns,&[]);
@@ -351,15 +351,15 @@ mod tests {
 
     #[test]
     fn orthogonal_fixture_is_near_zero() {
-        let a=history("A",&[.01,-.01,.01,-.01],&[]);
-        let b=history("B",&[.01,.01,-.01,-.01],&[]);
+        let a=history("A",&[0.01,-0.01,0.01,-0.01],&[]);
+        let b=history("B",&[0.01,0.01,-0.01,-0.01],&[]);
         let report=analyze(vec![input("a",&a,4),input("b",&b,4)],cfg(4)).unwrap();
         assert!(pair(&report).correlation.unwrap().abs()<1e-12);
     }
 
     #[test]
     fn missing_minute_is_not_filled_and_invalidates_following_return() {
-        let returns=[.01,.02,.03,.04,.05];
+        let returns=[0.01,0.02,0.03,0.04,0.05];
         let a=history("A",&returns,&[2]); let b=history("B",&returns,&[]);
         let report=analyze(vec![input("a",&a,5),input("b",&b,5)],cfg(2)).unwrap();
         assert!(!report.minutes[2].available[0]);
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn availability_mask_tracks_asynchronous_sources() {
-        let returns=[.01,.02,.03,.04];
+        let returns=[0.01,0.02,0.03,0.04];
         let a=history("A",&returns,&[1]); let b=history("B",&returns,&[3]);
         let report=analyze(vec![input("a",&a,4),input("b",&b,4)],cfg(2)).unwrap();
         assert_eq!(report.minutes[1].available,vec![false,true]);
@@ -380,21 +380,21 @@ mod tests {
 
     #[test]
     fn insufficient_overlap_is_unavailable_not_zero() {
-        let a=history("A",&[.01,.02,.03],&[]); let b=history("B",&[.01,.02,.03],&[]);
+        let a=history("A",&[0.01,0.02,0.03],&[]); let b=history("B",&[0.01,0.02,0.03],&[]);
         let report=analyze(vec![input("a",&a,3),input("b",&b,3)],cfg(4)).unwrap();
         assert!(!pair(&report).available); assert_eq!(pair(&report).correlation,None); assert!(pair(&report).reason.contains("at least 4"));
     }
 
     #[test]
     fn zero_variance_does_not_fabricate_correlation() {
-        let a=history("A",&[0.,0.,0.,0.],&[]); let b=history("B",&[.01,.02,-.01,.03],&[]);
+        let a=history("A",&[0.0,0.0,0.0,0.0],&[]); let b=history("B",&[0.01,0.02,-0.01,0.03],&[]);
         let report=analyze(vec![input("a",&a,4),input("b",&b,4)],cfg(4)).unwrap();
         assert!(!pair(&report).available); assert_eq!(pair(&report).correlation,None); assert!(pair(&report).reason.contains("zero variance"));
     }
 
     #[test]
     fn input_order_does_not_change_identity_or_source_order() {
-        let a=history("AAA",&[.01,.02,.03],&[]); let b=history("BBB",&[.03,.02,.01],&[]);
+        let a=history("AAA",&[0.01,0.02,0.03],&[]); let b=history("BBB",&[0.03,0.02,0.01],&[]);
         let x=analyze(vec![input("source-b",&b,3),input("source-a",&a,3)],cfg(2)).unwrap();
         let y=analyze(vec![input("source-a",&a,3),input("source-b",&b,3)],cfg(2)).unwrap();
         assert_eq!(x.identity,y.identity); assert_eq!(x.sources,y.sources); assert_eq!(x.minutes,y.minutes); assert_eq!(x.pairs,y.pairs);
@@ -403,18 +403,18 @@ mod tests {
 
     #[test]
     fn mixed_account_context_and_duplicate_symbols_are_rejected() {
-        let a=history("A",&[.01,.02],&[]); let mut b=history("B",&[.01,.02],&[]); b.login=8;
+        let a=history("A",&[0.01,0.02],&[]); let mut b=history("B",&[0.01,0.02],&[]); b.login=8;
         assert!(analyze(vec![input("a",&a,2),input("b",&b,2)],cfg(2)).unwrap_err().contains("same account"));
-        let b=history("A",&[.01,.02],&[]);
+        let b=history("A",&[0.01,0.02],&[]);
         assert!(analyze(vec![input("a",&a,2),input("b",&b,2)],cfg(2)).unwrap_err().contains("distinct symbols"));
     }
 
     #[test]
     fn later_price_change_cannot_change_earlier_aligned_returns() {
-        let r=[.01,.02,.03,.04];
+        let r=[0.01,0.02,0.03,0.04];
         let a=history("A",&r,&[]); let b=history("B",&r,&[]);
         let before=analyze(vec![input("a",&a,4),input("b",&b,4)],cfg(2)).unwrap();
-        let mut altered=history("B",&r,&[]); let last=altered.bars.last_mut().unwrap(); last.candle.open*=2.; last.candle.high*=2.; last.candle.low*=2.; last.candle.close*=2.;
+        let mut altered=history("B",&r,&[]); let last=altered.bars.last_mut().unwrap(); last.candle.open*=2.0; last.candle.high*=2.0; last.candle.low*=2.0; last.candle.close*=2.0;
         let after=analyze(vec![input("a",&a,4),input("b",&altered,4)],cfg(2)).unwrap();
         assert_eq!(before.minutes[..4],after.minutes[..4]);
         assert_ne!(before.identity,after.identity);
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn portfolio_uses_only_all_symbol_intersection() {
-        let r=[.01,.02,.03,.04,.05];
+        let r=[0.01,0.02,0.03,0.04,0.05];
         let a=history("A",&r,&[]); let b=history("B",&r,&[]); let c=history("C",&r,&[2]);
         let report=analyze(vec![input("a",&a,5),input("b",&b,5),input("c",&c,5)],cfg(2)).unwrap();
         // Returns at t1, t4 and t5 are all-symbol valid; t2 is missing and t3 has no predecessor for C.
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn common_interval_is_intersection_and_empty_intersection_fails() {
-        let a=history("A",&[.01,.02,.03,.04],&[]); let b=history("B",&[.01,.02,.03,.04],&[]);
+        let a=history("A",&[0.01,0.02,0.03,0.04],&[]); let b=history("B",&[0.01,0.02,0.03,0.04],&[]);
         let report=analyze(vec![Input{source_id:"a",from:T0,to:T0+5*60,history:&a},Input{source_id:"b",from:T0+60,to:T0+5*60,history:&b}],cfg(2)).unwrap();
         assert_eq!(report.from,T0+60); assert_eq!(report.minutes.first().unwrap().time,T0+60);
         let error=analyze(vec![Input{source_id:"a",from:T0,to:T0+60,history:&a},Input{source_id:"b",from:T0+60,to:T0+120,history:&b}],cfg(2)).unwrap_err();
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn report_is_observational_only() {
-        let a=history("A",&[.01,.02,.03],&[]); let b=history("B",&[.03,.02,.01],&[]);
+        let a=history("A",&[0.01,0.02,0.03],&[]); let b=history("B",&[0.03,0.02,0.01],&[]);
         let report=analyze(vec![input("a",&a,3),input("b",&b,3)],cfg(2)).unwrap();
         assert!(!report.execution_effect); assert_eq!(report.algorithm,ALGORITHM); assert_eq!(report.identity_algorithm,IDENTITY_ALGORITHM);
     }
