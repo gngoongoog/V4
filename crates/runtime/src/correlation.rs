@@ -293,7 +293,7 @@ fn replay(db: &Connection, body: &[u8]) -> Result<Value> {
 }
 
 fn csv_cell(value: &str) -> String {
-    if value.contains([',', '"', '\n', '\r']) {
+    if value.contains(|c| matches!(c, ',' | '"' | '\n' | '\r')) {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
         value.to_owned()
