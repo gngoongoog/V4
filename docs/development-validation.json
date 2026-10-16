@@ -2,36 +2,36 @@
   "version": "0.7.0",
   "status": "verified",
   "source_state": "development preview",
-  "tested_commit": "58e41284334d6778a3bfd2aa7eb5dd9cca5628fd",
+  "tested_commit": "7b127bf03fb45044ee53dc2366a6d0c53e7c59d8",
   "tested_tree": "10d1d6bee091b02fa1d044336649e645bce1b177",
   "research_ci": {
-    "run_id": 38901953329,
+    "run_id": 38903981927,
     "conclusion": "success",
-    "url": "https://github.com/gngoongoog/V4/actions/runs/38901953329",
+    "url": "https://github.com/gngoongoog/V4/actions/runs/38903981927",
     "artifact": {
-      "id": 12046902409,
+      "id": 12047357762,
       "name": "synthetic-research-validation",
-      "size_bytes": 4429133,
-      "sha256": "2de80d8d1afc407a09fde424ddcdcbe8145c02bda5de3eb497c47906f1c620c5"
+      "size_bytes": 4430101,
+      "sha256": "3b51fb901ed91f4aee95f4008b52f2e881a6147b850e5a6a66573f4123c73295"
     }
   },
   "windows_ci": {
-    "run_id": 38901953336,
+    "run_id": 38903982015,
     "conclusion": "success",
-    "url": "https://github.com/gngoongoog/V4/actions/runs/38901953336"
+    "url": "https://github.com/gngoongoog/V4/actions/runs/38903982015"
   },
   "windows_artifacts": [
     {
-      "id": 12047365466,
+      "id": 12047399573,
       "name": "BrainTrade-Windows-x64-Preview",
-      "size_bytes": 34038906,
-      "sha256": "afb677cc55d5653e41da4f83f7d07661d218a33044c84bc7611e2a512da9fbab"
+      "size_bytes": 34039008,
+      "sha256": "7681d89e99e01889d5971e20b99b5e4307faaf6ed6ea6f409ce4a3b2749f8fba"
     },
     {
-      "id": 12047257616,
+      "id": 12048102580,
       "name": "windows-native-validation",
       "size_bytes": 1780577,
-      "sha256": "c9d455388b3314d1d86981128c0e602e9cd4ebd8a6821b34b74dfc98b4fc66da"
+      "sha256": "6c5deaa9b7898fbca53b057324d9f5a9d0eb861ce7f2a5b027dc902d63ee2258"
     }
   ],
   "release_evidence": "validation.json",
@@ -43,7 +43,7 @@
     "telegram_live_delivery": "not performed",
     "imported_ml_automatic_promotion": false
   },
-  "note": "CI-verified 0.7 development preview including Portfolio Exposure v1, Sniper Fast Lane and the native MT5 OnTick/CopyTicks quote bridge. Tested commit is exact PR #20 head. The current development merge commit 7b127bf03fb45044ee53dc2366a6d0c53e7c59d8 has the identical tested tree 10d1d6bee091b02fa1d044336649e645bce1b177. Native Windows MT5 Demo acceptance and private Telegram delivery remain separate target-machine steps. The <=20 ms Sniper figure is a BrainTrade-local queue-to-send engineering target to characterize on the target machine, not a broker/network/fill guarantee. Promoted 0.6 evidence remains unchanged.",
+  "note": "CI-verified 0.7 development checkpoint after merging Portfolio Exposure v1, Sniper Fast Lane and the native MT5 OnTick/CopyTicks quote bridge. The recorded Research and Windows/Linux runs executed on the development merge commit itself. Native Windows MT5 Demo acceptance and private Telegram delivery remain separate target-machine steps. The <=20 ms Sniper figure is a BrainTrade-local queue-to-send engineering target to characterize on the target machine, not a broker/network/fill guarantee. Promoted 0.6 evidence remains unchanged.",
   "pull_request_head": "58e41284334d6778a3bfd2aa7eb5dd9cca5628fd",
   "current_development_merge": "7b127bf03fb45044ee53dc2366a6d0c53e7c59d8",
   "source_tree_matches_pr_head": true,
