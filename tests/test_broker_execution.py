@@ -98,6 +98,22 @@ class ExecutionTests(unittest.TestCase):
             self.assertIn(key,result)
             self.assertGreaterEqual(result[key],0)
         self.assertEqual(len(self.mt.sends),1)
+    def test_sniper_fast_path_reprices_stop_to_current_broker_floor(self):
+        self.cmd['signal'].update(key='tick:geometry',stop_distance=.02,target_distance=.02)
+        result=self.send()
+        self.assertEqual(result['state'],'filled')
+        self.assertEqual(result['pricing']['policy'],'sniper_send_geometry_v1')
+        self.assertAlmostEqual(result['pricing']['broker_minimum_distance'],.06,places=9)
+        self.assertAlmostEqual(result['pricing']['stop_distance'],.16,places=9)
+        request=self.mt.sends[0]
+        self.assertGreaterEqual((self.mt.tick.bid-request['sl'])+1e-9,.05)
+        self.assertGreaterEqual((request['tp']-self.mt.tick.bid)+1e-9,.05)
+    def test_regular_path_does_not_silently_widen_invalid_geometry(self):
+        self.cmd['signal'].update(stop_distance=.02,target_distance=.02)
+        result=self.send()
+        self.assertEqual(result['state'],'rejected')
+        self.assertFalse(result['fast_path'])
+        self.assertFalse(self.mt.sends)
     def test_sniper_fast_path_rechecks_identity_after_authorization(self):
         self.cmd['signal']['key']='tick:987654321'
         def authorize(_):

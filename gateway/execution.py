@@ -46,6 +46,24 @@ def is_fast_path(cmd):
     return cmd.get('kind') == 'open' and str(signal.get('key', '')).startswith('tick:')
 
 
+def sniper_broker_geometry(info, tick, stop, target):
+    """Adapt frozen Sniper distances to the quote and broker stop floor at send.
+
+    Distances remain measured from executable entry.  For a stop, the current
+    spread consumes part of the distance observed from the opposite exit quote;
+    TP does not pay the spread a second time.  One trade tick is reserved as a
+    rounding cushion so tick-size normalization does not land inside the floor.
+    """
+    step = float(info.trade_tick_size)
+    spread = float(tick.ask) - float(tick.bid)
+    minimum = max(0, getattr(info, 'trade_stops_level', 0)) * float(info.point) + step
+    stop = max(float(stop), spread + minimum)
+    target = max(float(target), max(step, minimum - spread))
+    if not all(math.isfinite(v) and v > 0 for v in (stop, target, spread + step, minimum)):
+        raise ValueError('Invalid Sniper broker geometry')
+    return stop, target, minimum, spread
+
+
 class BrokerExecutor:
     def __init__(self, path):
         self.db = sqlite3.connect(path)
@@ -171,13 +189,23 @@ class BrokerExecutor:
                 request['position']=cmd['position']
             else:
                 stop=float(cmd['signal']['stop_distance']);target=float(cmd['signal']['target_distance']);step=info.trade_tick_size
+                if fast_path:
+                    stop, target, minimum, spread = sniper_broker_geometry(info, tick, stop, target)
+                    result['pricing'] = dict(
+                        policy='sniper_send_geometry_v1',
+                        quote_time_ms=int(tick.time_msc),
+                        spread_points=spread/info.point,
+                        broker_minimum_distance=minimum,
+                        stop_distance=stop,
+                        target_distance=target,
+                    )
                 if not all(math.isfinite(v) and v>0 for v in (stop,target)):
                     raise ValueError('Invalid stop/target geometry')
                 request['sl']=(math.floor((price-side*stop)/step) if side==1 else math.ceil((price-side*stop)/step))*step
                 request['tp']=(math.ceil((price+side*target)/step) if side==1 else math.floor((price+side*target)/step))*step
                 exit_price=tick.bid if side==1 else tick.ask
                 minimum=max(0,getattr(info,'trade_stops_level',0))*info.point
-                if request['sl']<=0 or request['tp']<=0 or (exit_price-request['sl'])*side<minimum or (request['tp']-exit_price)*side<minimum:
+                if request['sl']<=0 or request['tp']<=0 or (exit_price-request['sl'])*side+step*1e-8<minimum or (request['tp']-exit_price)*side+step*1e-8<minimum:
                     raise ValueError('Stop/target too close for current spread or broker stops level')
 
             # Sniper removes one broker round trip. All equivalent local validations
