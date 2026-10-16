@@ -2,30 +2,36 @@
   "version": "0.7.0",
   "status": "verified",
   "source_state": "development preview",
-  "tested_commit": "ba399ad206b1fe3231a10dbbd270de75145fd2e4",
-  "tested_tree": "74cf92a0681b556c0b45462b511b11b2f7f5c62a",
+  "tested_commit": "58e41284334d6778a3bfd2aa7eb5dd9cca5628fd",
+  "tested_tree": "10d1d6bee091b02fa1d044336649e645bce1b177",
   "research_ci": {
-    "run_id": 38817498736,
+    "run_id": 38901953329,
     "conclusion": "success",
-    "url": "https://github.com/gngoongoog/V4/actions/runs/38817498736"
+    "url": "https://github.com/gngoongoog/V4/actions/runs/38901953329",
+    "artifact": {
+      "id": 12046902409,
+      "name": "synthetic-research-validation",
+      "size_bytes": 4429133,
+      "sha256": "2de80d8d1afc407a09fde424ddcdcbe8145c02bda5de3eb497c47906f1c620c5"
+    }
   },
   "windows_ci": {
-    "run_id": 38817498472,
+    "run_id": 38901953336,
     "conclusion": "success",
-    "url": "https://github.com/gngoongoog/V4/actions/runs/38817498472"
+    "url": "https://github.com/gngoongoog/V4/actions/runs/38901953336"
   },
   "windows_artifacts": [
     {
-      "id": 12011338620,
+      "id": 12047365466,
       "name": "BrainTrade-Windows-x64-Preview",
-      "size_bytes": 34008445,
-      "sha256": "0140425cf6a322211e166f37a23db14daf9a375b3c8fe79a2245680f0c91f5dc"
+      "size_bytes": 34038906,
+      "sha256": "afb677cc55d5653e41da4f83f7d07661d218a33044c84bc7611e2a512da9fbab"
     },
     {
-      "id": 12011318553,
+      "id": 12047257616,
       "name": "windows-native-validation",
-      "size_bytes": 1780470,
-      "sha256": "3fb36fb2d14f642810d4787ae27d447e2a4c17a9be3b18d462d0fc6f465d97be"
+      "size_bytes": 1780577,
+      "sha256": "c9d455388b3314d1d86981128c0e602e9cd4ebd8a6821b34b74dfc98b4fc66da"
     }
   ],
   "release_evidence": "validation.json",
@@ -37,25 +43,31 @@
     "telegram_live_delivery": "not performed",
     "imported_ml_automatic_promotion": false
   },
-  "note": "CI-verified development preview. Tested commit is the actual GitHub PR merge checkout; its tree equals the recorded pull-request head tree. Tested source and executable are identified above; a later documentation-only delivery commit records completed evidence without changing runtime code. Promoted 0.6 evidence remains unchanged. Native MT5 Demo and private Telegram acceptance remain separate target-machine steps.",
-  "pull_request_head": "e0547cab6ccce8d41944750f88d0089dc689ff29",
+  "note": "CI-verified 0.7 development preview including Portfolio Exposure v1, Sniper Fast Lane and the native MT5 OnTick/CopyTicks quote bridge. Tested commit is exact PR #20 head. The current development merge commit 7b127bf03fb45044ee53dc2366a6d0c53e7c59d8 has the identical tested tree 10d1d6bee091b02fa1d044336649e645bce1b177. Native Windows MT5 Demo acceptance and private Telegram delivery remain separate target-machine steps. The <=20 ms Sniper figure is a BrainTrade-local queue-to-send engineering target to characterize on the target machine, not a broker/network/fill guarantee. Promoted 0.6 evidence remains unchanged.",
+  "pull_request_head": "58e41284334d6778a3bfd2aa7eb5dd9cca5628fd",
+  "current_development_merge": "7b127bf03fb45044ee53dc2366a6d0c53e7c59d8",
   "source_tree_matches_pr_head": true,
+  "source_tree_matches_current_development": true,
   "tests": {
     "rust_domain_passed": 61,
     "rust_runtime_passed": 47,
     "rust_runtime_ignored": 1,
     "ignored_reason": "explicit public-network official news check",
-    "python_passed": 60
+    "python_passed": 78
   },
   "verified_checks": [
     "Core lifecycle, authentication, staleness, research replay and persistence",
-    "schema-12 backup/restore, portfolio settings and durable broker-journal boundary",
+    "schema-12 backup/restore, Portfolio Exposure v1 settings and durable broker-journal boundary",
     "four modes, proportional commissions, quote costs and 21-timeframe strategy studio",
     "simulated MT5 execution integration on Linux and packaged Windows",
-    "SOLO excludes coordinator votes; return waits for owned exposure settlement",
+    "SOLO excludes coordinator votes; RETURNING waits for owned exposure settlement",
     "unknown-intent account isolation, fill barrier, split-fill reconciliation and no blind resend",
+    "Sniper fast broker dispatch with queue/gateway/authorization/journal/send timing instrumentation",
+    "native Sniper authenticated named-pipe transport, bounded FIFO and automatic 5 ms polling fallback",
+    "OnTick wake plus CopyTicks recovery of terminal-cached ticks, source-order Bid/Ask forwarding and same-millisecond event separation",
+    "partial native transport writes do not advance the source cursor",
     "native desktop 18 pages rendered at two sizes on Linux and Windows",
     "offline report interactions and native selector compilation",
-    "Windows portable startup, embedded runtime, DPAPI IPC, PE dependencies and settings persistence"
+    "Windows portable startup, embedded runtime, DPAPI IPC, PE dependencies, native bridge packaging and settings persistence"
   ]
 }
