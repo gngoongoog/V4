@@ -193,10 +193,10 @@ class BrokerExecutor:
                     raise ValueError('Broker order_check: '+str(getattr(checked,'comment','unavailable')))
 
             authorize_start=time.perf_counter()
-            authorized=authorize(cmd['id'])
-            result['authorize_ms']=(time.perf_counter()-authorize_start)*1000
-            if not authorized:
+            if not authorize(cmd['id']):
+                result['authorize_ms']=(time.perf_counter()-authorize_start)*1000
                 return dict(result,state='cancelled',reason='Core withdrew authorization before send')
+            result['authorize_ms']=(time.perf_counter()-authorize_start)*1000
 
             current=mt5.account_info()
             if account_identity(current)!=expected(cmd) or current.trade_mode!=target_mode or clock_ms()>cmd['expires_ms']:
