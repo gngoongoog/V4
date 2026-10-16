@@ -85,5 +85,33 @@ class ExecutionTests(unittest.TestCase):
         self.mt.info.filling_mode=2;self.mt.code=10019;self.assertEqual(self.send()['state'],'rejected');self.assertEqual(self.mt.sends[0]['type_filling'],1)
     def test_missing_journal_unknown_never_becomes_new_order(self):
         self.cmd['state']='unknown';self.assertEqual(self.send()['state'],'unknown');self.assertFalse(self.mt.sends)
+    def test_sniper_tick_fast_path_skips_broker_check_and_reports_timings(self):
+        self.cmd['signal']['key']='tick:123456789'
+        self.mt.check_code=10019
+        self.mt.on_check=lambda: self.fail('Sniper fast path must not call order_check')
+        result=self.send()
+        self.assertEqual(result['state'],'filled')
+        self.assertTrue(result['fast_path'])
+        self.assertTrue(result['order_check_skipped'])
+        self.assertEqual(result['check_ms'],0.0)
+        for key in ('queue_to_gateway_ms','authorize_ms','journal_ms','pre_send_ms','queue_to_send_ms','send_ms','total_ms'):
+            self.assertIn(key,result)
+            self.assertGreaterEqual(result[key],0)
+        self.assertEqual(len(self.mt.sends),1)
+    def test_sniper_fast_path_rechecks_identity_after_authorization(self):
+        self.cmd['signal']['key']='tick:987654321'
+        def authorize(_):
+            self.mt.account.login=88
+            return True
+        result=self.ex.execute(self.mt,self.cmd,authorize)
+        self.assertEqual(result['state'],'rejected')
+        self.assertIn('Account changed',result['reason'])
+        self.assertFalse(self.mt.sends)
+    def test_regular_path_still_requires_broker_order_check(self):
+        self.mt.check_code=10019
+        result=self.send()
+        self.assertEqual(result['state'],'rejected')
+        self.assertFalse(result['fast_path'])
+        self.assertFalse(self.mt.sends)
 
 if __name__=='__main__':unittest.main()
