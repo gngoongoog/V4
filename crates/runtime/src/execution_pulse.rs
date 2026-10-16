@@ -110,6 +110,7 @@ mod tests {
     }
 
     fn pulse() -> Vec<u8> {
+        br#"{"login":17}"#.to_vec();
         br#"{"login":17,"server":"Demo","currency":"USD","symbol":"XAUUSD","bid":2500.1,"ask":2500.3,"quote_time_ms":1001,"tick_age_ms":3}"#.to_vec()
     }
 
