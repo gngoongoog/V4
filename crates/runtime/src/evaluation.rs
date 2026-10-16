@@ -49,3 +49,43 @@ impl Service {
         self.inner.route(method, path, body, db, dir)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn facade_initializes_parent_before_oos_and_maps_research_route() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        let mut service = Service::new(&db).unwrap();
+        let state = service
+            .route(
+                "GET",
+                "/v1/evaluation/oos",
+                b"",
+                &db,
+                Path::new("."),
+            )
+            .unwrap();
+        assert_eq!(state["research_only"], true);
+        assert_eq!(state["automatic_promotion"], false);
+        assert_eq!(state["broker_effect"], false);
+        let parent_exists: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='chronological_evaluations'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let child_exists: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='oos_evidence'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(parent_exists, 1);
+        assert_eq!(child_exists, 1);
+    }
+}
