@@ -2,9 +2,12 @@ import importlib.util
 from pathlib import Path
 from datetime import datetime, timezone
 from types import SimpleNamespace as NS
+import sys
 import unittest
 
-spec=importlib.util.spec_from_file_location("gateway",Path(__file__).parents[1]/"gateway"/"mt5_gateway.py")
+ROOT=Path(__file__).parents[1]
+sys.path.insert(0,str(ROOT/"gateway"))
+spec=importlib.util.spec_from_file_location("gateway",ROOT/"gateway"/"mt5_gateway.py")
 gateway=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gateway)
 

@@ -49,6 +49,15 @@ def main():
     if os.name != "nt":
         raise SystemExit("This acceptance harness requires Windows")
     executable = args.exe.resolve()
+    package_root = executable.parent
+    native_runtime = package_root / "runtime/gateway/sniper_native.py"
+    native_ea = package_root / "MT5/Experts/BrainTradeSniperBridge.mq5"
+    assert native_runtime.is_file(), native_runtime
+    assert native_ea.is_file(), native_ea
+    ea_source = native_ea.read_text(encoding="utf-8")
+    assert "void OnTick()" in ea_source and "FileFlush(g_pipe)" in ea_source
+    assert "OrderSend" not in ea_source and "CTrade" not in ea_source
+
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with tempfile.TemporaryDirectory(prefix="braintrade-windows-check-") as folder:
         directory = Path(folder)
@@ -140,9 +149,10 @@ def main():
                 shutil.copytree(frames, args.output.parent / "native-ui", dirs_exist_ok=True)
                 args.output.write_text(json.dumps({"version": status["version"], "result": "PASS",
                     "checks": ["packaged Core startup", "DPAPI IPC", "stopped/unbound default",
+                               "native Sniper runtime and source-only MQL5 EA packaged", "MQL5 bridge contains no order submission API",
                                "learning API", "four mode settings and restart", "proportional fee calculator", "21-frame studio API", "opportunity history", "config save", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "shutdown", "all 36 complete native frames"],
                     "native_pages": 18, "rendered_frames": len(expected),
-                    "native_mt5_acceptance": "not performed"}, indent=2), encoding="utf-8")
+                    "native_mt5_acceptance": "EA source packaged; target-machine MetaEditor compile/attach and real OnTick pipe acceptance not performed"}, indent=2), encoding="utf-8")
             finally:
                 if process.poll() is None:
                     try:

@@ -26,6 +26,8 @@ ASSETS = [
      "sha256": "b0544343a702fa80c95ad5d3d608ea3599dd54d4632df855e4c8d24eb6ecfa1c", "destination": "runtime/python/Lib/site-packages"},
 ]
 SYSTEM_DLLS = set("""advapi32 avrt bcrypt bcryptprimitives cfgmgr32 comctl32 comdlg32 crypt32 cryptbase cryptsp d2d1 d3d11 d3d12 dcomp dbghelp dhcpcsvc dnsapi dwmapi dwrite dxgi gdi32 gdiplus hid imm32 iphlpapi kernel32 kernelbase msimg32 msvcrt ncrypt normaliz ntdll ole32 oleacc oleaut32 opengl32 powrprof propsys psapi rpcrt4 secur32 setupapi shell32 shlwapi user32 userenv usp10 uxtheme version windowscodecs winhttp wininet winmm winscard winspool wintrust ws2_32 wtsapi32 ucrtbase mswsock ntmarta shcore combase netapi32 sensapi wldap32""".split())
+GATEWAY_FILES = ("mt5_gateway.py", "studio_feed.py", "execution.py", "check_runtime.py", "sniper_native.py")
+NATIVE_EA = "BrainTradeSniperBridge.mq5"
 
 def digest(path):
     with Path(path).open("rb") as stream:
@@ -139,6 +141,16 @@ def source_copy(destination):
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, output)
 
+def copy_runtime_assets(output):
+    """Copy the embedded gateway plus the source-only native MT5 bridge."""
+    gateway = output / "runtime/gateway"
+    gateway.mkdir(parents=True, exist_ok=True)
+    for file in GATEWAY_FILES:
+        shutil.copy2(ROOT / "gateway" / file, gateway / file)
+    experts = output / "MT5/Experts"
+    experts.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / "mt5" / NATIVE_EA, experts / NATIVE_EA)
+
 def source_commit():
     try:
         return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT,
@@ -164,15 +176,13 @@ def main():
     for asset in ASSETS:
         extract_checked(download(asset, cache), output / asset["destination"])
     (output / "runtime/python/python313._pth").write_text("python313.zip\n.\nLib/site-packages\n../gateway\nimport site\n", encoding="ascii")
-    (output / "runtime/gateway").mkdir(parents=True)
-    for file in ("mt5_gateway.py", "studio_feed.py", "execution.py", "check_runtime.py"):
-        shutil.copy2(ROOT / "gateway" / file, output / "runtime/gateway" / file)
+    copy_runtime_assets(output)
     for source, target in (("QUICKSTART_AR.md", "README_AR.md"), ("RELEASE_STATUS.md", "RELEASE_STATUS.md"), ("THIRD_PARTY.md", "THIRD_PARTY.md")):
         shutil.copy2(ROOT / "docs" / source, output / target)
     source_copy(output / "Source")
     count = collect_licenses(output / "licenses/rust", args.cargo)
     reports = check_pe_tree(output, args.dll_dir)
-    (output / "package-validation.json").write_text(json.dumps({"version": VERSION, "architecture": "Windows x64", "source_commit": source_commit(), "rust_dependencies": count, "assets": ASSETS, "pe_imports": reports, "validation": "Portable package built from the checked source tree with pinned embedded assets and PE dependency validation. Native MT5 acceptance remains a separate manual step."}, indent=2), encoding="utf-8")
+    (output / "package-validation.json").write_text(json.dumps({"version": VERSION, "architecture": "Windows x64", "source_commit": source_commit(), "rust_dependencies": count, "assets": ASSETS, "native_sniper_bridge": "MT5/Experts/BrainTradeSniperBridge.mq5 (source; target-machine MetaEditor compile/attach still required)", "pe_imports": reports, "validation": "Portable package built from the checked source tree with pinned embedded assets and PE dependency validation. Native MT5 acceptance remains a separate manual step."}, indent=2), encoding="utf-8")
     manifest = build_manifest(output)
     (output / "SHA256SUMS.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     archive = ROOT / "release" / f"BrainTrade-Windows-x64-v{VERSION}-Preview.zip"

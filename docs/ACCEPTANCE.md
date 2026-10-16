@@ -77,7 +77,21 @@ These checks require a Windows x64 host with a real MT5 installation and a demo 
 - Confirm tick-keyed Sniper entries report `fast_path=true` and `order_check_skipped=true`; non-Sniper/bar-based entries must keep the normal broker `order_check` path.
 - Verify `PRAGMA synchronous=FULL` journal persistence still completes before every `order_send`; low latency must not permit a blind duplicate after crash, timeout or uncertain broker acknowledgement.
 - Compare fresh quote time, command creation time and the final `order_send` result. If local P95/P99 exceeds the target, use the component timings to identify whether Core authorization, durable journal I/O or local MT5 calls dominate before changing any safety boundary.
-- Treat MT5/broker acknowledgement and fill latency separately. No fixed end-to-end latency may be claimed from CI or from the local 5 ms polling target.
+- Treat MT5/broker acknowledgement and fill latency separately. No fixed end-to-end latency may be claimed from CI or from the local fast path.
+
+## Native Sniper OnTick / CopyTicks bridge — target-machine acceptance required
+
+- From the portable package, copy `MT5/Experts/BrainTradeSniperBridge.mq5` into the selected terminal's `MQL5/Experts` folder if it is not already there, compile it with that terminal's MetaEditor and attach it to the exact broker symbol used by BrainTrade (for example the broker-specific XAUUSD name).
+- Start BrainTrade first so it creates the short-lived session token under that terminal data folder at `MQL5/Files/BrainTrade/sniper.token`; the EA should then show `BrainTrade Sniper Native: CONNECTED` on its chart.
+- Confirm the EA contains no trading API and does not place, modify or close any order by itself. Broker submission must remain exclusively in the journaled Python execution adapter.
+- During a fast Demo quote burst, compare the EA's quote-tick counter with a `CopyTicks(..., COPY_TICKS_ALL)` capture over the same fresh interval. Pure Last/volume-only ticks may be consumed by the cursor but only Bid/Ask changes should be forwarded to Sniper decisions.
+- Verify several Bid/Ask changes with one `time_msc` are still evaluated as distinct quote events rather than collapsing to one `tick:<ms>` decision.
+- Detach or stop the EA while Sniper is active and confirm the gateway automatically falls back to the 5 ms Python quote polling path without enabling execution by itself.
+- Reattach the EA and confirm native wake resumes without restarting Core and without creating a duplicate broker command for a previously observed quote.
+- Disconnect/reconnect MT5 for less than one second and confirm cached fresh quote changes are recovered in source order. After a longer gap, confirm the bridge resumes from the current millisecond instead of replaying stale history into live decisions.
+- Force a pipe interruption/partial write if possible and confirm the EA does not advance its source cursor until the whole ASCII batch is written; the next OnTick should recover that batch from MT5's tick cache.
+- Verify an invalid token, wrong login or wrong symbol cannot update the reconciled BrainTrade quote state.
+- Record native-path P50/P95/P99 separately from fallback-polling P50/P95/P99. Treat this as local reaction characterization only; neither path proves a fixed broker acknowledgement/fill latency or guaranteed capture of every upstream broker event.
 
 ## Portfolio Exposure v1 acceptance
 
