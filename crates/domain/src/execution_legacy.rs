@@ -1,4 +1,6 @@
 //! Independent, deterministic trading policies. Broker transport lives in the gateway.
+#[path = "execution_liquidity.rs"]
+mod liquidity;
 use crate::{
     studio::{FrameBar, Genome},
     trading::{self, TradingMode},
@@ -7,7 +9,8 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const BRAINS: [(&str, &str); 14] = [
+// Append new identities only. Existing index -> magic mappings are durable broker ownership.
+pub const BRAINS: [(&str, &str); 15] = [
     ("system", "النظام — الوضع المختار"),
     ("gann", "جان الهندسي"),
     ("wyckoff", "وايكوف"),
@@ -22,6 +25,7 @@ pub const BRAINS: [(&str, &str); 14] = [
     ("kte", "KTE — الاندفاع والارتداد"),
     ("regime", "حالة السوق — اتجاه أو نطاق"),
     ("generated", "استراتيجية مولّدة مختارة"),
+    ("liquidity", "سحب السيولة — sweep + reclaim"),
 ];
 pub fn magic(id: &str) -> Option<u64> {
     BRAINS
@@ -354,6 +358,16 @@ pub fn evaluate(
                 }
                 format!("كفاءة الاتجاه {er:.2}؛ اتباع اتجاه أو ارتداد نطاق")
             }
+            "liquidity" => {
+                let q = liquidity::assess(&series, t, atr);
+                s.side = q.side;
+                if q.side != 0 {
+                    s.stop_distance = q.stop_distance;
+                    s.target_distance = b.reward_risk * s.stop_distance;
+                    s.key = format!("sweep:{}:{}", b.timeframe, last.time);
+                }
+                q.reason
+            }
             "generated" => {
                 if let Some(g) = genome {
                     s.side = crate::studio::signal(g, bars);
@@ -405,6 +419,9 @@ mod tests {
         for (id, _) in BRAINS {
             assert_eq!(brain_for_magic(magic(id).unwrap()), Some(id));
         }
+        // Existing durable ownership stays stable; the new identity is appended only.
+        assert_eq!(magic("generated"), Some(410_613));
+        assert_eq!(magic("liquidity"), Some(410_614));
         b.lots = f64::NAN;
         assert!(b.validate().is_err());
     }
