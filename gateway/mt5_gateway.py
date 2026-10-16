@@ -1,12 +1,12 @@
 """MT5 snapshots and explicitly selected independent-brain broker execution.
 
-Sniper mode has two compatible fast paths.  The packaged MQL5 bridge can wake
-this process directly from MT5 OnTick through an authenticated local named pipe;
-when that bridge is absent or stale, the proven 5 ms Python quote polling path
-remains as a fallback.  Account reconciliation, deal history, DOM, candle
-history and research collection stay on slower bounded schedules.
+Sniper mode has two compatible fast paths. The packaged MQL5 bridge wakes this
+process directly from MT5 OnTick and recovers coalesced quote ticks with
+CopyTicks; when that bridge is absent or stale, the proven 5 ms Python quote
+polling path remains as a fallback. Account reconciliation, deal history, DOM,
+candle history and research collection stay on slower bounded schedules.
 
-Broker execution remains in execution.py.  The MQL5 bridge transports ticks
+Broker execution remains in execution.py. The MQL5 bridge transports quotes
 only and never owns order submission.
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ SNIPER_BACKGROUND_SECONDS = 0.500
 CONFIG_REFRESH_SECONDS = 0.500
 NORMAL_MIN_LOOP_SECONDS = 0.050
 NATIVE_RECENT_MS = 500
-NATIVE_BATCH_MAX = 256
+NATIVE_BATCH_MAX = 512
 
 
 class MarketCache:
@@ -121,8 +121,10 @@ def empty_snapshot(error: str) -> dict:
     return dict(connected=False, error=error, login=0, server="", currency="",
                 demo=False, balance=0.0, equity=0.0, positions=[], pending_orders=0,
                 today_net=None, today_deals=None, report_day="", bid=None, ask=None,
-                tick_age_ms=None, symbol="", volume_min=None, volume_step=None,
-                tick_size=None, dom_available=False,dom=[],volume_max=None,tick_value_loss=None,tick_value_profit=None,market=None,point=None)
+                tick_age_ms=None, quote_time_ms=None, source_quote_time_ms=None,
+                native_event_id=None, symbol="", volume_min=None, volume_step=None,
+                tick_size=None, dom_available=False,dom=[],volume_max=None,
+                tick_value_loss=None,tick_value_profit=None,market=None,point=None)
 
 
 def day_range(now: datetime):
@@ -169,6 +171,7 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
     if deals is None:
         errors.append("Deal history unavailable; daily PnL is unknown.")
     result = empty_snapshot(" ".join(errors))
+    tms=int(tick.time_msc) if tick else None
     result.update(connected=True, login=account.login, server=account.server,
                   currency=account.currency, demo=account.trade_mode == mt5.ACCOUNT_TRADE_MODE_DEMO,
                   account_trade_mode=int(account.trade_mode),margin_mode=getattr(account,"margin_mode",None),
@@ -181,7 +184,7 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
                              for p in positions], pending_orders=len(orders), today_net=net,
                   today_deals=count, report_day=report_day, symbol=symbol,
                   bid=tick.bid if tick else None, ask=tick.ask if tick else None,
-                  quote_time_ms=int(tick.time_msc) if tick else None,
+                  quote_time_ms=tms,source_quote_time_ms=tms,
                   tick_age_ms=max(0, int(now.timestamp() * 1000) - tick.time_msc) if tick and tick.time_msc<=int(now.timestamp()*1000)+2000 else None,
                   volume_min=info.volume_min if info else None,
                   volume_step=info.volume_step if info else None,
@@ -195,8 +198,40 @@ def sniper_enabled(config: dict) -> bool:
     return str(trading.get('mode', '')).strip().lower() == 'sniper'
 
 
+def quote_signature(snapshot: dict):
+    return (snapshot.get('source_quote_time_ms',snapshot.get('quote_time_ms')),
+            snapshot.get('bid'),snapshot.get('ask'))
+
+
+def advance_quote_clock(previous: dict | None, current: dict):
+    """Keep Core's quote_time_ms strictly monotonic for each quote-price change.
+
+    MT5 can report multiple quote changes with the same millisecond. Rust/Core's
+    existing Sniper contract keys decisions by quote_time_ms, so we preserve the
+    real broker millisecond separately and advance only the event clock by one
+    when necessary. This avoids a schema change while keeping freshness based on
+    the real source timestamp in tick_age_ms.
+    """
+    source_ms=current.get('source_quote_time_ms',current.get('quote_time_ms'))
+    if source_ms is None:
+        return current, False
+    current['source_quote_time_ms']=int(source_ms)
+    if not previous or not previous.get('connected'):
+        current['quote_time_ms']=int(source_ms)
+        return current, True
+    changed=quote_signature(previous)!=quote_signature(current)
+    previous_clock=int(previous.get('quote_time_ms') or 0)
+    if changed:
+        current['quote_time_ms']=max(int(source_ms),previous_clock+1)
+    else:
+        current['quote_time_ms']=max(int(source_ms),previous_clock)
+    if previous.get('native_event_id') is not None and current.get('native_event_id') is None:
+        current['native_event_id']=previous.get('native_event_id')
+    return current,changed
+
+
 def refresh_fast_tick(snapshot: dict, mt5, symbol: str, now_ms: int | None = None):
-    """Overlay only the newest observable MT5 quote onto a reconciled snapshot."""
+    """Overlay the newest observable Python MT5 quote onto reconciled state."""
     if not snapshot or not snapshot.get('connected'):
         return snapshot, False, None
     tick = mt5.symbol_info_tick(symbol)
@@ -209,20 +244,20 @@ def refresh_fast_tick(snapshot: dict, mt5, symbol: str, now_ms: int | None = Non
     if tms > now_ms + 2000:
         return snapshot, False, None
     signature=(tms,bid,ask)
-    previous=(snapshot.get('quote_time_ms'),snapshot.get('bid'),snapshot.get('ask'))
-    updated=dict(snapshot)
-    updated.update(bid=bid,ask=ask,quote_time_ms=tms,tick_age_ms=max(0,now_ms-tms))
-    return updated, signature != previous, signature
+    candidate=dict(snapshot)
+    candidate.update(bid=bid,ask=ask,source_quote_time_ms=tms,tick_age_ms=max(0,now_ms-tms))
+    updated,changed=advance_quote_clock(snapshot,candidate)
+    return updated,changed,signature
 
 
 def apply_native_tick(snapshot: dict, packet: dict, now_ms: int | None = None):
-    """Overlay one authenticated EA OnTick packet without touching reconciled state."""
+    """Overlay one authenticated native quote event without touching reconciled state."""
     if not snapshot or not snapshot.get('connected'):
         return snapshot, False, None
     now_ms = int(time.time()*1000) if now_ms is None else int(now_ms)
     try:
         login=int(packet['login']);symbol=str(packet['symbol']);tms=int(packet['time_msc'])
-        bid=float(packet['bid']);ask=float(packet['ask'])
+        event_id=int(packet.get('event_id') or 0);bid=float(packet['bid']);ask=float(packet['ask'])
     except (KeyError,TypeError,ValueError,OverflowError):
         return snapshot, False, None
     if login != int(snapshot.get('login') or 0) or symbol != snapshot.get('symbol'):
@@ -231,11 +266,16 @@ def apply_native_tick(snapshot: dict, packet: dict, now_ms: int | None = None):
         return snapshot, False, None
     if not all(math.isfinite(value) and value > 0 for value in (bid,ask)) or ask < bid:
         return snapshot, False, None
+    previous_event=int(snapshot.get('native_event_id') or 0)
+    if event_id and previous_event and event_id <= previous_event:
+        return snapshot, False, None
     signature=(tms,bid,ask)
-    previous=(snapshot.get('quote_time_ms'),snapshot.get('bid'),snapshot.get('ask'))
-    updated=dict(snapshot)
-    updated.update(bid=bid,ask=ask,quote_time_ms=tms,tick_age_ms=max(0,now_ms-tms))
-    return updated, signature != previous, signature
+    candidate=dict(snapshot)
+    candidate.update(bid=bid,ask=ask,source_quote_time_ms=tms,tick_age_ms=max(0,now_ms-tms))
+    if event_id:
+        candidate['native_event_id']=event_id
+    updated,changed=advance_quote_clock(snapshot,candidate)
+    return updated,changed,signature
 
 
 def collect_history_chunk(mt5, job, now=None):
@@ -383,9 +423,10 @@ def main():
                         if initialized:
                             native.bind_terminal(mt5.terminal_info())
                     if initialized:
-                        # Drain every authenticated OnTick packet first.  Each one is
-                        # published and followed immediately by command pickup, so a
-                        # queued burst is not collapsed into one synthetic latest tick.
+                        # Drain authenticated quote events before slower account/candle work.
+                        # Every distinct quote state is published in source order and command
+                        # pickup follows immediately, so same-millisecond quote changes are
+                        # not collapsed by Core's millisecond-keyed Sniper contract.
                         if sniper and latest_snapshot and latest_snapshot.get('connected'):
                             packets=native.drain(int(latest_snapshot.get('login') or 0),symbol,NATIVE_BATCH_MAX)
                             for packet in packets:
@@ -404,12 +445,14 @@ def main():
                         full_interval=SNIPER_FULL_SNAPSHOT_SECONDS if sniper else max(0.5,min(1.0,normal_poll_seconds))
                         full_due=latest_snapshot is None or mono >= next_full_snapshot
                         if full_due:
-                            latest_snapshot=collect(mt5,symbol,market_cache=market_cache,dom_cache=dom_cache)
+                            fresh_snapshot=collect(mt5,symbol,market_cache=market_cache,dom_cache=dom_cache)
+                            fresh_snapshot,_=advance_quote_clock(latest_snapshot,fresh_snapshot)
+                            latest_snapshot=fresh_snapshot
                             next_full_snapshot=mono+full_interval
                             publish(latest_snapshot)
                             core_failures=0
                         elif sniper and latest_snapshot.get('connected') and not native.recent(maximum_age_ms=NATIVE_RECENT_MS):
-                            # Native EA is optional.  If it is absent/stale the exact
+                            # Native EA is optional. If it is absent/stale the exact
                             # v0.7 5 ms polling path remains active as a fallback.
                             fast_snapshot,changed,_=refresh_fast_tick(latest_snapshot,mt5,symbol)
                             if changed:
