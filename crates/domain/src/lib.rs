@@ -11,6 +11,7 @@ pub mod kte;
 pub mod research;
 pub mod opportunities;
 pub mod correlation;
+pub mod oos;
 pub use research::{Analysis, Candle, MarketData, PaperSummary, RiskConfig};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
