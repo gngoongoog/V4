@@ -173,14 +173,18 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
     );
     let weak = ui.as_weak();
     std::thread::spawn(move || {
-        while let Ok((action, body, tf)) = rx.recv() {
+        while let Ok((action, mut body, tf)) = rx.recv() {
             let result = (|| -> anyhow::Result<Value> {
                 let c = Client::new(&data_dir())?;
                 match action.as_str() {
-                    "config" => c.get("/v1/config"),
+                    "config" => c.get("/v1/trading/settings"),
                     "save" => {
-                        c.post("/v1/trading/settings", body)?;
-                        c.get("/v1/config")
+                        if let Ok(current)=c.get("/v1/trading/settings") {
+                            if let Some(hold)=current["config"]["trading"]["sniper_max_hold_seconds"].as_u64() {
+                                body["trading"]["sniper_max_hold_seconds"]=json!(hold);
+                            }
+                        }
+                        c.post("/v1/trading/settings", body)
                     }
                     "cost" => c.post("/v1/trading/preview", body),
                     "report" => c.post("/v1/studio/report", body),
@@ -190,7 +194,7 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
                     _ => c.get("/v1/studio"),
                 }
             })();
-            let _=weak.upgrade_in_event_loop(move|ui|{ui.set_studio_busy(false);match result{Err(e)=>ui.set_studio_message(format!("تعذر الطلب: {e}").into()),Ok(v)=>match action.as_str(){"config"|"save"=>{if let Ok(c)=serde_json::from_value::<Config>(v["config"].clone()){load(&ui,&c);}ui.set_studio_message(if action=="save"{"حُفظ الوضع والتكلفة. شغّل النظام لتطبيقه على الإشارات الجديدة."}else{"تم تحميل الإعدادات المحفوظة"}.into());},"cost"=>{let c=&v["costs"];let text=if c.is_null(){format!("العمولة: {:.4}\n{}",v["commission"].as_f64().unwrap_or(0.),v["error"].as_str().unwrap_or(""))}else{let n=|key:&str|c[key].as_f64().unwrap_or(0.);format!("{} | {:.3} لوت\nالعمولة ذهاب وإياب: {:.4}\nالسبريد الفعلي: {:.2} نقطة / {:.2} pip = {:.4}\nانزلاق الدخول والخروج: {:.4}\nإجمالي التكلفة: {:.4}\nحركة التعادل من سعر bid: {:.2} نقطة / {:.2} pip\nآخر حساب يدوي؛ اضغط احسب لتحديث السعر.",c["currency"].as_str().unwrap_or(""),n("lots"),n("commission"),n("spread_points"),n("spread_pips"),n("spread_money"),n("slippage_money"),n("total"),n("break_even_points"),n("break_even_pips"))};ui.set_cost_detail(text.into());},"report"=>ui.set_studio_report(report(&v).into()),"poll"|"refresh"=>paint(&ui,&v,&tf),_=>ui.set_studio_message(serde_json::to_string_pretty(&v).unwrap_or_default().into())}}});
+            let _=weak.upgrade_in_event_loop(move|ui|{ui.set_studio_busy(false);match result{Err(e)=>ui.set_studio_message(format!("تعذر الطلب: {e}").into()),Ok(v)=>match action.as_str(){"config"|"save"=>{if let Ok(c)=serde_json::from_value::<Config>(v["config"].clone()){load(&ui,&c);}if let Some(amount)=v["commission_editor"]["amount"].as_f64(){ui.set_commission_lot(amount.to_string().into());}let scoped=v["commission_editor"]["saved"]==true;ui.set_studio_message(if action=="save"{if scoped{"حُفظ الوضع والعمولة للحساب والرمز المتصلين."}else{"حُفظ الوضع والعمولة الافتراضية."}}else if scoped{"تم تحميل عمولة الحساب والرمز الحاليين"}else{"تم تحميل الإعدادات الافتراضية"}.into());},"cost"=>{let c=&v["costs"];let text=if c.is_null(){format!("العمولة: {:.4}\n{}",v["commission"].as_f64().unwrap_or(0.),v["error"].as_str().unwrap_or(""))}else{let n=|key:&str|c[key].as_f64().unwrap_or(0.);format!("{} | {:.3} لوت\nالعمولة ذهاب وإياب: {:.4}\nالسبريد الفعلي: {:.2} نقطة / {:.2} pip = {:.4}\nانزلاق الدخول والخروج: {:.4}\nإجمالي التكلفة: {:.4}\nحركة التعادل من سعر bid: {:.2} نقطة / {:.2} pip\nآخر حساب يدوي؛ اضغط احسب لتحديث السعر.",c["currency"].as_str().unwrap_or(""),n("lots"),n("commission"),n("spread_points"),n("spread_pips"),n("spread_money"),n("slippage_money"),n("total"),n("break_even_points"),n("break_even_pips"))};ui.set_cost_detail(text.into());},"report"=>ui.set_studio_report(report(&v).into()),"poll"|"refresh"=>paint(&ui,&v,&tf),_=>ui.set_studio_message(serde_json::to_string_pretty(&v).unwrap_or_default().into())}}});
         }
     });
     timer
