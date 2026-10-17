@@ -69,10 +69,12 @@ def check(exe=None):
             api('/v1/trading/settings',dict(trading=config['trading'],commission_per_lot=7.))
             config['risk']['max_lots']=.01;api('/v1/risk',config['risk'])
             publish();api('/v1/execution/settings',dict(target='demo',deviation_points=20))
-            assert len(api('/v1/execution')['brains'])==16
+            assert len(api('/v1/execution')['brains'])==17
             assert brain('system')['role']=='coordinator' and brain('trend')['role']=='advisor'
             assert brain('liquidity')['role']=='advisor' and not brain('liquidity')['solo_enabled']
             assert brain('trend_pullback')['role']=='advisor' and not brain('trend_pullback')['solo_enabled']
+            assert brain('adaptive')['role']=='advisor' and not brain('adaptive')['solo_enabled']
+            assert brain('adaptive')['magic']==410616
             configure('trend',enabled=True,lots=.1,max_hold_seconds=2)
             publish();assert not api('/v1/status')['requested_run'];assert api('/v1/execution/gateway')['command'] is None
             assert brain('trend')['role']=='solo'

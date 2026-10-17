@@ -81,6 +81,40 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
         );
     }
 
+    let adaptive = &v["adaptive_learning"];
+    let adaptive_line = if config["id"] == "adaptive" {
+        format!(
+            "\n\nAdaptive Learner V1 — عينات التدريب الافتراضي المغلقة {} | حالة {} | سياسة {}\nTrend score {:.3} ({} عينة) | Reversion score {:.3} ({} عينة)\nعينات MT5 المغلقة {} | Trend booked {:.3} / Reversion booked {:.3}\nدليل المحاكاة ودليل صفقات الوسيط محفوظان بشكل منفصل.",
+            adaptive["total_closed_training_samples"].as_u64().unwrap_or(0),
+            adaptive["regime"].as_str().unwrap_or("unknown"),
+            adaptive["policy"].as_str().unwrap_or("—"),
+            adaptive["policy_scores"]["trend"].as_f64().unwrap_or(0.),
+            adaptive["policy_samples"]["trend"].as_u64().unwrap_or(0),
+            adaptive["policy_scores"]["reversion"].as_f64().unwrap_or(0.),
+            adaptive["policy_samples"]["reversion"].as_u64().unwrap_or(0),
+            adaptive["actual_closed_broker_samples"].as_u64().unwrap_or(0),
+            adaptive["broker_policy_scores"]["trend"].as_f64().unwrap_or(0.),
+            adaptive["broker_policy_scores"]["reversion"].as_f64().unwrap_or(0.),
+        )
+    } else { String::new() };
+    let adaptive_history = if config["id"] == "adaptive" {
+        let mut audit = String::from("\nآخر صفقات التعلّم الافتراضي المغلقة (ليست MT5):\n");
+        if let Some(history)=adaptive["recent_closed_simulated_trades"].as_array() {
+            for row in history.iter().rev().take(8) {
+            let _ = writeln!(audit,
+                "{} | {} | {} | R {:.3} | net/lot {:.2} | زخم {:.2} ATR | spread/ATR {:.2} | سبب الخروج {}",
+                row["entry_time"], row["policy"].as_str().unwrap_or("?"),
+                row["selection"].as_str().unwrap_or("?"),
+                row["reward_r"].as_f64().unwrap_or(0.),
+                row["net_per_lot"].as_f64().unwrap_or(0.),
+                row["momentum_atr"].as_f64().unwrap_or(0.),
+                row["spread_atr"].as_f64().unwrap_or(0.),
+                row["exit_reason"].as_str().unwrap_or("unknown")
+            );
+            }
+        }
+        audit
+    } else { String::new() };
     let s = &b["latest"];
     let a = &s["signal"];
     let gates = s["gates"]
@@ -109,7 +143,7 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
     } else {
         String::new()
     };
-    ui.set_exec_detail(format!("{} | Magic {}\n{} | اتجاه {} | جاهز للإرسال: {}\n{}\nآخر حساب للعقل: {} ميكروثانية (ليس زمن الوسيط)\n{}{}",b["name"].as_str().unwrap_or(""),b["magic"],a["reason"].as_str().unwrap_or("بانتظار تحديث MT5"),a["side"],s["ready"],gates,s["decision_us"],if config["use_risk_limits"]==true{"الحدود الاختيارية مفعّلة"}else{"الحدود الاختيارية معطلة؛ اللوت ثابت كما اخترته"},intelligence_line).into());
+    ui.set_exec_detail(format!("{} | Magic {}\n{} | اتجاه {} | جاهز للإرسال: {}\n{}\nآخر حساب للعقل: {} ميكروثانية (ليس زمن الوسيط)\n{}{}",b["name"].as_str().unwrap_or(""),b["magic"],a["reason"].as_str().unwrap_or("بانتظار تحديث MT5"),a["side"],s["ready"],gates,s["decision_us"],if config["use_risk_limits"]==true{"الحدود الاختيارية مفعّلة"}else{"الحدود الاختيارية معطلة؛ اللوت ثابت كما اخترته"},format!("{intelligence_line}{adaptive_line}{adaptive_history}")).into());
 
     let mut out = String::new();
     let _ = writeln!(

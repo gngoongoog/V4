@@ -16,7 +16,7 @@ class LiquidityBrainContractTests(unittest.TestCase):
         cls.gateway = GATEWAY.read_text(encoding="utf-8")
 
     def test_identity_stays_stable_when_later_brains_are_appended(self):
-        self.assertIn('pub const BRAINS: [(&str, &str); 16]', self.domain)
+        self.assertIn('pub const BRAINS: [(&str, &str); 17]', self.domain)
         generated = self.domain.index('(\"generated\", \"استراتيجية مولّدة مختارة\")')
         liquidity = self.domain.index('(\"liquidity\", \"سحب السيولة — sweep + reclaim\")')
         pullback = self.domain.index('(\"trend_pullback\", \"Trend Pullback — رجوع منظم + تأكيد\")')

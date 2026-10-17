@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 // Append new identities only. Existing index -> magic mappings are durable broker ownership.
-pub const BRAINS: [(&str, &str); 16] = [
+pub const BRAINS: [(&str, &str); 17] = [
     ("system", "النظام — الوضع المختار"),
     ("gann", "جان الهندسي"),
     ("wyckoff", "وايكوف"),
@@ -29,6 +29,7 @@ pub const BRAINS: [(&str, &str); 16] = [
     ("generated", "استراتيجية مولّدة مختارة"),
     ("liquidity", "سحب السيولة — sweep + reclaim"),
     ("trend_pullback", "Trend Pullback — رجوع منظم + تأكيد"),
+    ("adaptive", "Adaptive Learner — عقل متكيف مستقل"),
 ];
 pub fn magic(id: &str) -> Option<u64> {
     BRAINS
@@ -143,6 +144,10 @@ pub fn evaluate(
         || t.quote_time_ms
             .is_none_or(|v| v > now + 2000 || now.saturating_sub(v) > 3000)
     {
+        return s;
+    }
+    if b.id == "adaptive" {
+        s.reason = "Adaptive Learner: ينتظر قراراً من سجل التدريب السببي المحفوظ في Core".into();
         return s;
     }
     if b.id == "system" {
@@ -436,6 +441,7 @@ mod tests {
         assert_eq!(magic("generated"), Some(410_613));
         assert_eq!(magic("liquidity"), Some(410_614));
         assert_eq!(magic("trend_pullback"), Some(410_615));
+        assert_eq!(magic("adaptive"), Some(410_616));
         b.lots = f64::NAN;
         assert!(b.validate().is_err());
     }

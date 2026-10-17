@@ -1,6 +1,7 @@
 mod backup;
 mod execution;
 mod coordinator_learning;
+mod adaptive_brain;
 mod studio;
 mod backtest;
 mod correlation;
