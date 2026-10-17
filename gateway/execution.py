@@ -17,7 +17,7 @@ import math
 import sqlite3
 import time
 
-MAGIC_MIN, MAGIC_MAX = 410600, 410614
+MAGIC_MIN, MAGIC_MAX = 410600, 410615
 FAST_QUEUE_TARGET_MS = 20
 
 
