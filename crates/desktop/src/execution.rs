@@ -99,7 +99,8 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
     } else { String::new() };
     let adaptive_history = if config["id"] == "adaptive" {
         let mut audit = String::from("\nآخر صفقات التعلّم الافتراضي المغلقة (ليست MT5):\n");
-        for row in adaptive["recent_closed_simulated_trades"].as_array().into_iter().flatten().iter().rev().take(8) {
+        if let Some(history)=adaptive["recent_closed_simulated_trades"].as_array() {
+            for row in history.iter().rev().take(8) {
             let _ = writeln!(audit,
                 "{} | {} | {} | R {:.3} | net/lot {:.2} | زخم {:.2} ATR | spread/ATR {:.2} | سبب الخروج {}",
                 row["entry_time"], row["policy"].as_str().unwrap_or("?"),
@@ -110,6 +111,7 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
                 row["spread_atr"].as_f64().unwrap_or(0.),
                 row["exit_reason"].as_str().unwrap_or("unknown")
             );
+            }
         }
         audit
     } else { String::new() };
