@@ -38,6 +38,7 @@ pub struct Service {
     pub settings: Settings,
     pub brains: Vec<BrainConfig>,
     pub weights:BTreeMap<String,braintrade_domain::execution::LearnedWeight>,
+    pub adaptive_signal:Option<Signal>,
     signals: BTreeMap<String, Value>,
     last_sync_ms: u64,
     history_until_ms: u64,
@@ -96,6 +97,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             brains,
             signals: BTreeMap::new(),
             weights:BTreeMap::new(),
+            adaptive_signal:None,
             last_sync_ms: 0,
             history_until_ms: 0,
         })
@@ -174,6 +176,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         now: u64,
     ) -> Result<()> {
         if !self.matches(t) {
+            self.adaptive_signal=None;
             self.signals.clear();
             return Ok(());
         }
@@ -249,7 +252,9 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             let genome=crate::coordinator_learning::genome(db,&b,t)?;
             let available=crate::coordinator_learning::available_frames(t,frames,now);
             let started = std::time::Instant::now();
-            let base=execution::evaluate(&b,t,c,&available,genome.as_ref(),now);
+            let base=if b.id == "adaptive" {
+                self.adaptive_signal.clone().unwrap_or_else(||execution::evaluate(&b,t,c,&available,None,now))
+            } else {execution::evaluate(&b,t,c,&available,genome.as_ref(),now)};
             let signal=if b.id=="system" {
                 let mut votes=vec![];
                 for member in self.brains.iter().filter(|m|m.id!="system"&&!m.enabled) {
@@ -257,7 +262,9 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     let in_flight:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,member.id],|r|r.get(0))?;
                     if in_flight||t.positions.iter().any(|p|p.magic==execution::magic(&member.id).unwrap()&&p.symbol==t.symbol){continue;}
                     let g=crate::coordinator_learning::genome(db,member,t)?;
-                    let vote=execution::evaluate(member,t,c,&available,g.as_ref(),now);
+                    let vote=if member.id == "adaptive" {
+                        self.adaptive_signal.clone().unwrap_or_else(||execution::evaluate(member,t,c,&available,None,now))
+                    } else {execution::evaluate(member,t,c,&available,g.as_ref(),now)};
                     votes.push((member.clone(),vote,self.weights.get(&member.id).cloned().unwrap_or_default()));
                 }
                 execution::coordinate(base,c,votes)
