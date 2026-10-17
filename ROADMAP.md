@@ -4,7 +4,7 @@ GitHub `gngoongoog/V4` is canonical. Read `BUILD_HANDOFF.md`, `PROJECT_STATE.md`
 
 ## Promoted 0.6.0 checkpoint
 
-The promoted 0.6.0 line remains the release baseline. Its archived validation evidence stays immutable. Startup/restart is STOPPED. CI is simulated-broker validation; native MT5 Demo acceptance remains a separate target-machine gate.
+The promoted 0.6.0 line remains the release baseline. Its archived validation evidence stays immutable. Startup/restart is STOPPED. CI is simulated-broker validation; native MT5 demo acceptance remains a separate target-machine gate.
 
 ## Current 0.7.0 Development Preview
 
