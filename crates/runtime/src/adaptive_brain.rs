@@ -48,7 +48,7 @@ struct Features {
     spread_atr: f64,
 }
 fn features(bars: &[FrameBar], end: usize, spread: f64) -> Option<Features> {
-    if end < MIN_HISTORY || !bars[end-30..end].windows(2).all(|w| w.candle.time + 60 == w.candle.time) {
+    if end < MIN_HISTORY || !bars[end-30..end].windows(2).all(|w| w[0].candle.time + 60 == w[1].candle.time) {
         return None;
     }
     let series: Vec<_> = bars[end-15..end].iter().map(|v| v.candle.clone()).collect();
@@ -276,7 +276,7 @@ mod tests {
     use braintrade_domain::Candle;
     fn dataset(n: usize) -> Vec<FrameBar> {
         (0..n).map(|i| {
-            let price=2000.+(i as f64/6.).sin()*3.+i as f64*.02;
+            let price=2000.+(i as f64/6.).sin()*3.+i as f64*0.02;
             FrameBar {candle:Candle{time:1_800_000_000/60*60+i as u64*60,open:price,
             high:price+1.3,low:price-1.3,close:price+0.1,tick_volume:100},
             spread_points:20, real_volume:0}
