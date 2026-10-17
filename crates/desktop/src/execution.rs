@@ -85,7 +85,24 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
                 .join(" • ")
         })
         .unwrap_or_default();
-    ui.set_exec_detail(format!("{} | Magic {}\n{} | اتجاه {} | جاهز للإرسال: {}\n{}\nآخر حساب للعقل: {} ميكروثانية (ليس زمن الوسيط)\n{}",b["name"].as_str().unwrap_or(""),b["magic"],a["reason"].as_str().unwrap_or("بانتظار تحديث MT5"),a["side"],s["ready"],gates,s["decision_us"],if config["use_risk_limits"]==true{"الحدود الاختيارية مفعّلة"}else{"الحدود الاختيارية معطلة؛ اللوت ثابت كما اخترته"}).into());
+    let coordination = &a["coordination"];
+    let intelligence = &coordination["intelligence"];
+    let intelligence_line = if coordination["version"] == "braintrade-intelligence-v3" {
+        format!(
+            "\nV3: regime={} | session={} | quality {:.3} | history {:.3} ({} samples) | uncertainty {:.3} | meta-edge {:.3} | consensus ≥ {:.3}",
+            intelligence["regime"].as_str().unwrap_or("unknown"),
+            intelligence["session"].as_str().unwrap_or("unknown"),
+            intelligence["execution_quality"].as_f64().unwrap_or(0.5),
+            intelligence["execution_history_quality"].as_f64().unwrap_or(0.5),
+            intelligence["execution_history_samples"].as_u64().unwrap_or(0),
+            coordination["uncertainty"].as_f64().unwrap_or(1.0),
+            coordination["meta_edge"].as_f64().unwrap_or(0.0),
+            coordination["required_net"].as_f64().unwrap_or(0.0),
+        )
+    } else {
+        String::new()
+    };
+    ui.set_exec_detail(format!("{} | Magic {}\n{} | اتجاه {} | جاهز للإرسال: {}\n{}\nآخر حساب للعقل: {} ميكروثانية (ليس زمن الوسيط)\n{}{}",b["name"].as_str().unwrap_or(""),b["magic"],a["reason"].as_str().unwrap_or("بانتظار تحديث MT5"),a["side"],s["ready"],gates,s["decision_us"],if config["use_risk_limits"]==true{"الحدود الاختيارية مفعّلة"}else{"الحدود الاختيارية معطلة؛ اللوت ثابت كما اخترته"},intelligence_line).into());
 
     let mut out = String::new();
     let _ = writeln!(
@@ -115,17 +132,39 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
             stats["floating"].as_f64().unwrap_or(0.)
         );
     }
-    if let Some(members) = a["coordination"]["members"].as_array() {
+    if coordination["version"] == "braintrade-intelligence-v3" {
+        let _ = writeln!(
+            out,
+            "\nIntelligence V3 | regime {} | session {} | جودة تنفيذ {:.3} | عدم يقين {:.3} | meta-edge {:.3} | عتبة إجماع {:.3}",
+            intelligence["regime"].as_str().unwrap_or("unknown"),
+            intelligence["session"].as_str().unwrap_or("unknown"),
+            intelligence["execution_quality"].as_f64().unwrap_or(0.5),
+            coordination["uncertainty"].as_f64().unwrap_or(1.0),
+            coordination["meta_edge"].as_f64().unwrap_or(0.0),
+            coordination["required_net"].as_f64().unwrap_or(0.0),
+        );
+    }
+    if let Some(members) = coordination["members"].as_array() {
         out.push_str("\nالأعضاء الحاليون وأوزان التعلم:\n");
         for member in members {
+            let weighted_win = member["weighted_win_rate"]
+                .as_f64()
+                .map(|value| format!("{:.1}%", value * 100.0))
+                .unwrap_or_else(|| "—".into());
             let _ = writeln!(
                 out,
-                "{} {} | اتجاه {} | وزن {:.3} | عينات {} | متوسط صافي/لوت {:.3}",
+                "{} {} | اتجاه {} | وزن {:.3} | Reward {:.3} | Win(recency) {} | ثقة {:.3} | عينات {} / فعالة {:.2} | regime {} | دليل {} | صافي/لوت {:.3}",
                 member["id"].as_str().unwrap_or(""),
                 member["timeframe"].as_str().unwrap_or(""),
                 member["side"],
                 member["weight"].as_f64().unwrap_or(1.),
+                member["mean_reward"].as_f64().unwrap_or(0.),
+                weighted_win,
+                member["confidence"].as_f64().unwrap_or(0.),
                 member["samples"],
+                member["effective_samples"].as_f64().unwrap_or(0.),
+                member["regime"].as_str().unwrap_or("unknown"),
+                member["evidence_source"].as_str().unwrap_or("none"),
                 member["mean_net_per_lot"].as_f64().unwrap_or(0.)
             );
         }
