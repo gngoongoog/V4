@@ -2,6 +2,8 @@
 //! conservative simulated outcomes, never MT5 deals or broker execution proof.
 //! The learner is driven only by reconciled completed-bar snapshots (never Fast Pulse).
 use anyhow::Result;
+#[path = "adaptive_broker.rs"]
+mod broker;
 use braintrade_domain::{
     execution::Signal,
     studio::FrameBar,
@@ -33,6 +35,9 @@ struct State {
     next_experiment: u64,
     overall: [Policy; 2],
     regimes: BTreeMap<String, [Policy; 2]>,
+    broker: [Policy; 2],
+    broker_regimes: BTreeMap<String, [Policy; 2]>,
+    broker_samples: u64,
 }
 #[derive(Default)]
 pub struct Learner {
@@ -68,8 +73,13 @@ fn features(bars: &[FrameBar], end: usize, spread: f64) -> Option<Features> {
 fn policy_name(i: usize) -> &'static str { if i == 0 { "trend" } else { "reversion" } }
 fn choose(state: &State, regime: &str) -> (usize, &'static str) {
     let scoped = state.regimes.get(regime).unwrap_or(&state.overall);
-    let adjusted = |p: &Policy| p.score * p.samples as f64 / (p.samples as f64 + 12.);
-    let favorite = if adjusted(&scoped[1]) > adjusted(&scoped[0]) { 1 } else { 0 };
+    let booked = state.broker_regimes.get(regime).unwrap_or(&state.broker);
+    let score = |i: usize| {
+        let simulated = scoped[i].score * scoped[i].samples as f64 / (scoped[i].samples as f64 + 12.);
+        let broker_weight = booked[i].samples as f64 / (booked[i].samples as f64 + 12.);
+        simulated * (1. - broker_weight) + booked[i].score * broker_weight
+    };
+    let favorite = if score(1) > score(0) { 1 } else { 0 };
     if state.next_experiment % EXPLORATION_MODULUS == EXPLORATION_MODULUS - 1 {
         (1 - favorite, "explore")
     } else {
@@ -151,6 +161,7 @@ impl Learner {
              PRIMARY KEY(context,entry_time));\
              CREATE INDEX IF NOT EXISTS adaptive_brain_context ON adaptive_brain_samples(context,exit_time);"
         )?;
+        broker::init(db)?;
         Ok(Self::default())
     }
     fn load(db: &Connection, ctx: &str) -> Result<State> {
@@ -171,6 +182,13 @@ impl Learner {
             result.next_experiment += 1;
             result.last_exit = result.last_exit.max(ex);
         }
+        for evidence in broker::load(db,ctx)? {
+            if evidence.policy<2 {
+                update(&mut result.broker[evidence.policy],evidence.reward_r,evidence.net);
+                update(&mut result.broker_regimes.entry(evidence.regime).or_default()[evidence.policy],evidence.reward_r,evidence.net);
+                result.broker_samples+=1;
+            }
+        }
         Ok(result)
     }
     /// The only training path. Reconciled, completed M1 history is replayed in
@@ -190,6 +208,12 @@ impl Learner {
             self.cached.insert(ctx.clone(),Self::load(db,&ctx)?);
         }
         let state=self.cached.get_mut(&ctx).expect("state inserted");
+        // Genuine closed MT5 results are kept distinct from hypothetical M1 fills.
+        for evidence in broker::sync(db,t)? {
+            update(&mut state.broker[evidence.policy],evidence.reward_r,evidence.net);
+            update(&mut state.broker_regimes.entry(evidence.regime).or_default()[evidence.policy],evidence.reward_r,evidence.net);
+            state.broker_samples+=1;
+        }
         let fee=config.commission_profile(t).map(|p|p.basis.round_trip(p.amount).unwrap_or(config.risk.commission_per_lot))
             .unwrap_or(config.risk.commission_per_lot);
         for i in MIN_HISTORY..bars.len().saturating_sub(HORIZON-1) {
@@ -235,6 +259,7 @@ impl Learner {
         let (policy,selection)=choose(state,&f.regime);
         let side=if policy==0 {f.trend}else{-f.trend};
         let scoped=state.regimes.get(&f.regime).unwrap_or(&state.overall);
+        let broker_policy=state.broker_regimes.get(&f.regime).unwrap_or(&state.broker);
         let samples=scoped[policy].samples;
         let score=scoped[policy].score;
         let s=Signal {
@@ -246,8 +271,8 @@ impl Learner {
             target_distance: (f.atr * 0.8).max(2.*spread + 2.*config.risk.slippage_ticks*tick + 2.*tick)*1.2,
             hold_ms:5*60*1000,
             reason:format!(
-                "Adaptive v1 / {} {} | regime {} | {} عينات منتهية في هذا السياق | score {:.3} R | momentum {:.2} ATR | spread/ATR {:.2} | مصدر التكلفة {} | سجلات التعلم تقديرية وليست صفقات وسيط",
-                policy_name(policy),selection,f.regime,samples,score,f.momentum_atr,f.spread_atr,source
+                "Adaptive v1 / {} {} | regime {} | {} عينات بحثية + {} صفقات MT5 مغلقة | score {:.3} R | momentum {:.2} ATR | spread/ATR {:.2} | مصدر التكلفة {} | الأدلة الحقيقية منفصلة عن المحاكاة",
+                policy_name(policy),selection,f.regime,samples,broker_policy[policy].samples,score,f.momentum_atr,f.spread_atr,source
             ),
             ready:true,
             coordination:None,
@@ -256,12 +281,15 @@ impl Learner {
             "brain":"adaptive","version":"adaptive-contextual-v1",
             "source":"historical/forward simulated M1 after-cost results, NOT broker fills",
             "total_closed_training_samples":state.next_experiment,
+            "actual_closed_broker_samples":state.broker_samples,
+            "broker_policy_scores":{"trend":broker_policy[0].score,"reversion":broker_policy[1].score},
+            "broker_policy_samples":{"trend":broker_policy[0].samples,"reversion":broker_policy[1].samples},
             "latest_closed_trade_time":state.last_exit,
             "regime":f.regime,"selection":selection,"policy":policy_name(policy),
             "policy_scores":{"trend":scoped[0].score,"reversion":scoped[1].score},
             "policy_samples":{"trend":scoped[0].samples,"reversion":scoped[1].samples},
             "persisted":true,"training_account":t.login,
-            "warning":"Research proxy evidence is not real executed Demo/Live PnL; actual broker volume and margin remain mandatory."
+            "warning":"Research proxy and exact booked MT5 deals are separate. Broker evidence is shrunk to avoid single-fill overfitting; no profit is guaranteed."
         }));
         Ok(Some(s))
     }
