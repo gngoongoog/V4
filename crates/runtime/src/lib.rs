@@ -200,11 +200,12 @@ impl Engine{
                 atomic_write(&staging.join("README.txt"),b"BrainTrade research export. Virtual fills only; UTC timestamps in milliseconds. See Source/docs/RESEARCH.md for limitations.")?;let dest=self.dir.join("exports").join(name);fs::rename(staging,&dest)?;Ok(json!({"path":dest,"note":"Research export: candles, decisions and virtual ledger (JSONL)."}))
             },
             ("POST","/v1/config")=>{
-                if self.execution.pending(&self.db)?{bail!("Wait for broker command reconciliation before reconnecting settings");}self.execution.cancel_entries(&self.db)?;self.shared.lock().unwrap().status.requested_run=false;
                 let request:ConfigRequest=serde_json::from_slice(body)?;request.config.validate().map_err(anyhow::Error::msg)?;
                 if !request.config.mt5_path.is_empty(){let path=Path::new(&request.config.mt5_path);if !path.is_absolute()||!path.is_file()||path.extension().and_then(|v|v.to_str()).map(|v|v.to_ascii_lowercase())!=Some("exe".into()){bail!("MT5 path must point to an existing terminal64.exe file");}}
                 let token=request.telegram_token.trim();if !token.is_empty()&&(token.len()<20||!token.contains(':')||token.chars().any(char::is_whitespace)){bail!("Invalid Telegram bot token format");}if request.clear_telegram_token&&!token.is_empty(){bail!("Cannot save and remove a token together");}
                 let existing=self.shared.lock().unwrap().token.clone();let effective=if request.clear_telegram_token{None}else if !token.is_empty(){Some(token.to_owned())}else{existing};if request.config.telegram_enabled&&effective.is_none(){bail!("Enter a bot token before enabling Telegram");}
+                if self.execution.pending(&self.db)?{bail!("Wait for broker command reconciliation before reconnecting settings");}
+                self.execution.cancel_entries(&self.db)?;self.shared.lock().unwrap().status.requested_run=false;
                 if !token.is_empty(){secrets::write(&self.dir.join("telegram.sealed"),token)?;}atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&request.config)?)?;if request.clear_telegram_token&&self.dir.join("telegram.sealed").exists(){fs::remove_file(self.dir.join("telegram.sealed"))?;}
                 {let mut s=self.shared.lock().unwrap();s.config=request.config;s.token=effective;s.status.gateway_fresh=false;s.status.last_received_ms=None;s.status.telemetry=None;s.status.analysis=Default::default();s.status.paper=Default::default();s.status.message="Settings saved; reconnecting MT5".into();}
                 self.event("settings_changed",json!({"secrets":"redacted"}))?;if self.backtests.loading(){self.backtests.cancel();}self.stop_gateway();self.gateway_retry_ms=0;Ok(json!({"ok":true}))
