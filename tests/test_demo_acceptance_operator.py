@@ -46,6 +46,34 @@ class DemoAcceptanceOperatorTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, source)
 
+    def test_share_bundle_exports_only_acceptance_evidence(self):
+        source = (ROOT / "scripts" / "Run-Demo-Acceptance-GUI.ps1").read_text(encoding="utf-8")
+        start = source.index("function Export-ShareBundle")
+        end = source.index("$Form = New-Object", start)
+        export = source[start:end]
+        for expected in (
+            "demo-acceptance-latest.json",
+            "demo-acceptance-latest.csv",
+            "demo-acceptance-state.json",
+            "runtime-import-check.json",
+            "share-summary.json",
+            "SHARE_README.txt",
+            "ZipFile",
+            "account_fingerprint",
+        ):
+            self.assertIn(expected, export)
+        for forbidden in (
+            "ipc.key",
+            "broker-journal",
+            ".sqlite",
+            ".sqlite3",
+            "telegram",
+            "acceptance-gui-stdout.log",
+            "acceptance-gui-stderr.log",
+            "metadata.login",
+        ):
+            self.assertNotIn(forbidden, export.lower())
+
     def test_cmd_wrapper_opens_gui_without_args_and_preserves_cli_with_args(self):
         source = (ROOT / "scripts" / "Run-Demo-Acceptance.cmd").read_text(encoding="utf-8")
         self.assertIn("Tools\\Run-Demo-Acceptance.ps1", source)
