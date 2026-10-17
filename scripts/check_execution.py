@@ -69,9 +69,10 @@ def check(exe=None):
             api('/v1/trading/settings',dict(trading=config['trading'],commission_per_lot=7.))
             config['risk']['max_lots']=.01;api('/v1/risk',config['risk'])
             publish();api('/v1/execution/settings',dict(target='demo',deviation_points=20))
-            assert len(api('/v1/execution')['brains'])==15
+            assert len(api('/v1/execution')['brains'])==16
             assert brain('system')['role']=='coordinator' and brain('trend')['role']=='advisor'
             assert brain('liquidity')['role']=='advisor' and not brain('liquidity')['solo_enabled']
+            assert brain('trend_pullback')['role']=='advisor' and not brain('trend_pullback')['solo_enabled']
             configure('trend',enabled=True,lots=.1,max_hold_seconds=2)
             publish();assert not api('/v1/status')['requested_run'];assert api('/v1/execution/gateway')['command'] is None
             assert brain('trend')['role']=='solo'
@@ -130,7 +131,7 @@ def check(exe=None):
             assert brain('trend')['stats']['deals']==0
             api('/v1/shutdown',{});process.wait(timeout=10)
             report=dict(result='PASS',version=VERSION,broker='simulated; no native MT5 acceptance',checks=[
-                '15 identities; default coordinator and advisors including liquidity','SOLO exclusion; no implicit global START',
+                '16 identities; default coordinator and advisors including liquidity + trend_pullback','SOLO exclusion; no implicit global START',
                 'standalone M1 trend against opposing M5','optional risk caps off',
                 'Core+gateway single submission','unknown-to-fill history retains position barrier','entry history does not release fill barrier',
                 'pending return and frozen timeout exit while STOPPED','advisor rejoins actual votes after close',

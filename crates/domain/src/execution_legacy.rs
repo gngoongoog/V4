@@ -1,6 +1,8 @@
 //! Independent, deterministic trading policies. Broker transport lives in the gateway.
 #[path = "execution_liquidity.rs"]
 mod liquidity;
+#[path = "execution_pullback.rs"]
+mod pullback;
 use crate::{
     studio::{FrameBar, Genome},
     trading::{self, TradingMode},
@@ -10,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 // Append new identities only. Existing index -> magic mappings are durable broker ownership.
-pub const BRAINS: [(&str, &str); 15] = [
+pub const BRAINS: [(&str, &str); 16] = [
     ("system", "النظام — الوضع المختار"),
     ("gann", "جان الهندسي"),
     ("wyckoff", "وايكوف"),
@@ -26,6 +28,7 @@ pub const BRAINS: [(&str, &str); 15] = [
     ("regime", "حالة السوق — اتجاه أو نطاق"),
     ("generated", "استراتيجية مولّدة مختارة"),
     ("liquidity", "سحب السيولة — sweep + reclaim"),
+    ("trend_pullback", "Trend Pullback — رجوع منظم + تأكيد"),
 ];
 pub fn magic(id: &str) -> Option<u64> {
     BRAINS
@@ -368,6 +371,16 @@ pub fn evaluate(
                 }
                 q.reason
             }
+            "trend_pullback" => {
+                let q = pullback::assess(&series, t, atr);
+                s.side = q.side;
+                if q.side != 0 {
+                    s.stop_distance = q.stop_distance;
+                    s.target_distance = b.reward_risk * s.stop_distance;
+                    s.key = format!("pullback:{}:{}", b.timeframe, last.time);
+                }
+                q.reason
+            }
             "generated" => {
                 if let Some(g) = genome {
                     s.side = crate::studio::signal(g, bars);
@@ -419,9 +432,10 @@ mod tests {
         for (id, _) in BRAINS {
             assert_eq!(brain_for_magic(magic(id).unwrap()), Some(id));
         }
-        // Existing durable ownership stays stable; the new identity is appended only.
+        // Existing durable ownership stays stable; new identities are appended only.
         assert_eq!(magic("generated"), Some(410_613));
         assert_eq!(magic("liquidity"), Some(410_614));
+        assert_eq!(magic("trend_pullback"), Some(410_615));
         b.lots = f64::NAN;
         assert!(b.validate().is_err());
     }
