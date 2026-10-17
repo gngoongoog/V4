@@ -4,33 +4,37 @@
 
 الأداة الأساسية داخل الحزمة هي `runtime\gateway\check_runtime.py`. وضع القبول **قراءة فقط**: يتصل بـCore المحلي، يقرأ سجل التنفيذ الموجود، ولا يرسل أي POST ولا يغيّر START/STOP ولا يربط حساباً ولا يفتح/يغلق صفقة.
 
-## الطريقة الأسهل داخل الحزمة
+## الطريقة الأسهل داخل الحزمة — Acceptance Center
 
 بعد فك ضغط BrainTrade ستجد في المجلد الرئيسي:
 
-- `Run-Demo-Acceptance.cmd` — مشغّل مباشر بنقرتين.
-- `Tools\Run-Demo-Acceptance.ps1` — المشغّل المتقدم نفسه.
+- `Run-Demo-Acceptance.cmd` — دبل كلك يفتح نافذة **Demo Acceptance Center**.
+- `Tools\Run-Demo-Acceptance-GUI.ps1` — واجهة Windows نفسها.
+- `Tools\Run-Demo-Acceptance.ps1` — CLI المتقدم للمشغّل القراءة فقط.
 - `DEMO_ACCEPTANCE_AR.md` — هذه التعليمات داخل الحزمة.
 
-شغّل `BrainTrade.exe` أولاً، اربط حساب MT5 الحالي كـDemo، وبعدها افتح `Run-Demo-Acceptance.cmd`. سيطلب منك اختيار نوع الجلسة:
+شغّل `BrainTrade.exe` أولاً، اربط حساب MT5 الحالي كـDemo، وبعدها افتح `Run-Demo-Acceptance.cmd` بدون أي arguments. ستظهر نافذة فيها:
 
-1. `native` عندما يكون `BrainTradeSniperBridge` مربوطاً على الشارت ويعرض `CONNECTED`.
-2. `poll` بعد فصل/إيقاف الـEA حتى يعمل fallback polling.
-3. `auto` إذا تريد جمعاً عاماً بدون وسم يصلح لمقارنة Native مقابل Poll.
+- اختيار `Native` أو `Poll` أو `Auto`.
+- مدة قياس 5 / 15 / 30 / 60 دقيقة.
+- الحد الأدنى المطلوب لعينات Sniper.
+- خيار Reset لبدء عينة جديدة.
+- بطاقات مباشرة لحالة القبول وعدد العينات و`queue_to_send` P95/P99 و`send_ms` P95.
+- مقارنة عدد/P95 عينات Native وPoll.
+- التشخيص وأكبر hotspot محلي والتحذيرات.
+- زر لفتح مجلد النتائج.
 
-المشغّل يقوم أولاً بفحص Python/NumPy/MetaTrader5 المدمجة بدون تهيئة MT5، ثم يشغّل collector القراءة فقط، وبعدها يعرض مباشرة:
+عند اختيار `Native` تذكّرك النافذة أن يكون `BrainTradeSniperBridge` مربوطاً على الشارت ويعرض `CONNECTED`. وعند اختيار `Poll` تذكّرك بفصل/إيقاف الـEA حتى تكون المقارنة مضبوطة.
 
-- حالة القبول (`INCOMPLETE` / `TARGET_MET` / `CHARACTERIZED_SLOW` / `CONTRACT_FAIL`).
-- عدد صفقات Sniper المرسلة.
-- `queue_to_send` عند P95 وP99.
-- `send_ms` عند P95.
-- أكبر مكوّن محلي قبل الإرسال.
-- عدد عينات Native وPoll وP95 لكل واحد.
-- فرق P95 بين Native وPoll والمسار الأسرع محلياً عندما تتوفر عينات من الاثنين.
+النافذة **لا تشغّل التداول ولا تفعّل START**. هي تشغّل `Tools\Run-Demo-Acceptance.ps1` كعملية منفصلة للقراءة فقط ثم تقرأ ملف JSON الناتج. إذا كان BrainTrade يتداول أثناء القياس فهذا لأنك أنت شغّلت النظام بصورة طبيعية مسبقاً؛ نافذة القياس لا تصنع إشارة ولا ترسل صفقة.
 
-المشغّل **لا يشغّل التداول ولا يفعّل START**. إذا كان BrainTrade يتداول أثناء القياس فهذا لأنك أنت شغّلت النظام بصورة طبيعية مسبقاً؛ المشغّل نفسه لا يرسل أوامر.
+إذا مررت arguments إلى `Run-Demo-Acceptance.cmd` فإنه يحافظ على السلوك القديم ويفتح CLI مباشرة. مثال:
 
-للاستخدام من PowerShell بدون القوائم التفاعلية:
+```bat
+Run-Demo-Acceptance.cmd -Source native -WatchSeconds 3600 -MinimumFastSamples 200 -NonInteractive
+```
+
+وللاستخدام من PowerShell مباشرة:
 
 ```powershell
 .\Tools\Run-Demo-Acceptance.ps1 -Source native -WatchSeconds 3600 -MinimumFastSamples 200 -NonInteractive
@@ -77,11 +81,12 @@ runtime\python\python.exe runtime\gateway\check_runtime.py --demo-acceptance --s
 - `acceptance-output\demo-acceptance-latest.json`
 - `acceptance-output\demo-acceptance-latest.csv`
 - `acceptance-output\demo-acceptance-state.json` — حالة تراكمية محلية حتى تكمل عدة جلسات.
-- `acceptance-output\runtime-import-check.json` عند استخدام المشغّل الجديد.
+- `acceptance-output\runtime-import-check.json`.
+- `acceptance-output\acceptance-gui-stdout.log` و`acceptance-gui-stderr.log` عند تشغيل الواجهة الرسومية.
 
 التقرير لا يحفظ رقم Login؛ يستخدم بصمة قصيرة للحساب/الخادم/الرمز/العملة حتى لا يخلط عينات حسابين.
 
-إذا غيرت إصدار BrainTrade أو الحساب، استخدم `--reset` في collector أو `-Reset` في PowerShell لبدء حالة قياس جديدة.
+إذا غيرت إصدار BrainTrade أو الحساب، استخدم Reset من النافذة أو `--reset` في collector أو `-Reset` في PowerShell لبدء حالة قياس جديدة.
 
 ## ما الذي يقيسه؟
 
