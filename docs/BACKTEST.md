@@ -99,3 +99,11 @@ Synthetic review verification: run the real-core smoke harness first, then
 `scripts/check_trade_review.cjs` with Playwright available. The Linux-only
 `research.yml` workflow runs these checks on development pushes. It does not
 build or publish a Windows package.
+
+## Explore v1 — small-equity sequential training lab (0.7 development)
+
+Select **Explore v1** in Backtest. This **research-only** historical policy is separate from the four legacy strategies and does not activate a live, Demo, or Shadow execution route. It learns chronologically after closing each virtual M1 trade. Two simple entry policies (three-closed-bar trend and its reversal) are scored by an exponentially weighted, capped *realized net R*, including the configured costs. A deterministic one-in-four exploration choice challenges the current leader. The decisions are causal, state is reset for each independent historical run, and results are not a deep reinforcement-learning model or evidence of out-of-sample advantage.
+
+A short five-minute holding horizon encourages more training examples than the conservative Meta gates. **The 100 USD virtual mode permits 0.000001-step fractional research lots** to respect the monetary per-trade risk budget; they may be smaller than the broker's `volume_min`/`volume_step`. Those lots must NEVER be submitted to MT5. They are flagged per completed observation (`broker_volume_min`, `lots`) and counted in `below_broker_minimum`. Historical margin, leverage, contract changes, swaps, tick-by-tick spread and fill quality are not modeled. Daily loss and drawdown latches are recorded but not enforced for research exploration; the virtual balance must stay above 1 unit. In real Demo/Live the broker minimum, margin, exact account authorization, ownership, and broker journal remain unchanged.
+
+The canonical saved `report.json` adds the backward-compatible optional `exploration` object containing policy score history, closed trade outcomes, scores before/after each update, position size and spread. `report.warnings` summarizes the model and limits. Never read this chronologically trained result as a prospective performance test: use withheld later dates before deciding whether a learned policy should influence even Shadow trading. The other Meta/CES/KTE historical algorithms and their saved reports remain unchanged.
