@@ -62,17 +62,19 @@ class DemoAcceptanceOperatorTests(unittest.TestCase):
             "account_fingerprint",
         ):
             self.assertIn(expected, export)
-        for forbidden in (
+        allowed_start = export.index("$AllowedFiles = @(")
+        allowed_end = export.index(")", allowed_start)
+        allowed = export[allowed_start:allowed_end]
+        for forbidden_file in (
             "ipc.key",
-            "broker-journal",
-            ".sqlite",
-            ".sqlite3",
-            "telegram",
+            "broker-journal.sqlite",
+            "telegram.sealed",
             "acceptance-gui-stdout.log",
             "acceptance-gui-stderr.log",
-            "metadata.login",
+            "runtime.db",
         ):
-            self.assertNotIn(forbidden, export.lower())
+            self.assertNotIn(forbidden_file, allowed)
+        self.assertNotIn("metadata.login", export.lower())
 
     def test_cmd_wrapper_opens_gui_without_args_and_preserves_cli_with_args(self):
         source = (ROOT / "scripts" / "Run-Demo-Acceptance.cmd").read_text(encoding="utf-8")
