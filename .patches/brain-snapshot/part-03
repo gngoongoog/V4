@@ -1,0 +1,60 @@
+     let (tx,rx)=mpsc::channel::<(String,String)>();
+@@ -22,6 +50,8 @@
+             match action.as_str(){
+                 "refresh"=>{},
+                 "create"=>{let v=client.post("/v1/backup",json!({}))?;message=format!("تم إنشاء نسخة: {}",v["name"].as_str().unwrap_or("—"));},
++                "brain_export"=>{message=export_brain(&client)?;},
++                "brain_import"=>{let(m,exit)=import_brain(&client)?;if exit{return Ok((Value::Null,String::new(),true));}message=m;},
+                 "validate"|"restore"=>{
+                     if name.is_empty(){bail!("اختر نسخة احتياطية أولاً");}
+                     let checked=client.post("/v1/backup/restore/validate",json!({"name":name}))?;
+--- a/crates/desktop/ui/main.slint
++++ b/crates/desktop/ui/main.slint
+@@ -402,8 +402,13 @@
+             Text { text: root.studio-message; color: #f0c578; wrap: word-wrap; }
+         } }
+         if root.page == 13: ScrollView { VerticalBox { spacing: 12px;
+-            Text { text: "النسخ الاحتياطية والاستعادة"; color: #eaf0fb; font-size: 20px; }
+-            Text { text: "تشمل الإعدادات والسجل والشموع والمحاكاة والتقييم والتعلم. لا تشمل أسرار Telegram. الاستعادة تستبدل هذه البيانات، وتحفظ نسخة تراجع تلقائياً، ثم تتطلب إعادة فتح التطبيق."; color: #d5deed; wrap: word-wrap; }
++            Text { text: "النسخ الاحتياطية ونقل العقل"; color: #eaf0fb; font-size: 20px; }
++            Text { text: "Brain Snapshot ينقل التعلم المتراكم، نماذج التعلم، نتائج الصفقات/Coordinator وStrategy Studio إلى كمبيوتر آخر بملف .btbrain واحد. لا ينقل أسرار Telegram ولا journal إرسال الأوامر. للاستمرار الدقيق بأوزان Coordinator استخدم نفس الحساب/Server/Symbol."; color: #d5deed; wrap: word-wrap; }
++            HorizontalBox {
++                Button { text: "حفظ العقل إلى ملف"; enabled: !root.backup-busy; clicked => { root.backup-action("brain_export"); } }
++                Button { text: "استيراد العقل من ملف"; enabled: !root.backup-busy && root.state == "STOPPED"; clicked => { root.backup-action("brain_import"); } }
++            }
++            Text { text: "النسخ الداخلية الكاملة"; color: #8d9cb4; font-size: 14px; }
+             HorizontalBox {
+                 Button { text: "تحديث القائمة"; enabled: !root.backup-busy; clicked => { root.backup-action("refresh"); } }
+                 Button { text: "إنشاء نسخة الآن"; enabled: !root.backup-busy; clicked => { root.backup-action("create"); } }
+--- a/docs/BRAIN_SNAPSHOT_AR.md
++++ b/docs/BRAIN_SNAPSHOT_AR.md
+@@ -0,0 +1,45 @@
++# Brain Snapshot — نقل التعلم بين الأجهزة
++
++## الهدف
++
++ميزة Brain Snapshot تحفظ حالة BrainTrade القابلة للتعلم في ملف محمول واحد بامتداد `.btbrain` حتى يمكن نقل النظام إلى كمبيوتر آخر ومتابعة التعلم بدل البدء من الصفر.
++
++## ما الذي ينتقل؟
++
++الملف مبني من Snapshot متسق لقاعدة `events.sqlite` مع `config.json` وmanifest مصادق عليه بفحوص السلامة الموجودة في نظام النسخ الاحتياطي. لذلك يشمل ما هو محفوظ في قاعدة المشروع، ومنه عينات Coordinator، نتائج MT5 Demo broker evidence، نماذج/سجل التعلم، التوقعات والنتائج، Strategy Studio، Wyckoff learning، backtests والتقييمات والشموع المحفوظة وإعدادات العقول.
++
++الأوزان التكيفية للـCoordinator تُعاد اشتقاقها من عينات التعلم المحفوظة، لذلك لا يبدأ من الصفر بعد الاستعادة.
++
++## ما الذي لا ينتقل عمداً؟
++
++- أسرار Telegram المحلية.
++- gateway send journal الحساس.
++- أي أمر إرسال معلق يفترض إعادة تشغيله على الجهاز الجديد.
++
++استبعاد journal الإرسال مقصود لتجنب إعادة إرسال أمر Broker قديم أو مكرر بعد النقل.
++
++## طريقة النقل
++
++1. من **النظام → النسخ** اضغط **حفظ العقل إلى ملف** واختر مكان ملف `.btbrain`.
++2. انسخ الملف إلى الكمبيوتر الثاني.
++3. ثبت/افتح نفس إصدار BrainTrade.
++4. اضغط `STOP` إذا لم يكن النظام متوقفاً.
++5. من **النظام → النسخ** اضغط **استيراد العقل من ملف** واختر ملف `.btbrain`.
++6. بعد نجاح الفحص وافق على الاستعادة. سيُغلق التطبيق.
++7. افتح `BrainTrade.exe` من جديد؛ يتم تطبيق snapshot قبل فتح قاعدة البيانات.
