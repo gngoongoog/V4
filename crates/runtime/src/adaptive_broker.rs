@@ -20,8 +20,7 @@ pub fn init(db: &Connection) -> Result<()> {
          context TEXT NOT NULL, position_id INTEGER NOT NULL, command_id TEXT NOT NULL,\
          closed_ms INTEGER NOT NULL, regime TEXT NOT NULL, policy INTEGER NOT NULL,\
          payload TEXT NOT NULL, PRIMARY KEY(context,position_id));\
-         CREATE UNIQUE INDEX IF NOT EXISTS adaptive_brain_broker_commands\
-         ON adaptive_brain_broker_samples(context,command_id);"
+         CREATE UNIQUE INDEX IF NOT EXISTS adaptive_brain_broker_commands ON adaptive_brain_broker_samples(context,command_id);"
     )?;
     Ok(())
 }
@@ -40,8 +39,8 @@ pub fn sync(db: &Connection, t: &Telemetry) -> Result<Vec<Outcome>> {
         "SELECT b.id,b.payload,b.result FROM broker_commands b \
          WHERE b.context=?1 AND b.kind='open' AND b.brain IN ('adaptive','system') \
          AND CAST(json_extract(b.result,'$.deal') AS INTEGER)>0 \
-         AND NOT EXISTS(SELECT 1 FROM adaptive_brain_broker_samples s\
-           WHERE s.context=b.context AND s.command_id=b.id)\
+         AND NOT EXISTS(SELECT 1 FROM adaptive_brain_broker_samples s \
+           WHERE s.context=b.context AND s.command_id=b.id) \
          ORDER BY b.created_ms,b.id"
     )?;
     let commands=statement.query_map([&ctx],|r|Ok((
