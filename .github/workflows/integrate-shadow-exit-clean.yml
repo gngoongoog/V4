@@ -1,0 +1,69 @@
+name: Integrate Shadow Exit Cleanly
+
+on:
+  push:
+    branches:
+      - research/shadow-adaptive-exit-clean
+    paths:
+      - .github/workflows/integrate-shadow-exit-clean.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/shadow-adaptive-exit-clean
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Add minimal runtime hooks and test
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          lib = Path('crates/runtime/src/lib.rs')
+          text = lib.read_text(encoding='utf-8')
+          anchor = 'mod execution;\n'
+          assert anchor in text and 'mod shadow_exit;' not in text
+          lib.write_text(text.replace(anchor, anchor + 'mod shadow_exit;\n', 1), encoding='utf-8')
+
+          path = Path('crates/runtime/src/execution.rs')
+          text = path.read_text(encoding='utf-8')
+          anchor = '        let mut inner = legacy::Service::new(db)?;\n'
+          assert anchor in text
+          text = text.replace(anchor, anchor + '        crate::shadow_exit::init(db)?;\n', 1)
+
+          anchor = '        self.inner\n            .observe(db, telemetry, config, run, frames, now)?;\n'
+          assert anchor in text
+          text = text.replace(anchor, anchor + '        // Shadow Adaptive Exit is research-only and runs only on full reconciled snapshots.\n        // It is intentionally absent from the fast Sniper pulse path and cannot queue orders.\n        crate::shadow_exit::observe(db, telemetry, config, &available, now)?;\n', 1)
+
+          anchor = '        // A brain role change must never arm global START implicitly. START/STOP is a\n'
+          assert anchor in text
+          text = text.replace(anchor, '        if method == "GET" && path == "/v1/execution/shadow-exit" {\n            return crate::shadow_exit::summary(db, status.telemetry.as_ref());\n        }\n\n' + anchor, 1)
+
+          anchor = '            value["portfolio"] = self.portfolio_state.clone();\n            Ok(value)\n'
+          assert anchor in text
+          text = text.replace(anchor, '            value["portfolio"] = self.portfolio_state.clone();\n            value["shadow_exit"] = crate::shadow_exit::summary(db, status.telemetry.as_ref())?;\n            Ok(value)\n', 1)
+
+          old_model = 'value["execution_model"] = json!("adaptive-member-coordinator-v1");'
+          assert old_model in text
+          text = text.replace(old_model, 'value["execution_model"] = json!("braintrade-intelligence-v3");', 1)
+          old_note = 'value["note"] = json!("العقل الرئيسي يعمل مع START. العقول الثانوية تشارك كمستشارين افتراضياً؛ تفعيل SOLO يفصل العقل المختار فقط، وإطفاؤه يعيده بعد تسوية صفقة SOLO المفتوحة. التعلم يحدّث وزن العضو بعد 12 شمعة لاحقة؛ أول 20 عينة تستخدم وزناً محايداً. START/STOP منفصلان عن زر العضوية.");'
+          new_note = 'value["note"] = json!("العقل الرئيسي Intelligence V3 يعمل مع START. العقول الثانوية مستشارون افتراضياً؛ SOLO يفصل العقل المختار فقط. Broker evidence الحقيقي مفضل، والـforward/counterfactual سببي للبحث. Shadow Adaptive Exit بحثي فقط ولا يرسل أوامر. START/STOP منفصلان عن العضوية.");'
+          assert old_note in text
+          text = text.replace(old_note, new_note, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          cargo test -p braintrade-runtime shadow_exit --locked
+          git diff --check
+      - name: Commit minimal integration
+        shell: bash
+        run: |
+          git config user.name "gngoongoog"
+          git config user.email "95882142+gngoongoog@users.noreply.github.com"
+          git add crates/runtime/src/lib.rs crates/runtime/src/execution.rs
+          git commit -m "Integrate Shadow Adaptive Exit research without fast-path impact"
+          git push origin HEAD:research/shadow-adaptive-exit-clean
