@@ -85,3 +85,8 @@ must be retrained/re-exported; they are not silently granted inference eligibili
 ## Native performance review
 
 The Learning page exposes current performance details, freezes immutable reviews and opens saved reports by ID from the review list. POST /v1/learning/performance-review/create requires model_id, evidence_signature and optional note (500 characters). A changed subject or evidence set is rejected. Fingerprint v2 includes regime slices and exact serialized metrics; fixed v1 policy thresholds remain unchanged. No Champion or trading effect is enabled.
+
+
+## Adaptive Learner V1 — continuous execution-member advisor
+
+This layer adds a distinct `adaptive` member, account-scoped SQLite model and replayable simulated-trade evidence. It is separate from the historical `ExploreV1` backtest (whose trained scores remain run-scoped). On reconciled completed M1 snapshots, it evaluates the newest mature virtual after-cost trade outcomes sequentially and updates policy scores only after their close. It supports advisor participation in Coordinator and manually enabled SOLO execution using existing account/contract/broker gates. Its score is empirical weighted net R, not a calibrated probability and not a trained neural network; it can respond poorly to shifts in market regime. It does not merge forward-bar proxy results with real filled broker deals. For scientific validation, freeze the model for a genuinely untouched future time period and compare against a non-adaptive baseline after all costs.
