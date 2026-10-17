@@ -41,7 +41,13 @@ class DemoRealTrainingContractTests(unittest.TestCase):
             self.assertIn(field, source)
         self.assertIn("!t.demo||t.account_trade_mode!=Some(0)", compact)
         self.assertIn('member["ready"]!=true', compact)
-        self.assertIn('member["side"].as_i64()!=Some(executed_side)', compact)
+        # Intelligence V3 names the agreement explicitly so the same value can also be
+        # persisted in the counterfactual ledger. Exact broker evidence must still be
+        # credited only to members that supported the executed coordinator side.
+        self.assertIn('letsupported=member["side"].as_i64()==Some(executed_side)', compact)
+        self.assertIn("if!supported{continue;}", compact)
+        self.assertIn("supported_execution", source)
+        self.assertIn('"costs":"exact booked MT5 deal profit + commission + swap + fee"', source)
 
 
 if __name__ == "__main__":
