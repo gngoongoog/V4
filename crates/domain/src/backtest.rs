@@ -13,6 +13,7 @@ pub const MAX_BARS: usize = 60_000;
 pub const DAY: u64 = 86_400;
 mod kte;
 mod explore;
+pub use explore::{Audit as ExplorationAudit, Observation as ExplorationObservation};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Strategy {
@@ -272,7 +273,7 @@ impl Report {
             .take(20)
             .map(|t| {
                 format!(
-                    "{} | {} → {} | {:.4} lot | {:.5} → {:.5} | net {:.2} | {}{}",
+                    "{} | {} → {} | {:.6} lot | {:.5} → {:.5} | net {:.2} | {}{}",
                     if t.side == 1 { "BUY" } else { "SELL" },
                     t.entry_time,
                     t.exit_bar,
@@ -286,7 +287,18 @@ impl Report {
             })
             .collect::<Vec<_>>()
             .join("\n\n");
-        format!("{}\n\nملاحظات البيانات:\n{}\n\nأسباب عدم الدخول (عدد الدقائق):\n{}\n\nآخر 20 صفقة — أوقات UTC epoch:\n{}\n\nالتصدير يحتوي كل الصفقات ومنحنى الرصيد والشموع لإعادة المراجعة.",self.summary(),self.warnings.join("\n"),self.metrics.skipped.iter().map(|(k,v)|format!("{k}: {v}")).collect::<Vec<_>>().join("\n"),rows)
+        let training = self.exploration.as_ref().map(|audit| {
+            let latest = audit.observations.iter().rev().take(15).map(|o| format!(
+                "{} {} | {} | net {:.4} | R {:.3} | score {:.3} → {:.3} | {} | lot {:.6} / broker min {:.6}",
+                o.entry_time, o.policy, o.selection, o.net_after_costs,
+                o.realized_r, o.score_before, o.score_after, o.exit_reason,
+                o.lots, o.broker_volume_min
+            )).collect::<Vec<_>>().join("\n");
+            format!("\n\nتعلّم Explore الافتراضي: {} إغلاق | trend {:.3} / reversion {:.3} | دون حجم الوسيط {}\nآخر تحديثات التعلّم:\n{}",
+                audit.observations.len(), audit.scores[0], audit.scores[1],
+                audit.below_broker_minimum, latest)
+        }).unwrap_or_default();
+        format!("{}\n\nملاحظات البيانات:\n{}\n\nأسباب عدم الدخول (عدد الدقائق):\n{}\n\nآخر 20 صفقة — أوقات UTC epoch:\n{}{}\n\nالتصدير يحتوي كل الصفقات ومنحنى الرصيد والشموع لإعادة المراجعة.",self.summary(),self.warnings.join("\n"),self.metrics.skipped.iter().map(|(k,v)|format!("{k}: {v}")).collect::<Vec<_>>().join("\n"),rows,training)
     }
 }
 
