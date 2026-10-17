@@ -288,6 +288,7 @@ fn enforce_portfolio(
 pub struct Service {
     inner: legacy::Service,
     learner: crate::coordinator_learning::Learner,
+    adaptive: crate::adaptive_brain::Learner,
     portfolio: PortfolioLimits,
     portfolio_state: Value,
     fast: Option<pulse::FastContext>,
@@ -326,6 +327,7 @@ impl Service {
         Ok(Self {
             inner,
             learner: crate::coordinator_learning::Learner::new(db)?,
+            adaptive: crate::adaptive_brain::Learner::new(db)?,
             portfolio,
             portfolio_state,
             fast: None,
@@ -378,6 +380,9 @@ impl Service {
             system.enabled = true;
         }
         let available = crate::coordinator_learning::available_frames(telemetry, frames, now);
+        // Train/predict once on reconciled completed bars, not on fast quote pulses.
+        // The prediction is cached for both coordinator advising and optional SOLO.
+        self.inner.adaptive_signal = self.adaptive.observe(db, telemetry, config, &available, now)?;
         self.inner.weights = self.learner.observe(
             db,
             telemetry,
@@ -571,6 +576,7 @@ impl Service {
         if method == "GET" && path == "/v1/execution" {
             let mut value = Self::enrich_roles(value, db, status)?;
             value["portfolio"] = self.portfolio_state.clone();
+            value["adaptive_learning"] = self.adaptive.status(status.telemetry.as_ref());
             Ok(value)
         } else {
             Ok(value)
