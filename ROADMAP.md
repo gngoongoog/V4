@@ -1,61 +1,62 @@
 # BrainTrade OS — Roadmap
 
-GitHub `gngoongoog/V4` is canonical. Read `BUILD_HANDOFF.md`, `PROJECT_STATE.md`, `CONTINUE_HERE.md` and both release/development validation records before editing.
+GitHub `gngoongoog/V4` is canonical. Read `BUILD_HANDOFF.md`, `PROJECT_STATE.md`, `CONTINUE_HERE.md` and the release/development validation records before editing runtime execution code.
 
 ## Promoted 0.6.0 checkpoint
 
-Verified executable/source checkpoint: `fdc63d4d05df89e27607641bd197b9e6ead936e9` (tree `8593783f43a4892cdc724ed5d112607ef7cee006`). Research CI `38803539711`: PASS. Windows CI/package `38803539405`: PASS. PR #13 promoted the reviewed 0.6.0 line to `main` without history rewriting.
-
-The promoted line contains bound-account execution, 14 execution identities, coordinator/advisor/SOLO/RETURNING membership, Scalping/Swing/Expert/Sniper, adaptive member weighting, schema-12 backup/restore and the earlier native dashboard. Startup/restart is STOPPED. CI uses simulated MT5; native MT5 demo acceptance remains a separate target-machine gate.
+The promoted 0.6.0 line remains the release baseline. Its archived validation evidence stays immutable. It contains bound-account execution, 14 durable execution identities, coordinator/advisor/SOLO/RETURNING membership, four trading modes, adaptive weighting, backup/restore and the native dashboard. Startup/restart is STOPPED. CI is simulated-broker validation; native MT5 demo acceptance remains a separate target-machine gate.
 
 ## Current 0.7.0 Development Preview
 
-Current validated `development` runtime/source merge checkpoint is `9524367f039b8fe59247e88c714c1cbff9c4a5a9` (tree `58a250ddca283e867436953a459959c33ee8a1e2`). PR #38 head `b6c15e8243cbf6792b88a9ca7bac3330643b619f` has the same runtime/source tree and passed Research plus Windows/Linux validation before squash merge. Historical 0.6 release records remain unchanged.
+The 0.7 development line has advanced beyond the older validation checkpoint recorded in `docs/development-validation.json`. Intelligence V3 was merged through PR #47 at `30cc06390603491b7396f8c0c60a61c3d8416306` after exact PR-head Research and Windows/Linux validation.
 
-Current CI evidence scale is 82 domain Rust tests, 68 runtime Rust tests plus one intentionally ignored public-network news test, and 109 Python tests. Core build, lifecycle, backup/restore, Studio, chronological evaluation, OOS/correlation research, feature ablation contracts, simulated broker execution, native selector compilation, desktop rendering and Windows portable packaging passed.
-
-Completed 0.7 engineering now includes:
+Implemented 0.7 engineering includes:
 
 - Portfolio Exposure v1 with durable persistence and stopped-only editing.
-- Sniper Fast Lane and the execution-only `PUT /v1/execution/pulse` path that reuses reconciled state instead of running research/learning on every quote.
-- Native Sniper MT5 `OnTick` + `CopyTicks(..., COPY_TICKS_ALL)` bridge with authenticated local transport, source-order recovery, same-millisecond event separation and automatic 5 ms Python fallback.
-- Account-scoped commission profiles with Round-trip or Per-side basis and exact account/server/currency/symbol matching.
-- Configurable Sniper maximum hold time (1–3600 seconds), frozen at entry so an already-open position does not change when settings change.
-- Simplified native Control Center grouped into five primary sections: الرئيسية، التداول، البحث، المختبر، النظام.
-- Fifteen execution identities, including the Liquidity Sweep brain, without remapping earlier brain identities.
-- Aligned multi-symbol correlation/exposure research with exact timestamp intersections, explicit availability handling, deterministic persistence/replay/export and no broker-policy connection.
-- Chronological holdout/rolling OOS evaluation infrastructure and feature-group correlation/ablation tooling. These are research tools; real prospective evidence still has to accumulate.
-- Read-only Windows/Demo execution acceptance collector that analyzes stored real execution results, separates `native` and `poll` sessions, and calculates P50/P95/P99 without creating trades itself.
-- Causal official-news historical replay from PR #37, with append-only first-observed availability, deterministic replay and no execution route.
-- Real Demo broker-outcome learning from PR #38. Closed coordinator Demo trades use exact booked profit, commission, swap and fee as preferred adaptive evidence for participating members.
+- Sniper Fast Lane plus execution-only Fast Pulse.
+- Native Sniper MT5 `OnTick` + `CopyTicks(..., COPY_TICKS_ALL)` bridge with authenticated local transport, quote-order recovery and fallback polling.
+- Account-scoped commission profiles with Round-trip or Per-side basis.
+- Configurable 1–3600 second Sniper maximum hold, frozen at entry.
+- Simplified five-section native Control Center.
+- Fifteen merged execution identities through Liquidity Sweep, with append-only broker magic ownership.
+- Correlation/exposure research, chronological holdout/rolling OOS evaluation and feature-group ablation, all research-only.
+- Read-only Windows/Demo execution acceptance collection with native-vs-poll P50/P95/P99 timing characterization.
+- Causal official-news historical replay using append-only first-observed timestamps and no execution route.
+- Exact closed Demo broker-outcome adaptive learning using booked profit, commission, swap and fee.
+- Portable Brain Snapshot support.
+- Intelligence V3 member weighting with reward/confidence, regime/session context and execution-history quality evidence.
 
-The Sniper local engineering target is <=20 ms from BrainTrade queue to the `order_send` handoff on an appropriate target machine. The collector measures component timing and identifies whether delay is dominated by Core/pulse, authorization, durable journal, other pre-send MT5 work, or `order_send`. This is not a guaranteed MT5/broker acknowledgement, fill latency, network latency, profitability or HFT claim.
+PR #48 is the next focused execution addition. It appends a 16th identity, `trend_pullback`, with magic `410615` while preserving `generated=410613` and `liquidity=410614`. Its logic uses completed bars only: EMA20/EMA50 trend separation and slope, a controlled pullback toward the fast mean, preservation of the slow-mean structure, a confirmation candle, anti-chasing distance and structural stop geometry. Treat the identity as part of `development` only after PR #48 is merged and its exact-head gates are green.
+
+The Sniper local engineering target remains <=20 ms from BrainTrade queue to the `order_send` handoff on an appropriate target machine. This is not a guaranteed broker acknowledgement, fill-latency, network-latency, profitability or HFT claim.
 
 ## Immediate engineering and acceptance work
 
-1. **Run native Windows + real Demo MT5 acceptance.** Follow `docs/DEMO_ACCEPTANCE_AR.md` and `docs/ACCEPTANCE.md`. Collect at least a useful sample of real Sniper sends for both native OnTick and 5 ms fallback and preserve P50/P95/P99 reports.
-2. **Measure before optimizing again.** If `queue_to_send_ms` P95/P99 misses the 20 ms local target, use `core_pulse_ms`, `authorize_ms`, `journal_ms`, `other_pre_send_ms`, `pre_send_ms`, `send_ms` and `total_ms` to identify the actual bottleneck before changing execution code.
-3. **Accumulate genuine OOS evidence.** Keep holdout/rolling evaluation, feature ablation and correlation observational until enough completed-bar observations and matured labels exist.
-4. **Historical event research.** The first-observed causal replay is implemented; extend or analyze it only as research until independent evidence justifies a new hypothesis.
-5. **Private Telegram acceptance.** Test only with credentials stored on the target machine.
-6. **Repository policy.** Enable required checks/branch protection for `main` and preferably `development` if repository administration access becomes available.
+1. **Complete PR #48 exact-head validation and merge only if green.** Both Research and Windows/Linux workflows are required.
+2. **Run native Windows + real Demo MT5 acceptance.** Follow `docs/DEMO_ACCEPTANCE_AR.md` and `docs/ACCEPTANCE.md`; preserve separate native OnTick and fallback-poll samples.
+3. **Measure before optimizing execution again.** If `queue_to_send_ms` P95/P99 misses the local target, inspect `core_pulse_ms`, `authorize_ms`, `journal_ms`, `other_pre_send_ms`, `pre_send_ms`, `send_ms` and `total_ms` before changing architecture.
+4. **Accumulate genuine OOS evidence.** Keep correlation, ablation, news replay and imported ML observational until enough prospective evidence exists.
+5. **Evaluate Trend Pullback as a hypothesis, not a claim.** Track its closed Demo outcomes, execution costs and regime/session behavior before raising its learned influence.
+6. **Private Telegram acceptance.** Test only with credentials stored on the target machine.
+7. **Repository policy.** Enable required checks/branch protection for `main` and preferably `development` if administration access becomes available.
 
-## Research boundaries that remain intentional
+## Research and execution boundaries
 
-- Correlation/exposure results are research-only and cannot change broker execution or Portfolio Exposure v1.
-- Imported ML models remain audit/research challengers; there is no automatic Champion promotion or execution route.
-- Feature ablation can identify duplicate/weak groups but does not itself authorize removal from production logic without prospective evidence.
-- Official-news ingestion is observational; headline wording does not infer direction and is not a trading signal.
-- True order-flow/volume-profile claims require a feed that actually supplies the necessary fields.
+- Exact account identity, quote freshness, ownership, final Core authorization, durable journal and uncertain-send reconciliation remain mandatory.
+- Existing broker magic IDs must never be remapped; new identities append only.
+- Correlation/exposure research cannot directly change broker execution or Portfolio Exposure v1.
+- Imported ML remains audit/research-only; there is no automatic Champion promotion or execution route.
+- Official-news replay is observational and does not infer trade direction from headline wording.
+- True order-flow or volume-profile claims require feeds that actually provide the necessary fields.
 
 ## Explicitly not complete
 
-- Native broker acceptance on the user's actual MT5 installation and Demo account.
-- Real measured native-vs-poll Sniper latency distributions from that machine.
+- Native broker acceptance on the user's actual Windows/MT5 Demo installation.
+- Real native-vs-poll Sniper latency distributions from that machine.
 - Live Telegram acceptance.
 - Imported ML Champion activation or automatic promotion.
 - Correlation-driven broker execution policy.
 - Guaranteed capture of every upstream broker event.
-- Any profitability, HFT-latency, execution-quality or fill guarantee.
+- Any profitability, execution-quality, HFT-latency or fill guarantee.
 
 A module is complete only when code, verification and state documentation agree. A CI PASS proves the software path under the tested boundary; it does not substitute for target-machine broker acceptance.
