@@ -129,4 +129,52 @@ mod tests {
         let t=Telemetry::default();
         assert!(sync(&db,&t).unwrap().is_empty());
     }
+    #[test]
+    fn exact_mt5_booked_trade_is_learned_once_with_all_fees() {
+        let db=Connection::open_in_memory().unwrap();
+        init(&db).unwrap();
+        db.execute_batch(
+            "CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT NOT NULL,brain TEXT NOT NULL,kind TEXT NOT NULL,created_ms INTEGER NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL DEFAULT '{}');\
+             CREATE TABLE broker_deals(context TEXT NOT NULL,ticket INTEGER NOT NULL,position_id INTEGER NOT NULL,brain TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,ticket));"
+        ).unwrap();
+        let t=Telemetry {
+            connected:true,server:"DemoServer".into(),login:77,
+            symbol:"XAUUSD".into(),currency:"USD".into(),
+            account_trade_mode:Some(0),demo:true,
+            tick_size:Some(0.01),tick_value_loss:Some(1.),
+            ..Default::default()
+        };
+        let context=crate::coordinator_learning::context(&t);
+        let cmd=json!({
+            "id":"open1","brain":"adaptive","signal":{
+                "key":"adaptive:M1:1800000000:impulse_normal_cost:trend",
+                "side":1,"stop_distance":2.0
+            }
+        });
+        db.execute(
+            "INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload,result) VALUES('open1',?1,'adaptive','open',1,'observed',?2,?3)",
+            params![&context,cmd.to_string(),json!({"deal":100}).to_string()]
+        ).unwrap();
+        for (ticket,entry,profit,commission,swap,fee) in [
+            (100,0,0.0,-0.40,0.0,0.0),
+            (101,1,4.0,-0.40,-0.10,-0.20),
+        ] {
+            let deal=json!({
+                "ticket":ticket,"position_id":900,"entry":entry,
+                "profit":profit,"commission":commission,"swap":swap,"fee":fee,
+                "volume":0.1,"time_msc":ticket*1000
+            });
+            db.execute(
+                "INSERT INTO broker_deals(context,ticket,position_id,brain,payload) VALUES(?1,?2,900,'adaptive',?3)",
+                params![&context,ticket,deal.to_string()]
+            ).unwrap();
+        }
+        let outcome=sync(&db,&t).unwrap();
+        assert_eq!(outcome.len(),1);
+        assert_eq!(outcome[0].policy,0);
+        assert!((outcome[0].net-2.90).abs()<1e-9);
+        assert!(outcome[0].reward_r.is_finite());
+        assert!(sync(&db,&t).unwrap().is_empty());
+        assert_eq!(load(&db,&context).unwrap().len(),1);
+    }
 }
