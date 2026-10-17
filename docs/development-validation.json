@@ -2,36 +2,36 @@
   "version": "0.7.0",
   "status": "verified",
   "source_state": "development preview",
-  "tested_commit": "3ff9425e2795102c8d84ea991260d985f2d4baba",
-  "tested_tree": "db356f1eb5ae413543886f7a4f1427c883fad0da",
+  "tested_commit": "31c10767e7c284160a74c1e0b001c0fde825780d",
+  "tested_tree": "cb4cfc79358305d91caa4826ab2d47414fbd745b",
   "research_ci": {
-    "run_id": 39050497842,
+    "run_id": 39058307544,
     "conclusion": "success",
-    "url": "https://github.com/gngoongoog/V4/actions/runs/39050497842",
+    "url": "https://github.com/gngoongoog/V4/actions/runs/39058307544",
     "artifact": {
-      "id": 12106853812,
+      "id": 12110491477,
       "name": "synthetic-research-validation",
-      "size_bytes": 4308194,
-      "sha256": "fcb751f647d692f9da59c38f8b10eaa7233ece74f4c3901dcc370c51c5a0ebac"
+      "size_bytes": 4309247,
+      "sha256": "5a7b7c2dba278110f0c536aaa6cc162d3a509ed71da92137828dd0c10aaff5e9"
     }
   },
   "windows_ci": {
-    "run_id": 39050497836,
+    "run_id": 39058307570,
     "conclusion": "success",
-    "url": "https://github.com/gngoongoog/V4/actions/runs/39050497836"
+    "url": "https://github.com/gngoongoog/V4/actions/runs/39058307570"
   },
   "windows_artifacts": [
     {
-      "id": 12107094155,
+      "id": 12110404218,
       "name": "BrainTrade-Windows-x64-Preview",
-      "size_bytes": 34549437,
-      "sha256": "84f79393926209fc92d9eb3105bcae7ee5acc8ccd30ac41d97e0f37ff74fcf6d"
+      "size_bytes": 34560194,
+      "sha256": "e7d90d7744264e30c1febf0fc835ee78a849901a303177f73f3261c45e6b0c27"
     },
     {
-      "id": 12106889676,
+      "id": 12111210477,
       "name": "windows-native-validation",
       "size_bytes": 1704761,
-      "sha256": "25b2be406bf64e7a8c5b4a05e8129d2cf5a854f3282a28bc51d7f18dcf151180"
+      "sha256": "05fa8cdbb70c35e6f04c084d0b28a8b034c8bb665832f21fc235bdb523aab99d"
     }
   ],
   "release_evidence": "validation.json",
@@ -43,9 +43,9 @@
     "telegram_live_delivery": "not performed",
     "imported_ml_automatic_promotion": false
   },
-  "note": "CI-verified 0.7 development checkpoint through PR #50. PR #48 introduced the sixteenth Trend Pullback identity at magic 410615 while preserving generated=410613 and liquidity=410614. PR #50 adds a packaged one-click, read-only Windows MT5 Demo acceptance operator, Arabic instructions, Native-vs-Poll summary output, and Windows PowerShell syntax validation before and after packaging. It does not alter broker execution logic and does not perform native MT5 acceptance in CI. PR #50 head 3ff9425e2795102c8d84ea991260d985f2d4baba and development squash merge ae5cc5c5bf216fc8d2453b204dbc45abe2e89902 share tree db356f1eb5ae413543886f7a4f1427c883fad0da. Native Windows MT5 Demo acceptance and private Telegram delivery remain target-machine steps. The <=20 ms Sniper figure is a BrainTrade-local queue-to-send engineering target, not a broker/network/fill or profitability guarantee.",
-  "pull_request_head": "3ff9425e2795102c8d84ea991260d985f2d4baba",
-  "current_development_merge": "ae5cc5c5bf216fc8d2453b204dbc45abe2e89902",
+  "note": "CI-verified 0.7 development checkpoint through PR #53. PR #48 introduced the sixteenth Trend Pullback identity at magic 410615 while preserving generated=410613 and liquidity=410614. PR #50 introduced the packaged read-only Demo acceptance CLI/operator. PR #52 added the one-click Windows Demo Acceptance Center GUI with controlled Native/Poll/Auto capture and Windows parser validation before and after packaging. PR #53 added a privacy-safe allowlisted acceptance evidence ZIP and process-tree collector shutdown without changing BrainTrade START/STOP. The share exporter excludes raw MT5 login, ipc.key, broker journals/databases, Telegram credentials and GUI stdout/stderr logs. No PR #52/#53 change alters broker execution logic, and CI does not perform native MT5 acceptance. PR #53 head 31c10767e7c284160a74c1e0b001c0fde825780d and development merge b20af1f0a3ae37d30e688e92615972e5c03e5adc share tree cb4cfc79358305d91caa4826ab2d47414fbd745b. Native Windows MT5 Demo acceptance and private Telegram delivery remain target-machine steps. The <=20 ms Sniper figure is a BrainTrade-local queue-to-send engineering target, not a broker/network/fill or profitability guarantee.",
+  "pull_request_head": "31c10767e7c284160a74c1e0b001c0fde825780d",
+  "current_development_merge": "b20af1f0a3ae37d30e688e92615972e5c03e5adc",
   "source_tree_matches_pr_head": true,
   "source_tree_matches_current_development": true,
   "tests": {
@@ -53,7 +53,7 @@
     "rust_runtime_passed": 71,
     "rust_runtime_ignored": 1,
     "ignored_reason": "explicit public-network official news check",
-    "python_passed": 116
+    "python_passed": 118
   },
   "verified_checks": [
     "Core lifecycle, authentication, staleness, research replay and persistence",
@@ -71,7 +71,9 @@
     "aligned multi-symbol correlation research with explicit unavailable data, deterministic replay/export and observational-only boundary",
     "chronological holdout/rolling OOS infrastructure and deterministic feature-group correlation/ablation contracts",
     "read-only Demo acceptance collector rejects Live/mismatched contexts, separates native/poll samples and calculates P50/P95/P99",
-    "one-click packaged Demo acceptance operator performs import preflight, collector orchestration and Native-vs-Poll summary without mutating execution",
+    "one-click Demo Acceptance Center runs only the read-only CLI, preserves command-line CLI compatibility and exposes controlled Native/Poll/Auto capture",
+    "Demo Acceptance Center reports Sniper sample counts, queue-to-send P95/P99, MT5 send P95, Native/Poll counts/P95, hotspot and warnings",
+    "privacy-safe acceptance share bundle is allowlist-based and excludes raw login, ipc.key, broker journals/databases, Telegram credentials and GUI logs",
     "Demo acceptance PowerShell source and packaged copies pass Windows parser validation",
     "offline report interactions and native selector compilation/rendering",
     "Windows portable startup, embedded runtime, DPAPI IPC, PE dependencies, native bridge packaging and settings persistence",
