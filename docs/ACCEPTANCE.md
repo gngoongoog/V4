@@ -72,11 +72,13 @@ These checks require a Windows x64 host with a real MT5 installation and a demo 
 ## Sniper fast-lane latency — target-machine characterization required
 
 - In Sniper mode confirm the gateway hot loop is active while full account/position reconciliation and research/history collection remain on their slower schedules.
-- Collect at least several hundred Demo execution samples and preserve `queue_to_gateway_ms`, `authorize_ms`, `journal_ms`, `pre_send_ms`, `queue_to_send_ms`, `send_ms` and `total_ms` from broker results.
+- Collect at least several hundred Demo execution samples and preserve `core_pulse_ms`, `queue_to_gateway_ms`, `authorize_ms`, `journal_ms`, `post_journal_authorize_ms`, `post_journal_account_ms`, `other_pre_send_ms`, `pre_send_ms`, `queue_to_send_ms`, `send_ms` and `total_ms` from broker results.
 - Compute P50/P95/P99 separately for `queue_to_send_ms` and `send_ms`. The engineering target is **20 ms or less for BrainTrade-local queue-to-send latency** on the target machine; this is not a broker-fill or network guarantee.
 - Confirm tick-keyed Sniper entries report `fast_path=true` and `order_check_skipped=true`; non-Sniper/bar-based entries must keep the normal broker `order_check` path.
 - Verify `PRAGMA synchronous=FULL` journal persistence still completes before every `order_send`; low latency must not permit a blind duplicate after crash, timeout or uncertain broker acknowledgement.
-- Compare fresh quote time, command creation time and the final `order_send` result. If local P95/P99 exceeds the target, use the component timings to identify whether Core authorization, durable journal I/O or local MT5 calls dominate before changing any safety boundary.
+- Verify the post-journal Core authorization rejects an Open if STOP or execution revision changes after the durable journal was committed, and verify the final account read rejects a send if login/server/currency/Demo identity changes in that same last-moment window.
+- Compare actual `post_journal_authorize_ms` and `post_journal_account_ms` cost against the other local components. They are intentional safety gates and must be measured before considering any latency redesign.
+- Compare fresh quote time, command creation time and the final `order_send` result. If local P95/P99 exceeds the target, use the component timings to identify whether Core authorization, durable journal I/O, final authorization/account validation or local MT5 calls dominate before changing any safety boundary.
 - Treat MT5/broker acknowledgement and fill latency separately. No fixed end-to-end latency may be claimed from CI or from the local fast path.
 
 ## Native Sniper OnTick / CopyTicks bridge — target-machine acceptance required
