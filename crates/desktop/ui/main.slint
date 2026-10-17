@@ -402,8 +402,13 @@ export component Dashboard inherits Window {
             Text { text: root.studio-message; color: #f0c578; wrap: word-wrap; }
         } }
         if root.page == 13: ScrollView { VerticalBox { spacing: 12px;
-            Text { text: "النسخ الاحتياطية والاستعادة"; color: #eaf0fb; font-size: 20px; }
-            Text { text: "تشمل الإعدادات والسجل والشموع والمحاكاة والتقييم والتعلم. لا تشمل أسرار Telegram. الاستعادة تستبدل هذه البيانات، وتحفظ نسخة تراجع تلقائياً، ثم تتطلب إعادة فتح التطبيق."; color: #d5deed; wrap: word-wrap; }
+            Text { text: "النسخ الاحتياطية ونقل العقل"; color: #eaf0fb; font-size: 20px; }
+            Text { text: "Brain Snapshot ينقل التعلم المتراكم، نماذج التعلم، نتائج الصفقات/Coordinator وStrategy Studio إلى كمبيوتر آخر بملف .btbrain واحد. لا ينقل أسرار Telegram ولا journal إرسال الأوامر. للاستمرار الدقيق بأوزان Coordinator استخدم نفس الحساب/Server/Symbol."; color: #d5deed; wrap: word-wrap; }
+            HorizontalBox {
+                Button { text: "حفظ العقل إلى ملف"; enabled: !root.backup-busy; clicked => { root.backup-action("brain_export"); } }
+                Button { text: "استيراد العقل من ملف"; enabled: !root.backup-busy && root.state == "STOPPED"; clicked => { root.backup-action("brain_import"); } }
+            }
+            Text { text: "النسخ الداخلية الكاملة"; color: #8d9cb4; font-size: 14px; }
             HorizontalBox {
                 Button { text: "تحديث القائمة"; enabled: !root.backup-busy; clicked => { root.backup-action("refresh"); } }
                 Button { text: "إنشاء نسخة الآن"; enabled: !root.backup-busy; clicked => { root.backup-action("create"); } }
