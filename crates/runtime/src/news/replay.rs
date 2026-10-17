@@ -16,24 +16,28 @@ const REPORT_LIMIT: usize = 100;
 
 pub fn init(db: &Connection) -> Result<()> {
     db.execute_batch(
-        "CREATE TABLE IF NOT EXISTS news_observed_events(\
-            source_id TEXT NOT NULL,\
-            url TEXT NOT NULL,\
-            title TEXT NOT NULL,\
-            topic TEXT NOT NULL,\
-            published_ms INTEGER,\
-            first_observed_ms INTEGER NOT NULL,\
-            last_observed_ms INTEGER NOT NULL,\
-            PRIMARY KEY(source_id,url)\
-        ) WITHOUT ROWID;\
-        CREATE INDEX IF NOT EXISTS idx_news_observed_first ON news_observed_events(first_observed_ms);\
-        CREATE TABLE IF NOT EXISTS news_replay_reports(\
-            id TEXT PRIMARY KEY,\
-            created_ms INTEGER NOT NULL,\
-            source_id TEXT NOT NULL,\
-            report TEXT NOT NULL\
-        );\
-        CREATE INDEX IF NOT EXISTS idx_news_replay_created ON news_replay_reports(created_ms DESC);",
+        r#"
+        CREATE TABLE IF NOT EXISTS news_observed_events(
+            source_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            title TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            published_ms INTEGER,
+            first_observed_ms INTEGER NOT NULL,
+            last_observed_ms INTEGER NOT NULL,
+            PRIMARY KEY(source_id,url)
+        ) WITHOUT ROWID;
+        CREATE INDEX IF NOT EXISTS idx_news_observed_first
+            ON news_observed_events(first_observed_ms);
+        CREATE TABLE IF NOT EXISTS news_replay_reports(
+            id TEXT PRIMARY KEY,
+            created_ms INTEGER NOT NULL,
+            source_id TEXT NOT NULL,
+            report TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_news_replay_created
+            ON news_replay_reports(created_ms DESC);
+        "#,
     )?;
     Ok(())
 }
@@ -57,14 +61,16 @@ pub fn observe(db: &Connection, source_id: &str, observed_ms: u64, items: &[Head
             .transpose()
             .context("Published timestamp out of range")?;
         db.execute(
-            "INSERT INTO news_observed_events(\
-                source_id,url,title,topic,published_ms,first_observed_ms,last_observed_ms\
-             ) VALUES(?1,?2,?3,?4,?5,?6,?6)\
-             ON CONFLICT(source_id,url) DO UPDATE SET\
-                title=excluded.title,\
-                topic=excluded.topic,\
-                published_ms=COALESCE(news_observed_events.published_ms,excluded.published_ms),\
-                last_observed_ms=MAX(news_observed_events.last_observed_ms,excluded.last_observed_ms)",
+            r#"
+            INSERT INTO news_observed_events(
+                source_id,url,title,topic,published_ms,first_observed_ms,last_observed_ms
+            ) VALUES(?1,?2,?3,?4,?5,?6,?6)
+            ON CONFLICT(source_id,url) DO UPDATE SET
+                title=excluded.title,
+                topic=excluded.topic,
+                published_ms=COALESCE(news_observed_events.published_ms,excluded.published_ms),
+                last_observed_ms=MAX(news_observed_events.last_observed_ms,excluded.last_observed_ms)
+            "#,
             params![
                 source_id,
                 item.url,
@@ -144,10 +150,12 @@ fn load_observations(db: &Connection, min_ms: u64, max_ms: u64) -> Result<Vec<Ob
     let min_ms = i64::try_from(min_ms).context("Replay start out of range")?;
     let max_ms = i64::try_from(max_ms).context("Replay end out of range")?;
     let mut statement = db.prepare(
-        "SELECT source_id,url,title,topic,published_ms,first_observed_ms,last_observed_ms\
-         FROM news_observed_events\
-         WHERE first_observed_ms>=?1 AND first_observed_ms<?2\
-         ORDER BY first_observed_ms,source_id,url",
+        r#"
+        SELECT source_id,url,title,topic,published_ms,first_observed_ms,last_observed_ms
+        FROM news_observed_events
+        WHERE first_observed_ms>=?1 AND first_observed_ms<?2
+        ORDER BY first_observed_ms,source_id,url
+        "#,
     )?;
     let rows = statement.query_map(params![min_ms, max_ms], |row| {
         Ok(Observation {
