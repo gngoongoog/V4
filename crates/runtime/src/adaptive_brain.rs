@@ -99,7 +99,7 @@ fn observed_spread(t: &Telemetry) -> Option<f64> {
 }
 fn spread_for(bar: &FrameBar, point: f64, fallback: f64) -> (f64, &'static str) {
     if bar.spread_points > 0 {
-        ((bar.spread_points as f64 * point).max(fallback.min(0.)), "bar_spread")
+        (bar.spread_points as f64 * point, "bar_spread")
     } else { (fallback, "current_quote_proxy") }
 }
 fn virtual_outcome(
@@ -181,7 +181,7 @@ impl Learner {
     ) -> Result<Option<Signal>> {
         let ctx=crate::coordinator_learning::context(t);
         let Some(bars)=frames.get("M1") else {return Ok(None)};
-        if !t.connected || t.symbol != config.symbol || bars.len() < MIN_HISTORY + HORIZON + 1 {
+        if !t.connected || t.symbol != config.symbol || bars.len() < MIN_HISTORY + HORIZON + 1 || t.tick_age_ms.is_none_or(|age|age > 3000) || t.quote_time_ms.is_none_or(|ms|ms > now+2000 || now.saturating_sub(ms) > 3000) {
             return Ok(None);
         }
         let Some((point,tick,loss,profit))=valid_contract(t) else{return Ok(None)};
