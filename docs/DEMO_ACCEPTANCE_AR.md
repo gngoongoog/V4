@@ -2,7 +2,45 @@
 
 هذا الفحص يُشغّل على جهاز Windows الذي عليه MT5 وحساب **Demo** حقيقي. الاختبارات الآلية في GitHub لا تستطيع إثبات زمن الوسيط أو أن منصة وسيطك قبلت الصفقة فعلياً.
 
-الأداة الموجودة داخل الحزمة هي `runtime\gateway\check_runtime.py`. وضع القبول الجديد **قراءة فقط**: يتصل بـCore المحلي، يقرأ سجل التنفيذ الموجود، ولا يرسل أي POST ولا يغيّر START/STOP ولا يربط حساباً ولا يفتح/يغلق صفقة.
+الأداة الأساسية داخل الحزمة هي `runtime\gateway\check_runtime.py`. وضع القبول **قراءة فقط**: يتصل بـCore المحلي، يقرأ سجل التنفيذ الموجود، ولا يرسل أي POST ولا يغيّر START/STOP ولا يربط حساباً ولا يفتح/يغلق صفقة.
+
+## الطريقة الأسهل داخل الحزمة
+
+بعد فك ضغط BrainTrade ستجد في المجلد الرئيسي:
+
+- `Run-Demo-Acceptance.cmd` — مشغّل مباشر بنقرتين.
+- `Tools\Run-Demo-Acceptance.ps1` — المشغّل المتقدم نفسه.
+- `DEMO_ACCEPTANCE_AR.md` — هذه التعليمات داخل الحزمة.
+
+شغّل `BrainTrade.exe` أولاً، اربط حساب MT5 الحالي كـDemo، وبعدها افتح `Run-Demo-Acceptance.cmd`. سيطلب منك اختيار نوع الجلسة:
+
+1. `native` عندما يكون `BrainTradeSniperBridge` مربوطاً على الشارت ويعرض `CONNECTED`.
+2. `poll` بعد فصل/إيقاف الـEA حتى يعمل fallback polling.
+3. `auto` إذا تريد جمعاً عاماً بدون وسم يصلح لمقارنة Native مقابل Poll.
+
+المشغّل يقوم أولاً بفحص Python/NumPy/MetaTrader5 المدمجة بدون تهيئة MT5، ثم يشغّل collector القراءة فقط، وبعدها يعرض مباشرة:
+
+- حالة القبول (`INCOMPLETE` / `TARGET_MET` / `CHARACTERIZED_SLOW` / `CONTRACT_FAIL`).
+- عدد صفقات Sniper المرسلة.
+- `queue_to_send` عند P95 وP99.
+- `send_ms` عند P95.
+- أكبر مكوّن محلي قبل الإرسال.
+- عدد عينات Native وPoll وP95 لكل واحد.
+- فرق P95 بين Native وPoll والمسار الأسرع محلياً عندما تتوفر عينات من الاثنين.
+
+المشغّل **لا يشغّل التداول ولا يفعّل START**. إذا كان BrainTrade يتداول أثناء القياس فهذا لأنك أنت شغّلت النظام بصورة طبيعية مسبقاً؛ المشغّل نفسه لا يرسل أوامر.
+
+للاستخدام من PowerShell بدون القوائم التفاعلية:
+
+```powershell
+.\Tools\Run-Demo-Acceptance.ps1 -Source native -WatchSeconds 3600 -MinimumFastSamples 200 -NonInteractive
+```
+
+ولبدء عينة جديدة بعد تغيير الإصدار أو الحساب:
+
+```powershell
+.\Tools\Run-Demo-Acceptance.ps1 -Source native -WatchSeconds 3600 -MinimumFastSamples 200 -Reset -NonInteractive
+```
 
 ## قبل الفحص
 
@@ -12,7 +50,7 @@
 4. لو تريد قياس القناص، اختر Sniper وشغّل النظام بصورة طبيعية. عدم وجود إشارة صالحة يعني WAIT وهذا طبيعي؛ أداة القياس لا تصنع إشارة وهمية ولا تجبر النظام على التداول.
 5. لا تحوّل التنفيذ إلى Live أثناء جلسة القياس. الأداة ترفض Live وتوقف الجمع إذا تغير الحساب/السياق.
 
-## جلسة Native OnTick
+## جلسة Native OnTick يدوياً
 
 اربط `BrainTradeSniperBridge.mq5` على شارت نفس الرمز وتأكد أنه يعرض `CONNECTED`. افتح CMD من مجلد BrainTrade وشغّل:
 
@@ -22,7 +60,7 @@ runtime\python\python.exe runtime\gateway\check_runtime.py --demo-acceptance --s
 
 يمكنك إيقاف الجمع بـCtrl+C. العينات المحفوظة لا تضيع، وتشغيل الأمر مرة أخرى على نفس الإصدار والحساب يكمل عليها.
 
-## جلسة fallback polling 5ms
+## جلسة fallback polling 5ms يدوياً
 
 افصل الـEA أو أوقفه أولاً، ثم شغّل:
 
@@ -34,15 +72,16 @@ runtime\python\python.exe runtime\gateway\check_runtime.py --demo-acceptance --s
 
 ## أين النتائج؟
 
-داخل المجلد الذي شغّلت منه الأمر يظهر:
+داخل مجلد BrainTrade يظهر افتراضياً:
 
 - `acceptance-output\demo-acceptance-latest.json`
 - `acceptance-output\demo-acceptance-latest.csv`
 - `acceptance-output\demo-acceptance-state.json` — حالة تراكمية محلية حتى تكمل عدة جلسات.
+- `acceptance-output\runtime-import-check.json` عند استخدام المشغّل الجديد.
 
 التقرير لا يحفظ رقم Login؛ يستخدم بصمة قصيرة للحساب/الخادم/الرمز/العملة حتى لا يخلط عينات حسابين.
 
-إذا غيرت إصدار BrainTrade أو الحساب، استخدم `--reset` لبدء حالة قياس جديدة.
+إذا غيرت إصدار BrainTrade أو الحساب، استخدم `--reset` في collector أو `-Reset` في PowerShell لبدء حالة قياس جديدة.
 
 ## ما الذي يقيسه؟
 
