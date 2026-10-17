@@ -1,17 +1,41 @@
 # Continue from verified BrainTrade 0.7.0 Development Preview
 
-Current `development` runtime/source merge checkpoint is `7b127bf03fb45044ee53dc2366a6d0c53e7c59d8` (tree `10d1d6bee091b02fa1d044336649e645bce1b177`). The exact PR #20 head `58e41284334d6778a3bfd2aa7eb5dd9cca5628fd` has that same tree and passed Research plus Windows/Linux validation before merge. Read `BUILD_HANDOFF.md`, `PROJECT_STATE.md`, `docs/development-validation.json` and `docs/ACCEPTANCE.md` before changing runtime code. Do not restart the version bump or reuse old 0.6 artifact evidence.
+Current `development` runtime/source merge checkpoint is `4cf36107c72a59154859a8abdff64db70d6df21a` (tree `036989ffb18820920085fffa4b0517ace6e9904e`). PR #35 head `49ceb5956f9ac23aecaa03a444fa72abfc4fcf72` has the same tree and passed Research plus Windows/Linux validation before squash merge.
 
-Implemented development work now includes Portfolio Exposure v1, four modes, SOLO/RETURNING roles, adaptive coordinator evidence, durable execution recovery, the Sniper Fast Lane and the native MT5 Sniper quote bridge. The native path uses `OnTick` to wake, `CopyTicks(..., COPY_TICKS_ALL)` to recover terminal-cached ticks, an authenticated local named pipe and distinct same-millisecond event ordering. The prior 5 ms Python quote poll remains an automatic fallback. The EA is transport-only; broker orders remain exclusively in the journaled Python execution adapter.
+Read `BUILD_HANDOFF.md`, `PROJECT_STATE.md`, `ROADMAP.md`, `docs/development-validation.json`, `docs/ACCEPTANCE.md` and `docs/DEMO_ACCEPTANCE_AR.md` before changing runtime execution code. Do not restart the version bump, rewrite branch history or reuse old 0.6 artifact evidence as if it validated current development.
 
-The Sniper engineering target is <=20 ms for BrainTrade-local queue-to-send latency, measured from the stored component timings. Do not turn that target into a broker-fill, network, profitability or HFT guarantee. Native Windows/Demo measurements are still required.
+## Current implemented state
+
+- 15 execution identities, including Liquidity Sweep.
+- Coordinator/advisor/SOLO/RETURNING roles and Scalping/Swing/Expert/Sniper modes.
+- Sniper Fast Lane plus execution-only Fast Pulse.
+- Native MT5 OnTick/CopyTicks quote bridge with authenticated named pipe and automatic 5 ms Python fallback.
+- Account-scoped commission profiles with Round-trip/Per-side basis.
+- Configurable 1–3600 second Sniper hold frozen at entry.
+- Portfolio Exposure v1, durable broker journal/reconciliation and no blind resend.
+- Simplified five-section native Control Center.
+- Correlation/exposure research, chronological OOS tooling and feature-group ablation tooling, all research-only.
+- Read-only Demo acceptance collector for real Windows/MT5 latency characterization.
+
+The current CI checkpoint passed 82 domain Rust tests, 63 runtime Rust tests plus one intentionally ignored public-network test, and 102 Python tests. Research run `39011639762` and Windows/Linux run `39011639745` both passed.
 
 ## Continue in this order
 
-1. Finish/sync development evidence without changing promoted 0.6 records.
-2. Run native Windows + Demo MT5 acceptance from `docs/ACCEPTANCE.md`, including native bridge compilation/attachment, fallback, same-millisecond ordering, partial-write recovery and P50/P95/P99 latency characterization.
-3. Test private Telegram delivery only with local credentials.
-4. Start aligned multi-symbol correlation/exposure **research only**: exact timestamp joins, explicit availability masks, no forward-fill and no broker execution policy.
-5. Continue genuine out-of-sample/ablation/event-replay evidence.
+1. **Run the real Demo acceptance session on the target Windows machine.** Use `docs/DEMO_ACCEPTANCE_AR.md`. Collect native OnTick samples and a separate 5 ms fallback-poll sample.
+2. **Use measurements before further speed changes.** Compare P50/P95/P99 for `queue_to_send_ms` and inspect Core/pulse, authorization, journal, other pre-send and `send_ms` components.
+3. **Do not remove durable execution boundaries just to hit a number.** Exact account identity, quote freshness, ownership, authorization, durable journal and uncertain-send reconciliation remain mandatory.
+4. **Continue prospective scientific evidence.** Accumulate matured labels and holdout/rolling OOS evidence, then use ablation/correlation results to judge unique value.
+5. **Add causal historical news/event replay** with first-observed timestamps before any event-driven historical claim.
+6. **Test private Telegram delivery** only with local credentials.
+7. **Enable branch protection/required checks** if repository administration access becomes available.
 
-Startup/restart stays STOPPED. Imported ML challengers remain research-only and cannot automatically promote to Champion. Correlation-driven broker execution is not implemented. CI validates software behavior with simulated MT5 boundaries; it does not prove real broker execution quality.
+## Important boundaries
+
+- The <=20 ms goal is BrainTrade-local queue-to-`order_send` handoff, not fill latency.
+- The Demo acceptance collector is read-only and must not manufacture trades.
+- Correlation/exposure remains observational and cannot change broker execution.
+- Imported ML challengers remain research-only and cannot automatically promote to Champion.
+- Startup/restart stays STOPPED.
+- CI uses simulated broker boundaries and does not prove real fill quality, profitability or guaranteed latency.
+
+If target-machine acceptance uncovers a real failure or bottleneck, fix that measured issue on a focused feature branch, run exact-head Research + Windows/Linux CI, then merge normally into `development`.
