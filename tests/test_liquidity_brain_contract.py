@@ -15,21 +15,23 @@ class LiquidityBrainContractTests(unittest.TestCase):
         cls.liquidity = LIQUIDITY.read_text(encoding="utf-8")
         cls.gateway = GATEWAY.read_text(encoding="utf-8")
 
-    def test_identity_is_appended_without_remapping_generated(self):
-        self.assertIn('pub const BRAINS: [(&str, &str); 15]', self.domain)
+    def test_identity_stays_stable_when_later_brains_are_appended(self):
+        self.assertIn('pub const BRAINS: [(&str, &str); 16]', self.domain)
         generated = self.domain.index('(\"generated\", \"استراتيجية مولّدة مختارة\")')
         liquidity = self.domain.index('(\"liquidity\", \"سحب السيولة — sweep + reclaim\")')
+        pullback = self.domain.index('(\"trend_pullback\", \"Trend Pullback — رجوع منظم + تأكيد\")')
         self.assertLess(generated, liquidity)
+        self.assertLess(liquidity, pullback)
         self.assertIn('assert_eq!(magic("generated"), Some(410_613));', self.domain)
         self.assertIn('assert_eq!(magic("liquidity"), Some(410_614));', self.domain)
 
-    def test_gateway_accepts_exact_new_magic_ceiling(self):
-        self.assertIn('MAGIC_MIN, MAGIC_MAX = 410600, 410614', self.gateway)
+    def test_gateway_ceiling_can_expand_without_remapping_liquidity(self):
+        self.assertIn('MAGIC_MIN, MAGIC_MAX = 410600, 410615', self.gateway)
         spec = importlib.util.spec_from_file_location("braintrade_gateway_execution", GATEWAY)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self.assertEqual(module.MAGIC_MIN, 410600)
-        self.assertEqual(module.MAGIC_MAX, 410614)
+        self.assertGreaterEqual(module.MAGIC_MAX, 410614)
 
     def test_liquidity_logic_is_causal_and_does_not_claim_hidden_orders(self):
         self.assertIn('let prior = &series[n - 21..n - 1];', self.liquidity)
