@@ -84,7 +84,7 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
     let adaptive = &v["adaptive_learning"];
     let adaptive_line = if config["id"] == "adaptive" {
         format!(
-            "\n\nAdaptive Learner V1 — عينات التدريب الافتراضي المغلقة {} | حالة {} | سياسة {}\nTrend score {:.3} ({} عينة) | Reversion score {:.3} ({} عينة)\nالنتائج تقديرية بعد تكاليف التداول؛ ليست صفقات MT5 حقيقية.",
+            "\n\nAdaptive Learner V1 — عينات التدريب الافتراضي المغلقة {} | حالة {} | سياسة {}\nTrend score {:.3} ({} عينة) | Reversion score {:.3} ({} عينة)\nعينات MT5 المغلقة {} | Trend booked {:.3} / Reversion booked {:.3}\nدليل المحاكاة ودليل صفقات الوسيط محفوظان بشكل منفصل.",
             adaptive["total_closed_training_samples"].as_u64().unwrap_or(0),
             adaptive["regime"].as_str().unwrap_or("unknown"),
             adaptive["policy"].as_str().unwrap_or("—"),
@@ -92,6 +92,9 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
             adaptive["policy_samples"]["trend"].as_u64().unwrap_or(0),
             adaptive["policy_scores"]["reversion"].as_f64().unwrap_or(0.),
             adaptive["policy_samples"]["reversion"].as_u64().unwrap_or(0),
+            adaptive["actual_closed_broker_samples"].as_u64().unwrap_or(0),
+            adaptive["broker_policy_scores"]["trend"].as_f64().unwrap_or(0.),
+            adaptive["broker_policy_scores"]["reversion"].as_f64().unwrap_or(0.),
         )
     } else { String::new() };
     let s = &b["latest"];
