@@ -164,7 +164,7 @@ pub(super) fn run(
             } else {
                 let greedy = if audit.scores[1] > audit.scores[0] { 1 } else { 0 };
                 // Deterministic 25% exploration, without RNG or future outcomes.
-                let exploring = (audit.exploration_entries + audit.observations.len()) % 4 == 3;
+                let exploring = audit.exploration_entries % 4 == 3;
                 let chosen = if exploring { 1 - greedy } else { greedy };
                 let side = if chosen == 0 { trend } else { -trend };
                 let entry = c.open + if side > 0 { spread + slip } else { -slip };
