@@ -140,6 +140,17 @@ impl Engine{
         if path=="/v1/backtest"||path.starts_with("/v1/backtest/")||path.starts_with("/v1/gateway/history/"){
             let(config,status)={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());(s.config.clone(),s.status.clone())};let config=status.telemetry.as_ref().map(|t|config.for_account(t)).unwrap_or(config);let open=status.telemetry.as_ref().is_some_and(|t|self.research.has_open_position(t));return self.backtests.route(method,path,body,&self.db,&self.dir,&config,&status,open);
         }
+        if method=="POST"&&path=="/v1/brain-snapshot/export"{
+            let config=self.shared.lock().unwrap().config.clone();
+            let result=backup::export_brain(&self.db,&self.dir,&config,now_ms())?;
+            self.event("brain_snapshot_exported",json!({"file_name":result["file_name"],"bytes":result["bytes"],"checksum":result["checksum"],"secrets_included":false,"gateway_send_journal_restored":false}))?;
+            return Ok(result);
+        }
+        if method=="POST"&&path=="/v1/brain-snapshot/import"{
+            let result=backup::import_brain(&self.dir,body,now_ms())?;
+            self.event("brain_snapshot_imported",json!({"backup_name":result["backup_name"],"checksum":result["checksum"],"restore_required":true,"broker_effect":false}))?;
+            return Ok(result);
+        }
         if method=="GET"&&path=="/v1/backups"{return backup::list(&self.dir);}
         if method=="GET"&&path=="/v1/backup/restore/status"{return backup::pending_status(&self.dir);}
         if method=="POST"&&path=="/v1/backup/restore/validate"{return backup::validate_request(&self.dir,body);}
