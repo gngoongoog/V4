@@ -1,67 +1,52 @@
 # BrainTrade OS — project state: verified 0.7.0 Development Preview
 
-Canonical repository: `gngoongoog/V4`. Current runtime/source checkpoint on `development`: PR #48 squash merge `09c13460cee0a3fe42b4805ce1545529963783c7` (tree `7d952015f07c6022455500c12f321409cdc556c0`). PR #48 exact head `9c08109e6414132c0ddd07588bb55d3550d759be` has the same tree and passed Research plus Windows/Linux validation before merge.
+Canonical repository: `gngoongoog/V4`. Current validated runtime/source checkpoint on `development`: PR #50 squash merge `ae5cc5c5bf216fc8d2453b204dbc45abe2e89902` (tree `db356f1eb5ae413543886f7a4f1427c883fad0da`). Exact PR head `3ff9425e2795102c8d84ea991260d985f2d4baba` has the same tree and passed Research plus Windows/Linux validation before merge.
 
-Current exact-head CI scale is 87 domain Rust tests, 71 runtime Rust tests plus one intentionally ignored public-network news test, and 113 Python tests. Core, backup/restore, Studio, execution integration, offline reports, native desktop compilation/rendering, Linux validation and Windows portable packaging passed. Native MT5 Demo acceptance on the user's actual terminal remains a separate target-machine gate.
+Current exact-head CI scale is 87 domain Rust tests, 71 runtime Rust tests plus one intentionally ignored public-network news test, and 116 Python tests. Core, backup/restore, Studio, execution integration, offline reports, native desktop compilation/rendering, Linux validation and Windows portable packaging passed. Native MT5 Demo acceptance on the user's actual terminal remains a separate target-machine gate.
 
 ## Execution and Sniper state
 
-The development package now includes 16 durable execution identities. Existing broker ownership is unchanged and append-only: `generated=410613`, `liquidity=410614`, and `trend_pullback=410615`. It also includes Scalping, Swing, Expert and Sniper modes; coordinator/advisor/SOLO/RETURNING membership; durable intent/reconciliation; split-fill and uncertain-send recovery; Portfolio Exposure v1; account-scoped commissions; configurable Sniper hold time; and the simplified native Control Center.
+The development package contains 16 durable execution identities. Broker ownership remains append-only: `generated=410613`, `liquidity=410614`, `trend_pullback=410615`. It includes Scalping, Swing, Expert and Sniper modes; coordinator/advisor/SOLO/RETURNING membership; durable intent/reconciliation; split-fill and uncertain-send recovery; Portfolio Exposure v1; account-scoped commissions; configurable Sniper hold; and the native Control Center.
 
-Sniper has two quote-arrival paths:
+Sniper has a native Windows MT5 `OnTick` + `CopyTicks(..., COPY_TICKS_ALL)` path and an automatic 5 ms Python polling fallback. Fast quotes use execution-only `PUT /v1/execution/pulse`; final `/v1/execution/authorize` remains mandatory. The Python adapter rechecks the account and preserves the durable `broker-journal.sqlite` commit-before-`order_send` boundary with no blind resend after uncertain outcomes.
 
-- a native Windows MT5 bridge (`BrainTradeSniperBridge.mq5`) using `OnTick` and `CopyTicks(..., COPY_TICKS_ALL)` to recover terminal-cached executable quote changes;
-- the existing 5 ms Python `symbol_info_tick` loop as automatic fallback when the native bridge is absent or stale.
-
-Fast Sniper quotes use the execution-only `PUT /v1/execution/pulse` path. Core overlays only the quote onto cached reconciled state, rejects stale/wrong/crossed/duplicate input, runs execution/portfolio logic without rerunning the learner/research stack, and returns broker work in the same response. Final `/v1/execution/authorize` remains mandatory.
-
-The Python execution adapter rechecks the account after authorization and retains the durable `broker-journal.sqlite` boundary with SQLite `synchronous=FULL`, commit-before-`order_send`, account/ownership checks and no blind retry after uncertain outcomes. Fast tick entries and owned closes use the fast dispatch path; regular orders still use broker `order_check`.
-
-Current timing fields include `core_pulse_us`, `queue_to_gateway_ms`, `authorize_ms`, `journal_ms`, `pre_send_ms`, `queue_to_send_ms`, `send_ms` and `total_ms`. The target of **<=20 ms** refers only to BrainTrade-local queue-to-send latency on a suitable Windows target machine. It is not a broker acknowledgement/fill/network/profitability guarantee.
+The local engineering target is **<=20 ms for `queue_to_send_ms`** on a suitable target machine. It is not a broker acknowledgement, fill, network or profitability guarantee.
 
 ## Trend Pullback state
 
-PR #48 added the 16th execution identity, `trend_pullback`, without remapping any existing Magic ID. The assessor consumes completed bars only and waits for an established EMA20/EMA50 trend, a controlled pullback toward EMA20 that preserves the EMA50 structure, then a confirmation candle back with the trend.
-
-It blocks late entries when the confirmation close is too far from EMA20 or the current executable quote has already moved too far from the confirmation. Its stop is structural rather than a fixed arbitrary price: the recent pullback/confirmation extreme is buffered by ATR, with sanity bounds before the signal can become executable. Reward distance remains the configured per-brain reward/risk multiple. CI proves causal/source contracts and execution wiring; it does not prove the strategy is profitable.
-
-## Trading cost state
-
-Commission configuration is account-scoped by exact login/server/currency/symbol identity. The operator can enter broker cost as either Round trip or Per side; Per-side values are normalized internally to round-trip cost. Global commission remains only as fallback when no exact account profile exists.
-
-Sniper maximum hold is configurable from 1 to 3600 seconds and is frozen into the trade at entry together with target/stop geometry. Changing the setting later does not mutate an already-open trade.
-
-The native Control Center exposes trading mode, commission basis, Sniper hold and current cost preview. Primary navigation is grouped into five sections: الرئيسية، التداول، البحث، المختبر، النظام.
+PR #48 added `trend_pullback` as identity 16 without remapping any prior Magic ID. It uses completed bars only: EMA20/EMA50 trend structure, a controlled pullback toward EMA20 while preserving EMA50 structure, a confirmation candle, anti-chasing limits and ATR-buffered structural stop geometry. CI proves source/execution contracts, not profitability.
 
 ## Research and adaptive-learning state
 
-The development branch contains deterministic historical Meta v1/v2, CES v1 and KTE v1 research; Wyckoff; Trend/Regime/Structure/Volatility/Gann/Liquidity analysis; official-news context; chronological evaluation; learning snapshot/label/export pipelines; read-only challenger inference; strategy generation; causal official-news replay; aligned multi-symbol correlation/exposure research; holdout/rolling OOS infrastructure; and feature-group correlation/ablation tooling.
+The development branch includes deterministic historical Meta v1/v2, CES v1 and KTE v1 research; Wyckoff; Trend/Regime/Structure/Volatility/Gann/Liquidity analysis; chronological evaluation; aligned multi-symbol correlation; holdout/rolling OOS; feature-group ablation; causal official-news replay; snapshots/labels/export; imported challenger inference; and Intelligence V3.
 
-Correlation, ablation, news replay and imported ML remain research-only. They do not directly authorize broker execution. Imported ML challengers have no automatic Champion promotion path.
+Correlation, ablation, news replay and imported ML remain research-only. Exact closed Demo broker outcomes feed adaptive coordinator evidence from broker-reported `profit + commission + swap + fee` for members that supported the executed side at entry.
 
-Exact closed Demo broker outcomes feed the adaptive coordinator when a bound MT5 Demo trade is reconciled. Net evidence comes from broker-reported `profit + commission + swap + fee`, and only coordinator members that were ready and supported the executed side at entry receive that outcome. This is real-outcome learning logic, but CI still uses a simulated MT5 boundary.
+## Demo acceptance state
 
-## Demo Acceptance state
+The Windows package contains the read-only collector at `runtime\gateway\check_runtime.py` plus the one-click operator introduced by PR #50:
 
-The Windows package contains the read-only Demo acceptance collector in `runtime\gateway\check_runtime.py`. With `--demo-acceptance` it reads Core execution results and writes cumulative JSON/CSV reports without POST requests, START/STOP changes, binding changes or manufactured broker orders.
+- `Run-Demo-Acceptance.cmd`
+- `Tools\Run-Demo-Acceptance.ps1`
+- `DEMO_ACCEPTANCE_AR.md`
 
-It rejects Live/mismatched contexts, separates operator-labelled `native` and `poll` sessions, prevents mixing incompatible account/version state, fingerprints the login instead of storing it raw, and calculates P50/P95/P99 for stored execution timing fields. It can classify a completed sample as `TARGET_MET`, `CHARACTERIZED_SLOW` or `CONTRACT_FAIL`; until enough real sends exist it remains `INCOMPLETE`.
+The operator runs an embedded runtime import preflight, launches the GET-only collector, and prints acceptance result, Sniper sample counts, `queue_to_send` P95/P99, `send_ms` P95, the largest local pre-send hotspot and Native-vs-Poll P95 comparison when both controlled sample sets exist. It does not enable START, change settings, bind an account or submit orders.
 
-CI has not run this collector against the user's actual Windows + MT5 Demo installation. Real fills/rejections/fees/partial fills and native-vs-poll latency distributions therefore remain unverified.
+Windows CI validates PowerShell syntax before packaging and validates the packaged copy after staging. This validates the launcher/package contract only. CI has not run the collector against the user's actual Windows + MT5 Demo installation, so real fills/rejections/fees/partial fills and native-vs-poll latency distributions remain unverified.
 
 ## Evidence and delivery
 
-`docs/development-validation.json` records the exact PR #48 checkpoint. The promoted 0.6 history in `docs/validation.json`, `docs/validation-v0.6.0.json` and `docs/RELEASE_STATUS.md` remains unchanged.
+`docs/development-validation.json` records the exact PR #50 checkpoint. The promoted 0.6 history in `docs/validation.json`, `docs/validation-v0.6.0.json` and `docs/RELEASE_STATUS.md` remains unchanged.
 
-Research run `39045218522` passed on exact head `9c08109e6414132c0ddd07588bb55d3550d759be` and uploaded `synthetic-research-validation` artifact `12105916152` (SHA-256 `7e2ad28069847ced6d9ea01720bd5bdf8f21af178c7b5cc7afec3137652f7352`). Windows/Linux run `39045218508` passed on the same head and uploaded `BrainTrade-Windows-x64-Preview` artifact `12105678547` (SHA-256 `9ec11add63d8908ae82628aac00138503c949410dbb6b03504cef7f13203c5a8`) plus `windows-native-validation` artifact `12105628870` (SHA-256 `c9adc928ea48b5c465560a6a0d29ebc433adc85d85f92546b7412b495efc15cd`).
+Research run `39050497842` passed on head `3ff9425e2795102c8d84ea991260d985f2d4baba` and uploaded `synthetic-research-validation` artifact `12106853812` (SHA-256 `fcb751f647d692f9da59c38f8b10eaa7233ece74f4c3901dcc370c51c5a0ebac`). Windows/Linux run `39050497836` passed on the same head and uploaded `BrainTrade-Windows-x64-Preview` artifact `12107094155` (SHA-256 `84f79393926209fc92d9eb3105bcae7ee5acc8ccd30ac41d97e0f37ff74fcf6d`) plus `windows-native-validation` artifact `12106889676` (SHA-256 `25b2be406bf64e7a8c5b4a05e8129d2cf5a854f3282a28bc51d7f18dcf151180`).
 
 ## Next steps
 
-1. Run real Windows + Demo MT5 acceptance from `docs/DEMO_ACCEPTANCE_AR.md` and `docs/ACCEPTANCE.md`, collecting useful native and fallback samples.
-2. If local P95/P99 misses the 20 ms queue-to-send target, optimize only the dominant measured component instead of removing durable correctness boundaries.
-3. Accumulate genuine Trend Pullback and coordinator Demo/OOS evidence, including spread, fees, slippage and regime/session behavior.
-4. Continue causal research lanes as observational evidence until independent results justify any promotion design.
+1. Run the packaged `Run-Demo-Acceptance.cmd` on the intended Windows + MT5 Demo machine and collect separate Native and Poll sessions.
+2. If local P95/P99 misses the 20 ms queue-to-send target, optimize only the dominant measured component.
+3. Accumulate genuine Trend Pullback/coordinator Demo and OOS evidence, including spread, fees, slippage and regime/session behavior.
+4. Keep causal research lanes observational until independent evidence supports any promotion design.
 5. Test private Telegram delivery with credentials stored only on the target machine.
 6. Enable required branch checks when repository administration access is available.
 
-Startup/restart is STOPPED. SOLO never starts global execution automatically. STOP blocks new entries while owned timed exits continue with Core active; Full Exit stops client-side timed management while broker-attached SL/TP remain at the broker. CI does not establish profitability, guaranteed latency or broker execution quality.
+Startup/restart remains STOPPED. SOLO never starts global execution automatically. CI does not establish profitability, guaranteed latency, broker execution quality or real native MT5 acceptance.
