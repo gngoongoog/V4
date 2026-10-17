@@ -16,13 +16,14 @@ class TrendPullbackBrainContractTests(unittest.TestCase):
         cls.gateway = GATEWAY.read_text(encoding="utf-8")
 
     def test_identity_is_appended_and_all_prior_magics_remain_stable(self):
-        self.assertIn('pub const BRAINS: [(&str, &str); 16]', self.domain)
+        self.assertIn('pub const BRAINS: [(&str, &str); 17]', self.domain)
         liquidity = self.domain.index('(\"liquidity\", \"سحب السيولة — sweep + reclaim\")')
         pullback = self.domain.index('(\"trend_pullback\", \"Trend Pullback — رجوع منظم + تأكيد\")')
         self.assertLess(liquidity, pullback)
         self.assertIn('assert_eq!(magic("generated"), Some(410_613));', self.domain)
         self.assertIn('assert_eq!(magic("liquidity"), Some(410_614));', self.domain)
         self.assertIn('assert_eq!(magic("trend_pullback"), Some(410_615));', self.domain)
+        self.assertIn('assert_eq!(magic("adaptive"), Some(410_616));', self.domain)
 
     def test_gateway_accepts_exact_appended_magic(self):
         self.assertIn('MAGIC_MIN, MAGIC_MAX = 410600, 410615', self.gateway)
