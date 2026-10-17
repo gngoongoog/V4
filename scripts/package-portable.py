@@ -28,6 +28,9 @@ ASSETS = [
 SYSTEM_DLLS = set("""advapi32 avrt bcrypt bcryptprimitives cfgmgr32 comctl32 comdlg32 crypt32 cryptbase cryptsp d2d1 d3d11 d3d12 dcomp dbghelp dhcpcsvc dnsapi dwmapi dwrite dxgi gdi32 gdiplus hid imm32 iphlpapi kernel32 kernelbase msimg32 msvcrt ncrypt normaliz ntdll ole32 oleacc oleaut32 opengl32 powrprof propsys psapi rpcrt4 secur32 setupapi shell32 shlwapi user32 userenv usp10 uxtheme version windowscodecs winhttp wininet winmm winscard winspool wintrust ws2_32 wtsapi32 ucrtbase mswsock ntmarta shcore combase netapi32 sensapi wldap32""".split())
 GATEWAY_FILES = ("mt5_gateway.py", "studio_feed.py", "execution.py", "check_runtime.py", "sniper_native.py")
 NATIVE_EA = "BrainTradeSniperBridge.mq5"
+OPERATOR_POWERSHELL = "Run-Demo-Acceptance.ps1"
+OPERATOR_CMD = "Run-Demo-Acceptance.cmd"
+OPERATOR_DOC = "DEMO_ACCEPTANCE_AR.md"
 
 def digest(path):
     with Path(path).open("rb") as stream:
@@ -151,6 +154,14 @@ def copy_runtime_assets(output):
     experts.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "mt5" / NATIVE_EA, experts / NATIVE_EA)
 
+def copy_operator_assets(output):
+    """Expose the target-machine Demo acceptance workflow at package root."""
+    tools = output / "Tools"
+    tools.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / "scripts" / OPERATOR_POWERSHELL, tools / OPERATOR_POWERSHELL)
+    shutil.copy2(ROOT / "scripts" / OPERATOR_CMD, output / OPERATOR_CMD)
+    shutil.copy2(ROOT / "docs" / OPERATOR_DOC, output / OPERATOR_DOC)
+
 def source_commit():
     try:
         return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT,
@@ -177,12 +188,13 @@ def main():
         extract_checked(download(asset, cache), output / asset["destination"])
     (output / "runtime/python/python313._pth").write_text("python313.zip\n.\nLib/site-packages\n../gateway\nimport site\n", encoding="ascii")
     copy_runtime_assets(output)
+    copy_operator_assets(output)
     for source, target in (("QUICKSTART_AR.md", "README_AR.md"), ("RELEASE_STATUS.md", "RELEASE_STATUS.md"), ("THIRD_PARTY.md", "THIRD_PARTY.md")):
         shutil.copy2(ROOT / "docs" / source, output / target)
     source_copy(output / "Source")
     count = collect_licenses(output / "licenses/rust", args.cargo)
     reports = check_pe_tree(output, args.dll_dir)
-    (output / "package-validation.json").write_text(json.dumps({"version": VERSION, "architecture": "Windows x64", "source_commit": source_commit(), "rust_dependencies": count, "assets": ASSETS, "native_sniper_bridge": "MT5/Experts/BrainTradeSniperBridge.mq5 (source; target-machine MetaEditor compile/attach still required)", "pe_imports": reports, "validation": "Portable package built from the checked source tree with pinned embedded assets and PE dependency validation. Native MT5 acceptance remains a separate manual step."}, indent=2), encoding="utf-8")
+    (output / "package-validation.json").write_text(json.dumps({"version": VERSION, "architecture": "Windows x64", "source_commit": source_commit(), "rust_dependencies": count, "assets": ASSETS, "native_sniper_bridge": "MT5/Experts/BrainTradeSniperBridge.mq5 (source; target-machine MetaEditor compile/attach still required)", "demo_acceptance_launcher": "Run-Demo-Acceptance.cmd -> Tools/Run-Demo-Acceptance.ps1 (read-only collector wrapper)", "pe_imports": reports, "validation": "Portable package built from the checked source tree with pinned embedded assets and PE dependency validation. Native MT5 acceptance remains a separate target-machine step, now exposed through the packaged read-only acceptance launcher."}, indent=2), encoding="utf-8")
     manifest = build_manifest(output)
     (output / "SHA256SUMS.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     archive = ROOT / "release" / f"BrainTrade-Windows-x64-v{VERSION}-Preview.zip"
