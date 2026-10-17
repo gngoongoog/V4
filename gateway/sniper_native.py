@@ -171,6 +171,8 @@ class _WindowsPipeServer:
     PIPE_REJECT_REMOTE_CLIENTS = 0x00000008
     ERROR_PIPE_CONNECTED = 535
     INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+    THREAD_TERMINATE = 0x0001
+    STOP_TIMEOUT_SECONDS = 1.0
 
     def __init__(self, token: str, mailbox: NativeTickMailbox, pipe_name: str = PIPE_NAME):
         self.token = token
@@ -179,18 +181,58 @@ class _WindowsPipeServer:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
     def start(self) -> None:
-        if os.name != "nt" or self._thread is not None:
+        if os.name != "nt" or self.running:
             return
+        self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="braintrade-sniper-pipe", daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
+    def _cancel_synchronous_io(self) -> None:
+        """Cancel blocking ConnectNamedPipe/ReadFile issued by the worker thread."""
+        thread = self._thread
+        native_id = getattr(thread, "native_id", None) if thread is not None else None
+        if os.name != "nt" or not native_id:
+            return
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenThread.restype = wintypes.HANDLE
+        kernel.CancelSynchronousIo.argtypes = [wintypes.HANDLE]
+        kernel.CancelSynchronousIo.restype = wintypes.BOOL
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        handle = kernel.OpenThread(self.THREAD_TERMINATE, False, int(native_id))
+        if not handle:
+            return
+        try:
+            # ERROR_NOT_FOUND only means the worker is between synchronous calls.
+            # stop() retries cancellation until the bounded deadline.
+            kernel.CancelSynchronousIo(handle)
+        finally:
+            kernel.CloseHandle(handle)
+
+    def stop(self) -> bool:
         self._stop.set()
         self.mailbox.wake()
         self.mailbox.set_connected(False)
-        # A synchronous ConnectNamedPipe may be waiting for MT5. The thread is
-        # daemonized so process shutdown remains bounded even with no client.
+        thread = self._thread
+        if thread is None:
+            return True
+        if thread is threading.current_thread():
+            return False
+        deadline = time.monotonic() + self.STOP_TIMEOUT_SECONDS
+        while thread.is_alive() and time.monotonic() < deadline:
+            self._cancel_synchronous_io()
+            thread.join(timeout=min(0.05, max(0.0, deadline - time.monotonic())))
+        stopped = not thread.is_alive()
+        if stopped:
+            self._thread = None
+        return stopped
 
     def _kernel(self):
         from ctypes import wintypes
@@ -217,11 +259,16 @@ class _WindowsPipeServer:
             handle = kernel.CreateNamedPipeW(self.pipe_name, self.PIPE_ACCESS_DUPLEX, mode,
                                              1, 4096, 4096, 0, None)
             if handle == self.INVALID_HANDLE_VALUE:
-                time.sleep(0.25)
+                if self._stop.wait(0.25):
+                    break
                 continue
             try:
+                if self._stop.is_set():
+                    continue
                 connected = bool(kernel.ConnectNamedPipe(handle, None))
                 if not connected and ctypes.get_last_error() != self.ERROR_PIPE_CONNECTED:
+                    continue
+                if self._stop.is_set():
                     continue
                 self.mailbox.set_connected(True)
                 pending = bytearray()
@@ -263,7 +310,7 @@ class NativeTickBridge:
 
     @property
     def available(self) -> bool:
-        return os.name == "nt" and self.server is not None
+        return os.name == "nt" and self.server is not None and self.server.running
 
     @property
     def connected(self) -> bool:
@@ -275,15 +322,16 @@ class NativeTickBridge:
         data_path = Path(str(getattr(terminal_info, "data_path", "") or ""))
         if not str(data_path) or str(data_path) == ".":
             return False
-        if self.server is not None and self.data_path == data_path:
+        if self.server is not None and self.data_path == data_path and self.server.running:
             return True
-        self.close()
+        if not self.close():
+            return False
         self.data_path = data_path
         self.token = secrets.token_urlsafe(32)
         self.token_path = write_session_token(data_path, self.token)
         self.server = _WindowsPipeServer(self.token, self.mailbox)
         self.server.start()
-        return True
+        return self.server.running
 
     def drain(self, login: int, symbol: str, maximum: int = 256) -> list[dict]:
         return self.mailbox.drain(int(login), symbol, maximum)
@@ -294,17 +342,21 @@ class NativeTickBridge:
     def wait(self, timeout: float) -> None:
         self.mailbox.wait(timeout)
 
-    def close(self) -> None:
+    def close(self) -> bool:
         server, token_path, token = self.server, self.token_path, self.token
+        stopped = True
+        if server is not None:
+            stopped = server.stop()
+        if not stopped:
+            return False
         self.server = None
         self.token_path = None
         self.data_path = None
         self.token = ""
-        if server is not None:
-            server.stop()
         if token_path is not None:
             try:
                 if token_path.is_file() and token_path.read_text("ascii").strip() == token:
                     token_path.unlink()
             except OSError:
                 pass
+        return True
