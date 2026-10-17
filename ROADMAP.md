@@ -8,7 +8,7 @@ The promoted 0.6.0 line remains the release baseline. Its archived validation ev
 
 ## Current 0.7.0 Development Preview
 
-The 0.7 development line has advanced beyond the older validation checkpoint recorded in `docs/development-validation.json`. Intelligence V3 was merged through PR #47 at `30cc06390603491b7396f8c0c60a61c3d8416306` after exact PR-head Research and Windows/Linux validation.
+PR #48 (`Add causal Trend Pullback execution brain`) is merged into `development` as `09c13460cee0a3fe42b4805ce1545529963783c7`. Exact PR head `9c08109e6414132c0ddd07588bb55d3550d759be` passed Research run `39045218522` and Windows/Linux run `39045218508`; both the tested head and merged commit use tree `7d952015f07c6022455500c12f321409cdc556c0`.
 
 Implemented 0.7 engineering includes:
 
@@ -18,27 +18,25 @@ Implemented 0.7 engineering includes:
 - Account-scoped commission profiles with Round-trip or Per-side basis.
 - Configurable 1–3600 second Sniper maximum hold, frozen at entry.
 - Simplified five-section native Control Center.
-- Fifteen merged execution identities through Liquidity Sweep, with append-only broker magic ownership.
+- Sixteen merged execution identities through Trend Pullback, with append-only broker magic ownership.
 - Correlation/exposure research, chronological holdout/rolling OOS evaluation and feature-group ablation, all research-only.
 - Read-only Windows/Demo execution acceptance collection with native-vs-poll P50/P95/P99 timing characterization.
 - Causal official-news historical replay using append-only first-observed timestamps and no execution route.
 - Exact closed Demo broker-outcome adaptive learning using booked profit, commission, swap and fee.
 - Portable Brain Snapshot support.
 - Intelligence V3 member weighting with reward/confidence, regime/session context and execution-history quality evidence.
-
-PR #48 is the next focused execution addition. It appends a 16th identity, `trend_pullback`, with magic `410615` while preserving `generated=410613` and `liquidity=410614`. Its logic uses completed bars only: EMA20/EMA50 trend separation and slope, a controlled pullback toward the fast mean, preservation of the slow-mean structure, a confirmation candle, anti-chasing distance and structural stop geometry. Treat the identity as part of `development` only after PR #48 is merged and its exact-head gates are green.
+- Trend Pullback with magic `410615`, preserving `generated=410613` and `liquidity=410614`. It uses completed bars only: EMA20/EMA50 trend separation and slope, controlled pullback toward EMA20, EMA50 structure preservation, confirmation quality, anti-chasing distance and structural stop geometry.
 
 The Sniper local engineering target remains <=20 ms from BrainTrade queue to the `order_send` handoff on an appropriate target machine. This is not a guaranteed broker acknowledgement, fill-latency, network-latency, profitability or HFT claim.
 
 ## Immediate engineering and acceptance work
 
-1. **Complete PR #48 exact-head validation and merge only if green.** Both Research and Windows/Linux workflows are required.
-2. **Run native Windows + real Demo MT5 acceptance.** Follow `docs/DEMO_ACCEPTANCE_AR.md` and `docs/ACCEPTANCE.md`; preserve separate native OnTick and fallback-poll samples.
-3. **Measure before optimizing execution again.** If `queue_to_send_ms` P95/P99 misses the local target, inspect `core_pulse_ms`, `authorize_ms`, `journal_ms`, `other_pre_send_ms`, `pre_send_ms`, `send_ms` and `total_ms` before changing architecture.
+1. **Run native Windows + real Demo MT5 acceptance.** Follow `docs/DEMO_ACCEPTANCE_AR.md` and `docs/ACCEPTANCE.md`; preserve separate native OnTick and fallback-poll samples.
+2. **Measure before optimizing execution again.** If `queue_to_send_ms` P95/P99 misses the local target, inspect `core_pulse_ms`, `authorize_ms`, `journal_ms`, `other_pre_send_ms`, `pre_send_ms`, `send_ms` and `total_ms` before changing architecture.
+3. **Evaluate Trend Pullback prospectively.** Track real Demo closed outcomes, spread/fees/slippage and regime/session behavior before increasing learned influence or changing thresholds.
 4. **Accumulate genuine OOS evidence.** Keep correlation, ablation, news replay and imported ML observational until enough prospective evidence exists.
-5. **Evaluate Trend Pullback as a hypothesis, not a claim.** Track its closed Demo outcomes, execution costs and regime/session behavior before raising its learned influence.
-6. **Private Telegram acceptance.** Test only with credentials stored on the target machine.
-7. **Repository policy.** Enable required checks/branch protection for `main` and preferably `development` if administration access becomes available.
+5. **Private Telegram acceptance.** Test only with credentials stored on the target machine.
+6. **Repository policy.** Enable required checks/branch protection for `main` and preferably `development` if administration access becomes available.
 
 ## Research and execution boundaries
 

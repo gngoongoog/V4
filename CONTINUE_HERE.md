@@ -2,13 +2,13 @@
 
 GitHub `gngoongoog/V4` is canonical. Continue from `development`; do not restart from `main` unless preparing a promoted release.
 
-## Current development line
+## Current verified checkpoint
 
-`development` already includes the 0.7 execution program through Intelligence V3. PR #47 merged Intelligence V3 at merge commit `30cc06390603491b7396f8c0c60a61c3d8416306` after its exact PR head passed Research and Windows/Linux CI.
+PR #48 (`Add causal Trend Pullback execution brain`) is merged into `development` as `09c13460cee0a3fe42b4805ce1545529963783c7`. Its exact PR head `9c08109e6414132c0ddd07588bb55d3550d759be` passed Research run `39045218522` and Windows/Linux run `39045218508`. The tested PR head and the squash merge share tree `7d952015f07c6022455500c12f321409cdc556c0`, so the merged runtime/source tree is the tree that was validated.
 
-PR #48 is the next focused continuation: it appends a causal `trend_pullback` execution identity without remapping any previous broker ownership. If PR #48 is merged, the durable identity ceiling is 16 brains and `trend_pullback` owns magic `410615`; `generated=410613` and `liquidity=410614` remain unchanged. Always verify the PR state before assuming this candidate is present on `development`.
+The development line now has 16 durable execution identities. Broker ownership remains append-only: `generated=410613`, `liquidity=410614`, and the new `trend_pullback=410615`.
 
-The formal `docs/development-validation.json` record may intentionally lag later merged engineering until a new exact-head validation record is prepared. Never rewrite old validation evidence to make it appear newer than the CI run that produced it.
+`docs/development-validation.json` is the machine-readable evidence record for this checkpoint. The promoted 0.6.0 evidence remains immutable and separate.
 
 ## Implemented engineering
 
@@ -18,21 +18,20 @@ The formal `docs/development-validation.json` record may intentionally lag later
 - Durable pre-send journal, uncertain-send reconciliation and no blind resend.
 - Exact account/server/currency binding, quote freshness and owned-position execution boundaries.
 - Account-scoped commissions, configurable Sniper hold and Portfolio Exposure v1.
-- Native Control Center and persisted runtime state.
+- Native five-section Control Center and persisted runtime state.
 - Correlation/OOS/feature-ablation/news-replay research lanes that remain observational.
 - Exact closed Demo broker-outcome adaptive learning for coordinator participants.
 - Intelligence V3 weighting with reward/confidence, regime/session context and execution-quality evidence.
-- PR #48 candidate: Trend Pullback based on completed bars, EMA20/EMA50 trend structure, controlled pullback, confirmation quality, anti-chasing distance and structural stop geometry.
+- Trend Pullback execution identity using completed bars only: EMA20/EMA50 trend structure, controlled pullback, confirmation quality, anti-chasing distance and structural stop geometry.
 
 ## Continue in this order
 
-1. **Finish exact-head CI for any active feature PR before merge.** Research and Windows/Linux workflows must both pass on the current PR head.
-2. **Run native Windows + real Demo MT5 acceptance on the target machine.** Follow `docs/DEMO_ACCEPTANCE_AR.md` and `docs/ACCEPTANCE.md`; collect separate native and fallback-poll samples.
-3. **Measure before further speed changes.** Use `queue_to_send_ms`, `core_pulse_ms`, `authorize_ms`, `journal_ms`, `other_pre_send_ms`, `pre_send_ms`, `send_ms` and `total_ms` to identify the actual bottleneck.
+1. **Run native Windows + real Demo MT5 acceptance on the target machine.** Follow `docs/DEMO_ACCEPTANCE_AR.md` and `docs/ACCEPTANCE.md`; collect separate native and fallback-poll samples.
+2. **Measure before further speed changes.** Use `queue_to_send_ms`, `core_pulse_ms`, `authorize_ms`, `journal_ms`, `other_pre_send_ms`, `pre_send_ms`, `send_ms` and `total_ms` to identify the actual bottleneck.
+3. **Evaluate Trend Pullback with real Demo evidence.** Track closed outcomes, fees, spread/slippage, regime/session behavior and enough prospective/OOS samples before changing its learned influence.
 4. **Keep broker correctness boundaries intact.** Do not remove exact account identity, quote freshness, ownership, final authorization, durable journal or uncertain-send reconciliation merely to improve a benchmark.
-5. **Accumulate genuine prospective/OOS evidence.** New execution brains are hypotheses until measured; CI correctness is not profitability evidence.
-6. **Keep imported ML challengers research-only** until independent evidence and an explicit promotion design exist.
-7. **Test private Telegram delivery** only with target-machine credentials.
+5. **Keep imported ML challengers research-only** until independent evidence and an explicit promotion design exist.
+6. **Test private Telegram delivery** only with target-machine credentials.
 
 ## Important boundaries
 
