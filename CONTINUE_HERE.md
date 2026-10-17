@@ -4,18 +4,22 @@ GitHub `gngoongoog/V4` is canonical. Continue from `development`; do not restart
 
 ## Current verified checkpoint
 
-PR #53 (`Add privacy-safe Demo acceptance export bundle`) is merged into `development` as `b20af1f0a3ae37d30e688e92615972e5c03e5adc`. Its exact tested head `31c10767e7c284160a74c1e0b001c0fde825780d` passed Research run `39058307544` and Windows/Linux run `39058307570`. The tested PR head and merge share tree `cb4cfc79358305d91caa4826ab2d47414fbd745b`.
+PR #55 (comprehensive 0.7 correctness audit) is merged into `development` as `2e05cf3b907073c5faebe25fd16d4a4a523b224d`. Exact tested PR head `892807ec317c856b1215efb569e726554266709b` and the merge share code tree `a85fa0c424e23cf9e82790c649d25461e1547387`. Research run `39067458928` and Windows/Linux run `39067458927` both succeeded on that code.
 
-The development line has 16 durable execution identities. Broker ownership remains append-only: `generated=410613`, `liquidity=410614`, `trend_pullback=410615`.
+Verified count: 87 domain Rust tests, 72 runtime Rust tests plus one intentionally ignored official-news public-network test, three desktop Rust tests, and 124 of 125 Windows Python tests passed (one OS-specific fixture skipped). The Windows CI executed the real named-pipe blocking-connect shutdown/rebind regression, built the portable preview and passed simulated execution integration. The Research CI passed browser report and complete native-page rendering. Real Windows/MT5 Demo acceptance remains pending.
 
-`docs/development-validation.json` is the machine-readable evidence record for this checkpoint. Promoted 0.6.0 evidence remains immutable and separate.
+PR #55 fixed native pipe shutdown/rebind and dead-worker detection, stopped-only execution-affecting Risk/Trading settings, side-effect-free rejection of invalid `/v1/config`, explicit-only START, final post-journal Core authorization and account recheck before `order_send`, safe timeframe indexing, accurate START audit metadata and complete Python compile checks. It adds `post_journal_authorize_ms` and `post_journal_account_ms` latency evidence without double counting.
+
+Promoted 0.6.0 evidence remains immutable. BrainTrade 0.7.0 is a Development Preview, not production/broker acceptance or a profitability guarantee.
+
+The development line has 16 durable execution identities. Broker magic ownership remains append-only: `generated=410613`, `liquidity=410614`, `trend_pullback=410615`. `docs/development-validation.json` holds the exact machine-readable evidence; promoted 0.6.0 evidence remains separate.
 
 ## Implemented engineering
 
 - Coordinator/advisor/SOLO/RETURNING execution membership.
 - Scalping, Swing, Expert and Sniper modes.
 - Sniper Fast Lane, execution-only Fast Pulse and native MT5 `OnTick`/`CopyTicks` bridge with automatic polling fallback.
-- Durable pre-send journal, uncertain-send reconciliation and no blind resend.
+- Durable pre-send journal, uncertain-send reconciliation and no blind resend; second Core authorization and final MT5 identity recheck after journal and immediately before `order_send`.
 - Exact account binding, quote freshness, ownership and final authorization boundaries.
 - Account-scoped commissions, configurable Sniper hold and Portfolio Exposure v1.
 - Native five-section Control Center and persisted runtime state.
@@ -31,7 +35,7 @@ The development line has 16 durable execution identities. Broker ownership remai
 
 1. **Run native Windows + real Demo MT5 acceptance on the target machine.** Open the packaged `Run-Demo-Acceptance.cmd`; collect a `native` session with the bridge attached and a separate `poll` session with it detached/stopped.
 2. **Export the share bundle.** Use `تصدير حزمة مشاركة` after the captures so the acceptance evidence can be reviewed without account secrets or broker databases.
-3. **Measure before further speed changes.** Use `queue_to_send_ms`, `core_pulse_ms`, `authorize_ms`, `journal_ms`, `other_pre_send_ms`, `pre_send_ms`, `send_ms` and `total_ms` to identify the actual bottleneck.
+3. **Measure before further speed changes.** Use `queue_to_send_ms`, `core_pulse_ms`, `authorize_ms`, `journal_ms`, `post_journal_authorize_ms`, `post_journal_account_ms`, `other_pre_send_ms`, `pre_send_ms`, `send_ms` and `total_ms` to identify the actual bottleneck.
 4. **Evaluate Trend Pullback with real Demo evidence.** Track closed outcomes, fees, spread/slippage, regime/session behavior and enough prospective/OOS samples before changing learned influence.
 5. **Keep broker correctness boundaries intact.** Do not remove exact account identity, quote freshness, ownership, final authorization, durable journal or uncertain-send reconciliation merely to improve a benchmark.
 6. **Keep imported ML challengers research-only** until independent evidence and an explicit promotion design exist.
