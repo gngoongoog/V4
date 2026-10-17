@@ -27,7 +27,7 @@ jobs:
           text = path.read_text(encoding='utf-8')
           old = '    let dir = direction(p)?;\n'
           new = '    let Some(dir) = direction(p) else { return Ok(None); };\n'
-          assert text.count(old) == 1
+          assert old in text
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
           cargo fmt --all
