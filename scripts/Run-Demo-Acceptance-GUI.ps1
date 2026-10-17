@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -33,22 +34,28 @@ function New-Label {
     $Label.Location = New-Object System.Drawing.Point($X, $Y)
     $Label.Size = New-Object System.Drawing.Size($W, $H)
     $Label.ForeColor = [System.Drawing.Color]::FromArgb(220, 228, 240)
-    $Label.Font = New-Object System.Drawing.Font("Segoe UI", $Size, $(if ($Bold) { [System.Drawing.FontStyle]::Bold } else { [System.Drawing.FontStyle]::Regular }))
+    $Style = if ($Bold) { [System.Drawing.FontStyle]::Bold } else { [System.Drawing.FontStyle]::Regular }
+    $Label.Font = New-Object System.Drawing.Font("Segoe UI", $Size, $Style)
     return $Label
 }
 
 function Set-Card {
-    param([System.Windows.Forms.Label]$Label, $Value, [string]$Suffix = "")
+    param([System.Windows.Forms.Label]$Label, $Value)
     if ($null -eq $Value -or "$Value" -eq "") {
         $Label.Text = "—"
     } else {
-        $Label.Text = "$Value$Suffix"
+        $Label.Text = "$Value"
     }
 }
 
 function Format-MsValue($Value) {
     if ($null -eq $Value) { return "—" }
     try { return ("{0:N3} ms" -f [double]$Value) } catch { return "—" }
+}
+
+function Read-AcceptanceReport {
+    if (-not (Test-Path $ReportPath)) { return $null }
+    return Get-Content -Raw -Encoding UTF8 $ReportPath | ConvertFrom-Json
 }
 
 function Load-AcceptanceReport {
@@ -59,7 +66,7 @@ function Load-AcceptanceReport {
         return
     }
     try {
-        $Report = Get-Content -Raw -Encoding UTF8 $ReportPath | ConvertFrom-Json
+        $Report = Read-AcceptanceReport
         $Result = [string]$Report.result
         $StatusValue.Text = $Result
         $StatusValue.ForeColor = if ($Result -eq "TARGET_MET") {
@@ -106,11 +113,99 @@ function Load-AcceptanceReport {
     }
 }
 
+function Export-ShareBundle {
+    if (-not (Test-Path $ReportPath)) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "لا يوجد تقرير لتصديره بعد.",
+            "BrainTrade Demo Acceptance",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        ) | Out-Null
+        return
+    }
+
+    $Staging = Join-Path $OutputDir ("share-staging-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $Staging -Force | Out-Null
+    try {
+        $AllowedFiles = @(
+            "demo-acceptance-latest.json",
+            "demo-acceptance-latest.csv",
+            "demo-acceptance-state.json",
+            "runtime-import-check.json"
+        )
+        foreach ($Name in $AllowedFiles) {
+            $Source = Join-Path $OutputDir $Name
+            if (Test-Path $Source) {
+                Copy-Item -LiteralPath $Source -Destination (Join-Path $Staging $Name) -Force
+            }
+        }
+
+        $Report = Read-AcceptanceReport
+        $ShareSummary = [ordered]@{
+            schema = 1
+            generated_utc = [DateTime]::UtcNow.ToString("o")
+            privacy = "No raw MT5 login, ipc.key, broker journal/database, Telegram credentials, or GUI stdout/stderr logs are included by this exporter."
+            result = $Report.result
+            version = $Report.metadata.version
+            account_fingerprint = $Report.metadata.account_fingerprint
+            symbol = $Report.metadata.symbol
+            currency = $Report.metadata.currency
+            target = $Report.metadata.target
+            trading_mode_at_start = $Report.metadata.trading_mode_at_start
+            capture_source = $Report.metadata.capture_source
+            sample_counts = $Report.sample_counts
+            broker_result_states = $Report.broker_result_states
+            broker_retcodes = $Report.broker_retcodes
+            queue_to_send_ms = $Report.fast_path.timings.queue_to_send_ms
+            send_ms = $Report.fast_path.timings.send_ms
+            native = $Report.fast_path.sources.native
+            poll = $Report.fast_path.sources.poll
+            largest_local_pre_send_component_p95 = $Report.fast_path.largest_local_pre_send_component_p95
+            contracts = $Report.contracts
+            warnings = $Report.warnings
+        }
+        $SummaryPath = Join-Path $Staging "share-summary.json"
+        $ShareSummary | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $SummaryPath -Encoding UTF8
+
+        $Readme = @(
+            "BrainTrade Demo Acceptance share bundle",
+            "",
+            "This bundle is intended for diagnosis of the target-machine Demo acceptance run.",
+            "It does not contain the raw MT5 login, ipc.key, broker databases/journals, Telegram credentials, or GUI stdout/stderr logs.",
+            "The account_fingerprint is a short one-way fingerprint used only to keep samples from different accounts separate.",
+            "queue_to_send_ms is BrainTrade-local timing; it is not broker fill latency or a profitability guarantee."
+        ) -join [Environment]::NewLine
+        Set-Content -LiteralPath (Join-Path $Staging "SHARE_README.txt") -Value $Readme -Encoding UTF8
+
+        $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        $ZipPath = Join-Path $OutputDir ("BrainTrade-Demo-Acceptance-$Timestamp.zip")
+        if (Test-Path $ZipPath) { Remove-Item -LiteralPath $ZipPath -Force }
+        [System.IO.Compression.ZipFile]::CreateFromDirectory($Staging, $ZipPath, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+
+        $ProgressLabel.Text = "تم إنشاء حزمة مشاركة آمنة: $ZipPath"
+        [System.Windows.Forms.MessageBox]::Show(
+            "تم إنشاء حزمة النتائج القابلة للمشاركة:`n$ZipPath`n`nلا تحتوي Login خام أو ipc.key أو قواعد بيانات التداول أو سجلات GUI.",
+            "BrainTrade Demo Acceptance",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        ) | Out-Null
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            "تعذر إنشاء حزمة المشاركة: $($_.Exception.Message)",
+            "BrainTrade Demo Acceptance",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    } finally {
+        if (Test-Path $Staging) { Remove-Item -LiteralPath $Staging -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 $Form = New-Object System.Windows.Forms.Form
 $Form.Text = "BrainTrade — Demo Acceptance Center"
 $Form.StartPosition = "CenterScreen"
-$Form.Size = New-Object System.Drawing.Size(1040, 760)
-$Form.MinimumSize = New-Object System.Drawing.Size(940, 680)
+$Form.Size = New-Object System.Drawing.Size(1040, 800)
+$Form.MinimumSize = New-Object System.Drawing.Size(940, 720)
 $Form.BackColor = [System.Drawing.Color]::FromArgb(11, 18, 32)
 $Form.ForeColor = [System.Drawing.Color]::FromArgb(235, 240, 248)
 $Form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
@@ -174,7 +269,7 @@ $SettingsPanel.Controls.Add($RunButton)
 
 $CardsPanel = New-Object System.Windows.Forms.Panel
 $CardsPanel.Location = New-Object System.Drawing.Point(24, 200)
-$CardsPanel.Size = New-Object System.Drawing.Size(974, 180)
+$CardsPanel.Size = New-Object System.Drawing.Size(974, 166)
 $CardsPanel.BackColor = [System.Drawing.Color]::FromArgb(17, 26, 40)
 $Form.Controls.Add($CardsPanel)
 
@@ -197,24 +292,29 @@ $Native95Value = Add-Card "NATIVE P95" 176 92 170
 $PollCountValue = Add-Card "POLL COUNT" 366 92 140
 $Poll95Value = Add-Card "POLL P95" 526 92 170
 
+$ExportButton = New-Object System.Windows.Forms.Button
+$ExportButton.Text = "تصدير حزمة مشاركة"
+$ExportButton.Location = New-Object System.Drawing.Point(528, 378)
+$ExportButton.Size = New-Object System.Drawing.Size(180, 34)
+$Form.Controls.Add($ExportButton)
+
 $LoadButton = New-Object System.Windows.Forms.Button
 $LoadButton.Text = "تحديث التقرير"
-$LoadButton.Location = New-Object System.Drawing.Point(718, 296)
+$LoadButton.Location = New-Object System.Drawing.Point(718, 378)
 $LoadButton.Size = New-Object System.Drawing.Size(120, 34)
-$LoadButton.BringToFront()
 $Form.Controls.Add($LoadButton)
+
 $OpenButton = New-Object System.Windows.Forms.Button
 $OpenButton.Text = "فتح مجلد النتائج"
-$OpenButton.Location = New-Object System.Drawing.Point(848, 296)
+$OpenButton.Location = New-Object System.Drawing.Point(848, 378)
 $OpenButton.Size = New-Object System.Drawing.Size(150, 34)
-$OpenButton.BringToFront()
 $Form.Controls.Add($OpenButton)
 
-$SummaryLabel = New-Label "التشخيص" 24 396 160 24 10 $true
+$SummaryLabel = New-Label "التشخيص" 24 424 160 24 10 $true
 $Form.Controls.Add($SummaryLabel)
 $SummaryBox = New-Object System.Windows.Forms.TextBox
-$SummaryBox.Location = New-Object System.Drawing.Point(24, 424)
-$SummaryBox.Size = New-Object System.Drawing.Size(974, 170)
+$SummaryBox.Location = New-Object System.Drawing.Point(24, 452)
+$SummaryBox.Size = New-Object System.Drawing.Size(974, 166)
 $SummaryBox.Multiline = $true
 $SummaryBox.ReadOnly = $true
 $SummaryBox.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
@@ -224,12 +324,12 @@ $SummaryBox.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
 $SummaryBox.Font = New-Object System.Drawing.Font("Segoe UI", 9.5)
 $Form.Controls.Add($SummaryBox)
 
-$ProgressLabel = New-Label "جاهز" 24 610 940 26 9 $true
+$ProgressLabel = New-Label "جاهز" 24 630 940 26 9 $true
 $ProgressLabel.ForeColor = [System.Drawing.Color]::FromArgb(141, 156, 180)
 $Form.Controls.Add($ProgressLabel)
 $LogBox = New-Object System.Windows.Forms.TextBox
-$LogBox.Location = New-Object System.Drawing.Point(24, 640)
-$LogBox.Size = New-Object System.Drawing.Size(974, 58)
+$LogBox.Location = New-Object System.Drawing.Point(24, 660)
+$LogBox.Size = New-Object System.Drawing.Size(974, 70)
 $LogBox.Multiline = $true
 $LogBox.ReadOnly = $true
 $LogBox.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
@@ -259,6 +359,7 @@ $Timer.Add_Tick({
         $ExitCode = $script:AcceptanceProcess.ExitCode
         $Timer.Stop()
         $RunButton.Enabled = $true
+        $ExportButton.Enabled = $true
         $SourceCombo.Enabled = $true
         $DurationCombo.Enabled = $true
         $MinSamples.Enabled = $true
@@ -280,6 +381,7 @@ $Timer.Add_Tick({
     } catch {
         $Timer.Stop()
         $RunButton.Enabled = $true
+        $ExportButton.Enabled = $true
         $ProgressLabel.Text = "خطأ أثناء مراقبة جلسة القياس: $($_.Exception.Message)"
         $script:AcceptanceProcess = $null
     }
@@ -293,7 +395,7 @@ $RunButton.Add_Click({
 
     if ($Source -eq "native") {
         $Confirm = [System.Windows.Forms.MessageBox]::Show(
-            "تأكد أن BrainTradeSniperBridge مربوط على الشارت ويعرض CONNECTED.\n\nالأداة ستقرأ القياسات فقط ولن تشغّل التداول.",
+            "تأكد أن BrainTradeSniperBridge مربوط على الشارت ويعرض CONNECTED.`n`nالأداة ستقرأ القياسات فقط ولن تشغّل التداول.",
             "Native session",
             [System.Windows.Forms.MessageBoxButtons]::OKCancel,
             [System.Windows.Forms.MessageBoxIcon]::Information
@@ -301,7 +403,7 @@ $RunButton.Add_Click({
         if ($Confirm -ne [System.Windows.Forms.DialogResult]::OK) { return }
     } elseif ($Source -eq "poll") {
         $Confirm = [System.Windows.Forms.MessageBox]::Show(
-            "افصل/أوقف BrainTradeSniperBridge قبل جلسة Poll حتى تكون المقارنة مضبوطة.\n\nالأداة ستقرأ القياسات فقط ولن تشغّل التداول.",
+            "افصل/أوقف BrainTradeSniperBridge قبل جلسة Poll حتى تكون المقارنة مضبوطة.`n`nالأداة ستقرأ القياسات فقط ولن تشغّل التداول.",
             "Poll session",
             [System.Windows.Forms.MessageBoxButtons]::OKCancel,
             [System.Windows.Forms.MessageBoxIcon]::Information
@@ -325,6 +427,7 @@ $RunButton.Add_Click({
         $script:AcceptanceProcess = Start-Process -FilePath "powershell.exe" -ArgumentList $Args -WindowStyle Hidden -RedirectStandardOutput $StdoutPath -RedirectStandardError $StderrPath -PassThru
         $script:StartedAt = Get-Date
         $RunButton.Enabled = $false
+        $ExportButton.Enabled = $false
         $SourceCombo.Enabled = $false
         $DurationCombo.Enabled = $false
         $MinSamples.Enabled = $false
@@ -338,6 +441,7 @@ $RunButton.Add_Click({
     }
 })
 
+$ExportButton.Add_Click({ Export-ShareBundle })
 $LoadButton.Add_Click({ Load-AcceptanceReport })
 $OpenButton.Add_Click({
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
@@ -356,7 +460,11 @@ $Form.Add_FormClosing({
             $_.Cancel = $true
             return
         }
-        try { $script:AcceptanceProcess.Kill() } catch {}
+        try {
+            Start-Process -FilePath "taskkill.exe" -ArgumentList @("/PID", [string]$script:AcceptanceProcess.Id, "/T", "/F") -WindowStyle Hidden -Wait | Out-Null
+        } catch {
+            try { $script:AcceptanceProcess.Kill() } catch {}
+        }
     }
 })
 
