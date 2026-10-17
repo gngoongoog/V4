@@ -1,8 +1,8 @@
 # BrainTrade OS — project state: verified 0.7.0 Development Preview
 
-Canonical repository: `gngoongoog/V4`. Current `development` runtime/source merge checkpoint: `4cf36107c72a59154859a8abdff64db70d6df21a` (tree `036989ffb18820920085fffa4b0517ace6e9904e`). PR #35 head `49ceb5956f9ac23aecaa03a444fa72abfc4fcf72` has the same complete tree and passed Research plus Windows/Linux validation before squash merge.
+Canonical repository: `gngoongoog/V4`. Current validated runtime/source merge checkpoint on `development`: `9524367f039b8fe59247e88c714c1cbff9c4a5a9` (tree `58a250ddca283e867436953a459959c33ee8a1e2`). PR #38 head `b6c15e8243cbf6792b88a9ca7bac3330643b619f` has the same runtime/source tree and passed Research plus Windows/Linux validation before squash merge.
 
-Current verified test scale is 82 domain Rust tests, 63 runtime Rust tests and 102 Python tests; one explicit public-network official-news test is intentionally ignored. Core, backup/restore, Studio, chronological evaluation, OOS/correlation research, feature-ablation contracts, offline reports, simulated MT5 execution integration, browser review, native desktop rendering and Windows portable packaging passed. Native MT5 Demo acceptance on the user's actual terminal is still a separate target-machine gate.
+Current verified test scale is 82 domain Rust tests, 68 runtime Rust tests and 109 Python tests; one explicit public-network official-news test is intentionally ignored. Core, backup/restore, Studio, chronological evaluation, OOS/correlation research, feature-ablation contracts, offline reports, simulated MT5 execution integration, browser review, native desktop rendering and Windows portable packaging passed. Native MT5 Demo acceptance on the user's actual terminal is still a separate target-machine gate.
 
 ## Execution and Sniper state
 
@@ -29,11 +29,17 @@ The native Control Center exposes the trading mode, commission basis, Sniper hol
 
 ## Research state
 
-The development branch contains deterministic historical Meta v1/v2, CES v1 and KTE v1 research; Wyckoff; Trend/Regime/Structure/Volatility/Gann/Liquidity analysis; official-news context; chronological evaluation; learning snapshot/label/export pipelines; read-only challenger inference; and strategy generation across the supported MT5 timeframes.
+The development branch contains deterministic historical Meta v1/v2, CES v1 and KTE v1 research; Wyckoff; Trend/Regime/Structure/Volatility/Gann/Liquidity analysis; official-news context; chronological evaluation; learning snapshot/label/export pipelines; read-only challenger inference; strategy generation across the supported MT5 timeframes; and causal official-news historical replay based on append-only `first_observed_ms` availability.
 
 Aligned multi-symbol correlation/exposure research is now implemented and CI-verified. It uses exact common timestamp intersections and explicit unavailable data rather than forward-filling missing intervals. Reports are deterministic, persisted, replayable/exportable and explicitly observational; they cannot change broker execution or Portfolio Exposure v1.
 
-Holdout/rolling out-of-sample infrastructure and feature-group correlation/ablation tooling are also implemented and verified. This means the scientific machinery exists; it does **not** mean enough genuine prospective observations have accumulated to claim a profitable or stable edge.
+Holdout/rolling out-of-sample infrastructure and feature-group correlation/ablation tooling are also implemented and verified. PR #37 added research-only historical official-news replay: publication time is metadata, while historical availability is controlled by BrainTrade's first-observed timestamp, with no forward fill across missing M1 bars and no execution route. This means the scientific machinery exists; it does **not** mean enough genuine prospective observations have accumulated to claim a profitable or stable edge.
+
+## Real Demo learning state
+
+PR #38 removed the remaining gap between simulated adaptive scoring and real Demo outcomes. When the bound MT5 account is Demo and a coordinator trade is closed, the runtime records exact broker evidence from the matched MT5 deals and calculates net outcome from broker-reported `profit + commission + swap + fee`. Only members that were ready and supported the executed side at entry receive that broker outcome. These broker samples are preferred immediately by the adaptive coordinator; the causal completed-bar learning path remains a fallback when no exact broker evidence exists.
+
+This does not turn the project into unrestricted blind execution. The optional Portfolio Exposure and per-brain risk caps remain OFF by default, but exact account binding, quote freshness, ownership/reconciliation, duplicate prevention, final authorization and the durable commit-before-`order_send` journal remain mandatory correctness boundaries. Global START still has to be armed explicitly after startup/restart, which intentionally remains STOPPED.
 
 ## Demo Acceptance state
 
@@ -47,14 +53,14 @@ This collector makes target-machine acceptance measurable, but CI has not run it
 
 `docs/development-validation.json` is the machine-readable 0.7 development evidence record. The promoted 0.6 history in `docs/validation.json`, `docs/validation-v0.6.0.json` and `docs/RELEASE_STATUS.md` remains unchanged. Documentation-only evidence commits must never be described as newly compiled runtime code.
 
-Research run `39011639762` passed and uploaded `synthetic-research-validation` artifact `12092852855`. Windows/Linux run `39011639745` passed and uploaded `BrainTrade-Windows-x64-Preview` artifact `12093341260` plus `windows-native-validation` artifact `12093301318`.
+Research run `39017294919` passed and uploaded `synthetic-research-validation` artifact `12095079199` (SHA-256 `412902f1ec2418f8d34c898a91a5823050894a4e9a41b1daeed2c3af3919c77f`). Windows/Linux run `39017294905` passed and uploaded `BrainTrade-Windows-x64-Preview` artifact `12095677572` (SHA-256 `10c4b0730691866129b3848940f96ab5ad4be1019d04e0d99cffd1d86ea2c8ba`) plus `windows-native-validation` artifact `12095269571` (SHA-256 `b764424d4d0cef36f03aba3000992a84b1ecfb62f5b539a8f121e9b61b9271fd`).
 
 ## Next steps
 
 1. Run real Windows + Demo MT5 acceptance from `docs/DEMO_ACCEPTANCE_AR.md` and `docs/ACCEPTANCE.md`, collecting useful native and fallback samples.
 2. If local P95/P99 misses the 20 ms queue-to-send target, optimize only the dominant measured component instead of removing durable safety boundaries blindly.
 3. Continue genuine prospective/OOS accumulation and use ablation/correlation results as research evidence only.
-4. Add causal historical event/news replay with first-observed timestamps before testing event effects.
+4. Continue causal news/event replay research using the implemented first-observed infrastructure; keep it observational until independent evidence justifies any new hypothesis.
 5. Test private Telegram delivery with credentials stored only on the target machine.
 6. Enable required branch checks when repository administration access is available.
 

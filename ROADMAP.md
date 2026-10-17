@@ -10,9 +10,9 @@ The promoted line contains bound-account execution, 14 execution identities, coo
 
 ## Current 0.7.0 Development Preview
 
-Current `development` runtime/source merge checkpoint is `4cf36107c72a59154859a8abdff64db70d6df21a` (tree `036989ffb18820920085fffa4b0517ace6e9904e`). PR #35 head `49ceb5956f9ac23aecaa03a444fa72abfc4fcf72` has the same tree and passed Research plus Windows/Linux validation before squash merge. Historical 0.6 release records remain unchanged.
+Current validated `development` runtime/source merge checkpoint is `9524367f039b8fe59247e88c714c1cbff9c4a5a9` (tree `58a250ddca283e867436953a459959c33ee8a1e2`). PR #38 head `b6c15e8243cbf6792b88a9ca7bac3330643b619f` has the same runtime/source tree and passed Research plus Windows/Linux validation before squash merge. Historical 0.6 release records remain unchanged.
 
-Current CI evidence scale is 82 domain Rust tests, 63 runtime Rust tests plus one intentionally ignored public-network news test, and 102 Python tests. Core build, lifecycle, backup/restore, Studio, chronological evaluation, OOS/correlation research, feature ablation contracts, simulated broker execution, native selector compilation, desktop rendering and Windows portable packaging passed.
+Current CI evidence scale is 82 domain Rust tests, 68 runtime Rust tests plus one intentionally ignored public-network news test, and 109 Python tests. Core build, lifecycle, backup/restore, Studio, chronological evaluation, OOS/correlation research, feature ablation contracts, simulated broker execution, native selector compilation, desktop rendering and Windows portable packaging passed.
 
 Completed 0.7 engineering now includes:
 
@@ -26,6 +26,8 @@ Completed 0.7 engineering now includes:
 - Aligned multi-symbol correlation/exposure research with exact timestamp intersections, explicit availability handling, deterministic persistence/replay/export and no broker-policy connection.
 - Chronological holdout/rolling OOS evaluation infrastructure and feature-group correlation/ablation tooling. These are research tools; real prospective evidence still has to accumulate.
 - Read-only Windows/Demo execution acceptance collector that analyzes stored real execution results, separates `native` and `poll` sessions, and calculates P50/P95/P99 without creating trades itself.
+- Causal official-news historical replay from PR #37, with append-only first-observed availability, deterministic replay and no execution route.
+- Real Demo broker-outcome learning from PR #38. Closed coordinator Demo trades use exact booked profit, commission, swap and fee as preferred adaptive evidence for participating members.
 
 The Sniper local engineering target is <=20 ms from BrainTrade queue to the `order_send` handoff on an appropriate target machine. The collector measures component timing and identifies whether delay is dominated by Core/pulse, authorization, durable journal, other pre-send MT5 work, or `order_send`. This is not a guaranteed MT5/broker acknowledgement, fill latency, network latency, profitability or HFT claim.
 
@@ -34,7 +36,7 @@ The Sniper local engineering target is <=20 ms from BrainTrade queue to the `ord
 1. **Run native Windows + real Demo MT5 acceptance.** Follow `docs/DEMO_ACCEPTANCE_AR.md` and `docs/ACCEPTANCE.md`. Collect at least a useful sample of real Sniper sends for both native OnTick and 5 ms fallback and preserve P50/P95/P99 reports.
 2. **Measure before optimizing again.** If `queue_to_send_ms` P95/P99 misses the 20 ms local target, use `core_pulse_ms`, `authorize_ms`, `journal_ms`, `other_pre_send_ms`, `pre_send_ms`, `send_ms` and `total_ms` to identify the actual bottleneck before changing execution code.
 3. **Accumulate genuine OOS evidence.** Keep holdout/rolling evaluation, feature ablation and correlation observational until enough completed-bar observations and matured labels exist.
-4. **Historical event replay.** Add first-observed event timestamps and causal joins before any news/event signal can be tested historically.
+4. **Historical event research.** The first-observed causal replay is implemented; extend or analyze it only as research until independent evidence justifies a new hypothesis.
 5. **Private Telegram acceptance.** Test only with credentials stored on the target machine.
 6. **Repository policy.** Enable required checks/branch protection for `main` and preferably `development` if repository administration access becomes available.
 
@@ -53,7 +55,6 @@ The Sniper local engineering target is <=20 ms from BrainTrade queue to the `ord
 - Live Telegram acceptance.
 - Imported ML Champion activation or automatic promotion.
 - Correlation-driven broker execution policy.
-- Historical causal news/event replay.
 - Guaranteed capture of every upstream broker event.
 - Any profitability, HFT-latency, execution-quality or fill guarantee.
 

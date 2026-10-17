@@ -1,6 +1,6 @@
 # Continue from verified BrainTrade 0.7.0 Development Preview
 
-Current `development` runtime/source merge checkpoint is `4cf36107c72a59154859a8abdff64db70d6df21a` (tree `036989ffb18820920085fffa4b0517ace6e9904e`). PR #35 head `49ceb5956f9ac23aecaa03a444fa72abfc4fcf72` has the same tree and passed Research plus Windows/Linux validation before squash merge.
+Current validated `development` runtime/source merge checkpoint is `9524367f039b8fe59247e88c714c1cbff9c4a5a9` (tree `58a250ddca283e867436953a459959c33ee8a1e2`). PR #38 head `b6c15e8243cbf6792b88a9ca7bac3330643b619f` has the same runtime/source tree and passed Research plus Windows/Linux validation before squash merge.
 
 Read `BUILD_HANDOFF.md`, `PROJECT_STATE.md`, `ROADMAP.md`, `docs/development-validation.json`, `docs/ACCEPTANCE.md` and `docs/DEMO_ACCEPTANCE_AR.md` before changing runtime execution code. Do not restart the version bump, rewrite branch history or reuse old 0.6 artifact evidence as if it validated current development.
 
@@ -16,8 +16,10 @@ Read `BUILD_HANDOFF.md`, `PROJECT_STATE.md`, `ROADMAP.md`, `docs/development-val
 - Simplified five-section native Control Center.
 - Correlation/exposure research, chronological OOS tooling and feature-group ablation tooling, all research-only.
 - Read-only Demo acceptance collector for real Windows/MT5 latency characterization.
+- Causal official-news historical replay using append-only first-observed timestamps; research-only and disconnected from execution.
+- Real Demo broker-outcome learning: exact closed coordinator MT5 Demo deals feed adaptive member evidence using booked profit, commission, swap and fee.
 
-The current CI checkpoint passed 82 domain Rust tests, 63 runtime Rust tests plus one intentionally ignored public-network test, and 102 Python tests. Research run `39011639762` and Windows/Linux run `39011639745` both passed.
+The current CI checkpoint passed 82 domain Rust tests, 68 runtime Rust tests plus one intentionally ignored public-network test, and 109 Python tests. Research run `39017294919` and Windows/Linux run `39017294905` both passed.
 
 ## Continue in this order
 
@@ -25,7 +27,7 @@ The current CI checkpoint passed 82 domain Rust tests, 63 runtime Rust tests plu
 2. **Use measurements before further speed changes.** Compare P50/P95/P99 for `queue_to_send_ms` and inspect Core/pulse, authorization, journal, other pre-send and `send_ms` components.
 3. **Do not remove durable execution boundaries just to hit a number.** Exact account identity, quote freshness, ownership, authorization, durable journal and uncertain-send reconciliation remain mandatory.
 4. **Continue prospective scientific evidence.** Accumulate matured labels and holdout/rolling OOS evidence, then use ablation/correlation results to judge unique value.
-5. **Add causal historical news/event replay** with first-observed timestamps before any event-driven historical claim.
+5. **Use the implemented causal news replay only as research evidence** until independent prospective evidence justifies any execution hypothesis.
 6. **Test private Telegram delivery** only with local credentials.
 7. **Enable branch protection/required checks** if repository administration access becomes available.
 

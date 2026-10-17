@@ -2,36 +2,36 @@
   "version": "0.7.0",
   "status": "verified",
   "source_state": "development preview",
-  "tested_commit": "49ceb5956f9ac23aecaa03a444fa72abfc4fcf72",
-  "tested_tree": "036989ffb18820920085fffa4b0517ace6e9904e",
+  "tested_commit": "b6c15e8243cbf6792b88a9ca7bac3330643b619f",
+  "tested_tree": "58a250ddca283e867436953a459959c33ee8a1e2",
   "research_ci": {
-    "run_id": 39011639762,
+    "run_id": 39017294919,
     "conclusion": "success",
-    "url": "https://github.com/gngoongoog/V4/actions/runs/39011639762",
+    "url": "https://github.com/gngoongoog/V4/actions/runs/39017294919",
     "artifact": {
-      "id": 12092852855,
+      "id": 12095079199,
       "name": "synthetic-research-validation",
-      "size_bytes": 4301738,
-      "sha256": "91b6e0b8273a60e90bd3c636fd55a66ffb7dee8b68e042399c8e623aa531da87"
+      "size_bytes": 4303555,
+      "sha256": "412902f1ec2418f8d34c898a91a5823050894a4e9a41b1daeed2c3af3919c77f"
     }
   },
   "windows_ci": {
-    "run_id": 39011639745,
+    "run_id": 39017294905,
     "conclusion": "success",
-    "url": "https://github.com/gngoongoog/V4/actions/runs/39011639745"
+    "url": "https://github.com/gngoongoog/V4/actions/runs/39017294905"
   },
   "windows_artifacts": [
     {
-      "id": 12093341260,
+      "id": 12095677572,
       "name": "BrainTrade-Windows-x64-Preview",
-      "size_bytes": 34402819,
-      "sha256": "6f85ae1562130da5da4c85bf0bff0d9cc07c88b6d4e84e89f3cb43137b3bd7da"
+      "size_bytes": 34472951,
+      "sha256": "10c4b0730691866129b3848940f96ab5ad4be1019d04e0d99cffd1d86ea2c8ba"
     },
     {
-      "id": 12093301318,
+      "id": 12095269571,
       "name": "windows-native-validation",
       "size_bytes": 1701140,
-      "sha256": "6185b58db343063187aa97ae1d2f5e099e168d12e187652f00e39e064498a314"
+      "sha256": "b764424d4d0cef36f03aba3000992a84b1ecfb62f5b539a8f121e9b61b9271fd"
     }
   ],
   "release_evidence": "validation.json",
@@ -43,17 +43,17 @@
     "telegram_live_delivery": "not performed",
     "imported_ml_automatic_promotion": false
   },
-  "note": "CI-verified 0.7 development checkpoint after the simplified five-section Control Center, account-scoped Round-trip/Per-side commissions, configurable frozen Sniper hold, execution-only Fast Sniper Pulse, the fifteenth Liquidity Sweep execution identity, aligned correlation/OOS/feature-ablation research tooling, and the read-only Windows/Demo acceptance collector. Research and Windows/Linux validation ran on PR #35's tested merge tree; PR head 49ceb5956f9ac23aecaa03a444fa72abfc4fcf72 and current development squash merge 4cf36107c72a59154859a8abdff64db70d6df21a share tree 036989ffb18820920085fffa4b0517ace6e9904e. Native Windows MT5 Demo acceptance and private Telegram delivery remain target-machine steps. The <=20 ms Sniper figure is a BrainTrade-local queue-to-send engineering target, not a broker/network/fill guarantee. Promoted 0.6 evidence remains unchanged.",
-  "pull_request_head": "49ceb5956f9ac23aecaa03a444fa72abfc4fcf72",
-  "current_development_merge": "4cf36107c72a59154859a8abdff64db70d6df21a",
+  "note": "CI-verified 0.7 development runtime/source checkpoint through PR #38. This includes the five-section Control Center, account-scoped Round-trip/Per-side commissions, configurable frozen Sniper hold, Fast Sniper Pulse and native OnTick/CopyTicks bridge, the fifteenth Liquidity Sweep identity, aligned correlation/OOS/feature-ablation research, read-only Demo acceptance collector, PR #37 causal official-news historical replay using append-only first-observed availability with no execution route, and PR #38 real Demo broker-outcome learning using exact booked profit/commission/swap/fee for participating coordinator members. PR #38 head b6c15e8243cbf6792b88a9ca7bac3330643b619f and development squash merge 9524367f039b8fe59247e88c714c1cbff9c4a5a9 share tree 58a250ddca283e867436953a459959c33ee8a1e2. Native Windows MT5 Demo acceptance and private Telegram delivery remain target-machine steps. The <=20 ms Sniper figure is a BrainTrade-local queue-to-send engineering target, not a broker/network/fill or profitability guarantee.",
+  "pull_request_head": "b6c15e8243cbf6792b88a9ca7bac3330643b619f",
+  "current_development_merge": "9524367f039b8fe59247e88c714c1cbff9c4a5a9",
   "source_tree_matches_pr_head": true,
   "source_tree_matches_current_development": true,
   "tests": {
     "rust_domain_passed": 82,
-    "rust_runtime_passed": 63,
+    "rust_runtime_passed": 68,
     "rust_runtime_ignored": 1,
     "ignored_reason": "explicit public-network official news check",
-    "python_passed": 102
+    "python_passed": 109
   },
   "verified_checks": [
     "Core lifecycle, authentication, staleness, research replay and persistence",
@@ -71,6 +71,9 @@
     "chronological holdout/rolling OOS infrastructure and deterministic feature-group correlation/ablation contracts",
     "read-only Demo acceptance collector rejects Live/mismatched contexts, separates native/poll samples and calculates P50/P95/P99",
     "offline report interactions and native selector compilation",
-    "Windows portable startup, embedded runtime, DPAPI IPC, PE dependencies, native bridge packaging and settings persistence"
+    "Windows portable startup, embedded runtime, DPAPI IPC, PE dependencies, native bridge packaging and settings persistence",
+    "causal official-news historical replay uses append-only first-observed availability, no M1 forward fill and no execution route",
+    "real MT5 Demo coordinator broker outcomes feed adaptive evidence from exact booked profit, commission, swap and fee for participating members",
+    "Demo execution contract is not Shadow-locked; optional portfolio/per-brain entry limits default off while correctness boundaries remain"
   ]
 }

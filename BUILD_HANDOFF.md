@@ -1,8 +1,8 @@
 # BrainTrade OS — verified 0.7.0 Development Preview
 
-Canonical repository: `gngoongoog/V4`. Current `development` runtime/source merge checkpoint: `4cf36107c72a59154859a8abdff64db70d6df21a` (tree `036989ffb18820920085fffa4b0517ace6e9904e`). PR #35 head `49ceb5956f9ac23aecaa03a444fa72abfc4fcf72` has the same tree and passed Research plus Windows/Linux CI before squash merge. This handoff is documentation/state synchronization only; it does not create new runtime evidence beyond those validated artifacts.
+Canonical repository: `gngoongoog/V4`. Current validated runtime/source merge checkpoint: `9524367f039b8fe59247e88c714c1cbff9c4a5a9` (tree `58a250ddca283e867436953a459959c33ee8a1e2`). PR #38 head `b6c15e8243cbf6792b88a9ca7bac3330643b619f` has the same runtime/source tree and passed Research plus Windows/Linux CI before squash merge. Later documentation-only synchronization must not be described as new runtime evidence.
 
-Current verified test scale is 82 domain Rust tests, 63 runtime Rust tests and 102 Python tests, with one explicit public-network official-news test intentionally ignored. Core lifecycle, backup/restore, Studio, chronological evaluation, correlation/OOS research, feature-ablation contracts, simulated MT5 execution, offline reports, browser review, native desktop rendering and Windows portable packaging passed.
+Current verified test scale is 82 domain Rust tests, 68 runtime Rust tests and 109 Python tests, with one explicit public-network official-news test intentionally ignored. Core lifecycle, backup/restore, Studio, chronological evaluation, correlation/OOS research, feature-ablation contracts, simulated MT5 execution, offline reports, browser review, native desktop rendering and Windows portable packaging passed.
 
 ## What is implemented
 
@@ -17,6 +17,8 @@ Current verified test scale is 82 domain Rust tests, 63 runtime Rust tests and 1
 - Configurable Sniper maximum hold from 1–3600 seconds. Hold/target/stop are frozen into a trade at entry.
 - Simplified native Control Center grouped into five primary sections: الرئيسية، التداول، البحث، المختبر، النظام. Trading mode, commission basis and Sniper hold are visible in the trading center.
 - Historical Meta v1/v2, CES v1 and KTE v1 research; Wyckoff; Trend/Regime/Structure/Volatility/Gann/Liquidity analysis; deterministic replay/exports and chronological evaluation.
+- Causal official-news historical replay from PR #37. `first_observed_ms`, not publication time alone, controls historical availability; missing M1 bars are never forward-filled and the replay has no execution route.
+- Real Demo broker-outcome learning from PR #38. Closed coordinator Demo trades become exact broker evidence using booked profit, commission, swap and fee; only members that supported the executed side receive the result. Broker evidence is preferred over the completed-bar fallback.
 - Aligned multi-symbol correlation/exposure research with exact intersections, explicit unavailable data, persistence, replay and export. It is observational only and has no broker execution route.
 - Holdout/rolling OOS evaluation infrastructure plus feature-group correlation/ablation tooling. Tooling is complete; genuine prospective evidence accumulation remains open.
 - Learning snapshots/labels/export, offline challenger registry/evidence and read-only inference without automatic Champion promotion.
@@ -32,20 +34,20 @@ The <=20 ms figure is not a guarantee of MT5 acknowledgement, broker fill, netwo
 
 ## CI evidence
 
-Research run `39011639762`: SUCCESS.
+Research run `39017294919`: SUCCESS.
 
-- Artifact `12092852855` — `synthetic-research-validation`
-- Size: `4301738` bytes
-- SHA-256: `91b6e0b8273a60e90bd3c636fd55a66ffb7dee8b68e042399c8e623aa531da87`
+- Artifact `12095079199` — `synthetic-research-validation`
+- Size: `4303555` bytes
+- SHA-256: `412902f1ec2418f8d34c898a91a5823050894a4e9a41b1daeed2c3af3919c77f`
 
-Windows/Linux run `39011639745`: SUCCESS.
+Windows/Linux run `39017294905`: SUCCESS.
 
-- Artifact `12093341260` — `BrainTrade-Windows-x64-Preview`
-  - Size: `34402819` bytes
-  - SHA-256: `6f85ae1562130da5da4c85bf0bff0d9cc07c88b6d4e84e89f3cb43137b3bd7da`
-- Artifact `12093301318` — `windows-native-validation`
+- Artifact `12095677572` — `BrainTrade-Windows-x64-Preview`
+  - Size: `34472951` bytes
+  - SHA-256: `10c4b0730691866129b3848940f96ab5ad4be1019d04e0d99cffd1d86ea2c8ba`
+- Artifact `12095269571` — `windows-native-validation`
   - Size: `1701140` bytes
-  - SHA-256: `6185b58db343063187aa97ae1d2f5e099e168d12e187652f00e39e064498a314`
+  - SHA-256: `b764424d4d0cef36f03aba3000992a84b1ecfb62f5b539a8f121e9b61b9271fd`
 
 `docs/development-validation.json` is the machine-readable development evidence record. Promoted 0.6 evidence in `docs/validation.json`, `docs/validation-v0.6.0.json` and `docs/RELEASE_STATUS.md` is immutable historical evidence and must not be replaced with 0.7 data.
 
@@ -65,7 +67,7 @@ On Windows with the intended Demo account:
 
 - Accumulate genuine completed-bar observations, matured labels and independent holdout/rolling evidence.
 - Use ablation results to test whether feature groups add unique prospective value before simplifying live logic.
-- Add historical news/event replay with first-observed timestamps and causal joins.
+- Continue using the implemented first-observed historical news replay for observational causal research; do not connect it to execution without separate evidence and review.
 - Keep correlation/exposure observational until separate prospective evidence and review justify any execution rule.
 - Claim order-flow/volume-profile behavior only when the underlying feed supplies the required fields.
 
