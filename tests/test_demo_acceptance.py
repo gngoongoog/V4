@@ -46,6 +46,8 @@ class DemoAcceptanceTests(unittest.TestCase):
             "queue_to_gateway_ms": 2.0,
             "authorize_ms": 1.0,
             "journal_ms": 1.5,
+            "post_journal_authorize_ms": 0.75,
+            "post_journal_account_ms": 0.25,
             "check_ms": 0.0 if fast else 2.0,
             "pre_send_ms": 6.0 if fast else 8.0,
             "queue_to_send_ms": queue,
@@ -113,9 +115,24 @@ class DemoAcceptanceTests(unittest.TestCase):
         self.assertTrue(report["contracts"]["fast_open_skips_order_check"])
         self.assertTrue(report["contracts"]["durable_journal_timing_present_before_recorded_send"])
         self.assertLessEqual(report["fast_path"]["timings"]["queue_to_send_ms"]["p99"], 20.0)
+        self.assertEqual(report["fast_path"]["timings"]["post_journal_authorize_ms"]["count"], 5)
+        self.assertEqual(report["fast_path"]["timings"]["post_journal_account_ms"]["count"], 5)
+        self.assertAlmostEqual(rows[0]["other_pre_send_ms"], 2.5)
         serialized = json.dumps(report)
         self.assertNotIn("123456", serialized)
         self.assertEqual(len(rows), 5)
+
+    def test_legacy_samples_without_new_final_gate_timings_remain_readable(self):
+        identity = self.identity()
+        item = self.item("legacy", 4000)
+        item["result"].pop("post_journal_authorize_ms")
+        item["result"].pop("post_journal_account_ms")
+        samples = {}
+        acceptance.merge_execution(samples, {"commands": [item]}, identity, "native", 3000)
+        row = samples["legacy"]
+        self.assertIsNone(row["post_journal_authorize_ms"])
+        self.assertIsNone(row["post_journal_account_ms"])
+        self.assertAlmostEqual(row["other_pre_send_ms"], 3.5)
 
     def test_slow_characterization_and_regular_order_check_contract(self):
         identity = self.identity()
