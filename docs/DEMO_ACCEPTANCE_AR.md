@@ -94,9 +94,11 @@ runtime\python\python.exe runtime\gateway\check_runtime.py --demo-acceptance --s
 
 - `core_pulse_ms`
 - `queue_to_gateway_ms`
-- `authorize_ms`
-- `journal_ms`
-- `other_pre_send_ms`
+- `authorize_ms` — التفويض الأول قبل إنشاء سجل الإرسال المتين.
+- `journal_ms` — زمن تثبيت سجل no-duplicate على SQLite مع `synchronous=FULL`.
+- `post_journal_authorize_ms` — التفويض الأخير بعد تثبيت الـjournal مباشرة؛ يلتقط STOP أو تغيير revision قبل الإرسال.
+- `post_journal_account_ms` — قراءة هوية/نوع الحساب الأخيرة بعد الـjournal وقبل `order_send`.
+- `other_pre_send_ms` — بقية زمن التحضير بعد طرح المكونات المسماة أعلاه و`order_check` إن وُجد.
 - `pre_send_ms`
 - `queue_to_send_ms`
 - `send_ms`
@@ -106,17 +108,21 @@ runtime\python\python.exe runtime\gateway\check_runtime.py --demo-acceptance --s
 - هل كانت Fast Path
 - هل تم تجاوز `order_check` في Tick Sniper فقط
 
-ثم يحسب P50/P95/P99 ويفصل عينات Native عن Poll.
+ثم يحسب P50/P95/P99 ويفصل عينات Native عن Poll. ملفات القبول الأقدم التي سبقت القياسين الجديدين تبقى قابلة للقراءة؛ ببساطة لن يكون لها تاريخ للحقول الجديدة.
 
 ## معنى هدف 20ms
 
 الهدف الهندسي هو `queue_to_send_ms <= 20ms` على جهازك قدر الإمكان. التقرير يعرض P95 وP99 ولا يعتبر `send_ms` جزءاً من هذا الهدف؛ `send_ms` يشمل استدعاء MT5 وانتظار إقرار الوسيط ويتأثر بالشبكة والوسيط.
 
+`queue_to_send_ms` يشمل عمداً الحمايات الأخيرة بعد تثبيت الـjournal. لا نحذف هذه الحمايات لمجرد الوصول إلى رقم أصغر؛ نقيس كلفتها أولاً على جهاز MT5 الحقيقي ثم نحسن فقط الجزء الذي يثبت أنه عنق الزجاجة.
+
 إذا كان P95/P99 المحلي أبطأ من 20ms، راجع أكبر مكوّن قبل تغيير أي حد:
 
-- `authorize_ms` مرتفع: اتصال Core/التفويض المحلي هو المسيطر.
+- `authorize_ms` مرتفع: اتصال Core/التفويض المحلي الأول هو المسيطر.
 - `journal_ms` مرتفع: كتابة SQLite المتينة هي المسيطرة؛ لا تُعطّل `synchronous=FULL` لأن ذلك يحمي من إعادة إرسال عمياء بعد crash/timeout.
-- `other_pre_send_ms` مرتفع: قراءات MT5/الحساب/الصفقات ومطابقة العقد قبل الإرسال هي المسيطرة.
+- `post_journal_authorize_ms` مرتفع: التفويض الأخير الذي يمنع أمر Open بعد STOP/revision change هو المسيطر.
+- `post_journal_account_ms` مرتفع: قراءة MT5 الأخيرة للتأكد أن Login/Server/Currency/Demo لم تتغير هي المسيطرة.
+- `other_pre_send_ms` مرتفع: بقية قراءات MT5/العقد/الصفقات والتحضير قبل الإرسال هي المسيطرة.
 - `send_ms` مرتفع مع queue سريع: المشكلة بعد نقطة الإرسال المحلية، وغالباً MT5/الشبكة/الوسيط وليست Core queue.
 
 ## حالات التقرير

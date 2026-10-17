@@ -66,9 +66,12 @@ def main():
             try:api('/v1/config',{'config':invalid})
             except urllib.error.HTTPError as e:assert e.code==400
             else:raise AssertionError('Invalid Telegram config accepted')
+            # A rejected config request must be side-effect free: it cannot silently STOP
+            # a running/degraded system or cancel its current run state.
+            assert api('/v1/status')['state']=='degraded'
             api('/v1/config',{'config':config})
             assert not api('/v1/status')['gateway_fresh']
-            # Saving connection/config settings intentionally disarms global START.
+            # A successful connection/config save intentionally disarms global START.
             # Re-arming must always be explicit before new virtual or broker entries.
             assert api('/v1/status')['state']=='stopped'
             assert api('/v1/start',{})['state']=='starting'
@@ -81,12 +84,17 @@ def main():
             shadow=api('/v1/status');assert shadow['analysis']['action']=='SHADOW_BUY',shadow['analysis'];assert not shadow['execution_enabled']
             target=shadow['analysis']['target'];api('/v1/gateway/snapshot',snapshot)
             assert len(api('/v1/decisions')['decisions'])==1
-            risk=config['risk'];risk['risk_percent']=.35;api('/v1/risk',risk)
+            risk=config['risk'];risk['risk_percent']=.35
+            # Execution-affecting risk/cost changes are rejected while START is armed.
+            try:api('/v1/risk',risk)
+            except urllib.error.HTTPError as e:assert e.code==400
+            else:raise AssertionError('Risk settings changed while START was armed')
+            assert api('/v1/stop',{})['state']=='stopped'
+            api('/v1/risk',risk)
             assert api('/v1/config')['config']['risk']['risk_percent']==.35
             try:api('/v1/risk',dict(risk,max_lots=0))
             except urllib.error.HTTPError as e:assert e.code==400
             else:raise AssertionError('Invalid risk settings accepted')
-            assert api('/v1/stop',{})['state']=='stopped'
             snapshot.update(bid=target+.1,ask=target+.2);api('/v1/gateway/snapshot',snapshot)
             paper=api('/v1/status')['paper'];assert paper['trades']==1 and paper['realized']>0
             assert isinstance(api('/v1/opportunities/history')['setups'], list)
@@ -145,7 +153,7 @@ def main():
             assert len(api('/v1/events')['events'])>len(events_before)
             api('/v1/shutdown',{});process.wait(timeout=5)
             assert process.returncode==0
-            print('PASS: lifecycle/auth/staleness/shadow/risk; backtest UTC chunking, cancel, account isolation, asynchronous completion, full export, deterministic offline replay, CES/Meta-v2 experiments, chronological evidence, challenger review eligibility, cross-language feature parity, read-only inference persistence/isolation, news API/settings, backup and restart persistence')
+            print('PASS: lifecycle/auth/staleness/shadow/config atomicity/risk mutation guard; backtest UTC chunking, cancel, account isolation, asynchronous completion, full export, deterministic offline replay, CES/Meta-v2 experiments, chronological evidence, challenger review eligibility, cross-language feature parity, read-only inference persistence/isolation, news API/settings, backup and restart persistence')
         finally:
             if process.poll() is None:process.terminate();process.wait(timeout=5)
 

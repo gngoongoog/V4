@@ -18,7 +18,11 @@ class Broker:
         self.info=N(point=.01,trade_tick_size=.01,volume_min=.01,volume_step=.01,volume_max=100.,filling_mode=3,trade_exemode=2,trade_stops_level=5)
         self.tick=N(bid=2000.,ask=2000.10,time_msc=clock_ms())
         self.positions=[];self.orders=[];self.deals=[];self.sends=[];self.code=10009;self.raise_send=False;self.check_code=0;self.on_check=None
-    def account_info(self):return self.account
+        self.account_reads=0;self.on_account=None
+    def account_info(self):
+        self.account_reads+=1
+        if self.on_account:self.on_account(self.account_reads)
+        return self.account
     def terminal_info(self):return self.terminal
     def symbol_info(self,*a):return self.info
     def symbol_info_tick(self,*a):return self.tick
@@ -72,6 +76,29 @@ class ExecutionTests(unittest.TestCase):
     def test_account_switch_during_check_and_stop_before_send(self):
         self.mt.on_check=lambda:setattr(self.mt.account,'login',88);self.assertEqual(self.send()['state'],'rejected');self.assertFalse(self.mt.sends)
         self.mt.on_check=None;self.mt.account.login=17;self.assertEqual(self.ex.execute(self.mt,self.cmd,lambda _:False)['state'],'cancelled');self.assertFalse(self.mt.sends)
+    def test_stop_after_first_authorization_is_caught_after_durable_journal(self):
+        calls=0
+        def authorize(_):
+            nonlocal calls
+            calls+=1
+            return calls==1
+        result=self.ex.execute(self.mt,self.cmd,authorize)
+        self.assertEqual(result['state'],'cancelled')
+        self.assertIn('after durable journal',result['reason'])
+        self.assertEqual(calls,2)
+        self.assertFalse(self.mt.sends)
+        # The terminal cancellation is durable too: duplicate delivery cannot send it later.
+        self.assertEqual(self.send()['state'],'cancelled')
+        self.assertFalse(self.mt.sends)
+    def test_account_switch_after_journal_is_caught_before_order_send(self):
+        def switch_on_final_read(read):
+            if read==3:self.mt.account.login=88
+        self.mt.on_account=switch_on_final_read
+        result=self.send()
+        self.assertEqual(result['state'],'cancelled')
+        self.assertIn('after durable journal',result['reason'])
+        self.assertEqual(self.mt.account_reads,3)
+        self.assertFalse(self.mt.sends)
     def test_volume_spread_stops_and_quote_contract(self):
         self.cmd['lots']=.015;self.assertEqual(self.send()['state'],'rejected');self.cmd['lots']=.1
         self.mt.tick.ask=2002.;self.assertEqual(self.send()['state'],'rejected');self.mt.tick.ask=2000.10
@@ -94,7 +121,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertTrue(result['fast_path'])
         self.assertTrue(result['order_check_skipped'])
         self.assertEqual(result['check_ms'],0.0)
-        for key in ('queue_to_gateway_ms','authorize_ms','journal_ms','pre_send_ms','queue_to_send_ms','send_ms','total_ms'):
+        for key in ('queue_to_gateway_ms','authorize_ms','journal_ms','post_journal_authorize_ms','post_journal_account_ms','pre_send_ms','queue_to_send_ms','send_ms','total_ms'):
             self.assertIn(key,result)
             self.assertGreaterEqual(result[key],0)
         self.assertEqual(len(self.mt.sends),1)

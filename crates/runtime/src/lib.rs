@@ -91,6 +91,11 @@ struct Engine{dir:PathBuf,shared:Arc<Mutex<Shared>>,db:Connection,gateway:Option
 struct ConfigRequest{config:Config,#[serde(default)]telegram_token:String,#[serde(default)]clear_telegram_token:bool}
 #[derive(Serialize)]
 struct Event{id:i64,timestamp_ms:u64,kind:String,detail:Value}
+fn ensure_execution_mutation_stopped(status:&Status,pending:bool)->Result<()> {
+    if status.requested_run { bail!("Stop the system before changing execution-affecting risk or trading costs"); }
+    if pending { bail!("Wait for broker command reconciliation before changing execution-affecting risk or trading costs"); }
+    Ok(())
+}
 impl Engine{
     fn event(&self,kind:&str,detail:Value)->Result<()>{self.db.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,?2,?3)",params![now_ms(),kind,detail.to_string()])?;Ok(())}
     fn launch_gateway(&mut self)->Result<()>{
@@ -109,7 +114,6 @@ impl Engine{
             let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
             let result=self.execution.route(method,path,body,&self.db,&status,now_ms())?;
             if method=="POST"&&!matches!(path,"/v1/execution/sync"|"/v1/execution/authorize") {self.event("broker_execution_action",json!({"path":path,"result":result}))?;}
-            if path=="/v1/execution/brain"&&result["start"]==true {self.shared.lock().unwrap().status.requested_run=true;}
             let mut s=self.shared.lock().unwrap();s.status.execution_enabled=self.execution.enabled(&s.status);
             return Ok(result);
         }
@@ -119,6 +123,7 @@ impl Engine{
             let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());
             if method=="GET" {return Ok(trading_settings::view(&s.config,&s.status));}
             if method=="POST" {
+                ensure_execution_mutation_stopped(&s.status,self.execution.pending(&self.db)?)?;
                 let c=trading_settings::update(&s.config,&s.status,body)?;
                 atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&c)?)?;
                 self.event("trading_mode_changed",json!({"trading":c.trading,"commission_profiles":c.commission_profiles.len(),"default_commission_per_lot":c.risk.commission_per_lot}))?;
@@ -179,23 +184,33 @@ impl Engine{
             ("POST","/v1/learning/register")=>{let artifact:Value=serde_json::from_slice(body)?;self.learning.register(&mut self.db,artifact,now_ms())},
             ("GET","/v1/decisions")=>research::decision_history(&self.db),
             ("GET","/v1/opportunities/history")=>research::opportunity_history(&self.db),
-            ("POST","/v1/risk")=>{let risk:braintrade_domain::RiskConfig=serde_json::from_slice(body)?;risk.validate().map_err(anyhow::Error::msg)?;let mut s=self.shared.lock().unwrap();let mut updated=s.config.clone();updated.risk=risk;atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&updated)?)?;self.event("risk_settings_changed",json!({"risk":updated.risk,"mode":"shadow"}))?;s.config=updated;Ok(json!({"ok":true}))},
+            ("POST","/v1/risk")=>{
+                let risk:braintrade_domain::RiskConfig=serde_json::from_slice(body)?;risk.validate().map_err(anyhow::Error::msg)?;
+                let pending=self.execution.pending(&self.db)?;
+                let mut s=self.shared.lock().unwrap();
+                ensure_execution_mutation_stopped(&s.status,pending)?;
+                let mut updated=s.config.clone();updated.risk=risk;
+                atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&updated)?)?;
+                self.event("risk_settings_changed",json!({"risk":updated.risk,"scope":"research_and_optional_broker_execution_limits"}))?;
+                s.config=updated;Ok(json!({"ok":true}))
+            },
             ("POST","/v1/export")=>{
                 let name=format!("research-{}-{}",now_ms(),uuid::Uuid::new_v4());let staging=self.dir.join("exports").join(format!(".{name}.tmp"));fs::create_dir_all(&staging)?;
                 for table in["decisions","mode_decisions","paper_events","candles","opportunity_setups"]{let sql=match table{"opportunity_setups"=>"SELECT context,first_seen_ms,payload FROM opportunity_setups ORDER BY first_seen_ms,setup_id","decisions"=>"SELECT context,timestamp_ms,payload FROM decisions ORDER BY id","mode_decisions"=>"SELECT context,timestamp_ms,payload FROM mode_decisions ORDER BY id","paper_events"=>"SELECT context,timestamp_ms,json_object('kind',kind,'detail',json(payload)) FROM paper_events ORDER BY id",_=>"SELECT context,bar_time*1000,json_object('timeframe',timeframe,'candle',json(payload)) FROM candles ORDER BY context,timeframe,bar_time"};let mut stmt=self.db.prepare(sql)?;let mut rows=stmt.query([])?;let mut output=fs::File::create(staging.join(format!("{table}.jsonl")))?;while let Some(row)=rows.next()?{let payload:Value=serde_json::from_str(&row.get::<_,String>(2)?)?;writeln!(output,"{}",json!({"context":row.get::<_,String>(0)?,"timestamp_ms":row.get::<_,u64>(1)?,"payload":payload}))?;}output.sync_all()?;}
                 atomic_write(&staging.join("README.txt"),b"BrainTrade research export. Virtual fills only; UTC timestamps in milliseconds. See Source/docs/RESEARCH.md for limitations.")?;let dest=self.dir.join("exports").join(name);fs::rename(staging,&dest)?;Ok(json!({"path":dest,"note":"Research export: candles, decisions and virtual ledger (JSONL)."}))
             },
             ("POST","/v1/config")=>{
-                if self.execution.pending(&self.db)?{bail!("Wait for broker command reconciliation before reconnecting settings");}self.execution.cancel_entries(&self.db)?;self.shared.lock().unwrap().status.requested_run=false;
                 let request:ConfigRequest=serde_json::from_slice(body)?;request.config.validate().map_err(anyhow::Error::msg)?;
                 if !request.config.mt5_path.is_empty(){let path=Path::new(&request.config.mt5_path);if !path.is_absolute()||!path.is_file()||path.extension().and_then(|v|v.to_str()).map(|v|v.to_ascii_lowercase())!=Some("exe".into()){bail!("MT5 path must point to an existing terminal64.exe file");}}
                 let token=request.telegram_token.trim();if !token.is_empty()&&(token.len()<20||!token.contains(':')||token.chars().any(char::is_whitespace)){bail!("Invalid Telegram bot token format");}if request.clear_telegram_token&&!token.is_empty(){bail!("Cannot save and remove a token together");}
                 let existing=self.shared.lock().unwrap().token.clone();let effective=if request.clear_telegram_token{None}else if !token.is_empty(){Some(token.to_owned())}else{existing};if request.config.telegram_enabled&&effective.is_none(){bail!("Enter a bot token before enabling Telegram");}
+                if self.execution.pending(&self.db)?{bail!("Wait for broker command reconciliation before reconnecting settings");}
+                self.execution.cancel_entries(&self.db)?;self.shared.lock().unwrap().status.requested_run=false;
                 if !token.is_empty(){secrets::write(&self.dir.join("telegram.sealed"),token)?;}atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&request.config)?)?;if request.clear_telegram_token&&self.dir.join("telegram.sealed").exists(){fs::remove_file(self.dir.join("telegram.sealed"))?;}
                 {let mut s=self.shared.lock().unwrap();s.config=request.config;s.token=effective;s.status.gateway_fresh=false;s.status.last_received_ms=None;s.status.telemetry=None;s.status.analysis=Default::default();s.status.paper=Default::default();s.status.message="Settings saved; reconnecting MT5".into();}
                 self.event("settings_changed",json!({"secrets":"redacted"}))?;if self.backtests.loading(){self.backtests.cancel();}self.stop_gateway();self.gateway_retry_ms=0;Ok(json!({"ok":true}))
             },
-            ("POST","/v1/start")=>{if self.backtests.loading(){bail!("جلب التاريخ قيد العمل؛ انتظر أو ألغِ الاختبار قبل تشغيل المحاكاة");}self.event("monitoring_requested",json!({"execution":false}))?;let mut s=self.shared.lock().unwrap();s.status.requested_run=true;s.status.message="System started. Enabled independent brains may send broker orders to the bound account.".into();s.status.refresh(now_ms());Ok(serde_json::to_value(&s.status)?)},
+            ("POST","/v1/start")=>{if self.backtests.loading(){bail!("جلب التاريخ قيد العمل؛ انتظر أو ألغِ الاختبار قبل تشغيل المحاكاة");}self.event("monitoring_requested",json!({"broker_execution_possible":true,"requires_fresh_bound_account":true}))?;let mut s=self.shared.lock().unwrap();s.status.requested_run=true;s.status.message="System started. The coordinator and any SOLO brains may send broker orders only to the fresh bound account.".into();s.status.refresh(now_ms());Ok(serde_json::to_value(&s.status)?)},
             ("POST","/v1/stop")=>{self.execution.cancel_entries(&self.db)?;self.event("monitoring_stopped",json!({"positions_unchanged":true}))?;let mut s=self.shared.lock().unwrap();s.status.requested_run=false;s.status.analysis.action="WAIT".into();s.status.analysis.gates.push("System stopped — new virtual entries disabled".into());s.status.message="New entries stopped. Existing owned positions retain broker SL/TP and timed exits while Core runs.".into();s.status.refresh(now_ms());Ok(serde_json::to_value(&s.status)?)},
             ("POST","/v1/reconnect")=>{self.stop_gateway();self.gateway_retry_ms=0;{let mut s=self.shared.lock().unwrap();s.status.last_received_ms=None;s.status.telemetry=None;s.status.refresh(now_ms());}self.event("reconnect_requested",json!({}))?;Ok(json!({"ok":true}))},
             ("POST","/v1/gateway/snapshot")=>{
@@ -229,4 +244,6 @@ mod tests{
     fn atomic_config_replacement(){let dir=std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());fs::create_dir_all(&dir).unwrap();let p=dir.join("config.json");atomic_write(&p,b"first").unwrap();atomic_write(&p,b"second").unwrap();assert_eq!(fs::read(&p).unwrap(),b"second");fs::remove_dir_all(dir).unwrap();}
     #[test]
     fn sqlite_foreign_keys_are_enforced(){let db=Connection::open_in_memory().unwrap();configure_database(&db).unwrap();let enabled:i64=db.query_row("PRAGMA foreign_keys",[],|row|row.get(0)).unwrap();assert_eq!(enabled,1);db.execute_batch("CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(id INTEGER PRIMARY KEY,parent_id INTEGER NOT NULL REFERENCES parent(id));").unwrap();assert!(db.execute("INSERT INTO child(id,parent_id) VALUES(1,99)",[]).is_err());db.execute("INSERT INTO parent(id) VALUES(99)",[]).unwrap();db.execute("INSERT INTO child(id,parent_id) VALUES(1,99)",[]).unwrap();verify_foreign_key_integrity(&db).unwrap();}
+    #[test]
+    fn execution_affecting_config_requires_stopped_and_reconciled(){let mut status=Status::default();assert!(ensure_execution_mutation_stopped(&status,false).is_ok());status.requested_run=true;assert!(ensure_execution_mutation_stopped(&status,false).is_err());status.requested_run=false;assert!(ensure_execution_mutation_stopped(&status,true).is_err());}
 }

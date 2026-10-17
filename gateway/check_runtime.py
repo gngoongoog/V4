@@ -33,6 +33,8 @@ TIMING_FIELDS = (
     "queue_to_gateway_ms",
     "authorize_ms",
     "journal_ms",
+    "post_journal_authorize_ms",
+    "post_journal_account_ms",
     "other_pre_send_ms",
     "pre_send_ms",
     "queue_to_send_ms",
@@ -58,6 +60,8 @@ CSV_FIELDS = (
     "queue_to_gateway_ms",
     "authorize_ms",
     "journal_ms",
+    "post_journal_authorize_ms",
+    "post_journal_account_ms",
     "other_pre_send_ms",
     "pre_send_ms",
     "queue_to_send_ms",
@@ -188,9 +192,14 @@ def normalize_command(item: dict, identity: dict, source: str, existing: dict | 
     sent = _finite(result.get("send_ms")) is not None and _finite(result.get("queue_to_send_ms")) is not None
     authorize = _finite(result.get("authorize_ms")) or 0.0
     journal = _finite(result.get("journal_ms")) or 0.0
+    post_authorize = _finite(result.get("post_journal_authorize_ms")) or 0.0
+    post_account = _finite(result.get("post_journal_account_ms")) or 0.0
     check = _finite(result.get("check_ms")) or 0.0
     pre_send = _finite(result.get("pre_send_ms"))
-    other_pre = None if pre_send is None else max(0.0, pre_send - authorize - journal - check)
+    other_pre = None if pre_send is None else max(
+        0.0,
+        pre_send - authorize - journal - post_authorize - post_account - check,
+    )
     pricing = result.get("pricing") or {}
     preserved_source = (existing or {}).get("source")
     if preserved_source in ("native", "poll"):
@@ -215,6 +224,8 @@ def normalize_command(item: dict, identity: dict, source: str, existing: dict | 
         "queue_to_gateway_ms": _finite(result.get("queue_to_gateway_ms")),
         "authorize_ms": _finite(result.get("authorize_ms")),
         "journal_ms": _finite(result.get("journal_ms")),
+        "post_journal_authorize_ms": _finite(result.get("post_journal_authorize_ms")),
+        "post_journal_account_ms": _finite(result.get("post_journal_account_ms")),
         "other_pre_send_ms": other_pre,
         "pre_send_ms": pre_send,
         "queue_to_send_ms": _finite(result.get("queue_to_send_ms")),
@@ -274,7 +285,13 @@ def build_report(metadata: dict, samples: dict, minimum_fast_samples: int):
 
     components = {
         field: fast_timing[field]["p95"]
-        for field in ("authorize_ms", "journal_ms", "other_pre_send_ms")
+        for field in (
+            "authorize_ms",
+            "journal_ms",
+            "post_journal_authorize_ms",
+            "post_journal_account_ms",
+            "other_pre_send_ms",
+        )
         if fast_timing[field]["p95"] is not None
     }
     hotspot = max(components, key=components.get) if components else None
@@ -335,7 +352,8 @@ def build_report(metadata: dict, samples: dict, minimum_fast_samples: int):
         "characterization_complete": complete,
         "warnings": warnings,
         "interpretation": [
-            "queue_to_send_ms is BrainTrade-local latency from durable command creation to immediately before MT5 order_send; it is not broker fill latency.",
+            "queue_to_send_ms is BrainTrade-local latency from durable command creation to immediately before MT5 order_send; it includes the post-journal authorization and final account check and is not broker fill latency.",
+            "post_journal_authorize_ms and post_journal_account_ms expose the final STOP/revision/account safety gates immediately before order_send.",
             "send_ms measures the local MT5 order_send call through broker acknowledgement and remains network/broker dependent.",
             "native and poll source labels are operator-controlled capture sessions. Label native only with the OnTick bridge attached and poll only after detaching/stopping it.",
             "This collector performs GET requests only. It cannot enable START, bind an account, or submit an order.",

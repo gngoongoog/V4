@@ -13,6 +13,13 @@ fn number(s: slint::SharedString) -> anyhow::Result<f64> {
     Ok(n)
 }
 
+fn selected_frame(index: i32) -> &'static str {
+    FRAMES
+        .get(index.max(0) as usize)
+        .copied()
+        .unwrap_or(FRAMES[0])
+}
+
 fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
     let settings = &v["settings"];
     let portfolio = &v["portfolio"];
@@ -220,7 +227,7 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
                     let b = BrainConfig {
                         id: id.into(),
                         enabled: action == "enable" || ui.get_exec_enabled(),
-                        timeframe: FRAMES[ui.get_exec_frame().max(0) as usize].into(),
+                        timeframe: selected_frame(ui.get_exec_frame()).into(),
                         lots: number(ui.get_exec_lots())?,
                         stop_atr: number(ui.get_exec_stop())?,
                         reward_risk: number(ui.get_exec_reward())?,

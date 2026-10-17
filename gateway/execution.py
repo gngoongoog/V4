@@ -242,6 +242,35 @@ class BrokerExecutor:
             self.db.commit()
             result['journal_ms']=(time.perf_counter()-journal_start)*1000
             result['request']=request
+
+            # Closing the gap between the durable journal and order_send matters for
+            # both STOP and account-switch semantics.  The first authorization avoids
+            # journaling work that Core already withdrew; this second one is the true
+            # last-moment gate after disk persistence.  If it fails, we know no broker
+            # send occurred and persist an explicit terminal result instead of leaving
+            # an ambiguous journal row.
+            post_authorize_start=time.perf_counter()
+            try:
+                still_authorized=bool(authorize(cmd['id']))
+            except Exception as exc:
+                result['post_journal_authorize_ms']=(time.perf_counter()-post_authorize_start)*1000
+                result.update(state='cancelled',reason='Final Core authorization unavailable after durable journal; order not sent: '+type(exc).__name__)
+                result['total_ms']=(time.perf_counter()-started)*1000
+                return self._save(cmd,result)
+            result['post_journal_authorize_ms']=(time.perf_counter()-post_authorize_start)*1000
+            if not still_authorized:
+                result.update(state='cancelled',reason='Core withdrew authorization after durable journal; order not sent')
+                result['total_ms']=(time.perf_counter()-started)*1000
+                return self._save(cmd,result)
+
+            post_account_start=time.perf_counter()
+            final_account=mt5.account_info()
+            result['post_journal_account_ms']=(time.perf_counter()-post_account_start)*1000
+            if account_identity(final_account)!=expected(cmd) or getattr(final_account,'trade_mode',None)!=target_mode or clock_ms()>cmd['expires_ms']:
+                result.update(state='cancelled',reason='Account changed or intent expired after durable journal; order not sent')
+                result['total_ms']=(time.perf_counter()-started)*1000
+                return self._save(cmd,result)
+
             result['pre_send_ms']=(time.perf_counter()-started)*1000
             result['queue_to_send_ms']=max(0,clock_ms()-cmd['created_ms'])
             result['queue_to_send_target_met']=result['queue_to_send_ms']<=FAST_QUEUE_TARGET_MS
