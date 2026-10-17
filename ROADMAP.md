@@ -8,7 +8,7 @@ The promoted 0.6.0 line remains the release baseline. Its archived validation ev
 
 ## Current 0.7.0 Development Preview
 
-PR #50 (`Add one-click MT5 Demo acceptance operator`) is merged into `development` as `ae5cc5c5bf216fc8d2453b204dbc45abe2e89902`. Exact tested head `3ff9425e2795102c8d84ea991260d985f2d4baba` passed Research run `39050497842` and Windows/Linux run `39050497836`; both tested head and merge use tree `db356f1eb5ae413543886f7a4f1427c883fad0da`.
+PR #53 (`Add privacy-safe Demo acceptance export bundle`) is merged into `development` as `b20af1f0a3ae37d30e688e92615972e5c03e5adc`. Exact tested head `31c10767e7c284160a74c1e0b001c0fde825780d` passed Research run `39058307544` and Windows/Linux run `39058307570`; both tested head and merge use tree `cb4cfc79358305d91caa4826ab2d47414fbd745b`.
 
 Implemented 0.7 engineering includes:
 
@@ -24,19 +24,22 @@ Implemented 0.7 engineering includes:
 - Exact closed Demo broker-outcome adaptive learning and Intelligence V3 member weighting.
 - Portable Brain Snapshot support.
 - Read-only Windows/Demo execution acceptance collector with native-vs-poll P50/P95/P99 timing characterization.
-- One-click packaged acceptance operator (`Run-Demo-Acceptance.cmd` + `Tools\Run-Demo-Acceptance.ps1`) with runtime preflight, acceptance summary and Native-vs-Poll P95 comparison.
-- Windows PowerShell parser validation of the acceptance operator source and packaged copy.
+- Packaged acceptance operator with one-click CMD, Windows Demo Acceptance Center GUI, advanced PowerShell CLI and Arabic instructions.
+- GUI-controlled Native/Poll/Auto capture sessions with result/sample/latency cards and local hotspot/warning display.
+- Privacy-safe acceptance share bundle export using an explicit allowlist and excluding raw MT5 login, IPC key, broker databases/journals, Telegram credentials and GUI logs.
+- Windows PowerShell parser validation of the acceptance source and packaged copies.
 
 The Sniper local engineering target remains <=20 ms from BrainTrade queue to the `order_send` handoff on an appropriate target machine. This is not a guaranteed broker acknowledgement, fill latency, network latency, profitability or HFT claim.
 
 ## Immediate engineering and acceptance work
 
 1. **Run native Windows + real Demo MT5 acceptance.** Use packaged `Run-Demo-Acceptance.cmd`; preserve separate Native OnTick and fallback-poll samples.
-2. **Measure before optimizing execution again.** If `queue_to_send_ms` P95/P99 misses the local target, inspect `core_pulse_ms`, `authorize_ms`, `journal_ms`, `other_pre_send_ms`, `pre_send_ms`, `send_ms` and `total_ms` before changing architecture.
-3. **Evaluate Trend Pullback prospectively.** Track real Demo closed outcomes, spread/fees/slippage and regime/session behavior before changing thresholds or learned influence.
-4. **Accumulate genuine OOS evidence.** Keep correlation, ablation, news replay and imported ML observational until enough prospective evidence exists.
-5. **Private Telegram acceptance.** Test only with credentials stored on the target machine.
-6. **Repository policy.** Enable required checks/branch protection for `main` and preferably `development` if administration access becomes available.
+2. **Export the privacy-safe evidence bundle.** Use the Acceptance Center export button after capture so measured evidence can be reviewed without sharing secrets or broker databases.
+3. **Measure before optimizing execution again.** If `queue_to_send_ms` P95/P99 misses the local target, inspect `core_pulse_ms`, `authorize_ms`, `journal_ms`, `other_pre_send_ms`, `pre_send_ms`, `send_ms` and `total_ms` before changing architecture.
+4. **Evaluate Trend Pullback prospectively.** Track real Demo closed outcomes, spread/fees/slippage and regime/session behavior before changing thresholds or learned influence.
+5. **Accumulate genuine OOS evidence.** Keep correlation, ablation, news replay and imported ML observational until enough prospective evidence exists.
+6. **Private Telegram acceptance.** Test only with credentials stored on the target machine.
+7. **Repository policy.** Enable required checks/branch protection for `main` and preferably `development` if administration access becomes available.
 
 ## Research and execution boundaries
 
@@ -46,6 +49,7 @@ The Sniper local engineering target remains <=20 ms from BrainTrade queue to the
 - Imported ML remains audit/research-only; there is no automatic Champion promotion or execution route.
 - Official-news replay is observational and does not infer trade direction from headline wording.
 - True order-flow or volume-profile claims require feeds that actually provide the necessary fields.
+- Acceptance export remains diagnostic and allowlist-based; runtime secrets/databases are not part of the share bundle.
 
 ## Explicitly not complete
 

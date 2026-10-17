@@ -4,9 +4,9 @@ GitHub `gngoongoog/V4` is canonical. Continue from `development`; use `main` onl
 
 ## Current verified checkpoint
 
-PR #50 (`Add one-click MT5 Demo acceptance operator`) is merged into `development` as `ae5cc5c5bf216fc8d2453b204dbc45abe2e89902`. Its exact tested head `3ff9425e2795102c8d84ea991260d985f2d4baba` passed Research run `39050497842` and Windows/Linux run `39050497836`. The tested head and squash merge share tree `db356f1eb5ae413543886f7a4f1427c883fad0da`.
+PR #53 (`Add privacy-safe Demo acceptance export bundle`) is merged into `development` as `b20af1f0a3ae37d30e688e92615972e5c03e5adc`. Its exact tested head `31c10767e7c284160a74c1e0b001c0fde825780d` passed Research run `39058307544` and Windows/Linux run `39058307570`. The tested head and merge share tree `cb4cfc79358305d91caa4826ab2d47414fbd745b`.
 
-Current verified scale is 87 domain Rust tests, 71 runtime Rust tests, one intentionally ignored public-network official-news test, and 116 Python tests. Core, backup/restore, Studio, execution integration, offline reports, native selector compilation/rendering, Linux validation and Windows portable packaging passed.
+Current verified scale is 87 domain Rust tests, 71 runtime Rust tests, one intentionally ignored public-network official-news test, and 118 Python tests. Core, backup/restore, Studio, execution integration, offline reports, native selector compilation/rendering, Linux validation and Windows portable packaging passed.
 
 Promoted 0.6.0 evidence remains immutable and separate. This 0.7 checkpoint is a Development Preview, not a promoted production release.
 
@@ -35,13 +35,16 @@ Correlation, ablation, news replay and imported ML do not directly authorize bro
 The packaged Windows preview now contains:
 
 - `Run-Demo-Acceptance.cmd` at the package root.
-- `Tools\Run-Demo-Acceptance.ps1` for interactive or scripted operation.
+- `Tools\Run-Demo-Acceptance-GUI.ps1` as the one-click Windows Demo Acceptance Center.
+- `Tools\Run-Demo-Acceptance.ps1` for scripted/advanced operation.
 - `DEMO_ACCEPTANCE_AR.md` at the package root.
 - `runtime\gateway\check_runtime.py` as the underlying read-only collector.
 
-The operator performs an embedded Python/NumPy/MetaTrader5 import preflight, launches the read-only collector, summarizes `queue_to_send` P95/P99, `send_ms` P95, the largest local pre-send hotspot, and Native-vs-Poll sample counts/P95. It never enables START, binds an account, changes settings or submits an order.
+The Acceptance Center can run controlled Native, Poll or Auto capture sessions and display acceptance result, Sniper sample count, `queue_to_send` P95/P99, `send_ms` P95, Native/Poll counts/P95 and the largest local pre-send hotspot. It never enables START, binds an account, changes execution settings or submits an order.
 
-Windows CI parses the PowerShell source before packaging and parses the packaged copy again after staging. This proves syntax/package wiring only; it does **not** perform real MT5 Demo acceptance.
+PR #53 adds a privacy-safe `تصدير حزمة مشاركة` path for target-machine evidence. The exported ZIP is allowlisted to acceptance JSON/CSV/state/runtime-import evidence plus a reduced summary/README. It intentionally excludes raw MT5 login, `ipc.key`, broker journals/databases, Telegram credentials and GUI stdout/stderr logs.
+
+Windows CI parses both acceptance PowerShell files before packaging and parses the packaged copies again after staging. This proves syntax/package wiring only; it does **not** perform real MT5 Demo acceptance.
 
 ## Sniper latency boundary
 
@@ -51,31 +54,31 @@ Do not remove account identity, quote freshness, ownership, authorization, durab
 
 ## Exact CI evidence
 
-Research run `39050497842`: SUCCESS.
+Research run `39058307544`: SUCCESS on tested head `31c10767e7c284160a74c1e0b001c0fde825780d`.
 
-- Artifact `12106853812` — `synthetic-research-validation`
-- Size: `4308194` bytes
-- SHA-256: `fcb751f647d692f9da59c38f8b10eaa7233ece74f4c3901dcc370c51c5a0ebac`
+- Artifact `12110491477` — `synthetic-research-validation`
+- Size: `4309247` bytes
+- SHA-256: `5a7b7c2dba278110f0c536aaa6cc162d3a509ed71da92137828dd0c10aaff5e9`
 
-Windows/Linux run `39050497836`: SUCCESS.
+Windows/Linux run `39058307570`: SUCCESS on the same tested head.
 
-- Artifact `12107094155` — `BrainTrade-Windows-x64-Preview`
-  - Size: `34549437` bytes
-  - SHA-256: `84f79393926209fc92d9eb3105bcae7ee5acc8ccd30ac41d97e0f37ff74fcf6d`
-- Artifact `12106889676` — `windows-native-validation`
+- Artifact `12110404218` — `BrainTrade-Windows-x64-Preview`
+  - Size: `34560194` bytes
+  - SHA-256: `e7d90d7744264e30c1febf0fc835ee78a849901a303177f73f3261c45e6b0c27`
+- Artifact `12111210477` — `windows-native-validation`
   - Size: `1704761` bytes
-  - SHA-256: `25b2be406bf64e7a8c5b4a05e8129d2cf5a854f3282a28bc51d7f18dcf151180`
+  - SHA-256: `05fa8cdbb70c35e6f04c084d0b28a8b034c8bb665832f21fc235bdb523aab99d`
 
 `docs/development-validation.json` is the machine-readable 0.7 development evidence record. Promoted 0.6 evidence in `docs/validation.json`, `docs/validation-v0.6.0.json` and `docs/RELEASE_STATUS.md` remains immutable historical evidence.
 
 ## Target-machine work still pending
 
-1. On the intended Windows PC, open the packaged `BrainTrade.exe`, connect the intended MT5 **Demo** account and follow `DEMO_ACCEPTANCE_AR.md` / `docs/ACCEPTANCE.md`.
+1. On the intended Windows PC, open the packaged `BrainTrade.exe`, connect the intended MT5 **Demo** account and open `Run-Demo-Acceptance.cmd`.
 2. Collect a controlled Native session with `BrainTradeSniperBridge` attached and a separate Poll session with it detached/stopped.
-3. Preserve the generated acceptance JSON/CSV and evaluate real retcodes, fees, rejections, partial fills and P50/P95/P99 timing distributions.
-4. If local latency misses the target, optimize only the measured dominant component.
+3. Use `تصدير حزمة مشاركة` after capture so the JSON/CSV/state and reduced summary can be inspected without sending account secrets or broker databases.
+4. Evaluate real retcodes, fees, rejections, partial fills and P50/P95/P99 timing distributions. If local latency misses the target, optimize only the measured dominant component.
 5. Accumulate genuine prospective/OOS evidence for Trend Pullback and the coordinator before changing influence or thresholds.
 6. Test private Telegram delivery with credentials stored only on the target machine.
 7. Enable required branch checks when repository administration access is available.
 
-Startup/restart remains STOPPED. CI does not establish profitability, broker fill quality, guaranteed latency or native MT5 acceptance. The Demo acceptance collector remains read-only and must not manufacture trades.
+Startup/restart remains STOPPED. CI does not establish profitability, broker fill quality, guaranteed latency or native MT5 acceptance. The Demo acceptance collector and Acceptance Center remain read-only and must not manufacture trades.
