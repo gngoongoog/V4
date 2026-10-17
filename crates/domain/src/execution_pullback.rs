@@ -186,7 +186,7 @@ mod tests {
     #[test]
     fn bullish_pullback_waits_for_completed_confirmation_and_structural_stop() {
         let mut rows = trend(true);
-        let fast_zone = rows.last().unwrap().close - 0.30;
+        let fast_zone = rows.last().unwrap().close - 1.20;
         for j in 0..3 {
             let base = fast_zone - j as f64 * 0.10;
             rows.push(Candle { time: 1_700_000_000 + (96 + j) * 60, open: base + 0.12, high: base + 0.20, low: base - 0.28, close: base, tick_volume: 100 });
@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn bearish_pullback_is_symmetric_and_blocks_chasing() {
         let mut rows = trend(false);
-        let fast_zone = rows.last().unwrap().close + 0.30;
+        let fast_zone = rows.last().unwrap().close + 1.20;
         for j in 0..3 {
             let base = fast_zone + j as f64 * 0.10;
             rows.push(Candle { time: 1_700_000_000 + (96 + j) * 60, open: base - 0.12, high: base + 0.28, low: base - 0.20, close: base, tick_volume: 100 });
