@@ -1,6 +1,8 @@
+import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).parents[1]
@@ -65,6 +67,21 @@ class NativeSniperLifecycleTests(unittest.TestCase):
         worker.alive = False
         server._thread = worker
         self.assertFalse(server.running)
+
+    @unittest.skipUnless(os.name == "nt", "Windows named-pipe contract")
+    def test_real_windows_blocking_connect_stops_and_same_name_rebinds(self):
+        pipe_name = rf"\\.\pipe\BrainTradeSniperTest-{os.getpid()}-{id(self)}"
+        first = native._WindowsPipeServer("token-a", native.NativeTickMailbox(), pipe_name)
+        first.start()
+        self.assertTrue(first.running)
+        started = time.monotonic()
+        self.assertTrue(first.stop())
+        self.assertLess(time.monotonic() - started, 1.5)
+
+        second = native._WindowsPipeServer("token-b", native.NativeTickMailbox(), pipe_name)
+        second.start()
+        self.assertTrue(second.running)
+        self.assertTrue(second.stop())
 
 
 if __name__ == "__main__":
