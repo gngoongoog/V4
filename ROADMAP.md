@@ -4,36 +4,36 @@ GitHub `gngoongoog/V4` is canonical. Read `BUILD_HANDOFF.md`, `PROJECT_STATE.md`
 
 ## Promoted 0.6.0 checkpoint
 
-The promoted 0.6.0 line remains the release baseline. Its archived validation evidence stays immutable. It contains bound-account execution, 14 durable execution identities, coordinator/advisor/SOLO/RETURNING membership, four trading modes, adaptive weighting, backup/restore and the native dashboard. Startup/restart is STOPPED. CI is simulated-broker validation; native MT5 demo acceptance remains a separate target-machine gate.
+The promoted 0.6.0 line remains the release baseline. Its archived validation evidence stays immutable. Startup/restart is STOPPED. CI is simulated-broker validation; native MT5 Demo acceptance remains a separate target-machine gate.
 
 ## Current 0.7.0 Development Preview
 
-PR #48 (`Add causal Trend Pullback execution brain`) is merged into `development` as `09c13460cee0a3fe42b4805ce1545529963783c7`. Exact PR head `9c08109e6414132c0ddd07588bb55d3550d759be` passed Research run `39045218522` and Windows/Linux run `39045218508`; both the tested head and merged commit use tree `7d952015f07c6022455500c12f321409cdc556c0`.
+PR #50 (`Add one-click MT5 Demo acceptance operator`) is merged into `development` as `ae5cc5c5bf216fc8d2453b204dbc45abe2e89902`. Exact tested head `3ff9425e2795102c8d84ea991260d985f2d4baba` passed Research run `39050497842` and Windows/Linux run `39050497836`; both tested head and merge use tree `db356f1eb5ae413543886f7a4f1427c883fad0da`.
 
 Implemented 0.7 engineering includes:
 
 - Portfolio Exposure v1 with durable persistence and stopped-only editing.
 - Sniper Fast Lane plus execution-only Fast Pulse.
-- Native Sniper MT5 `OnTick` + `CopyTicks(..., COPY_TICKS_ALL)` bridge with authenticated local transport, quote-order recovery and fallback polling.
+- Native Sniper MT5 `OnTick` + `CopyTicks(..., COPY_TICKS_ALL)` bridge with authenticated local transport and fallback polling.
 - Account-scoped commission profiles with Round-trip or Per-side basis.
 - Configurable 1–3600 second Sniper maximum hold, frozen at entry.
 - Simplified five-section native Control Center.
-- Sixteen merged execution identities through Trend Pullback, with append-only broker magic ownership.
+- Sixteen merged execution identities through Trend Pullback with append-only broker magic ownership.
 - Correlation/exposure research, chronological holdout/rolling OOS evaluation and feature-group ablation, all research-only.
-- Read-only Windows/Demo execution acceptance collection with native-vs-poll P50/P95/P99 timing characterization.
-- Causal official-news historical replay using append-only first-observed timestamps and no execution route.
-- Exact closed Demo broker-outcome adaptive learning using booked profit, commission, swap and fee.
+- Causal official-news historical replay with no execution route.
+- Exact closed Demo broker-outcome adaptive learning and Intelligence V3 member weighting.
 - Portable Brain Snapshot support.
-- Intelligence V3 member weighting with reward/confidence, regime/session context and execution-history quality evidence.
-- Trend Pullback with magic `410615`, preserving `generated=410613` and `liquidity=410614`. It uses completed bars only: EMA20/EMA50 trend separation and slope, controlled pullback toward EMA20, EMA50 structure preservation, confirmation quality, anti-chasing distance and structural stop geometry.
+- Read-only Windows/Demo execution acceptance collector with native-vs-poll P50/P95/P99 timing characterization.
+- One-click packaged acceptance operator (`Run-Demo-Acceptance.cmd` + `Tools\Run-Demo-Acceptance.ps1`) with runtime preflight, acceptance summary and Native-vs-Poll P95 comparison.
+- Windows PowerShell parser validation of the acceptance operator source and packaged copy.
 
-The Sniper local engineering target remains <=20 ms from BrainTrade queue to the `order_send` handoff on an appropriate target machine. This is not a guaranteed broker acknowledgement, fill-latency, network-latency, profitability or HFT claim.
+The Sniper local engineering target remains <=20 ms from BrainTrade queue to the `order_send` handoff on an appropriate target machine. This is not a guaranteed broker acknowledgement, fill latency, network latency, profitability or HFT claim.
 
 ## Immediate engineering and acceptance work
 
-1. **Run native Windows + real Demo MT5 acceptance.** Follow `docs/DEMO_ACCEPTANCE_AR.md` and `docs/ACCEPTANCE.md`; preserve separate native OnTick and fallback-poll samples.
+1. **Run native Windows + real Demo MT5 acceptance.** Use packaged `Run-Demo-Acceptance.cmd`; preserve separate Native OnTick and fallback-poll samples.
 2. **Measure before optimizing execution again.** If `queue_to_send_ms` P95/P99 misses the local target, inspect `core_pulse_ms`, `authorize_ms`, `journal_ms`, `other_pre_send_ms`, `pre_send_ms`, `send_ms` and `total_ms` before changing architecture.
-3. **Evaluate Trend Pullback prospectively.** Track real Demo closed outcomes, spread/fees/slippage and regime/session behavior before increasing learned influence or changing thresholds.
+3. **Evaluate Trend Pullback prospectively.** Track real Demo closed outcomes, spread/fees/slippage and regime/session behavior before changing thresholds or learned influence.
 4. **Accumulate genuine OOS evidence.** Keep correlation, ablation, news replay and imported ML observational until enough prospective evidence exists.
 5. **Private Telegram acceptance.** Test only with credentials stored on the target machine.
 6. **Repository policy.** Enable required checks/branch protection for `main` and preferably `development` if administration access becomes available.
