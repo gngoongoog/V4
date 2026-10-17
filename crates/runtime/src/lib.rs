@@ -1,5 +1,6 @@
 mod backup;
 mod execution;
+mod shadow_exit;
 mod coordinator_learning;
 mod studio;
 mod backtest;

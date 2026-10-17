@@ -296,6 +296,7 @@ pub struct Service {
 impl Service {
     pub fn new(db: &Connection) -> Result<Self> {
         let mut inner = legacy::Service::new(db)?;
+        crate::shadow_exit::init(db)?;
         // `system` is the coordinated main brain. It is controlled by global START/STOP,
         // not by the per-brain SOLO switch. Keep it enabled in memory even when an older
         // 0.6 checkpoint persisted it as false.
@@ -391,6 +392,9 @@ impl Service {
         // forced on, it represents coordinated execution; every other `enabled` flag means SOLO.
         self.inner
             .observe(db, telemetry, config, run, frames, now)?;
+        // Research-only adaptive-exit challenger runs only on the full reconciled
+        // snapshot path. It never runs on the 5 ms Sniper pulse and cannot queue orders.
+        crate::shadow_exit::observe(db, telemetry, config, &available, now)?;
         // Apply one global entry budget after all brains have proposed their queued opens and
         // before the gateway can retrieve them. Exits and reconciliation states are untouched.
         let current = enforce_portfolio(db, telemetry, config, &self.portfolio)?;
@@ -443,8 +447,8 @@ impl Service {
                 }
             }
         }
-        value["execution_model"] = json!("adaptive-member-coordinator-v1");
-        value["note"] = json!("العقل الرئيسي يعمل مع START. العقول الثانوية تشارك كمستشارين افتراضياً؛ تفعيل SOLO يفصل العقل المختار فقط، وإطفاؤه يعيده بعد تسوية صفقة SOLO المفتوحة. التعلم يحدّث وزن العضو بعد 12 شمعة لاحقة؛ أول 20 عينة تستخدم وزناً محايداً. START/STOP منفصلان عن زر العضوية.");
+        value["execution_model"] = json!("braintrade-intelligence-v3");
+        value["note"] = json!("العقل الرئيسي Intelligence V3 يعمل مع START. العقول الثانوية مستشارون افتراضياً؛ SOLO يفصل العقل المختار فقط. Broker evidence الحقيقي مفضل، والـforward/counterfactual سببي للبحث. Shadow Adaptive Exit بحثي فقط ولا يرسل أوامر. START/STOP منفصلان عن العضوية.");
         Ok(value)
     }
 
@@ -539,6 +543,10 @@ impl Service {
             return Ok(json!({"ok":true,"portfolio":self.portfolio_state}));
         }
 
+        if method == "GET" && path == "/v1/execution/shadow-exit" {
+            return crate::shadow_exit::summary(db, status.telemetry.as_ref());
+        }
+
         // A brain role change must never arm global START implicitly. START/STOP is a
         // separate master control. The `enabled` bit on a non-system brain means SOLO.
         if method == "POST" && path == "/v1/execution/brain" {
@@ -571,6 +579,7 @@ impl Service {
         if method == "GET" && path == "/v1/execution" {
             let mut value = Self::enrich_roles(value, db, status)?;
             value["portfolio"] = self.portfolio_state.clone();
+            value["shadow_exit"] = crate::shadow_exit::summary(db, status.telemetry.as_ref())?;
             Ok(value)
         } else {
             Ok(value)
