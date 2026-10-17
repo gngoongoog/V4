@@ -12,6 +12,7 @@ use std::{
 pub const MAX_BARS: usize = 60_000;
 pub const DAY: u64 = 86_400;
 mod kte;
+mod explore;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Strategy {
@@ -20,6 +21,7 @@ pub enum Strategy {
     CesV1,
     KteV1,
     MetaV2,
+    ExploreV1,
 }
 impl Strategy {
     pub fn algorithm(self) -> &'static str {
@@ -28,6 +30,7 @@ impl Strategy {
             Self::CesV1 => "ces-v1 / M1-OHLC-conservative-v1",
             Self::MetaV2 => "meta-v2-candidate-v1 / M1-OHLC-conservative-v1",
             Self::KteV1 => "kte-v1 / M1-partials-conservative-v1",
+            Self::ExploreV1 => "explore-v1 / online-bandit-research-only-v1",
         }
     }
 }
@@ -247,6 +250,8 @@ pub struct Report {
     pub warnings: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decisions: Vec<CandidateDecision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exploration: Option<explore::Audit>,
 }
 impl Report {
     pub fn summary(&self) -> String {
@@ -490,6 +495,9 @@ pub fn run(
     }
     if options.strategy == Strategy::KteV1 {
         return kte::run(history, options, cancel, progress);
+    }
+    if options.strategy == Strategy::ExploreV1 {
+        return explore::run(history, options, cancel, progress);
     }
     let spec = &history.contract;
     let risk = &options.risk;
@@ -857,6 +865,7 @@ fn finish(history: &History, options: &Options, ledger: Ledger, equity: Vec<Equi
         equity,
         warnings,
         decisions: vec![],
+        exploration: None,
     })
 }
 
