@@ -81,6 +81,19 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
         );
     }
 
+    let adaptive = &v["adaptive_learning"];
+    let adaptive_line = if config["id"] == "adaptive" {
+        format!(
+            "\n\nAdaptive Learner V1 — عينات التدريب الافتراضي المغلقة {} | حالة {} | سياسة {}\nTrend score {:.3} ({} عينة) | Reversion score {:.3} ({} عينة)\nالنتائج تقديرية بعد تكاليف التداول؛ ليست صفقات MT5 حقيقية.",
+            adaptive["total_closed_training_samples"].as_u64().unwrap_or(0),
+            adaptive["regime"].as_str().unwrap_or("unknown"),
+            adaptive["policy"].as_str().unwrap_or("—"),
+            adaptive["policy_scores"]["trend"].as_f64().unwrap_or(0.),
+            adaptive["policy_samples"]["trend"].as_u64().unwrap_or(0),
+            adaptive["policy_scores"]["reversion"].as_f64().unwrap_or(0.),
+            adaptive["policy_samples"]["reversion"].as_u64().unwrap_or(0),
+        )
+    } else { String::new() };
     let s = &b["latest"];
     let a = &s["signal"];
     let gates = s["gates"]
@@ -109,7 +122,7 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
     } else {
         String::new()
     };
-    ui.set_exec_detail(format!("{} | Magic {}\n{} | اتجاه {} | جاهز للإرسال: {}\n{}\nآخر حساب للعقل: {} ميكروثانية (ليس زمن الوسيط)\n{}{}",b["name"].as_str().unwrap_or(""),b["magic"],a["reason"].as_str().unwrap_or("بانتظار تحديث MT5"),a["side"],s["ready"],gates,s["decision_us"],if config["use_risk_limits"]==true{"الحدود الاختيارية مفعّلة"}else{"الحدود الاختيارية معطلة؛ اللوت ثابت كما اخترته"},intelligence_line).into());
+    ui.set_exec_detail(format!("{} | Magic {}\n{} | اتجاه {} | جاهز للإرسال: {}\n{}\nآخر حساب للعقل: {} ميكروثانية (ليس زمن الوسيط)\n{}{}",b["name"].as_str().unwrap_or(""),b["magic"],a["reason"].as_str().unwrap_or("بانتظار تحديث MT5"),a["side"],s["ready"],gates,s["decision_us"],if config["use_risk_limits"]==true{"الحدود الاختيارية مفعّلة"}else{"الحدود الاختيارية معطلة؛ اللوت ثابت كما اخترته"},format!("{intelligence_line}{adaptive_line}")).into());
 
     let mut out = String::new();
     let _ = writeln!(
