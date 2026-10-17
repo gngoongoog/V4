@@ -25,12 +25,16 @@ class DemoRealTrainingContractTests(unittest.TestCase):
         self.assertIn("use_risk_limits: false", brain)
         self.assertIn("if b.use_risk_limits", self.text("crates/runtime/src/execution_legacy.rs"))
 
-    def test_coordinator_is_not_shadow_locked(self):
+    def test_coordinator_is_not_shadow_locked_and_start_remains_explicit(self):
         wrapper = self.text("crates/runtime/src/execution.rs")
         core = self.text("crates/runtime/src/lib.rs")
         self.assertIn("system.enabled = true", wrapper)
         self.assertIn("status.requested_run && status.gateway_fresh && self.account_matches(status)", wrapper)
-        self.assertIn("Enabled independent brains may send broker orders to the bound account", core)
+        self.assertIn("The coordinator and any SOLO brains may send broker orders only to the fresh bound account", core)
+        self.assertIn('"broker_execution_possible":true', core)
+        self.assertIn('"requires_fresh_bound_account":true', core)
+        self.assertNotIn('result["start"]==true', core)
+        self.assertNotIn('json!({"execution":false})', core)
 
     def test_real_demo_learning_uses_exact_booked_broker_costs(self):
         source = self.text("crates/runtime/src/coordinator_learning.rs")
