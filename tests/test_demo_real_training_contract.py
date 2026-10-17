@@ -34,13 +34,14 @@ class DemoRealTrainingContractTests(unittest.TestCase):
 
     def test_real_demo_learning_uses_exact_booked_broker_costs(self):
         source = self.text("crates/runtime/src/coordinator_learning.rs")
+        compact = "".join(source.split())
         self.assertIn("coordinator_broker_samples", source)
         self.assertIn('"mt5_demo_broker"', source)
         for field in ('d["profit"]', 'd["commission"]', 'd["swap"]', 'd["fee"]'):
             self.assertIn(field, source)
-        self.assertIn("t.demo||t.account_trade_mode!=Some(0)", source)
-        self.assertIn("member[\"ready\"]!=true", source)
-        self.assertIn("member[\"side\"].as_i64()!=Some(executed_side)", source)
+        self.assertIn("!t.demo||t.account_trade_mode!=Some(0)", compact)
+        self.assertIn('member["ready"]!=true', compact)
+        self.assertIn('member["side"].as_i64()!=Some(executed_side)', compact)
 
 
 if __name__ == "__main__":
