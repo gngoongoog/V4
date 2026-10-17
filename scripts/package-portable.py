@@ -29,6 +29,7 @@ SYSTEM_DLLS = set("""advapi32 avrt bcrypt bcryptprimitives cfgmgr32 comctl32 com
 GATEWAY_FILES = ("mt5_gateway.py", "studio_feed.py", "execution.py", "check_runtime.py", "sniper_native.py")
 NATIVE_EA = "BrainTradeSniperBridge.mq5"
 OPERATOR_POWERSHELL = "Run-Demo-Acceptance.ps1"
+OPERATOR_GUI = "Run-Demo-Acceptance-GUI.ps1"
 OPERATOR_CMD = "Run-Demo-Acceptance.cmd"
 OPERATOR_DOC = "DEMO_ACCEPTANCE_AR.md"
 
@@ -159,6 +160,7 @@ def copy_operator_assets(output):
     tools = output / "Tools"
     tools.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "scripts" / OPERATOR_POWERSHELL, tools / OPERATOR_POWERSHELL)
+    shutil.copy2(ROOT / "scripts" / OPERATOR_GUI, tools / OPERATOR_GUI)
     shutil.copy2(ROOT / "scripts" / OPERATOR_CMD, output / OPERATOR_CMD)
     shutil.copy2(ROOT / "docs" / OPERATOR_DOC, output / OPERATOR_DOC)
 
@@ -194,7 +196,7 @@ def main():
     source_copy(output / "Source")
     count = collect_licenses(output / "licenses/rust", args.cargo)
     reports = check_pe_tree(output, args.dll_dir)
-    (output / "package-validation.json").write_text(json.dumps({"version": VERSION, "architecture": "Windows x64", "source_commit": source_commit(), "rust_dependencies": count, "assets": ASSETS, "native_sniper_bridge": "MT5/Experts/BrainTradeSniperBridge.mq5 (source; target-machine MetaEditor compile/attach still required)", "demo_acceptance_launcher": "Run-Demo-Acceptance.cmd -> Tools/Run-Demo-Acceptance.ps1 (read-only collector wrapper)", "pe_imports": reports, "validation": "Portable package built from the checked source tree with pinned embedded assets and PE dependency validation. Native MT5 acceptance remains a separate target-machine step, now exposed through the packaged read-only acceptance launcher."}, indent=2), encoding="utf-8")
+    (output / "package-validation.json").write_text(json.dumps({"version": VERSION, "architecture": "Windows x64", "source_commit": source_commit(), "rust_dependencies": count, "assets": ASSETS, "native_sniper_bridge": "MT5/Experts/BrainTradeSniperBridge.mq5 (source; target-machine MetaEditor compile/attach still required)", "demo_acceptance_launcher": "Run-Demo-Acceptance.cmd -> Tools/Run-Demo-Acceptance-GUI.ps1 by default; CLI arguments route to Tools/Run-Demo-Acceptance.ps1. Both are read-only collector frontends.", "pe_imports": reports, "validation": "Portable package built from the checked source tree with pinned embedded assets and PE dependency validation. Native MT5 acceptance remains a separate target-machine step, exposed through the packaged read-only GUI/CLI acceptance launchers."}, indent=2), encoding="utf-8")
     manifest = build_manifest(output)
     (output / "SHA256SUMS.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     archive = ROOT / "release" / f"BrainTrade-Windows-x64-v{VERSION}-Preview.zip"
