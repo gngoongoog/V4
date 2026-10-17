@@ -43,3 +43,10 @@ Backup schema 12 includes configurations, broker intents/deals/observations, ada
 `python scripts/check_execution.py` runs a real Core against a simulated MT5 object in isolated temporary storage. `scripts/check_backup_restore.py` additionally verifies that portfolio limits survive a staged restore/restart. `--exe BrainTrade.exe` checks the packaged Windows Core, including DPAPI IPC. These are not native broker acceptance. Latest recorded release CI evidence belongs in `docs/validation.json`; feature-branch CI must remain separate until a new release checkpoint is recorded.
 
 Official transport references: https://www.mql5.com/en/docs/python_metatrader5/mt5ordersend_py and https://www.mql5.com/en/docs/python_metatrader5/mt5ordercheck_py.
+
+
+### Adaptive Learner V1 (new independent identity)
+
+The adaptive member is appended at `magic=410616` without altering prior ownership. It is advisor by default and uses existing global START and explicit per-member SOLO controls. It trains only on broker-account-scoped, reconciled completed M1 history, saving chronological virtual closed-trade outcomes to `adaptive_brain_samples`. A 5-bar hold and conservative stop-first OHLC execution proxy includes available recorded spread, commission and configured slippage. Regime-specific EMA net-R scores for trend/reversion policies are shrunk when sample size is small; every fifth decision explores the alternative. This is a **persistent contextual online learner**, not a neural network or evidence that its choice is profitable. It cannot retroactively learn from a bar before the virtual outcome closes. Runtime Fast Pulse reuses the cached signal but never retrains from unverified tick data.
+
+Virtual training is **not** the same as MT5 broker-account-deal learning. Real Demo/Live sends remain governed by the exact broker account, contract, lot-step, available margin, journal, ownership and Core authorization. A $100 simulated account with research-only sub-minimum lot sizes must not be mistaken for a $100 account that can necessarily trade gold at a given broker.
