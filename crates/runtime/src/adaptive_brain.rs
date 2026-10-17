@@ -38,6 +38,7 @@ struct State {
     broker: [Policy; 2],
     broker_regimes: BTreeMap<String, [Policy; 2]>,
     broker_samples: u64,
+    recent: Vec<Value>,
 }
 #[derive(Default)]
 pub struct Learner {
@@ -181,6 +182,8 @@ impl Learner {
             update(&mut result.regimes.entry(regime).or_default()[policy],reward,net);
             result.next_experiment += 1;
             result.last_exit = result.last_exit.max(ex);
+            result.recent.push(record);
+            if result.recent.len()>10 {result.recent.remove(0);}
         }
         for evidence in broker::load(db,ctx)? {
             if evidence.policy<2 {
@@ -245,6 +248,8 @@ impl Learner {
                 "INSERT OR IGNORE INTO adaptive_brain_samples(context,entry_time,exit_time,regime,policy,payload) VALUES(?1,?2,?3,?4,?5,?6)",
                 params![&ctx,entry_time,exit_time,&f.regime,policy,payload.to_string()],
             )?;
+            state.recent.push(payload);
+            if state.recent.len()>10 {state.recent.remove(0);}
             state.last_exit=exit_time;
             state.next_experiment+=1;
             update(&mut state.overall[policy],reward_r,net_per_lot);
@@ -283,6 +288,7 @@ impl Learner {
             "total_closed_training_samples":state.next_experiment,
             "actual_closed_broker_samples":state.broker_samples,
             "broker_policy_scores":{"trend":broker_policy[0].score,"reversion":broker_policy[1].score},
+            "recent_closed_simulated_trades":&state.recent,
             "broker_policy_samples":{"trend":broker_policy[0].samples,"reversion":broker_policy[1].samples},
             "latest_closed_trade_time":state.last_exit,
             "regime":f.regime,"selection":selection,"policy":policy_name(policy),
@@ -333,6 +339,8 @@ mod tests {
         let n=state["total_closed_training_samples"].as_u64().unwrap();
         assert!(n>=10);
         assert!(state["policy_samples"]["trend"].as_u64().unwrap()+state["policy_samples"]["reversion"].as_u64().unwrap()>0);
+        assert!(!state["recent_closed_simulated_trades"].as_array().unwrap().is_empty());
+        assert!(state["recent_closed_simulated_trades"].as_array().unwrap().iter().all(|x|x["exit_reason"].is_string()));
         drop(learner);
         let mut reloaded=Learner::new(&db).unwrap();
         let same=reloaded.observe(&db,&t,&Config::default(),&frames,now).unwrap().unwrap();
