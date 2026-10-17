@@ -1,14 +1,22 @@
 # BrainTrade OS — project state: verified 0.7.0 Development Preview
 
-Canonical repository: `gngoongoog/V4`. Current validated runtime/source checkpoint on `development`: PR #53 merge `b20af1f0a3ae37d30e688e92615972e5c03e5adc` (tree `cb4cfc79358305d91caa4826ab2d47414fbd745b`). Exact PR head `31c10767e7c284160a74c1e0b001c0fde825780d` has the same tree and passed Research plus Windows/Linux validation before merge.
+Canonical repository: `gngoongoog/V4`. Verified 0.7.0 `development` state.
 
-Current exact-head CI scale is 87 domain Rust tests, 71 runtime Rust tests plus one intentionally ignored public-network news test, and 118 Python tests. Core, backup/restore, Studio, execution integration, offline reports, native desktop compilation/rendering, Linux validation and Windows portable packaging passed. Native MT5 Demo acceptance on the user's actual terminal remains a separate target-machine gate.
+PR #55 (comprehensive 0.7 correctness audit) is merged into `development` as `2e05cf3b907073c5faebe25fd16d4a4a523b224d`. Exact tested PR head `892807ec317c856b1215efb569e726554266709b` and the merge share code tree `a85fa0c424e23cf9e82790c649d25461e1547387`. Research run `39067458928` and Windows/Linux run `39067458927` both succeeded on that code.
+
+Verified count: 87 domain Rust tests, 72 runtime Rust tests plus one intentionally ignored official-news public-network test, three desktop Rust tests, and 124 of 125 Windows Python tests passed (one OS-specific fixture skipped). The Windows CI executed the real named-pipe blocking-connect shutdown/rebind regression, built the portable preview and passed simulated execution integration. The Research CI passed browser report and complete native-page rendering. Real Windows/MT5 Demo acceptance remains pending.
+
+PR #55 fixed native pipe shutdown/rebind and dead-worker detection, stopped-only execution-affecting Risk/Trading settings, side-effect-free rejection of invalid `/v1/config`, explicit-only START, final post-journal Core authorization and account recheck before `order_send`, safe timeframe indexing, accurate START audit metadata and complete Python compile checks. It adds `post_journal_authorize_ms` and `post_journal_account_ms` latency evidence without double counting.
+
+Promoted 0.6.0 evidence remains immutable. BrainTrade 0.7.0 is a Development Preview, not production/broker acceptance or a profitability guarantee.
 
 ## Execution and Sniper state
 
 The development package contains 16 durable execution identities. Broker ownership remains append-only: `generated=410613`, `liquidity=410614`, `trend_pullback=410615`. It includes Scalping, Swing, Expert and Sniper modes; coordinator/advisor/SOLO/RETURNING membership; durable intent/reconciliation; split-fill and uncertain-send recovery; Portfolio Exposure v1; account-scoped commissions; configurable Sniper hold; and the native Control Center.
 
 Sniper has a native Windows MT5 `OnTick` + `CopyTicks(..., COPY_TICKS_ALL)` path and an automatic 5 ms Python polling fallback. Fast quotes use execution-only `PUT /v1/execution/pulse`; final `/v1/execution/authorize` remains mandatory. The Python adapter rechecks the account and preserves the durable `broker-journal.sqlite` commit-before-`order_send` boundary with no blind resend after uncertain outcomes.
+
+The final Core authorization and MT5 account check run after the durable journal and immediately before `order_send`. Acceptance exposes `post_journal_authorize_ms` and `post_journal_account_ms` separately.
 
 The local engineering target is **<=20 ms for `queue_to_send_ms`** on a suitable target machine. It is not a broker acknowledgement, fill, network or profitability guarantee.
 
@@ -39,9 +47,14 @@ The collector/operator stack does not enable START, change execution settings, b
 
 ## Evidence and delivery
 
-`docs/development-validation.json` records the exact PR #53 checkpoint. The promoted 0.6 history in `docs/validation.json`, `docs/validation-v0.6.0.json` and `docs/RELEASE_STATUS.md` remains unchanged.
+## Exact CI evidence
 
-Research run `39058307544` passed on head `31c10767e7c284160a74c1e0b001c0fde825780d` and uploaded `synthetic-research-validation` artifact `12110491477` (SHA-256 `5a7b7c2dba278110f0c536aaa6cc162d3a509ed71da92137828dd0c10aaff5e9`). Windows/Linux run `39058307570` passed on the same head and uploaded `BrainTrade-Windows-x64-Preview` artifact `12110404218` (SHA-256 `e7d90d7744264e30c1febf0fc835ee78a849901a303177f73f3261c45e6b0c27`) plus `windows-native-validation` artifact `12111210477` (SHA-256 `05fa8cdbb70c35e6f04c084d0b28a8b034c8bb665832f21fc235bdb523aab99d`).
+PR #55 tested head `892807ec317c856b1215efb569e726554266709b`, merged `development` commit `2e05cf3b907073c5faebe25fd16d4a4a523b224d`; matching source tree `a85fa0c424e23cf9e82790c649d25461e1547387`.
+
+- Research: SUCCESS `39067458928`. Artifact `12114515035` (`synthetic-research-validation`), 4309079 bytes, SHA-256 `40d2a26180ad9d054d63a9069a7405b9e33b0ec6b89c813dad8d09ad6485263a`.
+- Windows/Linux: SUCCESS `39067458927`. Portable artifact `12114566161` (`BrainTrade-Windows-x64-Preview`), 34569115 bytes, SHA-256 `79cbde840d3ff0d809da922ea55d9b3551a6007ef2301b12a76e045d31db8f70`.
+- Windows validation: artifact `12114167824`, 1704761 bytes, SHA-256 `1a7a691d35acb7fa52ea941fa5db35a6064c8d013187180f1a84b47ed3dd87c1`.
+- `docs/development-validation.json` contains machine-readable evidence; `docs/QUALITY_AUDIT.md` documents corrected defects and explicit limitations. Promoted 0.6.0 records are untouched.
 
 ## Next steps
 
