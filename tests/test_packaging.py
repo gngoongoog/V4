@@ -51,6 +51,7 @@ class PackagingTests(unittest.TestCase):
             (root / "scripts").mkdir(parents=True)
             (root / "docs").mkdir(parents=True)
             (root / "scripts" / packaging.OPERATOR_POWERSHELL).write_text("Write-Host 'fixture'\n", encoding="utf-8")
+            (root / "scripts" / packaging.OPERATOR_GUI).write_text("Write-Host 'gui fixture'\n", encoding="utf-8")
             (root / "scripts" / packaging.OPERATOR_CMD).write_text("@echo off\r\n", encoding="utf-8")
             (root / "docs" / packaging.OPERATOR_DOC).write_text("# fixture\n", encoding="utf-8")
             original = packaging.ROOT
@@ -61,6 +62,7 @@ class PackagingTests(unittest.TestCase):
                 packaging.ROOT = original
             self.assertTrue((output / packaging.OPERATOR_CMD).is_file())
             self.assertTrue((output / "Tools" / packaging.OPERATOR_POWERSHELL).is_file())
+            self.assertTrue((output / "Tools" / packaging.OPERATOR_GUI).is_file())
             self.assertTrue((output / packaging.OPERATOR_DOC).is_file())
 
     def test_source_copy_defensively_excludes_secret_runtime_and_generated_state(self):
