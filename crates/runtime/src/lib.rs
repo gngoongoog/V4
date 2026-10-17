@@ -91,6 +91,11 @@ struct Engine{dir:PathBuf,shared:Arc<Mutex<Shared>>,db:Connection,gateway:Option
 struct ConfigRequest{config:Config,#[serde(default)]telegram_token:String,#[serde(default)]clear_telegram_token:bool}
 #[derive(Serialize)]
 struct Event{id:i64,timestamp_ms:u64,kind:String,detail:Value}
+fn ensure_execution_mutation_stopped(status:&Status,pending:bool)->Result<()> {
+    if status.requested_run { bail!("Stop the system before changing execution-affecting risk or trading costs"); }
+    if pending { bail!("Wait for broker command reconciliation before changing execution-affecting risk or trading costs"); }
+    Ok(())
+}
 impl Engine{
     fn event(&self,kind:&str,detail:Value)->Result<()>{self.db.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,?2,?3)",params![now_ms(),kind,detail.to_string()])?;Ok(())}
     fn launch_gateway(&mut self)->Result<()>{
@@ -119,6 +124,7 @@ impl Engine{
             let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());
             if method=="GET" {return Ok(trading_settings::view(&s.config,&s.status));}
             if method=="POST" {
+                ensure_execution_mutation_stopped(&s.status,self.execution.pending(&self.db)?)?;
                 let c=trading_settings::update(&s.config,&s.status,body)?;
                 atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&c)?)?;
                 self.event("trading_mode_changed",json!({"trading":c.trading,"commission_profiles":c.commission_profiles.len(),"default_commission_per_lot":c.risk.commission_per_lot}))?;
@@ -179,7 +185,16 @@ impl Engine{
             ("POST","/v1/learning/register")=>{let artifact:Value=serde_json::from_slice(body)?;self.learning.register(&mut self.db,artifact,now_ms())},
             ("GET","/v1/decisions")=>research::decision_history(&self.db),
             ("GET","/v1/opportunities/history")=>research::opportunity_history(&self.db),
-            ("POST","/v1/risk")=>{let risk:braintrade_domain::RiskConfig=serde_json::from_slice(body)?;risk.validate().map_err(anyhow::Error::msg)?;let mut s=self.shared.lock().unwrap();let mut updated=s.config.clone();updated.risk=risk;atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&updated)?)?;self.event("risk_settings_changed",json!({"risk":updated.risk,"mode":"shadow"}))?;s.config=updated;Ok(json!({"ok":true}))},
+            ("POST","/v1/risk")=>{
+                let risk:braintrade_domain::RiskConfig=serde_json::from_slice(body)?;risk.validate().map_err(anyhow::Error::msg)?;
+                let pending=self.execution.pending(&self.db)?;
+                let mut s=self.shared.lock().unwrap();
+                ensure_execution_mutation_stopped(&s.status,pending)?;
+                let mut updated=s.config.clone();updated.risk=risk;
+                atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&updated)?)?;
+                self.event("risk_settings_changed",json!({"risk":updated.risk,"scope":"research_and_optional_broker_execution_limits"}))?;
+                s.config=updated;Ok(json!({"ok":true}))
+            },
             ("POST","/v1/export")=>{
                 let name=format!("research-{}-{}",now_ms(),uuid::Uuid::new_v4());let staging=self.dir.join("exports").join(format!(".{name}.tmp"));fs::create_dir_all(&staging)?;
                 for table in["decisions","mode_decisions","paper_events","candles","opportunity_setups"]{let sql=match table{"opportunity_setups"=>"SELECT context,first_seen_ms,payload FROM opportunity_setups ORDER BY first_seen_ms,setup_id","decisions"=>"SELECT context,timestamp_ms,payload FROM decisions ORDER BY id","mode_decisions"=>"SELECT context,timestamp_ms,payload FROM mode_decisions ORDER BY id","paper_events"=>"SELECT context,timestamp_ms,json_object('kind',kind,'detail',json(payload)) FROM paper_events ORDER BY id",_=>"SELECT context,bar_time*1000,json_object('timeframe',timeframe,'candle',json(payload)) FROM candles ORDER BY context,timeframe,bar_time"};let mut stmt=self.db.prepare(sql)?;let mut rows=stmt.query([])?;let mut output=fs::File::create(staging.join(format!("{table}.jsonl")))?;while let Some(row)=rows.next()?{let payload:Value=serde_json::from_str(&row.get::<_,String>(2)?)?;writeln!(output,"{}",json!({"context":row.get::<_,String>(0)?,"timestamp_ms":row.get::<_,u64>(1)?,"payload":payload}))?;}output.sync_all()?;}
@@ -229,4 +244,6 @@ mod tests{
     fn atomic_config_replacement(){let dir=std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());fs::create_dir_all(&dir).unwrap();let p=dir.join("config.json");atomic_write(&p,b"first").unwrap();atomic_write(&p,b"second").unwrap();assert_eq!(fs::read(&p).unwrap(),b"second");fs::remove_dir_all(dir).unwrap();}
     #[test]
     fn sqlite_foreign_keys_are_enforced(){let db=Connection::open_in_memory().unwrap();configure_database(&db).unwrap();let enabled:i64=db.query_row("PRAGMA foreign_keys",[],|row|row.get(0)).unwrap();assert_eq!(enabled,1);db.execute_batch("CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(id INTEGER PRIMARY KEY,parent_id INTEGER NOT NULL REFERENCES parent(id));").unwrap();assert!(db.execute("INSERT INTO child(id,parent_id) VALUES(1,99)",[]).is_err());db.execute("INSERT INTO parent(id) VALUES(99)",[]).unwrap();db.execute("INSERT INTO child(id,parent_id) VALUES(1,99)",[]).unwrap();verify_foreign_key_integrity(&db).unwrap();}
+    #[test]
+    fn execution_affecting_config_requires_stopped_and_reconciled(){let mut status=Status::default();assert!(ensure_execution_mutation_stopped(&status,false).is_ok());status.requested_run=true;assert!(ensure_execution_mutation_stopped(&status,false).is_err());status.requested_run=false;assert!(ensure_execution_mutation_stopped(&status,true).is_err());}
 }
