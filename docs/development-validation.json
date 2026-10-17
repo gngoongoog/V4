@@ -2,36 +2,36 @@
   "version": "0.7.0",
   "status": "verified",
   "source_state": "development preview",
-  "tested_commit": "b6c15e8243cbf6792b88a9ca7bac3330643b619f",
-  "tested_tree": "58a250ddca283e867436953a459959c33ee8a1e2",
+  "tested_commit": "9c08109e6414132c0ddd07588bb55d3550d759be",
+  "tested_tree": "7d952015f07c6022455500c12f321409cdc556c0",
   "research_ci": {
-    "run_id": 39017294919,
+    "run_id": 39045218522,
     "conclusion": "success",
-    "url": "https://github.com/gngoongoog/V4/actions/runs/39017294919",
+    "url": "https://github.com/gngoongoog/V4/actions/runs/39045218522",
     "artifact": {
-      "id": 12095079199,
+      "id": 12105916152,
       "name": "synthetic-research-validation",
-      "size_bytes": 4303555,
-      "sha256": "412902f1ec2418f8d34c898a91a5823050894a4e9a41b1daeed2c3af3919c77f"
+      "size_bytes": 4308982,
+      "sha256": "7e2ad28069847ced6d9ea01720bd5bdf8f21af178c7b5cc7afec3137652f7352"
     }
   },
   "windows_ci": {
-    "run_id": 39017294905,
+    "run_id": 39045218508,
     "conclusion": "success",
-    "url": "https://github.com/gngoongoog/V4/actions/runs/39017294905"
+    "url": "https://github.com/gngoongoog/V4/actions/runs/39045218508"
   },
   "windows_artifacts": [
     {
-      "id": 12095677572,
+      "id": 12105678547,
       "name": "BrainTrade-Windows-x64-Preview",
-      "size_bytes": 34472951,
-      "sha256": "10c4b0730691866129b3848940f96ab5ad4be1019d04e0d99cffd1d86ea2c8ba"
+      "size_bytes": 34537739,
+      "sha256": "9ec11add63d8908ae82628aac00138503c949410dbb6b03504cef7f13203c5a8"
     },
     {
-      "id": 12095269571,
+      "id": 12105628870,
       "name": "windows-native-validation",
-      "size_bytes": 1701140,
-      "sha256": "b764424d4d0cef36f03aba3000992a84b1ecfb62f5b539a8f121e9b61b9271fd"
+      "size_bytes": 1704761,
+      "sha256": "c9adc928ea48b5c465560a6a0d29ebc433adc85d85f92546b7412b495efc15cd"
     }
   ],
   "release_evidence": "validation.json",
@@ -43,26 +43,27 @@
     "telegram_live_delivery": "not performed",
     "imported_ml_automatic_promotion": false
   },
-  "note": "CI-verified 0.7 development runtime/source checkpoint through PR #38. This includes the five-section Control Center, account-scoped Round-trip/Per-side commissions, configurable frozen Sniper hold, Fast Sniper Pulse and native OnTick/CopyTicks bridge, the fifteenth Liquidity Sweep identity, aligned correlation/OOS/feature-ablation research, read-only Demo acceptance collector, PR #37 causal official-news historical replay using append-only first-observed availability with no execution route, and PR #38 real Demo broker-outcome learning using exact booked profit/commission/swap/fee for participating coordinator members. PR #38 head b6c15e8243cbf6792b88a9ca7bac3330643b619f and development squash merge 9524367f039b8fe59247e88c714c1cbff9c4a5a9 share tree 58a250ddca283e867436953a459959c33ee8a1e2. Native Windows MT5 Demo acceptance and private Telegram delivery remain target-machine steps. The <=20 ms Sniper figure is a BrainTrade-local queue-to-send engineering target, not a broker/network/fill or profitability guarantee.",
-  "pull_request_head": "b6c15e8243cbf6792b88a9ca7bac3330643b619f",
-  "current_development_merge": "9524367f039b8fe59247e88c714c1cbff9c4a5a9",
+  "note": "CI-verified 0.7 development runtime/source checkpoint through PR #48. PR #48 appends the sixteenth Trend Pullback execution identity at magic 410615 without remapping generated=410613 or liquidity=410614. Trend Pullback uses completed bars only, EMA20/EMA50 trend structure, a controlled pullback, confirmation quality, anti-chasing checks and structural stop geometry. The checkpoint also includes Fast Sniper Pulse/native OnTick-CopyTicks execution, Portfolio Exposure v1, account-scoped commissions, causal news replay, exact closed Demo broker-outcome learning, Brain Snapshot and Intelligence V3. PR #48 head 9c08109e6414132c0ddd07588bb55d3550d759be and development squash merge 09c13460cee0a3fe42b4805ce1545529963783c7 share tree 7d952015f07c6022455500c12f321409cdc556c0. Native Windows MT5 Demo acceptance and private Telegram delivery remain target-machine steps. The <=20 ms Sniper figure is a BrainTrade-local queue-to-send engineering target, not a broker/network/fill or profitability guarantee.",
+  "pull_request_head": "9c08109e6414132c0ddd07588bb55d3550d759be",
+  "current_development_merge": "09c13460cee0a3fe42b4805ce1545529963783c7",
   "source_tree_matches_pr_head": true,
   "source_tree_matches_current_development": true,
   "tests": {
-    "rust_domain_passed": 82,
-    "rust_runtime_passed": 68,
+    "rust_domain_passed": 87,
+    "rust_runtime_passed": 71,
     "rust_runtime_ignored": 1,
     "ignored_reason": "explicit public-network official news check",
-    "python_passed": 109
+    "python_passed": 113
   },
   "verified_checks": [
     "Core lifecycle, authentication, staleness, research replay and persistence",
     "schema-12 backup/restore, Portfolio Exposure v1 settings and durable broker-journal boundary",
     "four trading modes, account-scoped proportional commissions, Round-trip/Per-side basis and configurable frozen Sniper hold",
     "simulated MT5 execution integration on Linux and packaged Windows",
-    "fifteen execution identities including Liquidity Sweep; SOLO exclusion and RETURNING settlement semantics",
+    "sixteen append-only execution identities including Liquidity Sweep and Trend Pullback; SOLO exclusion and RETURNING settlement semantics",
+    "Trend Pullback completed-bar causality, EMA20/EMA50 structure, pullback confirmation, anti-chasing and structural-stop contracts",
     "unknown-intent account isolation, fill barrier, split-fill reconciliation and no blind resend",
-    "Sniper fast broker dispatch with Core pulse, queue/gateway/authorization/journal/send timing instrumentation",
+    "Sniper fast broker dispatch with Core pulse and queue/gateway/authorization/journal/send timing instrumentation",
     "execution-only PUT pulse reuses reconciled state and returns prefetched work without rerunning research/learning per quote",
     "native Sniper authenticated named-pipe transport, bounded FIFO and automatic 5 ms polling fallback",
     "OnTick wake plus CopyTicks recovery of terminal-cached executable quote changes and same-millisecond event separation",
@@ -70,10 +71,11 @@
     "aligned multi-symbol correlation research with explicit unavailable data, deterministic replay/export and observational-only boundary",
     "chronological holdout/rolling OOS infrastructure and deterministic feature-group correlation/ablation contracts",
     "read-only Demo acceptance collector rejects Live/mismatched contexts, separates native/poll samples and calculates P50/P95/P99",
-    "offline report interactions and native selector compilation",
+    "offline report interactions and native selector compilation/rendering",
     "Windows portable startup, embedded runtime, DPAPI IPC, PE dependencies, native bridge packaging and settings persistence",
     "causal official-news historical replay uses append-only first-observed availability, no M1 forward fill and no execution route",
     "real MT5 Demo coordinator broker outcomes feed adaptive evidence from exact booked profit, commission, swap and fee for participating members",
+    "Intelligence V3 member weighting with reward/confidence, regime/session context and execution-history quality evidence",
     "Demo execution contract is not Shadow-locked; optional portfolio/per-brain entry limits default off while correctness boundaries remain"
   ]
 }
