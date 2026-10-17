@@ -54,8 +54,7 @@ impl PortfolioLimits {
             "Portfolio max lots must be 0.001..10000"
         );
         anyhow::ensure!(
-            self.max_risk_percent.is_finite()
-                && (0.01..=100.0).contains(&self.max_risk_percent),
+            self.max_risk_percent.is_finite() && (0.01..=100.0).contains(&self.max_risk_percent),
             "Portfolio max risk must be 0.01..100 percent"
         );
         Ok(())
@@ -103,7 +102,11 @@ fn context(t: &Telemetry) -> String {
     crate::coordinator_learning::context(t)
 }
 
-fn owned_position_risk(t: &Telemetry, c: &Config, position: &braintrade_domain::Position) -> Option<f64> {
+fn owned_position_risk(
+    t: &Telemetry,
+    c: &Config,
+    position: &braintrade_domain::Position,
+) -> Option<f64> {
     if position.volume <= 0.0 || !position.volume.is_finite() || position.sl <= 0.0 {
         return None;
     }
@@ -128,7 +131,9 @@ fn owned_position_risk(t: &Telemetry, c: &Config, position: &braintrade_domain::
 }
 
 fn intent_risk(t: &Telemetry, c: &Config, request: &Value) -> Option<f64> {
-    let lots = request["lots"].as_f64().filter(|v| v.is_finite() && *v > 0.0)?;
+    let lots = request["lots"]
+        .as_f64()
+        .filter(|v| v.is_finite() && *v > 0.0)?;
     let stop = request["signal"]["stop_distance"]
         .as_f64()
         .filter(|v| v.is_finite() && *v > 0.0)?;
@@ -212,7 +217,8 @@ fn portfolio_reason(limits: &PortfolioLimits, next: &Exposure, equity: f64) -> O
     if next.total_slots() > limits.max_positions {
         return Some(format!(
             "Portfolio exposure: {} positions/intents would exceed limit {}",
-            next.total_slots(), limits.max_positions
+            next.total_slots(),
+            limits.max_positions
         ));
     }
     if next.lots > limits.max_lots + 1e-9 {
@@ -222,7 +228,9 @@ fn portfolio_reason(limits: &PortfolioLimits, next: &Exposure, equity: f64) -> O
         ));
     }
     if !next.risk_known || !equity.is_finite() || equity <= 0.0 {
-        return Some("Portfolio exposure: stop risk is unknown; new entry blocked fail-closed".into());
+        return Some(
+            "Portfolio exposure: stop risk is unknown; new entry blocked fail-closed".into(),
+        );
     }
     let cap = equity * limits.max_risk_percent / 100.0;
     if next.estimated_risk > cap + 1e-8 {
@@ -250,7 +258,9 @@ fn enforce_portfolio(
         "SELECT id,payload FROM broker_commands WHERE context=?1 AND kind='open' AND state='queued' ORDER BY created_ms,id",
     )?;
     let rows = statement
-        .query_map([&key], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+        .query_map([&key], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(statement);
     for (id, raw) in rows {
@@ -348,7 +358,11 @@ impl Service {
                 && t.server == self.inner.settings.server
                 && t.currency == self.inner.settings.currency
                 && t.account_trade_mode
-                    == Some(if self.inner.settings.target == "demo" { 0 } else { 2 })
+                    == Some(if self.inner.settings.target == "demo" {
+                        0
+                    } else {
+                        2
+                    })
         })
     }
 
@@ -375,7 +389,12 @@ impl Service {
         frames: &BTreeMap<String, Vec<FrameBar>>,
         now: u64,
     ) -> Result<()> {
-        if let Some(system) = self.inner.brains.iter_mut().find(|brain| brain.id == "system") {
+        if let Some(system) = self
+            .inner
+            .brains
+            .iter_mut()
+            .find(|brain| brain.id == "system")
+        {
             system.enabled = true;
         }
         let available = crate::coordinator_learning::available_frames(telemetry, frames, now);
@@ -476,7 +495,12 @@ impl Service {
                 .as_ref()
                 .context("Sniper pulse cache is not ready")?
                 .apply(body, now)?;
-            if let Some(system) = self.inner.brains.iter_mut().find(|brain| brain.id == "system") {
+            if let Some(system) = self
+                .inner
+                .brains
+                .iter_mut()
+                .find(|brain| brain.id == "system")
+            {
                 system.enabled = true;
             }
             self.inner.observe(
@@ -497,14 +521,9 @@ impl Service {
             pulse_status.execution_enabled = self.enabled(&pulse_status);
             self.fast = Some(next);
 
-            let mut work = self.inner.route(
-                "GET",
-                "/v1/execution/gateway",
-                &[],
-                db,
-                &pulse_status,
-                now,
-            )?;
+            let mut work =
+                self.inner
+                    .route("GET", "/v1/execution/gateway", &[], db, &pulse_status, now)?;
             work["pulse_fast_path"] = json!(true);
             work["pulse_to_work_us"] = json!(started.elapsed().as_micros() as u64);
             return Ok(work);
@@ -554,9 +573,7 @@ impl Service {
             if config.id == "system" {
                 config.enabled = true;
                 let encoded = serde_json::to_vec(&config)?;
-                let mut result = self
-                    .inner
-                    .route(method, path, &encoded, db, status, now)?;
+                let mut result = self.inner.route(method, path, &encoded, db, status, now)?;
                 result["start"] = json!(false);
                 result["role"] = json!("coordinator");
                 result["note"] = json!("العقل الرئيسي يتبع START/STOP ولا يحتاج زر تداول منفرد.");
@@ -612,7 +629,15 @@ mod tests {
         let _ = Service::new(&db).unwrap();
         db
     }
-    fn queue(db: &Connection, t: &Telemetry, id: &str, brain: &str, lots: f64, stop: f64, created: u64) {
+    fn queue(
+        db: &Connection,
+        t: &Telemetry,
+        id: &str,
+        brain: &str,
+        lots: f64,
+        stop: f64,
+        created: u64,
+    ) {
         let key = context(t);
         let magic = execution::magic(brain).unwrap();
         let payload = json!({
@@ -726,8 +751,11 @@ mod tests {
         let db = setup();
         let t = telemetry();
         queue(&db, &t, "a", "trend", 0.01, 0.05, 1);
-        db.execute("UPDATE broker_commands SET state='unknown' WHERE id='a'", [])
-            .unwrap();
+        db.execute(
+            "UPDATE broker_commands SET state='unknown' WHERE id='a'",
+            [],
+        )
+        .unwrap();
         queue(&db, &t, "b", "gann", 0.01, 0.05, 2);
         let limits = PortfolioLimits {
             enabled: true,

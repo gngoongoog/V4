@@ -3,9 +3,7 @@
 //! This module has no broker command writer and never queues/closes a position.
 use anyhow::Result;
 use braintrade_domain::{
-    execution as domain_execution,
-    studio::FrameBar,
-    Config, Position, Telemetry,
+    execution as domain_execution, studio::FrameBar, Config, Position, Telemetry,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
@@ -41,7 +39,11 @@ pub fn init(db: &Connection) -> Result<()> {
 }
 
 fn position_id(p: &Position) -> u64 {
-    if p.identifier > 0 { p.identifier } else { p.ticket }
+    if p.identifier > 0 {
+        p.identifier
+    } else {
+        p.ticket
+    }
 }
 
 fn executable_exit_price(t: &Telemetry, p: &Position) -> Option<f64> {
@@ -62,7 +64,9 @@ fn direction(p: &Position) -> Option<f64> {
 }
 
 fn frozen_stop_distance(db: &Connection, key: &str, p: &Position) -> Result<Option<f64>> {
-    let dir = direction(p)?;
+    let Some(dir) = direction(p) else {
+        return Ok(None);
+    };
     let attached = match p.side.as_str() {
         "BUY" if p.sl > 0.0 && p.sl < p.price_open => Some(p.price_open - p.sl),
         "SELL" if p.sl > p.price_open => Some(p.sl - p.price_open),
@@ -110,11 +114,16 @@ fn estimated_net(t: &Telemetry, c: &Config, p: &Position, exit_price: f64) -> Op
     let tick = t.tick_size.filter(|v| v.is_finite() && *v > 0.0)?;
     let profit_value = t.tick_value_profit.filter(|v| v.is_finite() && *v > 0.0)?;
     let loss_value = t.tick_value_loss.filter(|v| v.is_finite() && *v > 0.0)?;
-    if !p.volume.is_finite() || p.volume <= 0.0 || !p.price_open.is_finite() || p.price_open <= 0.0 {
+    if !p.volume.is_finite() || p.volume <= 0.0 || !p.price_open.is_finite() || p.price_open <= 0.0
+    {
         return None;
     }
     let move_price = (exit_price - p.price_open) * dir;
-    let value = if move_price >= 0.0 { profit_value } else { loss_value };
+    let value = if move_price >= 0.0 {
+        profit_value
+    } else {
+        loss_value
+    };
     let gross = move_price / tick * value * p.volume;
     // Entry is an already-booked broker fill. The shadow exit estimates one additional
     // market-exit slippage while retaining the configured round-trip commission model.
@@ -134,8 +143,18 @@ fn candidate_reason(
     if peak_r >= 1.0 && current_r <= peak_r - 0.40 && current_r >= 0.25 {
         return Some("profit_retrace");
     }
-    let position_direction = if p.side == "BUY" { 1 } else if p.side == "SELL" { -1 } else { 0 };
-    if market_direction != 0 && position_direction != 0 && market_direction == -position_direction && current_r <= 0.50 {
+    let position_direction = if p.side == "BUY" {
+        1
+    } else if p.side == "SELL" {
+        -1
+    } else {
+        0
+    };
+    if market_direction != 0
+        && position_direction != 0
+        && market_direction == -position_direction
+        && current_r <= 0.50
+    {
         return Some("regime_flip");
     }
     if hold_fraction >= 0.75 && current_r < 0.25 {
@@ -192,14 +211,18 @@ fn settle_closed(db: &Connection, t: &Telemetry, now: u64) -> Result<()> {
     let visible: std::collections::BTreeSet<u64> = t
         .positions
         .iter()
-        .filter(|p| p.symbol == t.symbol && p.magic == domain_execution::magic("system").unwrap_or(0))
+        .filter(|p| {
+            p.symbol == t.symbol && p.magic == domain_execution::magic("system").unwrap_or(0)
+        })
         .map(position_id)
         .collect();
     let mut statement = db.prepare(
         "SELECT position_id,payload FROM shadow_exit_trials WHERE context=?1 AND state IN ('tracking','candidate')",
     )?;
     let rows = statement
-        .query_map([&key], |row| Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?)))?
+        .query_map([&key], |row| {
+            Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(statement);
     for (pid, raw) in rows {
@@ -218,7 +241,11 @@ fn settle_closed(db: &Connection, t: &Telemetry, now: u64) -> Result<()> {
             "interpretation":"counterfactual estimate minus exact booked broker outcome; not a fill claim"
         });
         payload["settled_ms"] = json!(now);
-        let state = if shadow_net.is_some() { "settled_candidate" } else { "settled_no_candidate" };
+        let state = if shadow_net.is_some() {
+            "settled_candidate"
+        } else {
+            "settled_no_candidate"
+        };
         db.execute(
             "UPDATE shadow_exit_trials SET state=?3,updated_ms=?4,payload=?5 WHERE context=?1 AND position_id=?2",
             params![&key, pid, state, now, payload.to_string()],
@@ -242,11 +269,21 @@ pub fn observe(
     let key = context(t);
     let intelligence = domain_execution::intelligence_context(t, frames, now);
     let system_magic = domain_execution::magic("system").unwrap_or(0);
-    for p in t.positions.iter().filter(|p| p.symbol == t.symbol && p.magic == system_magic) {
+    for p in t
+        .positions
+        .iter()
+        .filter(|p| p.symbol == t.symbol && p.magic == system_magic)
+    {
         let pid = position_id(p);
-        let Some(exit_price) = executable_exit_price(t, p) else { continue; };
-        let Some(dir) = direction(p) else { continue; };
-        let Some(stop_distance) = frozen_stop_distance(db, &key, p)? else { continue; };
+        let Some(exit_price) = executable_exit_price(t, p) else {
+            continue;
+        };
+        let Some(dir) = direction(p) else {
+            continue;
+        };
+        let Some(stop_distance) = frozen_stop_distance(db, &key, p)? else {
+            continue;
+        };
         if !p.price_open.is_finite() || p.price_open <= 0.0 || stop_distance <= 0.0 {
             continue;
         }
@@ -268,23 +305,25 @@ pub fn observe(
             .as_deref()
             .map(serde_json::from_str::<Value>)
             .transpose()?
-            .unwrap_or_else(|| json!({
-                "mode":"research_only_shadow",
-                "can_send_orders":false,
-                "context":key,
-                "position_id":pid,
-                "opened_ms":p.opened_ms,
-                "side":p.side,
-                "entry_price":p.price_open,
-                "volume":p.volume,
-                "stop_distance":stop_distance,
-                "hold_ms":hold_ms,
-                "peak_r":current_r,
-                "trough_r":current_r,
-                "last_r":current_r,
-                "candidate":Value::Null,
-                "actual":Value::Null,
-            }));
+            .unwrap_or_else(|| {
+                json!({
+                    "mode":"research_only_shadow",
+                    "can_send_orders":false,
+                    "context":key,
+                    "position_id":pid,
+                    "opened_ms":p.opened_ms,
+                    "side":p.side,
+                    "entry_price":p.price_open,
+                    "volume":p.volume,
+                    "stop_distance":stop_distance,
+                    "hold_ms":hold_ms,
+                    "peak_r":current_r,
+                    "trough_r":current_r,
+                    "last_r":current_r,
+                    "candidate":Value::Null,
+                    "actual":Value::Null,
+                })
+            });
         let previous_update = payload["last_observed_ms"].as_u64().unwrap_or(0);
         let old_peak = payload["peak_r"].as_f64().unwrap_or(current_r);
         let old_trough = payload["trough_r"].as_f64().unwrap_or(current_r);
@@ -321,7 +360,11 @@ pub fn observe(
                 "estimate_model":"executable Bid for BUY / Ask for SELL; actual entry fill; configured round-trip commission plus one hypothetical exit slippage"
             });
         }
-        let state = if payload["candidate"].is_null() { "tracking" } else { "candidate" };
+        let state = if payload["candidate"].is_null() {
+            "tracking"
+        } else {
+            "candidate"
+        };
         db.execute(
             "INSERT INTO shadow_exit_trials(context,position_id,opened_ms,updated_ms,state,payload)\
              VALUES(?1,?2,?3,?4,?5,?6)\
@@ -336,7 +379,9 @@ pub fn observe(
 pub fn summary(db: &Connection, t: Option<&Telemetry>) -> Result<Value> {
     init(db)?;
     let Some(t) = t.filter(|t| t.connected) else {
-        return Ok(json!({"mode":"research_only_shadow","can_send_orders":false,"active":0,"settled":0,"candidates":0,"latest":[]}));
+        return Ok(
+            json!({"mode":"research_only_shadow","can_send_orders":false,"active":0,"settled":0,"candidates":0,"latest":[]}),
+        );
     };
     let key = context(t);
     let (active, settled, candidates): (u64, u64, u64) = db.query_row(
@@ -392,45 +437,123 @@ mod tests {
 
     fn telemetry(now: u64) -> Telemetry {
         Telemetry {
-            connected:true,demo:true,account_trade_mode:Some(0),login:9,server:"DEMO".into(),currency:"USD".into(),symbol:"XAUUSD".into(),
-            bid:Some(2001.20),ask:Some(2001.30),tick_size:Some(0.01),point:Some(0.01),tick_value_profit:Some(1.0),tick_value_loss:Some(1.0),tick_age_ms:Some(0),quote_time_ms:Some(now),
-            positions:vec![Position{magic:domain_execution::magic("system").unwrap(),identifier:700,ticket:700,symbol:"XAUUSD".into(),side:"BUY".into(),volume:0.1,price_open:2000.0,price_current:2001.2,profit:12.0,sl:1999.0,tp:2003.0,opened_ms:now-30_000}],
+            connected: true,
+            demo: true,
+            account_trade_mode: Some(0),
+            login: 9,
+            server: "DEMO".into(),
+            currency: "USD".into(),
+            symbol: "XAUUSD".into(),
+            bid: Some(2001.20),
+            ask: Some(2001.30),
+            tick_size: Some(0.01),
+            point: Some(0.01),
+            tick_value_profit: Some(1.0),
+            tick_value_loss: Some(1.0),
+            tick_age_ms: Some(0),
+            quote_time_ms: Some(now),
+            positions: vec![Position {
+                magic: domain_execution::magic("system").unwrap(),
+                identifier: 700,
+                ticket: 700,
+                symbol: "XAUUSD".into(),
+                side: "BUY".into(),
+                volume: 0.1,
+                price_open: 2000.0,
+                price_current: 2001.2,
+                profit: 12.0,
+                sl: 1999.0,
+                tp: 2003.0,
+                opened_ms: now - 30_000,
+            }],
             ..Default::default()
         }
     }
 
     #[test]
     fn first_retrace_candidate_uses_buy_bid_and_never_writes_broker_commands() {
-        let db=setup();let now=1_800_000_000_000;let mut t=telemetry(now);let key=context(&t);
-        db.execute("INSERT INTO broker_observations VALUES(?1,700,'system',?2,120000,'{}')",params![key,now-30_000]).unwrap();
-        observe(&db,&t,&Config::default(),&BTreeMap::new(),now).unwrap();
-        t.bid=Some(2000.70);t.ask=Some(2000.80);t.quote_time_ms=Some(now+1_000);
-        observe(&db,&t,&Config::default(),&BTreeMap::new(),now+1_000).unwrap();
-        let raw:String=db.query_row("SELECT payload FROM shadow_exit_trials WHERE position_id=700",[],|r|r.get(0)).unwrap();let p:Value=serde_json::from_str(&raw).unwrap();
-        assert_eq!(p["candidate"]["reason"],"profit_retrace");assert_eq!(p["candidate"]["exit_price"],2000.70);
-        let commands:u64=db.query_row("SELECT COUNT(*) FROM broker_commands",[],|r|r.get(0)).unwrap();assert_eq!(commands,0);
+        let db = setup();
+        let now = 1_800_000_000_000;
+        let mut t = telemetry(now);
+        let key = context(&t);
+        db.execute(
+            "INSERT INTO broker_observations VALUES(?1,700,'system',?2,120000,'{}')",
+            params![key, now - 30_000],
+        )
+        .unwrap();
+        observe(&db, &t, &Config::default(), &BTreeMap::new(), now).unwrap();
+        t.bid = Some(2000.70);
+        t.ask = Some(2000.80);
+        t.quote_time_ms = Some(now + 1_000);
+        observe(&db, &t, &Config::default(), &BTreeMap::new(), now + 1_000).unwrap();
+        let raw: String = db
+            .query_row(
+                "SELECT payload FROM shadow_exit_trials WHERE position_id=700",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let p: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(p["candidate"]["reason"], "profit_retrace");
+        assert_eq!(p["candidate"]["exit_price"], 2000.70);
+        let commands: u64 = db
+            .query_row("SELECT COUNT(*) FROM broker_commands", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(commands, 0);
     }
 
     #[test]
     fn closed_candidate_is_compared_with_exact_booked_broker_net() {
-        let db=setup();let now=1_800_000_000_000;let mut t=telemetry(now);let key=context(&t);
-        db.execute("INSERT INTO broker_observations VALUES(?1,700,'system',?2,120000,'{}')",params![&key,now-30_000]).unwrap();
-        observe(&db,&t,&Config::default(),&BTreeMap::new(),now).unwrap();
-        t.bid=Some(2000.70);t.ask=Some(2000.80);observe(&db,&t,&Config::default(),&BTreeMap::new(),now+1_000).unwrap();
+        let db = setup();
+        let now = 1_800_000_000_000;
+        let mut t = telemetry(now);
+        let key = context(&t);
+        db.execute(
+            "INSERT INTO broker_observations VALUES(?1,700,'system',?2,120000,'{}')",
+            params![&key, now - 30_000],
+        )
+        .unwrap();
+        observe(&db, &t, &Config::default(), &BTreeMap::new(), now).unwrap();
+        t.bid = Some(2000.70);
+        t.ask = Some(2000.80);
+        observe(&db, &t, &Config::default(), &BTreeMap::new(), now + 1_000).unwrap();
         t.positions.clear();
-        let open=json!({"entry":0,"profit":0.0,"commission":-0.3,"swap":0.0,"fee":0.0,"volume":0.1,"price":2000.0,"time_msc":now-30_000});
-        let close=json!({"entry":1,"profit":5.0,"commission":-0.3,"swap":-0.1,"fee":-0.1,"volume":0.1,"price":2000.5,"time_msc":now+2_000});
-        db.execute("INSERT INTO broker_deals VALUES(?1,1,700,'system',?2)",params![&key,open.to_string()]).unwrap();
-        db.execute("INSERT INTO broker_deals VALUES(?1,2,700,'system',?2)",params![&key,close.to_string()]).unwrap();
-        observe(&db,&t,&Config::default(),&BTreeMap::new(),now+3_000).unwrap();
-        let raw:String=db.query_row("SELECT payload FROM shadow_exit_trials WHERE position_id=700",[],|r|r.get(0)).unwrap();let p:Value=serde_json::from_str(&raw).unwrap();
-        assert!((p["actual"]["actual_net"].as_f64().unwrap()-4.2).abs()<1e-9);assert!(p["comparison"]["shadow_minus_actual_net"].is_number());
+        let open = json!({"entry":0,"profit":0.0,"commission":-0.3,"swap":0.0,"fee":0.0,"volume":0.1,"price":2000.0,"time_msc":now-30_000});
+        let close = json!({"entry":1,"profit":5.0,"commission":-0.3,"swap":-0.1,"fee":-0.1,"volume":0.1,"price":2000.5,"time_msc":now+2_000});
+        db.execute(
+            "INSERT INTO broker_deals VALUES(?1,1,700,'system',?2)",
+            params![&key, open.to_string()],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO broker_deals VALUES(?1,2,700,'system',?2)",
+            params![&key, close.to_string()],
+        )
+        .unwrap();
+        observe(&db, &t, &Config::default(), &BTreeMap::new(), now + 3_000).unwrap();
+        let raw: String = db
+            .query_row(
+                "SELECT payload FROM shadow_exit_trials WHERE position_id=700",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let p: Value = serde_json::from_str(&raw).unwrap();
+        assert!((p["actual"]["actual_net"].as_f64().unwrap() - 4.2).abs() < 1e-9);
+        assert!(p["comparison"]["shadow_minus_actual_net"].is_number());
     }
 
     #[test]
     fn live_context_is_not_recorded() {
-        let db=setup();let now=1_800_000_000_000;let mut t=telemetry(now);t.demo=false;t.account_trade_mode=Some(2);
-        observe(&db,&t,&Config::default(),&BTreeMap::new(),now).unwrap();
-        let n:u64=db.query_row("SELECT COUNT(*) FROM shadow_exit_trials",[],|r|r.get(0)).unwrap();assert_eq!(n,0);
+        let db = setup();
+        let now = 1_800_000_000_000;
+        let mut t = telemetry(now);
+        t.demo = false;
+        t.account_trade_mode = Some(2);
+        observe(&db, &t, &Config::default(), &BTreeMap::new(), now).unwrap();
+        let n: u64 = db
+            .query_row("SELECT COUNT(*) FROM shadow_exit_trials", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
     }
 }
