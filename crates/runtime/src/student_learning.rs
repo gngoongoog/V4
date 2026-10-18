@@ -48,11 +48,12 @@ pub fn adapt(
     } else {
         json!([b.stop_atr, b.reward_risk, b.max_hold_seconds])
     };
+    // Tick monetary values are frozen per experience, not policy identity: conversion
+    // changes must not restart the same strategy study on every quote.
     identity.as_array_mut().unwrap().push(
         json!({"definition":definition,"sniper_target":c.trading.sniper_target_points,
         "sniper_stop":c.trading.sniper_stop_points,"sniper_hold":c.trading.sniper_max_hold_seconds,
-        "commission":c.risk.commission_per_lot,"slippage":c.risk.slippage_ticks,"tick":t.tick_size,
-        "profit_value":t.tick_value_profit,"loss_value":t.tick_value_loss}),
+        "commission":c.risk.commission_per_lot,"slippage":c.risk.slippage_ticks,"tick":t.tick_size}),
     );
     let key = identity.to_string();
     let study = policies.get(&key).cloned().unwrap_or_default();
@@ -467,6 +468,11 @@ mod tests {
         adapt(&mut s, &t, &c, &b, &policies);
         assert_eq!(s.target_distance, 1.5);
         assert_eq!(s.hold_ms, 2000);
+        t.tick_value_profit = Some(1.01);
+        t.tick_value_loss = Some(1.02);
+        let mut s = signal();
+        adapt(&mut s, &t, &c, &b, &policies);
+        assert_eq!(s.target_distance, 1.5);
         let mut changed = c.clone();
         changed.risk.commission_per_lot += 1.;
         let mut s = signal();

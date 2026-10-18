@@ -13,7 +13,7 @@ This iteration extends Flexible Demo in V4 development. It does not change the 1
 ## Execution and scope
 
 - Automatic exit application is enabled by default on Demo, independently configurable under Trading → Mode and costs. Existing open positions retain their frozen geometry and hold time.
-- Source identity includes the mode, brain, timeframe, generated report, strategy geometry definition, Sniper settings, configured commission/slippage and frozen contract values. Changed definitions start a separate study.
+- Source identity includes the mode, brain, timeframe, generated report, strategy geometry definition, Sniper settings, configured commission/slippage and tick size. Changed definitions start a separate study. Monetary tick values are frozen per experience for cost/R calculation; conversion-rate changes do not reset the strategy study.
 - STOP, account identity, broker volume constraints, ownership, reconciliation and the durable no-resend journal remain authoritative. Learning sample counts never block a valid entry.
 - Fast pulses only update in-memory quote trials. SQLite writes and policy changes happen on regular snapshots. Only complete actual closes can admit their paired trials to a study. Shadows never write broker PnL or broker commands.
 - Experiences and studies survive restart and are included in SQLite/Brain Snapshot backups. Account switching cannot reuse another account's studies.
