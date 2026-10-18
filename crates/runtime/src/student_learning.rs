@@ -57,17 +57,29 @@ pub fn adapt(
     );
     let key = identity.to_string();
     let study = policies.get(&key).cloned().unwrap_or_default();
-    let profile = if c.trading.adaptive_exits {
+    let mut profile = if c.trading.adaptive_exits {
         study.active
     } else {
         ExitProfile::Baseline
     };
+    // Preserve the user's Sniper cost fraction after a learned target change.
+    // Falling back keeps the already-valid baseline entry available.
+    let mut cost_fallback = false;
+    if profile != ExitProfile::Baseline && b.id == "system"
+        && c.trading.mode == braintrade_domain::trading::TradingMode::Sniper {
+        let (_, target, _) = profile.geometry(signal.stop_distance, signal.target_distance, signal.hold_ms);
+        let net_target = t.tick_size.zip(t.tick_value_profit).filter(|(tick,value)|*tick>0.&&*value>0.)
+            .map(|(tick,value)|(target/tick*value-c.risk.commission_per_lot-c.risk.slippage_ticks*value)*b.lots);
+        let affordable = braintrade_domain::trading::costs(t,c,b.lots,t.quote_time_ms.unwrap_or(0)).ok()
+            .zip(net_target).is_some_and(|(cost,net)| net>0. && cost.total/(cost.total+net)<=c.trading.max_cost_fraction);
+        if !affordable { profile=ExitProfile::Baseline; cost_fallback=true; }
+    }
     let baseline = json!({"stop":signal.stop_distance,"target":signal.target_distance,"hold_ms":signal.hold_ms});
     let coord = signal.coordination.get_or_insert_with(|| json!({}));
     coord["student"] = json!({"version":1,"source":key,"brain":brain,"timeframe":timeframe,"report_id":report,
         "baseline":baseline,"profile":profile,"adaptive_exits":c.trading.adaptive_exits,
         "phase":if study.phase.is_empty(){"collecting"}else{&study.phase},"decision":study.last_decision,
-        "validation_gain_r":study.last_gain_r,"basis":"prospective_paired_quote_trials"});
+        "validation_gain_r":study.last_gain_r,"cost_fallback":cost_fallback,"basis":"prospective_paired_quote_trials"});
     (signal.stop_distance, signal.target_distance, signal.hold_ms) =
         profile.geometry(signal.stop_distance, signal.target_distance, signal.hold_ms);
 }
@@ -488,6 +500,24 @@ mod tests {
         let mut s = signal();
         adapt(&mut s, &t, &c, &b, &policies);
         assert!(s.coordination.is_none());
+    }
+    #[test]
+    fn learned_sniper_exit_preserves_cost_fraction_without_blocking_entry() {
+        let mut t=telemetry();t.point=Some(0.1);
+        let mut c=Config::default();c.trading.mode=braintrade_domain::trading::TradingMode::Sniper;
+        c.trading.sniper_target_points=19.;c.trading.max_cost_fraction=0.15;
+        c.risk.commission_per_lot=1.;c.risk.slippage_ticks=0.;
+        let b=BrainConfig{id:"system".into(),..Default::default()};
+        let mut s=signal();adapt(&mut s,&t,&c,&b,&BTreeMap::new());
+        let key=s.coordination.unwrap()["student"]["source"].as_str().unwrap().to_owned();
+        let policies=BTreeMap::from([(key,ExitStudy{active:ExitProfile::Quick,..Default::default()})]);
+        let mut s=signal();adapt(&mut s,&t,&c,&b,&policies);
+        assert!(s.ready);assert_eq!(s.target_distance,2.);
+        assert_eq!(s.coordination.unwrap()["student"]["cost_fallback"],true);
+        c.trading.max_cost_fraction=0.5;
+        let mut s=signal();adapt(&mut s,&t,&c,&b,&policies);
+        assert!(s.ready);assert_eq!(s.target_distance,1.5);
+        assert_eq!(s.coordination.unwrap()["student"]["cost_fallback"],false);
     }
     #[test]
     fn ledger_restart_exact_labels_and_shadow_isolation() {
