@@ -15,6 +15,8 @@ pub enum TradingMode {
 #[serde(default, deny_unknown_fields)]
 pub struct TradingConfig {
     pub mode: TradingMode,
+    /// Demo only: select actionable advisors adaptively and shrink oversized orders.
+    pub demo_flexible: bool,
     pub sniper_target_points: f64,
     pub sniper_stop_points: f64,
     pub sniper_cooldown_seconds: u64,
@@ -26,6 +28,7 @@ impl Default for TradingConfig {
     fn default() -> Self {
         Self {
             mode: TradingMode::Expert,
+            demo_flexible: true,
             sniper_target_points: 50.,
             sniper_stop_points: 80.,
             sniper_cooldown_seconds: 0,

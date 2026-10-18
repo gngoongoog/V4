@@ -48,6 +48,7 @@ export component Dashboard inherits Window {
     in property <[string]> exec-frames;
     callback execution-action(string);
     in-out property <int> trade-mode: 2;
+    in-out property <bool> demo-flexible: true;
     in-out property <string> sniper-target: "50";
     in-out property <string> sniper-stop: "80";
     in-out property <string> sniper-cooldown: "0";
@@ -338,7 +339,9 @@ export component Dashboard inherits Window {
         if root.page == 14: ScrollView { VerticalBox { spacing: 10px;
             Text { text: "مركز التداول — الوضع والتكلفة والقناص"; font-size: 20px; color: #eaf0fb; }
             ComboBox { model: ["Scalping / سكالبنك", "Swing / سوينك", "Expert / الخبير المتعلم", "Sniper / القناص"]; current-index <=> root.trade-mode; }
-            Text { text: root.trade-mode == 0 ? "M1 + M5؛ زخم مؤكد، وقف 1.2 ATR وهدف 1.4R، أقصى احتفاظ 15 دقيقة." : root.trade-mode == 1 ? "H1 + H4 + D1؛ اتجاهات متوافقة، وقف 2 ATR وهدف 2.5R، أقصى احتفاظ 3 أيام. السواب غير محسوب." : root.trade-mode == 2 ? "الخبير: تصويت الأعضاء بأوزان تتعلم من نتائج لاحقة؛ يستبعد العقول المنفردة. وقف 1.5 ATR وهدف 2R؛ مهلة 30 دقيقة." : "القناص يستخدم Fast Pulse للقرار اللحظي؛ مدة الاحتفاظ أدناه قابلة للتعديل ولا تتغير على صفقة مفتوحة بعد دخولها."; color: #acbad0; wrap: word-wrap; }
+            Text { text: root.trade-mode == 0 ? "M1 + M5؛ زخم مؤكد، وقف 1.2 ATR وهدف 1.4R، أقصى احتفاظ 15 دقيقة." : root.trade-mode == 1 ? "H1 + H4 + D1؛ اتجاهات متوافقة، وقف 2 ATR وهدف 2.5R، أقصى احتفاظ 3 أيام. السواب غير محسوب." : root.trade-mode == 2 ? (root.demo-flexible ? "الخبير على الديمو المرن: يختار عضواً جاهزاً حسب التعلم والاستكشاف، بوقفه وهدفه ومدته. على الحقيقي يستخدم الإجماع المعتاد." : "الخبير: تصويت الأعضاء بأوزان تتعلم من نتائج لاحقة؛ يستبعد العقول المنفردة. وقف 1.5 ATR وهدف 2R؛ مهلة 30 دقيقة.") : "القناص يستخدم Fast Pulse للقرار اللحظي؛ مدة الاحتفاظ أدناه قابلة للتعديل ولا تتغير على صفقة مفتوحة بعد دخولها."; color: #acbad0; wrap: word-wrap; }
+            CheckBox { text: "تعلّم ديمو مرن"; checked <=> root.demo-flexible; enabled: root.state == "STOPPED"; }
+            Text { text: "على الديمو فقط: الخبير يختار إشارة عضو جاهز حسب النتائج والاستكشاف؛ بقية الأوضاع تتبع إشارتها دون فيتو الأعضاء. يصغّر اللوت عند نقص الهامش ولا يزيده عن اختيارك. أوقف الخيار لاسترجاع الإجماع. شروط الوسيط تبقى لازمة."; color: #acbad0; wrap: word-wrap; }
             Rectangle { background: #151f30; border-radius: 8px; min-height: 116px;
                 VerticalLayout { padding: 12px; spacing: 8px;
                     Text { text: "تكلفة الحساب"; color: #eaf0fb; font-weight: 700; }

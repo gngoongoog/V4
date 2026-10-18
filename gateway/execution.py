@@ -68,6 +68,48 @@ def sniper_broker_geometry(info, tick, stop, target):
     return stop, target, minimum, spread
 
 
+def affordable_demo_volume(mt5, account, info, symbol, side, price, requested, commission):
+    """Round down and shrink only; broker minimum and free margin remain real constraints.
+
+    No retries after order_send. order_calc_margin is a pre-send estimate, so the
+    broker still owns final acceptance when its margin calculation differs.
+    """
+    step = float(info.volume_step)
+    free = float(getattr(account, 'margin_free', float('nan')))
+    if not all(math.isfinite(v) for v in (requested, commission, free)) or requested <= 0 or commission < 0 or free < 0:
+        raise ValueError('Demo sizing: valid free margin, volume and commission required')
+    low = math.ceil(info.volume_min / step - 1e-9)
+    high = math.floor(min(requested, info.volume_max) / step + 1e-9)
+    if low > high:
+        raise ValueError(f'Demo sizing: requested {requested:g} lot is below broker minimum {info.volume_min:g}; volume was not increased')
+    order_type = mt5.ORDER_TYPE_BUY if side == 1 else mt5.ORDER_TYPE_SELL
+    def estimate(units):
+        volume = round(units * step, 10)
+        margin = mt5.order_calc_margin(order_type, symbol, volume, price)
+        if margin is None or not math.isfinite(margin) or margin < 0:
+            raise ValueError('Demo sizing: broker margin estimate unavailable')
+        return volume, float(margin), float(margin) + commission * volume
+    chosen = estimate(high)
+    if chosen[2] > free:
+        minimum = estimate(low)
+        if minimum[2] > free:
+            raise ValueError(f'Demo sizing: broker minimum {minimum[0]:g} lot needs {minimum[2]:.2f} {account.currency} including configured commission; free margin {free:.2f}')
+        chosen = minimum
+        lo, hi = low + 1, high - 1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            candidate = estimate(mid)
+            if candidate[2] <= free:
+                chosen = candidate
+                lo = mid + 1
+            else:
+                hi = mid - 1
+    volume, margin, total = chosen
+    return volume, dict(policy='demo_downsize_only_v1', requested=requested, sent=volume,
+                        free_margin=free, estimated_margin=margin, estimated_margin_plus_commission=total,
+                        broker_minimum=info.volume_min, reduced=volume < requested - 1e-9)
+
+
 class BrokerExecutor:
     def __init__(self, path):
         self.db = sqlite3.connect(path)
@@ -175,6 +217,11 @@ class BrokerExecutor:
                 if a.margin_mode!=getattr(mt5,'ACCOUNT_MARGIN_MODE_RETAIL_HEDGING',2) and (positions or orders):
                     raise ValueError('Netting account: symbol occupied; independent ownership cannot be merged')
                 lots=float(cmd['lots']);side=cmd['signal']['side']
+                if side in (-1,1) and cmd.get('demo_flexible') is True and cmd['target']=='demo' and a.trade_mode==0:
+                    sizing_started=time.perf_counter()
+                    lots,result['sizing']=affordable_demo_volume(mt5,a,info,symbol,side,
+                        float(tick.ask if side==1 else tick.bid),lots,float(cmd.get('commission_per_lot',0)))
+                    result['sizing_ms']=(time.perf_counter()-sizing_started)*1000
             if side not in (-1,1) or not math.isfinite(lots) or not info.volume_min-1e-9<=lots<=info.volume_max+1e-9 or abs(lots/info.volume_step-round(lots/info.volume_step))>1e-7:
                 raise ValueError('Volume/side does not match broker min/max/step')
 
@@ -317,7 +364,7 @@ class BrokerExecutor:
             if account_identity(mt5.account_info())==wanted:
                 rows=mt5.history_deals_get(datetime.fromtimestamp(start/1000,timezone.utc),datetime.fromtimestamp(until/1000,timezone.utc))
                 if rows is not None and account_identity(mt5.account_info())==wanted:
-                    fields=('ticket','position_id','magic','symbol','entry','time_msc','volume','price','profit','commission','swap','fee')
+                    fields=('ticket','position_id','magic','symbol','entry','time_msc','volume','price','profit','commission','swap','fee','reason')
                     deals=[{k:getattr(d,k,0) for k in fields} for d in rows]
                     api('/v1/execution/sync',dict(identity,deals=deals,until_ms=until))
         return work.get('poll_ms',250)/1000

@@ -153,6 +153,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         signal: Option<&Signal>,
         position: u64,
         now: u64,
+        config: Option<&Config>,
     ) -> Result<()> {
         let key = ctx(t);
         let id = uuid::Uuid::new_v4().simple().to_string();
@@ -160,7 +161,15 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             .map(serde_json::to_value)
             .transpose()?
             .unwrap_or(Value::Null);
-        let p = json!({"id":id,"revision":self.settings.revision,"context":key,"brain":b.id,"kind":kind,"login":t.login,"server":t.server,"currency":t.currency,"target":self.settings.target,"symbol":t.symbol,"magic":execution::magic(&b.id),"position":position,"lots":b.lots,"deviation_points":self.settings.deviation_points,"created_ms":now,"max_quote_age_ms":signal.map(|s|if s.key.starts_with("tick:"){1000}else{3000}).unwrap_or(3000),"expires_ms":if kind=="open"{now+3000}else{now+30_000},"signal":s});
+        let mut p = json!({"id":id,"revision":self.settings.revision,"context":key,"brain":b.id,"kind":kind,"login":t.login,"server":t.server,"currency":t.currency,"target":self.settings.target,"symbol":t.symbol,"magic":execution::magic(&b.id),"position":position,"lots":b.lots,"deviation_points":self.settings.deviation_points,"created_ms":now,"max_quote_age_ms":signal.map(|s|if s.key.starts_with("tick:"){1000}else{3000}).unwrap_or(3000),"expires_ms":if kind=="open"{now+3000}else{now+30_000},"signal":s});
+        if let Some(c) = config {
+            p["demo_flexible"] = json!(c.trading.demo_flexible && t.demo && t.account_trade_mode==Some(0));
+            p["commission_per_lot"] = json!(c.risk.commission_per_lot);
+            p["learning"] = json!({"trading_mode":c.trading.mode,"timeframe":b.timeframe,"report_id":b.report_id,
+                "tick_size":t.tick_size,"tick_value_loss":t.tick_value_loss,
+                "weight_at_entry":self.weights.get(&b.id).map(|w|w.weight()).unwrap_or(1.),
+                "intelligence":self.weights.get(&b.id).map(|w|w.intelligence()).unwrap_or_default()});
+        }
         db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload) VALUES(?1,?2,?3,?4,?5,'queued',?6)",params![id,key,b.id,kind,now,p.to_string()])?;
         Ok(())
     }
@@ -243,7 +252,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     && now.saturating_sub(p.opened_ms) >= frozen
                     && now.saturating_sub(last_close) > 5000
                 {
-                    self.queue(db, t, &b, "close", None, p.ticket, now)?;
+                    self.queue(db, t, &b, "close", None, p.ticket, now, None)?;
                 }
             }
             let genome=crate::coordinator_learning::genome(db,&b,t)?;
@@ -260,7 +269,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     let vote=execution::evaluate(member,t,c,&available,g.as_ref(),now);
                     votes.push((member.clone(),vote,self.weights.get(&member.id).cloned().unwrap_or_default()));
                 }
-                execution::coordinate(base,c,votes)
+                execution::coordinate_for_account(base,c,t,votes)
             }else{base};
             let decision_us = started.elapsed().as_micros() as u64;
             let mut gates = vec![];
@@ -333,7 +342,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     "INSERT OR IGNORE INTO broker_seen VALUES(?1,?2,?3)",
                     params![key, b.id, signal.key],
                 )?;
-                self.queue(&tx, t, &b, "open", Some(&signal), 0, now)?;
+                self.queue(&tx, t, &b, "open", Some(&signal), 0, now, Some(c))?;
                 tx.execute("INSERT INTO broker_signal_log(context,brain,timestamp_ms,payload) VALUES(?1,?2,?3,?4)",params![key,b.id,now,result.to_string()])?;
                 tx.commit()?;
             }
@@ -388,7 +397,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                                 })
                         })
                         .collect();
-                    brains.push(json!({"config":b,"name":BRAINS.iter().find(|v|v.0==b.id).unwrap().1,"magic":magic,"latest":self.signals.get(&b.id).filter(|v|t.is_some_and(|t|self.matches(t))&&now.saturating_sub(v["evaluated_ms"].as_u64().unwrap_or(0))<=3000),"stats":{"deals":own.len(),"closed_positions":closed.len(),"wins":closed.iter().filter(|(_,p)|**p>0.).count(),"net_booked":net,"floating":positions.iter().filter(|p|p.magic==magic).map(|p|p.profit).sum::<f64>(),"open_positions":positions.iter().filter(|p|p.magic==magic).count()}}));
+                    brains.push(json!({"config":b,"name":BRAINS.iter().find(|v|v.0==b.id).unwrap().1,"magic":magic,"latest":self.signals.get(&b.id).filter(|v|t.is_some_and(|t|self.matches(t))&&now.saturating_sub(v["evaluated_ms"].as_u64().unwrap_or(0))<=3000),"learning":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))),"learned_weight":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))).map(|w|w.weight()),"stats":{"deals":own.len(),"closed_positions":closed.len(),"wins":closed.iter().filter(|(_,p)|**p>0.).count(),"net_booked":net,"floating":positions.iter().filter(|p|p.magic==magic).map(|p|p.profit).sum::<f64>(),"open_positions":positions.iter().filter(|p|p.magic==magic).count()}}));
                 }
                 let commands=json_rows(db,"SELECT json_object('request',json(payload),'state',state,'result',json(result)) FROM broker_commands WHERE context=?1 ORDER BY created_ms DESC LIMIT 100",&key)?;
                 Ok(
@@ -475,7 +484,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     .iter()
                     .filter(|p| p.magic == execution::magic(id).unwrap() && p.symbol == t.symbol)
                 {
-                    self.queue(db, t, b, "close", None, p.ticket, now)?;
+                    self.queue(db, t, b, "close", None, p.ticket, now, None)?;
                 }
                 Ok(json!({"ok":true}))
             }

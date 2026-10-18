@@ -13,7 +13,7 @@ class Broker:
     ORDER_TIME_GTC=0; ORDER_FILLING_FOK=0; ORDER_FILLING_IOC=1; ORDER_FILLING_RETURN=2
     ACCOUNT_MARGIN_MODE_RETAIL_HEDGING=2; SYMBOL_TRADE_EXECUTION_MARKET=2
     def __init__(self):
-        self.account=N(login=17,server='Demo',currency='USD',trade_mode=0,margin_mode=2,trade_allowed=True,trade_expert=True)
+        self.account=N(margin_free=10000.,login=17,server='Demo',currency='USD',trade_mode=0,margin_mode=2,trade_allowed=True,trade_expert=True)
         self.terminal=N(connected=True,trade_allowed=True,tradeapi_disabled=False)
         self.info=N(point=.01,trade_tick_size=.01,volume_min=.01,volume_step=.01,volume_max=100.,filling_mode=3,trade_exemode=2,trade_stops_level=5)
         self.tick=N(bid=2000.,ask=2000.10,time_msc=clock_ms())
@@ -29,6 +29,7 @@ class Broker:
     def positions_get(self,**kw):return self.positions
     def orders_get(self,**kw):return self.orders
     def history_deals_get(self,*a):return self.deals
+    def order_calc_margin(self,side,symbol,volume,price):return volume*1000.
     def order_check(self,r):
         if self.on_check:self.on_check()
         return N(retcode=self.check_code,comment='check')
@@ -46,6 +47,32 @@ class ExecutionTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();self.path=Path(self.temp.name)/'journal.sqlite';self.ex=BrokerExecutor(self.path);self.mt=Broker();self.cmd=command()
     def tearDown(self):self.ex.close();self.temp.cleanup()
     def send(self):return self.ex.execute(self.mt,self.cmd,lambda _:True)
+    def test_flexible_100_dollar_demo_downsizes_before_one_real_send(self):
+        self.mt.account.margin_free=100.
+        self.cmd.update(demo_flexible=True,commission_per_lot=7.,lots=.5)
+        result=self.send()
+        self.assertEqual(result['state'],'filled')
+        self.assertAlmostEqual(result['sizing']['sent'],.09)
+        self.assertLessEqual(result['sizing']['estimated_margin_plus_commission'],100.)
+        self.assertEqual(len(self.mt.sends),1)
+        self.send();self.assertEqual(len(self.mt.sends),1)
+    def test_flexible_minimum_is_not_invented_and_zero_margin_never_sends(self):
+        self.cmd.update(demo_flexible=True,commission_per_lot=7.)
+        self.mt.account.margin_free=5.
+        result=self.send();self.assertEqual(result['state'],'rejected')
+        self.assertIn('broker minimum',result['reason']);self.assertFalse(self.mt.sends)
+        self.mt.account.margin_free=100.;self.cmd['lots']=.001
+        result=self.send();self.assertIn('not increased',result['reason']);self.assertFalse(self.mt.sends)
+    def test_flexible_volume_rounds_down_and_is_demo_only(self):
+        self.cmd.update(demo_flexible=True,commission_per_lot=7.,lots=.015)
+        self.assertEqual(self.send()['request']['volume'],.01)
+        self.cmd['id']='new-live';self.cmd['target']='live';self.mt.account.trade_mode=2
+        self.assertEqual(self.send()['state'],'rejected')
+        self.assertEqual(len(self.mt.sends),1)
+    def test_flexible_margin_estimate_failure_does_not_guess(self):
+        self.cmd.update(demo_flexible=True)
+        self.mt.order_calc_margin=lambda *args:None
+        self.assertIn('estimate unavailable',self.send()['reason']);self.assertFalse(self.mt.sends)
     def test_filled_once_even_after_restart_and_duplicate_delivery(self):
         r=self.send();self.assertEqual(r['state'],'filled');self.assertEqual(self.mt.sends[0]['type_filling'],0);self.assertLess(self.mt.sends[0]['sl'],self.mt.tick.bid);self.assertGreater(self.mt.sends[0]['tp'],self.mt.tick.ask)
         self.ex.close();self.ex=BrokerExecutor(self.path);self.assertEqual(self.send()['state'],'filled');self.assertEqual(len(self.mt.sends),1)

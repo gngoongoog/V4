@@ -101,6 +101,41 @@ pub fn intelligence_context(t:&Telemetry,frames:&BTreeMap<String,Vec<FrameBar>>,
 }
 pub fn evaluate(b:&BrainConfig,t:&Telemetry,c:&Config,frames:&BTreeMap<String,Vec<FrameBar>>,genome:Option<&Genome>,now:u64)->Signal {legacy::evaluate(b,t,c,frames,genome,now)}
 
+/// Exploration acts on already actionable signals, never on random price directions.
+/// The exact selected policy is frozen so only its own closed trade earns credit.
+pub fn coordinate_for_account(primary:Signal,c:&Config,t:&Telemetry,votes:Vec<(BrainConfig,Signal,LearnedWeight)>)->Signal {
+    if !c.trading.demo_flexible || !t.demo || t.account_trade_mode != Some(0) {
+        return coordinate(primary,c,votes);
+    }
+    let selected = if c.trading.mode == TradingMode::Expert {
+        votes.iter().filter(|(b,s,_)| b.id!="system" && !b.enabled && s.ready && matches!(s.side,-1|1)
+            && s.stop_distance.is_finite() && s.stop_distance>0. && s.target_distance.is_finite() && s.target_distance>0.)
+            .max_by(|a,b| {
+                let score=|w:&LearnedWeight| w.weight()+0.20/(1.+w.broker_samples as f64).sqrt();
+                score(&a.2).total_cmp(&score(&b.2)).then_with(|| b.0.id.cmp(&a.0.id))
+            }).cloned()
+    } else {None};
+    let original=primary.clone();
+    let mut result=coordinate(primary,c,votes);
+    let coordination=result.coordination.as_mut().unwrap();
+    coordination["demo_flexible"]=serde_json::json!(true);
+    if let Some((b,s,w))=selected {
+        coordination["selection"]=serde_json::json!({"brain":b.id,"policy":"ready_advisor_reward_plus_exploration_v1",
+            "weight":w.weight(),"broker_samples":w.broker_samples,"exploration_bonus":0.20/(1.+w.broker_samples as f64).sqrt(),
+            "note":"Bounded exploration bonus; not a success probability. Only selected advisor receives broker credit."});
+        result.side=s.side;result.ready=true;result.stop_distance=s.stop_distance;result.target_distance=s.target_distance;
+        result.hold_ms=s.hold_ms;result.bar_time=s.bar_time;
+        // One coordinator attempt per source timeframe/bar, even if learning changes its preferred advisor.
+        result.key=format!("demo:{}:{}",b.timeframe,s.bar_time);
+        result.reason=format!("تعلّم ديمو مرن: {}؛ وزن {:.3}؛ عينات MT5 {} | {}",b.id,w.weight(),w.broker_samples,s.reason);
+    } else if c.trading.mode != TradingMode::Expert {
+        // Slow advisor disagreement is diagnostic in fast/primary modes, not a veto.
+        result.ready=original.ready;
+        result.reason=format!("{} | ديمو مرن: إشارات الأعضاء استشارية",original.reason);
+    }
+    result
+}
+
 pub fn coordinate(mut primary:Signal,c:&Config,votes:Vec<(BrainConfig,Signal,LearnedWeight)>)->Signal {
     let intelligence=votes.iter().map(|(_,_,w)|w.intelligence()).find(|ctx|ctx.regime!="unknown").unwrap_or_default();
     let mut buy=0.;let mut sell=0.;let mut confidence_sum=0.;let mut ready_count=0u64;let mut members=vec![];
@@ -162,4 +197,42 @@ pub fn coordinate(mut primary:Signal,c:&Config,votes:Vec<(BrainConfig,Signal,Lea
         let recent_bad=LearnedWeight{samples:20,wins:10,weighted_win_rate:0.20,effective_samples:8.,confidence:0.8,..Default::default()};
         assert!(recent_good.weight()>recent_bad.weight());
     }
+    #[test]
+    fn flexible_demo_selects_actionable_policy_and_closed_reward_changes_choice() {
+        let c=Config::default();
+        let t=Telemetry{demo:true,account_trade_mode:Some(0),..Default::default()};
+        let a=BrainConfig{id:"gann".into(),..Default::default()};
+        let b=BrainConfig{id:"trend".into(),..Default::default()};
+        let votes=vec![(a.clone(),signal("gann",1),LearnedWeight::default()),(b.clone(),signal("trend",-1),LearnedWeight::default())];
+        assert!(!coordinate(signal("system",0),&c,votes.clone()).ready);
+        let first=coordinate_for_account(signal("system",0),&c,&t,votes.clone());
+        assert!(first.ready);assert_eq!(first.side,1);
+        assert_eq!(first.coordination.unwrap()["selection"]["brain"],"gann");
+        let loss=LearnedWeight{broker_samples:1,..learned(0,1,-0.8,0.15,1.)};
+        let next=coordinate_for_account(signal("system",0),&c,&t,vec![(a,signal("gann",1),loss),(b,signal("trend",-1),Default::default())]);
+        assert!(next.ready);assert_eq!(next.side,-1);
+        let live=Telemetry{demo:false,account_trade_mode:Some(2),..Default::default()};
+        assert!(!coordinate_for_account(signal("system",0),&c,&live,votes.clone()).ready);
+        let mut off=c.clone();off.trading.demo_flexible=false;
+        assert!(!coordinate_for_account(signal("system",0),&off,&t,votes).ready);
+    }
+    #[test]
+    fn flexible_demo_never_invents_signal_or_uses_solo_vote() {
+        let t=Telemetry{demo:true,account_trade_mode:Some(0),..Default::default()};
+        let b=BrainConfig{id:"trend".into(),enabled:true,..Default::default()};
+        let mut primary=signal("system",0);primary.stop_distance=0.;
+        assert!(!coordinate_for_account(primary.clone(),&Config::default(),&t,vec![(b,signal("trend",1),Default::default())]).ready);
+        assert!(!coordinate_for_account(primary,&Config::default(),&t,vec![]).ready);
+    }
+    #[test]
+    fn flexible_sniper_ignores_slow_veto_but_keeps_primary_gates() {
+        let mut c=Config::default();c.trading.mode=TradingMode::Sniper;
+        let t=Telemetry{demo:true,account_trade_mode:Some(0),..Default::default()};
+        let votes=vec!["trend","gann","momentum"].into_iter().map(|id|(BrainConfig{id:id.into(),..Default::default()},signal(id,-1),LearnedWeight::default())).collect::<Vec<_>>();
+        assert!(!coordinate(signal("system",1),&c,votes.clone()).ready);
+        assert!(coordinate_for_account(signal("system",1),&c,&t,votes.clone()).ready);
+        let mut invalid=signal("system",1);invalid.ready=false;
+        assert!(!coordinate_for_account(invalid,&c,&t,votes).ready);
+    }
+
 }
