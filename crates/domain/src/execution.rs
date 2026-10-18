@@ -40,6 +40,10 @@ pub struct LearnedWeight {
     pub quote_freshness:f64,
     /// Exact broker evidence when available, otherwise causal forward evidence.
     pub evidence_source:String,
+    pub context_key:String,
+    pub context_samples:u64,
+    pub context_reward:f64,
+    pub context_confidence:f64,
 }
 impl LearnedWeight {
     /// V3 combines Bayesian win evidence with cost-adjusted Reward V2 and shrinks every
@@ -56,7 +60,7 @@ impl LearnedWeight {
         let raw=1.0+(p-0.5)*0.9+self.mean_reward.clamp(-1.,1.)*0.45;
         let mut confidence=self.confidence.clamp(0.,1.);
         if self.broker_samples>0 {confidence=confidence.max(0.15);}
-        (1.0+(raw-1.0)*confidence).clamp(0.55,1.60)
+        (1.0+(raw-1.0)*confidence + 0.20*self.context_reward.clamp(-1.,1.)*self.context_confidence.clamp(0.,1.)).clamp(0.55,1.60)
     }
     pub fn intelligence(&self)->IntelligenceContext {
         IntelligenceContext{
@@ -107,22 +111,31 @@ pub fn coordinate_for_account(primary:Signal,c:&Config,t:&Telemetry,votes:Vec<(B
     if !c.trading.demo_flexible || !t.demo || t.account_trade_mode != Some(0) {
         return coordinate(primary,c,votes);
     }
-    let selected = if c.trading.mode == TradingMode::Expert {
-        votes.iter().filter(|(b,s,_)| b.id!="system" && !b.enabled && s.ready && matches!(s.side,-1|1)
-            && s.stop_distance.is_finite() && s.stop_distance>0. && s.target_distance.is_finite() && s.target_distance>0.)
-            .max_by(|a,b| {
-                let score=|w:&LearnedWeight| w.weight()+0.20/(1.+w.broker_samples as f64).sqrt();
-                score(&a.2).total_cmp(&score(&b.2)).then_with(|| b.0.id.cmp(&a.0.id))
-            }).cloned()
-    } else {None};
+    let mut candidates:Vec<_>=votes.iter().filter(|(b,s,_)| b.id!="system" && !b.enabled && s.ready && matches!(s.side,-1|1)
+        && s.stop_distance.is_finite() && s.stop_distance>0. && s.target_distance.is_finite() && s.target_distance>0.).collect();
+    candidates.sort_by(|a,b|a.0.id.cmp(&b.0.id));
+    let total=candidates.iter().map(|v|v.2.broker_samples).sum();
+    let epsilon=crate::student::exploration_rate(total);
+    // Candidate signal keys and account identity fix this draw for an unchanged opportunity.
+    let seed=serde_json::to_string(&(&t.server,t.login,&t.symbol,c.trading.mode,
+        candidates.iter().map(|v|(&v.0.id,&v.0.timeframe,v.1.bar_time)).collect::<Vec<_>>())).unwrap();
+    let exploring=crate::student::draw(&seed,0)<epsilon;
+    let best=candidates.iter().enumerate().max_by(|a,b|a.1.2.weight().total_cmp(&b.1.2.weight())
+        .then_with(|| b.1.0.id.cmp(&a.1.0.id))).map(|v|v.0).unwrap_or(0);
+    let chosen=if exploring && !candidates.is_empty(){(crate::student::draw(&seed,1)*candidates.len() as f64) as usize}else{best};
+    let propensity=if candidates.is_empty(){0.}else{epsilon/candidates.len() as f64+if chosen==best{1.-epsilon}else{0.}};
+    let selected=if c.trading.mode==TradingMode::Expert {candidates.get(chosen).map(|v|(*v).clone())}else{None};
     let original=primary.clone();
     let mut result=coordinate(primary,c,votes);
     let coordination=result.coordination.as_mut().unwrap();
     coordination["demo_flexible"]=serde_json::json!(true);
     if let Some((b,s,w))=selected {
-        coordination["selection"]=serde_json::json!({"brain":b.id,"policy":"ready_advisor_reward_plus_exploration_v1",
-            "weight":w.weight(),"broker_samples":w.broker_samples,"exploration_bonus":0.20/(1.+w.broker_samples as f64).sqrt(),
-            "note":"Bounded exploration bonus; not a success probability. Only selected advisor receives broker credit."});
+        coordination["selection"]=serde_json::json!({"brain":b.id,"timeframe":b.timeframe,"report_id":b.report_id,
+            "definition":[b.stop_atr,b.reward_risk,b.max_hold_seconds],
+            "policy":"contextual_epsilon_greedy_v2","weight":w.weight(),"broker_samples":w.broker_samples,
+            "exploration_rate":epsilon,"exploring":exploring,"selection_probability":propensity,
+            "context_key":w.context_key,"context_samples":w.context_samples,"context_reward":w.context_reward,
+            "note":"Selection probability describes this policy draw, not trade success. Only ready advisors participate."});
         result.side=s.side;result.ready=true;result.stop_distance=s.stop_distance;result.target_distance=s.target_distance;
         result.hold_ms=s.hold_ms;result.bar_time=s.bar_time;
         // One coordinator attempt per source timeframe/bar, even if learning changes its preferred advisor.

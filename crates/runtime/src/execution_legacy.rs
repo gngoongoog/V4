@@ -38,6 +38,7 @@ pub struct Service {
     pub settings: Settings,
     pub brains: Vec<BrainConfig>,
     pub weights:BTreeMap<String,braintrade_domain::execution::LearnedWeight>,
+    pub student_policies:BTreeMap<String,braintrade_domain::student::ExitStudy>,
     signals: BTreeMap<String, Value>,
     last_sync_ms: u64,
     history_until_ms: u64,
@@ -96,6 +97,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             brains,
             signals: BTreeMap::new(),
             weights:BTreeMap::new(),
+            student_policies:BTreeMap::new(),
             last_sync_ms: 0,
             history_until_ms: 0,
         })
@@ -166,7 +168,9 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             p["demo_flexible"] = json!(c.trading.demo_flexible && t.demo && t.account_trade_mode==Some(0));
             p["commission_per_lot"] = json!(c.risk.commission_per_lot);
             p["learning"] = json!({"trading_mode":c.trading.mode,"timeframe":b.timeframe,"report_id":b.report_id,
-                "tick_size":t.tick_size,"tick_value_loss":t.tick_value_loss,
+                "tick_size":t.tick_size,"tick_value_loss":t.tick_value_loss,"tick_value_profit":t.tick_value_profit,
+                "slippage_ticks":c.risk.slippage_ticks,"bid":t.bid,"ask":t.ask,"quote_time_ms":t.quote_time_ms,
+                "context_key":self.weights.get(&b.id).map(|w|w.context_key.clone()).unwrap_or_default(),
                 "weight_at_entry":self.weights.get(&b.id).map(|w|w.weight()).unwrap_or(1.),
                 "intelligence":self.weights.get(&b.id).map(|w|w.intelligence()).unwrap_or_default()});
         }
@@ -259,7 +263,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             let available=crate::coordinator_learning::available_frames(t,frames,now);
             let started = std::time::Instant::now();
             let base=execution::evaluate(&b,t,c,&available,genome.as_ref(),now);
-            let signal=if b.id=="system" {
+            let mut signal=if b.id=="system" {
                 let mut votes=vec![];
                 for member in self.brains.iter().filter(|m|m.id!="system"&&!m.enabled) {
                     // Returning SOLO positions finish under their original owner before rejoining.
@@ -271,6 +275,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 }
                 execution::coordinate_for_account(base,c,t,votes)
             }else{base};
+            crate::student_learning::adapt(&mut signal,t,c,&b,&self.student_policies);
             let decision_us = started.elapsed().as_micros() as u64;
             let mut gates = vec![];
             if t.margin_mode!=Some(2)&&db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain<>?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,b.id],|r|r.get::<_,bool>(0))?{gates.push("Netting: أمر لعقل آخر لم تتم تسويته");}

@@ -14,6 +14,7 @@ mod news;
 mod render;
 mod studio;
 mod execution;
+mod student;
 
 enum Task {
     Action(String),
@@ -135,6 +136,7 @@ fn run_ui() -> anyhow::Result<()> {
     let _learning_timer = learning::setup(&ui);
     let _studio_timer=studio::setup(&ui);
     let _execution_timer=execution::setup(&ui);
+    let _student_timer=student::setup(&ui);
     let (tx, rx) = mpsc::channel::<Task>();
     let sender = tx.clone();
     let weak = ui.as_weak();

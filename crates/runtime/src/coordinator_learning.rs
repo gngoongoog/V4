@@ -141,11 +141,22 @@ fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<
     for(ts,raw)in rows{let p:Value=serde_json::from_str(&raw)?;let sample_regime=p["regime"].as_str().unwrap_or("legacy");if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}let net=p["net_per_lot"].as_f64().unwrap_or(0.);let reward=p["reward"].as_f64().unwrap_or_else(||reward_v2(net,0.).1);let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);samples+=1;if net>0.{wins+=1;weighted_wins+=w;}weighted_net+=net*w;weighted_reward+=reward*w;effective+=w;}
     Ok(finish_stats(samples,wins,weighted_wins,weighted_net,weighted_reward,effective))
 }
+fn contextual_stats(db:&Connection,source:&str,key:&str,now:u64)->Result<(u64,f64,f64)> {
+    let mut st=db.prepare("SELECT closed_ms,payload FROM coordinator_broker_samples WHERE source=?1 ORDER BY closed_ms DESC LIMIT 4000")?;
+    let rows=st.query_map([source],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let(mut count,mut sum,mut mass)=(0,0.,0.);
+    for(ts,raw) in rows {let p:Value=serde_json::from_str(&raw)?;
+        if p["context_key"].as_str()!=Some(key){continue;}
+        let Some(reward)=p["reward"].as_f64().filter(|v|v.is_finite()) else {continue;};
+        let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);count+=1;sum+=reward*w;mass+=w;
+    }
+    Ok((count,if mass>0.{sum/mass}else{0.},confidence(mass,true)))
+}
 fn confidence(effective:f64,broker:bool)->f64{if effective<=0.{0.}else{let scale=if broker{8.}else{20.};(1.-(-effective/scale).exp()).clamp(0.,1.)}}
 fn selected_weight(forward_global:Stats,forward_regime:Stats,broker_global:Stats,broker_regime:Stats,intelligence:&IntelligenceContext)->LearnedWeight{
     let(mut chosen,broker,evidence)=if broker_global.samples>0{if broker_regime.samples>0{(broker_regime.clone(),true,"mt5_demo_broker_regime")}else{(broker_global.clone(),true,"mt5_demo_broker_global")}}else if forward_regime.samples>=5{(forward_regime.clone(),false,"forward_bars_regime")}else{(forward_global.clone(),false,"forward_bars_global")};
     if chosen.effective_samples<=0.&&chosen.samples>0{chosen.effective_samples=chosen.samples as f64;}
-    LearnedWeight{samples:chosen.samples,wins:chosen.wins,mean_net_per_lot:chosen.mean_net_per_lot,mean_reward:chosen.mean_reward,weighted_win_rate:chosen.weighted_win_rate,broker_samples:broker_global.samples,forward_samples:forward_global.samples,regime_samples:if broker{broker_regime.samples}else{forward_regime.samples},effective_samples:chosen.effective_samples,confidence:confidence(chosen.effective_samples,broker),regime:intelligence.regime.clone(),session:intelligence.session.clone(),direction:intelligence.direction,atr:intelligence.atr,volatility_ratio:intelligence.volatility_ratio,spread_to_atr:intelligence.spread_to_atr,execution_quality:intelligence.execution_quality,execution_history_quality:intelligence.execution_history_quality,execution_history_samples:intelligence.execution_history_samples,quote_freshness:intelligence.quote_freshness,evidence_source:evidence.into()}
+    LearnedWeight{samples:chosen.samples,wins:chosen.wins,mean_net_per_lot:chosen.mean_net_per_lot,mean_reward:chosen.mean_reward,weighted_win_rate:chosen.weighted_win_rate,broker_samples:broker_global.samples,forward_samples:forward_global.samples,regime_samples:if broker{broker_regime.samples}else{forward_regime.samples},effective_samples:chosen.effective_samples,confidence:confidence(chosen.effective_samples,broker),regime:intelligence.regime.clone(),session:intelligence.session.clone(),direction:intelligence.direction,atr:intelligence.atr,volatility_ratio:intelligence.volatility_ratio,spread_to_atr:intelligence.spread_to_atr,execution_quality:intelligence.execution_quality,execution_history_quality:intelligence.execution_history_quality,execution_history_samples:intelligence.execution_history_samples,quote_freshness:intelligence.quote_freshness,evidence_source:evidence.into(),..Default::default()}
 }
 
 fn execution_history_quality(db:&Connection,key:&str,t:&Telemetry,now:u64)->Result<(f64,u64)> {
@@ -278,6 +289,7 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
                 "gross":gross,"commission":commission,"swap":swap,"fee":fee,"net":net,"net_per_lot":net/exit_volume,
                 "attribution":attribution,"exit_reason_codes":reasons,"weight_at_entry":member["weight"],"entry_reason":cmd["signal"]["reason"],
                 "risk_money":risk_money,"r_multiple":r_multiple,"reward":reward,"regime":regime,"session":session,
+                "context_key":learning["context_key"],"selection":coordination["selection"],
                 "execution_quality":intel["execution_quality"],"costs":"exact booked MT5 deal profit + commission + swap + fee"});
             tx.execute("INSERT OR IGNORE INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,?3,?4,?5,?6)",params![&source,position_id,&key,id,closed_ms,payload.to_string()])?;
         }
@@ -401,9 +413,13 @@ impl Learner {
 
             // Broker history can mature between completed bars, so weights are refreshed on
             // every observe call rather than only when this member's timeframe advances.
-            let weight=selected_weight(
+            let mut weight=selected_weight(
                 forward_stats(db,&source,None,now)?,forward_stats(db,&source,Some(&intelligence.regime),now)?,
                 broker_stats(db,&source,None,now)?,broker_stats(db,&source,Some(&intelligence.regime),now)?,&intelligence);
+            weight.context_key=braintrade_domain::student::context_key(&intelligence);
+            if c.trading.demo_flexible && t.demo && t.account_trade_mode==Some(0) {
+                (weight.context_samples,weight.context_reward,weight.context_confidence)=contextual_stats(db,&source,&weight.context_key,now)?;
+            }
             self.weights.insert(source.clone(),weight);
 
             if run {
@@ -463,6 +479,20 @@ impl Learner {
 mod tests {
     use super::*;
     use braintrade_domain::Candle;
+
+    #[test]
+    fn context_rewards_do_not_cross_sessions_cost_buckets_or_sources() {
+        let db=Connection::open_in_memory().unwrap();let _=Learner::new(&db).unwrap();
+        for (id,source,key,reward) in [(1,"same","trend_up_normal|london|tight",0.8),
+            (2,"same","trend_up_normal|asia|tight",-0.8),(3,"same","trend_up_normal|london|wide",-0.9),
+            (4,"other","trend_up_normal|london|tight",-1.)] {
+            db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,'account','trend',1000,?3)",
+                params![source,id,json!({"context_key":key,"reward":reward}).to_string()]).unwrap();
+        }
+        let (n,reward,confidence)=contextual_stats(&db,"same","trend_up_normal|london|tight",1000).unwrap();
+        assert_eq!(n,1);assert_eq!(reward,0.8);assert!(confidence>0. && confidence<0.2);
+        assert_eq!(contextual_stats(&db,"missing","trend_up_normal|london|tight",1000).unwrap().0,0);
+    }
 
     fn bars(end: u64) -> Vec<FrameBar> {
         (0..180)

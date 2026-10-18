@@ -17,6 +17,8 @@ pub struct TradingConfig {
     pub mode: TradingMode,
     /// Demo only: select actionable advisors adaptively and shrink oversized orders.
     pub demo_flexible: bool,
+    /// Demo-only prospective exit learning; no effect on already open positions.
+    pub adaptive_exits: bool,
     pub sniper_target_points: f64,
     pub sniper_stop_points: f64,
     pub sniper_cooldown_seconds: u64,
@@ -29,6 +31,7 @@ impl Default for TradingConfig {
         Self {
             mode: TradingMode::Expert,
             demo_flexible: true,
+            adaptive_exits: true,
             sniper_target_points: 50.,
             sniper_stop_points: 80.,
             sniper_cooldown_seconds: 0,

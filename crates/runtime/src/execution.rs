@@ -288,6 +288,7 @@ fn enforce_portfolio(
 pub struct Service {
     inner: legacy::Service,
     learner: crate::coordinator_learning::Learner,
+    student: crate::student_learning::Student,
     portfolio: PortfolioLimits,
     portfolio_state: Value,
     fast: Option<pulse::FastContext>,
@@ -326,6 +327,7 @@ impl Service {
         Ok(Self {
             inner,
             learner: crate::coordinator_learning::Learner::new(db)?,
+            student: crate::student_learning::Student::new(db)?,
             portfolio,
             portfolio_state,
             fast: None,
@@ -387,6 +389,8 @@ impl Service {
             run,
             now,
         )?;
+        self.student.observe(db,telemetry,now)?;
+        self.inner.student_policies=self.student.policies.clone();
         // Legacy engine still owns durable broker intents/reconciliation. With `system`
         // forced on, it represents coordinated execution; every other `enabled` flag means SOLO.
         self.inner
@@ -458,6 +462,12 @@ impl Service {
         status: &Status,
         now: u64,
     ) -> Result<Value> {
+        if method=="GET" && path=="/v1/execution/student" {
+            let key=status.telemetry.as_ref().map(crate::coordinator_learning::context).unwrap_or_default();
+            let mut view=crate::student_learning::view(db,&key)?;
+            view["demo_connected"]=json!(status.gateway_fresh && status.telemetry.as_ref().is_some_and(|t|t.connected&&t.demo&&t.account_trade_mode==Some(0)));
+            return Ok(view);
+        }
         // PUT intentionally avoids the generic POST audit write on every market tick.
         // The pulse only changes the cached quote, then runs execution/reconciliation
         // logic and returns gateway work in the same response. Final authorization and
@@ -476,6 +486,7 @@ impl Service {
             if let Some(system) = self.inner.brains.iter_mut().find(|brain| brain.id == "system") {
                 system.enabled = true;
             }
+            self.student.quote(&next.telemetry);
             self.inner.observe(
                 db,
                 &next.telemetry,

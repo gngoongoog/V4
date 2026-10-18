@@ -3,6 +3,7 @@ pub mod backtest;
 pub mod trading;
 pub mod commission;
 pub mod execution;
+pub mod student;
 pub mod studio;
 pub mod wyckoff;
 #[path = "backtest/evaluation.rs"]

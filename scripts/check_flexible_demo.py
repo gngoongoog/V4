@@ -75,6 +75,9 @@ def check(exe=None):
             command1=api('/v1/execution/gateway')['command'];assert command1 and command1['brain']=='system',brain('system')
             selected=command1['signal']['coordination']['selection']['brain']
             assert command1['demo_flexible'] and command1['learning']['trading_mode']=='expert'
+            choice=command1['signal']['coordination']['selection']
+            assert choice['policy']=='contextual_epsilon_greedy_v2' and 0<choice['selection_probability']<=1
+            assert command1['signal']['coordination']['student']['profile']=='baseline'
             result=submit(command1);assert result['state']=='filled',result
             assert abs(result['request']['volume']-.09)<1e-8,result
             assert len(broker.sends)==1
@@ -98,6 +101,12 @@ def check(exe=None):
             assert abs(sample['net']+.43)<1e-8,sample
             learned=brain(selected);assert learned['learning']['broker_samples']==1,learned
             assert learned['learned_weight']<1.,learned
+            assert learned['learning']['context_samples']==1,learned
+            student=api('/v1/execution/student')
+            assert student['closed_broker_trades']==1 and student['total_experiences']==1,student
+            assert student['experiences'][0]['brain']==selected
+            assert abs(student['experiences'][0]['actual']['net']+.43)<1e-8
+            assert student['recent_pattern_counts']['cost_drag']==1
             # Replaying history doesn't multiply samples or fake additional learning.
             api('/v1/execution/sync',sync);publish()
             assert len(api('/v1/execution')['learning_review'])==2
@@ -105,8 +114,10 @@ def check(exe=None):
             assert not api('/v1/status')['requested_run']
             assert brain(selected)['learning']['broker_samples']==1
             assert brain(selected)['learned_weight']<1.
+            assert api('/v1/execution/student')['closed_broker_trades']==1
             snapshot['login']=99;publish()
             assert not api('/v1/execution')['learning_review']
+            assert api('/v1/execution/student')['total_experiences']==0
             assert api('/v1/execution/gateway')['command'] is None
             report=dict(result='PASS',version=VERSION,broker='simulated; no native MT5 acceptance',balance=100.,
                 checks=['ready expert selects without consensus','Core authorization reaches adapter order_send',
@@ -115,6 +126,8 @@ def check(exe=None):
                 'selected advisor only plus primary owner receive actual closed net outcome',
                 'positive gross turned into loss by booked commission is explained',
                 'negative outcome lowers next learned influence','restart preserves learning and STOP',
+                'contextual exploration probability frozen in order',
+                'student journal uses exact closed net and persists through restart',
                 'account isolation'])
             out=ROOT/'test-output/flexible-demo-integration.json';out.parent.mkdir(exist_ok=True);out.write_text(json.dumps(report,indent=2))
             print(json.dumps(report))

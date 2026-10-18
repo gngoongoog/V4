@@ -334,6 +334,7 @@ class BrokerExecutor:
                 result.update(state=state,retcode=code,reason=str(getattr(response,'comment','No broker acknowledgement')),
                               order=int(getattr(response,'order',0)),deal=int(getattr(response,'deal',0)),
                               volume=float(getattr(response,'volume',0)),price=float(getattr(response,'price',0)))
+            result['acknowledged_ms']=clock_ms()
             result['send_ms']=(time.perf_counter()-sent)*1000
             result['total_ms']=(time.perf_counter()-started)*1000
             return self._save(cmd,result)
