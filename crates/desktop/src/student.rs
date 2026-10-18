@@ -51,7 +51,7 @@ pub fn paint(ui: &Dashboard, v: &Value) {
         let s = &item["study"];
         let source: Value =
             serde_json::from_str(item["source"].as_str().unwrap_or("[]")).unwrap_or(Value::Null);
-        let _=writeln!(policies,"{} / {} / {}\n{} • {} / 20 مقارنة\nالمطبّق: {} | المرشح: {}\nآخر فرق متوسط: {:+.3} R | ترقيات {} • رجوع {}\n{}\n",
+        let _=writeln!(policies,"{} / {} / {}\n{} • {} / 20 مقارنة\nالمعتمد بالتعلّم: {} | المرشح: {}\nآخر فرق متوسط: {:+.3} R | ترقيات {} • رجوع {}\n{}\n",
             source[3].as_str().unwrap_or("—"),source[4].as_str().unwrap_or("—"),source[2].as_str().unwrap_or("—"),
             label(s["phase"].as_str().unwrap_or("collecting")),s["samples"],label(s["active"].as_str().unwrap_or("baseline")),
             label(s["challenger"].as_str().unwrap_or("baseline")),s["last_gain_r"].as_f64().unwrap_or(0.),s["promotions"],s["rollbacks"],
@@ -65,6 +65,10 @@ pub fn paint(ui: &Dashboard, v: &Value) {
     for e in v["experiences"].as_array().into_iter().flatten().take(20) {
         let sel = &e["entry"]["signal"]["coordination"]["selection"];
         let intel = &e["entry"]["learning"]["intelligence"];
+        let profile=label(e["entry"]["signal"]["coordination"]["student"]["profile"].as_str().unwrap_or("baseline"));
+        let exit_label=if e["entry"]["signal"]["coordination"]["student"]["cost_fallback"]==true {
+            format!("{profile} — الهدف المتعلّم لا يناسب التكلفة الحالية")
+        } else {profile.to_owned()};
         let net = e["actual"]["net"]
             .as_f64()
             .map(|n| format!("{n:+.2}"))
@@ -74,7 +78,7 @@ pub fn paint(ui: &Dashboard, v: &Value) {
             intel["regime"].as_str().unwrap_or("—"),intel["session"].as_str().unwrap_or("—"),
             e["entry"]["signal"]["reason"].as_str().unwrap_or(""),
             sel["exploration_rate"].as_f64().unwrap_or(0.)*100.,sel["context_samples"].as_u64().unwrap_or(0),
-            label(e["entry"]["signal"]["coordination"]["student"]["profile"].as_str().unwrap_or("baseline")),
+            exit_label,
             e["observed_mfe_price"].as_f64().unwrap_or(0.),e["observed_mae_price"].as_f64().unwrap_or(0.),e["position_samples"],
             if e["position_path_usable"]==true{"كافٍ للوصف"}else{"محدود"},
             if e["shadow"]["usable"]!=true{"مستبعدة: فجوة رصد"}else if e["study_consumed"]==true{"اكتملت"}else{"تنتظر أسعاراً لاحقة"},e["shadow"]["max_gap_ms"]);

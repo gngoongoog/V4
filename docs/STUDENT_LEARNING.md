@@ -12,6 +12,7 @@ This iteration extends Flexible Demo in V4 development. It does not change the 1
 
 ## Execution and scope
 
+- A learned Sniper target is checked against the configured cost fraction. If it no longer fits current spread/commission, that entry retains its already-valid baseline geometry; the journal explains the fallback.
 - Automatic exit application is enabled by default on Demo, independently configurable under Trading → Mode and costs. Existing open positions retain their frozen geometry and hold time.
 - Source identity includes the mode, brain, timeframe, generated report, strategy geometry definition, Sniper settings, configured commission/slippage and tick size. Changed definitions start a separate study. Monetary tick values are frozen per experience for cost/R calculation; conversion-rate changes do not reset the strategy study.
 - STOP, account identity, broker volume constraints, ownership, reconciliation and the durable no-resend journal remain authoritative. Learning sample counts never block a valid entry.
