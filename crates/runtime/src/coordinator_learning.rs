@@ -177,9 +177,9 @@ fn execution_history_quality(db:&Connection,key:&str,t:&Telemetry,now:u64)->Resu
     Ok((if mass>0.{(weighted/mass).clamp(0.,1.)}else{0.5},samples))
 }
 
-fn open_coordinator_commands(db: &Connection, key: &str) -> Result<Vec<(String, String)>> {
+fn open_learning_commands(db: &Connection, key: &str) -> Result<Vec<(String, String)>> {
     let mut st = db.prepare(
-        "SELECT payload,result FROM broker_commands WHERE context=?1 AND brain='system' AND kind='open' AND CAST(json_extract(result,'$.deal') AS INTEGER)>0 ORDER BY created_ms,id",
+        "SELECT payload,result FROM broker_commands c WHERE context=?1 AND kind='open' AND CAST(json_extract(result,'$.deal') AS INTEGER)>0 AND NOT EXISTS(SELECT 1 FROM broker_learning_processed p WHERE p.context=c.context AND p.command_id=c.id) ORDER BY created_ms,id",
     )?;
     let mapped = st.query_map([key], |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
@@ -197,16 +197,102 @@ fn position_deals(db: &Connection, key: &str, position_id: u64) -> Result<Vec<St
     Ok(rows)
 }
 
-/// Convert exact closed coordinator Demo trades into Reward V2 broker evidence.
-/// Opposing members are never assigned synthetic broker losses; their ideas stay in the
-/// causal counterfactual ledger and mature from later completed bars.
-fn sync_demo_broker_evidence(db:&Connection,t:&Telemetry)->Result<()> {
-    if !t.demo||t.account_trade_mode!=Some(0){return Ok(());}if !table_exists(db,"broker_commands")?||!table_exists(db,"broker_deals")?{return Ok(());}let key=context(t);
-    for(raw_cmd,raw_result)in open_coordinator_commands(db,&key)?{let cmd:Value=serde_json::from_str(&raw_cmd)?;let result:Value=serde_json::from_str(&raw_result)?;let Some(open_deal)=result["deal"].as_u64().filter(|v|*v>0)else{continue;};let position_id:Option<u64>=db.query_row("SELECT position_id FROM broker_deals WHERE context=?1 AND ticket=?2",params![&key,open_deal],|r|r.get(0)).optional()?;let Some(position_id)=position_id.filter(|v|*v>0)else{continue;};if t.positions.iter().any(|p|p.identifier==position_id||p.ticket==position_id){continue;}
-        let(mut net,mut exit_volume,mut closed_ms,mut has_exit)=(0.,0.,0u64,false);for raw in position_deals(db,&key,position_id)?{let d:Value=serde_json::from_str(&raw)?;net+=d["profit"].as_f64().unwrap_or(0.)+d["commission"].as_f64().unwrap_or(0.)+d["swap"].as_f64().unwrap_or(0.)+d["fee"].as_f64().unwrap_or(0.);if matches!(d["entry"].as_i64(),Some(1)|Some(3)){has_exit=true;let v=d["volume"].as_f64().unwrap_or(0.);if v.is_finite()&&v>0.{exit_volume+=v;}closed_ms=closed_ms.max(d["time_msc"].as_u64().unwrap_or(0));}}
-        if !has_exit||!net.is_finite()||!exit_volume.is_finite()||exit_volume<=0.{continue;}let coordination=&cmd["signal"]["coordination"];let Ok(mode)=serde_json::from_value::<TradingMode>(coordination["trading_mode"].clone())else{continue;};let Some(members)=coordination["members"].as_array()else{continue;};let Some(executed_side)=cmd["signal"]["side"].as_i64()else{continue;};let net_per_lot=net/exit_volume;let intel=&coordination["intelligence"];let regime=intel["regime"].as_str().unwrap_or("legacy");let session=intel["session"].as_str().unwrap_or("unknown");let execution_quality=intel["execution_quality"].as_f64().unwrap_or(0.5);let stop=cmd["signal"]["stop_distance"].as_f64().unwrap_or(0.);let risk_money=t.tick_size.zip(t.tick_value_loss).filter(|(tick,value)|*tick>0.&&*value>0.).map(|(tick,value)|stop/tick*value*exit_volume).filter(|v|v.is_finite()&&*v>0.).unwrap_or(0.);let(r_multiple,reward)=reward_v2(net,risk_money);
-        for member in members{if member["ready"]!=true{continue;}let Some(id)=member["id"].as_str()else{continue;};let Some(timeframe)=member["timeframe"].as_str()else{continue;};let report_id=member["report_id"].as_str().unwrap_or("");let source=source_key(&key,mode,id,timeframe,report_id)?;let bar=member["bar_time"].as_u64().unwrap_or(0);let supported=member["side"].as_i64()==Some(executed_side);if bar>0{db.execute("UPDATE coordinator_counterfactuals SET executed_position_id=?3,executed_side=?4,supported_execution=?5 WHERE source=?1 AND bar=?2",params![&source,bar,position_id,executed_side,if supported{1_i64}else{0_i64}])?;}if !supported{continue;}let payload=json!({"evidence_source":"mt5_demo_broker","context":key,"position_id":position_id,"brain":id,"timeframe":timeframe,"report_id":report_id,"trade_owner":"system","executed_side":executed_side,"open_command_id":cmd["id"],"open_deal":open_deal,"closed_ms":closed_ms,"closed_volume":exit_volume,"net":net,"net_per_lot":net_per_lot,"risk_money":risk_money,"r_multiple":r_multiple,"reward":reward,"regime":regime,"session":session,"execution_quality":execution_quality,"costs":"exact booked MT5 deal profit + commission + swap + fee"});db.execute("INSERT OR IGNORE INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,?3,?4,?5,?6)",params![&source,position_id,&key,id,closed_ms,payload.to_string()])?;}
-    }Ok(())
+/// Credit only complete closed broker positions. A partial history page or partial
+/// close is not a training label; no synthetic fills or opposing-member losses.
+fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
+    if !t.demo || t.account_trade_mode != Some(0) { return Ok(()); }
+    if !table_exists(db,"broker_commands")? || !table_exists(db,"broker_deals")? { return Ok(()); }
+    let key = context(t);
+    for (raw_cmd,raw_result) in open_learning_commands(db,&key)? {
+        let cmd:Value=serde_json::from_str(&raw_cmd)?;
+        let result:Value=serde_json::from_str(&raw_result)?;
+        let Some(open_deal)=result["deal"].as_u64().filter(|v|*v>0) else {continue;};
+        let position_id:Option<u64>=db.query_row("SELECT position_id FROM broker_deals WHERE context=?1 AND ticket=?2",params![&key,open_deal],|r|r.get(0)).optional()?;
+        let Some(position_id)=position_id.filter(|v|*v>0) else {continue;};
+        if t.positions.iter().any(|p|p.identifier==position_id||p.ticket==position_id) {continue;}
+        let (mut gross,mut commission,mut swap,mut fee,mut entry_volume,mut exit_volume,mut closed_ms)=(0.,0.,0.,0.,0.,0.,0u64);
+        let mut reasons=Vec::new();
+        let mut valid=true;
+        for raw in position_deals(db,&key,position_id)? {
+            let d:Value=serde_json::from_str(&raw)?;
+            gross+=d["profit"].as_f64().unwrap_or(0.);
+            commission+=d["commission"].as_f64().unwrap_or(0.);
+            swap+=d["swap"].as_f64().unwrap_or(0.);
+            fee+=d["fee"].as_f64().unwrap_or(0.);
+            let volume=d["volume"].as_f64().unwrap_or(0.);
+            match d["entry"].as_i64() {
+                Some(0)=>entry_volume+=volume,
+                Some(1)|Some(3)=>{exit_volume+=volume;closed_ms=closed_ms.max(d["time_msc"].as_u64().unwrap_or(0));
+                    if let Some(reason)=d["reason"].as_i64(){if !reasons.contains(&reason){reasons.push(reason);}}},
+                // Netting reversal mixes an opening and an exit: do not guess attribution.
+                Some(2)=>valid=false,
+                _=>{}
+            }
+        }
+        let net=gross+commission+swap+fee;
+        if !valid || !net.is_finite() || !exit_volume.is_finite() || exit_volume<=0.
+            || !entry_volume.is_finite() || entry_volume+1e-8<result["volume"].as_f64().unwrap_or(0.) || (entry_volume-exit_volume).abs()>1e-8 {continue;}
+        let coordination=&cmd["signal"]["coordination"];
+        let learning=&cmd["learning"];
+        let owner=cmd["brain"].as_str().unwrap_or("system");
+        let mode_value=if learning["trading_mode"].is_null(){&coordination["trading_mode"]}else{&learning["trading_mode"]};
+        let Ok(mode)=serde_json::from_value::<TradingMode>(mode_value.clone()) else {continue;};
+        let Some(executed_side)=cmd["signal"]["side"].as_i64() else {continue;};
+        let selected=coordination["selection"]["brain"].as_str();
+        let intel=if coordination["intelligence"].is_object(){&coordination["intelligence"]}else{&learning["intelligence"]};
+        let regime=intel["regime"].as_str().unwrap_or("legacy");
+        let session=intel["session"].as_str().unwrap_or("unknown");
+        let stop=result["price"].as_f64().filter(|v|*v>0.).or_else(||result["request"]["price"].as_f64()).zip(result["request"]["sl"].as_f64())
+            .map(|(price,sl)|(price-sl).abs()).unwrap_or_else(||cmd["signal"]["stop_distance"].as_f64().unwrap_or(0.));
+        let tick=learning["tick_size"].as_f64().or(t.tick_size).unwrap_or(0.);
+        let value=learning["tick_value_loss"].as_f64().or(t.tick_value_loss).unwrap_or(0.);
+        let risk_money=if tick>0. && value>0. {stop/tick*value*exit_volume} else {0.};
+        let (r_multiple,reward)=reward_v2(net,risk_money);
+        let attribution=if gross>0. && net<=0. {"costs_erased_gross_profit"}
+            else if net>0. {"positive_after_costs"} else if gross<0. {"adverse_price_move"}
+            else if net<0. {"booked_costs"} else {"break_even"};
+        let mut members=coordination["members"].as_array().cloned().unwrap_or_default();
+        if owner!="system" && !learning["timeframe"].is_null() {
+            members=vec![json!({"id":owner,"timeframe":learning["timeframe"],"report_id":learning["report_id"],
+                "bar_time":cmd["signal"]["bar_time"],"side":executed_side,"ready":true,"weight":learning["weight_at_entry"]})];
+        } else if learning["trading_mode"].is_string() {
+            // The primary policy also receives its own outcome, including Sniper with no ready advisor.
+            members.push(json!({"id":"system","timeframe":learning["timeframe"],"report_id":"",
+                "bar_time":cmd["signal"]["bar_time"],"side":executed_side,"ready":true,"weight":learning["weight_at_entry"]}));
+        }
+        let tx=db.unchecked_transaction()?;
+        for member in members {
+            if member["ready"]!=true {continue;}
+            let Some(id)=member["id"].as_str() else {continue;};
+            if id!="system" && selected.is_some_and(|chosen|chosen!=id) {continue;}
+            let Some(timeframe)=member["timeframe"].as_str() else {continue;};
+            let report_id=member["report_id"].as_str().unwrap_or("");
+            let source=source_key(&key,mode,id,timeframe,report_id)?;
+            let bar=member["bar_time"].as_u64().unwrap_or(0);
+            let supported=member["side"].as_i64()==Some(executed_side);
+            if bar>0 {tx.execute("UPDATE coordinator_counterfactuals SET executed_position_id=?3,executed_side=?4,supported_execution=?5 WHERE source=?1 AND bar=?2",params![&source,bar,position_id,executed_side,if supported{1_i64}else{0_i64}])?;}
+            if !supported {continue;}
+            let payload=json!({"evidence_source":"mt5_demo_broker","context":key,"position_id":position_id,
+                "brain":id,"timeframe":timeframe,"report_id":report_id,"trading_mode":mode,"trade_owner":owner,"executed_side":executed_side,
+                "open_command_id":cmd["id"],"open_deal":open_deal,"closed_ms":closed_ms,"closed_volume":exit_volume,
+                "gross":gross,"commission":commission,"swap":swap,"fee":fee,"net":net,"net_per_lot":net/exit_volume,
+                "attribution":attribution,"exit_reason_codes":reasons,"weight_at_entry":member["weight"],"entry_reason":cmd["signal"]["reason"],
+                "risk_money":risk_money,"r_multiple":r_multiple,"reward":reward,"regime":regime,"session":session,
+                "execution_quality":intel["execution_quality"],"costs":"exact booked MT5 deal profit + commission + swap + fee"});
+            tx.execute("INSERT OR IGNORE INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,?3,?4,?5,?6)",params![&source,position_id,&key,id,closed_ms,payload.to_string()])?;
+        }
+        if let Some(id)=cmd["id"].as_str() {
+            tx.execute("INSERT OR IGNORE INTO broker_learning_processed(context,command_id) VALUES(?1,?2)",params![key,id])?;
+        }
+        tx.commit()?;
+    }
+    Ok(())
+}
+
+pub fn broker_review(db:&Connection,key:&str)->Result<Vec<Value>> {
+    let mut st=db.prepare("SELECT payload FROM coordinator_broker_samples WHERE context=?1 ORDER BY closed_ms DESC,brain LIMIT 40")?;
+    let rows=st.query_map([key],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter().map(|raw|Ok(serde_json::from_str(&raw)?)).collect()
 }
 
 pub struct Learner {
@@ -217,7 +303,8 @@ pub struct Learner {
 impl Learner {
     pub fn new(db: &Connection) -> Result<Self> {
         db.execute_batch(
-            "CREATE TABLE IF NOT EXISTS coordinator_samples(source TEXT NOT NULL,bar INTEGER NOT NULL,payload TEXT NOT NULL,outcome TEXT,PRIMARY KEY(source,bar));
+            "CREATE TABLE IF NOT EXISTS broker_learning_processed(context TEXT NOT NULL,command_id TEXT NOT NULL,PRIMARY KEY(context,command_id));
+             CREATE TABLE IF NOT EXISTS coordinator_samples(source TEXT NOT NULL,bar INTEGER NOT NULL,payload TEXT NOT NULL,outcome TEXT,PRIMARY KEY(source,bar));
              CREATE INDEX IF NOT EXISTS coordinator_pending ON coordinator_samples(source,outcome);
              CREATE TABLE IF NOT EXISTS coordinator_broker_samples(source TEXT NOT NULL,position_id INTEGER NOT NULL,context TEXT NOT NULL,brain TEXT NOT NULL,closed_ms INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(source,position_id));
              CREATE INDEX IF NOT EXISTS coordinator_broker_context ON coordinator_broker_samples(context,brain,closed_ms);
@@ -251,7 +338,7 @@ impl Learner {
             intelligence.execution_quality=(0.65*intelligence.execution_quality+0.35*history_quality).clamp(0.,1.);
         }
 
-        for b in brains.iter().filter(|b| b.id != "system") {
+        for b in brains {
             let source = source_key(&key, c.trading.mode, &b.id, &b.timeframe, &b.report_id)?;
             let Some(bars) = frames.get(&b.timeframe).filter(|v| v.len() >= 100) else {
                 continue;
@@ -597,6 +684,36 @@ mod tests {
         let(worse,n2)=execution_history_quality(&db,key,&t,now+20_000).unwrap();
         assert_eq!(n2,10);
         assert!(worse<good);
+    }
+
+    #[test]
+    fn solo_closed_costs_partial_history_restart_and_live_isolation() {
+        let db=Connection::open_in_memory().unwrap();let _=Learner::new(&db).unwrap();
+        db.execute_batch("CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT,brain TEXT,kind TEXT,created_ms INTEGER,state TEXT,payload TEXT,result TEXT);
+            CREATE TABLE broker_deals(context TEXT,ticket INTEGER,position_id INTEGER,brain TEXT,payload TEXT,PRIMARY KEY(context,ticket));").unwrap();
+        let t=Telemetry{demo:true,account_trade_mode:Some(0),login:17,server:"Demo".into(),symbol:"XAUUSD".into(),currency:"USD".into(),..Default::default()};
+        let key=context(&t);
+        let cmd=json!({"id":"solo","brain":"trend","signal":{"side":1,"bar_time":12,"stop_distance":1.,"reason":"trend ready"},
+            "learning":{"trading_mode":"expert","timeframe":"M1","report_id":"","tick_size":0.01,"tick_value_loss":1.,"weight_at_entry":1.}});
+        db.execute("INSERT INTO broker_commands VALUES('solo',?1,'trend','open',1,'observed',?2,?3)",params![key,cmd.to_string(),json!({"deal":1,"request":{"price":2000.,"sl":1999.}}).to_string()]).unwrap();
+        let insert=|ticket:u64,entry:i64,volume:f64,profit:f64,commission:f64| {
+            db.execute("INSERT INTO broker_deals VALUES(?1,?2,90,'trend',?3)",params![key,ticket,json!({"entry":entry,"volume":volume,"profit":profit,"commission":commission,"time_msc":1000+ticket,"reason":5}).to_string()]).unwrap();
+        };
+        insert(1,0,0.1,0.,-0.35);insert(2,1,0.04,0.2,-0.14);
+        sync_demo_broker_evidence(&db,&t).unwrap();assert!(broker_review(&db,&key).unwrap().is_empty());
+        insert(3,1,0.06,0.3,-0.21);
+        let mut live=t.clone();live.demo=false;live.account_trade_mode=Some(2);
+        sync_demo_broker_evidence(&db,&live).unwrap();assert!(broker_review(&db,&key).unwrap().is_empty());
+        sync_demo_broker_evidence(&db,&t).unwrap();
+        let _=Learner::new(&db).unwrap();sync_demo_broker_evidence(&db,&t).unwrap();
+        let rows=broker_review(&db,&key).unwrap();assert_eq!(rows.len(),1);
+        assert_eq!(rows[0]["trade_owner"],"trend");assert_eq!(rows[0]["attribution"],"costs_erased_gross_profit");
+        assert!((rows[0]["net"].as_f64().unwrap()+0.2).abs()<1e-9);
+        assert_eq!(rows[0]["risk_money"],10.);
+        let source=source_key(&key,TradingMode::Expert,"trend","M1","").unwrap();
+        let learned=selected_weight(Stats::default(),Stats::default(),broker_stats(&db,&source,None,2000).unwrap(),Stats::default(),&IntelligenceContext::default());
+        assert_eq!(learned.broker_samples,1);assert!(learned.weight()<1.);
+        let mut other=t.clone();other.login=18;assert!(broker_review(&db,&context(&other)).unwrap().is_empty());
     }
 
 }

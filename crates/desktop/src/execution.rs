@@ -109,7 +109,7 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
     } else {
         String::new()
     };
-    ui.set_exec_detail(format!("{} | Magic {}\n{} | اتجاه {} | جاهز للإرسال: {}\n{}\nآخر حساب للعقل: {} ميكروثانية (ليس زمن الوسيط)\n{}{}",b["name"].as_str().unwrap_or(""),b["magic"],a["reason"].as_str().unwrap_or("بانتظار تحديث MT5"),a["side"],s["ready"],gates,s["decision_us"],if config["use_risk_limits"]==true{"الحدود الاختيارية مفعّلة"}else{"الحدود الاختيارية معطلة؛ اللوت ثابت كما اخترته"},intelligence_line).into());
+    ui.set_exec_detail(format!("{} | Magic {}\n{} | اتجاه {} | جاهز للإرسال: {}\n{}\nآخر حساب للعقل: {} ميكروثانية (ليس زمن الوسيط)\n{}{}",b["name"].as_str().unwrap_or(""),b["magic"],a["reason"].as_str().unwrap_or("بانتظار تحديث MT5"),a["side"],s["ready"],gates,s["decision_us"],if config["use_risk_limits"]==true{"الحدود الاختيارية مفعّلة"}else{"الحدود الاختيارية معطلة؛ الديمو المرن قد يصغّر اللوت حسب الهامش"},intelligence_line).into());
 
     let mut out = String::new();
     let _ = writeln!(
@@ -176,10 +176,32 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
             );
         }
     }
+    let learning=&b["learning"];
+    let _=writeln!(out,"\nتعلّم العقل المحدد: صفقات MT5 {} | الوزن الحالي {:.3} | Reward {:.3}",
+        learning["broker_samples"].as_u64().unwrap_or(0),b["learned_weight"].as_f64().unwrap_or(1.),learning["mean_reward"].as_f64().unwrap_or(0.));
+    if let Some(selection)=coordination.get("selection") {
+        let _=writeln!(out,"اختيار الديمو المرن: {} | مكافأة الاستكشاف {:.3}",selection["brain"].as_str().unwrap_or(""),selection["exploration_bonus"].as_f64().unwrap_or(0.));
+    }
+    out.push_str("\nلماذا ربحت أو خسرت؟ تفكيك النتائج المسجلة، وليس إثباتاً لسبب السوق:\n");
+    for item in v["learning_review"].as_array().into_iter().flatten().filter(|v|v["brain"]==config["id"]).take(8) {
+        let reason=match item["attribution"].as_str().unwrap_or("") {
+            "costs_erased_gross_profit"=>"التكاليف محت ربح الحركة", "positive_after_costs"=>"ربح بعد التكاليف",
+            "adverse_price_move"=>"حركة السعر ضد الصفقة", "booked_costs"=>"خسارة تكاليف", _=>"تعادل / غير مصنف"};
+        let exit_reasons=item["exit_reason_codes"].as_array().into_iter().flatten().map(|v|match v.as_i64() {
+            Some(0)=>"طرفية",Some(1)=>"موبايل",Some(2)=>"ويب",Some(3)=>"برنامج",Some(4)=>"وقف الخسارة",Some(5)=>"الهدف",Some(6)=>"تصفية الهامش",_=>"سبب آخر لدى الوسيط"
+        }).collect::<Vec<_>>().join("، ");
+        let _=writeln!(out,"صفقة {} | {} | حركة {:.2} | عمولة {:.2} | سواب {:.2} | رسوم {:.2} | صافي {:.2} | Reward {:.3} | وزن الدخول {:.3} | خروج MT5 {}",
+            item["position_id"],reason,item["gross"].as_f64().unwrap_or(0.),item["commission"].as_f64().unwrap_or(0.),
+            item["swap"].as_f64().unwrap_or(0.),item["fee"].as_f64().unwrap_or(0.),item["net"].as_f64().unwrap_or(0.),
+            item["reward"].as_f64().unwrap_or(0.),item["weight_at_entry"].as_f64().unwrap_or(1.),exit_reasons);
+    }
     out.push_str("\nأحدث الأوامر — الأزمنة مقاسة على جهازك:\n");
     for cmd in v["commands"].as_array().into_iter().flatten().take(20) {
         let q = &cmd["request"];
         let r = &cmd["result"];
+        if let Some(sizing)=r.get("sizing") {
+            let _=writeln!(out,"لوت مطلوب {} → مرسل {} | هامش مقدّر {} / متاح {}",sizing["requested"],sizing["sent"],sizing["estimated_margin"],sizing["free_margin"]);
+        }
         let _ = writeln!(
             out,
             "{} | {} | {} | {}\n{} | انتظار {}ms / فحص {}ms / رد MT5 {}ms\n",
