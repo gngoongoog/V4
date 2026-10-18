@@ -2,7 +2,13 @@
 
 GitHub `gngoongoog/V4` is canonical. Continue from `development`; do not restart from `main` unless preparing a promoted release.
 
-## Current verified checkpoint — flexible Demo learning
+## Student learning iteration — October 18, 2026
+
+The user explicitly requested this extension after the Flexible Demo delivery. The current source adds a persistent entry/closed-outcome journal, context-specific advisor evidence, epsilon-greedy exploration, prospective paired exit studies with later-entry validation and rollback, and the twentieth native dashboard page (Trading → Learning progress). `docs/STUDENT_LEARNING.md` explains exact scope and limits. Execution identities remain unchanged. New source must pass exact-head Research and Windows/Linux CI before normal merge; Windows/MT5 native Demo acceptance remains a user-side task. Do not represent quote-only exit results as booked broker PnL or guaranteed improvement.
+
+Local checks passed: 95 domain and 76 runtime Rust tests (one public-network test ignored); 128 Python passes/one OS skip; Core + simulated broker execution and the extended $100 Flexible Demo integration. Native page rendering includes page 19 at both viewport sizes. CI/package evidence is to be recorded after completion.
+
+## Previous verified checkpoint — flexible Demo learning
 
 PR #59 is merged into `development` as `317df185f035e2f3d90387fcf6e3e13babd05327`. Exact tested PR head `710b31ffa906920e4ffda2930a18b020d45e4e5f`, packaged CI merge `b5a22971422b1431f8a9ada6e7f60d169b8241f7` and the development merge share source tree `f0e5b5c94490decfa353257892748af0ed394b8b`.
 

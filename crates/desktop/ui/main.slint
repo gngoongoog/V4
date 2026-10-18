@@ -47,8 +47,17 @@ export component Dashboard inherits Window {
     in property <string> exec-message;
     in property <[string]> exec-frames;
     callback execution-action(string);
+    in property <bool> student-busy: false;
+    in property <string> student-status: "بانتظار سجل التعلّم";
+    in property <string> student-total: "0";
+    in property <string> student-closed: "0";
+    in property <string> student-pairs: "0";
+    in property <string> student-patterns;
+    in property <string> student-policies;
+    in property <string> student-journal;
     in-out property <int> trade-mode: 2;
     in-out property <bool> demo-flexible: true;
+    in-out property <bool> adaptive-exits: true;
     in-out property <string> sniper-target: "50";
     in-out property <string> sniper-stop: "80";
     in-out property <string> sniper-cooldown: "0";
@@ -231,6 +240,7 @@ export component Dashboard inherits Window {
                 if root.nav-section == 1: HorizontalLayout { spacing: 8px;
                     Button { text: "الوضع والتكلفة"; clicked => { root.page = 14; root.studio-action("config"); } }
                     Button { text: "التنفيذ"; clicked => { root.page = 17; root.execution-action("refresh"); } }
+                    Button { text: "تقدّم التعلّم"; clicked => { root.page = 19; } }
                     Button { text: "المخاطرة"; clicked => { root.page = 6; } }
                 }
                 if root.nav-section == 2: VerticalLayout { spacing: 6px;
@@ -283,6 +293,24 @@ export component Dashboard inherits Window {
             boundary: root.corr-boundary;
             action(value) => { root.correlation-action(value); }
         }
+        if root.page == 19: ScrollView { VerticalBox { spacing: 14px;
+            Text { text: "الطالب — من التجربة إلى قرار أفضل"; color: #eaf0fb; font-size: 22px; font-weight: 700; }
+            Text { text: root.student-status; color: #8ddfc6; wrap: word-wrap; }
+            HorizontalBox { spacing: 10px;
+                Card { label: "تجارب دخول مسجّلة"; value: root.student-total; }
+                Card { label: "صفقات MT5 مغلقة"; value: root.student-closed; }
+                Card { label: "مقارنات خروج صالحة"; value: root.student-pairs; }
+            }
+            Text { text: "شنو يتكرر بالنتائج؟"; color: #eaf0fb; font-size: 18px; font-weight: 700; }
+            Text { text: "آخر 100 تجربة كحد أقصى. هذه أنماط مرصودة؛ سبب الخسارة قد يحتاج أدلة إضافية."; color: #8d9cb4; wrap: word-wrap; }
+            Text { text: root.student-patterns; color: #eedaa5; wrap: word-wrap; }
+            Text { text: "شنو تغيّر بالخروج؟"; color: #eaf0fb; font-size: 18px; font-weight: 700; }
+            Text { text: root.student-policies; color: #acbad0; wrap: word-wrap; }
+            Text { text: "20 مقارنة للتدريب، ثم 20 دخولاً جديداً لاختبار البديل. الإعداد الأصلي يبقى يعمل خلال التعلّم. التطبيق الآلي للديمو فقط؛ تغييره من صفحة الوضع والتكلفة."; color: #8d9cb4; wrap: word-wrap; }
+            Text { text: "دفتر التجارب — أحدث 20 دخولاً"; color: #eaf0fb; font-size: 18px; font-weight: 700; }
+            Text { text: root.student-journal; color: #acbad0; wrap: word-wrap; }
+            Text { text: "MFE / MAE: أفضل وأسوأ حركة مرصودة أثناء ظهور الصفقة. المقارنة الافتراضية تستخدم سعر Bid/Ask والعمولة والانزلاق، وتُستبعد عند فجوة تتجاوز ثانيتين. السواب غير محسوب فيها. التحسّن السابق لا يضمن ربحاً لاحقاً."; color: #8d9cb4; wrap: word-wrap; }
+        } }
         if root.page == 17: ScrollView { VerticalBox { spacing: 10px;
             Text { text: "تنفيذ MT5 — لكل عقل قراره وصفقاته"; color: #eaf0fb; font-size: 20px; }
             Text { text: root.exec-summary; color: #8ddfc6; wrap: word-wrap; }
@@ -340,6 +368,7 @@ export component Dashboard inherits Window {
             Text { text: "مركز التداول — الوضع والتكلفة والقناص"; font-size: 20px; color: #eaf0fb; }
             ComboBox { model: ["Scalping / سكالبنك", "Swing / سوينك", "Expert / الخبير المتعلم", "Sniper / القناص"]; current-index <=> root.trade-mode; }
             Text { text: root.trade-mode == 0 ? "M1 + M5؛ زخم مؤكد، وقف 1.2 ATR وهدف 1.4R، أقصى احتفاظ 15 دقيقة." : root.trade-mode == 1 ? "H1 + H4 + D1؛ اتجاهات متوافقة، وقف 2 ATR وهدف 2.5R، أقصى احتفاظ 3 أيام. السواب غير محسوب." : root.trade-mode == 2 ? (root.demo-flexible ? "الخبير على الديمو المرن: يختار عضواً جاهزاً حسب التعلم والاستكشاف، بوقفه وهدفه ومدته. على الحقيقي يستخدم الإجماع المعتاد." : "الخبير: تصويت الأعضاء بأوزان تتعلم من نتائج لاحقة؛ يستبعد العقول المنفردة. وقف 1.5 ATR وهدف 2R؛ مهلة 30 دقيقة.") : "القناص يستخدم Fast Pulse للقرار اللحظي؛ مدة الاحتفاظ أدناه قابلة للتعديل ولا تتغير على صفقة مفتوحة بعد دخولها."; color: #acbad0; wrap: word-wrap; }
+            CheckBox { text: "تطبيق الخروج المتعلّم على الديمو"; checked <=> root.adaptive-exits; enabled: root.state == "STOPPED"; }
             CheckBox { text: "تعلّم ديمو مرن"; checked <=> root.demo-flexible; enabled: root.state == "STOPPED"; }
             Text { text: "على الديمو فقط: الخبير يختار إشارة عضو جاهز حسب النتائج والاستكشاف؛ بقية الأوضاع تتبع إشارتها دون فيتو الأعضاء. يصغّر اللوت عند نقص الهامش ولا يزيده عن اختيارك. أوقف الخيار لاسترجاع الإجماع. شروط الوسيط تبقى لازمة."; color: #acbad0; wrap: word-wrap; }
             Rectangle { background: #151f30; border-radius: 8px; min-height: 116px;

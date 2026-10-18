@@ -107,11 +107,17 @@ pub fn render() -> anyhow::Result<()> {
     ui.set_exec_frames(slint::ModelRc::new(slint::VecModel::from(vec!["M1".into(),"M5".into(),"H1".into()])));
     ui.set_exec_selected(3);
     ui.set_exec_detail("RENDER FIXTURE — لا أوامر سوق حقيقية\nالترند | عضو تابع للرئيسي\nSTART/STOP مستقل عن زر العضوية".into());
+    ui.set_student_status("RENDER FIXTURE — بيانات اصطناعية لتفقد الواجهة".into());
+    ui.set_student_total("62".into()); ui.set_student_closed("58".into()); ui.set_student_pairs("41".into());
+    ui.set_student_patterns("التكاليف محت الربح: 7\nرجوع ربح مرصود: 12\nربح بعد التكاليف: 27".into());
+    ui.set_student_policies("trend / M1 / expert\nاختبار على صفقات جديدة • 13 / 20 مقارنة\nالمطبّق: الإعداد الأصلي | المرشح: خروج أسرع\nآخر فرق متوسط: +0.000 R\nتثبيت البديل؛ بدأ الاختبار اللاحق".into());
+    ui.set_student_journal("trend | صفقة 1001 | صافي MT5: -0.80\ntrend_up_normal / london | ارتداد بعد اتجاه\nاستكشاف 12% • عينات السياق 8 | الخروج: الإعداد الأصلي\nMFE مرصود 0.42000 / MAE 0.85000 • رصد الصفقة 24\nمقارنة الخروج: اكتملت • أكبر فجوة 250 ms".into());
     ui.show()?;
     for (width, height, suffix) in [(1120, 820, ""), (880, 700, "-small")] {
         window.set_size(slint::PhysicalSize::new(width, height));
-        for page in 0..19 {
+        for page in 0..20 {
             ui.set_page(page);
+            if [6,14,17,19].contains(&page) {ui.set_nav_section(1);}
             ui.set_events(
                 format!(
                     "#1 | core_started\nversion: {} • execution_enabled: false\n\nUI render check — not live trading data",
