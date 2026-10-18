@@ -2,11 +2,17 @@
 
 GitHub `gngoongoog/V4` is canonical. Continue from `development`; do not restart from `main` unless preparing a promoted release.
 
-## Student learning iteration — October 18, 2026
+## Current verified checkpoint — student learning
 
-The user explicitly requested this extension after the Flexible Demo delivery. The current source adds a persistent entry/closed-outcome journal, context-specific advisor evidence, epsilon-greedy exploration, prospective paired exit studies with later-entry validation and rollback, and the twentieth native dashboard page (Trading → Learning progress). `docs/STUDENT_LEARNING.md` explains exact scope and limits. Execution identities remain unchanged. New source must pass exact-head Research and Windows/Linux CI before normal merge; Windows/MT5 native Demo acceptance remains a user-side task. Do not represent quote-only exit results as booked broker PnL or guaranteed improvement.
+PR #60 is merged into `development` as `6467d2022e600c944b6b05a02de541e66dea78e5`. Exact tested head `126c7f357f4ed2dca0769cb8fd8ac96a843d3a22`, packaged CI merge `fef0d29e8d2517778436f0c627b3e9a7fcda4263` and the development merge share source tree `ab415df5284b60ea7e5eb0ffb5d7435d349b1e4c`.
 
-Local checks passed: 95 domain and 76 runtime Rust tests (one public-network test ignored); 128 Python passes/one OS skip; Core + simulated broker execution and the extended $100 Flexible Demo integration. Native page rendering includes page 19 at both viewport sizes. CI/package evidence is to be recorded after completion.
+Research run `39152599211` and Windows/Linux run `39152599258` succeeded. Windows passed 95 domain, 77 runtime and 3 desktop Rust tests (one public-network test ignored), plus 128 Python tests (one OS-specific skip). Portable startup, restore, the student API, all 40 rendered frames of the 20-page UI, execution integration and the $100 Flexible Demo/student integration passed.
+
+This adds a durable entry/closed-outcome journal, context-specific advisor evidence, reproducible epsilon-greedy exploration, prospective paired exit studies with later-entry validation and rollback, and Trading → Learning progress. The learner identity stays stable when monetary tick values change; every experience retains its frozen calculation values. Learned Sniper targets retain the configured cost fraction, with an explained per-entry baseline fallback.
+
+Read `docs/STUDENT_LEARNING_AR.md` for the user report and `docs/STUDENT_LEARNING.md` for evidence rules. `docs/student-learning-validation.json` records exact source, CI and delivery hashes. Execution identities remain the same 16; quote-only shadow comparisons must never be described as broker PnL. Automatic exit application is Demo-only and affects future entries.
+
+The current user-authorized student-learning build is complete and the Windows package was delivered. Native Windows/MT5 Demo acceptance and profitability remain unverified; collect target-machine results next. Do not reset persisted learning or overwrite prior checkpoints. This evidence-only documentation commit does not change tested execution code.
 
 ## Previous verified checkpoint — flexible Demo learning
 
