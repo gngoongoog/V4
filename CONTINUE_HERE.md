@@ -2,7 +2,17 @@
 
 GitHub `gngoongoog/V4` is canonical. Continue from `development`; do not restart from `main` unless preparing a promoted release.
 
-## Current verified checkpoint
+## Current verified checkpoint — flexible Demo learning
+
+PR #59 is merged into `development` as `317df185f035e2f3d90387fcf6e3e13babd05327`. Exact tested PR head `710b31ffa906920e4ffda2930a18b020d45e4e5f`, packaged CI merge `b5a22971422b1431f8a9ada6e7f60d169b8241f7` and the development merge share source tree `f0e5b5c94490decfa353257892748af0ed394b8b`.
+
+Research run `39084459002` and Windows/Linux run `39084459007` both succeeded. Windows passed 92 domain, 73 runtime and 3 desktop Rust tests (one public-network test intentionally ignored); 128 of 129 Python tests passed (one OS-specific skip). The packaged executable passed the existing execution integration and the new $100 flexible Demo integration.
+
+This checkpoint adds Demo-only actionable-advisor selection with learned weight plus bounded exploration, downsize-only margin-aware lots, exact closed SOLO/primary evidence, selected-advisor credit, complete-volume closure checks, incremental learning reconciliation and native cost/exit/weight explanations. The Trading Center switch defaults on for Demo, is stopped-only to change, and does not apply to Live accounts or implicitly START execution. There are still 16 append-only execution identities.
+
+Read `docs/FLEXIBLE_DEMO_AR.md` for behavior and use. `docs/flexible-demo-validation.json` records this checkpoint and deliverable hashes. Real Windows/MT5 Demo acceptance, broker latency and profitability remain unverified; the next task is target-machine acceptance, not speculative new speed changes.
+
+## Previous verified checkpoint
 
 PR #55 (comprehensive 0.7 correctness audit) is merged into `development` as `2e05cf3b907073c5faebe25fd16d4a4a523b224d`. Exact tested PR head `892807ec317c856b1215efb569e726554266709b` and the merge share code tree `a85fa0c424e23cf9e82790c649d25461e1547387`. Research run `39067458928` and Windows/Linux run `39067458927` both succeeded on that code.
 

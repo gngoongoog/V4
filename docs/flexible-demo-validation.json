@@ -1,0 +1,63 @@
+{
+  "version": "0.7.0",
+  "kind": "Development Preview",
+  "date": "2026-10-18",
+  "pr": 59,
+  "tested_head": "710b31ffa906920e4ffda2930a18b020d45e4e5f",
+  "packaged_commit": "b5a22971422b1431f8a9ada6e7f60d169b8241f7",
+  "development_merge": "317df185f035e2f3d90387fcf6e3e13babd05327",
+  "verified_source_tree": "f0e5b5c94490decfa353257892748af0ed394b8b",
+  "ci": {
+    "research": {
+      "run": 39084459002,
+      "result": "success"
+    },
+    "windows_linux": {
+      "run": 39084459007,
+      "result": "success"
+    }
+  },
+  "windows_tests": {
+    "domain_pass": 92,
+    "runtime_pass": 73,
+    "runtime_ignored": 1,
+    "desktop_pass": 3,
+    "python_pass": 128,
+    "python_skipped": 1,
+    "existing_execution_integration": "PASS",
+    "flexible_100_usd_integration": "PASS"
+  },
+  "artifact": {
+    "id": 12119484960,
+    "archive_bytes": 34646812,
+    "archive_sha256": "ec7d3adff08ce255c864c4703551603ba15065de81b10eff60968877dead42c5",
+    "portable_zip_bytes": 35943877,
+    "portable_zip_sha256": "5bbe6398b8f72b6fe8e70d9e5ca9b40bde511949929d79eadf1a9eba4506df43"
+  },
+  "scope_completion": {
+    "scope": "Flexible Demo update acceptance checklist; not overall project completion or profitability",
+    "completed": 9,
+    "total": 10,
+    "percent": 90,
+    "passed": [
+      "latest development review",
+      "ready-policy selection",
+      "margin-aware downsize",
+      "SOLO and primary evidence",
+      "booked-cost attribution",
+      "closure/idempotence/persistence",
+      "native settings and diagnostics",
+      "exact-head integration and CI",
+      "Windows package delivery"
+    ],
+    "pending": [
+      "User-machine native MT5 Demo acceptance"
+    ]
+  },
+  "limitations": [
+    "No user-account order was placed from this environment.",
+    "Broker acceptance, fills, latency and future profitability are not established by simulated tests.",
+    "100 USD does not override broker minimum lot and margin requirements.",
+    "Adaptive automatic policy selection is in flexible Expert; SOLO retains its chosen policy and learned weights transfer when it rejoins."
+  ]
+}
