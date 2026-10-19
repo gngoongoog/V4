@@ -47,6 +47,15 @@ class ExecutionTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();self.path=Path(self.temp.name)/'journal.sqlite';self.ex=BrokerExecutor(self.path);self.mt=Broker();self.cmd=command()
     def tearDown(self):self.ex.close();self.temp.cleanup()
     def send(self):return self.ex.execute(self.mt,self.cmd,lambda _:True)
+    def test_sniper_identity_and_reserved_adaptive_identity(self):
+        self.cmd['magic']=410616
+        self.assertEqual(self.send()['state'],'rejected')
+        self.assertFalse(self.mt.sends)
+        self.cmd['id']='sniper-specialist';self.cmd['magic']=410617
+        self.cmd['signal']['key']='tick:123'
+        self.assertEqual(self.send()['state'],'filled')
+        self.assertEqual(len(self.mt.sends),1)
+
     def test_flexible_100_dollar_demo_downsizes_before_one_real_send(self):
         self.mt.account.margin_free=100.
         self.cmd.update(demo_flexible=True,commission_per_lot=7.,lots=.5)

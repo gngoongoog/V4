@@ -86,7 +86,7 @@ pub fn adapt(
         }
     }
     if profile != ExitProfile::Baseline
-        && b.id == "system"
+        && matches!(b.id.as_str(), "system" | "sniper_learner")
         && c.trading.mode == braintrade_domain::trading::TradingMode::Sniper
     {
         let (_, target, _) =

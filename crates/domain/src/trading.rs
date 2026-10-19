@@ -11,10 +11,15 @@ pub enum TradingMode {
     Expert,
     Sniper,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SniperBrain { #[default] Classic, Learner }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TradingConfig {
     pub mode: TradingMode,
+    pub sniper_brain: SniperBrain,
     /// Demo only: select actionable advisors adaptively and shrink oversized orders.
     pub demo_flexible: bool,
     /// Demo-only prospective exit learning; no effect on already open positions.
@@ -30,6 +35,7 @@ impl Default for TradingConfig {
     fn default() -> Self {
         Self {
             mode: TradingMode::Expert,
+            sniper_brain: SniperBrain::Classic,
             demo_flexible: true,
             adaptive_exits: true,
             sniper_target_points: 50.,

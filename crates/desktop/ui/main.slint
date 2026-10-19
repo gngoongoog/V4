@@ -57,6 +57,7 @@ export component Dashboard inherits Window {
     in property <string> student-journal;
     in property <string> student-timing;
     in-out property <int> trade-mode: 2;
+    in-out property <int> sniper-brain: 0;
     in-out property <bool> demo-flexible: true;
     in-out property <bool> adaptive-exits: true;
     in-out property <string> sniper-target: "50";
@@ -344,7 +345,7 @@ export component Dashboard inherits Window {
                 LineEdit { text <=> root.exec-hold; }
                 LineEdit { text <=> root.exec-cooldown; }
             }
-            Text { text: "عقل النظام يستخدم هندسة الوضع المختار. KTE يستخدم وقفه البنيوي؛ الاستراتيجية المولدة تستخدم إعدادات تقريرها."; color: #acbad0; wrap: word-wrap; }
+            Text { text: "عقل النظام والقناص المتعلّم يستخدمان هدف ووقف ومدة الوضع المختار. KTE يستخدم وقفه البنيوي؛ الاستراتيجية المولدة تستخدم إعدادات تقريرها."; color: #acbad0; wrap: word-wrap; }
             CheckBox { text: "تفعيل حدود المخاطرة واللوت والسبريد الاختيارية من صفحة المخاطرة"; checked <=> root.exec-risk; }
             LineEdit { text <=> root.exec-report; placeholder-text: "للعقل المولّد فقط: معرّف تقرير محفوظ من مختبر الاستراتيجيات"; }
             Rectangle { height: 1px; background: #263145; }
@@ -390,6 +391,8 @@ export component Dashboard inherits Window {
             Rectangle { background: #151f30; border-radius: 8px; min-height: 150px;
                 VerticalLayout { padding: 12px; spacing: 8px;
                     Text { text: "إعداد القناص"; color: #eaf0fb; font-weight: 700; }
+                    ComboBox { model: ["القناص الكلاسيكي", "القناص المتعلّم / Sniper Learner"]; current-index <=> root.sniper-brain; enabled: root.state == "STOPPED" && root.trade-mode == 3; }
+                    Text { text: "اختر القناص المتعلّم ثم احفظ واضغط تشغيل النظام. يعمل بلوت عقل النظام؛ لا يحتاج تشغيل منفرد. يتعلّم من صفقات الديمو المغلقة ويعرض قراره في تنفيذ MT5. يعمل فقط في Sniper."; color: #8ddfc6; wrap: word-wrap; }
                     Text { text: "الهدف والوقف بالنقاط • انتظار إعادة الدخول بالثواني • أقصى احتفاظ بالصفقة بالثواني • سقف حصة التكلفة"; color: #acbad0; wrap: word-wrap; }
                     HorizontalBox {
                         LineEdit { text <=> root.sniper-target; placeholder-text: "الهدف"; }
