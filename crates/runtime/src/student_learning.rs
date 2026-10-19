@@ -78,6 +78,18 @@ pub fn adapt(
     // Falling back keeps the already-valid baseline entry available.
     let mut cost_fallback = false;
     let mut fallback_reason = "";
+    // One controller owns the executed TP geometry at a time. The Sniper
+    // target bandit labels the exact chosen pip arm at entry: letting the
+    // independent exit learner reshape the TP would corrupt that arm's
+    // booked outcome. Its counterfactual exit studies may still collect,
+    // but their candidate policy is not allowed to alter this entry.
+    if c.trading.mode == braintrade_domain::trading::TradingMode::Sniper
+        && signal.coordination.as_ref().is_some_and(|v| v["selection"]["sniper_target_mode"]=="adaptive")
+        && profile != ExitProfile::Baseline
+    {
+        profile = ExitProfile::Baseline;
+        fallback_reason = "sniper_pip_target_owned";
+    }
     if profile != ExitProfile::Baseline {
         let (stop, _, _) = profile.geometry(signal.stop_distance, signal.target_distance, signal.hold_ms);
         if t.bid.zip(t.ask).zip(t.tick_size).is_some_and(|((bid,ask),tick)| stop <= ask-bid+tick) {
