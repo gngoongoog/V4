@@ -303,6 +303,26 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
         let value=learning["tick_value_loss"].as_f64().or(t.tick_value_loss).unwrap_or(0.);
         let risk_money=if tick>0. && value>0. {stop/tick*value*exit_volume} else {0.};
         let (r_multiple,reward)=reward_v2(net,risk_money);
+        // Sniper target learning is causal only when the TP *submitted to the
+        // broker* still represents the arm chosen by the specialist. The MT5
+        // adapter may widen TP to meet stops-level rules. Keep the completed
+        // trade as real strategy feedback, but do NOT assign its result to a
+        // different, unexecuted pip target.
+        let sniper_tp_preserved=if coordination["selection"]["sniper_target_mode"]=="adaptive" {
+            let expected=cmd["signal"]["target_distance"].as_f64();
+            let entry=result["request"]["price"].as_f64();
+            let tp=result["request"]["tp"].as_f64();
+            let tick=learning["tick_size"].as_f64();
+            match (expected,entry,tp,tick) {
+                (Some(expected),Some(entry),Some(tp),Some(tick))
+                    if expected.is_finite()&&expected>0.&&entry.is_finite()
+                        &&tp.is_finite()&&tick.is_finite()&&tick>0. =>
+                {
+                    (tp-entry).abs()>0. && ((tp-entry).abs()-expected).abs()<=tick*1.01
+                }
+                _=>false,
+            }
+        } else {false};
         let attribution=if gross>0. && net<=0. {"costs_erased_gross_profit"}
             else if net>0. {"positive_after_costs"} else if gross<0. {"adverse_price_move"}
             else if net<0. {"booked_costs"} else {"break_even"};
@@ -334,6 +354,7 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
                 "attribution":attribution,"exit_reason_codes":reasons,"weight_at_entry":member["weight"],"entry_reason":cmd["signal"]["reason"],
                 "risk_money":risk_money,"r_multiple":r_multiple,"reward":reward,"regime":regime,"session":session,
                 "context_key":learning["context_key"],"selection":coordination["selection"],
+                "sniper_tp_preserved":sniper_tp_preserved,
                 "execution_quality":intel["execution_quality"],"costs":"exact booked MT5 deal profit + commission + swap + fee"});
             tx.execute("INSERT OR IGNORE INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,?3,?4,?5,?6)",params![&source,position_id,&key,id,closed_ms,payload.to_string()])?;
         }
