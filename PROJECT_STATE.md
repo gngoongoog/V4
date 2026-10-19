@@ -1,5 +1,13 @@
 # BrainTrade OS — project state: verified 0.7.0 Development Preview
 
+## Latest merged development status — 2026-10-19
+
+PR #62 is merged into `development` as `29fe6663972651e8e3a1b613b9d957a86590bf6e`. Post-merge Research run `39240501418` and Windows/Linux run `39240501431` completed successfully. Preview artifact `12180999893` (`BrainTrade-Windows-x64-Preview`) is available from the Windows workflow; see `docs/pr62-learning-validation.json`.
+
+The current learner keeps legacy three-way exit studies and adds new Baseline/Quick/Patient/Protective/Extended studies. It also observes independent quote-only prospective 0/250/1000 ms entry timings for queued Demo opportunities; no research-only timing experiment can create or delay an MT5 order. Actual settled PnL remains distinct from shadow estimates. 16 broker execution identities remain in the merged branch. The previous PR #55 evidence below is a **historical** audit checkpoint, not the current development HEAD.
+
+Remaining: target-machine Windows + MT5 Demo acceptance, quote coverage and cost/latency evidence; review unmerged PR #58 for compatibility. Promoted `main` 0.6.0 is unchanged.
+
 Canonical repository: `gngoongoog/V4`. Verified 0.7.0 `development` state.
 
 PR #55 (comprehensive 0.7 correctness audit) is merged into `development` as `2e05cf3b907073c5faebe25fd16d4a4a523b224d`. Exact tested PR head `892807ec317c856b1215efb569e726554266709b` and the merge share code tree `a85fa0c424e23cf9e82790c649d25461e1547387`. Research run `39067458928` and Windows/Linux run `39067458927` both succeeded on that code.
