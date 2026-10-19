@@ -79,6 +79,12 @@ pub struct Trial {
     pub last_quote_ms: u64,
     pub samples: u64,
     pub max_gap_ms: u64,
+    #[serde(default)]
+    pub last_observed_ms: u64,
+    #[serde(default)]
+    pub max_observation_gap_ms: u64,
+    #[serde(default)]
+    pub exclusion_reason: String,
     pub usable: bool,
     pub mfe: f64,
     pub mae: f64,
@@ -91,20 +97,37 @@ impl Trial {
     /// Bid is the executable long exit; ask is the executable short exit.
     /// A missing interval invalidates policy comparison instead of inventing a path.
     pub fn observe(&mut self, bid: f64, ask: f64, quote_ms: u64) {
+        self.observe_at(bid, ask, quote_ms, quote_ms, true);
+    }
+    /// Receipt heartbeats distinguish a quiet quote from an unobserved interval.
+    /// Stale prices acknowledge connectivity but cannot resolve a hypothetical exit.
+    pub fn observe_at(&mut self, bid: f64, ask: f64, quote_ms: u64, now: u64, fresh: bool) {
         if !bid.is_finite()
             || !ask.is_finite()
             || bid <= 0.
             || ask < bid
-            || quote_ms <= self.last_quote_ms
+            || quote_ms < self.last_quote_ms
             || quote_ms < self.opened_ms
         {
             return;
         }
+        if now <= self.last_observed_ms {
+            return;
+        }
+        let observation_gap = now.saturating_sub(self.last_observed_ms.max(self.opened_ms));
+        self.max_observation_gap_ms = self.max_observation_gap_ms.max(observation_gap);
+        if observation_gap > 2000 {
+            self.usable = false;
+            if self.exclusion_reason.is_empty() {
+                self.exclusion_reason = "observation_gap".into();
+            }
+        }
+        self.last_observed_ms = now;
+        if !fresh || quote_ms <= self.last_quote_ms {
+            return;
+        }
         let gap = quote_ms.saturating_sub(self.last_quote_ms.max(self.opened_ms));
         self.max_gap_ms = self.max_gap_ms.max(gap);
-        if gap > 2000 {
-            self.usable = false;
-        }
         self.last_quote_ms = quote_ms;
         self.samples += 1;
         let price = if self.side > 0 { bid } else { ask };
@@ -171,8 +194,20 @@ pub struct ExitStudy {
     pub rollbacks: u64,
     pub last_gain_r: f64,
     pub last_decision: String,
+    #[serde(default)]
+    pub reviewed_losses: u64,
+    #[serde(default)]
+    pub loss_patterns: std::collections::BTreeMap<String, u64>,
+    #[serde(default)]
+    pub experiment_reason: String,
 }
 impl ExitStudy {
+    pub fn record_loss(&mut self, patterns: &[String]) {
+        self.reviewed_losses += 1;
+        for pattern in patterns {
+            *self.loss_patterns.entry(pattern.clone()).or_default() += 1;
+        }
+    }
     fn reset_window(&mut self, now: u64) {
         self.cutoff_ms = now;
         self.samples = 0;
@@ -182,9 +217,9 @@ impl ExitStudy {
         self.baseline_sum = 0.;
         self.candidate_sum = 0.;
     }
-    pub fn observe(&mut self, opened_ms: u64, now: u64, rewards: [f64; 3]) {
+    pub fn observe(&mut self, opened_ms: u64, now: u64, rewards: [f64; 3]) -> bool {
         if rewards.iter().any(|v| !v.is_finite()) || opened_ms <= self.cutoff_ms {
-            return;
+            return false;
         }
         self.total_pairs += 1;
         self.samples += 1;
@@ -196,7 +231,7 @@ impl ExitStudy {
         }
         if self.phase == "collecting" {
             if self.samples < 20 {
-                return;
+                return true;
             }
             let index = (1..3)
                 .max_by(|a, b| self.sums[*a].total_cmp(&self.sums[*b]))
@@ -205,11 +240,24 @@ impl ExitStudy {
                 self.challenger = ExitProfile::ALL[index];
                 self.phase = "validating".into();
                 self.last_decision = "challenger_frozen_for_future_entries".into();
+                self.experiment_reason = match self
+                    .loss_patterns
+                    .iter()
+                    .filter(|(_, n)| **n >= 3)
+                    .max_by_key(|(_, n)| **n)
+                    .map(|(p, _)| p.as_str())
+                {
+                    Some("cost_drag") => "compare_net_exits_after_repeated_cost_drag",
+                    Some("profit_giveback") => "compare_exits_after_repeated_giveback",
+                    Some("adverse_entry_path") => "compare_exits_entry_cause_unproven",
+                    _ => "compare_exits_from_paired_evidence",
+                }
+                .into();
             } else {
                 self.last_decision = "baseline_retained_after_training".into();
             }
             self.reset_window(now);
-            return;
+            return true;
         }
         let candidate = if self.phase == "monitoring" {
             self.active
@@ -222,7 +270,7 @@ impl ExitStudy {
         self.baseline_sum += rewards[0];
         self.candidate_sum += rewards[candidate.index()];
         if self.samples < 20 {
-            return;
+            return true;
         }
         let n = self.samples as f64;
         let mean = self.gain_sum / n;
@@ -247,6 +295,7 @@ impl ExitStudy {
             self.last_decision = "improvement_retained_in_monitoring".into();
         }
         self.reset_window(now);
+        true
     }
 }
 
@@ -269,6 +318,9 @@ mod tests {
             last_quote_ms: 1000,
             samples: 0,
             max_gap_ms: 0,
+            last_observed_ms: 1000,
+            max_observation_gap_ms: 0,
+            exclusion_reason: String::new(),
             usable: true,
             mfe: 0.,
             mae: 0.,
@@ -320,5 +372,21 @@ mod tests {
         assert_eq!(exploration_rate(1_000_000), 0.05);
         let count = (0..1000).filter(|i| draw(&i.to_string(), 0) < 0.3).count();
         assert!((250..350).contains(&count));
+    }
+    #[test]
+    fn quiet_heartbeats_preserve_comparison_but_transport_gaps_do_not() {
+        let mut t = trial(1);
+        t.observe_at(100., 100.2, 1500, 1500, true);
+        for now in [2500, 3500, 4500] {
+            t.observe_at(100., 100.2, 1500, now, false);
+        }
+        t.observe_at(103., 103.2, 5000, 5000, true);
+        assert!(t.paired_rewards().is_some());
+        assert_eq!(t.max_gap_ms, 3500);
+        let mut gap = trial(1);
+        gap.observe_at(100., 100.2, 1500, 1500, true);
+        gap.observe_at(103., 103.2, 5000, 5000, true);
+        assert!(!gap.usable);
+        assert_eq!(gap.exclusion_reason, "observation_gap");
     }
 }

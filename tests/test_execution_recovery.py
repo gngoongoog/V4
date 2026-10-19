@@ -91,6 +91,26 @@ class ExecutionRecoveryContractTests(unittest.TestCase):
         self.assertIn("Intent identity differs", rejected["reason"])
         self.assertEqual(len(self.broker.sends), 1)
 
+    def test_recovered_split_fill_supplies_learning_geometry_without_resend(self):
+        self.broker.raise_send = True
+        self.assertEqual(self.execute()['state'], 'unknown')
+        tag = 'BT:' + self.cmd['id'][:20]
+        self.broker.deals = [
+            N(ticket=901, magic=self.cmd['magic'], symbol=self.cmd['symbol'], comment=tag,
+              volume=.04, price=2000., time_msc=1000, position_id=700),
+            N(ticket=902, magic=self.cmd['magic'], symbol=self.cmd['symbol'], comment=tag,
+              volume=.06, price=2001., time_msc=1100, position_id=700),
+        ]
+        recovered = self.execute()
+        self.assertAlmostEqual(recovered['volume'], .1)
+        self.assertAlmostEqual(recovered['price'], 2000.6)
+        self.assertEqual(recovered['fill_time_ms'], 1000)
+        self.assertEqual(recovered['position_id'], 700)
+        self.assertTrue(recovered['recovered_from_history'])
+        self.assertEqual(recovered['deals'], [901, 902])
+        self.assertEqual(self.execute(), recovered)
+        self.assertEqual(len(self.broker.sends), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

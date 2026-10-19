@@ -2,6 +2,12 @@
 
 GitHub `gngoongoog/V4` is canonical. Continue from `development`; do not restart from `main` unless preparing a promoted release.
 
+## In-progress feedback repair — 2026-10-19
+
+Branch `feature/learning-feedback-repair` repairs recovery-to-student fill geometry, acknowledgement-time registration, pre-history quote-path capture with post-close trimming, receipt-gap versus quiet-market coverage, sparse regime pooling, under-observed contextual exploration, actual admission counts and the native Learning progress explanations/blocker log. It preserves the 16 broker identities and Demo-only learned execution. Existing studies remain stored; new known-regime studies collect independently.
+
+Focused gateway recovery tests, domain/runtime tests and simulated Core integration are required, followed by exact-head Research and Windows/Linux CI before normal merge to development. This section will be updated with the tested commit and CI outcome. Native MT5 acceptance is still pending. Entry-timing experiments and additional exit variants are not implemented by this repair.
+
 ## Current verified checkpoint — student learning
 
 PR #60 is merged into `development` as `6467d2022e600c944b6b05a02de541e66dea78e5`. Exact tested head `126c7f357f4ed2dca0769cb8fd8ac96a843d3a22`, packaged CI merge `fef0d29e8d2517778436f0c627b3e9a7fcda4263` and the development merge share source tree `ab415df5284b60ea7e5eb0ffb5d7435d349b1e4c`.

@@ -54,6 +54,9 @@ fn json_rows(db: &Connection, sql: &str, key: &str) -> Result<Vec<Value>> {
     rows.iter().map(|r| Ok(serde_json::from_str(r)?)).collect()
 }
 impl Service {
+    pub fn learning_decisions(&self)->Vec<(String,Value)> {
+        self.brains.iter().filter(|b|b.enabled).filter_map(|b|self.signals.get(&b.id).map(|v|(b.id.clone(),v.clone()))).collect()
+    }
     pub fn new(db: &Connection) -> Result<Self> {
         db.execute_batch("CREATE TABLE IF NOT EXISTS execution_settings(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS execution_equity(context TEXT PRIMARY KEY,peak REAL NOT NULL);
@@ -275,6 +278,9 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 }
                 execution::coordinate_for_account(base,c,t,votes)
             }else{base};
+            if b.id!="system" {
+                signal.coordination.get_or_insert_with(||json!({}))["intelligence"]=json!(self.weights.get(&b.id).map(|w|w.intelligence()).unwrap_or_default());
+            }
             crate::student_learning::adapt(&mut signal,t,c,&b,&self.student_policies);
             let decision_us = started.elapsed().as_micros() as u64;
             let mut gates = vec![];

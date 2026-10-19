@@ -299,7 +299,7 @@ export component Dashboard inherits Window {
             HorizontalBox { spacing: 10px;
                 Card { label: "تجارب دخول مسجّلة"; value: root.student-total; }
                 Card { label: "صفقات MT5 مغلقة"; value: root.student-closed; }
-                Card { label: "مقارنات خروج صالحة"; value: root.student-pairs; }
+                Card { label: "مقارنات دخلت التعلّم"; value: root.student-pairs; }
             }
             Text { text: "شنو يتكرر بالنتائج؟"; color: #eaf0fb; font-size: 18px; font-weight: 700; }
             Text { text: "آخر 100 تجربة كحد أقصى. هذه أنماط مرصودة؛ سبب الخسارة قد يحتاج أدلة إضافية."; color: #8d9cb4; wrap: word-wrap; }
@@ -309,7 +309,7 @@ export component Dashboard inherits Window {
             Text { text: "20 مقارنة للتدريب، ثم 20 دخولاً جديداً لاختبار البديل. الإعداد الأصلي يبقى يعمل خلال التعلّم. التطبيق الآلي للديمو فقط؛ تغييره من صفحة الوضع والتكلفة."; color: #8d9cb4; wrap: word-wrap; }
             Text { text: "دفتر التجارب — أحدث 20 دخولاً"; color: #eaf0fb; font-size: 18px; font-weight: 700; }
             Text { text: root.student-journal; color: #acbad0; wrap: word-wrap; }
-            Text { text: "MFE / MAE: أفضل وأسوأ حركة مرصودة أثناء ظهور الصفقة. المقارنة الافتراضية تستخدم سعر Bid/Ask والعمولة والانزلاق، وتُستبعد عند فجوة تتجاوز ثانيتين. السواب غير محسوب فيها. التحسّن السابق لا يضمن ربحاً لاحقاً."; color: #8d9cb4; wrap: word-wrap; }
+            Text { text: "MFE / MAE: أفضل وأسوأ حركة مرصودة بعد تأكيد التنفيذ وحتى الإغلاق. المقارنة الافتراضية تستخدم Bid/Ask والعمولة والانزلاق؛ فجوة وصول الرصد فوق ثانيتين تستبعدها، وهدوء السعر وحده لا يستبعدها. السواب غير محسوب فيها. التحسّن السابق لا يضمن ربحاً لاحقاً."; color: #8d9cb4; wrap: word-wrap; }
         } }
         if root.page == 17: ScrollView { VerticalBox { spacing: 10px;
             Text { text: "تنفيذ MT5 — لكل عقل قراره وصفقاته"; color: #eaf0fb; font-size: 20px; }
