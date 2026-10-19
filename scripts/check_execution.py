@@ -53,8 +53,18 @@ def check(exe=None):
             volume_min=.01,volume_step=.01,volume_max=100.,bid=2053.8,ask=2053.9,
             market=dict(captured_ms=clock_ms(),m1=bars(60,1),m5=bars(300,-1),m15=bars(900,-1),error=''))
         def publish():
-            snapshot.update(quote_time_ms=clock_ms(),tick_age_ms=0)
-            snapshot['market']['captured_ms']=clock_ms()
+            current=clock_ms()
+            snapshot.update(quote_time_ms=current,tick_age_ms=0)
+            # This acceptance test can run while Windows compiles/packages under
+            # heavy CI load. A synthetic snapshot must never pretend its last
+            # completed candle is fresh merely by advancing captured_ms.
+            # Rebuild only expired fixture frames with actual completed times;
+            # production MT5 market data is not modified by this script.
+            for name,seconds,side in [('m1',60,1),('m5',300,-1),('m15',900,-1)]:
+                series=snapshot['market'][name]
+                if not series or current-(series[-1]['time']+seconds)*1000>seconds*1000+15_000:
+                    snapshot['market'][name]=bars(seconds,side)
+            snapshot['market']['captured_ms']=current
             api('/v1/gateway/snapshot',snapshot)
         broker=Broker();broker.tick.bid=2053.8;broker.tick.ask=2053.9
         executor=BrokerExecutor(Path(directory)/'send-journal.sqlite')
@@ -69,7 +79,7 @@ def check(exe=None):
             api('/v1/trading/settings',dict(trading=config['trading'],commission_per_lot=7.))
             config['risk']['max_lots']=.01;api('/v1/risk',config['risk'])
             publish();api('/v1/execution/settings',dict(target='demo',deviation_points=20))
-            assert len(api('/v1/execution')['brains'])==16
+            assert len(api('/v1/execution')['brains'])==17
             assert brain('system')['role']=='coordinator' and brain('trend')['role']=='advisor'
             assert brain('liquidity')['role']=='advisor' and not brain('liquidity')['solo_enabled']
             assert brain('trend_pullback')['role']=='advisor' and not brain('trend_pullback')['solo_enabled']
@@ -79,7 +89,11 @@ def check(exe=None):
             members=brain('system')['latest']['signal']['coordination']['members']
             assert all(m['id']!='trend' for m in members), members
             api('/v1/start',{});publish()
-            cmd=api('/v1/execution/gateway')['command'];assert cmd['brain']=='trend' and cmd['lots']==.1,cmd
+            cmd=api('/v1/execution/gateway')['command']
+            if cmd is None:
+                details=brain('trend')['latest']
+                raise AssertionError(f"Expected a fresh independent trend command, got none: {details}")
+            assert cmd['brain']=='trend' and cmd['lots']==.1,cmd
             broker.raise_send=True
             result=submit(cmd);assert result['state']=='unknown',result
             submit(cmd);assert len(broker.sends)==1
@@ -131,7 +145,7 @@ def check(exe=None):
             assert brain('trend')['stats']['deals']==0
             api('/v1/shutdown',{});process.wait(timeout=10)
             report=dict(result='PASS',version=VERSION,broker='simulated; no native MT5 acceptance',checks=[
-                '16 identities; default coordinator and advisors including liquidity + trend_pullback','SOLO exclusion; no implicit global START',
+                '17 identities; default coordinator and advisors including liquidity + trend_pullback','SOLO exclusion; no implicit global START',
                 'standalone M1 trend against opposing M5','optional risk caps off',
                 'Core+gateway single submission','unknown-to-fill history retains position barrier','entry history does not release fill barrier',
                 'pending return and frozen timeout exit while STOPPED','advisor rejoins actual votes after close',
