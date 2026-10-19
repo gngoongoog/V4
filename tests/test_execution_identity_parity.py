@@ -41,12 +41,13 @@ class ExecutionIdentityParity(unittest.TestCase):
         self.assertEqual(rust_base, low)
         self.assertEqual(high, rust_base + len(names) - 1,
                          "Added/removed execution brain without synchronizing Python MT5 magic bounds")
-        self.assertEqual(names[0], "system", "Existing append-only ownership must not be reordered")
-        self.assertEqual(names[-1], "trend_pullback", "Current 16-identity checkpoint changed; manually audit legacy magic migration")
-
-    def test_open_adaptive_pr_must_not_be_assumed_merged(self):
-        self.assertNotIn('"adaptive",', self.rust,
-                         "If Adaptive becomes a registered broker brain, update identity parity and frozen ownership tests")
+        previous = (
+            "system", "gann", "wyckoff", "trend", "momentum", "structure",
+            "zones", "dom", "profile", "gann_dom_profile", "ces", "kte",
+            "regime", "generated", "liquidity", "trend_pullback",
+        )
+        self.assertEqual(tuple(names[:len(previous)]), previous,
+                         "Existing magic identities must not be reordered or remapped; append new brains only")
 
 
 if __name__ == "__main__":
