@@ -69,6 +69,14 @@ def check(exe=None):
                 snapshot.update(bid=value,ask=value+.01)
                 broker.tick.bid=value;broker.tick.ask=value+.01
                 publish()
+        def pulse(value):
+            time.sleep(.01)
+            broker.tick.bid=value;broker.tick.ask=value+.01
+            body=dict(login=17,server='Demo',currency='USD',symbol='XAUUSD',bid=value,ask=value+.01,
+                quote_time_ms=clock_ms(),tick_age_ms=0)
+            request=urllib.request.Request('http://127.0.0.1:18741/v1/execution/pulse',method='PUT',
+                data=json.dumps(body).encode(),headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})
+            with opener.open(request,timeout=8) as response:return json.load(response)
         try:
             boot()
             config=api('/v1/config')['config'];config['trading'].update(mode='sniper',sniper_brain='learner')
@@ -79,8 +87,8 @@ def check(exe=None):
             prices([2053.80,2053.84,2053.88])
             assert brain('system')['latest']['signal']['ready'],brain('system')
             assert api('/v1/execution/gateway')['command'] is None
-            api('/v1/start',{});prices([2053.92])
-            cmd=api('/v1/execution/gateway')['command'];assert cmd and cmd['brain']=='system',brain('system')
+            api('/v1/start',{});work=pulse(2053.92);assert work['pulse_fast_path']
+            cmd=work['command'];assert cmd and cmd['brain']=='system',brain('system')
             selection=cmd['signal']['coordination']['selection']
             assert selection['brain']=='sniper_learner' and selection['sniper_policy']=='impulse'
             assert 0<selection['selection_probability']<=1
@@ -112,7 +120,10 @@ def check(exe=None):
             solo=api('/v1/execution/gateway')['command'];assert solo['brain']=='sniper_learner' and solo['magic']==410617,solo
             assert not brain('system')['latest']['ready']
             api('/v1/stop',{});configure('sniper_learner',enabled=False)
-            assert brain('sniper_learner')['role']=='advisor'
+            assert brain('sniper_learner')['role']=='returning'
+            assert submit(solo)['state']=='cancelled'
+            assert len(broker.sends)==1
+            publish();assert brain('sniper_learner')['role']=='advisor'
             # Another mode cannot accidentally execute the tick specialist, even in SOLO.
             config['trading']['mode']='scalping'
             api('/v1/trading/settings',dict(trading=config['trading'],commission_per_lot=7.))
@@ -120,7 +131,7 @@ def check(exe=None):
             assert not brain('sniper_learner')['latest']['signal']['ready']
             snapshot['login']=99;publish();assert api('/v1/execution/gateway')['command'] is None
             report=dict(result='PASS',version=VERSION,broker='simulated; no native MT5 acceptance',checks=[
-                'explicit Sniper learner selector; STOP never submits','tick engine reaches authorized order_send',
+                'explicit Sniper learner selector; STOP never submits','Fast Pulse tick engine reaches authorized order_send',
                 'duplicate never resends; partial close never trains','net fees credited only to specialist and owner',
                 'restart restores policy history and STOP','SOLO detaches without coordinator duplicate',
                 'inactive outside Sniper; account isolation'])
