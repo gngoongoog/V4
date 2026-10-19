@@ -91,6 +91,8 @@ def check(exe=None):
             cmd=work['command'];assert cmd and cmd['brain']=='system',brain('system')
             selection=cmd['signal']['coordination']['selection']
             assert selection['brain']=='sniper_learner' and selection['sniper_policy']=='impulse'
+            assert selection['sniper_target_mode']=='fixed'
+            assert abs(selection['sniper_target_pips'] - 5.)<1e-8
             assert 0<selection['selection_probability']<=1
             result=submit(cmd);assert result['state']=='filled' and result['fast_path'],result
             submit(cmd);assert len(broker.sends)==1
@@ -114,6 +116,20 @@ def check(exe=None):
             api('/v1/execution/sync',sync);prices([2054.00]);assert learned_count()==1
             api('/v1/shutdown',{});process.wait(timeout=10);boot();prices([2054.04,2054.08,2054.12])
             assert not api('/v1/status')['requested_run'];assert learned_count()==1
+            # The Demo-only bounded optimizer is enabled explicitly and uses
+            # four configured pip arms; it cannot invent out-of-range targets.
+            config['trading'].update(sniper_target_mode='adaptive',
+                                     sniper_min_target_pips=3.0,sniper_max_target_pips=9.0)
+            saved=api('/v1/trading/settings',dict(trading=config['trading'],commission_per_lot=7.))
+            assert saved['config']['trading']['sniper_target_mode']=='adaptive'
+            prices([2054.13,2054.17,2054.21])
+            latest=brain('system')['latest']['signal']
+            assert latest['ready'],latest
+            selection=latest['coordination']['selection']
+            assert selection['sniper_target_mode']=='adaptive',selection
+            assert 3.<=selection['sniper_target_pips']<=9.
+            assert len(selection['sniper_target_candidates_pips'])==4
+            assert selection['sniper_target_samples']==0,selection
             # Detaching the brain prevents a concurrent coordinator entry.
             configure('sniper_learner',enabled=True)
             api('/v1/start',{});prices([2054.16])
@@ -134,7 +150,8 @@ def check(exe=None):
                 'explicit Sniper learner selector; STOP never submits','Fast Pulse tick engine reaches authorized order_send',
                 'duplicate never resends; partial close never trains','net fees credited only to specialist and owner',
                 'restart restores policy history and STOP','SOLO detaches without coordinator duplicate',
-                'inactive outside Sniper; account isolation'])
+                'inactive outside Sniper; account isolation',
+                'fixed 5-pip target; user-bounded adaptive 3–9-pip Demo-only target selection'])
             out=ROOT/'test-output/sniper-learner-integration.json';out.parent.mkdir(exist_ok=True);out.write_text(json.dumps(report,indent=2))
             print(json.dumps(report))
         finally:
