@@ -135,7 +135,7 @@ struct Experience {
     #[serde(default)]
     shadow_expired: bool,
     #[serde(default)]
-    admitted: bool,
+    admitted: Option<bool>,
     #[serde(default)]
     path: Vec<(u64, f64)>,
     #[serde(default)]
@@ -468,7 +468,7 @@ impl Student {
                 last_position_ms: 0,
                 study_consumed: false,
                 shadow_expired: false,
-                admitted: false,
+                admitted: Some(false),
                 path: Vec::new(),
                 path_overflow: recovered,
                 path_coverage: false,
@@ -538,7 +538,7 @@ impl Student {
             if (e.trial.complete() || e.shadow_expired) && e.actual.is_some() && !e.study_consumed {
                 let study = self.policies.entry(e.source.clone()).or_default();
                 if let Some(rewards) = e.trial.paired_rewards() {
-                    e.admitted = study.observe(e.opened_ms, now, rewards);
+                    e.admitted = Some(study.observe(e.opened_ms, now, rewards));
                 } else if e.trial.usable && e.trial.samples < 2 {
                     e.trial.usable = false;
                     e.trial.exclusion_reason = "too_few_quotes".into();
@@ -848,6 +848,10 @@ mod tests {
             view(&db, &key).unwrap()["studies"][0]["study"]["samples"],
             1
         );
+        db.execute("UPDATE student_experiences SET payload=json_remove(payload,'$.admitted') WHERE context=?1",[&key]).unwrap();
+        let legacy = view(&db, &key).unwrap();
+        assert!(legacy["experiences"][0]["admitted"].is_null());
+        assert_eq!(legacy["usable_shadow_pairs"], 1);
         t.login = 99;
         student.observe(&db, &t, 2500).unwrap();
         assert!(student.policies.is_empty());

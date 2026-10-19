@@ -139,7 +139,7 @@ pub fn paint(ui: &Dashboard, v: &Value) {
             exit_label,
             e["observed_mfe_price"].as_f64().unwrap_or(0.),e["observed_mae_price"].as_f64().unwrap_or(0.),e["position_samples"],
             if e["position_path_usable"]==true{"كافٍ للوصف"}else{"محدود"},
-            if e["shadow"]["usable"]!=true{label(e["shadow"]["exclusion_reason"].as_str().filter(|s|!s.is_empty()).unwrap_or("legacy_quality_unknown"))}else if e["admitted"]==true{"دخلت التعلّم"}else if e["study_consumed"]==true{"لم تدخل نافذة المقارنة"}else{"تنتظر أسعاراً لاحقة"},e["shadow"]["max_observation_gap_ms"]);
+            if e["shadow"]["usable"]!=true{label(e["shadow"]["exclusion_reason"].as_str().filter(|s|!s.is_empty()).unwrap_or("legacy_quality_unknown"))}else if e["admitted"]==true{"دخلت التعلّم"}else if e["study_consumed"]==true && e["admitted"].is_null(){"تجربة قديمة؛ القبول الفردي غير مسجّل"}else if e["study_consumed"]==true{"لم تدخل نافذة المقارنة"}else{"تنتظر أسعاراً لاحقة"},e["shadow"]["max_observation_gap_ms"]);
     }
     if journal.is_empty() {
         journal =
