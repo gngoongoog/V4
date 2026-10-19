@@ -179,6 +179,32 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
     let learning=&b["learning"];
     let _=writeln!(out,"\nتعلّم العقل المحدد: صفقات MT5 {} | الوزن الحالي {:.3} | Reward {:.3}",
         learning["broker_samples"].as_u64().unwrap_or(0),b["learned_weight"].as_f64().unwrap_or(1.),learning["mean_reward"].as_f64().unwrap_or(0.));
+    if coordination["version"] == "sniper-learner-v1" {
+        let sel=&coordination["selection"];
+        let _=writeln!(out,"\nالقناص المتعلّم | أسلوب {} | سياق {} | صفقات الديمو {} | استكشاف {} | احتمال الاختيار {:.3}",
+            sel["sniper_policy"].as_str().unwrap_or("—"),sel["sniper_regime"].as_str().unwrap_or("—"),
+            sel["broker_samples"],sel["exploring"],sel["selection_probability"].as_f64().unwrap_or(1.));
+        let _=writeln!(out,"هدف صافي مطلوب {:.2} pip | النظام {} | هدف مُختبر {} | عينات هدف {} | استكشاف هدف {}",
+            sel["sniper_target_pips"].as_f64().unwrap_or(0.),
+            sel["sniper_target_mode"].as_str().unwrap_or("fixed"),
+            sel["sniper_target_arm"].as_u64().map(|v|v.to_string()).unwrap_or_else(||"يدوي".into()),
+            sel["sniper_target_samples"].as_u64().unwrap_or(0),
+            sel["sniper_target_exploring"]);
+        if let Some(models)=sel["sniper_target_policies"].as_array() {
+            if let Some(arms)=sel["sniper_target_candidates_pips"].as_array() {
+                for (i,p) in models.iter().enumerate() {
+                    let _=writeln!(out,"هدف {:.2} pip | صفقات مكتملة {} | رابحة {} | مكافأة {:.3} | خسائر متتالية {}",
+                        arms.get(i).and_then(Value::as_f64).unwrap_or(0.),
+                        p["samples"],p["wins"],p["reward"].as_f64().unwrap_or(0.),p["loss_streak"]);
+                }
+            }
+        }
+        out.push_str("الهدف المرن يستكشف فقط داخل الحدود التي اخترتها على Demo. الأرقام دليل تجارب وليست نسبة نجاح أو ضمان أفضلية.\n");
+        if let Some(policies)=sel["policies"].as_array() {for (i,p) in policies.iter().enumerate() {
+            let _=writeln!(out,"{}: مغلقة {} | رابحة {} | مكافأة {:.3} | خسائر متتالية {}",
+                if i==0 {"اندفاع"} else {"ارتداد"},p["samples"],p["wins"],p["reward"].as_f64().unwrap_or(0.),p["loss_streak"]);
+        }}
+    }
     if let Some(selection)=coordination.get("selection") {
         let _=writeln!(out,"اختيار الديمو المرن: {} | مكافأة الاستكشاف {:.3}",selection["brain"].as_str().unwrap_or(""),selection["exploration_bonus"].as_f64().unwrap_or(0.));
     }

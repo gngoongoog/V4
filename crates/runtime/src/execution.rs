@@ -396,6 +396,7 @@ impl Service {
             run,
             now,
         )?;
+        crate::sniper_learning::refresh(&mut self.inner.sniper, db, telemetry, now)?;
         self.student.observe(db,telemetry,now)?;
         self.inner.student_policies=self.student.policies.clone();
         // Legacy engine still owns durable broker intents/reconciliation. With `system`

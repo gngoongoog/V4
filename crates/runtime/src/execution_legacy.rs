@@ -35,6 +35,7 @@ impl Default for Settings {
     }
 }
 pub struct Service {
+    pub sniper: braintrade_domain::sniper::Engine,
     pub settings: Settings,
     pub brains: Vec<BrainConfig>,
     pub weights:BTreeMap<String,braintrade_domain::execution::LearnedWeight>,
@@ -98,6 +99,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             brains.push(b);
         }
         Ok(Self {
+            sniper: Default::default(),
             settings,
             brains,
             signals: BTreeMap::new(),
@@ -201,6 +203,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         now: u64,
     ) -> Result<()> {
         if !self.matches(t) {
+            self.sniper.reset_quotes();
             self.signals.clear();
             return Ok(());
         }
@@ -235,6 +238,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 )?;
             }
         }
+        let sniper_signal = self.sniper.evaluate(t,c,now);
+        let available=crate::coordinator_learning::available_frames(t,frames,now);
         for b in self.brains.clone() {
             let magic = execution::magic(&b.id).unwrap();
             let active:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,b.id],|r|r.get(0))?;
@@ -273,11 +278,25 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     self.queue(db, t, &b, "close", None, p.ticket, now, None)?;
                 }
             }
+            if braintrade_domain::sniper::selected(c) && b.id!="system" && b.id!=braintrade_domain::sniper::ID && !b.enabled {
+                // Keep ownership exits above active; this Sniper specialist does not evaluate inactive slow advisors.
+                continue;
+            }
             let genome=crate::coordinator_learning::genome(db,&b,t)?;
-            let available=crate::coordinator_learning::available_frames(t,frames,now);
             let started = std::time::Instant::now();
-            let base=execution::evaluate(&b,t,c,&available,genome.as_ref(),now);
-            let mut signal=if b.id=="system" {
+            let base=if b.id==braintrade_domain::sniper::ID || (b.id=="system" && braintrade_domain::sniper::selected(c)) {sniper_signal.clone()}
+                else {execution::evaluate(&b,t,c,&available,genome.as_ref(),now)};
+            let mut signal=if b.id=="system" && braintrade_domain::sniper::selected(c) {
+                let member=self.brains.iter().find(|m|m.id==braintrade_domain::sniper::ID).unwrap();
+                let pending:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain='sniper_learner' AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",[&key],|r|r.get(0))?;
+                let occupied=t.positions.iter().any(|p|p.magic==410_617 && p.symbol==t.symbol);
+                let mut selected=sniper_signal.clone(); selected.brain="system".into();
+                if member.enabled || pending || occupied {
+                    selected.ready=false;selected.reason="القناص المتعلّم منفرد أو ينتظر تسوية صفقته قبل الرجوع".into();
+                }
+                selected.coordination.get_or_insert_with(||json!({}))["intelligence"]=json!(self.weights.get(braintrade_domain::sniper::ID).map(|w|w.intelligence()).unwrap_or_default());
+                selected
+            } else if b.id=="system" {
                 let mut votes=vec![];
                 for member in self.brains.iter().filter(|m|m.id!="system"&&!m.enabled) {
                     // Returning SOLO positions finish under their original owner before rejoining.
@@ -316,7 +335,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 gates.push("حساب Netting: الرمز مملوك لصفقة حالية");
             }
             let last:u64=db.query_row("SELECT COALESCE(MAX(created_ms),0) FROM broker_commands WHERE context=?1 AND brain=?2 AND kind='open'",params![key,b.id],|r|r.get(0))?;
-            let cooldown = if b.id == "system"
+            let cooldown = if matches!(b.id.as_str(),"system"|"sniper_learner")
                 && c.trading.mode == braintrade_domain::trading::TradingMode::Sniper
             {
                 c.trading.sniper_cooldown_seconds.max(b.cooldown_seconds)

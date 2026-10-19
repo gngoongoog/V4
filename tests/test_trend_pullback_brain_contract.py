@@ -16,7 +16,7 @@ class TrendPullbackBrainContractTests(unittest.TestCase):
         cls.gateway = GATEWAY.read_text(encoding="utf-8")
 
     def test_identity_is_appended_and_all_prior_magics_remain_stable(self):
-        self.assertIn('pub const BRAINS: [(&str, &str); 16]', self.domain)
+        self.assertIn('pub const BRAINS: [(&str, &str); 17]', self.domain)
         liquidity = self.domain.index('(\"liquidity\", \"سحب السيولة — sweep + reclaim\")')
         pullback = self.domain.index('(\"trend_pullback\", \"Trend Pullback — رجوع منظم + تأكيد\")')
         self.assertLess(liquidity, pullback)
@@ -25,12 +25,12 @@ class TrendPullbackBrainContractTests(unittest.TestCase):
         self.assertIn('assert_eq!(magic("trend_pullback"), Some(410_615));', self.domain)
 
     def test_gateway_accepts_exact_appended_magic(self):
-        self.assertIn('MAGIC_MIN, MAGIC_MAX = 410600, 410615', self.gateway)
+        self.assertIn('MAGIC_MIN, MAGIC_MAX = 410600, 410617', self.gateway)
         spec = importlib.util.spec_from_file_location("braintrade_gateway_execution_pullback", GATEWAY)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self.assertEqual(module.MAGIC_MIN, 410600)
-        self.assertEqual(module.MAGIC_MAX, 410615)
+        self.assertEqual(module.MAGIC_MAX, 410617)
 
     def test_logic_requires_trend_pullback_confirmation_and_no_chase(self):
         for token in (

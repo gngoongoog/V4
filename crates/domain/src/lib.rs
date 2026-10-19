@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 pub mod backtest;
 pub mod trading;
+pub mod sniper;
 pub mod commission;
 pub mod execution;
 pub mod student;

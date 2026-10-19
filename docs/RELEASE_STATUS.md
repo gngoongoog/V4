@@ -1,15 +1,30 @@
-# BrainTrade OS 0.6.0 Preview
+# BrainTrade OS V4 — 0.7.0 Unified Windows Demo Release Candidate
 
-The verified executable/source checkpoint for the 0.6 development candidate is `fdc63d4d05df89e27607641bd197b9e6ead936e9` (tree `8593783f43a4892cdc724ed5d112607ef7cee006`). Research CI `38803539711` and Windows CI/package `38803539405` both passed on that checkpoint.
+**Package:** `BrainTrade-Windows-x64-v0.7.0-Preview.zip` (a Windows x64 portable ZIP contained within the GitHub Actions downloadable artifact `BrainTrade-Windows-x64-Preview`). This is the combined version for **controlled MT5 Demo acceptance**, not an independently certified profitable trading product.
 
-The packaged Windows artifact is `BrainTrade-Windows-x64-v0.6.0-Preview` (33,948,849 bytes, SHA-256 `3f7a945a4f9c1ab1ce3e008880722c3dc078a54018a8f622133c604420665779`). The Windows native-validation artifact is 1,785,325 bytes with SHA-256 `64725943777396d8c974c825a0319554b7f6536213709fd4d76edd49c6a6c66d`.
+## Included in this unified build
 
-Implemented: 14 execution identities, coordinator/advisor/SOLO/RETURNING roles, Scalping/Swing/Expert/Sniper modes, persistent intent/reconciliation state, schema-12 backup support, adaptive member weighting, the historical research/learning pipeline, and an 18-page native dashboard.
+- Complete Windows `BrainTrade.exe`, Rust Core and embedded Python MT5 gateway, together with the native Sniper EA source and read-only Demo acceptance collector.
+- Sixteen legacy durable execution identities preserved; `sniper_learner` owns **410617** and **410616** remains reserved, unowned and explicitly rejected by MT5.
+- Expert multi-brain coordinator, Scalping, Swing, Sniper classic, and the dedicated tick-driven Sniper Learner with direct operator choice, independent/returning SOLO behavior, Demo learning, and explainable signals.
+- Configurable fixed net-pip target or four user-bounded, context-specific **Demo-only** pip alternatives. Only exact closed broker outcomes with matching submitted TP geometry update the chosen target's learner; broker-widened TP is excluded from arm scoring.
+- Adaptive contextual loss-memory, limited exploration, journaled broker sends, partial and unknown-reply reconciliation, cost and margin checks, account-binding persistence before activation, exposure accounting for break-even/trailing stops.
+- Sniper/Scalping M1/M5 readiness independent from unrelated M15 research readiness; closed/finite/fresh bar constraints still apply.
+- Windows launcher `Run-Demo-Acceptance.cmd`, Arabic Sniper guide `START_HERE_SNIPER_DEMO_AR.md` and a complete `Source` archive for independent review.
 
-Recovery hardening covers unknown-intent account isolation, split-fill reconciliation without top-up/resend, durable-intent identity mismatch fail-closed behavior, and preservation of the gateway send journal outside staged backup restore.
+## Release qualification — must use exact-source test evidence
 
-Release boundary: startup/restart is STOPPED. Imported ML challengers remain research-only and cannot auto-promote. CI execution acceptance is simulated and never connects to a broker. Native MT5 demo-account acceptance and live Telegram delivery have not been performed in the build environment.
+The Windows and Research workflow checks validate Rust/Python test suites, simulated broker replies, source integrity and packaging. Download **only the artifact from a successful Windows run on the unified PR #69 branch or its merged development commit**. The package carries `package-validation.json` and `SHA256SUMS.json`; check their source commit and archive contents against GitHub Actions.
 
-Promotion to `main` must use the reviewed PR path rather than force-updating the diverged branches. Release-record/documentation commits may sit on top of the tested checkpoint without changing runtime behavior.
+A successful automated test suite does **not** validate:
+- actual fills, partial-close behavior or latency on your broker's Windows MT5 Demo installation;
+- execution under price gaps, unstable ticks, network failures not represented in tests;
+- future profitability, the best possible pip target, or zero bugs.
 
-See `docs/validation.json` for machine-readable evidence and `docs/EXECUTION_AND_ROLES.md` for execution semantics.
+The target-machine MT5 Demo acceptance step is mandatory before considering any Live use. Start in **STOPPED** mode, confirm the target account is Demo, and verify symbol, volume minimum, margin, roundtrip commission and spread. Never change to a real account merely to get more trades.
+
+See `START_HERE_SNIPER_DEMO_AR.md`, `README_AR.md`, and `Run-Demo-Acceptance.cmd`.
+
+## Version history
+
+Version 0.6.0 remains the old promoted baseline on `main`. Version 0.7.0 is the unified development release candidate. A package of 0.7.0 may be feature-complete for Demo trial without being certified as production-safe or consistently profitable. Research-only ML challengers, speculative entry-timing comparisons and news sentiment are not broker execution authorities.

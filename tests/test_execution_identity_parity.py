@@ -39,8 +39,18 @@ class ExecutionIdentityParity(unittest.TestCase):
         self.assertIsNotNone(source, "Rust magic base mapping changed; audit broker ownership before continuing")
         rust_base = int(source.group(1).replace("_", ""))
         self.assertEqual(rust_base, low)
-        self.assertEqual(high, rust_base + len(names) - 1,
-                         "Added/removed execution brain without synchronizing Python MT5 magic bounds")
+        # The Adaptive learner's 410616 magic is reserved but intentionally
+        # unowned. The shipped Sniper specialist owns 410617. Check the actual
+        # Python allowlist, not merely a contiguous upper bound.
+        self.assertEqual(high, 410617)
+        self.assertEqual(names[16:], ["sniper_learner"])
+        self.assertRegex(self.rust, r'if\s+id\s*==\s*"sniper_learner"\s*\{\s*return\s+Some\(410_617\)')
+        allowed = re.search(r"OWNED_MAGICS\s*=\s*frozenset\(range\((\d+),\s*(\d+)\)\)\s*\|\s*\{(\d+)\}", self.python)
+        self.assertIsNotNone(allowed, "Gateway must enforce explicit non-contiguous magic whitelist")
+        start, stop, sniper = map(int, allowed.groups())
+        self.assertEqual(set(range(start,stop)) | {sniper}, set(range(rust_base,rust_base+16)) | {410617})
+        self.assertNotIn(410616,set(range(start,stop))|{sniper},
+                         "Reserved Adaptive magic must never be accepted without registered owner")
         previous = (
             "system", "gann", "wyckoff", "trend", "momentum", "structure",
             "zones", "dom", "profile", "gann_dom_profile", "ces", "kte",

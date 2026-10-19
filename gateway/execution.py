@@ -17,7 +17,9 @@ import math
 import sqlite3
 import time
 
-MAGIC_MIN, MAGIC_MAX = 410600, 410615
+MAGIC_MIN, MAGIC_MAX = 410600, 410617
+# Reserved 410616 belongs to the unmerged Adaptive Learner, not this build.
+OWNED_MAGICS = frozenset(range(410600, 410616)) | {410617}
 FAST_QUEUE_TARGET_MS = 20
 
 
@@ -216,7 +218,7 @@ class BrokerExecutor:
                 raise ValueError('Bound account or Demo/Live mode changed')
             if not terminal or not terminal.connected or not terminal.trade_allowed or getattr(terminal,'tradeapi_disabled',False) or not a.trade_allowed or not a.trade_expert:
                 raise ValueError('Enable Algo Trading and external Python trading in MT5; account must permit trading')
-            if not MAGIC_MIN<=cmd['magic']<=MAGIC_MAX:
+            if cmd['magic'] not in OWNED_MAGICS:
                 raise ValueError('Unknown brain ownership')
 
             symbol=cmd['symbol']; info=mt5.symbol_info(symbol); tick=mt5.symbol_info_tick(symbol)

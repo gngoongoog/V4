@@ -78,6 +78,18 @@ pub fn adapt(
     // Falling back keeps the already-valid baseline entry available.
     let mut cost_fallback = false;
     let mut fallback_reason = "";
+    // One controller owns the executed TP geometry at a time. The Sniper
+    // target bandit labels the exact chosen pip arm at entry: letting the
+    // independent exit learner reshape the TP would corrupt that arm's
+    // booked outcome. Its counterfactual exit studies may still collect,
+    // but their candidate policy is not allowed to alter this entry.
+    if c.trading.mode == braintrade_domain::trading::TradingMode::Sniper
+        && signal.coordination.as_ref().is_some_and(|v| v["selection"]["sniper_target_mode"]=="adaptive")
+        && profile != ExitProfile::Baseline
+    {
+        profile = ExitProfile::Baseline;
+        fallback_reason = "sniper_pip_target_owned";
+    }
     if profile != ExitProfile::Baseline {
         let (stop, _, _) = profile.geometry(signal.stop_distance, signal.target_distance, signal.hold_ms);
         if t.bid.zip(t.ask).zip(t.tick_size).is_some_and(|((bid,ask),tick)| stop <= ask-bid+tick) {
@@ -86,7 +98,7 @@ pub fn adapt(
         }
     }
     if profile != ExitProfile::Baseline
-        && b.id == "system"
+        && matches!(b.id.as_str(), "system" | "sniper_learner")
         && c.trading.mode == braintrade_domain::trading::TradingMode::Sniper
     {
         let (_, target, _) =
@@ -795,6 +807,39 @@ mod tests {
         assert!(s.ready);
         assert_eq!(s.target_distance, 1.5);
         assert_eq!(s.coordination.unwrap()["student"]["cost_fallback"], false);
+    }
+    #[test]
+    fn adaptive_sniper_pip_arm_cannot_be_relabelled_by_exit_profile() {
+        let mut t=telemetry();
+        t.point=Some(0.01);
+        let mut c=Config::default();
+        c.trading.mode=braintrade_domain::trading::TradingMode::Sniper;
+        c.trading.sniper_target_mode=braintrade_domain::trading::SniperTargetMode::Adaptive;
+        let b=BrainConfig{id:"system".into(),..Default::default()};
+        let mut entry=signal();
+        entry.coordination=Some(json!({"selection":{
+            "brain":"sniper_learner","policy":"sniper-ticks-v1",
+            "sniper_target_mode":"adaptive","sniper_target_arm":2,"sniper_target_pips":6.0,
+            "sniper_definition":"fixture","sniper_regime":"directional_normal",
+            "definition":["sniper-ticks-v1","impulse"],"timeframe":"M1"
+        }}));
+        let before_target=entry.target_distance;
+        let mut baseline=entry.clone();
+        adapt(&mut baseline,&t,&c,&b,&BTreeMap::new());
+        let key=baseline.coordination.as_ref().unwrap()["student"]["source"].as_str().unwrap().to_string();
+        let policies=BTreeMap::from([(key,ExitStudy{active:ExitProfile::Quick,..Default::default()})]);
+        adapt(&mut entry,&t,&c,&b,&policies);
+        assert_eq!(entry.target_distance,before_target);
+        assert_eq!(entry.hold_ms,4000);
+        let coord=entry.coordination.unwrap();
+        assert_eq!(coord["student"]["profile"],"baseline");
+        assert_eq!(coord["student"]["fallback_reason"],"sniper_pip_target_owned");
+        assert_eq!(coord["selection"]["sniper_target_arm"],2);
+        // Ordinary Sniper fixed-target exit learning remains available.
+        c.trading.sniper_target_mode=braintrade_domain::trading::SniperTargetMode::Fixed;
+        let mut fixed=signal();
+        adapt(&mut fixed,&t,&c,&b,&BTreeMap::new());
+        assert!(fixed.ready);
     }
     #[test]
     fn ledger_restart_exact_labels_and_shadow_isolation() {

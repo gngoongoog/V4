@@ -11,10 +11,21 @@ pub enum TradingMode {
     Expert,
     Sniper,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SniperBrain { #[default] Classic, Learner }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SniperTargetMode { #[default] Fixed, Adaptive }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TradingConfig {
     pub mode: TradingMode,
+    pub sniper_brain: SniperBrain,
+    pub sniper_target_mode: SniperTargetMode,
+    pub sniper_min_target_pips: f64,
+    pub sniper_max_target_pips: f64,
     /// Demo only: select actionable advisors adaptively and shrink oversized orders.
     pub demo_flexible: bool,
     /// Demo-only prospective exit learning; no effect on already open positions.
@@ -30,6 +41,10 @@ impl Default for TradingConfig {
     fn default() -> Self {
         Self {
             mode: TradingMode::Expert,
+            sniper_brain: SniperBrain::Classic,
+            sniper_target_mode: SniperTargetMode::Fixed,
+            sniper_min_target_pips: 2.0,
+            sniper_max_target_pips: 10.0,
             demo_flexible: true,
             adaptive_exits: true,
             sniper_target_points: 50.,
@@ -48,10 +63,15 @@ impl TradingConfig {
             ("Stop points", self.sniper_stop_points, 1., 100_000.),
             ("Points per pip", self.pip_points, 1., 1000.),
             ("Cost fraction", self.max_cost_fraction, 0.01, 0.9),
+            ("Adaptive min target pips", self.sniper_min_target_pips, 0.1, 1000.),
+            ("Adaptive max target pips", self.sniper_max_target_pips, 0.1, 1000.),
         ] {
             if !v.is_finite() || !(min..=max).contains(&v) {
                 return Err(format!("{name} must be {min}–{max}"));
             }
+        }
+        if self.sniper_max_target_pips <= self.sniper_min_target_pips {
+            return Err("Adaptive Sniper max target must exceed min target in pips".into());
         }
         if !(0..=3600).contains(&self.sniper_cooldown_seconds) {
             return Err("Cooldown must be 0–3600 seconds".into());
@@ -356,6 +376,19 @@ mod tests {
         assert!(!choose(&t),"A reported feed error must not be bypassed");
     }
 
+    #[test]
+    fn adaptive_pip_controls_validate_and_legacy_serialization_remains_compatible() {
+        let old=r#"{"mode":"sniper","sniper_brain":"learner","sniper_target_points":50,"pip_points":10}"#;
+        let c:TradingConfig=serde_json::from_str(old).unwrap();
+        assert_eq!(c.sniper_target_mode,SniperTargetMode::Fixed);
+        assert_eq!(c.sniper_target_points/c.pip_points,5.);
+        let mut a=c.clone();a.sniper_target_mode=SniperTargetMode::Adaptive;
+        a.sniper_min_target_pips=3.;a.sniper_max_target_pips=11.;
+        a.validate().unwrap();
+        assert_eq!(serde_json::to_value(&a).unwrap()["sniper_target_mode"],"adaptive");
+        a.sniper_max_target_pips=3.;assert!(a.validate().is_err());
+        a.sniper_max_target_pips=f64::INFINITY;assert!(a.validate().is_err());
+    }
     #[test]
     fn proportional_costs_without_double_spread() {
         let t = Telemetry {

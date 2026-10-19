@@ -99,6 +99,8 @@ pub fn render() -> anyhow::Result<()> {
     std::fs::create_dir_all(&output)?;
     ui.set_studio_frames(std::rc::Rc::new(slint::VecModel::from(vec!["ALL".into(),"M1".into(),"H1".into()])).into());
     ui.set_studio_summary("RENDER FIXTURE — بيانات اصطناعية\nM1: 600 شمعة | H1: 600 شمعة\n40 تركيباً؛ اختبار نهائي محفوظ".into());
+    ui.set_trade_mode(3);
+    ui.set_sniper_brain(1);
     ui.set_cost_detail("RENDER FIXTURE / USD\n0.1 لوت × 7 = 0.70 عمولة\nسبريد 2 نقطة = 0.20\nانزلاق 0.40 | إجمالي 1.30\nالتعادل 13 نقطة / 1.3 pip".into());
     ui.set_wyckoff_detail("RENDER FIXTURE — ليس تحليلاً حقيقياً\nM1 | C → D محتملة\nSpring + Test | دعم 98 | مقاومة 102\nالحجم: tick_activity_proxy\nاختبار أقل نشاطاً بعد اختراق الدعم والعودة\nنتائج مقاسة: 0 | ينتظر 12 شمعة لاحقة".into());
     ui.set_exec_summary("RENDER FIXTURE — Demo / stopped / no broker connected".into());

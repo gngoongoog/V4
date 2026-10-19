@@ -39,5 +39,6 @@ Invoke-Checked -Program $EmbeddedPython -Arguments @($Check)
 Invoke-Checked -Program $Python -Arguments @('scripts\check_windows_portable.py','--exe','release\BrainTrade\BrainTrade.exe')
 Invoke-Checked -Program $Python -Arguments @('scripts\check_execution.py','--exe','release\BrainTrade\BrainTrade.exe')
 Invoke-Checked -Program $Python -Arguments @('scripts\check_flexible_demo.py','--exe','release\BrainTrade\BrainTrade.exe')
+Invoke-Checked -Program $Python -Arguments @('scripts\check_sniper_learner.py','--exe','release\BrainTrade\BrainTrade.exe')
 Write-Host 'Portable package created. End users launch BrainTrade.exe; no separate Python/Rust installation.'
 Write-Host 'Demo acceptance GUI/CLI syntax was validated on Windows, but real MT5 Demo acceptance remains a target-machine step.'
