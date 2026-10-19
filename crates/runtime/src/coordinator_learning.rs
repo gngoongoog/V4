@@ -141,16 +141,46 @@ fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<
     for(ts,raw)in rows{let p:Value=serde_json::from_str(&raw)?;let sample_regime=p["regime"].as_str().unwrap_or("legacy");if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}let net=p["net_per_lot"].as_f64().unwrap_or(0.);let reward=p["reward"].as_f64().unwrap_or_else(||reward_v2(net,0.).1);let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);samples+=1;if net>0.{wins+=1;weighted_wins+=w;}weighted_net+=net*w;weighted_reward+=reward*w;effective+=w;}
     Ok(finish_stats(samples,wins,weighted_wins,weighted_net,weighted_reward,effective))
 }
-fn contextual_stats(db:&Connection,source:&str,key:&str,now:u64)->Result<(u64,f64,f64)> {
-    let mut st=db.prepare("SELECT closed_ms,payload FROM coordinator_broker_samples WHERE source=?1 ORDER BY closed_ms DESC LIMIT 4000")?;
+// Repeated-mistake memory uses only exact completed Demo broker evidence already
+// in coordinator_broker_samples. An observed loss is not proof that the strategy
+// caused the market move. The response is a temporary, bounded preference shift.
+fn contextual_stats(db:&Connection,source:&str,key:&str,now:u64)->Result<(u64,f64,f64,u64,f64)> {
+    let mut st=db.prepare("SELECT closed_ms,payload FROM coordinator_broker_samples WHERE source=?1 ORDER BY closed_ms DESC,position_id DESC LIMIT 4000")?;
     let rows=st.query_map([source],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    let(mut count,mut sum,mut mass)=(0,0.,0.);
-    for(ts,raw) in rows {let p:Value=serde_json::from_str(&raw)?;
+    let(mut count,mut sum,mut mass)=(0u64,0.,0.);
+    let(mut recent_loss_streak,mut recent_cost_losses)=(0u64,0u64);
+    let mut streak_unbroken=true;
+    const MEMORY_HORIZON_MS:u64=14*24*60*60*1000;
+    for(ts,raw) in rows {
+        let p:Value=serde_json::from_str(&raw)?;
         if p["context_key"].as_str()!=Some(key){continue;}
-        let Some(reward)=p["reward"].as_f64().filter(|v|v.is_finite()) else {continue;};
-        let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);count+=1;sum+=reward*w;mass+=w;
+        if let Some(reward)=p["reward"].as_f64().filter(|v|v.is_finite()) {
+            let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);
+            count+=1;sum+=reward*w;mass+=w;
+        }
+        // Nonfinite or missing booked net breaks the streak; never invent a loss.
+        // Expiration stops stale mistakes from holding back a recovered strategy.
+        if streak_unbroken {
+            if ts==0 || ts>now || now.saturating_sub(ts)>MEMORY_HORIZON_MS {
+                streak_unbroken=false;
+            } else if p["net"].as_f64().is_some_and(|net|net.is_finite() && net<0.) {
+                recent_loss_streak+=1;
+                if p["attribution"]=="costs_erased_gross_profit" || p["attribution"]=="booked_costs" {
+                    recent_cost_losses+=1;
+                }
+            } else {
+                streak_unbroken=false;
+            }
+        }
     }
-    Ok((count,if mass>0.{sum/mass}else{0.},confidence(mass,true)))
+    // No penalty on just one or two losses: trading outcomes are noisy.
+    // Three consecutive negatives in the SAME regime/session/spread context
+    // introduce a mild preference penalty, with extra evidence for cost drag.
+    let penalty=if recent_loss_streak>=3 {
+        (0.035*(recent_loss_streak-1) as f64
+           + 0.012*(recent_cost_losses.saturating_sub(1)) as f64).clamp(0.,0.20)
+    } else {0.};
+    Ok((count,if mass>0.{sum/mass}else{0.},confidence(mass,true),recent_loss_streak,penalty))
 }
 fn confidence(effective:f64,broker:bool)->f64{if effective<=0.{0.}else{let scale=if broker{8.}else{20.};(1.-(-effective/scale).exp()).clamp(0.,1.)}}
 // Use at most eight effective observations from other regimes as a prior.
@@ -432,7 +462,8 @@ impl Learner {
                 broker_stats(db,&source,None,now)?,broker_stats(db,&source,Some(&intelligence.regime),now)?,&intelligence);
             weight.context_key=braintrade_domain::student::context_key(&intelligence);
             if c.trading.demo_flexible && t.demo && t.account_trade_mode==Some(0) {
-                (weight.context_samples,weight.context_reward,weight.context_confidence)=contextual_stats(db,&source,&weight.context_key,now)?;
+                (weight.context_samples,weight.context_reward,weight.context_confidence,
+                 weight.context_loss_streak,weight.context_mistake_penalty)=contextual_stats(db,&source,&weight.context_key,now)?;
             }
             self.weights.insert(source.clone(),weight);
 
@@ -771,6 +802,38 @@ mod tests {
         let same=pooled_stats(&local,&local);
         assert_eq!(same.effective_samples,1.);
         assert_eq!(same.mean_reward,-1.);
+    }
+
+    #[test]
+    fn contextual_loss_memory_is_account_scoped_recovers_on_a_win_and_expires() {
+        let db=Connection::open_in_memory().unwrap();let _=Learner::new(&db).unwrap();
+        let now=2_000_000_000_000u64;
+        let ctx="trend_up_normal|london|tight";
+        let source="demo-account-1/trend";
+        let other="demo-account-2/trend";
+        let mut add=|source:&str,id:u64,age:u64,net:f64,attr:&str|{
+            let payload=json!({"context_key":ctx,"net":net,"reward":if net<0.{-0.5}else{0.5},"attribution":attr});
+            db.execute("INSERT INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,'account','trend',?3,?4)",
+                params![source,id,now-age,payload.to_string()]).unwrap();
+        };
+        add(source,1,4000,-1.,"adverse_price_move");
+        add(source,2,3000,-1.,"costs_erased_gross_profit");
+        add(source,3,2000,-1.,"costs_erased_gross_profit");
+        let (count,_,_,streak,penalty)=contextual_stats(&db,source,ctx,now).unwrap();
+        assert_eq!(count,3);assert_eq!(streak,3);assert!(penalty>0.07 && penalty<=0.20);
+        assert_eq!(contextual_stats(&db,other,ctx,now).unwrap().3,0);
+        assert_eq!(contextual_stats(&db,source,"trend_down_normal|london|tight",now).unwrap().3,0);
+        add(source,4,1000,0.5,"positive_after_costs");
+        let (_,_,_,streak,penalty)=contextual_stats(&db,source,ctx,now).unwrap();
+        assert_eq!(streak,0);assert_eq!(penalty,0.);
+        // Historical negative samples can inform long-term statistics, but
+        // cannot keep a temporary 14-day repeated-error penalty alive.
+        let later=now+15*24*60*60*1000;
+        assert_eq!(contextual_stats(&db,source,ctx,later).unwrap().4,0.);
+        // Three unbroken losses in a new isolated account do not affect the first.
+        for i in 0..3 {add(other,10+i,700-i*100,-1.,"adverse_price_move");}
+        assert!(contextual_stats(&db,other,ctx,now).unwrap().4>0.);
+        assert_eq!(contextual_stats(&db,source,ctx,now).unwrap().4,0.);
     }
 
 }
