@@ -534,8 +534,9 @@ mod tests {
             db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,'account','trend',1000,?3)",
                 params![source,id,json!({"context_key":key,"reward":reward}).to_string()]).unwrap();
         }
-        let (n,reward,confidence)=contextual_stats(&db,"same","trend_up_normal|london|tight",1000).unwrap();
+        let (n,reward,confidence,streak,penalty)=contextual_stats(&db,"same","trend_up_normal|london|tight",1000).unwrap();
         assert_eq!(n,1);assert_eq!(reward,0.8);assert!(confidence>0. && confidence<0.2);
+        assert_eq!(streak,0);assert_eq!(penalty,0.);
         assert_eq!(contextual_stats(&db,"missing","trend_up_normal|london|tight",1000).unwrap().0,0);
     }
 
