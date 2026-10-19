@@ -31,6 +31,12 @@ Some brokers acknowledge an order with `TRADE_RETCODE_DONE`/`DONE_PARTIAL` but n
 
 Regression tests cover missing deal IDs for DONE/DONE_PARTIAL, restart persistence, recovery with changed broker comments, disjoint broker orders and misleading matching comments. Remaining limitation: if a broker provides neither usable history order IDs nor intact comments, Core cannot safely infer the fill and requires manual reconciliation.
 
+### A4 — Cross-language brain ownership drift guarded
+
+The merged Rust registry has 16 stable append-only magic identities 410600..410615, which the Python MT5 executor currently accepts. The open, unmerged Adaptive Learner PR #58 proposes identity 410616 but does not update the Python executor's `MAGIC_MAX`, and has merge conflicts with current development. **Do not merge PR #58 as-is** or claim that this 17th brain can execute broker orders.
+
+Added `tests/test_execution_identity_parity.py` to the ordinary Python test suite. It verifies the Rust registry declaration, uniqueness, stable original 16 names/order, Rust magic base and Python gateway min/max. New append-only brains remain allowed **only after both sides are updated together** and the regression suite passes.
+
 ## Existing controls checked but intentionally not weakened
 
 - No unconditional/random trades or bypass of broker minimum lot/margin, executable bid/ask, quote timestamp freshness, account identity, Core authorization, STOP semantics or append-only magic ownership.
