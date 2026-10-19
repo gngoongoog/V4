@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
 pub fn source(context: &str, mode: &Value, brain: &str, timeframe: &str, report: &str) -> String {
-    json!([context, "student-exits-v1", mode, brain, timeframe, report]).to_string()
+    json!([context, "student-exits-v2", mode, brain, timeframe, report]).to_string()
 }
 
 /// Called before the durable entry is queued; original geometry and policy are frozen.
@@ -68,7 +68,7 @@ pub fn adapt(
             .push(json!({"exit_regime":regime}));
     }
     let key = identity.to_string();
-    let study = policies.get(&key).cloned().unwrap_or_default();
+    let study = policies.get(&key).cloned().unwrap_or_else(ExitStudy::expanded);
     let mut profile = if c.trading.adaptive_exits {
         study.active
     } else {
@@ -77,6 +77,14 @@ pub fn adapt(
     // Preserve the user's Sniper cost fraction after a learned target change.
     // Falling back keeps the already-valid baseline entry available.
     let mut cost_fallback = false;
+    let mut fallback_reason = "";
+    if profile != ExitProfile::Baseline {
+        let (stop, _, _) = profile.geometry(signal.stop_distance, signal.target_distance, signal.hold_ms);
+        if t.bid.zip(t.ask).zip(t.tick_size).is_some_and(|((bid,ask),tick)| stop <= ask-bid+tick) {
+            profile = ExitProfile::Baseline;
+            fallback_reason = "stop_inside_spread";
+        }
+    }
     if profile != ExitProfile::Baseline
         && b.id == "system"
         && c.trading.mode == braintrade_domain::trading::TradingMode::Sniper
@@ -101,14 +109,15 @@ pub fn adapt(
         if !affordable {
             profile = ExitProfile::Baseline;
             cost_fallback = true;
+            fallback_reason = "sniper_cost_fraction";
         }
     }
     let baseline = json!({"stop":signal.stop_distance,"target":signal.target_distance,"hold_ms":signal.hold_ms});
     let coord = signal.coordination.get_or_insert_with(|| json!({}));
-    coord["student"] = json!({"version":1,"source":key,"brain":brain,"timeframe":timeframe,"report_id":report,
+    coord["student"] = json!({"version":1,"exit_candidates":2,"entry_timing":1,"source":key,"brain":brain,"timeframe":timeframe,"report_id":report,
         "baseline":baseline,"profile":profile,"adaptive_exits":c.trading.adaptive_exits,
         "phase":if study.phase.is_empty(){"collecting"}else{&study.phase},"decision":study.last_decision,
-        "validation_gain_r":study.last_gain_r,"cost_fallback":cost_fallback,"basis":"prospective_paired_quote_trials"});
+        "validation_gain_r":study.last_gain_r,"cost_fallback":cost_fallback,"fallback_reason":fallback_reason,"basis":"prospective_paired_quote_trials"});
     (signal.stop_distance, signal.target_distance, signal.hold_ms) =
         profile.geometry(signal.stop_distance, signal.target_distance, signal.hold_ms);
 }
@@ -256,8 +265,15 @@ pub struct Student {
     context: String,
     active: BTreeMap<String, Experience>,
     pub policies: BTreeMap<String, ExitStudy>,
+    timing: timing::Learner,
 }
+#[path = "student_timing.rs"]
+mod timing;
+
 impl Student {
+    pub fn capture_entries(&mut self, commands: Vec<Value>, now: u64) {
+        for command in commands { self.timing.capture(&command, now); }
+    }
     pub fn new(db: &Connection) -> Result<Self> {
         db.execute_batch("CREATE TABLE IF NOT EXISTS student_experiences(context TEXT NOT NULL,command_id TEXT NOT NULL,source TEXT NOT NULL,opened_ms INTEGER NOT NULL,complete INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,command_id));
             CREATE INDEX IF NOT EXISTS student_pending ON student_experiences(context,complete,opened_ms);
@@ -268,6 +284,7 @@ impl Student {
             context: String::new(),
             active: BTreeMap::new(),
             policies: BTreeMap::new(),
+            timing: timing::Learner::new(db)?,
         })
     }
     fn flush(&self, db: &Connection) -> Result<()> {
@@ -293,6 +310,7 @@ impl Student {
         self.active.clear();
         self.policies.clear();
         self.context = key.into();
+        self.timing.load(db, key)?;
         let mut st=db.prepare("SELECT payload FROM student_experiences WHERE context=?1 AND complete=0 ORDER BY opened_ms")?;
         for raw in st.query_map([key], |r| r.get::<_, String>(0))? {
             let e: Experience = serde_json::from_str(&raw?)?;
@@ -320,6 +338,7 @@ impl Student {
         let (Some(bid), Some(ask), Some(ms)) = (t.bid, t.ask, t.quote_time_ms) else {
             return;
         };
+        self.timing.quote(t, now);
         for e in self.active.values_mut() {
             if ms >= e.opened_ms && t.tick_age_ms.is_some_and(|age| age <= 1000) {
                 e.observe_path(bid, ask, now);
@@ -341,6 +360,7 @@ impl Student {
         }
         let key = crate::coordinator_learning::context(t);
         self.load(db, &key)?;
+        self.timing.restore(db, &key, now)?;
         // Register from acknowledged fills immediately, without waiting five seconds for history.
         let mut st=db.prepare("SELECT c.payload,c.result FROM broker_commands c WHERE c.context=?1 AND c.kind='open' AND CAST(json_extract(c.result,'$.deal') AS INTEGER)>0 AND json_extract(c.payload,'$.signal.coordination.student.version')=1 AND NOT EXISTS(SELECT 1 FROM student_experiences e WHERE e.context=c.context AND e.command_id=c.id) ORDER BY c.created_ms,c.id")?;
         let rows = st
@@ -439,6 +459,7 @@ impl Student {
                     stop,
                     target,
                     hold_ms: baseline["hold_ms"].as_u64().unwrap_or(1000),
+                    deadline_ms: None,
                     tick_size: tick,
                     profit_value: profit,
                     loss_value: loss,
@@ -459,7 +480,7 @@ impl Student {
                     usable: !recovered && r["acknowledged_ms"].as_u64().is_some(),
                     mfe: 0.,
                     mae: 0.,
-                    outcomes: [None, None, None],
+                    outcomes: vec![None; if m["exit_candidates"] == 2 { 5 } else { 3 }],
                 },
                 actual: None,
                 position_mfe: 0.,
@@ -520,7 +541,7 @@ impl Student {
                         .collect();
                     self.policies
                         .entry(e.source.clone())
-                        .or_default()
+                        .or_insert_with(|| if e.trial.outcomes.len() == 5 { ExitStudy::expanded() } else { ExitStudy::default() })
                         .record_loss(&patterns);
                 }
                 e.loss_reviewed = true;
@@ -536,7 +557,7 @@ impl Student {
                 e.shadow_expired = true;
             }
             if (e.trial.complete() || e.shadow_expired) && e.actual.is_some() && !e.study_consumed {
-                let study = self.policies.entry(e.source.clone()).or_default();
+                let study = self.policies.entry(e.source.clone()).or_insert_with(|| if e.trial.outcomes.len() == 5 { ExitStudy::expanded() } else { ExitStudy::default() });
                 if let Some(rewards) = e.trial.paired_rewards() {
                     e.admitted = Some(study.observe(e.opened_ms, now, rewards));
                 } else if e.trial.usable && e.trial.samples < 2 {
@@ -546,6 +567,7 @@ impl Student {
                 e.study_consumed = true;
             }
         }
+        self.timing.finish(db, now)?;
         self.flush(db)?;
         self.active.retain(|_, e| !e.complete());
         Ok(())
@@ -641,7 +663,7 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
     let mut st=db.prepare("SELECT brain,reason,SUM(observations) FROM student_opportunities WHERE context=?1 AND minute >= CAST(strftime('%s','now') AS INTEGER)/60-10080 GROUP BY brain,reason ORDER BY SUM(observations) DESC LIMIT 12")?;
     let blockers=st.query_map([key],|r|Ok(json!({"brain":r.get::<_,String>(0)?,"reason":r.get::<_,String>(1)?,"observations":r.get::<_,u64>(2)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(
-        json!({"version":2,"context":key,"total_experiences":total,"closed_broker_trades":closed,"usable_shadow_pairs":admitted,
+        json!({"version":3,"context":key,"entry_timing":timing::view(db,key)?,"total_experiences":total,"closed_broker_trades":closed,"usable_shadow_pairs":admitted,
         "recent_exclusions":exclusions,"recent_net":recent_net,"recent_closed":recent_closed,"blocker_observations":blockers,
         "recent_pattern_counts":patterns,"pattern_window":experiences.len(),"studies":studies,"experiences":experiences,
         "training_pairs":20,"validation_pairs":20,"gap_exclusion_ms":2000,
@@ -816,8 +838,8 @@ mod tests {
         t.quote_time_ms = Some(1750);
         student.observe(&db, &t, 1750).unwrap();
         t.positions[0].price_current = 102.6;
-        t.bid = Some(102.6);
-        t.ask = Some(102.8);
+        t.bid = Some(104.);
+        t.ask = Some(104.2);
         t.quote_time_ms = Some(2000);
         student.observe(&db, &t, 2000).unwrap();
         assert_eq!(view(&db, &key).unwrap()["usable_shadow_pairs"], 0);
@@ -952,8 +974,8 @@ mod tests {
         );
         let mut student = Student::new(&db).unwrap();
         student.observe(&db, &t, 1000).unwrap();
-        t.bid = Some(103.);
-        t.ask = Some(103.2);
+        t.bid = Some(104.);
+        t.ask = Some(104.2);
         t.quote_time_ms = Some(1500);
         student.quote(&t, 1500);
         label(&db, &key, 1600);
@@ -964,4 +986,16 @@ mod tests {
             false
         );
     }
+    #[test]
+    fn learned_protective_stop_falls_back_when_inside_executable_spread() {
+        let mut t=telemetry(); t.ask=Some(100.6);
+        let b=BrainConfig { id:"trend".into(),..Default::default() }; let c=Config::default();
+        let mut s=signal(); adapt(&mut s,&t,&c,&b,&BTreeMap::new());
+        let key=s.coordination.unwrap()["student"]["source"].as_str().unwrap().to_owned();
+        let policies=BTreeMap::from([(key,ExitStudy { active:ExitProfile::Protective,..ExitStudy::expanded() })]);
+        let mut s=signal(); adapt(&mut s,&t,&c,&b,&policies);
+        assert_eq!(s.stop_distance,1.); assert!(s.ready);
+        assert_eq!(s.coordination.unwrap()["student"]["fallback_reason"],"stop_inside_spread");
+    }
+
 }

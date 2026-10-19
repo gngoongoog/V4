@@ -2,6 +2,10 @@
 
 GitHub `gngoongoog/V4` is canonical. Continue from `development`; do not restart from `main` unless preparing a promoted release.
 
+## In progress — entry timing and expanded exits (2026-10-19)
+
+Branch `feature/entry-timing-exit-candidates` adds five-way prospective exit studies while preserving stored three-way records, and separate prospective entry-timing research at queued Demo opportunities (0/250/1000 ms). Timing is research-only, never delays or creates orders; shared deadlines, executable prices, costs, receipt coverage and entry resolution are explicit. The existing Learning progress page exposes its counts, exclusions and validated delay recommendations. Exact-head Research and Windows/Linux CI are required before normal merge and package handoff. Native MT5 acceptance remains pending.
+
 ## Current verified checkpoint — feedback repair (2026-10-19)
 
 PR #61 is merged into `development` as `959246e97dc1be81d1b38845fa22684025e07c91`. Exact tested PR head `fb52100632d8665aa9ab8b31c989683c9982ebc6`, packaged CI merge `2c664bfff8052411a6772f25d7997636b8bededf` and the development merge share source tree `a61cb9959dbc35f8b613ef1f0e18a8e83bfe94c3`.

@@ -35,14 +35,18 @@ pub enum ExitProfile {
     Baseline,
     Quick,
     Patient,
+    Protective,
+    Extended,
 }
 impl ExitProfile {
-    pub const ALL: [Self; 3] = [Self::Baseline, Self::Quick, Self::Patient];
+    pub const ALL: [Self; 5] = [Self::Baseline, Self::Quick, Self::Patient, Self::Protective, Self::Extended];
     pub fn index(self) -> usize {
         match self {
             Self::Baseline => 0,
             Self::Quick => 1,
             Self::Patient => 2,
+            Self::Protective => 3,
+            Self::Extended => 4,
         }
     }
     pub fn geometry(self, stop: f64, target: f64, hold: u64) -> (f64, f64, u64) {
@@ -50,6 +54,8 @@ impl ExitProfile {
             Self::Baseline => (1., 1., 1.),
             Self::Quick => (0.9, 0.75, 0.5),
             Self::Patient => (1., 1.25, 1.25),
+            Self::Protective => (0.65, 1., 0.75),
+            Self::Extended => (1., 1.75, 1.5),
         };
         (stop * s, target * t, ((hold as f64 * h) as u64).max(1000))
     }
@@ -71,6 +77,8 @@ pub struct Trial {
     pub stop: f64,
     pub target: f64,
     pub hold_ms: u64,
+    #[serde(default)]
+    pub deadline_ms: Option<u64>,
     pub tick_size: f64,
     pub profit_value: f64,
     pub loss_value: f64,
@@ -88,11 +96,11 @@ pub struct Trial {
     pub usable: bool,
     pub mfe: f64,
     pub mae: f64,
-    pub outcomes: [Option<ShadowOutcome>; 3],
+    pub outcomes: Vec<Option<ShadowOutcome>>,
 }
 impl Trial {
     pub fn complete(&self) -> bool {
-        self.outcomes.iter().all(Option::is_some)
+        !self.outcomes.is_empty() && self.outcomes.iter().all(Option::is_some)
     }
     /// Bid is the executable long exit; ask is the executable short exit.
     /// A missing interval invalidates policy comparison instead of inventing a path.
@@ -134,7 +142,7 @@ impl Trial {
         let movement = (price - self.entry) * self.side as f64;
         self.mfe = self.mfe.max(movement);
         self.mae = self.mae.max(-movement);
-        for profile in ExitProfile::ALL {
+        for profile in ExitProfile::ALL.into_iter().take(self.outcomes.len()) {
             if self.outcomes[profile.index()].is_some() {
                 continue;
             }
@@ -143,7 +151,7 @@ impl Trial {
                 "stop_quote"
             } else if movement >= target {
                 "target_quote"
-            } else if quote_ms.saturating_sub(self.opened_ms) >= hold {
+            } else if quote_ms >= self.deadline_ms.unwrap_or(self.opened_ms.saturating_add(hold)) {
                 "time_quote"
             } else {
                 continue;
@@ -165,26 +173,104 @@ impl Trial {
             });
         }
     }
-    pub fn paired_rewards(&self) -> Option<[f64; 3]> {
+    pub fn paired_rewards(&self) -> Option<Vec<f64>> {
         if !self.usable || !self.complete() || self.samples < 2 {
             return None;
         }
-        Some(std::array::from_fn(|i| {
-            self.outcomes[i].as_ref().unwrap().reward_r
-        }))
+        Some(self.outcomes.iter().map(|o| o.as_ref().unwrap().reward_r).collect())
+    }
+}
+
+/// Prospective quote experiment at a queued opportunity, never a delayed broker order.
+/// All three entries share a fixed deadline and original risk. Receipt time schedules
+/// delays; broker quote timestamps only deduplicate quotes. No interpolation is used.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EntryTiming {
+    pub anchor_ms: u64,
+    pub deadline_ms: u64,
+    pub last_received_ms: u64,
+    pub last_quote_ms: u64,
+    pub template: Trial,
+    pub legs: Vec<Option<Trial>>,
+    pub usable: bool,
+    pub exclusion_reason: String,
+}
+impl EntryTiming {
+    pub const DELAYS: [u64; 3] = [0, 250, 1000];
+    pub fn new(mut template: Trial, bid: f64, ask: f64, quote_ms: u64) -> Self {
+        let anchor = template.opened_ms;
+        let deadline = anchor.saturating_add(template.hold_ms);
+        template.outcomes = vec![None];
+        template.deadline_ms = Some(deadline);
+        let mut result = Self { anchor_ms: anchor, deadline_ms: deadline,
+            last_received_ms: anchor, last_quote_ms: quote_ms, template,
+            legs: vec![None; 3], usable: true, exclusion_reason: String::new() };
+        if !bid.is_finite() || !ask.is_finite() || bid <= 0. || ask < bid {
+            result.exclude("invalid_quote");
+        } else if deadline.saturating_sub(anchor) <= 1100 {
+            result.exclude("timing_horizon");
+        } else { result.enter(0, bid, ask, anchor); }
+        result
+    }
+    pub fn exclude(&mut self, reason: &str) {
+        self.usable = false;
+        if self.exclusion_reason.is_empty() { self.exclusion_reason = reason.into(); }
+    }
+    fn enter(&mut self, index: usize, bid: f64, ask: f64, now: u64) {
+        let mut t = self.template.clone();
+        t.opened_ms = now;
+        t.last_observed_ms = now;
+        t.last_quote_ms = now;
+        t.entry = if t.side > 0 { ask + t.exit_slippage } else { bid - t.exit_slippage };
+        self.legs[index] = Some(t);
+    }
+    pub fn complete(&self) -> bool {
+        !self.usable || self.legs.iter().all(|t| t.as_ref().is_some_and(Trial::complete))
+    }
+    pub fn observe(&mut self, bid: f64, ask: f64, quote_ms: u64, now: u64, fresh: bool) {
+        if self.complete() || now <= self.last_received_ms || !bid.is_finite()
+            || !ask.is_finite() || bid <= 0. || ask < bid || quote_ms < self.last_quote_ms { return; }
+        if now.saturating_sub(self.last_received_ms) > 2000 { self.exclude("observation_gap"); return; }
+        self.last_received_ms = now;
+        if !fresh || quote_ms <= self.last_quote_ms {
+            for t in self.legs.iter_mut().flatten().filter(|t| !t.complete()) {
+                t.observe_at(bid, ask, t.last_quote_ms, now, false);
+            }
+            return;
+        }
+        self.last_quote_ms = quote_ms;
+        for i in 0..3 {
+            if self.legs[i].is_none() {
+                let due = self.anchor_ms.saturating_add(Self::DELAYS[i]);
+                if now < due { continue; }
+                if now > due.saturating_add(100) { self.exclude("timing_resolution"); return; }
+                self.enter(i, bid, ask, now);
+            } else if let Some(t) = &mut self.legs[i] {
+                if t.complete() { continue; }
+                // Receipt time is the common clock for this hypothetical experiment.
+                t.observe_at(bid, ask, now, now, true);
+            }
+        }
+    }
+    pub fn rewards(&self) -> Option<[f64; 3]> {
+        if !self.usable || !self.complete() { return None; }
+        let rewards: Vec<_> = self.legs.iter().map(|t| t.as_ref()?.paired_rewards().map(|v| v[0])).collect::<Option<_>>()?;
+        Some([rewards[0], rewards[1], rewards[2]])
     }
 }
 
 /// A challenger is frozen after training, then judged only on newly opened trades.
 /// Promotion is a conservative evidence heuristic, not a statistical profit guarantee.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ExitStudy {
     pub active: ExitProfile,
     pub challenger: ExitProfile,
     pub phase: String,
     pub cutoff_ms: u64,
     pub samples: u64,
-    pub sums: [f64; 3],
+    #[serde(default = "legacy_sums")]
+    pub sums: Vec<f64>,
     pub gain_sum: f64,
     pub gain_squares: f64,
     pub baseline_sum: f64,
@@ -201,7 +287,19 @@ pub struct ExitStudy {
     #[serde(default)]
     pub experiment_reason: String,
 }
+fn legacy_sums() -> Vec<f64> { vec![0.; 3] }
+impl Default for ExitStudy {
+    fn default() -> Self {
+        Self { active: ExitProfile::Baseline, challenger: ExitProfile::Baseline,
+            phase: String::new(), cutoff_ms: 0, samples: 0, sums: legacy_sums(),
+            gain_sum: 0., gain_squares: 0., baseline_sum: 0., candidate_sum: 0.,
+            total_pairs: 0, promotions: 0, rollbacks: 0, last_gain_r: 0.,
+            last_decision: String::new(), reviewed_losses: 0,
+            loss_patterns: Default::default(), experiment_reason: String::new() }
+    }
+}
 impl ExitStudy {
+    pub fn expanded() -> Self { Self { sums: vec![0.; 5], ..Self::default() } }
     pub fn record_loss(&mut self, patterns: &[String]) {
         self.reviewed_losses += 1;
         for pattern in patterns {
@@ -211,14 +309,17 @@ impl ExitStudy {
     fn reset_window(&mut self, now: u64) {
         self.cutoff_ms = now;
         self.samples = 0;
-        self.sums = [0.; 3];
+        self.sums.fill(0.);
         self.gain_sum = 0.;
         self.gain_squares = 0.;
         self.baseline_sum = 0.;
         self.candidate_sum = 0.;
     }
-    pub fn observe(&mut self, opened_ms: u64, now: u64, rewards: [f64; 3]) -> bool {
-        if rewards.iter().any(|v| !v.is_finite()) || opened_ms <= self.cutoff_ms {
+    pub fn observe(&mut self, opened_ms: u64, now: u64, rewards: impl AsRef<[f64]>) -> bool {
+        let rewards = rewards.as_ref();
+        if rewards.len() != self.sums.len() || !(3..=5).contains(&rewards.len())
+            || self.active.index() >= rewards.len() || self.challenger.index() >= rewards.len()
+            || rewards.iter().any(|v| !v.is_finite()) || opened_ms <= self.cutoff_ms {
             return false;
         }
         self.total_pairs += 1;
@@ -233,7 +334,7 @@ impl ExitStudy {
             if self.samples < 20 {
                 return true;
             }
-            let index = (1..3)
+            let index = (1..self.sums.len())
                 .max_by(|a, b| self.sums[*a].total_cmp(&self.sums[*b]))
                 .unwrap();
             if self.sums[index] > self.sums[0] {
@@ -310,6 +411,7 @@ mod tests {
             stop: 1.,
             target: 2.,
             hold_ms: 4000,
+            deadline_ms: None,
             tick_size: 0.1,
             profit_value: 1.,
             loss_value: 1.,
@@ -324,7 +426,7 @@ mod tests {
             usable: true,
             mfe: 0.,
             mae: 0.,
-            outcomes: [None, None, None],
+            outcomes: vec![None; 3],
         }
     }
     #[test]
@@ -389,4 +491,62 @@ mod tests {
         assert!(!gap.usable);
         assert_eq!(gap.exclusion_reason, "observation_gap");
     }
+    #[test]
+    fn expanded_exit_candidates_and_legacy_records_stay_separate() {
+        let old = trial(1);
+        let json = serde_json::to_string(&old).unwrap();
+        let loaded: Trial = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.outcomes.len(), 3);
+        let mut expanded = trial(1);
+        expanded.outcomes = vec![None; 5];
+        expanded.observe(99.3,99.5,1200);
+        assert_eq!(expanded.outcomes[3].as_ref().unwrap().reason,"stop_quote");
+        assert!(expanded.outcomes[0].is_none());
+        expanded.observe(104.,104.2,1300);
+        assert_eq!(expanded.paired_rewards().unwrap().len(),5);
+        let mut study = ExitStudy::expanded();
+        assert!(!study.observe(1,1,[0.,1.,2.]));
+        for i in 1..=40 { study.observe(i,i,[0.,-1.,-1.,-1.,1.]); }
+        assert_eq!(study.active,ExitProfile::Extended);
+        let legacy: ExitStudy = serde_json::from_str(r#"{"sums":[0,0,0]}"#).unwrap();
+        assert_eq!(legacy.sums.len(),3);
+    }
+    #[test]
+    fn timing_uses_executable_sides_costs_and_a_common_deadline() {
+        for side in [1,-1] {
+            let mut template = trial(side);
+            template.stop=10.; template.target=20.; template.hold_ms=2500;
+            let mut timing = EntryTiming::new(template,100.,100.2,1000);
+            assert!((timing.legs[0].as_ref().unwrap().entry - if side>0 {100.3} else {99.9}).abs()<1e-8);
+            for now in [1100,1250,1350,2000,2100,2500,3500] {
+                timing.observe(100.,100.2,now,now,true);
+            }
+            let rewards=timing.rewards().unwrap();
+            assert!((rewards[0]+0.11).abs()<1e-8); // 0.2 spread + two 0.1 slippages + 7 commission / 100 risk.
+            assert_eq!(rewards[0],rewards[1]); assert_eq!(rewards[1],rewards[2]);
+            for leg in timing.legs.iter().flatten() { assert_eq!(leg.outcomes[0].as_ref().unwrap().exit_ms,3500); }
+        }
+    }
+    #[test]
+    fn timing_does_not_invent_delayed_quotes_or_reuse_stale_prices() {
+        let mut timing=EntryTiming::new(trial(1),100.,100.2,1000);
+        timing.observe(100.,100.2,1000,1250,false);
+        assert!(timing.legs[1].is_none());
+        timing.observe(101.,101.2,1400,1400,true);
+        assert_eq!(timing.exclusion_reason,"timing_resolution");
+        assert!(timing.rewards().is_none());
+        let mut gap=EntryTiming::new(trial(1),100.,100.2,1000);
+        gap.observe(101.,101.2,3101,3101,true);
+        assert_eq!(gap.exclusion_reason,"observation_gap");
+    }
+    #[test]
+    fn timing_quiet_heartbeats_keep_already_entered_legs_observed() {
+        let mut template=trial(1); template.stop=10.; template.target=20.; template.hold_ms=5000;
+        let mut timing=EntryTiming::new(template,100.,100.2,1000);
+        for now in [1100,1250,1350,2000,2100] { timing.observe(100.,100.2,now,now,true); }
+        for now in [3000,4000,5000] { timing.observe(100.,100.2,2100,now,false); }
+        timing.observe(100.,100.2,6000,6000,true);
+        assert!(timing.rewards().is_some());
+    }
+
 }

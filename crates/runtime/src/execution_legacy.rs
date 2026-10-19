@@ -40,6 +40,7 @@ pub struct Service {
     pub weights:BTreeMap<String,braintrade_domain::execution::LearnedWeight>,
     pub student_policies:BTreeMap<String,braintrade_domain::student::ExitStudy>,
     signals: BTreeMap<String, Value>,
+    new_entries: Vec<Value>,
     last_sync_ms: u64,
     history_until_ms: u64,
 }
@@ -54,6 +55,7 @@ fn json_rows(db: &Connection, sql: &str, key: &str) -> Result<Vec<Value>> {
     rows.iter().map(|r| Ok(serde_json::from_str(r)?)).collect()
 }
 impl Service {
+    pub fn take_entries(&mut self) -> Vec<Value> { std::mem::take(&mut self.new_entries) }
     pub fn learning_decisions(&self)->Vec<(String,Value)> {
         self.brains.iter().filter(|b|b.enabled).filter_map(|b|self.signals.get(&b.id).map(|v|(b.id.clone(),v.clone()))).collect()
     }
@@ -99,6 +101,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             settings,
             brains,
             signals: BTreeMap::new(),
+            new_entries: Vec::new(),
             weights:BTreeMap::new(),
             student_policies:BTreeMap::new(),
             last_sync_ms: 0,
@@ -159,7 +162,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         position: u64,
         now: u64,
         config: Option<&Config>,
-    ) -> Result<()> {
+    ) -> Result<Value> {
         let key = ctx(t);
         let id = uuid::Uuid::new_v4().simple().to_string();
         let s = signal
@@ -172,13 +175,13 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             p["commission_per_lot"] = json!(c.risk.commission_per_lot);
             p["learning"] = json!({"trading_mode":c.trading.mode,"timeframe":b.timeframe,"report_id":b.report_id,
                 "tick_size":t.tick_size,"tick_value_loss":t.tick_value_loss,"tick_value_profit":t.tick_value_profit,
-                "slippage_ticks":c.risk.slippage_ticks,"bid":t.bid,"ask":t.ask,"quote_time_ms":t.quote_time_ms,
+                "slippage_ticks":c.risk.slippage_ticks,"bid":t.bid,"ask":t.ask,"quote_time_ms":t.quote_time_ms,"quote_age_ms":t.tick_age_ms,
                 "context_key":self.weights.get(&b.id).map(|w|w.context_key.clone()).unwrap_or_default(),
                 "weight_at_entry":self.weights.get(&b.id).map(|w|w.weight()).unwrap_or(1.),
                 "intelligence":self.weights.get(&b.id).map(|w|w.intelligence()).unwrap_or_default()});
         }
         db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload) VALUES(?1,?2,?3,?4,?5,'queued',?6)",params![id,key,b.id,kind,now,p.to_string()])?;
-        Ok(())
+        Ok(p)
     }
     pub fn observe(
         &mut self,
@@ -353,9 +356,10 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     "INSERT OR IGNORE INTO broker_seen VALUES(?1,?2,?3)",
                     params![key, b.id, signal.key],
                 )?;
-                self.queue(&tx, t, &b, "open", Some(&signal), 0, now, Some(c))?;
+                let command = self.queue(&tx, t, &b, "open", Some(&signal), 0, now, Some(c))?;
                 tx.execute("INSERT INTO broker_signal_log(context,brain,timestamp_ms,payload) VALUES(?1,?2,?3,?4)",params![key,b.id,now,result.to_string()])?;
                 tx.commit()?;
+                self.new_entries.push(command);
             }
         }
         Ok(())

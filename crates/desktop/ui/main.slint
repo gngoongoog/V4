@@ -55,6 +55,7 @@ export component Dashboard inherits Window {
     in property <string> student-patterns;
     in property <string> student-policies;
     in property <string> student-journal;
+    in property <string> student-timing;
     in-out property <int> trade-mode: 2;
     in-out property <bool> demo-flexible: true;
     in-out property <bool> adaptive-exits: true;
@@ -307,6 +308,9 @@ export component Dashboard inherits Window {
             Text { text: "شنو تغيّر بالخروج؟"; color: #eaf0fb; font-size: 18px; font-weight: 700; }
             Text { text: root.student-policies; color: #acbad0; wrap: word-wrap; }
             Text { text: "20 مقارنة للتدريب، ثم 20 دخولاً جديداً لاختبار البديل. الإعداد الأصلي يبقى يعمل خلال التعلّم. التطبيق الآلي للديمو فقط؛ تغييره من صفحة الوضع والتكلفة."; color: #8d9cb4; wrap: word-wrap; }
+            Text { text: "توقيت الدخول — مقارنة افتراضية"; color: #eaf0fb; font-size: 18px; font-weight: 700; }
+            Text { text: "فور الإشارة، بعد 250 ms، أو بعد 1000 ms. مقارنة على أسعار لاحقة بنفس المهلة والتكاليف، ولا تؤخّر إرسال الأوامر. الرصد البطيء يُستبعد بدل تخمين الأسعار."; color: #8d9cb4; wrap: word-wrap; }
+            Text { text: root.student-timing; color: #acbad0; wrap: word-wrap; }
             Text { text: "دفتر التجارب — أحدث 20 دخولاً"; color: #eaf0fb; font-size: 18px; font-weight: 700; }
             Text { text: root.student-journal; color: #acbad0; wrap: word-wrap; }
             Text { text: "MFE / MAE: أفضل وأسوأ حركة مرصودة بعد تأكيد التنفيذ وحتى الإغلاق. المقارنة الافتراضية تستخدم Bid/Ask والعمولة والانزلاق؛ فجوة وصول الرصد فوق ثانيتين تستبعدها، وهدوء السعر وحده لا يستبعدها. السواب غير محسوب فيها. التحسّن السابق لا يضمن ربحاً لاحقاً."; color: #8d9cb4; wrap: word-wrap; }
