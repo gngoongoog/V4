@@ -1,13 +1,14 @@
 //! Rebuild the small cached policy model from the existing, deduplicated complete
 //! Demo broker ledger. No new schema, virtual fills or training on Fast Pulse.
 use anyhow::Result;
-use braintrade_domain::{sniper::{Engine, Models, ID, POLICIES}, Telemetry};
+use braintrade_domain::{sniper::{Engine, Models, TargetModels, ID, POLICIES, TARGET_ARMS}, Telemetry};
 use rusqlite::Connection;
 use serde_json::Value;
 
 pub fn refresh(engine: &mut Engine, db: &Connection, t: &Telemetry, now: u64) -> Result<()> {
     let context = crate::coordinator_learning::context(t);
     let mut models = Models::new();
+    let mut targets=TargetModels::new();
     if t.demo && t.account_trade_mode == Some(0) {
         let mut st = db.prepare("SELECT closed_ms,payload FROM coordinator_broker_samples WHERE context=?1 AND brain='sniper_learner' ORDER BY closed_ms DESC,position_id DESC LIMIT 2000")?;
         let rows = st.query_map([&context], |r| Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?)))?
@@ -23,9 +24,20 @@ pub fn refresh(engine: &mut Engine, db: &Connection, t: &Telemetry, now: u64) ->
                 (s["sniper_definition"].as_str(),s["sniper_regime"].as_str(),p["reward"].as_f64(),p["net"].as_f64()) else { continue; };
             if !reward.is_finite() || !net.is_finite() { continue; }
             models.entry((definition.into(),regime.into())).or_default()[policy].learn(reward,net);
+            // The chosen arm is frozen with the entry's signal; it is NOT
+            // inferred from realized profit, MFE or an optimistic simulation.
+            // No booked fill => no completed coordinator_broker_samples row.
+            if s["sniper_target_mode"]=="adaptive" {
+                if let Some(arm)=s["sniper_target_arm"].as_u64().filter(|arm|(*arm as usize)<TARGET_ARMS) {
+                    if s["sniper_target_pips"].as_f64().is_some_and(|p|p.is_finite()&&p>0.) {
+                        targets.entry((definition.into(),regime.into(),POLICIES[policy].into()))
+                            .or_default()[arm as usize].learn(reward,net);
+                    }
+                }
+            }
         }
     }
-    engine.set_models(context, models);
+    engine.set_models_with_targets(context, models, targets);
     Ok(())
 }
 
@@ -49,4 +61,38 @@ mod tests {
         assert_eq!(restarted.models.values().next().unwrap()[0].reward,e.models.values().next().unwrap()[0].reward);
         let mut live=t.clone();live.demo=false;live.account_trade_mode=Some(2);refresh(&mut e,&db,&live,2000).unwrap();assert!(e.models.is_empty());
     }
+    #[test]
+    fn target_learning_is_real_demo_only_account_scoped_replay_idempotent_and_arm_specific() {
+        let db=Connection::open_in_memory().unwrap();
+        crate::coordinator_learning::Learner::new(&db).unwrap();
+        let t=Telemetry{demo:true,account_trade_mode:Some(0),login:22,server:"Demo".into(),symbol:"XAUUSD".into(),..Default::default()};
+        let context=crate::coordinator_learning::context(&t);
+        for (id,brain,ctx,source,arm,mode) in [
+            (1,ID,context.as_str(),"mt5_demo_broker",2,"adaptive"),
+            (2,ID,context.as_str(),"virtual",3,"adaptive"),
+            (3,"trend",context.as_str(),"mt5_demo_broker",3,"adaptive"),
+            (4,ID,"other-account","mt5_demo_broker",3,"adaptive"),
+            (5,ID,context.as_str(),"mt5_demo_broker",3,"fixed"),
+            (6,ID,context.as_str(),"mt5_demo_broker",6,"adaptive")
+        ] {
+            let payload=json!({"evidence_source":source,"trading_mode":"sniper","net":1.2,"reward":0.4,
+                "selection":{"brain":ID,"policy":"sniper-ticks-v1","sniper_policy":"impulse",
+                    "sniper_definition":"config-P","sniper_regime":"directional_normal",
+                    "sniper_target_mode":mode,"sniper_target_arm":arm,"sniper_target_pips":6.0}});
+            db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,?3,?4,1000,?5)",
+                rusqlite::params![format!("pos-{id}"),id,ctx,brain,payload.to_string()]).unwrap();
+        }
+        let mut engine=Engine::default();
+        for _ in 0..3 {
+            refresh(&mut engine,&db,&t,2000).unwrap();
+            assert_eq!(engine.target_models.len(),1);
+            let arms=engine.target_models.values().next().unwrap();
+            assert_eq!(arms[2].samples,1);
+            assert!(arms.iter().enumerate().all(|(i,a)|i==2 || a.samples==0));
+        }
+        let mut live=t.clone();live.demo=false;live.account_trade_mode=Some(2);
+        refresh(&mut engine,&db,&live,2000).unwrap();
+        assert!(engine.target_models.is_empty());
+    }
+
 }
