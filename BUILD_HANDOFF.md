@@ -2,7 +2,15 @@
 
 GitHub `gngoongoog/V4` is canonical. Continue from `development`; use `main` only when preparing a promoted release.
 
-## Current verified checkpoint
+## Latest delivered development checkpoint — PR #62 (2026-10-19)
+
+Continue from `development` merge `29fe6663972651e8e3a1b613b9d957a86590bf6e` (PR #62). **Post-merge Research PASS**: [39240501418](https://github.com/gngoongoog/V4/actions/runs/39240501418); **post-merge Windows/Linux PASS**: [39240501431](https://github.com/gngoongoog/V4/actions/runs/39240501431). Windows preview upload: `BrainTrade-Windows-x64-Preview`, artifact `12180999893`, 34,895,029 bytes, Actions artifact ZIP SHA-256 `7f48e39954bfa7fee0be36939b747e00e3998032745dd0048096f6b74ca119b6`.
+
+Features: prospective five-way exits with preserved three-way history, independent quote-only 0/250/1000 ms entry-timing research and explicit coverage/exclusion evidence. Timing is not a broker execution policy; booked MT5 PnL is not inferred from comparative quotes. There are still 16 durable broker identities. Read `docs/ENTRY_TIMING_EXIT5_AR.md` and `docs/pr62-learning-validation.json`.
+
+**Important remaining gate:** target-machine Windows + native MT5 **Demo** acceptance has not been performed. Use `Run-Demo-Acceptance.cmd` from the downloaded package to collect separate Native/Poll samples and share its privacy-safe evidence bundle. Validate actual fills/costs, timing and continued learning before promoting any execution decision. PR #58 remains open and requires compatibility review. Previous PR #55 evidence below is a historical correctness checkpoint, not the latest tested source.
+
+## Earlier verified correctness checkpoint — PR #55
 
 PR #55 (comprehensive 0.7 correctness audit) is merged into `development` as `2e05cf3b907073c5faebe25fd16d4a4a523b224d`. Exact tested PR head `892807ec317c856b1215efb569e726554266709b` and the merge share code tree `a85fa0c424e23cf9e82790c649d25461e1547387`. Research run `39067458928` and Windows/Linux run `39067458927` both succeeded on that code.
 

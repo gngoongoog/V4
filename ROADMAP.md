@@ -6,7 +6,15 @@ GitHub `gngoongoog/V4` is canonical. Read `BUILD_HANDOFF.md`, `PROJECT_STATE.md`
 
 The promoted 0.6.0 line remains the release baseline. Its archived validation evidence stays immutable. Startup/restart is STOPPED. CI is simulated-broker validation; native MT5 demo acceptance remains a separate target-machine gate.
 
-## Current 0.7.0 Development Preview
+## Latest checkpoint — PR #62 merged and validated (2026-10-19)
+
+Development merge: `29fe6663972651e8e3a1b613b9d957a86590bf6e`. Post-merge validation: Research [PASS](https://github.com/gngoongoog/V4/actions/runs/39240501418) and Windows/Linux [PASS](https://github.com/gngoongoog/V4/actions/runs/39240501431). Windows artifact: `BrainTrade-Windows-x64-Preview` ID `12180999893`.
+
+Implemented since the earlier PR #55 checkpoint: flexible $100 Demo sizing/selection and booked broker feedback (PR #59), student context/entry/exit learning and the Learning progress page (PR #60), recovered fill and quote coverage repair (PR #61), and five-way prospective exits plus quote-only 0/250/1000ms entry-timing research (PR #62). Research timing cannot delay/submit broker orders. Execution identity count remains 16.
+
+**Next validation priority:** collect actual Windows/MT5 Demo fills, fees, partial closures and P50/P95/P99 Native/Poll timings; inspect missing-quote exclusion rates and chronological performance of exit challengers. Do not promote learned entry delays or open PR #58's 17th identity without compatible code/tests and independent target-machine evidence. See `docs/ENTRY_TIMING_EXIT5_AR.md`, `docs/pr62-learning-validation.json`.
+
+## Earlier 0.7.0 correctness audit — PR #55
 
 PR #55 (comprehensive 0.7 correctness audit) is merged into `development` as `2e05cf3b907073c5faebe25fd16d4a4a523b224d`. Exact tested PR head `892807ec317c856b1215efb569e726554266709b` and the merge share code tree `a85fa0c424e23cf9e82790c649d25461e1547387`. Research run `39067458928` and Windows/Linux run `39067458927` both succeeded on that code.
 

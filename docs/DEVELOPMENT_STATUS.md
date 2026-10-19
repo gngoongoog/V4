@@ -1,5 +1,9 @@
 # BrainTrade OS — verified 0.7.0 Development Preview
 
+## 2026-10-19 status supersedes the historical PR #38 report below
+
+Current `development` HEAD is `29fe6663972651e8e3a1b613b9d957a86590bf6e` (PR #62). **16** durable broker identities are merged, not the 15 shown in the archived PR #38 narrative below. PR #59–#62 add Demo flexibility, actual booked student outcomes, prospective exit learning, repaired quote/position evidence, five-way exits and quote-only 0/250/1000ms timing comparisons. Research and Windows/Linux post-merge workflows passed as runs `39240501418` and `39240501431` respectively. See `../CONTINUE_HERE.md`, `ENTRY_TIMING_EXIT5_AR.md` and `pr62-learning-validation.json`. Real Windows/MT5 Demo execution and profitability remain unverified.
+
 Canonical repository: `gngoongoog/V4`. Current validated runtime/source tree is `58a250ddca283e867436953a459959c33ee8a1e2`, represented by `development` merge `9524367f039b8fe59247e88c714c1cbff9c4a5a9` and PR #38 head `b6c15e8243cbf6792b88a9ca7bac3330643b619f` with the same runtime/source tree.
 
 Research validation: PASS — run `39017294919`.
