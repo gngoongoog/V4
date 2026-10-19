@@ -413,7 +413,7 @@ export component Dashboard inherits Window {
                     }
                 }
             }
-            Text { text: "القناص المتعلّم يختبر 4 أهداف pip ضمن الحدّين فقط إذا توفرت إشارة وتجاوز الهدف اختبار التكاليف. المقارنات تعتمد على صفقات MT5 Demo مغلقة، لا تضمن أفضلية مستقبلية. على Live يعود للهدف الثابت. مدة الاحتفاظ 1–3600 ثانية."; color: #acbad0; wrap: word-wrap; }
+            Text { text: "القناص المتعلّم يختبر 4 أهداف pip ضمن الحدّين فقط إذا توفرت إشارة وتجاوز الهدف اختبار التكاليف. المقارنات تعتمد على صفقات MT5 Demo مغلقة، لا تضمن أفضلية مستقبلية. على Live يعود للهدف الثابت. مدة الاحتفاظ من 1 إلى 3600 ثانية."; color: #acbad0; wrap: word-wrap; }
             Button { text: "حفظ إعدادات التداول"; enabled: !root.studio-busy && root.state == "STOPPED"; clicked => { root.studio-action("save"); } }
             Text { text: "أوقف النظام لتبديل الوضع أو التكاليف. الصفقة المفتوحة تحتفظ بهدفها ووقفها ومدتها التي جُمّدت عند الدخول."; color: #f0c578; wrap: word-wrap; }
             HorizontalBox {
