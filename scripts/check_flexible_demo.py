@@ -76,7 +76,8 @@ def check(exe=None):
             selected=command1['signal']['coordination']['selection']['brain']
             assert command1['demo_flexible'] and command1['learning']['trading_mode']=='expert'
             choice=command1['signal']['coordination']['selection']
-            assert choice['policy']=='contextual_exploration_v3' and 0<choice['selection_probability']<=1
+            assert choice['policy']=='contextual_exploration_v4' and 0<choice['selection_probability']<=1
+            assert choice['context_loss_streak']==0 and choice['context_mistake_penalty']==0
             assert command1['signal']['coordination']['student']['profile']=='baseline'
             assert command1['signal']['coordination']['student']['exit_candidates']==2
             result=submit(command1);assert result['state']=='filled',result

@@ -44,6 +44,10 @@ pub struct LearnedWeight {
     pub context_samples:u64,
     pub context_reward:f64,
     pub context_confidence:f64,
+    /// Consecutive recently closed MT5 Demo losses in this exact strategy/market context.
+    pub context_loss_streak:u64,
+    /// Small, temporary selection preference reduction. Never a trading veto.
+    pub context_mistake_penalty:f64,
 }
 impl LearnedWeight {
     /// V3 combines Bayesian win evidence with cost-adjusted Reward V2 and shrinks every
@@ -60,7 +64,12 @@ impl LearnedWeight {
         let raw=1.0+(p-0.5)*0.9+self.mean_reward.clamp(-1.,1.)*0.45;
         let mut confidence=self.confidence.clamp(0.,1.);
         if self.broker_samples>0 {confidence=confidence.max(0.15);}
-        (1.0+(raw-1.0)*confidence + 0.20*self.context_reward.clamp(-1.,1.)*self.context_confidence.clamp(0.,1.)).clamp(0.55,1.60)
+        // Only exact, complete broker outcomes can supply the contextual mistake memory.
+        // It changes preference rather than declaring any next trade impossible.
+        let penalty=if self.broker_samples>0 && self.context_loss_streak>=3 {
+            self.context_mistake_penalty.clamp(0.,0.20)
+        } else {0.};
+        (1.0+(raw-1.0)*confidence + 0.20*self.context_reward.clamp(-1.,1.)*self.context_confidence.clamp(0.,1.)-penalty).clamp(0.55,1.60)
     }
     pub fn intelligence(&self)->IntelligenceContext {
         IntelligenceContext{
@@ -114,7 +123,10 @@ pub fn coordinate_for_account(primary:Signal,c:&Config,t:&Telemetry,votes:Vec<(B
     let mut candidates:Vec<_>=votes.iter().filter(|(b,s,_)| b.id!="system" && !b.enabled && s.ready && matches!(s.side,-1|1)
         && s.stop_distance.is_finite() && s.stop_distance>0. && s.target_distance.is_finite() && s.target_distance>0.).collect();
     candidates.sort_by(|a,b|a.0.id.cmp(&b.0.id));
-    let total=candidates.iter().map(|v|v.2.context_samples).min().unwrap_or(0);
+    // Graduate from exploration to exploitation as *total closed Demo context evidence*
+    // grows. A never-traded candidate must not freeze the whole system at 30%.
+    // The novelty-weighted lottery below still samples under-observed advisors.
+    let total=candidates.iter().fold(0u64,|count,v|count.saturating_add(v.2.context_samples));
     let epsilon=crate::student::exploration_rate(total);
     // Candidate signal keys and account identity fix this draw for an unchanged opportunity.
     let seed=serde_json::to_string(&(&t.server,t.login,&t.symbol,c.trading.mode,
@@ -122,7 +134,12 @@ pub fn coordinate_for_account(primary:Signal,c:&Config,t:&Telemetry,votes:Vec<(B
     let exploring=crate::student::draw(&seed,0)<epsilon;
     let best=candidates.iter().enumerate().max_by(|a,b|a.1.2.weight().total_cmp(&b.1.2.weight())
         .then_with(|| b.1.0.id.cmp(&a.1.0.id))).map(|v|v.0).unwrap_or(0);
-    let uncertainty:Vec<f64>=candidates.iter().map(|v|1./(1.+v.2.context_samples as f64).sqrt()).collect();
+    // Keep exploration possible for every ready advisor. Recently repeated Demo
+    // mistakes gently reduce, but never eliminate, its exploratory probability.
+    let uncertainty:Vec<f64>=candidates.iter().map(|v|{
+        let novelty=1./(1.+v.2.context_samples as f64).sqrt();
+        novelty*(1.-v.2.context_mistake_penalty.clamp(0.,0.20))
+    }).collect();
     let mass:f64=uncertainty.iter().sum();
     let mut chosen=best;
     if exploring && mass>0. {
@@ -139,10 +156,11 @@ pub fn coordinate_for_account(primary:Signal,c:&Config,t:&Telemetry,votes:Vec<(B
     if let Some((b,s,w))=selected {
         coordination["selection"]=serde_json::json!({"brain":b.id,"timeframe":b.timeframe,"report_id":b.report_id,
             "definition":[b.stop_atr,b.reward_risk,b.max_hold_seconds],
-            "policy":"contextual_exploration_v3","weight":w.weight(),"broker_samples":w.broker_samples,
+            "policy":"contextual_exploration_v4","weight":w.weight(),"broker_samples":w.broker_samples,
+            "context_loss_streak":w.context_loss_streak,"context_mistake_penalty":w.context_mistake_penalty,
             "exploration_rate":epsilon,"exploring":exploring,"selection_probability":propensity,
             "context_key":w.context_key,"context_samples":w.context_samples,"context_reward":w.context_reward,
-            "note":"Selection probability describes this policy draw, not trade success. Only ready advisors participate."});
+            "note":"Temporary preference from consecutive booked Demo losses; not a veto or a success probability. Only ready advisors participate."});
         result.side=s.side;result.ready=true;result.stop_distance=s.stop_distance;result.target_distance=s.target_distance;
         result.hold_ms=s.hold_ms;result.bar_time=s.bar_time;
         // One coordinator attempt per source timeframe/bar, even if learning changes its preferred advisor.
@@ -269,11 +287,64 @@ pub fn coordinate(mut primary:Signal,c:&Config,votes:Vec<(BrainConfig,Signal,Lea
             let out=coordinate_for_account(signal("system",0),&c,&t,vec![(a.clone(),sa,known.clone()),(b.clone(),sb,Default::default())]);
             let selection=&out.coordination.as_ref().unwrap()["selection"];
             let is_known=selection["brain"]=="gann";
-            let expected=if is_known {0.7+0.3/11.} else {0.3*10./11.};
+            let epsilon=crate::student::exploration_rate(99);
+            let expected=if is_known {1.-epsilon+epsilon/11.} else {epsilon*10./11.};
             assert!((selection["selection_probability"].as_f64().unwrap()-expected).abs()<1e-9);
             if selection["exploring"]==true {if is_known{known_explores+=1;}else{fresh_explores+=1;}}
         }
         assert!(known_explores>0 && fresh_explores>known_explores*5);
+    }
+
+    #[test]
+    fn demo_exploration_matures_without_being_pinned_by_an_untried_advisor() {
+        let mut c=Config::default();c.trading.mode=TradingMode::Expert;
+        let t=Telemetry{demo:true,account_trade_mode:Some(0),..Default::default()};
+        let a=BrainConfig{id:"gann".into(),..Default::default()};
+        let b=BrainConfig{id:"trend".into(),..Default::default()};
+        let trial=|known:u64|{
+            let w=LearnedWeight{context_samples:known,..Default::default()};
+            let out=coordinate_for_account(signal("system",0),&c,&t,vec![
+                (a.clone(),signal("gann",1),w),(b.clone(),signal("trend",-1),Default::default())]);
+            out.coordination.unwrap()["selection"]["exploration_rate"].as_f64().unwrap()
+        };
+        assert!((trial(0)-0.30).abs()<1e-12);
+        assert!(trial(400)<trial(10));
+        assert!(trial(400)>=0.05);
+        assert_eq!(trial(10_000),0.05);
+    }
+    #[test]
+    fn repeated_booked_losses_softly_deprioritize_without_forbidding_exploration() {
+        let mut c=Config::default();c.trading.mode=TradingMode::Expert;
+        let t=Telemetry{demo:true,account_trade_mode:Some(0),..Default::default()};
+        let a=BrainConfig{id:"gann".into(),..Default::default()};
+        let b=BrainConfig{id:"trend".into(),..Default::default()};
+        let mut losses=LearnedWeight{broker_samples:4,samples:4,context_samples:4,context_loss_streak:4,
+            context_mistake_penalty:0.18,..Default::default()};
+        let clean=LearnedWeight{broker_samples:4,samples:4,context_samples:4,..Default::default()};
+        assert!(losses.weight()<clean.weight());
+        let original=losses.weight();
+        losses.context_loss_streak=0;losses.context_mistake_penalty=0.;
+        assert!((losses.weight()-clean.weight()).abs()<1e-12);
+        losses.context_loss_streak=4;losses.context_mistake_penalty=0.18;
+        let mut counted=0;
+        for n in 1..=400 {
+            let mut first=signal("gann",1);first.bar_time=n;
+            let mut second=signal("trend",-1);second.bar_time=n;
+            let out=coordinate_for_account(signal("system",0),&c,&t,
+                vec![(a.clone(),first,losses.clone()),(b.clone(),second,clean.clone())]);
+            let select=&out.coordination.as_ref().unwrap()["selection"];
+            if select["brain"]=="gann" {counted+=1;}
+            assert!(select["selection_probability"].as_f64().unwrap()>0.);
+            assert!(select["selection_probability"].as_f64().unwrap()<=1.);
+            assert_eq!(select["policy"],"contextual_exploration_v4");
+            assert_eq!(select["context_loss_streak"],if select["brain"]=="gann"{4}else{0});
+        }
+        assert!(original<clean.weight());
+        assert!(counted>0 && counted<100,"a losing advisor may still be explored, not chosen by default");
+        let mut live=t.clone();live.demo=false;live.account_trade_mode=Some(2);
+        let out=coordinate_for_account(signal("system",0),&c,&live,
+            vec![(a,signal("gann",1),losses),(b,signal("trend",-1),clean)]);
+        assert!(out.coordination.unwrap().get("selection").is_none(),"Demo policy cannot apply to live");
     }
 
 }
