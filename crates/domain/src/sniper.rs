@@ -1,12 +1,20 @@
 //! Quote-driven Sniper specialist. Learning uses closed Demo broker evidence only;
 //! the tick path reads a cached model and never trains or touches storage.
-use crate::{execution::Signal, trading::{self, SniperBrain, TradingMode}, Config, Telemetry};
+use crate::{execution::Signal, trading::{self, SniperBrain, SniperTargetMode, TradingMode}, Config, Telemetry};
 use serde::Serialize;
 use serde_json::json;
 use std::collections::{BTreeMap, VecDeque};
 
 pub const ID: &str = "sniper_learner";
 pub const POLICIES: [&str; 2] = ["impulse", "rebound"];
+pub const TARGET_ARMS: usize = 4;
+/// Four stationary arms inside the user-defined target bounds. Only real,
+/// fully closed Demo results for the chosen arm may change its score.
+pub fn target_candidates(c: &Config) -> [f64; TARGET_ARMS] {
+    let min = c.trading.sniper_min_target_pips;
+    let gap = c.trading.sniper_max_target_pips - min;
+    std::array::from_fn(|i| min + gap * (i as f64 / (TARGET_ARMS-1) as f64))
+}
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Policy {
@@ -29,6 +37,7 @@ impl Policy {
     }
 }
 pub type Models = BTreeMap<(String, String), [Policy; 2]>;
+pub type TargetModels = BTreeMap<(String, String, String), [Policy; TARGET_ARMS]>;
 
 pub fn selected(c: &Config) -> bool {
     c.trading.mode == TradingMode::Sniper && c.trading.sniper_brain == SniperBrain::Learner
@@ -37,20 +46,27 @@ pub fn definition(t: &Telemetry, c: &Config) -> String {
     // Monetary tick conversion changes must not fragment the same policy's history.
     json!(["sniper-ticks-v1", c.trading.sniper_target_points, c.trading.sniper_stop_points,
         c.trading.sniper_max_hold_seconds, c.risk.commission_per_lot,
-        c.risk.slippage_ticks, t.point, t.tick_size]).to_string()
+        c.risk.slippage_ticks, t.point, t.tick_size, c.trading.pip_points,
+        c.trading.sniper_target_mode, c.trading.sniper_min_target_pips,
+        c.trading.sniper_max_target_pips]).to_string()
 }
 #[derive(Default)]
 pub struct Engine {
     pub models: Models,
+    pub target_models: TargetModels,
     account: String,
     definition: String,
     quotes: VecDeque<(u64, u64, f64)>, // broker clock, receipt clock, midpoint
 }
 impl Engine {
     pub fn set_models(&mut self, account: String, models: Models) {
+        self.set_models_with_targets(account,models,TargetModels::new());
+    }
+    pub fn set_models_with_targets(&mut self, account: String, models: Models, targets: TargetModels) {
         if self.account != account { self.quotes.clear(); }
         self.account = account;
         self.models = models;
+        self.target_models = targets;
     }
     pub fn reset_quotes(&mut self) { self.quotes.clear(); }
     pub fn evaluate(&mut self, t: &Telemetry, c: &Config, now: u64) -> Signal {
@@ -75,9 +91,9 @@ impl Engine {
         while self.quotes.len() > 64 || self.quotes.front().is_some_and(|q| now.saturating_sub(q.1) > 2000) { self.quotes.pop_front(); }
         s.key = format!("tick:{ts}");
         if self.quotes.len() < 3 { s.reason = "القناص: يجمع ثلاثة أسعار متتابعة قبل القرار".into(); return s; }
-        if cost.total / (cost.total + cost.desired_net_target_money) > c.trading.max_cost_fraction {
-            s.reason = "القناص: حصة السبريد والعمولة والانزلاق تتجاوز اختيارك".into(); return s;
-        }
+        // A candidate-specific cost gate runs after the pip arm is chosen.
+        // Comparing against the fixed target here would incorrectly reject
+        // profitable larger user-permitted alternatives before they are seen.
         let q: Vec<f64> = self.quotes.iter().map(|q| q.2).collect();
         let n = q.len();
         let movement = q[n-1] - q[0];
@@ -106,18 +122,66 @@ impl Engine {
         let exploring = candidates.len()>1 && crate::student::draw(&seed, 0) < epsilon;
         let chosen = if exploring { candidates[(crate::student::draw(&seed, 1)*candidates.len() as f64) as usize] } else { best };
         let probability = epsilon / candidates.len() as f64 + if chosen==best { 1.-epsilon } else { 0. };
+        let adaptive = demo && c.trading.sniper_target_mode == SniperTargetMode::Adaptive;
+        let arms = target_candidates(c);
+        let fixed_pips = c.trading.sniper_target_points / c.trading.pip_points;
+        let target_key=(def.clone(), regime.clone(), POLICIES[chosen].to_owned());
+        let target_policies = self.target_models.get(&target_key).cloned().unwrap_or_default();
+        let mut eligible = Vec::new();
+        if adaptive {
+            for i in 0..TARGET_ARMS {
+                let desired=arms[i]*c.trading.pip_points*point/tick*t.tick_value_profit.unwrap();
+                if desired.is_finite() && desired>0. && cost.total/(cost.total+desired) <= c.trading.max_cost_fraction {
+                    eligible.push(i);
+                }
+            }
+        }
+        let target_total: u64 = target_policies.iter().map(|p|p.samples).sum();
+        let mut target_arm: Option<usize> = None;
+        let mut target_exploring=false;
+        let target_pips=if adaptive {
+            if eligible.is_empty() {
+                s.reason="القناص: لا هدف ضمن نطاق pip المختار يغطي التكلفة الحالية".into();
+                return s;
+            }
+            let best_arm = *eligible.iter().max_by(|a,b|
+                target_policies[**a].score().total_cmp(&target_policies[**b].score())
+                    .then_with(|| b.cmp(a))
+            ).unwrap();
+            let target_epsilon=crate::student::exploration_rate(target_total);
+            target_exploring=eligible.len()>1 && crate::student::draw(&seed,2)<target_epsilon;
+            let pick=if target_exploring {
+                eligible[((crate::student::draw(&seed,3)*eligible.len() as f64) as usize).min(eligible.len()-1)]
+            } else {best_arm};
+            target_arm=Some(pick);
+            arms[pick]
+        } else {
+            let desired=c.trading.sniper_target_points*point/tick*t.tick_value_profit.unwrap();
+            if !desired.is_finite() || desired<=0. || cost.total/(cost.total+desired)>c.trading.max_cost_fraction {
+                s.reason="القناص: هدف pip الثابت لا يغطي حصة التكلفة التي اخترتها".into();
+                return s;
+            }
+            fixed_pips
+        };
         s.side = sides[chosen];
         s.stop_distance = (c.trading.sniper_stop_points*point).max(ask-bid+2.*tick);
-        s.target_distance = c.trading.sniper_target_points*point
+        s.target_distance = target_pips*c.trading.pip_points*point
             + (c.risk.commission_per_lot + 2.*c.risk.slippage_ticks*t.tick_value_loss.unwrap().max(t.tick_value_profit.unwrap())) / t.tick_value_profit.unwrap()*tick;
         s.ready = true;
-        s.reason = format!("القناص المتعلّم: {} | {} | صفقات مكتملة {} | استكشاف {}",
-            if chosen==0 {"اندفاع سريع"} else {"ارتداد سريع"}, regime, total, exploring);
+        s.reason = format!("القناص المتعلّم: {} | {} | هدف {:.2} pip {} | نتائج الاستراتيجية {} / عينات الهدف {}",
+            if chosen==0 {"اندفاع سريع"} else {"ارتداد سريع"}, regime, target_pips,
+            if adaptive {"تجريبي مرن"} else {"ثابت"}, total,target_total);
         s.coordination = Some(json!({"version":"sniper-learner-v1","trading_mode":"sniper",
             "selection":{"brain":ID,"timeframe":"M1","report_id":"","policy":"sniper-ticks-v1",
                 "sniper_policy":POLICIES[chosen],"sniper_definition":def,"sniper_regime":regime,
                 "definition":["sniper-ticks-v1",POLICIES[chosen]],"exploring":exploring,
                 "exploration_rate":epsilon,"selection_probability":probability,"broker_samples":total,
+                "sniper_target_mode":if adaptive {"adaptive"}else{"fixed"},
+                "sniper_target_pips":target_pips,"sniper_target_points":target_pips*c.trading.pip_points,
+                "sniper_target_arm":target_arm,"sniper_target_exploring":target_exploring,
+                "sniper_target_samples":target_total,"sniper_target_candidates_pips":arms,
+                "sniper_target_policies":target_policies,
+                "sniper_target_evidence":"booked Demo net outcomes for the chosen pip arm only; not a win probability",
                 "policies":policies,"applied_demo_learning":demo},
             "members":[{"id":ID,"timeframe":"M1","report_id":"","bar_time":s.bar_time,"side":s.side,"ready":true}]}));
         s
@@ -180,4 +244,67 @@ mod tests {
         }
         assert!(changed);
     }
+    #[test]
+    fn user_defined_pip_targets_are_fixed_or_bounded_and_cost_checked() {
+        let (mut t,mut c)=fixture();
+        c.trading.pip_points=10.;
+        c.trading.sniper_target_points=70.;
+        let mut engine=Engine::default();
+        for (ts,p) in [(10000,2000.),(10010,2000.04),(10020,2000.08)] {
+            let s=feed(&mut engine,&mut t,&c,ts,p);
+            if ts==10020 {
+                assert!(s.ready);
+                assert_eq!(s.coordination.as_ref().unwrap()["selection"]["sniper_target_pips"],7.);
+                assert!((s.target_distance-(70.*0.01+0.11)).abs()<1e-8);
+            }
+        }
+        c.trading.sniper_target_mode=SniperTargetMode::Adaptive;
+        c.trading.sniper_min_target_pips=3.;
+        c.trading.sniper_max_target_pips=9.;
+        engine.reset_quotes();
+        feed(&mut engine,&mut t,&c,10030,2000.);
+        feed(&mut engine,&mut t,&c,10040,2000.04);
+        let s=feed(&mut engine,&mut t,&c,10050,2000.08);
+        assert!(s.ready);
+        let v=&s.coordination.as_ref().unwrap()["selection"];
+        let pip=v["sniper_target_pips"].as_f64().unwrap();
+        assert!((3. ..=9.).contains(&pip));
+        let arm=v["sniper_target_arm"].as_u64().unwrap() as usize;
+        assert!((pip-target_candidates(&c)[arm]).abs()<1e-8);
+        let mut live=t.clone();live.demo=false;live.account_trade_mode=Some(2);
+        engine.reset_quotes();
+        feed(&mut engine,&mut live,&c,10060,2000.);
+        feed(&mut engine,&mut live,&c,10070,2000.04);
+        let s=feed(&mut engine,&mut live,&c,10080,2000.08);
+        assert!(s.ready);
+        assert_eq!(s.coordination.as_ref().unwrap()["selection"]["sniper_target_mode"],"fixed");
+        assert_eq!(s.coordination.as_ref().unwrap()["selection"]["sniper_target_pips"],7.);
+    }
+    #[test]
+    fn learned_target_arm_uses_completed_demo_reward_and_never_blocks_exploration() {
+        let (mut t,mut c)=fixture();
+        c.trading.sniper_target_mode=SniperTargetMode::Adaptive;
+        c.trading.sniper_min_target_pips=2.;c.trading.sniper_max_target_pips=11.;
+        let def=definition(&t,&c);
+        let mut engine=Engine::default();
+        let mut stats=std::array::from_fn(|_| Policy::default());
+        for _ in 0..20 { stats[0].learn(-0.7,-2.);stats[3].learn(0.7,2.); }
+        engine.target_models.insert((def,"directional_normal".into(),"impulse".into()),stats);
+        let mut saw_best=false;
+        for n in 0..90 {
+            engine.reset_quotes();
+            let first=10000+n*100;
+            feed(&mut engine,&mut t,&c,first,2000.);
+            feed(&mut engine,&mut t,&c,first+10,2000.04);
+            let s=feed(&mut engine,&mut t,&c,first+20,2000.08);
+            assert!(s.ready);
+            let v=&s.coordination.as_ref().unwrap()["selection"];
+            assert!(v["sniper_target_pips"].as_f64().unwrap()>=2.);
+            if v["sniper_policy"]=="impulse" && v["sniper_target_exploring"]==false {
+                saw_best |= v["sniper_target_arm"]==3;
+            }
+        }
+        assert!(saw_best);
+    }
+
 }
