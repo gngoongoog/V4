@@ -37,6 +37,12 @@ The merged Rust registry has 16 stable append-only magic identities 410600..4106
 
 Added `tests/test_execution_identity_parity.py` to the ordinary Python test suite. It verifies the Rust registry declaration, uniqueness, stable original 16 names/order, Rust magic base and Python gateway min/max. New append-only brains remain allowed **only after both sides are updated together** and the regression suite passes.
 
+### A5 — Execution account binding could update memory before its durable settings write
+
+The old `bind` mutated `self.settings`, the historical sync boundary and timestamps **before** attempting the SQLite settings save. Likewise `POST /v1/execution/settings` assigned a new target/deviation setting before binding and saving it. A write error could leave in-memory authorization using a different execution target from the persisted identity restored on restart.
+
+The new `bind_with_settings` constructs the complete bound candidate, persists it first and only then replaces memory and history boundaries. Callers changing account binding or execution target/deviation use the same transactionally ordered path. Regression tests toggle SQLite read-only/query-only mode to force a real write failure; they assert no premature change in bound account, deviation, sync markers, or post-restart settings, followed by a successful retry after restoring writes.
+
 ## Existing controls checked but intentionally not weakened
 
 - No unconditional/random trades or bypass of broker minimum lot/margin, executable bid/ask, quote timestamp freshness, account identity, Core authorization, STOP semantics or append-only magic ownership.
