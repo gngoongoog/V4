@@ -27,7 +27,7 @@ pub fn refresh(engine: &mut Engine, db: &Connection, t: &Telemetry, now: u64) ->
             // The chosen arm is frozen with the entry's signal; it is NOT
             // inferred from realized profit, MFE or an optimistic simulation.
             // No booked fill => no completed coordinator_broker_samples row.
-            if s["sniper_target_mode"]=="adaptive" {
+            if s["sniper_target_mode"]=="adaptive" && p["sniper_tp_preserved"]==true {
                 if let Some(arm)=s["sniper_target_arm"].as_u64().filter(|arm|(*arm as usize)<TARGET_ARMS) {
                     if s["sniper_target_pips"].as_f64().is_some_and(|p|p.is_finite()&&p>0.) {
                         targets.entry((definition.into(),regime.into(),POLICIES[policy].into()))
@@ -76,6 +76,7 @@ mod tests {
             (6,ID,context.as_str(),"mt5_demo_broker",6,"adaptive")
         ] {
             let payload=json!({"evidence_source":source,"trading_mode":"sniper","net":1.2,"reward":0.4,
+                "sniper_tp_preserved":true,
                 "selection":{"brain":ID,"policy":"sniper-ticks-v1","sniper_policy":"impulse",
                     "sniper_definition":"config-P","sniper_regime":"directional_normal",
                     "sniper_target_mode":mode,"sniper_target_arm":arm,"sniper_target_pips":6.0}});
@@ -90,6 +91,11 @@ mod tests {
             assert_eq!(arms[2].samples,1);
             assert!(arms.iter().enumerate().all(|(i,a)|i==2 || a.samples==0));
         }
+        // The same historical booked net can remain strategy feedback while
+        // a broker-widened TP is excluded from the exact pip-arm estimate.
+        db.execute("UPDATE coordinator_broker_samples SET payload=json_set(payload,'$.sniper_tp_preserved',false) WHERE source='pos-1'",[]).unwrap();
+        refresh(&mut engine,&db,&t,2000).unwrap();
+        assert_eq!(engine.target_models.len(),0);
         let mut live=t.clone();live.demo=false;live.account_trade_mode=Some(2);
         refresh(&mut engine,&db,&live,2000).unwrap();
         assert!(engine.target_models.is_empty());
