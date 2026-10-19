@@ -104,7 +104,10 @@ fn context(t: &Telemetry) -> String {
 }
 
 fn owned_position_risk(t: &Telemetry, c: &Config, position: &braintrade_domain::Position) -> Option<f64> {
-    if position.volume <= 0.0 || !position.volume.is_finite() || position.sl <= 0.0 {
+    if position.volume <= 0.0 || !position.volume.is_finite()
+        || !position.sl.is_finite() || position.sl <= 0.0
+        || !position.price_open.is_finite() || position.price_open <= 0.0
+    {
         return None;
     }
     let tick = t.tick_size.filter(|v| v.is_finite() && *v > 0.0)?;
@@ -113,12 +116,16 @@ fn owned_position_risk(t: &Telemetry, c: &Config, position: &braintrade_domain::
         .zip(t.tick_value_profit)
         .map(|(loss, profit)| loss.max(profit))
         .filter(|v| v.is_finite() && *v > 0.0)?;
+    // A breakeven/trailing stop past entry locks in some gross profit and no
+    // longer has downside price risk relative to entry. It is NOT an unknown
+    // stop: count zero price loss plus the estimated round-trip commission.
+    // A genuinely missing/invalid stop still fails closed.
     let distance = match position.side.as_str() {
-        "BUY" if position.sl < position.price_open => position.price_open - position.sl,
-        "SELL" if position.sl > position.price_open => position.sl - position.price_open,
+        "BUY" => (position.price_open - position.sl).max(0.0),
+        "SELL" => (position.sl - position.price_open).max(0.0),
         _ => return None,
     };
-    if !distance.is_finite() || distance <= 0.0 {
+    if !distance.is_finite() {
         return None;
     }
     Some(
@@ -334,10 +341,10 @@ impl Service {
         })
     }
 
-    fn save_portfolio(&self, db: &Connection) -> Result<()> {
+    fn save_portfolio(db: &Connection, candidate: &PortfolioLimits) -> Result<()> {
         db.execute(
             "INSERT OR REPLACE INTO portfolio_execution_settings VALUES(1,?1)",
-            [serde_json::to_string(&self.portfolio)?],
+            [serde_json::to_string(candidate)?],
         )?;
         Ok(())
     }
@@ -522,11 +529,16 @@ impl Service {
         }
 
         if method == "POST" && path == "/v1/execution/portfolio" {
-            anyhow::ensure!(!status.requested_run, "أوقف النظام قبل تغيير حدود المحفظة");
+            anyhow::ensure!(
+                !status.requested_run && !self.pending(db)?,
+                "أوقف النظام وانتظر تسوية كل الأوامر قبل تغيير حدود المحفظة"
+            );
             let candidate: PortfolioLimits = serde_json::from_slice(body)?;
             candidate.validate()?;
+            // Persist the proposed policy before replacing the in-memory one;
+            // a disk failure must not leave two inconsistent exposure policies.
+            Self::save_portfolio(db, &candidate)?;
             self.portfolio = candidate;
-            self.save_portfolio(db)?;
             if let Some(t) = status.telemetry.as_ref().filter(|t| t.connected) {
                 // Read-only refresh; queued entries are not created while STOPPED and exits remain untouched.
                 let config = status
@@ -731,6 +743,65 @@ mod tests {
         };
         enforce_portfolio(&db, &t, &Config::default(), &limits).unwrap();
         assert_eq!(state(&db, "b"), "cancelled");
+    }
+
+    #[test]
+    fn breakeven_and_profit_lock_stops_remain_known_risk_but_missing_sl_fails_closed() {
+        let mut t=telemetry();
+        let mut buy=Position {
+            magic:execution::magic("trend").unwrap(),identifier:50,ticket:50,
+            symbol:"XAUUSD".into(),side:"BUY".into(),volume:0.1,
+            price_open:2000.0,price_current:2001.0,sl:2000.0,tp:2002.0,
+            ..Default::default()
+        };
+        let c=Config::default();
+        let commission=c.risk.commission_per_lot*buy.volume;
+        assert!((owned_position_risk(&t,&c,&buy).unwrap()-commission).abs()<1e-8);
+        buy.sl=2000.5;
+        assert!((owned_position_risk(&t,&c,&buy).unwrap()-commission).abs()<1e-8);
+        buy.sl=0.0;
+        assert!(owned_position_risk(&t,&c,&buy).is_none());
+        buy.sl=f64::NAN;
+        assert!(owned_position_risk(&t,&c,&buy).is_none());
+
+        let sell=Position{
+            magic:execution::magic("gann").unwrap(),identifier:51,ticket:51,
+            symbol:"XAUUSD".into(),side:"SELL".into(),volume:0.1,
+            price_open:2000.0,price_current:1999.0,sl:1999.5,tp:1998.0,
+            ..Default::default()
+        };
+        assert!((owned_position_risk(&t,&c,&sell).unwrap()-commission).abs()<1e-8);
+        t.positions.push(sell);
+        let db=setup();
+        queue(&db,&t,"trailing-advisor","trend",0.01,0.05,1000);
+        let limits=PortfolioLimits{enabled:true,max_positions:3,max_lots:1.0,max_risk_percent:2.0};
+        let exposure=enforce_portfolio(&db,&t,&c,&limits).unwrap();
+        assert!(exposure.risk_known);
+        assert_eq!(state(&db,"trailing-advisor"),"queued");
+    }
+
+    #[test]
+    fn portfolio_settings_wait_for_pending_broker_intents_and_do_not_mutate_on_rejection() {
+        let db=setup();
+        let mut service=Service::new(&db).unwrap();
+        let t=telemetry();
+        let status=Status::default();
+        let updated=PortfolioLimits{enabled:true,max_positions:2,max_lots:0.2,max_risk_percent:1.0};
+        let body=serde_json::to_vec(&updated).unwrap();
+        queue(&db,&t,"in-flight","trend",0.01,0.05,1000);
+        for state_name in ["queued","dispatched","unknown","placed","filled","partial"] {
+            db.execute("UPDATE broker_commands SET state=?1 WHERE id='in-flight'",[state_name]).unwrap();
+            assert!(service.route("POST","/v1/execution/portfolio",&body,&db,&status,1001).is_err(),"{state_name}");
+            assert!(!service.portfolio.enabled);
+            let persisted: i64=db.query_row("SELECT COUNT(*) FROM portfolio_execution_settings",[],|r|r.get(0)).unwrap();
+            assert_eq!(persisted,0);
+        }
+        db.execute("UPDATE broker_commands SET state='observed' WHERE id='in-flight'",[]).unwrap();
+        assert!(service.route("POST","/v1/execution/portfolio",&body,&db,&status,1002).is_ok());
+        assert!(service.portfolio.enabled);
+        let restarted=Service::new(&db).unwrap();
+        assert!(restarted.portfolio.enabled);
+        assert_eq!(restarted.portfolio.max_positions,2);
     }
 
     #[test]
