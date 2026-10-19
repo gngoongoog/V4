@@ -155,7 +155,19 @@ class BrokerExecutor:
                 return result
             state = 'partial' if volume + 1e-8 < submitted['volume'] else 'filled'
             result = dict(result, state=state, reason='Broker history confirms fill; await Core position reconciliation; no resend',
-                          request=submitted, deal=int(matches[0].ticket), deals=[int(d.ticket) for d in matches])
+                          request=submitted, deal=int(matches[0].ticket), deals=[int(d.ticket) for d in matches],
+                          volume=volume, recovered_from_history=True)
+            prices = [float(getattr(d, 'price', 0)) for d in matches]
+            if all(math.isfinite(p) and p > 0 for p in prices):
+                result['price'] = sum(p * float(d.volume) for p, d in zip(prices, matches)) / volume
+            times = [int(getattr(d, 'time_msc', 0)) for d in matches]
+            if all(t > 0 for t in times):
+                result['fill_time_ms'] = min(times)
+            positions = {int(getattr(d, 'position_id', 0)) for d in matches}
+            if len(positions) == 1 and next(iter(positions)) > 0:
+                result['position_id'] = next(iter(positions))
+            # Recovery can restore booked evidence, never the unobserved quote path.
+            result['reconciled_ms'] = clock_ms()
             return self._save(cmd, result)
         return result
 

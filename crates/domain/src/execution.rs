@@ -114,7 +114,7 @@ pub fn coordinate_for_account(primary:Signal,c:&Config,t:&Telemetry,votes:Vec<(B
     let mut candidates:Vec<_>=votes.iter().filter(|(b,s,_)| b.id!="system" && !b.enabled && s.ready && matches!(s.side,-1|1)
         && s.stop_distance.is_finite() && s.stop_distance>0. && s.target_distance.is_finite() && s.target_distance>0.).collect();
     candidates.sort_by(|a,b|a.0.id.cmp(&b.0.id));
-    let total=candidates.iter().map(|v|v.2.broker_samples).sum();
+    let total=candidates.iter().map(|v|v.2.context_samples).min().unwrap_or(0);
     let epsilon=crate::student::exploration_rate(total);
     // Candidate signal keys and account identity fix this draw for an unchanged opportunity.
     let seed=serde_json::to_string(&(&t.server,t.login,&t.symbol,c.trading.mode,
@@ -122,8 +122,15 @@ pub fn coordinate_for_account(primary:Signal,c:&Config,t:&Telemetry,votes:Vec<(B
     let exploring=crate::student::draw(&seed,0)<epsilon;
     let best=candidates.iter().enumerate().max_by(|a,b|a.1.2.weight().total_cmp(&b.1.2.weight())
         .then_with(|| b.1.0.id.cmp(&a.1.0.id))).map(|v|v.0).unwrap_or(0);
-    let chosen=if exploring && !candidates.is_empty(){(crate::student::draw(&seed,1)*candidates.len() as f64) as usize}else{best};
-    let propensity=if candidates.is_empty(){0.}else{epsilon/candidates.len() as f64+if chosen==best{1.-epsilon}else{0.}};
+    let uncertainty:Vec<f64>=candidates.iter().map(|v|1./(1.+v.2.context_samples as f64).sqrt()).collect();
+    let mass:f64=uncertainty.iter().sum();
+    let mut chosen=best;
+    if exploring && mass>0. {
+        let target=crate::student::draw(&seed,1)*mass;
+        let mut cumulative=0.;
+        for (i,w) in uncertainty.iter().enumerate() {cumulative+=w;if target<cumulative{chosen=i;break;}}
+    }
+    let propensity=if candidates.is_empty(){0.}else{epsilon*uncertainty[chosen]/mass+if chosen==best{1.-epsilon}else{0.}};
     let selected=if c.trading.mode==TradingMode::Expert {candidates.get(chosen).map(|v|(*v).clone())}else{None};
     let original=primary.clone();
     let mut result=coordinate(primary,c,votes);
@@ -132,7 +139,7 @@ pub fn coordinate_for_account(primary:Signal,c:&Config,t:&Telemetry,votes:Vec<(B
     if let Some((b,s,w))=selected {
         coordination["selection"]=serde_json::json!({"brain":b.id,"timeframe":b.timeframe,"report_id":b.report_id,
             "definition":[b.stop_atr,b.reward_risk,b.max_hold_seconds],
-            "policy":"contextual_epsilon_greedy_v2","weight":w.weight(),"broker_samples":w.broker_samples,
+            "policy":"contextual_exploration_v3","weight":w.weight(),"broker_samples":w.broker_samples,
             "exploration_rate":epsilon,"exploring":exploring,"selection_probability":propensity,
             "context_key":w.context_key,"context_samples":w.context_samples,"context_reward":w.context_reward,
             "note":"Selection probability describes this policy draw, not trade success. Only ready advisors participate."});

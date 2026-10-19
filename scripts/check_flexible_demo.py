@@ -76,9 +76,10 @@ def check(exe=None):
             selected=command1['signal']['coordination']['selection']['brain']
             assert command1['demo_flexible'] and command1['learning']['trading_mode']=='expert'
             choice=command1['signal']['coordination']['selection']
-            assert choice['policy']=='contextual_epsilon_greedy_v2' and 0<choice['selection_probability']<=1
+            assert choice['policy']=='contextual_exploration_v3' and 0<choice['selection_probability']<=1
             assert command1['signal']['coordination']['student']['profile']=='baseline'
             result=submit(command1);assert result['state']=='filled',result
+            assert api('/v1/execution/student')['total_experiences']==1, 'acknowledged fill must register before the next snapshot'
             assert abs(result['request']['volume']-.09)<1e-8,result
             assert len(broker.sends)==1
             # No blind duplicate before the first position is reconciled.

@@ -395,6 +395,7 @@ impl Service {
         // forced on, it represents coordinated execution; every other `enabled` flag means SOLO.
         self.inner
             .observe(db, telemetry, config, run, frames, now)?;
+        if run {crate::student_learning::log_opportunities(db,telemetry,&self.inner.learning_decisions(),now)?;}
         // Apply one global entry budget after all brains have proposed their queued opens and
         // before the gateway can retrieve them. Exits and reconciliation states are untouched.
         let current = enforce_portfolio(db, telemetry, config, &self.portfolio)?;
@@ -486,7 +487,7 @@ impl Service {
             if let Some(system) = self.inner.brains.iter_mut().find(|brain| brain.id == "system") {
                 system.enabled = true;
             }
-            self.student.quote(&next.telemetry);
+            self.student.quote(&next.telemetry, now);
             self.inner.observe(
                 db,
                 &next.telemetry,
@@ -580,6 +581,12 @@ impl Service {
         }
 
         let value = self.inner.route(method, path, body, db, status, now)?;
+        if method == "POST" && path == "/v1/execution/result" {
+            if let Some(t) = status.telemetry.as_ref().filter(|t| status.gateway_fresh && t.connected) {
+                // Register the acknowledged fill now, before the next quote pulse.
+                self.student.observe(db, t, now)?;
+            }
+        }
         if method == "GET" && path == "/v1/execution" {
             let mut value = Self::enrich_roles(value, db, status)?;
             value["portfolio"] = self.portfolio_state.clone();

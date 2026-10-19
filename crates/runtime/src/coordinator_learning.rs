@@ -153,8 +153,22 @@ fn contextual_stats(db:&Connection,source:&str,key:&str,now:u64)->Result<(u64,f6
     Ok((count,if mass>0.{sum/mass}else{0.},confidence(mass,true)))
 }
 fn confidence(effective:f64,broker:bool)->f64{if effective<=0.{0.}else{let scale=if broker{8.}else{20.};(1.-(-effective/scale).exp()).clamp(0.,1.)}}
+// Use at most eight effective observations from other regimes as a prior.
+// Subtract the local regime first so an outcome is not counted twice.
+fn pooled_stats(global:&Stats, local:&Stats)->Stats {
+    if local.samples==0 || local.effective_samples<=0. {return global.clone();}
+    let remaining=(global.effective_samples-local.effective_samples).max(0.);
+    if remaining<=1e-9 {return local.clone();}
+    let prior=remaining.min(8.);
+    let mass=local.effective_samples+prior;
+    let blend=|g:f64,l:f64| (l*local.effective_samples + (g*global.effective_samples-l*local.effective_samples)/remaining*prior)/mass;
+    Stats{samples:global.samples,wins:global.wins,effective_samples:mass,
+        mean_net_per_lot:blend(global.mean_net_per_lot,local.mean_net_per_lot),
+        mean_reward:blend(global.mean_reward,local.mean_reward).clamp(-1.,1.),
+        weighted_win_rate:blend(global.weighted_win_rate,local.weighted_win_rate).clamp(0.,1.)}
+}
 fn selected_weight(forward_global:Stats,forward_regime:Stats,broker_global:Stats,broker_regime:Stats,intelligence:&IntelligenceContext)->LearnedWeight{
-    let(mut chosen,broker,evidence)=if broker_global.samples>0{if broker_regime.samples>0{(broker_regime.clone(),true,"mt5_demo_broker_regime")}else{(broker_global.clone(),true,"mt5_demo_broker_global")}}else if forward_regime.samples>=5{(forward_regime.clone(),false,"forward_bars_regime")}else{(forward_global.clone(),false,"forward_bars_global")};
+    let(mut chosen,broker,evidence)=if broker_global.samples>0{if broker_regime.samples>0{(pooled_stats(&broker_global,&broker_regime),true,"mt5_demo_broker_pooled_regime")}else{(broker_global.clone(),true,"mt5_demo_broker_global")}}else if forward_regime.samples>0{(pooled_stats(&forward_global,&forward_regime),false,"forward_bars_pooled_regime")}else{(forward_global.clone(),false,"forward_bars_global")};
     if chosen.effective_samples<=0.&&chosen.samples>0{chosen.effective_samples=chosen.samples as f64;}
     LearnedWeight{samples:chosen.samples,wins:chosen.wins,mean_net_per_lot:chosen.mean_net_per_lot,mean_reward:chosen.mean_reward,weighted_win_rate:chosen.weighted_win_rate,broker_samples:broker_global.samples,forward_samples:forward_global.samples,regime_samples:if broker{broker_regime.samples}else{forward_regime.samples},effective_samples:chosen.effective_samples,confidence:confidence(chosen.effective_samples,broker),regime:intelligence.regime.clone(),session:intelligence.session.clone(),direction:intelligence.direction,atr:intelligence.atr,volatility_ratio:intelligence.volatility_ratio,spread_to_atr:intelligence.spread_to_atr,execution_quality:intelligence.execution_quality,execution_history_quality:intelligence.execution_history_quality,execution_history_samples:intelligence.execution_history_samples,quote_freshness:intelligence.quote_freshness,evidence_source:evidence.into(),..Default::default()}
 }
@@ -744,6 +758,19 @@ mod tests {
         let learned=selected_weight(Stats::default(),Stats::default(),broker_stats(&db,&source,None,2000).unwrap(),Stats::default(),&IntelligenceContext::default());
         assert_eq!(learned.broker_samples,1);assert!(learned.weight()<1.);
         let mut other=t.clone();other.login=18;assert!(broker_review(&db,&context(&other)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn sparse_regime_keeps_global_prior_without_double_counting() {
+        let global=Stats{samples:101,wins:100,mean_reward:99./101.,weighted_win_rate:100./101.,effective_samples:101.,..Default::default()};
+        let local=Stats{samples:1,wins:0,mean_reward:-1.,weighted_win_rate:0.,effective_samples:1.,..Default::default()};
+        let pooled=pooled_stats(&global,&local);
+        assert_eq!(pooled.effective_samples,9.);
+        assert!((pooled.mean_reward-7./9.).abs()<1e-9);
+        assert!((pooled.weighted_win_rate-8./9.).abs()<1e-9);
+        let same=pooled_stats(&local,&local);
+        assert_eq!(same.effective_samples,1.);
+        assert_eq!(same.mean_reward,-1.);
     }
 
 }

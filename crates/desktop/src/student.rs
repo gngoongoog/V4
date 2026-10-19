@@ -14,6 +14,17 @@ fn label(value: &str) -> &str {
         "profit_giveback" => "رجوع ربح مرصود",
         "positive_after_costs" => "ربح بعد التكاليف",
         "unclassified" => "السبب غير محسوم",
+        "observation_gap" => "فجوة في وصول الرصد",
+        "history_recovery" => "استرجاع تنفيذ؛ مسار الأسعار غير مكتمل",
+        "missing_fill_time" => "وقت تأكيد التنفيذ غير متاح",
+        "too_few_quotes" => "عدد الأسعار المرصودة غير كافٍ للمقارنة",
+        "volume_changed" => "حجم الإغلاق يختلف عن التجربة",
+        "expired" => "انتهت مهلة الرصد",
+        "legacy_quality_unknown" => "تجربة قديمة؛ سبب الاستبعاد غير مسجّل",
+        "compare_net_exits_after_repeated_cost_drag" => "التكاليف تكررت: مقارنة صافي طرق الخروج",
+        "compare_exits_after_repeated_giveback" => "رجوع الربح تكرر: اختبار طريقة خروج بديلة",
+        "compare_exits_entry_cause_unproven" => "مقارنة خروج؛ سبب الدخول المعاكس يحتاج بحثاً مستقلاً",
+        "compare_exits_from_paired_evidence" => "اختبار بديل اختارته المقارنات السابقة",
         "challenger_frozen_for_future_entries" => "تثبيت البديل؛ بدأ الاختبار اللاحق",
         "baseline_retained_after_training" => "الإعداد الأصلي أفضل في عينة التدريب",
         "promoted_on_later_paired_quotes" => "تفعيل البديل بعد تحسّن المقارنة اللاحقة",
@@ -45,6 +56,33 @@ pub fn paint(ui: &Dashboard, v: &Value) {
             "لا توجد صفقات مغلقة في سجل الطالب بعد. تبدأ المراجعة بعد وصول النتيجة الكاملة من MT5."
                 .into();
     }
+    let _ = writeln!(
+        patterns,
+        "\nالنافذة الأخيرة: {} صفقة مغلقة • الصافي {:+.2}",
+        v["recent_closed"],
+        v["recent_net"].as_f64().unwrap_or(0.)
+    );
+    for (reason, count) in v["recent_exclusions"].as_object().into_iter().flatten() {
+        let _ = writeln!(patterns, "استبعاد مقارنة: {} • {}", label(reason), count);
+    }
+    if let Some(blockers) = v["blocker_observations"]
+        .as_array()
+        .filter(|v| !v.is_empty())
+    {
+        let _ = writeln!(
+            patterns,
+            "\nأسباب الانتظار — مرات رصد خلال 7 أيام، وليست صفقات فائتة:"
+        );
+        for b in blockers.iter().take(6) {
+            let _ = writeln!(
+                patterns,
+                "{}: {} ({})",
+                b["brain"].as_str().unwrap_or(""),
+                b["reason"].as_str().unwrap_or(""),
+                b["observations"]
+            );
+        }
+    }
     ui.set_student_patterns(patterns.into());
     let mut policies = String::new();
     for item in v["studies"].as_array().into_iter().flatten() {
@@ -56,6 +94,19 @@ pub fn paint(ui: &Dashboard, v: &Value) {
             label(s["phase"].as_str().unwrap_or("collecting")),s["samples"],label(s["active"].as_str().unwrap_or("baseline")),
             label(s["challenger"].as_str().unwrap_or("baseline")),s["last_gain_r"].as_f64().unwrap_or(0.),s["promotions"],s["rollbacks"],
             label(s["last_decision"].as_str().unwrap_or("")));
+        let _ = writeln!(
+            policies,
+            "خسائر تمت مراجعتها: {} • {}\n",
+            s["reviewed_losses"].as_u64().unwrap_or(0),
+            label(s["experiment_reason"].as_str().unwrap_or(""))
+        );
+        if let Some(regime) = source
+            .as_array()
+            .and_then(|a| a.last())
+            .and_then(|v| v["exit_regime"].as_str())
+        {
+            let _ = writeln!(policies, "حالة السوق: {regime}\n");
+        }
     }
     if policies.is_empty() {
         policies="الخروج الأصلي فعّال. تُجمع مقارنات الهدف والوقف والمدة من الأسعار القادمة، ثم يُختبر البديل على دخول جديد قبل اعتماده.".into();
@@ -65,10 +116,17 @@ pub fn paint(ui: &Dashboard, v: &Value) {
     for e in v["experiences"].as_array().into_iter().flatten().take(20) {
         let sel = &e["entry"]["signal"]["coordination"]["selection"];
         let intel = &e["entry"]["learning"]["intelligence"];
-        let profile=label(e["entry"]["signal"]["coordination"]["student"]["profile"].as_str().unwrap_or("baseline"));
-        let exit_label=if e["entry"]["signal"]["coordination"]["student"]["cost_fallback"]==true {
+        let profile = label(
+            e["entry"]["signal"]["coordination"]["student"]["profile"]
+                .as_str()
+                .unwrap_or("baseline"),
+        );
+        let exit_label = if e["entry"]["signal"]["coordination"]["student"]["cost_fallback"] == true
+        {
             format!("{profile} — الهدف المتعلّم لا يناسب التكلفة الحالية")
-        } else {profile.to_owned()};
+        } else {
+            profile.to_owned()
+        };
         let net = e["actual"]["net"]
             .as_f64()
             .map(|n| format!("{n:+.2}"))
@@ -81,7 +139,7 @@ pub fn paint(ui: &Dashboard, v: &Value) {
             exit_label,
             e["observed_mfe_price"].as_f64().unwrap_or(0.),e["observed_mae_price"].as_f64().unwrap_or(0.),e["position_samples"],
             if e["position_path_usable"]==true{"كافٍ للوصف"}else{"محدود"},
-            if e["shadow"]["usable"]!=true{"مستبعدة: فجوة رصد"}else if e["study_consumed"]==true{"اكتملت"}else{"تنتظر أسعاراً لاحقة"},e["shadow"]["max_gap_ms"]);
+            if e["shadow"]["usable"]!=true{label(e["shadow"]["exclusion_reason"].as_str().filter(|s|!s.is_empty()).unwrap_or("legacy_quality_unknown"))}else if e["admitted"]==true{"دخلت التعلّم"}else if e["study_consumed"]==true{"لم تدخل نافذة المقارنة"}else{"تنتظر أسعاراً لاحقة"},e["shadow"]["max_observation_gap_ms"]);
     }
     if journal.is_empty() {
         journal =
