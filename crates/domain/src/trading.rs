@@ -228,7 +228,7 @@ pub fn select(
         let Some(m) = t.market.as_ref() else {
             return a;
         };
-        if !a.current && !short_mode_frames_current(m, now) {
+        if !a.current && (!t.connected || t.symbol != c.symbol || !short_mode_frames_current(m, now)) {
             // When M1/M5 are unsafe or missing, retain the original research
             // WAIT. A missing M15 alone must not veto a valid 1m/5m trade.
             return a;
@@ -338,6 +338,9 @@ mod tests {
                 m15:Vec::new(),error:String::new()}),..Default::default()};
         let choose=|t:&Telemetry|select(base.clone(),t,&c,&BTreeMap::new(),now).current;
         assert!(choose(&t));
+        t.connected=false;assert!(!choose(&t));
+        t.connected=true;t.symbol="OTHER".into();assert!(!choose(&t));
+        t.symbol="XAUUSD".into();
         t.market.as_mut().unwrap().captured_ms=now-16_000;assert!(!choose(&t));
         t.market.as_mut().unwrap().captured_ms=now;
         t.market.as_mut().unwrap().m5.last_mut().unwrap().time-=300;
