@@ -25,6 +25,12 @@ Prior code returned `None` when a BUY stop was at/above entry or SELL stop was a
 
 The previously stopped-only settings path did not check `pending()`, allowing changes while an open or close command remained queued/dispatched/unknown/placed/filled/partial. It also mutated memory before SQLite persistence. The settings path now rejects all such changes until reconciliation, commits the new policy before switching its in-memory copy, and preserves pending broker-state journal/authorizations. Added all six pending-state, rejection-state, reload-persistence tests.
 
+### A3 — MT5 DONE acknowledgement without a deal ticket was treated as a completed fill
+
+Some brokers acknowledge an order with `TRADE_RETCODE_DONE`/`DONE_PARTIAL` but no deal ticket in the immediate response. Prior code marked this `filled`/`partial`, but the learning ledger requires an exact opened deal. The gateway now records such results as **placed / awaiting evidence**, keeps the durable send journal and attempts exact history reconciliation. When a successful response contains an order number, history can be matched by **exact order ticket + magic + symbol + account**, even if a broker edits the comment. If a returned order ticket conflicts with history, an identical-looking comment is not enough to attribute the fill. The order is **never resent blindly**.
+
+Regression tests cover missing deal IDs for DONE/DONE_PARTIAL, restart persistence, recovery with changed broker comments, disjoint broker orders and misleading matching comments. Remaining limitation: if a broker provides neither usable history order IDs nor intact comments, Core cannot safely infer the fill and requires manual reconciliation.
+
 ## Existing controls checked but intentionally not weakened
 
 - No unconditional/random trades or bypass of broker minimum lot/margin, executable bid/ask, quote timestamp freshness, account identity, Core authorization, STOP semantics or append-only magic ownership.
