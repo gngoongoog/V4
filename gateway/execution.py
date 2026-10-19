@@ -150,8 +150,12 @@ class BrokerExecutor:
         def matches_identity(item):
             if getattr(item, 'magic', 0)!=cmd['magic'] or getattr(item, 'symbol', '')!=cmd['symbol']:
                 return False
-            return (getattr(item, 'comment', '')==tag
-                    or (acknowledged_order>0 and int(getattr(item, 'order', 0))==acknowledged_order))
+            item_order = int(getattr(item, 'order', 0) or 0)
+            # If both sides expose an order ID, it must agree. A copied or
+            # broker-reused comment must never override a conflicting ticket.
+            if acknowledged_order>0 and item_order>0:
+                return item_order==acknowledged_order
+            return getattr(item, 'comment', '')==tag
         matches = [d for d in deals if matches_identity(d)]
         pending = any(matches_identity(o) for o in orders)
         if account_identity(mt5.account_info()) != expected(cmd):
