@@ -171,6 +171,8 @@ impl Experience {
             return;
         }
         self.path.push((now, movement));
+        self.position_samples = self.path.len() as u64;
+        self.last_position_ms = now;
         self.position_mfe = self.position_mfe.max(movement);
         self.position_mae = self.position_mae.max(-movement);
     }

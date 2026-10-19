@@ -255,4 +255,25 @@ pub fn coordinate(mut primary:Signal,c:&Config,votes:Vec<(BrainConfig,Signal,Lea
         assert!(!coordinate_for_account(invalid,&c,&t,votes).ready);
     }
 
+    #[test]
+    fn exploration_favors_under_observed_contexts_and_logs_exact_probability() {
+        let mut c=Config::default();c.trading.mode=TradingMode::Expert;
+        let t=Telemetry{demo:true,account_trade_mode:Some(0),..Default::default()};
+        let a=BrainConfig{id:"gann".into(),..Default::default()};
+        let b=BrainConfig{id:"trend".into(),..Default::default()};
+        let known=LearnedWeight{context_samples:99,..Default::default()};
+        let mut fresh_explores=0; let mut known_explores=0;
+        for n in 1..=1000 {
+            let mut sa=signal("gann",1);sa.bar_time=n;
+            let mut sb=signal("trend",-1);sb.bar_time=n;
+            let out=coordinate_for_account(signal("system",0),&c,&t,vec![(a.clone(),sa,known.clone()),(b.clone(),sb,Default::default())]);
+            let selection=&out.coordination.as_ref().unwrap()["selection"];
+            let is_known=selection["brain"]=="gann";
+            let expected=if is_known {0.7+0.3/11.} else {0.3*10./11.};
+            assert!((selection["selection_probability"].as_f64().unwrap()-expected).abs()<1e-9);
+            if selection["exploring"]==true {if is_known{known_explores+=1;}else{fresh_explores+=1;}}
+        }
+        assert!(known_explores>0 && fresh_explores>known_explores*5);
+    }
+
 }
