@@ -2,7 +2,19 @@
 
 GitHub `gngoongoog/V4` is canonical. Continue from `development`; use `main` only when preparing a promoted release.
 
-## Latest delivered development checkpoint — PR #62 (2026-10-19)
+
+## Latest verified checkpoint — contextual mistake memory (2026-10-19)
+
+PR #64 is merged into `development` as `88a341fc8733deaa1856079fc073bb744a61afcf`, source tree `59efba92fc67eb249336695074e9c67eafb7537b`. This includes PR #62 timing/five-way exits and PR #63 handoff documentation. Post-merge Research `39249735055` and Windows/Linux `39249735059` both passed on that exact merge.
+
+Windows evidence: 103 domain, 85 runtime and 3 desktop Rust tests passed, with one public-network test ignored; 129 of 130 Python tests passed, with one OS-specific skip. Packaged startup/DPAPI/STOPPED default, all four modes, backup/restore/restart, execution integration and the $100 Flexible Demo/student integration passed. All 40 native frames cover 20 pages. Native MT5 acceptance, actual broker latency and profitability remain unverified.
+
+The current learner reduces a ready Demo advisor's preference after at least three recent consecutive booked losses in the same strategy/market context. The penalty is capped at 0.20, clears with a newer non-loss or expiration of the 14-day window, and never vetoes a valid candidate. Exploration graduates from 30% toward 5% using total eligible contextual evidence while retaining novelty-weighted sampling. The entry journal shows the frozen streak and penalty. Five-way exits, legacy studies, research-only timing and 16 execution identities remain intact.
+
+Windows handoff: `BrainTrade-Windows-Learning-88a341f.zip` (36,203,052 bytes), SHA256 `0f0ffb68f16f6bd04d41e740b1735cc2b477931542b8aae76190f9f9dba8c6bb`. It is the unchanged inner package from successful post-merge artifact `12186286037`. Read `docs/LATEST_WINDOWS_HANDOFF_AR.md` and `docs/latest-learning-validation.json`. Take an application backup before upgrading; older binaries cannot read new five-way study records. Native Demo acceptance is the next evidence step; automatic application of timing recommendations remains unimplemented. This delivery documentation changes no tested execution code.
+
+
+## Previous delivered development checkpoint — PR #62 (2026-10-19)
 
 Continue from `development` merge `29fe6663972651e8e3a1b613b9d957a86590bf6e` (PR #62). **Post-merge Research PASS**: [39240501418](https://github.com/gngoongoog/V4/actions/runs/39240501418); **post-merge Windows/Linux PASS**: [39240501431](https://github.com/gngoongoog/V4/actions/runs/39240501431). Windows preview upload: `BrainTrade-Windows-x64-Preview`, artifact `12180999893`, 34,895,029 bytes, Actions artifact ZIP SHA-256 `7f48e39954bfa7fee0be36939b747e00e3998032745dd0048096f6b74ca119b6`.
 
