@@ -160,11 +160,12 @@ pub fn paint(ui: &Dashboard, v: &Value) {
             .as_f64()
             .map(|n| format!("{n:+.2}"))
             .unwrap_or_else(|| "بانتظار إغلاق كامل".into());
-        let _=writeln!(journal,"{} | صفقة {} | صافي MT5: {}\n{} / {} | {}\nاستكشاف {:.1}% • عينات السياق {} | الخروج: {}\nMFE مرصود {:.5} / MAE {:.5} • رصد الصفقة {} • جودة المسار {}\nمقارنة الخروج: {} • أكبر فجوة {} ms\n",
+        let _=writeln!(journal,"{} | صفقة {} | صافي MT5: {}\n{} / {} | {}\nاستكشاف {:.1}% • عينات السياق {} | خسائر متتالية {} • تخفيض مرن {:.3} | الخروج: {}\nMFE مرصود {:.5} / MAE {:.5} • رصد الصفقة {} • جودة المسار {}\nمقارنة الخروج: {} • أكبر فجوة {} ms\n",
             e["brain"].as_str().unwrap_or("—"),e["position_id"],net,
             intel["regime"].as_str().unwrap_or("—"),intel["session"].as_str().unwrap_or("—"),
             e["entry"]["signal"]["reason"].as_str().unwrap_or(""),
             sel["exploration_rate"].as_f64().unwrap_or(0.)*100.,sel["context_samples"].as_u64().unwrap_or(0),
+            sel["context_loss_streak"].as_u64().unwrap_or(0),sel["context_mistake_penalty"].as_f64().unwrap_or(0.),
             exit_label,
             e["observed_mfe_price"].as_f64().unwrap_or(0.),e["observed_mae_price"].as_f64().unwrap_or(0.),e["position_samples"],
             if e["position_path_usable"]==true{"كافٍ للوصف"}else{"محدود"},
