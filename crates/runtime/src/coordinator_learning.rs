@@ -335,7 +335,7 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
         // trade as real strategy feedback, but do NOT assign its result to a
         // different, unexecuted pip target.
         let sniper_tp_preserved=coordination["selection"]["sniper_target_mode"]=="adaptive"
-            && sniper_executed_target_matches(cmd,result);
+            && sniper_executed_target_matches(&cmd,&result);
         let attribution=if gross>0. && net<=0. {"costs_erased_gross_profit"}
             else if net>0. {"positive_after_costs"} else if gross<0. {"adverse_price_move"}
             else if net<0. {"booked_costs"} else {"break_even"};
