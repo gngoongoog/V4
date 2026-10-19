@@ -41,10 +41,9 @@ class NativeUiContract(unittest.TestCase):
             self.assertEqual(count, wired, f"Found inert control in {path.name}")
 
     def test_every_declared_callback_is_registered_in_the_desktop(self):
-        callbacks = set(re.findall(r"(?m)^\s*callback\s+([a-z-]+)\s*\(", self.dashboard))
-        callbacks.update(re.findall(r"(?m)^\s*callback\s+([a-z-]+)\s*\(", CORRELATION.read_text(encoding="utf-8")))
+        callbacks = set(re.findall(r"(?m)^\s*callback\s+([a-z0-9-]+)\s*\(", self.dashboard))
+        callbacks.update(re.findall(r"(?m)^\s*callback\s+([a-z0-9-]+)\s*\(", CORRELATION.read_text(encoding="utf-8")))
         # Correlation callback is forwarded to Dashboard; not a Rust callback itself.
-        callbacks.discard("action") if False else None
         handlers = set(re.findall(r"\bui\.on_([a-z_]+)\s*\(", self.rust))
         for callback in callbacks:
             rust_name = callback.replace("-", "_")
