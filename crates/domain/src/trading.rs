@@ -183,6 +183,26 @@ pub fn direction(b: &[Candle]) -> i8 {
         0
     }
 }
+/// Validate the two frames actually used by Scalping/Sniper when full research
+/// was unavailable solely because its separate M15 requirement did not mature.
+/// Do not waive current snapshots, completed bars or gaps to force a trade.
+fn short_mode_frames_current(m: &crate::MarketData, now: u64) -> bool {
+    if !m.error.is_empty() || m.captured_ms > now
+        || now.saturating_sub(m.captured_ms) > 15_000 { return false; }
+    for (series, seconds) in [(&m.m1, 60u64), (&m.m5, 300u64)] {
+        if series.len() < 100 || series.len() > 300
+            || series.iter().any(|bar| !bar.valid())
+            || series.windows(2).any(|w| w[0].time >= w[1].time) { return false; }
+        let Some(last)=series.last() else { return false; };
+        let close_ms=last.time.saturating_add(seconds).saturating_mul(1000);
+        if close_ms>now || now.saturating_sub(close_ms)>seconds*1000+20_000 { return false; }
+        if series[series.len()-30..].windows(2).any(|w|w[1].time-w[0].time!=seconds) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Higher frames have passed account, closure and freshness checks in Core.
 pub fn select(
     mut a: Analysis,
@@ -205,12 +225,14 @@ pub fn select(
         };
         (h1, h4, Some(d1))
     } else {
-        if !a.current {
-            return a;
-        }
         let Some(m) = t.market.as_ref() else {
             return a;
         };
+        if !a.current && !short_mode_frames_current(m, now) {
+            // When M1/M5 are unsafe or missing, retain the original research
+            // WAIT. A missing M15 alone must not veto a valid 1m/5m trade.
+            return a;
+        }
         (&m.m1, &m.m5, None)
     };
     if fast.len() < 100 || confirm.len() < 100 || higher.is_some_and(|v| v.len() < 100) {
@@ -278,6 +300,59 @@ mod tests {
         let buy=select(base.clone(),&t,&c,&BTreeMap::new(),now);assert_eq!(buy.action,"BUY");assert_eq!(wait.bar_time,buy.bar_time);
         t.quote_time_ms=Some(now-1001);assert!(!select(base,&t,&c,&BTreeMap::new(),now).gates.is_empty());
     }
+    fn complete_bars(now: u64, seconds: u64) -> Vec<Candle> {
+        let last=(now/1000/seconds-1)*seconds;
+        (0..120).map(|i|{
+            let time=last-(119-i)*seconds;
+            let close=100. + i as f64*0.2;
+            Candle{time,open:close-0.05,high:close+0.2,low:close-0.2,close,tick_volume:100}
+        }).collect()
+    }
+    #[test]
+    fn sniper_and_scalping_need_only_fresh_completed_m1_m5_not_research_m15() {
+        let now=1_800_000_000_000u64;
+        let m=crate::MarketData{captured_ms:now,m1:complete_bars(now,60),m5:complete_bars(now,300),m15:Vec::new(),error:String::new()};
+        let base=crate::research::analyze(Some(&m),"XAUUSD",now);
+        assert!(!base.current,"Full research should still require M15");
+        let t=Telemetry{connected:true,symbol:"XAUUSD".into(),bid:Some(124.),ask:Some(124.01),
+            tick_age_ms:Some(0),quote_time_ms:Some(now),market:Some(m.clone()),..Default::default()};
+        for mode in [TradingMode::Scalping,TradingMode::Sniper] {
+            let mut c=Config::default();c.trading.mode=mode;
+            let out=select(base.clone(),&t,&c,&BTreeMap::new(),now);
+            assert!(out.current,"{mode:?} should not inherit unrelated M15 research veto");
+            assert!(out.atr.is_some_and(|atr|atr>0.));
+            assert!(out.reason.contains("confirmed trend"));
+        }
+        let mut expert=Config::default();expert.trading.mode=TradingMode::Expert;
+        assert!(!select(base,&t,&expert,&BTreeMap::new(),now).current,
+                "Expert research still requires its original M15 evidence");
+    }
+    #[test]
+    fn short_mode_m1_m5_fallback_never_accepts_stale_incomplete_or_gapped_bars() {
+        let now=1_800_000_000_000u64;
+        let base=Analysis::default();
+        let mut c=Config::default();c.trading.mode=TradingMode::Scalping;
+        let mut t=Telemetry{connected:true,symbol:"XAUUSD".into(),tick_age_ms:Some(0),
+            quote_time_ms:Some(now),market:Some(crate::MarketData{
+                captured_ms:now,m1:complete_bars(now,60),m5:complete_bars(now,300),
+                m15:Vec::new(),error:String::new()}),..Default::default()};
+        let choose=|t:&Telemetry|select(base.clone(),t,&c,&BTreeMap::new(),now).current;
+        assert!(choose(&t));
+        t.market.as_mut().unwrap().captured_ms=now-16_000;assert!(!choose(&t));
+        t.market.as_mut().unwrap().captured_ms=now;
+        t.market.as_mut().unwrap().m5.last_mut().unwrap().time-=300;
+        assert!(!choose(&t),"Latest M5 candle must not duplicate prior bar");
+        t.market.as_mut().unwrap().m5=complete_bars(now,300);
+        t.market.as_mut().unwrap().m1[110].time-=60;
+        assert!(!choose(&t),"Recent M1 timestamp gap/duplicate must veto entry");
+        t.market.as_mut().unwrap().m1=complete_bars(now,60);
+        t.market.as_mut().unwrap().m1.last_mut().unwrap().time=now/1000;
+        assert!(!choose(&t),"Unclosed M1 candle must never count as complete");
+        t.market.as_mut().unwrap().m1=complete_bars(now,60);
+        t.market.as_mut().unwrap().error="MT5 quote/history read failed".into();
+        assert!(!choose(&t),"A reported feed error must not be bypassed");
+    }
+
     #[test]
     fn proportional_costs_without_double_spread() {
         let t = Telemetry {
