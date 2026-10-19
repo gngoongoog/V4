@@ -1,6 +1,7 @@
 mod backup;
 mod execution;
 mod coordinator_learning;
+mod sniper_learning;
 mod student_learning;
 mod studio;
 mod backtest;
