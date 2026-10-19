@@ -2,13 +2,19 @@
 
 GitHub `gngoongoog/V4` is canonical. Continue from `development`; do not restart from `main` unless preparing a promoted release.
 
-## In-progress feedback repair — 2026-10-19
+## Current verified checkpoint — feedback repair (2026-10-19)
 
-Branch `feature/learning-feedback-repair` repairs recovery-to-student fill geometry, acknowledgement-time registration, pre-history quote-path capture with post-close trimming, receipt-gap versus quiet-market coverage, sparse regime pooling, under-observed contextual exploration, actual admission counts and the native Learning progress explanations/blocker log. It preserves the 16 broker identities and Demo-only learned execution. Existing studies remain stored; new known-regime studies collect independently.
+PR #61 is merged into `development` as `959246e97dc1be81d1b38845fa22684025e07c91`. Exact tested PR head `fb52100632d8665aa9ab8b31c989683c9982ebc6`, packaged CI merge `2c664bfff8052411a6772f25d7997636b8bededf` and the development merge share source tree `a61cb9959dbc35f8b613ef1f0e18a8e83bfe94c3`.
 
-Focused gateway recovery tests, domain/runtime tests and simulated Core integration are required, followed by exact-head Research and Windows/Linux CI before normal merge to development. This section will be updated with the tested commit and CI outcome. Native MT5 acceptance is still pending. Entry-timing experiments and additional exit variants are not implemented by this repair.
+Research run `39181535218` and Windows/Linux run `39181535246` succeeded. The Windows job passed 97 domain, 81 runtime and 3 desktop Rust tests (one public-network test intentionally ignored), plus 129 of 130 Python tests (one OS-specific skip). Core lifecycle/config/auth, backup/restore, all four modes, simulated execution and the $100 Flexible Demo/student integration passed. Packaged executable startup, DPAPI, STOPPED default, student API and restart passed. All 40 frames of the 20-page native UI and the browser report interactions passed.
 
-## Current verified checkpoint — student learning
+The repair completes recovered fill price/volume evidence, registers student experiences on execution acknowledgement, captures executable quotes before delayed position history and trims observations after broker close. It distinguishes quiet prices from missing receipt coverage, pools sparse regimes without double counting, weights exploration toward under-observed ready contexts and records every complete loss review once. The learning page now explains actual admission, legacy unknown admission, exclusions, repeated loss patterns and aggregated entry blockers. The 16 execution identities and Demo-only learned application are unchanged; existing studies remain stored while new known-regime studies collect independently.
+
+Windows handoff: `BrainTrade-Windows-Feedback-fb52100.zip`, 36,143,059 bytes, SHA256 `6a430d5b4c670fa145e4f9aeb374c33be892fb42c206dc7cfb5b2ec14db5beb7`. This is the unchanged inner package from the successful Windows CI artifact. Read `docs/feedback-repair-validation.json` for provenance and `docs/STUDENT_LEARNING_AR.md` for use and limitations.
+
+This feedback repair is complete and the Windows package is ready for target-machine use. Native Windows/MT5 Demo acceptance, actual broker latency and profitability remain unverified. Next, collect Demo acceptance evidence on the user's machine. Entry-timing experiments and exit alternatives beyond Baseline/Quick/Patient remain future work. Preserve persisted learning and previous checkpoints. The delivery documentation changes no tested execution code.
+
+## Previous verified checkpoint — student learning
 
 PR #60 is merged into `development` as `6467d2022e600c944b6b05a02de541e66dea78e5`. Exact tested head `126c7f357f4ed2dca0769cb8fd8ac96a843d3a22`, packaged CI merge `fef0d29e8d2517778436f0c627b3e9a7fcda4263` and the development merge share source tree `ab415df5284b60ea7e5eb0ffb5d7435d349b1e4c`.
 
@@ -18,7 +24,7 @@ This adds a durable entry/closed-outcome journal, context-specific advisor evide
 
 Read `docs/STUDENT_LEARNING_AR.md` for the user report and `docs/STUDENT_LEARNING.md` for evidence rules. `docs/student-learning-validation.json` records exact source, CI and delivery hashes. Execution identities remain the same 16; quote-only shadow comparisons must never be described as broker PnL. Automatic exit application is Demo-only and affects future entries.
 
-The current user-authorized student-learning build is complete and the Windows package was delivered. Native Windows/MT5 Demo acceptance and profitability remain unverified; collect target-machine results next. Do not reset persisted learning or overwrite prior checkpoints. This evidence-only documentation commit does not change tested execution code.
+The preceding student-learning build is complete and its Windows package was delivered. Native Windows/MT5 Demo acceptance and profitability remain unverified; collect target-machine results next. Do not reset persisted learning or overwrite prior checkpoints. This evidence-only documentation commit does not change tested execution code.
 
 ## Previous verified checkpoint — flexible Demo learning
 

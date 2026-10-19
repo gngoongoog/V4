@@ -1,0 +1,75 @@
+{
+  "version": "0.7.0",
+  "iteration": "learning-feedback-repair",
+  "verified_on": "2026-10-19",
+  "repository": "gngoongoog/V4",
+  "branch": "development",
+  "pr": 61,
+  "tested_head": "fb52100632d8665aa9ab8b31c989683c9982ebc6",
+  "tested_tree": "a61cb9959dbc35f8b613ef1f0e18a8e83bfe94c3",
+  "packaged_commit": "2c664bfff8052411a6772f25d7997636b8bededf",
+  "merged_commit": "959246e97dc1be81d1b38845fa22684025e07c91",
+  "tree_matches_tested_head_packaged_commit_and_merge": true,
+  "research": {
+    "run": 39181535218,
+    "job": 117835295165,
+    "status": "success",
+    "browser_report_interactions": "PASS",
+    "native_pages": 20,
+    "rendered_frames": 40
+  },
+  "windows_linux_run": 39181535246,
+  "linux": {
+    "job": 117835229885,
+    "status": "success"
+  },
+  "windows": {
+    "job": 117835230128,
+    "status": "success",
+    "domain_passed": 97,
+    "runtime_passed": 81,
+    "runtime_ignored": 1,
+    "desktop_passed": 3,
+    "python_run": 130,
+    "python_passed": 129,
+    "python_skipped": 1,
+    "portable_smoke": "PASS",
+    "dpapi": "PASS",
+    "stopped_default": "PASS",
+    "student_api": "PASS",
+    "backup_restore_restart": "PASS",
+    "core_lifecycle_config_auth": "PASS",
+    "studio_four_modes": "PASS",
+    "execution_integration": "PASS",
+    "flexible_demo_student_integration": "PASS"
+  },
+  "package": {
+    "filename": "BrainTrade-Windows-Feedback-fb52100.zip",
+    "bytes": 36143059,
+    "sha256": "6a430d5b4c670fa145e4f9aeb374c33be892fb42c206dc7cfb5b2ec14db5beb7",
+    "artifact_id": 12156487506,
+    "artifact_bytes": 34843712,
+    "artifact_sha256": "ecb7bd5b4d4faf974bd6e0f75f510053bd835d8347bcf0995ac5649cb01d01a8",
+    "inner_package_unchanged": true,
+    "crc": "PASS"
+  },
+  "validation_artifact": {
+    "id": 12156517527,
+    "sha256": "37dc6e0da1e0b17207795a0c7fd254946bd0b5b3136a33b153d50a06b0595ec0"
+  },
+  "native_mt5": "Not performed; requires the user Windows Demo terminal",
+  "broker_latency": "Not established by simulated CI",
+  "profitability": "Not established by build or simulated acceptance",
+  "remaining_scope": [
+    "Target-machine native MT5 Demo acceptance",
+    "Future work: entry-timing experiments",
+    "Future work: exit alternatives beyond Baseline/Quick/Patient"
+  ],
+  "preserved": [
+    "16 append-only execution identities",
+    "Existing studies and legacy admission compatibility",
+    "Demo-only automatic learned exits",
+    "STOPPED on startup",
+    "Durable journal and no blind resend"
+  ]
+}
