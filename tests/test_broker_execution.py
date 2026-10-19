@@ -111,6 +111,14 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(self.send()['state'],'placed')
         self.assertEqual(len(self.mt.sends),1)
 
+    def test_conflicting_order_id_cannot_be_overridden_by_matching_comment(self):
+        self.mt.reply_deal=0
+        self.assertEqual(self.send()['state'],'placed')
+        self.mt.deals=[N(ticket=88,order=999,position_id=900,magic=self.cmd['magic'],symbol='XAUUSD',
+                         volume=.1,comment='BT:'+self.cmd['id'][:20],price=2000.10,time_msc=clock_ms())]
+        self.assertEqual(self.send()['state'],'placed')
+        self.assertEqual(len(self.mt.sends),1)
+
     def test_partial_retcode_without_deal_ticket_waits_for_reconciliation(self):
         self.mt.code=10010;self.mt.reply_deal=0
         result=self.send()
