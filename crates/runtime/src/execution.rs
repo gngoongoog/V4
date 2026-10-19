@@ -395,6 +395,7 @@ impl Service {
         // forced on, it represents coordinated execution; every other `enabled` flag means SOLO.
         self.inner
             .observe(db, telemetry, config, run, frames, now)?;
+        self.student.capture_entries(self.inner.take_entries(), now);
         if run {crate::student_learning::log_opportunities(db,telemetry,&self.inner.learning_decisions(),now)?;}
         // Apply one global entry budget after all brains have proposed their queued opens and
         // before the gateway can retrieve them. Exits and reconciliation states are untouched.
@@ -496,6 +497,7 @@ impl Service {
                 next.frames.as_ref(),
                 now,
             )?;
+            self.student.capture_entries(self.inner.take_entries(), now);
             let current = enforce_portfolio(db, &next.telemetry, &next.config, &self.portfolio)?;
             self.portfolio_state = current.json(&self.portfolio, next.telemetry.equity);
 

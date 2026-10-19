@@ -78,6 +78,7 @@ def check(exe=None):
             choice=command1['signal']['coordination']['selection']
             assert choice['policy']=='contextual_exploration_v3' and 0<choice['selection_probability']<=1
             assert command1['signal']['coordination']['student']['profile']=='baseline'
+            assert command1['signal']['coordination']['student']['exit_candidates']==2
             result=submit(command1);assert result['state']=='filled',result
             assert api('/v1/execution/student')['total_experiences']==1, 'acknowledged fill must register before the next snapshot'
             assert abs(result['request']['volume']-.09)<1e-8,result
@@ -108,6 +109,9 @@ def check(exe=None):
             assert student['experiences'][0]['brain']==selected
             assert abs(student['experiences'][0]['actual']['net']+.43)<1e-8
             assert student['recent_pattern_counts']['cost_drag']==1
+            assert student['entry_timing']['research_only'] is True
+            assert student['entry_timing']['total_opportunities']==1
+            assert student['entry_timing']['delays_ms']==[0,250,1000]
             # Replaying history doesn't multiply samples or fake additional learning.
             api('/v1/execution/sync',sync);publish()
             assert len(api('/v1/execution')['learning_review'])==2
@@ -116,9 +120,11 @@ def check(exe=None):
             assert brain(selected)['learning']['broker_samples']==1
             assert brain(selected)['learned_weight']<1.
             assert api('/v1/execution/student')['closed_broker_trades']==1
+            assert api('/v1/execution/student')['entry_timing']['total_opportunities']==1
             snapshot['login']=99;publish()
             assert not api('/v1/execution')['learning_review']
             assert api('/v1/execution/student')['total_experiences']==0
+            assert api('/v1/execution/student')['entry_timing']['total_opportunities']==0
             assert api('/v1/execution/gateway')['command'] is None
             report=dict(result='PASS',version=VERSION,broker='simulated; no native MT5 acceptance',balance=100.,
                 checks=['ready expert selects without consensus','Core authorization reaches adapter order_send',

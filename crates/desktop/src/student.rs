@@ -6,9 +6,18 @@ fn label(value: &str) -> &str {
         "baseline" => "الإعداد الأصلي",
         "quick" => "خروج أسرع",
         "patient" => "هدف أبعد",
+        "protective" => "وقف أقرب",
+        "extended" => "امتداد أطول",
+        "timing_resolution" => "الرصد لا يغطي توقيت الدخول بالدقة المطلوبة",
+        "timing_restart_gap" => "انقطاع قبل حفظ مسار التوقيت",
+        "timing_horizon" => "مدة الصفقة أقصر من نافذة مقارنة التوقيت",
+        "timing_capacity" => "اكتملت سعة التجارب المتزامنة",
+        "stale_entry_quote" => "سعر بداية المقارنة قديم",
         "collecting" => "جمع الخبرة",
         "validating" => "اختبار على صفقات جديدة",
         "monitoring" => "مراقبة التحسّن",
+        "stop_inside_spread" => "الوقف المتعلّم قريب من السبريد؛ استُخدم الأصل",
+        "sniper_cost_fraction" => "الهدف المتعلّم لا يناسب التكلفة الحالية",
         "cost_drag" => "التكاليف محت الربح",
         "adverse_entry_path" => "حركة معاكسة بعد الدخول",
         "profit_giveback" => "رجوع ربح مرصود",
@@ -112,6 +121,24 @@ pub fn paint(ui: &Dashboard, v: &Value) {
         policies="الخروج الأصلي فعّال. تُجمع مقارنات الهدف والوقف والمدة من الأسعار القادمة، ثم يُختبر البديل على دخول جديد قبل اعتماده.".into();
     }
     ui.set_student_policies(policies.into());
+    let timing = &v["entry_timing"];
+    let mut text = format!("فرص مقترحة: {} | مقارنات دخلت الدراسة: {}\nبحث فقط — التوقيت المقترح لا يُطبّق على أوامر MT5.\n",
+        timing["total_opportunities"].as_u64().unwrap_or(0),timing["admitted_pairs"].as_u64().unwrap_or(0));
+    for (reason,count) in timing["exclusions"].as_object().into_iter().flatten() {
+        let _=writeln!(text,"{}: {}",label(reason),count);
+    }
+    for item in timing["studies"].as_array().into_iter().flatten() {
+        let source: Value=serde_json::from_str(item["source"].as_str().unwrap_or("[]")).unwrap_or(Value::Null);
+        let s=&item["study"];
+        let _=writeln!(text,"\n{} / {} | {} • {} / 20\nالمقترح بعد التقييم: {} ms | المرشح: {} ms\nفرق الصافي الافتراضي: {:+.3} R | ترقيات {} • رجوع {}",
+            source[3].as_str().unwrap_or("—"),source[4].as_str().unwrap_or("—"),
+            label(s["phase"].as_str().unwrap_or("collecting")),s["samples"],
+            item["suggested_delay_ms"],item["candidate_delay_ms"],s["last_gain_r"].as_f64().unwrap_or(0.),s["promotions"],s["rollbacks"]);
+    }
+    if timing["total_opportunities"].as_u64().unwrap_or(0)==0 {
+        text.push_str("تبدأ عند اقتراح دخول ديمو جديد. المقارنات منفصلة عن عدّاد الصفقات وأرباح الحساب.");
+    }
+    ui.set_student_timing(text.into());
     let mut journal = String::new();
     for e in v["experiences"].as_array().into_iter().flatten().take(20) {
         let sel = &e["entry"]["signal"]["coordination"]["selection"];
@@ -124,6 +151,8 @@ pub fn paint(ui: &Dashboard, v: &Value) {
         let exit_label = if e["entry"]["signal"]["coordination"]["student"]["cost_fallback"] == true
         {
             format!("{profile} — الهدف المتعلّم لا يناسب التكلفة الحالية")
+        } else if let Some(reason)=e["entry"]["signal"]["coordination"]["student"]["fallback_reason"].as_str().filter(|s|!s.is_empty()) {
+            format!("{profile} — {}",label(reason))
         } else {
             profile.to_owned()
         };
