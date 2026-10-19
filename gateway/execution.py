@@ -142,8 +142,22 @@ class BrokerExecutor:
         if deals is None or orders is None:
             return result
         tag = 'BT:' + cmd['id'][:20]
-        matches = [d for d in deals if getattr(d, 'magic', 0)==cmd['magic'] and getattr(d, 'symbol', '')==cmd['symbol'] and getattr(d, 'comment', '')==tag]
-        pending = any(getattr(o,'magic',0)==cmd['magic'] and getattr(o,'comment','')==tag for o in orders)
+        # Broker comments are not guaranteed to survive a fill unchanged. A
+        # positive MT5 order ticket from the durable acknowledgement is a
+        # stronger exact link than the comment. Keep magic/symbol/account checks
+        # and never guess based solely on timing or trade direction.
+        acknowledged_order = int(result.get('order') or 0)
+        def matches_identity(item):
+            if getattr(item, 'magic', 0)!=cmd['magic'] or getattr(item, 'symbol', '')!=cmd['symbol']:
+                return False
+            item_order = int(getattr(item, 'order', 0) or 0)
+            # If both sides expose an order ID, it must agree. A copied or
+            # broker-reused comment must never override a conflicting ticket.
+            if acknowledged_order>0 and item_order>0:
+                return item_order==acknowledged_order
+            return getattr(item, 'comment', '')==tag
+        matches = [d for d in deals if matches_identity(d)]
+        pending = any(matches_identity(o) for o in orders)
         if account_identity(mt5.account_info()) != expected(cmd):
             return result
         if matches and not pending:
@@ -343,9 +357,19 @@ class BrokerExecutor:
                 code=getattr(response,'retcode',None)
                 known_rejects={10004,10006,10007,10013,10014,10015,10016,10017,10018,10019,10020,10021,10022,10024,10026,10027,10028,10029,10030,10032,10033,10034,10035,10036,10038,10039,10040,10042,10043,10044,10045,10046}
                 state={10009:'filled',10010:'partial',10008:'placed'}.get(code,'rejected' if code in known_rejects else 'unknown')
+                order_id=int(getattr(response,'order',0) or 0)
+                deal_id=int(getattr(response,'deal',0) or 0)
+                # A DONE/DONE_PARTIAL retcode without any deal ticket is not
+                # sufficient evidence of an exact fill/volume/price. Preserve
+                # the send journal and reconcile using subsequent MT5 history
+                # instead of training on an acknowledgement with deal=0.
+                if state in ('filled','partial') and deal_id<=0:
+                    state='placed'
                 result.update(state=state,retcode=code,reason=str(getattr(response,'comment','No broker acknowledgement')),
-                              order=int(getattr(response,'order',0)),deal=int(getattr(response,'deal',0)),
+                              order=order_id,deal=deal_id,
                               volume=float(getattr(response,'volume',0)),price=float(getattr(response,'price',0)))
+                if deal_id<=0 and code in (10009,10010):
+                    result['reason']='Broker retcode acknowledges submission but deal ticket is unavailable; await exact MT5 history reconciliation'
             result['acknowledged_ms']=clock_ms()
             result['send_ms']=(time.perf_counter()-sent)*1000
             result['total_ms']=(time.perf_counter()-started)*1000

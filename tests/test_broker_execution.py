@@ -18,7 +18,7 @@ class Broker:
         self.info=N(point=.01,trade_tick_size=.01,volume_min=.01,volume_step=.01,volume_max=100.,filling_mode=3,trade_exemode=2,trade_stops_level=5)
         self.tick=N(bid=2000.,ask=2000.10,time_msc=clock_ms())
         self.positions=[];self.orders=[];self.deals=[];self.sends=[];self.code=10009;self.raise_send=False;self.check_code=0;self.on_check=None
-        self.account_reads=0;self.on_account=None
+        self.account_reads=0;self.on_account=None;self.reply_deal=77
     def account_info(self):
         self.account_reads+=1
         if self.on_account:self.on_account(self.account_reads)
@@ -36,7 +36,7 @@ class Broker:
     def order_send(self,r):
         self.sends.append(r)
         if self.raise_send:raise RuntimeError('network failure after submit')
-        return N(retcode=self.code,comment='broker',order=55,deal=77,volume=r['volume'],price=r['price'])
+        return N(retcode=self.code,comment='broker',order=55,deal=self.reply_deal,volume=r['volume'],price=r['price'])
 
 def command():
     now=clock_ms()
@@ -79,6 +79,54 @@ class ExecutionTests(unittest.TestCase):
     def test_timeout_never_retries_and_later_history_reconciles(self):
         self.mt.raise_send=True;self.assertEqual(self.send()['state'],'unknown');self.mt.raise_send=False;self.assertEqual(self.send()['state'],'unknown');self.assertEqual(len(self.mt.sends),1)
         self.mt.deals=[N(ticket=77,magic=self.cmd['magic'],symbol='XAUUSD',volume=.1,comment='BT:'+self.cmd['id'][:20])];self.assertEqual(self.send()['state'],'filled');self.assertEqual(len(self.mt.sends),1)
+    def test_broker_done_without_deal_ticket_is_not_falsely_booked_as_filled(self):
+        self.mt.reply_deal=0
+        first=self.send()
+        self.assertEqual(first['retcode'],10009)
+        self.assertEqual(first['state'],'placed')
+        self.assertEqual(first['deal'],0)
+        self.assertEqual(len(self.mt.sends),1)
+        self.assertEqual(self.send()['state'],'placed')
+        self.assertEqual(len(self.mt.sends),1)
+        # A different broker comment can still be linked to the exact original
+        # order number. Never synthesize fills or send the order twice.
+        self.mt.deals=[N(ticket=78,order=55,position_id=900,magic=self.cmd['magic'],symbol='XAUUSD',
+                         volume=.1,comment='broker-stripped-comment',price=2000.10,time_msc=clock_ms())]
+        result=self.send()
+        self.assertEqual(result['state'],'filled')
+        self.assertEqual(result['deal'],78)
+        self.assertEqual(result['order'],55)
+        self.assertEqual(result['position_id'],900)
+        self.assertTrue(result['recovered_from_history'])
+        self.assertEqual(len(self.mt.sends),1)
+        self.ex.close();self.ex=BrokerExecutor(self.path)
+        self.assertEqual(self.send()['state'],'filled')
+        self.assertEqual(len(self.mt.sends),1)
+
+    def test_broker_history_different_order_does_not_fill_an_unrelated_intent(self):
+        self.mt.reply_deal=0
+        self.assertEqual(self.send()['state'],'placed')
+        self.mt.deals=[N(ticket=78,order=999,position_id=900,magic=self.cmd['magic'],symbol='XAUUSD',
+                         volume=.1,comment='another-order',price=2000.10,time_msc=clock_ms())]
+        self.assertEqual(self.send()['state'],'placed')
+        self.assertEqual(len(self.mt.sends),1)
+
+    def test_conflicting_order_id_cannot_be_overridden_by_matching_comment(self):
+        self.mt.reply_deal=0
+        self.assertEqual(self.send()['state'],'placed')
+        self.mt.deals=[N(ticket=88,order=999,position_id=900,magic=self.cmd['magic'],symbol='XAUUSD',
+                         volume=.1,comment='BT:'+self.cmd['id'][:20],price=2000.10,time_msc=clock_ms())]
+        self.assertEqual(self.send()['state'],'placed')
+        self.assertEqual(len(self.mt.sends),1)
+
+    def test_partial_retcode_without_deal_ticket_waits_for_reconciliation(self):
+        self.mt.code=10010;self.mt.reply_deal=0
+        result=self.send()
+        self.assertEqual(result['state'],'placed')
+        self.assertEqual(result['retcode'],10010)
+        self.assertEqual(len(self.mt.sends),1)
+        self.assertEqual(self.send()['state'],'placed')
+
     def test_partial_close_reconciliation_retains_submitted_volume_after_crash(self):
         self.cmd.update(kind='close',position=1)
         self.mt.positions=[N(ticket=1,magic=self.cmd['magic'],symbol='XAUUSD',volume=.1,type=0)]

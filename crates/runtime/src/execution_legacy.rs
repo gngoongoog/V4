@@ -121,26 +121,34 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             && self.brains.iter().any(|b| b.enabled)
             && s.telemetry.as_ref().is_some_and(|t| self.matches(t))
     }
-    fn save(&self, db: &Connection) -> Result<()> {
+    fn save_candidate(db: &Connection, candidate: &Settings) -> Result<()> {
         db.execute(
             "INSERT OR REPLACE INTO execution_settings VALUES(1,?1)",
-            [serde_json::to_string(&self.settings)?],
+            [serde_json::to_string(candidate)?],
         )?;
         Ok(())
     }
-    fn bind(&mut self, db: &Connection, t: &Telemetry, now: u64) -> Result<()> {
+    fn bind_with_settings(&mut self, db: &Connection, t: &Telemetry, now: u64, mut candidate: Settings) -> Result<()> {
         if !t.connected
-            || t.account_trade_mode != Some(if self.settings.target == "demo" { 0 } else { 2 })
+            || t.account_trade_mode != Some(if candidate.target == "demo" { 0 } else { 2 })
         {
             bail!("نوع الحساب لا يطابق هدف التنفيذ المختار؛ Demo يحتاج حساب MT5 تجريبي");
         }
-        self.settings.login = t.login;
-        self.settings.server = t.server.clone();
-        self.settings.currency = t.currency.clone();
-        self.settings.bound_ms = now;
+        candidate.login = t.login;
+        candidate.server = t.server.clone();
+        candidate.currency = t.currency.clone();
+        candidate.bound_ms = now;
+        // Never activate or advertise an account/target whose durable
+        // execution_settings write failed. START and final authorization
+        // must always agree with settings restored after restart.
+        Self::save_candidate(db, &candidate)?;
+        self.settings = candidate;
         self.history_until_ms = now;
         self.last_sync_ms = 0;
-        self.save(db)
+        Ok(())
+    }
+    fn bind(&mut self, db: &Connection, t: &Telemetry, now: u64) -> Result<()> {
+        self.bind_with_settings(db, t, now, self.settings.clone())
     }
     pub fn pending(&self, db: &Connection) -> Result<bool> {
         Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE state IN ('queued','dispatched','unknown','placed','filled','partial'))",[],|r|r.get(0))?)
@@ -445,8 +453,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 if t.account_trade_mode != Some(if target == "demo" { 0 } else { 2 }) {
                     bail!("نوع حساب MT5 لا يطابق Demo/Live المختار");
                 }
-                self.settings = candidate;
-                self.bind(db, t, now)?;
+                self.bind_with_settings(db, t, now, candidate)?;
                 Ok(json!({"ok":true,"settings":self.settings}))
             }
             ("POST", "/v1/execution/brain") => {
@@ -622,5 +629,63 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             }
             _ => bail!("Unknown execution route"),
         }
+    }
+}
+
+#[cfg(test)]
+mod execution_persistence_tests {
+    use super::*;
+
+    fn demo() -> Telemetry {
+        Telemetry {
+            connected: true, account_trade_mode: Some(0), demo: true,
+            login: 17, server: "Demo-Test".into(), currency: "USD".into(),
+            symbol: "XAUUSD".into(), ..Default::default()
+        }
+    }
+
+    #[test]
+    fn failed_bind_does_not_activate_an_uncommitted_account() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        db.execute_batch("PRAGMA query_only=ON").unwrap();
+        assert!(service.bind(&db,&t,1234).is_err());
+        assert_eq!(service.settings.login,0);
+        assert_eq!(service.settings.bound_ms,0);
+        assert_eq!(service.history_until_ms,0);
+        assert_eq!(service.last_sync_ms,0);
+        db.execute_batch("PRAGMA query_only=OFF").unwrap();
+        service.bind(&db,&t,1235).unwrap();
+        assert_eq!(service.settings.login,17);
+        assert_eq!(service.history_until_ms,1235);
+        let restarted=Service::new(&db).unwrap();
+        assert_eq!(restarted.settings.login,17);
+        assert_eq!(restarted.settings.server,"Demo-Test");
+    }
+
+    #[test]
+    fn failed_settings_change_keeps_in_memory_and_durable_binding_identical() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        service.bind(&db,&t,100).unwrap();
+        let old_revision=service.settings.revision;
+        let mut status=Status::default();
+        status.gateway_fresh=true;
+        status.telemetry=Some(t);
+        let request=json!({"target":"demo","deviation_points":35}).to_string();
+        db.execute_batch("PRAGMA query_only=ON").unwrap();
+        assert!(service.route("POST","/v1/execution/settings",request.as_bytes(),&db,&status,200).is_err());
+        assert_eq!(service.settings.deviation_points,20);
+        assert_eq!(service.settings.bound_ms,100);
+        assert_eq!(service.settings.revision,old_revision);
+        db.execute_batch("PRAGMA query_only=OFF").unwrap();
+        let restarted=Service::new(&db).unwrap();
+        assert_eq!(restarted.settings.deviation_points,20);
+        assert_eq!(restarted.settings.bound_ms,100);
+        service.route("POST","/v1/execution/settings",request.as_bytes(),&db,&status,201).unwrap();
+        assert_eq!(service.settings.deviation_points,35);
+        assert_eq!(Service::new(&db).unwrap().settings.deviation_points,35);
     }
 }
