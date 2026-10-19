@@ -232,6 +232,32 @@ fn execution_history_quality(db:&Connection,key:&str,t:&Telemetry,now:u64)->Resu
     Ok((if mass>0.{(weighted/mass).clamp(0.,1.)}else{0.5},samples))
 }
 
+/// Real Sniper pip targets only learn from the executable target sent to MT5.
+/// This verifies direction and tick-normalized distance, not an imaginary TP
+/// computed after the trade closed.
+fn sniper_executed_target_matches(cmd: &Value, result: &Value) -> bool {
+    let signal=&cmd["signal"];
+    let learning=&cmd["learning"];
+    let expected=signal["target_distance"].as_f64();
+    let entry=result["request"]["price"].as_f64();
+    let tp=result["request"]["tp"].as_f64();
+    let tick=learning["tick_size"].as_f64();
+    let side=signal["side"].as_i64();
+    match (expected,entry,tp,tick,side) {
+        (Some(expected),Some(entry),Some(tp),Some(tick),Some(side))
+            if expected.is_finite() && expected>0.
+                && entry.is_finite() && entry>0.
+                && tp.is_finite() && tp>0.
+                && tick.is_finite() && tick>0.
+                && matches!(side,-1|1) =>
+        {
+            let distance=(tp-entry)*side as f64;
+            distance>0. && (distance-expected).abs()<=tick*1.01
+        }
+        _=>false,
+    }
+}
+
 fn open_learning_commands(db: &Connection, key: &str) -> Result<Vec<(String, String)>> {
     let mut st = db.prepare(
         "SELECT payload,result FROM broker_commands c WHERE context=?1 AND kind='open' AND CAST(json_extract(result,'$.deal') AS INTEGER)>0 AND NOT EXISTS(SELECT 1 FROM broker_learning_processed p WHERE p.context=c.context AND p.command_id=c.id) ORDER BY created_ms,id",
@@ -303,6 +329,13 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
         let value=learning["tick_value_loss"].as_f64().or(t.tick_value_loss).unwrap_or(0.);
         let risk_money=if tick>0. && value>0. {stop/tick*value*exit_volume} else {0.};
         let (r_multiple,reward)=reward_v2(net,risk_money);
+        // Sniper target learning is causal only when the TP *submitted to the
+        // broker* still represents the arm chosen by the specialist. The MT5
+        // adapter may widen TP to meet stops-level rules. Keep the completed
+        // trade as real strategy feedback, but do NOT assign its result to a
+        // different, unexecuted pip target.
+        let sniper_tp_preserved=coordination["selection"]["sniper_target_mode"]=="adaptive"
+            && sniper_executed_target_matches(&cmd,&result);
         let attribution=if gross>0. && net<=0. {"costs_erased_gross_profit"}
             else if net>0. {"positive_after_costs"} else if gross<0. {"adverse_price_move"}
             else if net<0. {"booked_costs"} else {"break_even"};
@@ -334,6 +367,7 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
                 "attribution":attribution,"exit_reason_codes":reasons,"weight_at_entry":member["weight"],"entry_reason":cmd["signal"]["reason"],
                 "risk_money":risk_money,"r_multiple":r_multiple,"reward":reward,"regime":regime,"session":session,
                 "context_key":learning["context_key"],"selection":coordination["selection"],
+                "sniper_tp_preserved":sniper_tp_preserved,
                 "execution_quality":intel["execution_quality"],"costs":"exact booked MT5 deal profit + commission + swap + fee"});
             tx.execute("INSERT OR IGNORE INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,?3,?4,?5,?6)",params![&source,position_id,&key,id,closed_ms,payload.to_string()])?;
         }
@@ -525,6 +559,24 @@ mod tests {
     use super::*;
     use braintrade_domain::Candle;
 
+    #[test]
+    fn sniper_target_provenance_is_directional_and_rejects_broker_widening() {
+        let cmd=json!({"signal":{"side":1,"target_distance":0.50},
+            "learning":{"tick_size":0.01}});
+        let exact=json!({"request":{"price":2000.0,"tp":2000.50}});
+        let rounded=json!({"request":{"price":2000.0,"tp":2000.51}});
+        let widened=json!({"request":{"price":2000.0,"tp":2000.75}});
+        let reversed=json!({"request":{"price":2000.0,"tp":1999.50}});
+        assert!(sniper_executed_target_matches(&cmd,&exact));
+        assert!(sniper_executed_target_matches(&cmd,&rounded));
+        assert!(!sniper_executed_target_matches(&cmd,&widened));
+        assert!(!sniper_executed_target_matches(&cmd,&reversed));
+        assert!(!sniper_executed_target_matches(&cmd,&json!({"request":{"price":2000.0}})));
+        let sell=json!({"signal":{"side":-1,"target_distance":0.5},
+            "learning":{"tick_size":0.01}});
+        assert!(sniper_executed_target_matches(&sell,&reversed));
+        assert!(!sniper_executed_target_matches(&sell,&exact));
+    }
     #[test]
     fn context_rewards_do_not_cross_sessions_cost_buckets_or_sources() {
         let db=Connection::open_in_memory().unwrap();let _=Learner::new(&db).unwrap();
