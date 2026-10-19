@@ -57,9 +57,13 @@ export component Dashboard inherits Window {
     in property <string> student-journal;
     in property <string> student-timing;
     in-out property <int> trade-mode: 2;
+    in-out property <int> sniper-brain: 0;
+    in-out property <int> sniper-target-mode: 0;
+    in-out property <string> sniper-min-target-pips: "2";
+    in-out property <string> sniper-max-target-pips: "10";
     in-out property <bool> demo-flexible: true;
     in-out property <bool> adaptive-exits: true;
-    in-out property <string> sniper-target: "50";
+    in-out property <string> sniper-target: "5";
     in-out property <string> sniper-stop: "80";
     in-out property <string> sniper-cooldown: "0";
     in-out property <string> sniper-hold: "120";
@@ -344,7 +348,7 @@ export component Dashboard inherits Window {
                 LineEdit { text <=> root.exec-hold; }
                 LineEdit { text <=> root.exec-cooldown; }
             }
-            Text { text: "عقل النظام يستخدم هندسة الوضع المختار. KTE يستخدم وقفه البنيوي؛ الاستراتيجية المولدة تستخدم إعدادات تقريرها."; color: #acbad0; wrap: word-wrap; }
+            Text { text: "عقل النظام والقناص المتعلّم يستخدمان هدف ووقف ومدة الوضع المختار. KTE يستخدم وقفه البنيوي؛ الاستراتيجية المولدة تستخدم إعدادات تقريرها."; color: #acbad0; wrap: word-wrap; }
             CheckBox { text: "تفعيل حدود المخاطرة واللوت والسبريد الاختيارية من صفحة المخاطرة"; checked <=> root.exec-risk; }
             LineEdit { text <=> root.exec-report; placeholder-text: "للعقل المولّد فقط: معرّف تقرير محفوظ من مختبر الاستراتيجيات"; }
             Rectangle { height: 1px; background: #263145; }
@@ -390,11 +394,18 @@ export component Dashboard inherits Window {
             Rectangle { background: #151f30; border-radius: 8px; min-height: 150px;
                 VerticalLayout { padding: 12px; spacing: 8px;
                     Text { text: "إعداد القناص"; color: #eaf0fb; font-weight: 700; }
-                    Text { text: "الهدف والوقف بالنقاط • انتظار إعادة الدخول بالثواني • أقصى احتفاظ بالصفقة بالثواني • سقف حصة التكلفة"; color: #acbad0; wrap: word-wrap; }
+                    ComboBox { model: ["القناص الكلاسيكي", "القناص المتعلّم / Sniper Learner"]; current-index <=> root.sniper-brain; enabled: root.state == "STOPPED" && root.trade-mode == 3; }
+                    Text { text: "اختر القناص المتعلّم ثم احفظ واضغط تشغيل النظام. يعمل بلوت عقل النظام؛ لا يحتاج تشغيل منفرد. يتعلّم من صفقات الديمو المغلقة ويعرض قراره في تنفيذ MT5. يعمل فقط في Sniper."; color: #8ddfc6; wrap: word-wrap; }
+                    Text { text: "هدف الربح الصافي بالـ pip؛ الوقف بالنقاط (points). يختلف تعريف Pip بين وسطاء الذهب، راجع خانة نقاط / pip أعلاه."; color: #acbad0; wrap: word-wrap; }
+                    ComboBox { model: ["هدف pip ثابت تختاره", "تعلّم هدف pip ضمن نطاق — Demo فقط"]; current-index <=> root.sniper-target-mode; enabled: root.state == "STOPPED" && root.trade-mode == 3 && root.sniper-brain == 1; }
                     HorizontalBox {
-                        LineEdit { text <=> root.sniper-target; placeholder-text: "الهدف"; }
+                        LineEdit { text <=> root.sniper-target; placeholder-text: "الهدف الثابت pip"; }
                         LineEdit { text <=> root.sniper-stop; placeholder-text: "الوقف"; }
                         LineEdit { text <=> root.sniper-cooldown; placeholder-text: "انتظار الدخول"; }
+                    }
+                    HorizontalBox {
+                        LineEdit { text <=> root.sniper-min-target-pips; placeholder-text: "أدنى هدف pip"; enabled: root.sniper-target-mode == 1 && root.trade-mode == 3 && root.sniper-brain == 1; }
+                        LineEdit { text <=> root.sniper-max-target-pips; placeholder-text: "أعلى هدف pip"; enabled: root.sniper-target-mode == 1 && root.trade-mode == 3 && root.sniper-brain == 1; }
                     }
                     HorizontalBox {
                         LineEdit { text <=> root.sniper-hold; placeholder-text: "أقصى احتفاظ"; }
@@ -402,7 +413,7 @@ export component Dashboard inherits Window {
                     }
                 }
             }
-            Text { text: "حصة التكلفة = التكلفة ÷ (التكلفة + الهدف الصافي). عند تجاوز الحد ينتظر القناص. مدة الاحتفاظ من 1 إلى 3600 ثانية."; color: #acbad0; wrap: word-wrap; }
+            Text { text: "القناص المتعلّم يختبر 4 أهداف pip ضمن الحدّين فقط إذا توفرت إشارة وتجاوز الهدف اختبار التكاليف. المقارنات تعتمد على صفقات MT5 Demo مغلقة، لا تضمن أفضلية مستقبلية. على Live يعود للهدف الثابت. مدة الاحتفاظ من 1 إلى 3600 ثانية."; color: #acbad0; wrap: word-wrap; }
             Button { text: "حفظ إعدادات التداول"; enabled: !root.studio-busy && root.state == "STOPPED"; clicked => { root.studio-action("save"); } }
             Text { text: "أوقف النظام لتبديل الوضع أو التكاليف. الصفقة المفتوحة تحتفظ بهدفها ووقفها ومدتها التي جُمّدت عند الدخول."; color: #f0c578; wrap: word-wrap; }
             HorizontalBox {
