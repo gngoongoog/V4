@@ -43,9 +43,10 @@ export component Dashboard inherits Window {
     in-out property <string> portfolio-max-risk: "2.0";
     in property <bool> exec-enabled: false;
     in property <string> exec-role: "coordinator";
-    in property <string> exec-summary: "اربط حساب Demo ثم START. العقول أعضاء افتراضياً؛ زر منفرد يغيّر عضوية العقل المختار.";
+    in property <string> exec-summary: "اربط حساب Demo ثم START. العقل الرئيسي للوضع المختار فقط ينفذ؛ بقية العقول SHADOW/PAPER.";
     in property <string> exec-detail;
     in property <string> exec-ledger;
+    in property <string> exec-shadow: "التدريب الافتراضي: بانتظار أسعار حديثة";
     in property <[string]> trade-journal-rows;
     in-out property <int> trade-journal-selected: -1;
     in property <string> trade-journal-summary: "حمّل سجل الصفقات من MT5";
@@ -480,6 +481,8 @@ export component Dashboard inherits Window {
             Text { text: root.exec-message; color: #c8cbd1; wrap: word-wrap; }
             Text { text: root.exec-detail; color: #dadce1; wrap: word-wrap; }
             Text { text: "نتائج مستقلة لكل عقل وسجل التنفيذ"; color: #f2f2f4; font-size: 18px; }
+            Text { text: "سجل التعلّم الورقي للعقول الأخرى (غير حقيقي)"; color: #f2f2f4; font-size: 18px; font-weight: 700; }
+            Text { text: root.exec-shadow; color: #b7bac3; wrap: word-wrap; }
             Text { text: root.exec-ledger; color: #b7bac3; wrap: word-wrap; }
             Text { text: "حساب Hedging يسمح باستقلال صفقات عدة عقول. Netting يسمح بمالك واحد للرمز حتى إغلاقه. الأخبار وتوقعات النماذج الإحصائية تبقى مصادر بحث، وليست استراتيجيات مكتملة للتداول المنفرد."; color: #b7bac3; wrap: word-wrap; }
         } }
