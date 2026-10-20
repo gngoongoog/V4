@@ -74,7 +74,7 @@ export component Dashboard inherits Window {
     in-out property <string> preview-lots: "0.1";
     in property <bool> studio-busy: false;
     in property <string> studio-message: "";
-    in property <string> cost-detail: "7 لكل لوت × 0.1 = 0.70 من عملة الحساب. السبريد يحتاج اتصال MT5.";
+    in property <string> cost-detail: "العمولة الافتراضية: 0.10 لوت = 0.70 و0.01 لوت = 0.07 من عملة الحساب. اربط MT5 واضغط «احسب» لعرض السبريد والتعادل من الأسعار الحقيقية.";
     in property <string> studio-summary: "بانتظار تحميل الفريمات";
     in property <string> studio-report: "اختر نتيجة محفوظة بعد انتهاء التقييم. نحتاج 400 شمعة فعلية لكل فريم على الأقل.";
     in property <string> wyckoff-detail: "بانتظار الشموع المكتملة";
@@ -441,59 +441,159 @@ export component Dashboard inherits Window {
             Text { text: root.exec-ledger; color: #b7bac3; wrap: word-wrap; }
             Text { text: "حساب Hedging يسمح باستقلال صفقات عدة عقول. Netting يسمح بمالك واحد للرمز حتى إغلاقه. الأخبار وتوقعات النماذج الإحصائية تبقى مصادر بحث، وليست استراتيجيات مكتملة للتداول المنفرد."; color: #b7bac3; wrap: word-wrap; }
         } }
-        if root.page == 14: ScrollView { VerticalBox { spacing: 10px;
-            Text { text: "إعداد التداول  /  الوضع والتكاليف والقناص"; font-size: 20px; color: #f2f2f4; }
-            Text { text: "1   اختر الوضع الذي تريد تشغيله"; color: #e0e1e4; font-weight: 700; }
-            ComboBox { model: ["Scalping / سكالبنك", "Swing / سوينك", "Expert / الخبير المتعلم", "Sniper / القناص"]; current-index <=> root.trade-mode; enabled: root.state == "STOPPED"; }
-            Text { text: root.trade-mode == 0 ? "M1 + M5؛ زخم مؤكد، وقف 1.2 ATR وهدف 1.4R، أقصى احتفاظ 15 دقيقة." : root.trade-mode == 1 ? "H1 + H4 + D1؛ اتجاهات متوافقة، وقف 2 ATR وهدف 2.5R، أقصى احتفاظ 3 أيام. السواب غير محسوب." : root.trade-mode == 2 ? (root.demo-flexible ? "الخبير على الديمو المرن: يختار عضواً جاهزاً حسب التعلم والاستكشاف، بوقفه وهدفه ومدته. على الحقيقي يستخدم الإجماع المعتاد." : "الخبير: تصويت الأعضاء بأوزان تتعلم من نتائج لاحقة؛ يستبعد العقول المنفردة. وقف 1.5 ATR وهدف 2R؛ مهلة 30 دقيقة.") : "القناص يستخدم Fast Pulse للقرار اللحظي؛ مدة الاحتفاظ أدناه قابلة للتعديل ولا تتغير على صفقة مفتوحة بعد دخولها."; color: #b7bac3; wrap: word-wrap; }
-            CheckBox { text: "تطبيق الخروج المتعلّم على الديمو"; checked <=> root.adaptive-exits; enabled: root.state == "STOPPED"; }
-            CheckBox { text: "تعلّم ديمو مرن"; checked <=> root.demo-flexible; enabled: root.state == "STOPPED"; }
-            Text { text: "على الديمو فقط: الخبير يختار إشارة عضو جاهز حسب النتائج والاستكشاف؛ بقية الأوضاع تتبع إشارتها دون فيتو الأعضاء. يصغّر اللوت عند نقص الهامش ولا يزيده عن اختيارك. أوقف الخيار لاسترجاع الإجماع. شروط الوسيط تبقى لازمة."; color: #b7bac3; wrap: word-wrap; }
-            Rectangle { background: #212329; border-radius: 8px; min-height: 116px;
-                VerticalLayout { padding: 12px; spacing: 8px;
-                    Text { text: "2   تكلفة التنفيذ الفعلية"; color: #f2f2f4; font-weight: 700; }
-                    Text { text: "أدخل عمولة 1.00 لوت حسب طريقة الوسيط. إذا اخترت لكل جهة يحولها النظام تلقائياً إلى تكلفة ذهاب وإياب."; color: #b7bac3; wrap: word-wrap; }
-                    HorizontalBox {
-                        LineEdit { text <=> root.commission-lot; placeholder-text: "العمولة"; }
-                        ComboBox { model: ["ذهاب وإياب / Round trip", "لكل جهة / Per side"]; current-index <=> root.commission-basis; }
-                        Text { text: "نقاط / pip"; color: #b7bac3; vertical-alignment: center; }
-                        LineEdit { text <=> root.pip-points; }
+        if root.page == 14: ScrollView {
+            VerticalBox {
+                spacing: 16px;
+                Text { text: "إعداد التداول  /  الوضع والتكاليف والقناص"; font-size: 21px; color: #f2f2f4; font-weight: 700; }
+                Text { text: "كل خانة تحت عنوانها. عدّل القيم والنظام متوقف، ثم احفظها؛ عرض التكلفة يستعمل أسعار Bid / Ask الحالية من MT5."; color: #b7bac3; wrap: word-wrap; }
+                Rectangle {
+                    background: #212329; border-radius: 12px; border-width: 1px; border-color: #393c43;
+                    VerticalLayout {
+                        padding: 16px; spacing: 12px;
+                        Text { text: "1  •  وضع التداول"; color: #f2f2f4; font-size: 16px; font-weight: 700; }
+                        Text { text: "اختر الوضع الذي يحدد طريقة الدخول والخروج"; color: #bfc2ca; }
+                        ComboBox { model: ["Scalping / سكالبنك", "Swing / سوينك", "Expert / الخبير المتعلم", "Sniper / القناص"]; current-index <=> root.trade-mode; enabled: root.state == "STOPPED"; }
+                        Text {
+                            text: root.trade-mode == 0 ? "M1 + M5؛ وقف 1.2 ATR وهدف 1.4R، أقصى احتفاظ 15 دقيقة."
+                                : root.trade-mode == 1 ? "H1 + H4 + D1؛ وقف 2 ATR وهدف 2.5R، أقصى احتفاظ 3 أيام. السواب غير محسوب."
+                                : root.trade-mode == 2 ? (root.demo-flexible ? "الخبير المرن على Demo يختار عضواً جاهزاً بحسب التعلّم والاستكشاف. على Live يستخدم الإجماع." : "الخبير يستخدم إجماع الأعضاء؛ وقف 1.5 ATR وهدف 2R، مهلة 30 دقيقة.")
+                                : "القناص يستخدم Fast Pulse. مدة الاحتفاظ تُضبط أدناه وتثبت عند فتح الصفقة.";
+                            color: #b7bac3; wrap: word-wrap;
+                        }
+                        CheckBox { text: "تطبيق الخروج المتعلّم على الديمو"; checked <=> root.adaptive-exits; enabled: root.state == "STOPPED"; }
+                        CheckBox { text: "تعلّم ديمو مرن"; checked <=> root.demo-flexible; enabled: root.state == "STOPPED"; }
+                        Text { text: "التعلّم المرن على Demo فقط. شروط الوسيط وحدود التنفيذ ما زالت مطبّقة."; color: #aeb1ba; wrap: word-wrap; }
+                    }
+                }
+                Rectangle {
+                    background: #212329; border-radius: 12px; border-width: 1px; border-color: #393c43;
+                    VerticalLayout {
+                        padding: 16px; spacing: 12px;
+                        Text { text: "2  •  عمولة الوسيط ووحدات السعر"; color: #f2f2f4; font-size: 16px; font-weight: 700; }
+                        Text { text: "مثال: 7 لعملة الحساب لكل 1.00 لوت ذهاب وإياب = 0.70 للوت 0.10 و0.07 للوت 0.01. إذا الوسيط يقول العمولة لكل جهة، اختر «لكل جهة» وأدخل قيمتها لجهة واحدة."; color: #c6c8ce; wrap: word-wrap; }
+                        HorizontalLayout {
+                            spacing: 14px;
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 6px;
+                                Text { text: "العمولة لكل 1.00 لوت (عملة الحساب)"; color: #e0e1e4; wrap: word-wrap; }
+                                LineEdit { text <=> root.commission-lot; placeholder-text: "مثال: 7"; }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 6px;
+                                Text { text: "طريقة احتساب العمولة"; color: #e0e1e4; }
+                                ComboBox { model: ["ذهاب وإياب / Round trip", "لكل جهة / Per side"]; current-index <=> root.commission-basis; }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 14px;
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 6px;
+                                Text { text: "عدد نقاط MT5 في 1 pip"; color: #e0e1e4; wrap: word-wrap; }
+                                LineEdit { text <=> root.pip-points; placeholder-text: "مثال: 10"; }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 6px;
+                                Text { text: "الانزلاق المفترض لكل جهة (ticks)"; color: #e0e1e4; wrap: word-wrap; }
+                                LineEdit { text <=> root.slippage-ticks; placeholder-text: "0 = دون انزلاق مفترض"; }
+                            }
+                        }
+                        Text { text: "السبريد يُقرأ من Ask − Bid الحقيقي عند الضغط على «احسب»؛ لا نضاعفه ولا نأخذه من حقل الانزلاق. الانزلاق تقدير منفصل، وقيمته 0 تعني عدم افتراض انزلاق. عدد النقاط في pip يغيّر العرض فقط ولا يغيّر سعر السوق."; color: #b7bac3; wrap: word-wrap; }
+                    }
+                }
+                Rectangle {
+                    background: #212329; border-radius: 12px; border-width: 1px; border-color: #393c43;
+                    VerticalLayout {
+                        padding: 16px; spacing: 12px;
+                        Text { text: "3  •  إعداد القناص وأهداف Pip"; color: #f2f2f4; font-size: 16px; font-weight: 700; }
+                        Text { text: "يعمل القناص المتعلّم بوضع Sniper بعد الحفظ والتشغيل، ويستند إلى صفقات Demo المغلقة. الهدف بـ pip، والوقف بنقاط MT5."; color: #c6c8ce; wrap: word-wrap; }
+                        HorizontalLayout {
+                            spacing: 14px;
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 6px;
+                                Text { text: "نوع عقل القناص"; color: #e0e1e4; }
+                                ComboBox { model: ["القناص الكلاسيكي", "القناص المتعلّم / Sniper Learner"]; current-index <=> root.sniper-brain; enabled: root.state == "STOPPED" && root.trade-mode == 3; }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 6px;
+                                Text { text: "طريقة تحديد هدف الربح"; color: #e0e1e4; }
+                                ComboBox { model: ["هدف pip ثابت تختاره", "تعلّم هدف pip ضمن نطاق — Demo فقط"]; current-index <=> root.sniper-target-mode; enabled: root.state == "STOPPED" && root.trade-mode == 3 && root.sniper-brain == 1; }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 14px;
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 6px;
+                                Text { text: "هدف الربح الثابت (pip)"; color: #e0e1e4; wrap: word-wrap; }
+                                LineEdit { text <=> root.sniper-target; placeholder-text: "مثال: 5"; }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 6px;
+                                Text { text: "وقف الخسارة (points)"; color: #e0e1e4; wrap: word-wrap; }
+                                LineEdit { text <=> root.sniper-stop; placeholder-text: "مثال: 80"; }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 6px;
+                                Text { text: "انتظار بين الدخولات (ثانية)"; color: #e0e1e4; wrap: word-wrap; }
+                                LineEdit { text <=> root.sniper-cooldown; placeholder-text: "مثال: 0"; }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 14px;
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 6px;
+                                Text { text: "أدنى هدف متعلّم (pip)"; color: #e0e1e4; wrap: word-wrap; }
+                                LineEdit { text <=> root.sniper-min-target-pips; placeholder-text: "مثال: 2"; enabled: root.sniper-target-mode == 1 && root.trade-mode == 3 && root.sniper-brain == 1; }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 6px;
+                                Text { text: "أعلى هدف متعلّم (pip)"; color: #e0e1e4; wrap: word-wrap; }
+                                LineEdit { text <=> root.sniper-max-target-pips; placeholder-text: "مثال: 10"; enabled: root.sniper-target-mode == 1 && root.trade-mode == 3 && root.sniper-brain == 1; }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 14px;
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 6px;
+                                Text { text: "أقصى احتفاظ بالصفقة (ثانية)"; color: #e0e1e4; wrap: word-wrap; }
+                                LineEdit { text <=> root.sniper-hold; placeholder-text: "1 – 3600"; }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 6px;
+                                Text { text: "أقصى حصة تكلفة من الهدف (0.01 – 0.90)"; color: #e0e1e4; wrap: word-wrap; }
+                                LineEdit { text <=> root.cost-fraction; placeholder-text: "مثال: 0.45"; }
+                            }
+                        }
+                        Text { text: "القناص المتعلّم يختبر 4 أهداف pip ضمن النطاق عند وجود إشارة وتجاوز اختبار التكلفة. على Live يعود للهدف الثابت. مدة الاحتفاظ من 1 إلى 3600 ثانية."; color: #b7bac3; wrap: word-wrap; }
+                    }
+                }
+                Rectangle {
+                    background: #212329; border-radius: 12px; border-width: 1px; border-color: #393c43;
+                    VerticalLayout {
+                        padding: 16px; spacing: 12px;
+                        Text { text: "4  •  حفظ الإعدادات ومعاينة تكلفة صفقة جديدة"; color: #f2f2f4; font-size: 16px; font-weight: 700; }
+                        Button { text: "4   حفظ إعدادات التداول"; enabled: !root.studio-busy && root.state == "STOPPED"; clicked => { root.studio-action("save"); } }
+                        Text { text: "أوقف النظام لتبديل الوضع أو التكاليف. الصفقة المفتوحة تحتفظ بهدفها ووقفها ومدتها التي جُمّدت عند الدخول."; color: #c8cbd1; wrap: word-wrap; }
+                        HorizontalLayout {
+                            spacing: 14px;
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 6px;
+                                Text { text: "حجم اللوت للمعاينة فقط"; color: #e0e1e4; }
+                                LineEdit { text <=> root.preview-lots; placeholder-text: "مثال: 0.10"; }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: 6px;
+                                Text { text: "سعر MT5 اللحظي والسبريد"; color: #e0e1e4; }
+                                Button { text: "احسب التكلفة الحالية"; enabled: !root.studio-busy; clicked => { root.studio-action("cost"); } }
+                            }
+                        }
+                        Rectangle { height: 1px; background: #3d4047; }
+                        Text { text: "تفاصيل التكلفة ونقطة التعادل"; color: #f2f2f4; font-weight: 700; }
+                        Text { text: root.cost-detail; color: #e0e2e5; wrap: word-wrap; }
+                        Text { text: root.studio-message; color: #bfc2ca; wrap: word-wrap; }
                     }
                 }
             }
-            Rectangle { background: #212329; border-radius: 8px; min-height: 150px;
-                VerticalLayout { padding: 12px; spacing: 8px;
-                    Text { text: "3   إعداد القناص وأهداف Pip"; color: #f2f2f4; font-weight: 700; }
-                    ComboBox { model: ["القناص الكلاسيكي", "القناص المتعلّم / Sniper Learner"]; current-index <=> root.sniper-brain; enabled: root.state == "STOPPED" && root.trade-mode == 3; }
-                    Text { text: "اختر القناص المتعلّم ثم احفظ واضغط تشغيل النظام. يعمل بلوت عقل النظام؛ لا يحتاج تشغيل منفرد. يتعلّم من صفقات الديمو المغلقة ويعرض قراره في تنفيذ MT5. يعمل فقط في Sniper."; color: #d7dadf; wrap: word-wrap; }
-                    Text { text: "هدف الربح الصافي بالـ pip؛ الوقف بالنقاط (points). يختلف تعريف Pip بين وسطاء الذهب، راجع خانة نقاط / pip أعلاه."; color: #b7bac3; wrap: word-wrap; }
-                    ComboBox { model: ["هدف pip ثابت تختاره", "تعلّم هدف pip ضمن نطاق — Demo فقط"]; current-index <=> root.sniper-target-mode; enabled: root.state == "STOPPED" && root.trade-mode == 3 && root.sniper-brain == 1; }
-                    HorizontalBox {
-                        LineEdit { text <=> root.sniper-target; placeholder-text: "الهدف الثابت pip"; }
-                        LineEdit { text <=> root.sniper-stop; placeholder-text: "الوقف"; }
-                        LineEdit { text <=> root.sniper-cooldown; placeholder-text: "انتظار الدخول"; }
-                    }
-                    HorizontalBox {
-                        LineEdit { text <=> root.sniper-min-target-pips; placeholder-text: "أدنى هدف pip"; enabled: root.sniper-target-mode == 1 && root.trade-mode == 3 && root.sniper-brain == 1; }
-                        LineEdit { text <=> root.sniper-max-target-pips; placeholder-text: "أعلى هدف pip"; enabled: root.sniper-target-mode == 1 && root.trade-mode == 3 && root.sniper-brain == 1; }
-                    }
-                    HorizontalBox {
-                        LineEdit { text <=> root.sniper-hold; placeholder-text: "أقصى احتفاظ"; }
-                        LineEdit { text <=> root.cost-fraction; placeholder-text: "حصة التكلفة 0.45"; }
-                    }
-                }
-            }
-            Text { text: "ملخص: القناص المتعلّم يختبر 4 أهداف pip ضمن الحدّين فقط إذا توفرت إشارة وتجاوز الهدف اختبار التكاليف. المقارنات تعتمد على صفقات MT5 Demo مغلقة، لا تضمن أفضلية مستقبلية. على Live يعود للهدف الثابت. مدة الاحتفاظ من 1 إلى 3600 ثانية."; color: #b7bac3; wrap: word-wrap; }
-            Button { text: "4   حفظ إعدادات التداول"; enabled: !root.studio-busy && root.state == "STOPPED"; clicked => { root.studio-action("save"); } }
-            Text { text: "أوقف النظام لتبديل الوضع أو التكاليف. الصفقة المفتوحة تحتفظ بهدفها ووقفها ومدتها التي جُمّدت عند الدخول."; color: #c8cbd1; wrap: word-wrap; }
-            HorizontalBox {
-                Text { text: "لوت حساب التكلفة"; color: #e0e1e4; vertical-alignment: center; }
-                LineEdit { text <=> root.preview-lots; }
-                Button { text: "احسب التكلفة الحالية"; enabled: !root.studio-busy; clicked => { root.studio-action("cost"); } }
-            }
-            Text { text: root.cost-detail; color: #e0e2e5; wrap: word-wrap; }
-            Text { text: root.studio-message; color: #c8cbd1; wrap: word-wrap; }
-        } }
+        }
         if root.page == 15: ScrollView { VerticalBox { spacing: 10px;
             Text { text: "مختبر توليد الاستراتيجيات"; font-size: 20px; color: #f2f2f4; }
             Text { text: "يبني 40 تركيباً من الاختراق والارتداد والاتجاه واختبارات وايكوف، ثم يرتبها بالتدريب والتحقق الزمني. الاختبار النهائي محفوظ ولا يختار الاستراتيجية. لا تفعيل تلقائي للنتائج."; color: #b7bac3; wrap: word-wrap; }
