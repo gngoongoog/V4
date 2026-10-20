@@ -694,6 +694,41 @@ mod execution_persistence_tests {
     }
 
     #[test]
+    fn selected_mode_only_can_dispatch_and_authorize_its_coordinator() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        service.bind(&db,&t,50).unwrap();
+        service.set_mode(TradingMode::Sniper);
+        for brain in &mut service.brains {
+            // Simulate previously saved 0.6 SOLO flags.
+            brain.enabled=true;
+        }
+        let mut status=Status::default();
+        status.telemetry=Some(t.clone());
+        status.gateway_fresh=true;
+        status.requested_run=true;
+        let key=ctx(&t);
+        for (id,brain,mode) in [
+            ("old-solo","trend","sniper"),
+            ("old-mode","system","expert"),
+            ("valid-sniper","system","sniper"),
+        ] {
+            let payload=json!({"id":id,"brain":brain,"trading_mode":mode,"kind":"open","revision":service.settings.revision,
+                "context":key,"expires_ms":10000,"created_ms":100});
+            db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload) VALUES (?1,?2,?3,'open',100,'dispatched',?4)",
+                params![id,key,brain,payload.to_string()]).unwrap();
+            let result=service.route("POST","/v1/execution/authorize",
+                json!({"id":id}).to_string().as_bytes(),&db,&status,200).unwrap();
+            assert_eq!(result["authorized"],id=="valid-sniper", "{id}");
+        }
+        service.set_mode(TradingMode::Expert);
+        let result=service.route("POST","/v1/execution/authorize",
+            json!({"id":"valid-sniper"}).to_string().as_bytes(),&db,&status,201).unwrap();
+        assert_eq!(result["authorized"],false);
+    }
+
+    #[test]
     fn failed_bind_does_not_activate_an_uncommitted_account() {
         let db=Connection::open_in_memory().unwrap();
         let mut service=Service::new(&db).unwrap();
