@@ -14,15 +14,15 @@ class ControlCenterUiTests(unittest.TestCase):
 
     def test_navigation_is_grouped_into_five_primary_sections(self):
         self.assertIn('in-out property <int> nav-section: 0;', self.ui)
-        for label in ("الرئيسية", "التداول", "البحث", "المختبر", "النظام"):
-            self.assertIn(f'? "● {label}" : "{label}"', self.ui)
+        for label in ("الرئيسية", "التداول", "التحليل", "المختبر", "الإعدادات"):
+            self.assertIn(f'? "●  {label}" : "{label}"', self.ui)
         self.assertIn('if root.nav-section == 1:', self.ui)
         self.assertIn('if root.nav-section == 2:', self.ui)
         self.assertIn('if root.nav-section == 3:', self.ui)
         self.assertIn('if root.nav-section == 4:', self.ui)
 
     def test_system_section_exposes_backup_page(self):
-        self.assertIn('Button { text: "النسخ"', self.ui)
+        self.assertIn('"النسخ الاحتياطي"', self.ui)
         self.assertIn('root.page = 13; root.backup-action("refresh")', self.ui)
 
     def test_sniper_hold_is_visible_and_saved(self):
