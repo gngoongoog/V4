@@ -1,0 +1,59 @@
+{
+  "version": "0.6.0",
+  "status": "CI-verified 0.6.0 development candidate; native broker and Telegram acceptance remain pending",
+  "tested_commit": "fdc63d4d05df89e27607641bd197b9e6ead936e9",
+  "tested_tree": "8593783f43a4892cdc724ed5d112607ef7cee006",
+  "research_ci": {
+    "run_id": 38803539711,
+    "conclusion": "success",
+    "url": "https://github.com/gngoongoog/V4/actions/runs/38803539711"
+  },
+  "windows_ci": {
+    "run_id": 38803539405,
+    "conclusion": "success",
+    "url": "https://github.com/gngoongoog/V4/actions/runs/38803539405"
+  },
+  "windows_artifacts": [
+    {
+      "name": "BrainTrade-Windows-x64-v0.6.0-Preview",
+      "size_bytes": 33948849,
+      "sha256": "3f7a945a4f9c1ab1ce3e008880722c3dc078a54018a8f622133c604420665779"
+    },
+    {
+      "name": "windows-native-validation",
+      "size_bytes": 1785325,
+      "sha256": "64725943777396d8c974c825a0319554b7f6536213709fd4d76edd49c6a6c66d"
+    }
+  ],
+  "verified_checks": [
+    "Rust domain/runtime tests",
+    "Core build",
+    "Python tests and project contracts",
+    "real-Core smoke harness",
+    "browser/offline report checks",
+    "native desktop compile and headless render",
+    "Windows portable packaging",
+    "simulated MT5 execution integration with no broker connection",
+    "account-switch unknown-intent isolation",
+    "split-fill reconciliation without top-up or resend",
+    "gateway send-journal preservation across backup restore"
+  ],
+  "execution_boundary": {
+    "broker_execution_code_present": true,
+    "startup_restart_state": "STOPPED",
+    "simulated_acceptance_only": true,
+    "native_mt5_acceptance": "not performed",
+    "telegram_live_delivery": "not performed",
+    "imported_ml_automatic_promotion": false
+  },
+  "latest_execution_fixes": [
+    "reconciled fills remain behind the position-observation barrier",
+    "exact submitted broker volume is persisted",
+    "Sniper uses the configured broker-cost threshold",
+    "unknown broker intents remain scoped to the bound account across account switches",
+    "split broker fills aggregate without automatic top-up or duplicate submission",
+    "schema-12 backups restore application state while the durable gateway send journal remains outside restore rollback"
+  ],
+  "release_record_note": "Release-record/documentation commits may sit on top of the tested source checkpoint without changing runtime behavior; tested_commit and artifact hashes refer to the exact executable/source checkpoint above.",
+  "prior_release_evidence": "validation-v0.5.0.json"
+}

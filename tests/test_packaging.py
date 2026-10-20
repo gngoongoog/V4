@@ -44,6 +44,27 @@ class PackagingTests(unittest.TestCase):
             packaging.extract_checked(root/"good.zip", root/"output")
             self.assertEqual((root/"output/Lib/site-packages/package/__init__.py").read_text(), "value = 42\n")
 
+    def test_operator_assets_are_exposed_at_package_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "source"
+            output = Path(tmp) / "package"
+            (root / "scripts").mkdir(parents=True)
+            (root / "docs").mkdir(parents=True)
+            (root / "scripts" / packaging.OPERATOR_POWERSHELL).write_text("Write-Host 'fixture'\n", encoding="utf-8")
+            (root / "scripts" / packaging.OPERATOR_GUI).write_text("Write-Host 'gui fixture'\n", encoding="utf-8")
+            (root / "scripts" / packaging.OPERATOR_CMD).write_text("@echo off\r\n", encoding="utf-8")
+            (root / "docs" / packaging.OPERATOR_DOC).write_text("# fixture\n", encoding="utf-8")
+            original = packaging.ROOT
+            packaging.ROOT = root
+            try:
+                packaging.copy_operator_assets(output)
+            finally:
+                packaging.ROOT = original
+            self.assertTrue((output / packaging.OPERATOR_CMD).is_file())
+            self.assertTrue((output / "Tools" / packaging.OPERATOR_POWERSHELL).is_file())
+            self.assertTrue((output / "Tools" / packaging.OPERATOR_GUI).is_file())
+            self.assertTrue((output / packaging.OPERATOR_DOC).is_file())
+
     def test_source_copy_defensively_excludes_secret_runtime_and_generated_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "source"

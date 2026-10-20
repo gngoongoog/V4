@@ -2,9 +2,11 @@
 Linux CI fixture only: no MT5 connection and no broker execution.
 """
 import json
+import math
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -14,6 +16,7 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = ROOT / "target" / "debug" / "braintrade-core"
 BASE = "http://127.0.0.1:18741"
+T0 = 1_800_000_000
 
 
 def main():
@@ -57,6 +60,53 @@ def main():
             out, err = process.communicate(timeout=2)
             raise AssertionError(f"Core startup failed: {out!r} {err!r}")
 
+        def saved_history(symbol, returns):
+            closes = [100.0]
+            for value in returns:
+                closes.append(closes[-1] * math.exp(value))
+            bars = []
+            for index, close in enumerate(closes):
+                bars.append({
+                    "time": T0 + index * 60,
+                    "open": close,
+                    "high": close,
+                    "low": close,
+                    "close": close,
+                    "tick_volume": 100,
+                    "spread_points": 10,
+                })
+            last = T0 + len(returns) * 60
+            return {
+                "symbol": symbol,
+                "server": "Demo",
+                "login": 7,
+                "currency": "USD",
+                "captured_ms": (last + 60) * 1000,
+                "contract": {
+                    "point": 0.01,
+                    "tick_size": 0.01,
+                    "tick_loss": 1.0,
+                    "tick_profit": 1.0,
+                    "volume_min": 0.01,
+                    "volume_step": 0.01,
+                    "volume_max": 100.0,
+                },
+                "bars": bars,
+            }
+
+        def seed_backtest(run_id, symbol, returns):
+            report = {
+                "symbol": symbol,
+                "options": {"from": T0, "to": T0 + (len(returns) + 1) * 60},
+            }
+            history = saved_history(symbol, returns)
+            with sqlite3.connect(root / "events.sqlite", timeout=5) as db:
+                db.execute(
+                    "INSERT INTO backtest_runs(id,created_ms,report,history) VALUES(?,?,?,?)",
+                    (run_id, 1, json.dumps(report, separators=(",", ":")), json.dumps(history, separators=(",", ":"))),
+                )
+                db.commit()
+
         try:
             status = start()
             assert not status["execution_enabled"]
@@ -64,6 +114,23 @@ def main():
             risk = dict(config["risk"])
             risk["risk_percent"] = 0.31
             api("/v1/risk", risk)
+            portfolio_saved = dict(enabled=True, max_positions=2, max_lots=0.25, max_risk_percent=1.5)
+            api("/v1/execution/portfolio", portfolio_saved)
+            current_portfolio = api("/v1/execution")["portfolio"]
+            assert current_portfolio["enabled"] is True
+            assert current_portfolio["limits"]["max_positions"] == 2
+            assert abs(current_portfolio["limits"]["max_lots"] - 0.25) < 1e-12
+
+            seed_backtest("corr-before-a", "AAA", [0.01, 0.02, -0.01, 0.03])
+            seed_backtest("corr-before-b", "BBB", [0.02, 0.04, -0.02, 0.06])
+            before = api("/v1/research/correlation/analyze", {
+                "source_ids": ["corr-before-a", "corr-before-b"], "min_overlap": 4,
+            })
+            before_id = before["summary"]["id"]
+            assert api("/v1/research/correlation/replay", {"id": before_id})["matches_stored_report"] is True
+            before_export = api("/v1/research/correlation/export", {"id": before_id})
+            assert before_export["deterministic_replay_verified"] is True
+            assert [item["name"] for item in before_export["files"]] == ["report.json", "provenance.json", "pairs.csv"]
 
             created = api("/v1/backup", {})
             name = created["name"]
@@ -76,6 +143,14 @@ def main():
             assert manifest["coordinator_samples_included"] is True
             assert manifest["gateway_send_journal_restored"] is False
             assert manifest["hash_algorithm"] == "fnv1a64-v1"
+
+            seed_backtest("corr-after-a", "CCC", [0.01, -0.02, 0.03, -0.01])
+            seed_backtest("corr-after-b", "DDD", [-0.01, 0.02, -0.03, 0.01])
+            after = api("/v1/research/correlation/analyze", {
+                "source_ids": ["corr-after-a", "corr-after-b"], "min_overlap": 4,
+            })
+            after_id = after["summary"]["id"]
+            assert before_id != after_id
 
             listing = api("/v1/backups")
             match = next(item for item in listing["backups"] if item["name"] == name)
@@ -99,6 +174,8 @@ def main():
             risk["risk_percent"] = 0.42
             api("/v1/risk", risk)
             assert api("/v1/config")["config"]["risk"]["risk_percent"] == 0.42
+            api("/v1/execution/portfolio", dict(enabled=False, max_positions=7, max_lots=7.0, max_risk_percent=7.0))
+            assert api("/v1/execution")["portfolio"]["enabled"] is False
 
             staged = api("/v1/backup/restore/stage", {"name": name})
             assert staged["staged"] is True
@@ -113,7 +190,20 @@ def main():
             assert not status["execution_enabled"]
             restored = api("/v1/config")["config"]
             assert restored["risk"]["risk_percent"] == 0.31
+            restored_portfolio = api("/v1/execution")["portfolio"]
+            assert restored_portfolio["enabled"] is True
+            assert restored_portfolio["limits"]["max_positions"] == 2
+            assert abs(restored_portfolio["limits"]["max_lots"] - 0.25) < 1e-12
+            assert abs(restored_portfolio["limits"]["max_risk_percent"] - 1.5) < 1e-12
             assert api("/v1/backup/restore/status")["pending"] is False
+
+            restored_corr = api("/v1/research/correlation/report", {"id": before_id})
+            assert restored_corr["id"] == before_id and restored_corr["broker_effect"] is False
+            assert api("/v1/research/correlation/replay", {"id": before_id})["matches_stored_report"] is True
+            restored_export = api("/v1/research/correlation/export", {"id": before_id})
+            assert restored_export == before_export
+            expect_400("/v1/research/correlation/report", {"id": after_id})
+
             last = json.loads((root / "restore.last.json").read_text())
             assert last["status"] == "applied" and last["source"] == name
             assert last["rollback"] == rollback and last["rollback_used"] is False
@@ -128,7 +218,7 @@ def main():
             api("/v1/shutdown", {})
             process.wait(timeout=5)
             assert process.returncode == 0
-            print("PASS: backup schema/hash validation, traversal/corruption rejection, staged restart restore, pre-restore rollback snapshot, secret exclusion, restored config and audit result")
+            print("PASS: backup schema/hash validation, traversal/corruption rejection, staged restart restore, correlation replay/export preservation, pre-restore rollback snapshot, secret exclusion, restored config + portfolio exposure limits and audit result")
         finally:
             if process is not None and process.poll() is None:
                 process.terminate()

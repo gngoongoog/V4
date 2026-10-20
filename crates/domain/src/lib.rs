@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 pub mod backtest;
 pub mod trading;
+pub mod sniper;
+pub mod commission;
 pub mod execution;
+pub mod student;
 pub mod studio;
 pub mod wyckoff;
 #[path = "backtest/evaluation.rs"]
@@ -10,6 +13,8 @@ pub mod ces;
 pub mod kte;
 pub mod research;
 pub mod opportunities;
+pub mod correlation;
+pub mod oos;
 pub use research::{Analysis, Candle, MarketData, PaperSummary, RiskConfig};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -38,6 +43,8 @@ pub struct Config {
     pub risk: RiskConfig,
     #[serde(default)]
     pub trading: trading::TradingConfig,
+    #[serde(default)]
+    pub commission_profiles: Vec<commission::Profile>,
 }
 
 impl Default for Config {
@@ -51,6 +58,7 @@ impl Default for Config {
             telegram_enabled: false,
             risk: RiskConfig::default(),
             trading: trading::TradingConfig::default(),
+            commission_profiles: Vec::new(),
         }
     }
 }
@@ -58,6 +66,18 @@ impl Config {
     pub fn validate(&self) -> Result<(), String> {
         self.risk.validate()?;
         self.trading.validate()?;
+        if self.commission_profiles.len() > 256 {
+            return Err("Too many commission profiles".into());
+        }
+        for (i, profile) in self.commission_profiles.iter().enumerate() {
+            profile.validate()?;
+            if self.commission_profiles[..i]
+                .iter()
+                .any(|other| other.account == profile.account)
+            {
+                return Err("Duplicate commission account profile".into());
+            }
+        }
         if self.schema != 1 {
             return Err("Unsupported config schema".into());
         }
@@ -289,7 +309,7 @@ impl Status {
                 .is_none_or(|m| now.saturating_sub(m.captured_ms) > 15000)
             {
                 self.analysis.clear_plan();
-            self.analysis.current = false;
+                self.analysis.current = false;
                 self.analysis.action = "WAIT".into();
                 self.analysis.reason =
                     "Candle snapshot unavailable or older than 15 seconds".into();

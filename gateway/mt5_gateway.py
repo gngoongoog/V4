@@ -1,16 +1,39 @@
-"""MT5 snapshots and explicitly selected independent-brain broker execution."""
+"""MT5 snapshots and explicitly selected independent-brain broker execution.
+
+Sniper mode has two compatible fast paths. The packaged MQL5 bridge wakes this
+process directly from MT5 OnTick and recovers coalesced quote ticks with
+CopyTicks; when that bridge is absent or stale, the proven 5 ms Python quote
+polling path remains as a fallback. Account reconciliation, deal history, DOM,
+candle history and research collection stay on slower bounded schedules.
+
+Latency-sensitive quote changes use a minimal Sniper pulse endpoint. The Core
+runs execution-only work and returns any broker command in the same response,
+removing a second localhost work-fetch from the critical path. Full reconciled
+snapshots continue on their slower schedule. Broker execution remains in
+execution.py; the MQL5 bridge transports quotes only and never owns order
+submission.
+"""
 from __future__ import annotations
 import json
 import math
 import os
 from pathlib import Path
-import sys
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
+from sniper_native import NativeTickBridge
+
 BASE = "http://127.0.0.1:18741"
 BAGHDAD = timezone(timedelta(hours=3))
+SNIPER_LOOP_SECONDS = 0.005
+SNIPER_FULL_SNAPSHOT_SECONDS = 0.250
+SNIPER_BACKGROUND_SECONDS = 0.500
+CONFIG_REFRESH_SECONDS = 0.500
+NORMAL_MIN_LOOP_SECONDS = 0.050
+NATIVE_RECENT_MS = 500
+NATIVE_BATCH_MAX = 512
+
 
 class MarketCache:
     def __init__(self):
@@ -20,6 +43,7 @@ class MarketCache:
             self.key=key;self.next_read=time.monotonic()+5.0
             self.data=collect_market(mt5,key[2],now)
         return self.data
+
 
 class DomCache:
     """Optional MT5 Market Book subscription. It never fabricates depth."""
@@ -49,7 +73,7 @@ class DomCache:
         if not self.active:
             return False,[]
         try:
-            book=mt5.market_book_get(key[2])
+            book=mt5.market_book_get(self.key[2])
             if not book:
                 return False,[]
             buy_types={getattr(mt5,'BOOK_TYPE_BUY',2)}
@@ -66,8 +90,6 @@ class DomCache:
                 if math.isfinite(price) and math.isfinite(volume) and price>0 and volume>0:
                     rows.append(dict(side=side,price=price,volume=volume))
             rows.sort(key=lambda row:(0 if row['side']=='buy' else 1,-row['price'] if row['side']=='buy' else row['price']))
-            # Preserve both sides even when one side has more than 100 rows.
-            # Multiple rows at one price are one level for nearest-depth analysis.
             levels={}
             for row in rows:
                 identity=(row['side'],row['price'])
@@ -79,6 +101,7 @@ class DomCache:
             return bool(bids and asks),depth
         except Exception:
             return False,[]
+
 
 def collect_market(mt5,symbol,now):
     data=dict(captured_ms=int(now.timestamp()*1000),m1=[],m5=[],m15=[],error="")
@@ -102,8 +125,10 @@ def empty_snapshot(error: str) -> dict:
     return dict(connected=False, error=error, login=0, server="", currency="",
                 demo=False, balance=0.0, equity=0.0, positions=[], pending_orders=0,
                 today_net=None, today_deals=None, report_day="", bid=None, ask=None,
-                tick_age_ms=None, symbol="", volume_min=None, volume_step=None,
-                tick_size=None, dom_available=False,dom=[],volume_max=None,tick_value_loss=None,tick_value_profit=None,market=None,point=None)
+                tick_age_ms=None, quote_time_ms=None, source_quote_time_ms=None,
+                native_event_id=None, symbol="", volume_min=None, volume_step=None,
+                tick_size=None, dom_available=False,dom=[],volume_max=None,
+                tick_value_loss=None,tick_value_profit=None,market=None,point=None)
 
 
 def day_range(now: datetime):
@@ -141,7 +166,6 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
     key=(account.login,account.server,symbol)
     market=market_cache.read(mt5,key,now) if market_cache is not None and info is not None else None
     dom_available,dom=dom_cache.read(mt5,key) if dom_cache is not None and info is not None else (False,[])
-    # Re-read account identity after collection to reject account-switch races.
     current = mt5.account_info()
     if current is None or (current.login, current.server) != (account.login, account.server):
         return empty_snapshot("Account changed during snapshot; waiting for reconciliation.")
@@ -151,6 +175,7 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
     if deals is None:
         errors.append("Deal history unavailable; daily PnL is unknown.")
     result = empty_snapshot(" ".join(errors))
+    tms=int(tick.time_msc) if tick else None
     result.update(connected=True, login=account.login, server=account.server,
                   currency=account.currency, demo=account.trade_mode == mt5.ACCOUNT_TRADE_MODE_DEMO,
                   account_trade_mode=int(account.trade_mode),margin_mode=getattr(account,"margin_mode",None),
@@ -163,13 +188,105 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
                              for p in positions], pending_orders=len(orders), today_net=net,
                   today_deals=count, report_day=report_day, symbol=symbol,
                   bid=tick.bid if tick else None, ask=tick.ask if tick else None,
-                  quote_time_ms=int(tick.time_msc) if tick else None,
+                  quote_time_ms=tms,source_quote_time_ms=tms,
                   tick_age_ms=max(0, int(now.timestamp() * 1000) - tick.time_msc) if tick and tick.time_msc<=int(now.timestamp()*1000)+2000 else None,
                   volume_min=info.volume_min if info else None,
                   volume_step=info.volume_step if info else None,
                   tick_size=info.trade_tick_size if info else None,dom_available=dom_available,dom=dom,
                   volume_max=getattr(info,'volume_max',None),tick_value_loss=getattr(info,'trade_tick_value_loss',None),tick_value_profit=getattr(info,'trade_tick_value_profit',None),market=market,point=getattr(info,'point',None))
     return result
+
+
+def sniper_enabled(config: dict) -> bool:
+    trading = config.get('trading') or {}
+    return str(trading.get('mode', '')).strip().lower() == 'sniper'
+
+
+def pulse_payload(snapshot: dict) -> dict:
+    """Minimal quote-only payload; reconciled account state stays cached in Core."""
+    return {key:snapshot.get(key) for key in (
+        'login','server','currency','symbol','bid','ask','quote_time_ms','tick_age_ms'
+    )}
+
+
+def quote_signature(snapshot: dict):
+    return (snapshot.get('source_quote_time_ms',snapshot.get('quote_time_ms')),
+            snapshot.get('bid'),snapshot.get('ask'))
+
+
+def advance_quote_clock(previous: dict | None, current: dict):
+    """Keep Core's quote_time_ms strictly monotonic for each quote-price change.
+
+    MT5 can report multiple quote changes with the same millisecond. Rust/Core's
+    existing Sniper contract keys decisions by quote_time_ms, so we preserve the
+    real broker millisecond separately and advance only the event clock by one
+    when necessary. This avoids a schema change while keeping freshness based on
+    the real source timestamp in tick_age_ms.
+    """
+    source_ms=current.get('source_quote_time_ms',current.get('quote_time_ms'))
+    if source_ms is None:
+        return current, False
+    current['source_quote_time_ms']=int(source_ms)
+    if not previous or not previous.get('connected'):
+        current['quote_time_ms']=int(source_ms)
+        return current, True
+    changed=quote_signature(previous)!=quote_signature(current)
+    previous_clock=int(previous.get('quote_time_ms') or 0)
+    if changed:
+        current['quote_time_ms']=max(int(source_ms),previous_clock+1)
+    else:
+        current['quote_time_ms']=max(int(source_ms),previous_clock)
+    if previous.get('native_event_id') is not None and current.get('native_event_id') is None:
+        current['native_event_id']=previous.get('native_event_id')
+    return current,changed
+
+
+def refresh_fast_tick(snapshot: dict, mt5, symbol: str, now_ms: int | None = None):
+    """Overlay the newest observable Python MT5 quote onto reconciled state."""
+    if not snapshot or not snapshot.get('connected'):
+        return snapshot, False, None
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return snapshot, False, None
+    bid=float(getattr(tick,'bid',0.0)); ask=float(getattr(tick,'ask',0.0)); tms=int(getattr(tick,'time_msc',0) or 0)
+    if not all(math.isfinite(v) and v>0 for v in (bid,ask)) or ask < bid or tms <= 0:
+        return snapshot, False, None
+    now_ms = int(time.time()*1000) if now_ms is None else int(now_ms)
+    if tms > now_ms + 2000:
+        return snapshot, False, None
+    signature=(tms,bid,ask)
+    candidate=dict(snapshot)
+    candidate.update(bid=bid,ask=ask,source_quote_time_ms=tms,tick_age_ms=max(0,now_ms-tms))
+    updated,changed=advance_quote_clock(snapshot,candidate)
+    return updated,changed,signature
+
+
+def apply_native_tick(snapshot: dict, packet: dict, now_ms: int | None = None):
+    """Overlay one authenticated native quote event without touching reconciled state."""
+    if not snapshot or not snapshot.get('connected'):
+        return snapshot, False, None
+    now_ms = int(time.time()*1000) if now_ms is None else int(now_ms)
+    try:
+        login=int(packet['login']);symbol=str(packet['symbol']);tms=int(packet['time_msc'])
+        event_id=int(packet.get('event_id') or 0);bid=float(packet['bid']);ask=float(packet['ask'])
+    except (KeyError,TypeError,ValueError,OverflowError):
+        return snapshot, False, None
+    if login != int(snapshot.get('login') or 0) or symbol != snapshot.get('symbol'):
+        return snapshot, False, None
+    if tms <= 0 or tms > now_ms + 2000 or now_ms - tms > 1000:
+        return snapshot, False, None
+    if not all(math.isfinite(value) and value > 0 for value in (bid,ask)) or ask < bid:
+        return snapshot, False, None
+    previous_event=int(snapshot.get('native_event_id') or 0)
+    if event_id and previous_event and event_id <= previous_event:
+        return snapshot, False, None
+    signature=(tms,bid,ask)
+    candidate=dict(snapshot)
+    candidate.update(bid=bid,ask=ask,source_quote_time_ms=tms,tick_age_ms=max(0,now_ms-tms))
+    if event_id:
+        candidate['native_event_id']=event_id
+    updated,changed=advance_quote_clock(snapshot,candidate)
+    return updated,changed,signature
 
 
 def collect_history_chunk(mt5, job, now=None):
@@ -200,7 +317,7 @@ def collect_history_chunk(mt5, job, now=None):
             spread_points=int(r['spread'])) for r in rates]
         if any(r['time'] < start or r['time']+60 > end or r['time'] % 60 or
                r['spread_points'] < 0 or any(not math.isfinite(r[k]) for k in ('open','high','low','close')) for r in rows):
-            raise ValueError('Invalid, unfinished or out-of-range historical candle')
+            raise ValueError('Invalid, unfinished or out-of-range historical candles')
         if any(a['time'] >= b['time'] for a,b in zip(rows,rows[1:])):
             raise ValueError('Duplicate or unordered historical candles')
         if identity(mt5.account_info()) != expected:
@@ -233,11 +350,11 @@ def main():
     try:
         lock = lock_gateway(directory)
     except OSError:
-        return  # Existing gateway will exit if its parent core becomes unavailable.
+        return
     config_path = directory / "config.json"
-    config = json.loads(config_path.read_text("utf-8")) if config_path.exists() else {}
-    path = config.get("mt5_path", "")
-    symbol = config.get("symbol", "XAUUSD")
+    runtime_config = json.loads(config_path.read_text("utf-8")) if config_path.exists() else {}
+    path = runtime_config.get("mt5_path", "")
+    symbol = runtime_config.get("symbol", "XAUUSD")
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         import MetaTrader5 as mt5
@@ -248,68 +365,173 @@ def main():
     core_failures = 0
     market_cache=MarketCache()
     dom_cache=DomCache()
-    def api(path, payload=None):
+    native=NativeTickBridge()
+    latest_snapshot=None
+    next_full_snapshot=0.0
+    next_background=0.0
+    next_config_refresh=0.0
+    normal_poll_seconds=1.0
+
+    def api(path, payload=None, method=None):
         request = urllib.request.Request(BASE+path,
             data=json.dumps(payload, allow_nan=False).encode('utf-8') if payload is not None else None,
-            headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+            headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+            method=method)
         with opener.open(request,timeout=4) as response:
             return json.load(response)
+
+    def publish(snapshot):
+        body = json.dumps(snapshot, allow_nan=False).encode("utf-8")
+        request = urllib.request.Request(BASE + "/v1/gateway/snapshot", data=body,
+                  headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+        with opener.open(request, timeout=4) as response:
+            response.read()
+
+    def background_work():
+        try:
+            job = api('/v1/gateway/history/request').get('job')
+            if job is not None:
+                api('/v1/gateway/history/chunk', collect_history_chunk(mt5, job))
+                return
+            from studio_feed import collect_frame
+            request=api('/v1/gateway/research/request')
+            if request.get('job') is not None:
+                api('/v1/gateway/research/frame',collect_frame(mt5,request['job']))
+        except (OSError, ValueError):
+            pass
+
     from execution import BrokerExecutor
     executor=BrokerExecutor(directory / 'broker-journal.sqlite')
     try:
         while True:
+            loop_started=time.perf_counter()
+            mono=time.monotonic()
+            command_polled=False
+            if mono >= next_config_refresh:
+                next_config_refresh=mono+CONFIG_REFRESH_SECONDS
+                try:
+                    if config_path.exists():
+                        candidate=json.loads(config_path.read_text("utf-8"))
+                        if isinstance(candidate,dict):
+                            runtime_config=candidate
+                except (OSError,ValueError,TypeError):
+                    pass
+            sniper=sniper_enabled(runtime_config)
+
             if mt5 is None:
-                snapshot = empty_snapshot("MT5 bridge dependency unavailable. Use the complete Windows package.")
+                latest_snapshot = empty_snapshot("MT5 bridge dependency unavailable. Use the complete Windows package.")
+                if mono >= next_full_snapshot:
+                    next_full_snapshot=mono+1.0
+                    try:
+                        publish(latest_snapshot);core_failures=0
+                    except (OSError,ValueError):
+                        core_failures+=1
             else:
                 try:
-                    if not initialized and time.monotonic() >= retry_at:
-                        # Official initialize() starts the terminal if necessary.
-                        # Saved terminal login is used; no password is held here.
+                    if not initialized and mono >= retry_at:
                         initialized = mt5.initialize(path, timeout=5000) if path else mt5.initialize(timeout=5000)
-                        retry_at = time.monotonic() + 5
-                    snapshot = collect(mt5, symbol,market_cache=market_cache,dom_cache=dom_cache) if initialized else empty_snapshot(
-                        "MT5 connection failed. Set terminal64.exe path and sign in inside MT5.")
-                    if initialized and not snapshot["connected"]:
-                        dom_cache.release(mt5)
-                        mt5.shutdown()
-                        initialized = False
+                        retry_at = mono + 5
+                        next_full_snapshot=0.0
+                        if initialized:
+                            native.bind_terminal(mt5.terminal_info())
+                    if initialized:
+                        # Drain authenticated quote events before slower account/candle work.
+                        # Each distinct quote is evaluated through the execution-only pulse
+                        # and any command is returned in that same localhost response.
+                        if sniper and latest_snapshot and latest_snapshot.get('connected'):
+                            packets=native.drain(int(latest_snapshot.get('login') or 0),symbol,NATIVE_BATCH_MAX)
+                            for packet in packets:
+                                native_snapshot,changed,_=apply_native_tick(latest_snapshot,packet)
+                                if not changed:
+                                    continue
+                                latest_snapshot=native_snapshot
+                                try:
+                                    work=api('/v1/execution/pulse',pulse_payload(latest_snapshot),method='PUT')
+                                    normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api,work=work)))
+                                    command_polled=True
+                                    core_failures=0
+                                except (OSError,ValueError,RuntimeError):
+                                    # Compatibility/failure fallback: publish the full cached
+                                    # state and let the normal work poll preserve behavior.
+                                    try:
+                                        publish(latest_snapshot);core_failures=0
+                                    except (OSError,ValueError):
+                                        core_failures+=1
+
+                        full_interval=SNIPER_FULL_SNAPSHOT_SECONDS if sniper else max(0.5,min(1.0,normal_poll_seconds))
+                        full_due=latest_snapshot is None or mono >= next_full_snapshot
+                        if full_due:
+                            fresh_snapshot=collect(mt5,symbol,market_cache=market_cache,dom_cache=dom_cache)
+                            fresh_snapshot,_=advance_quote_clock(latest_snapshot,fresh_snapshot)
+                            latest_snapshot=fresh_snapshot
+                            next_full_snapshot=mono+full_interval
+                            publish(latest_snapshot)
+                            core_failures=0
+                        elif sniper and latest_snapshot.get('connected') and not native.recent(maximum_age_ms=NATIVE_RECENT_MS):
+                            # Native EA is optional. If it is absent/stale the exact
+                            # v0.7 5 ms polling source remains active, but quote handling
+                            # now uses the same execution-only pulse as the native source.
+                            fast_snapshot,changed,_=refresh_fast_tick(latest_snapshot,mt5,symbol)
+                            if changed:
+                                latest_snapshot=fast_snapshot
+                                try:
+                                    work=api('/v1/execution/pulse',pulse_payload(latest_snapshot),method='PUT')
+                                    normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api,work=work)))
+                                    command_polled=True
+                                    core_failures=0
+                                except (OSError,ValueError,RuntimeError):
+                                    try:
+                                        publish(latest_snapshot);core_failures=0
+                                    except (OSError,ValueError):
+                                        core_failures+=1
+                        if initialized and latest_snapshot and not latest_snapshot.get('connected'):
+                            dom_cache.release(mt5);mt5.shutdown();initialized=False
+                    elif mono >= next_full_snapshot:
+                        latest_snapshot=empty_snapshot("MT5 connection failed. Set terminal64.exe path and sign in inside MT5.")
+                        next_full_snapshot=mono+1.0
+                        publish(latest_snapshot)
                 except Exception:
-                    snapshot = empty_snapshot("MT5 read failed; retrying connection.")
+                    latest_snapshot=empty_snapshot("MT5 read failed; retrying connection.")
                     dom_cache.release(mt5)
-                    mt5.shutdown()
-                    initialized = False
-                    retry_at = time.monotonic() + 5
+                    try:
+                        mt5.shutdown()
+                    except Exception:
+                        pass
+                    initialized=False
+                    retry_at=time.monotonic()+5
+                    next_full_snapshot=0.0
+
             try:
-                body = json.dumps(snapshot, allow_nan=False).encode("utf-8")
-                request = urllib.request.Request(BASE + "/v1/gateway/snapshot", data=body,
-                          headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
-                with opener.open(request, timeout=4) as response:
-                    response.read()
-                core_failures = 0
-                poll_seconds = 1.0
-                if initialized and snapshot['connected']:
-                    try:
-                        poll_seconds=min(poll_seconds,executor.cycle(mt5,api))
-                    except (OSError, ValueError, RuntimeError):
-                        pass  # Durable journal reconciles any interrupted submission.
-                    try:
-                        job = api('/v1/gateway/history/request').get('job')
-                        if job is not None:
-                            api('/v1/gateway/history/chunk', collect_history_chunk(mt5, job))
-                        else:
-                            from studio_feed import collect_frame
-                            request=api('/v1/gateway/research/request')
-                            poll_seconds=min(poll_seconds,max(0.25,min(1.0,request.get('poll_ms',1000)/1000.0)))
-                            if request.get('job') is not None:
-                                api('/v1/gateway/research/frame',collect_frame(mt5,request['job']))
-                    except (OSError, ValueError):
-                        pass  # Live snapshot succeeded; an obsolete history job may have been cancelled.
-            except (OSError, ValueError):
-                core_failures += 1
+                if initialized and latest_snapshot and latest_snapshot.get('connected'):
+                    if not command_polled:
+                        try:
+                            normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api)))
+                        except (OSError,ValueError,RuntimeError):
+                            pass
+                    mono=time.monotonic()
+                    background_interval=SNIPER_BACKGROUND_SECONDS if sniper else max(0.25,normal_poll_seconds)
+                    if mono >= next_background:
+                        next_background=mono+background_interval
+                        background_work()
                 if core_failures >= 3:
                     return
-            time.sleep(locals().get("poll_seconds",1.0))
+            except (OSError,ValueError):
+                core_failures+=1
+                if core_failures >= 3:
+                    return
+
+            target=SNIPER_LOOP_SECONDS if sniper and initialized else normal_poll_seconds
+            elapsed=time.perf_counter()-loop_started
+            if target > elapsed:
+                remaining=target-elapsed
+                if sniper and initialized and native.available:
+                    # Named-pipe OnTick wakes this wait immediately; 5 ms is only
+                    # the maximum fallback polling interval, not a mandatory sleep.
+                    native.wait(remaining)
+                else:
+                    time.sleep(remaining)
     finally:
+        native.close()
         executor.close()
         if mt5 is not None:
             dom_cache.release(mt5)

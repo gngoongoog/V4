@@ -50,6 +50,11 @@ class BackupJournalBoundaryTests(unittest.TestCase):
             process = None
             key = ""
 
+            def close_process_pipe():
+                nonlocal process
+                if process is not None and process.stderr is not None:
+                    process.stderr.close()
+
             def api(path, body=None):
                 request = urllib.request.Request(
                     BASE + path,
@@ -74,6 +79,7 @@ class BackupJournalBoundaryTests(unittest.TestCase):
                             break
                         time.sleep(0.1)
                 stderr = process.stderr.read().decode(errors="replace") if process.stderr else ""
+                close_process_pipe()
                 raise AssertionError("Core failed to start: " + stderr)
 
             try:
@@ -100,6 +106,7 @@ class BackupJournalBoundaryTests(unittest.TestCase):
                 self.assertTrue(staged["staged"])
                 process.wait(timeout=6)
                 self.assertEqual(process.returncode, 0)
+                close_process_pipe()
 
                 boot()
                 restored = api("/v1/config")["config"]
@@ -120,10 +127,12 @@ class BackupJournalBoundaryTests(unittest.TestCase):
                 api("/v1/shutdown", {})
                 process.wait(timeout=6)
                 self.assertEqual(process.returncode, 0)
+                close_process_pipe()
             finally:
                 if process is not None and process.poll() is None:
                     process.terminate()
                     process.wait(timeout=5)
+                close_process_pipe()
 
 
 if __name__ == "__main__":

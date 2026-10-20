@@ -1,0 +1,94 @@
+{
+  "version": "0.7.0",
+  "status": "verified",
+  "source_state": "development preview",
+  "tested_commit": "892807ec317c856b1215efb569e726554266709b",
+  "tested_tree": "a85fa0c424e23cf9e82790c649d25461e1547387",
+  "research_ci": {
+    "run_id": 39067458928,
+    "conclusion": "success",
+    "url": "https://github.com/gngoongoog/V4/actions/runs/39067458928",
+    "artifact": {
+      "id": 12114515035,
+      "name": "synthetic-research-validation",
+      "size_bytes": 4309079,
+      "sha256": "40d2a26180ad9d054d63a9069a7405b9e33b0ec6b89c813dad8d09ad6485263a"
+    }
+  },
+  "windows_ci": {
+    "run_id": 39067458927,
+    "conclusion": "success",
+    "url": "https://github.com/gngoongoog/V4/actions/runs/39067458927"
+  },
+  "windows_artifacts": [
+    {
+      "id": 12114566161,
+      "name": "BrainTrade-Windows-x64-Preview",
+      "size_bytes": 34569115,
+      "sha256": "79cbde840d3ff0d809da922ea55d9b3551a6007ef2301b12a76e045d31db8f70"
+    },
+    {
+      "id": 12114167824,
+      "name": "windows-native-validation",
+      "size_bytes": 1704761,
+      "sha256": "1a7a691d35acb7fa52ea941fa5db35a6064c8d013187180f1a84b47ed3dd87c1"
+    }
+  ],
+  "release_evidence": "validation.json",
+  "release_version": "0.6.0",
+  "execution_boundary": {
+    "startup_restart_state": "STOPPED",
+    "simulated_acceptance_only": true,
+    "native_mt5_acceptance": "not performed",
+    "telegram_live_delivery": "not performed",
+    "imported_ml_automatic_promotion": false
+  },
+  "note": "Exact tested 0.7 development checkpoint through PR #55. PR #55 fixed bounded native Windows named-pipe shutdown/rebind, dead-worker detection, stopped-only risk/trading mutations, invalid /v1/config request side-effect ordering, explicit START, final post-journal Core authorization plus MT5 account recheck before order_send, bounds-safe timeframe selection and accurate audit metadata. The Windows real named-pipe regression passed. Timings post_journal_authorize_ms and post_journal_account_ms are separate and included in queue_to_send_ms without double count. Core/Broker journal/reconciliation correctness preserved. Windows and Research CI passed; real target-machine MT5 Demo Native/Poll latency, fills, fees and private Telegram delivery are not accepted yet. Imported ML remains research-only and 0.6 release records remain unchanged.",
+  "pull_request_head": "892807ec317c856b1215efb569e726554266709b",
+  "current_development_merge": "2e05cf3b907073c5faebe25fd16d4a4a523b224d",
+  "source_tree_matches_pr_head": true,
+  "source_tree_matches_current_development": true,
+  "tests": {
+    "rust_domain_passed": 87,
+    "rust_runtime_passed": 72,
+    "rust_runtime_ignored": 1,
+    "ignored_reason": "explicit public-network official news check",
+    "rust_desktop_passed": 3,
+    "python_passed": 124,
+    "python_skipped": 1,
+    "python_total": 125,
+    "python_skip_reason": "Windows-only/Linux-only fixture boundary"
+  },
+  "verified_checks": [
+    "Core lifecycle, authentication, staleness, research replay and persistence",
+    "schema-12 backup/restore, Portfolio Exposure v1 settings and durable broker-journal boundary",
+    "four trading modes, account-scoped proportional commissions, Round-trip/Per-side basis and configurable frozen Sniper hold",
+    "simulated MT5 execution integration on Linux and packaged Windows",
+    "sixteen append-only execution identities including Liquidity Sweep and Trend Pullback; SOLO exclusion and RETURNING settlement semantics",
+    "Trend Pullback completed-bar causality, EMA20/EMA50 structure, pullback confirmation, anti-chasing and structural-stop contracts",
+    "unknown-intent account isolation, fill barrier, split-fill reconciliation and no blind resend",
+    "Sniper fast broker dispatch with Core pulse and queue/gateway/authorization/journal/send timing instrumentation",
+    "execution-only PUT pulse reuses reconciled state and returns prefetched work without rerunning research/learning per quote",
+    "native Sniper authenticated named-pipe transport, bounded FIFO and automatic 5 ms polling fallback",
+    "OnTick wake plus CopyTicks recovery of terminal-cached executable quote changes and same-millisecond event separation",
+    "simplified native Control Center navigation grouped into five primary sections",
+    "aligned multi-symbol correlation research with explicit unavailable data, deterministic replay/export and observational-only boundary",
+    "chronological holdout/rolling OOS infrastructure and deterministic feature-group correlation/ablation contracts",
+    "read-only Demo acceptance collector rejects Live/mismatched contexts, separates native/poll samples and calculates P50/P95/P99",
+    "one-click Demo Acceptance Center runs only the read-only CLI, preserves command-line CLI compatibility and exposes controlled Native/Poll/Auto capture",
+    "Demo Acceptance Center reports Sniper sample counts, queue-to-send P95/P99, MT5 send P95, Native/Poll counts/P95, hotspot and warnings",
+    "privacy-safe acceptance share bundle is allowlist-based and excludes raw login, ipc.key, broker journals/databases, Telegram credentials and GUI logs",
+    "Demo acceptance PowerShell source and packaged copies pass Windows parser validation",
+    "offline report interactions and native selector compilation/rendering",
+    "Windows portable startup, embedded runtime, DPAPI IPC, PE dependencies, native bridge packaging and settings persistence",
+    "causal official-news historical replay uses append-only first-observed availability, no M1 forward fill and no execution route",
+    "real MT5 Demo coordinator broker outcomes feed adaptive evidence from exact booked profit, commission, swap and fee for participating members",
+    "Intelligence V3 member weighting with reward/confidence, regime/session context and execution-history quality evidence",
+    "Demo execution contract is not Shadow-locked; optional portfolio/per-brain entry limits default off while correctness boundaries remain",
+    "Windows native blocking named-pipe shutdown/rebind regression test runs and passes on real Windows CI",
+    "post-journal Core authorization and final MT5 account check cancel STOP/account switch before order_send; no duplicate resend",
+    "stopped-only Risk/Trading mutation, side-effect-free invalid general config, explicit-only START and safe timeframe selector",
+    "post_journal_authorize_ms and post_journal_account_ms included in acceptance report with legacy sample compatibility and no double counting",
+    "PR #55 completeness documented in docs/QUALITY_AUDIT.md"
+  ]
+}

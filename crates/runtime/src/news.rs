@@ -1,4 +1,5 @@
 //! Official RSS headlines plus bounded macro/news context. No directional execution signal.
+mod replay;
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use quick_xml::{events::Event, Reader};
@@ -293,6 +294,7 @@ fn stamp(ms: u64) -> String {
 impl Service {
     pub fn new(db: &Connection) -> Result<Self> {
         db.execute_batch("CREATE TABLE IF NOT EXISTS news_cache(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);")?;
+        replay::init(db)?;
         use rusqlite::OptionalExtension;
         let row: Option<String> = db
             .query_row("SELECT payload FROM news_cache WHERE id=1", [], |r| {
@@ -327,6 +329,11 @@ impl Service {
     }
     fn persist(&mut self, db: &Connection) -> Result<()> {
         db.execute("INSERT INTO news_cache(id,payload) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",params![serde_json::to_string(&self.saved)?])?;
+        for source in &self.saved.sources {
+            if source.last_success_ms > 0 && !source.items.is_empty() {
+                replay::observe(db, &source.id, source.last_success_ms, &source.items)?;
+            }
+        }
         self.storage_error.clear();
         Ok(())
     }
@@ -524,6 +531,9 @@ impl Service {
         db: &Connection,
     ) -> Result<Value> {
         let now = crate::now_ms();
+        if path == "/v1/news/replay" || path.starts_with("/v1/news/replay/") {
+            return replay::route(method, path, body, db, now);
+        }
         match (method, path) {
             ("GET", "/v1/news") => Ok(self.snapshot(now)),
             ("POST", "/v1/news/refresh") => {

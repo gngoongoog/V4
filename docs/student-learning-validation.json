@@ -1,0 +1,52 @@
+{
+  "version": "0.7.0",
+  "iteration": "student-learning-v1",
+  "tested_head": "126c7f357f4ed2dca0769cb8fd8ac96a843d3a22",
+  "tested_tree": "ab415df5284b60ea7e5eb0ffb5d7435d349b1e4c",
+  "pr": 60,
+  "repository": "gngoongoog/V4",
+  "research_run": 39152599211,
+  "windows_run": 39152599258,
+  "linux_job": 117749357982,
+  "research_job": 117749388244,
+  "windows_job": 117749358173,
+  "linux": {
+    "domain_passed": 95,
+    "runtime_passed": 77,
+    "runtime_ignored": 1,
+    "python_passed": 128,
+    "python_skipped": 1,
+    "execution_integration": "PASS",
+    "flexible_demo_student_integration": "PASS"
+  },
+  "native_mt5": "Not performed; requires user's Windows Demo terminal",
+  "profitability": "Not established by build or simulated acceptance",
+  "research": "success",
+  "merged_commit": "6467d2022e600c944b6b05a02de541e66dea78e5",
+  "packaged_commit": "fef0d29e8d2517778436f0c627b3e9a7fcda4263",
+  "verified_on": "2026-10-18",
+  "windows": "success",
+  "windows_tests": {
+    "domain_passed": 95,
+    "runtime_passed": 77,
+    "desktop_passed": 3,
+    "runtime_ignored": 1,
+    "python_passed": 128,
+    "python_skipped": 1,
+    "portable_smoke": "PASS",
+    "execution_integration": "PASS",
+    "flexible_demo_student_integration": "PASS",
+    "native_pages": 20,
+    "rendered_frames": 40
+  },
+  "package": {
+    "filename": "BrainTrade-Windows-Student-Learning-126c7f3.zip",
+    "bytes": 36116082,
+    "sha256": "2bef0b4d74f818d6717fdba277b8da633bb3ff4807ae82353ff21348eb0598bf",
+    "artifact_id": 12145878644,
+    "artifact_bytes": 34817176,
+    "artifact_sha256": "fc87de551e4d44734f64f0dea26519108880ff81ddb1e59781d797f104fdf8af",
+    "crc": "PASS",
+    "tree_matches_tested_head_and_merge": true
+  }
+}

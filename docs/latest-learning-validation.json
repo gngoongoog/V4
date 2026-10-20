@@ -1,0 +1,74 @@
+{
+  "version": "0.7.0",
+  "iteration": "contextual-mistake-memory-with-timing-and-five-way-exits",
+  "verified_on": "2026-10-19",
+  "repository": "gngoongoog/V4",
+  "branch": "development",
+  "included_prs": [
+    61,
+    62,
+    63,
+    64
+  ],
+  "latest_pr_head": "399e80015639a7e97014d670fb52da65da2c6cdd",
+  "tested_and_packaged_merge": "88a341fc8733deaa1856079fc073bb744a61afcf",
+  "tested_tree": "59efba92fc67eb249336695074e9c67eafb7537b",
+  "research": {
+    "run": 39249735055,
+    "job": 118050301472,
+    "status": "success"
+  },
+  "windows_linux_run": 39249735059,
+  "linux": {
+    "job": 118050786032,
+    "status": "success"
+  },
+  "windows": {
+    "job": 118050786295,
+    "status": "success",
+    "domain_passed": 103,
+    "runtime_passed": 85,
+    "runtime_ignored": 1,
+    "desktop_passed": 3,
+    "python_run": 130,
+    "python_passed": 129,
+    "python_skipped": 1,
+    "portable_smoke": "PASS",
+    "backup_restore_restart": "PASS",
+    "four_modes": "PASS",
+    "execution_integration": "PASS",
+    "flexible_demo_student_integration": "PASS",
+    "native_pages": 20,
+    "rendered_frames": 40
+  },
+  "package": {
+    "filename": "BrainTrade-Windows-Learning-88a341f.zip",
+    "bytes": 36203052,
+    "sha256": "0f0ffb68f16f6bd04d41e740b1735cc2b477931542b8aae76190f9f9dba8c6bb",
+    "artifact_id": 12186286037,
+    "artifact_bytes": 34902493,
+    "artifact_sha256": "4379789483a7497ea6b2e0d04a4aeb86568505410e6294b331cbe65a0445ac9c",
+    "inner_package_unchanged": true,
+    "crc": "PASS"
+  },
+  "validation_artifact": {
+    "id": 12186081411,
+    "sha256": "23169d6b911d3480549092f9ac8bb23990cdde0be4dc323946f657fc0dd29516"
+  },
+  "research_artifact": {
+    "id": 12185267126,
+    "sha256": "c8f86db3a2bc8af25d16eacad655de7d51cc2ae306716eddc8aef72af6819401"
+  },
+  "execution_identities": 16,
+  "entry_timing_research_only": true,
+  "native_mt5": "Not performed; target-machine Demo and native OnTick acceptance pending",
+  "broker_latency": "Not established by simulated CI",
+  "profitability": "Not established",
+  "upgrade_note": "Back up application data first. New build reads legacy studies; old binaries cannot read expanded five-way study records.",
+  "remaining": [
+    "Target-machine MT5 Demo acceptance",
+    "Future automatic application of timing recommendations",
+    "Statistically calibrated drift detection",
+    "Arbitrary strategy rewriting"
+  ]
+}

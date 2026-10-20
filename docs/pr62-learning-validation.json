@@ -1,0 +1,68 @@
+{
+  "version": "0.7.0",
+  "iteration": "prospective-entry-timing-five-way-exits",
+  "repository": "gngoongoog/V4",
+  "pr": 62,
+  "pr_head": "1d97cb53531ae533350894e8de1d7bc83f2db4c0",
+  "merged_development_sha": "29fe6663972651e8e3a1b613b9d957a86590bf6e",
+  "verified_at_utc": "2026-10-19",
+  "post_merge_validation": {
+    "research": {
+      "run_id": 39240501418,
+      "status": "success",
+      "url": "https://github.com/gngoongoog/V4/actions/runs/39240501418"
+    },
+    "windows_linux": {
+      "run_id": 39240501431,
+      "status": "success",
+      "url": "https://github.com/gngoongoog/V4/actions/runs/39240501431"
+    }
+  },
+  "artifacts": [
+    {
+      "name": "BrainTrade-Windows-x64-Preview",
+      "id": 12180999893,
+      "artifact_zip_size_bytes": 34895029,
+      "artifact_zip_sha256": "7f48e39954bfa7fee0be36939b747e00e3998032745dd0048096f6b74ca119b6",
+      "source_run_id": 39240501431
+    },
+    {
+      "name": "windows-native-validation",
+      "id": 12182505114,
+      "artifact_zip_size_bytes": 1817923,
+      "artifact_zip_sha256": "cd5db9fb57addf89e39edec495f43ae469ac807f132ea723e60df5ff30783bd6",
+      "source_run_id": 39240501431
+    },
+    {
+      "name": "synthetic-research-validation",
+      "id": 12180903563,
+      "artifact_zip_size_bytes": 4438161,
+      "artifact_zip_sha256": "324179dfcdc369bbb76bed5bbfcf197c497aab37fdbba23de5fe5ccd91571d95",
+      "source_run_id": 39240501418
+    }
+  ],
+  "feature_contracts": {
+    "exit_profiles": [
+      "Baseline",
+      "Quick",
+      "Patient",
+      "Protective",
+      "Extended"
+    ],
+    "legacy_three_way_records": "preserved; not backfilled",
+    "entry_timing_milliseconds": [
+      0,
+      250,
+      1000
+    ],
+    "entry_timing_mode": "quote-only prospective research; never submits, delays, or modifies broker orders",
+    "cost_fidelity": "executable Bid/Ask, configured commission, modeled entry and exit slippage",
+    "missing_quote_policy": "exclude instead of interpolate",
+    "learning_context": "Demo; actual booked broker profit remains separate from shadow comparisons",
+    "execution_identities_unchanged": 16
+  },
+  "target_machine_mt5_demo_acceptance": "NOT PERFORMED",
+  "broker_fill_latency": "NOT VERIFIED",
+  "profitability": "NOT ESTABLISHED",
+  "notes": "GitHub post-merge CI proves only tested simulated/code paths. Artifact hashes identify Actions ZIP uploads, not inner packaged ZIP or installed executable. Historical trial results cannot be treated as broker PnL."
+}

@@ -64,11 +64,45 @@ These checks require a Windows x64 host with a real MT5 installation and a demo 
 - Verify STOP prevents new entry, while timed exits and broker SL/TP retain their ownership. Full Exit stops client-side timed exits.
 - Exercise broker rejection, partial fill, disconnection and restart on Demo; an uncertain result must never cause a blind duplicate submission.
 - Compare actual fee entries, swaps and manual exits against position-attributed totals. Fees without position IDs need separate accounting.
-- Verify configured commission proportionality, actual spread and Sniper cost threshold. Measure observed queue/check/send times on this machine; 100 ms is a polling sleep, not an execution guarantee.
+- Verify configured commission proportionality, actual spread and Sniper cost threshold.
 - On hedging accounts, verify separate brain positions. On netting accounts, verify exclusive ownership of the symbol.
 - Verify all four modes. Swing needs actual H1/H4/D1 history; Sniper needs a fresh tick crossing the completed-bar range. WAIT without a valid strategy signal is expected.
 - After enough prospective member outcomes mature, verify sample counts/weights survive restart and remain isolated by account/mode/frame.
 
+## Sniper fast-lane latency — target-machine characterization required
+
+- In Sniper mode confirm the gateway hot loop is active while full account/position reconciliation and research/history collection remain on their slower schedules.
+- Collect at least several hundred Demo execution samples and preserve `core_pulse_ms`, `queue_to_gateway_ms`, `authorize_ms`, `journal_ms`, `post_journal_authorize_ms`, `post_journal_account_ms`, `other_pre_send_ms`, `pre_send_ms`, `queue_to_send_ms`, `send_ms` and `total_ms` from broker results.
+- Compute P50/P95/P99 separately for `queue_to_send_ms` and `send_ms`. The engineering target is **20 ms or less for BrainTrade-local queue-to-send latency** on the target machine; this is not a broker-fill or network guarantee.
+- Confirm tick-keyed Sniper entries report `fast_path=true` and `order_check_skipped=true`; non-Sniper/bar-based entries must keep the normal broker `order_check` path.
+- Verify `PRAGMA synchronous=FULL` journal persistence still completes before every `order_send`; low latency must not permit a blind duplicate after crash, timeout or uncertain broker acknowledgement.
+- Verify the post-journal Core authorization rejects an Open if STOP or execution revision changes after the durable journal was committed, and verify the final account read rejects a send if login/server/currency/Demo identity changes in that same last-moment window.
+- Compare actual `post_journal_authorize_ms` and `post_journal_account_ms` cost against the other local components. They are intentional safety gates and must be measured before considering any latency redesign.
+- Compare fresh quote time, command creation time and the final `order_send` result. If local P95/P99 exceeds the target, use the component timings to identify whether Core authorization, durable journal I/O, final authorization/account validation or local MT5 calls dominate before changing any safety boundary.
+- Treat MT5/broker acknowledgement and fill latency separately. No fixed end-to-end latency may be claimed from CI or from the local fast path.
+
+## Native Sniper OnTick / CopyTicks bridge — target-machine acceptance required
+
+- From the portable package, copy `MT5/Experts/BrainTradeSniperBridge.mq5` into the selected terminal's `MQL5/Experts` folder if it is not already there, compile it with that terminal's MetaEditor and attach it to the exact broker symbol used by BrainTrade (for example the broker-specific XAUUSD name).
+- Start BrainTrade first so it creates the short-lived session token under that terminal data folder at `MQL5/Files/BrainTrade/sniper.token`; the EA should then show `BrainTrade Sniper Native: CONNECTED` on its chart.
+- Confirm the EA contains no trading API and does not place, modify or close any order by itself. Broker submission must remain exclusively in the journaled Python execution adapter.
+- During a fast Demo quote burst, compare the EA's quote-tick counter with a `CopyTicks(..., COPY_TICKS_ALL)` capture over the same fresh interval. Pure Last/volume-only ticks may be consumed by the cursor but only Bid/Ask changes should be forwarded to Sniper decisions.
+- Verify several Bid/Ask changes with one `time_msc` are still evaluated as distinct quote events rather than collapsing to one `tick:<ms>` decision.
+- Detach or stop the EA while Sniper is active and confirm the gateway automatically falls back to the 5 ms Python quote polling path without enabling execution by itself.
+- Reattach the EA and confirm native wake resumes without restarting Core and without creating a duplicate broker command for a previously observed quote.
+- Disconnect/reconnect MT5 for less than one second and confirm cached fresh quote changes are recovered in source order. After a longer gap, confirm the bridge resumes from the current millisecond instead of replaying stale history into live decisions.
+- Force a pipe interruption/partial write if possible and confirm the EA does not advance its source cursor until the whole ASCII batch is written; the next OnTick should recover that batch from MT5's tick cache.
+- Verify an invalid token, wrong login or wrong symbol cannot update the reconciled BrainTrade quote state.
+- Record native-path P50/P95/P99 separately from fallback-polling P50/P95/P99. Treat this as local reaction characterization only; neither path proves a fixed broker acknowledgement/fill latency or guaranteed capture of every upstream broker event.
+
+## Portfolio Exposure v1 acceptance
+
+- Portfolio Exposure v1 is implemented and OFF by default; confirm upgrading or restarting does not silently enable it.
+- While STOPPED, enable it and configure aggregate maximum positions/intents, lots and estimated stop-risk percentage.
+- Verify new entries that would exceed any enabled portfolio limit are cancelled while existing positions, broker SL/TP, timed exits and reconciliation continue.
+- Verify unknown aggregate stop risk fails closed for new entries rather than being treated as zero risk.
+- Confirm settings survive restart and backup/restore according to the current schema.
+
 ## Separate future work
 
-Portfolio-level execution risk, cross-version/multi-account migration and imported ML champion activation are not implemented. Existing working databases migrate additively; sealed backup restore is restricted to the same app version/schema.
+Cross-version/multi-account migration, correlation-driven broker execution policy and imported ML champion activation are not implemented. Aligned multi-symbol correlation/exposure **research** remains a separate evidence step before any correlation-driven execution policy. Existing working databases migrate additively; sealed backup restore is restricted to the same app version/schema.

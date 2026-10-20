@@ -1,4 +1,8 @@
 //! Independent, deterministic trading policies. Broker transport lives in the gateway.
+#[path = "execution_liquidity.rs"]
+mod liquidity;
+#[path = "execution_pullback.rs"]
+mod pullback;
 use crate::{
     studio::{FrameBar, Genome},
     trading::{self, TradingMode},
@@ -7,7 +11,8 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const BRAINS: [(&str, &str); 14] = [
+// Append new identities only. Existing index -> magic mappings are durable broker ownership.
+pub const BRAINS: [(&str, &str); 17] = [
     ("system", "النظام — الوضع المختار"),
     ("gann", "جان الهندسي"),
     ("wyckoff", "وايكوف"),
@@ -22,14 +27,21 @@ pub const BRAINS: [(&str, &str); 14] = [
     ("kte", "KTE — الاندفاع والارتداد"),
     ("regime", "حالة السوق — اتجاه أو نطاق"),
     ("generated", "استراتيجية مولّدة مختارة"),
+    ("liquidity", "سحب السيولة — sweep + reclaim"),
+    ("trend_pullback", "Trend Pullback — رجوع منظم + تأكيد"),
+    ("sniper_learner", "القناص المتعلّم — اندفاع وارتداد سريع"),
 ];
 pub fn magic(id: &str) -> Option<u64> {
+    // 410616 is reserved by the unmerged adaptive-brain PR #58. Never reuse it.
+    if id == "sniper_learner" { return Some(410_617); }
     BRAINS
         .iter()
         .position(|(b, _)| *b == id)
         .map(|i| 410_600 + i as u64)
 }
 pub fn brain_for_magic(m: u64) -> Option<&'static str> {
+    if m == 410_617 { return Some("sniper_learner"); }
+    if m >= 410_616 { return None; }
     m.checked_sub(410_600)
         .and_then(|i| BRAINS.get(i as usize))
         .map(|b| b.0)
@@ -83,8 +95,8 @@ impl BrainConfig {
         {
             return Err("Invalid lot, stop, target or duration".into());
         }
-        if matches!(self.id.as_str(), "ces" | "kte") && self.timeframe != "M1" {
-            return Err("CES/KTE v1 require M1".into());
+        if matches!(self.id.as_str(), "ces" | "kte" | "sniper_learner") && self.timeframe != "M1" {
+            return Err("CES/KTE/Sniper Learner require M1".into());
         }
         if self.report_id.len() > 100 {
             return Err("Invalid report ID".into());
@@ -136,6 +148,10 @@ pub fn evaluate(
         || t.quote_time_ms
             .is_none_or(|v| v > now + 2000 || now.saturating_sub(v) > 3000)
     {
+        return s;
+    }
+    if b.id == "sniper_learner" {
+        s.reason = "القناص المتعلّم يعمل بالأسعار اللحظية في وضع Sniper فقط".into();
         return s;
     }
     if b.id == "system" {
@@ -354,6 +370,26 @@ pub fn evaluate(
                 }
                 format!("كفاءة الاتجاه {er:.2}؛ اتباع اتجاه أو ارتداد نطاق")
             }
+            "liquidity" => {
+                let q = liquidity::assess(&series, t, atr);
+                s.side = q.side;
+                if q.side != 0 {
+                    s.stop_distance = q.stop_distance;
+                    s.target_distance = b.reward_risk * s.stop_distance;
+                    s.key = format!("sweep:{}:{}", b.timeframe, last.time);
+                }
+                q.reason
+            }
+            "trend_pullback" => {
+                let q = pullback::assess(&series, t, atr);
+                s.side = q.side;
+                if q.side != 0 {
+                    s.stop_distance = q.stop_distance;
+                    s.target_distance = b.reward_risk * s.stop_distance;
+                    s.key = format!("pullback:{}:{}", b.timeframe, last.time);
+                }
+                q.reason
+            }
             "generated" => {
                 if let Some(g) = genome {
                     s.side = crate::studio::signal(g, bars);
@@ -405,6 +441,12 @@ mod tests {
         for (id, _) in BRAINS {
             assert_eq!(brain_for_magic(magic(id).unwrap()), Some(id));
         }
+        // Existing durable ownership stays stable; new identities are appended only.
+        assert_eq!(magic("generated"), Some(410_613));
+        assert_eq!(magic("liquidity"), Some(410_614));
+        assert_eq!(magic("trend_pullback"), Some(410_615));
+        assert_eq!(magic("sniper_learner"), Some(410_617));
+        assert_eq!(brain_for_magic(410_616), None);
         b.lots = f64::NAN;
         assert!(b.validate().is_err());
     }

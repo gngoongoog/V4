@@ -35,10 +35,13 @@ impl Default for Settings {
     }
 }
 pub struct Service {
+    pub sniper: braintrade_domain::sniper::Engine,
     pub settings: Settings,
     pub brains: Vec<BrainConfig>,
     pub weights:BTreeMap<String,braintrade_domain::execution::LearnedWeight>,
+    pub student_policies:BTreeMap<String,braintrade_domain::student::ExitStudy>,
     signals: BTreeMap<String, Value>,
+    new_entries: Vec<Value>,
     last_sync_ms: u64,
     history_until_ms: u64,
 }
@@ -53,6 +56,10 @@ fn json_rows(db: &Connection, sql: &str, key: &str) -> Result<Vec<Value>> {
     rows.iter().map(|r| Ok(serde_json::from_str(r)?)).collect()
 }
 impl Service {
+    pub fn take_entries(&mut self) -> Vec<Value> { std::mem::take(&mut self.new_entries) }
+    pub fn learning_decisions(&self)->Vec<(String,Value)> {
+        self.brains.iter().filter(|b|b.enabled).filter_map(|b|self.signals.get(&b.id).map(|v|(b.id.clone(),v.clone()))).collect()
+    }
     pub fn new(db: &Connection) -> Result<Self> {
         db.execute_batch("CREATE TABLE IF NOT EXISTS execution_settings(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS execution_equity(context TEXT PRIMARY KEY,peak REAL NOT NULL);
@@ -92,10 +99,13 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             brains.push(b);
         }
         Ok(Self {
+            sniper: Default::default(),
             settings,
             brains,
             signals: BTreeMap::new(),
+            new_entries: Vec::new(),
             weights:BTreeMap::new(),
+            student_policies:BTreeMap::new(),
             last_sync_ms: 0,
             history_until_ms: 0,
         })
@@ -113,26 +123,34 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             && self.brains.iter().any(|b| b.enabled)
             && s.telemetry.as_ref().is_some_and(|t| self.matches(t))
     }
-    fn save(&self, db: &Connection) -> Result<()> {
+    fn save_candidate(db: &Connection, candidate: &Settings) -> Result<()> {
         db.execute(
             "INSERT OR REPLACE INTO execution_settings VALUES(1,?1)",
-            [serde_json::to_string(&self.settings)?],
+            [serde_json::to_string(candidate)?],
         )?;
         Ok(())
     }
-    fn bind(&mut self, db: &Connection, t: &Telemetry, now: u64) -> Result<()> {
+    fn bind_with_settings(&mut self, db: &Connection, t: &Telemetry, now: u64, mut candidate: Settings) -> Result<()> {
         if !t.connected
-            || t.account_trade_mode != Some(if self.settings.target == "demo" { 0 } else { 2 })
+            || t.account_trade_mode != Some(if candidate.target == "demo" { 0 } else { 2 })
         {
             bail!("نوع الحساب لا يطابق هدف التنفيذ المختار؛ Demo يحتاج حساب MT5 تجريبي");
         }
-        self.settings.login = t.login;
-        self.settings.server = t.server.clone();
-        self.settings.currency = t.currency.clone();
-        self.settings.bound_ms = now;
+        candidate.login = t.login;
+        candidate.server = t.server.clone();
+        candidate.currency = t.currency.clone();
+        candidate.bound_ms = now;
+        // Never activate or advertise an account/target whose durable
+        // execution_settings write failed. START and final authorization
+        // must always agree with settings restored after restart.
+        Self::save_candidate(db, &candidate)?;
+        self.settings = candidate;
         self.history_until_ms = now;
         self.last_sync_ms = 0;
-        self.save(db)
+        Ok(())
+    }
+    fn bind(&mut self, db: &Connection, t: &Telemetry, now: u64) -> Result<()> {
+        self.bind_with_settings(db, t, now, self.settings.clone())
     }
     pub fn pending(&self, db: &Connection) -> Result<bool> {
         Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE state IN ('queued','dispatched','unknown','placed','filled','partial'))",[],|r|r.get(0))?)
@@ -153,16 +171,27 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         signal: Option<&Signal>,
         position: u64,
         now: u64,
-    ) -> Result<()> {
+        config: Option<&Config>,
+    ) -> Result<Value> {
         let key = ctx(t);
         let id = uuid::Uuid::new_v4().simple().to_string();
         let s = signal
             .map(serde_json::to_value)
             .transpose()?
             .unwrap_or(Value::Null);
-        let p = json!({"id":id,"revision":self.settings.revision,"context":key,"brain":b.id,"kind":kind,"login":t.login,"server":t.server,"currency":t.currency,"target":self.settings.target,"symbol":t.symbol,"magic":execution::magic(&b.id),"position":position,"lots":b.lots,"deviation_points":self.settings.deviation_points,"created_ms":now,"max_quote_age_ms":signal.map(|s|if s.key.starts_with("tick:"){1000}else{3000}).unwrap_or(3000),"expires_ms":if kind=="open"{now+3000}else{now+30_000},"signal":s});
+        let mut p = json!({"id":id,"revision":self.settings.revision,"context":key,"brain":b.id,"kind":kind,"login":t.login,"server":t.server,"currency":t.currency,"target":self.settings.target,"symbol":t.symbol,"magic":execution::magic(&b.id),"position":position,"lots":b.lots,"deviation_points":self.settings.deviation_points,"created_ms":now,"max_quote_age_ms":signal.map(|s|if s.key.starts_with("tick:"){1000}else{3000}).unwrap_or(3000),"expires_ms":if kind=="open"{now+3000}else{now+30_000},"signal":s});
+        if let Some(c) = config {
+            p["demo_flexible"] = json!(c.trading.demo_flexible && t.demo && t.account_trade_mode==Some(0));
+            p["commission_per_lot"] = json!(c.risk.commission_per_lot);
+            p["learning"] = json!({"trading_mode":c.trading.mode,"timeframe":b.timeframe,"report_id":b.report_id,
+                "tick_size":t.tick_size,"tick_value_loss":t.tick_value_loss,"tick_value_profit":t.tick_value_profit,
+                "slippage_ticks":c.risk.slippage_ticks,"bid":t.bid,"ask":t.ask,"quote_time_ms":t.quote_time_ms,"quote_age_ms":t.tick_age_ms,
+                "context_key":self.weights.get(&b.id).map(|w|w.context_key.clone()).unwrap_or_default(),
+                "weight_at_entry":self.weights.get(&b.id).map(|w|w.weight()).unwrap_or(1.),
+                "intelligence":self.weights.get(&b.id).map(|w|w.intelligence()).unwrap_or_default()});
+        }
         db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload) VALUES(?1,?2,?3,?4,?5,'queued',?6)",params![id,key,b.id,kind,now,p.to_string()])?;
-        Ok(())
+        Ok(p)
     }
     pub fn observe(
         &mut self,
@@ -174,6 +203,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         now: u64,
     ) -> Result<()> {
         if !self.matches(t) {
+            self.sniper.reset_quotes();
             self.signals.clear();
             return Ok(());
         }
@@ -208,6 +238,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 )?;
             }
         }
+        let sniper_signal = self.sniper.evaluate(t,c,now);
+        let available=crate::coordinator_learning::available_frames(t,frames,now);
         for b in self.brains.clone() {
             let magic = execution::magic(&b.id).unwrap();
             let active:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,b.id],|r|r.get(0))?;
@@ -243,14 +275,28 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     && now.saturating_sub(p.opened_ms) >= frozen
                     && now.saturating_sub(last_close) > 5000
                 {
-                    self.queue(db, t, &b, "close", None, p.ticket, now)?;
+                    self.queue(db, t, &b, "close", None, p.ticket, now, None)?;
                 }
             }
+            if braintrade_domain::sniper::selected(c) && b.id!="system" && b.id!=braintrade_domain::sniper::ID && !b.enabled {
+                // Keep ownership exits above active; this Sniper specialist does not evaluate inactive slow advisors.
+                continue;
+            }
             let genome=crate::coordinator_learning::genome(db,&b,t)?;
-            let available=crate::coordinator_learning::available_frames(t,frames,now);
             let started = std::time::Instant::now();
-            let base=execution::evaluate(&b,t,c,&available,genome.as_ref(),now);
-            let signal=if b.id=="system" {
+            let base=if b.id==braintrade_domain::sniper::ID || (b.id=="system" && braintrade_domain::sniper::selected(c)) {sniper_signal.clone()}
+                else {execution::evaluate(&b,t,c,&available,genome.as_ref(),now)};
+            let mut signal=if b.id=="system" && braintrade_domain::sniper::selected(c) {
+                let member=self.brains.iter().find(|m|m.id==braintrade_domain::sniper::ID).unwrap();
+                let pending:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain='sniper_learner' AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",[&key],|r|r.get(0))?;
+                let occupied=t.positions.iter().any(|p|p.magic==410_617 && p.symbol==t.symbol);
+                let mut selected=sniper_signal.clone(); selected.brain="system".into();
+                if member.enabled || pending || occupied {
+                    selected.ready=false;selected.reason="القناص المتعلّم منفرد أو ينتظر تسوية صفقته قبل الرجوع".into();
+                }
+                selected.coordination.get_or_insert_with(||json!({}))["intelligence"]=json!(self.weights.get(braintrade_domain::sniper::ID).map(|w|w.intelligence()).unwrap_or_default());
+                selected
+            } else if b.id=="system" {
                 let mut votes=vec![];
                 for member in self.brains.iter().filter(|m|m.id!="system"&&!m.enabled) {
                     // Returning SOLO positions finish under their original owner before rejoining.
@@ -260,8 +306,12 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     let vote=execution::evaluate(member,t,c,&available,g.as_ref(),now);
                     votes.push((member.clone(),vote,self.weights.get(&member.id).cloned().unwrap_or_default()));
                 }
-                execution::coordinate(base,c,votes)
+                execution::coordinate_for_account(base,c,t,votes)
             }else{base};
+            if b.id!="system" {
+                signal.coordination.get_or_insert_with(||json!({}))["intelligence"]=json!(self.weights.get(&b.id).map(|w|w.intelligence()).unwrap_or_default());
+            }
+            crate::student_learning::adapt(&mut signal,t,c,&b,&self.student_policies);
             let decision_us = started.elapsed().as_micros() as u64;
             let mut gates = vec![];
             if t.margin_mode!=Some(2)&&db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain<>?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,b.id],|r|r.get::<_,bool>(0))?{gates.push("Netting: أمر لعقل آخر لم تتم تسويته");}
@@ -285,7 +335,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 gates.push("حساب Netting: الرمز مملوك لصفقة حالية");
             }
             let last:u64=db.query_row("SELECT COALESCE(MAX(created_ms),0) FROM broker_commands WHERE context=?1 AND brain=?2 AND kind='open'",params![key,b.id],|r|r.get(0))?;
-            let cooldown = if b.id == "system"
+            let cooldown = if matches!(b.id.as_str(),"system"|"sniper_learner")
                 && c.trading.mode == braintrade_domain::trading::TradingMode::Sniper
             {
                 c.trading.sniper_cooldown_seconds.max(b.cooldown_seconds)
@@ -333,9 +383,10 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     "INSERT OR IGNORE INTO broker_seen VALUES(?1,?2,?3)",
                     params![key, b.id, signal.key],
                 )?;
-                self.queue(&tx, t, &b, "open", Some(&signal), 0, now)?;
+                let command = self.queue(&tx, t, &b, "open", Some(&signal), 0, now, Some(c))?;
                 tx.execute("INSERT INTO broker_signal_log(context,brain,timestamp_ms,payload) VALUES(?1,?2,?3,?4)",params![key,b.id,now,result.to_string()])?;
                 tx.commit()?;
+                self.new_entries.push(command);
             }
         }
         Ok(())
@@ -388,7 +439,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                                 })
                         })
                         .collect();
-                    brains.push(json!({"config":b,"name":BRAINS.iter().find(|v|v.0==b.id).unwrap().1,"magic":magic,"latest":self.signals.get(&b.id).filter(|v|t.is_some_and(|t|self.matches(t))&&now.saturating_sub(v["evaluated_ms"].as_u64().unwrap_or(0))<=3000),"stats":{"deals":own.len(),"closed_positions":closed.len(),"wins":closed.iter().filter(|(_,p)|**p>0.).count(),"net_booked":net,"floating":positions.iter().filter(|p|p.magic==magic).map(|p|p.profit).sum::<f64>(),"open_positions":positions.iter().filter(|p|p.magic==magic).count()}}));
+                    brains.push(json!({"config":b,"name":BRAINS.iter().find(|v|v.0==b.id).unwrap().1,"magic":magic,"latest":self.signals.get(&b.id).filter(|v|t.is_some_and(|t|self.matches(t))&&now.saturating_sub(v["evaluated_ms"].as_u64().unwrap_or(0))<=3000),"learning":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))),"learned_weight":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))).map(|w|w.weight()),"stats":{"deals":own.len(),"closed_positions":closed.len(),"wins":closed.iter().filter(|(_,p)|**p>0.).count(),"net_booked":net,"floating":positions.iter().filter(|p|p.magic==magic).map(|p|p.profit).sum::<f64>(),"open_positions":positions.iter().filter(|p|p.magic==magic).count()}}));
                 }
                 let commands=json_rows(db,"SELECT json_object('request',json(payload),'state',state,'result',json(result)) FROM broker_commands WHERE context=?1 ORDER BY created_ms DESC LIMIT 100",&key)?;
                 Ok(
@@ -421,8 +472,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 if t.account_trade_mode != Some(if target == "demo" { 0 } else { 2 }) {
                     bail!("نوع حساب MT5 لا يطابق Demo/Live المختار");
                 }
-                self.settings = candidate;
-                self.bind(db, t, now)?;
+                self.bind_with_settings(db, t, now, candidate)?;
                 Ok(json!({"ok":true,"settings":self.settings}))
             }
             ("POST", "/v1/execution/brain") => {
@@ -475,7 +525,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     .iter()
                     .filter(|p| p.magic == execution::magic(id).unwrap() && p.symbol == t.symbol)
                 {
-                    self.queue(db, t, b, "close", None, p.ticket, now)?;
+                    self.queue(db, t, b, "close", None, p.ticket, now, None)?;
                 }
                 Ok(json!({"ok":true}))
             }
@@ -598,5 +648,63 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             }
             _ => bail!("Unknown execution route"),
         }
+    }
+}
+
+#[cfg(test)]
+mod execution_persistence_tests {
+    use super::*;
+
+    fn demo() -> Telemetry {
+        Telemetry {
+            connected: true, account_trade_mode: Some(0), demo: true,
+            login: 17, server: "Demo-Test".into(), currency: "USD".into(),
+            symbol: "XAUUSD".into(), ..Default::default()
+        }
+    }
+
+    #[test]
+    fn failed_bind_does_not_activate_an_uncommitted_account() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        db.execute_batch("PRAGMA query_only=ON").unwrap();
+        assert!(service.bind(&db,&t,1234).is_err());
+        assert_eq!(service.settings.login,0);
+        assert_eq!(service.settings.bound_ms,0);
+        assert_eq!(service.history_until_ms,0);
+        assert_eq!(service.last_sync_ms,0);
+        db.execute_batch("PRAGMA query_only=OFF").unwrap();
+        service.bind(&db,&t,1235).unwrap();
+        assert_eq!(service.settings.login,17);
+        assert_eq!(service.history_until_ms,1235);
+        let restarted=Service::new(&db).unwrap();
+        assert_eq!(restarted.settings.login,17);
+        assert_eq!(restarted.settings.server,"Demo-Test");
+    }
+
+    #[test]
+    fn failed_settings_change_keeps_in_memory_and_durable_binding_identical() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        service.bind(&db,&t,100).unwrap();
+        let old_revision=service.settings.revision;
+        let mut status=Status::default();
+        status.gateway_fresh=true;
+        status.telemetry=Some(t);
+        let request=json!({"target":"demo","deviation_points":35}).to_string();
+        db.execute_batch("PRAGMA query_only=ON").unwrap();
+        assert!(service.route("POST","/v1/execution/settings",request.as_bytes(),&db,&status,200).is_err());
+        assert_eq!(service.settings.deviation_points,20);
+        assert_eq!(service.settings.bound_ms,100);
+        assert_eq!(service.settings.revision,old_revision);
+        db.execute_batch("PRAGMA query_only=OFF").unwrap();
+        let restarted=Service::new(&db).unwrap();
+        assert_eq!(restarted.settings.deviation_points,20);
+        assert_eq!(restarted.settings.bound_ms,100);
+        service.route("POST","/v1/execution/settings",request.as_bytes(),&db,&status,201).unwrap();
+        assert_eq!(service.settings.deviation_points,35);
+        assert_eq!(Service::new(&db).unwrap().settings.deviation_points,35);
     }
 }

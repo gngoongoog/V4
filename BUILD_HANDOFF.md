@@ -1,51 +1,96 @@
-# BrainTrade OS 0.6.0 Preview — verified development candidate
+# BrainTrade OS — verified 0.7.0 Development Preview
 
-Canonical repository: `gngoongoog/V4`.
+GitHub `gngoongoog/V4` is canonical. Continue from `development`; use `main` only when preparing a promoted release.
 
-Verified executable/source checkpoint: `fdc63d4d05df89e27607641bd197b9e6ead936e9` (tree `8593783f43a4892cdc724ed5d112607ef7cee006`).
 
-Validation on that exact checkpoint:
+## Latest verified checkpoint — contextual mistake memory (2026-10-19)
 
-- Research CI: PASS — run `38803539711`.
-- Windows CI/package: PASS — run `38803539405`.
-- Windows artifact: `BrainTrade-Windows-x64-v0.6.0-Preview`, 33,948,849 bytes, SHA-256 `3f7a945a4f9c1ab1ce3e008880722c3dc078a54018a8f622133c604420665779`.
-- Windows native-validation artifact: 1,785,325 bytes, SHA-256 `64725943777396d8c974c825a0319554b7f6536213709fd4d76edd49c6a6c66d`.
-- Simulated MT5 execution integration: PASS; the harness does not connect to a broker.
-- Native broker/account acceptance: NOT PERFORMED.
-- Telegram live delivery: NOT PERFORMED.
+PR #64 is merged into `development` as `88a341fc8733deaa1856079fc073bb744a61afcf`, source tree `59efba92fc67eb249336695074e9c67eafb7537b`. This includes PR #62 timing/five-way exits and PR #63 handoff documentation. Post-merge Research `39249735055` and Windows/Linux `39249735059` both passed on that exact merge.
 
-Implemented in the 0.6 line:
+Windows evidence: 103 domain, 85 runtime and 3 desktop Rust tests passed, with one public-network test ignored; 129 of 130 Python tests passed, with one OS-specific skip. Packaged startup/DPAPI/STOPPED default, all four modes, backup/restore/restart, execution integration and the $100 Flexible Demo/student integration passed. All 40 native frames cover 20 pages. Native MT5 acceptance, actual broker latency and profitability remain unverified.
 
-- 14 execution identities with coordinator/advisor/SOLO/RETURNING membership.
-- Four trading modes: Scalping, Swing, Expert/adaptive and live-quote Sniper.
-- Persistent execution intents, reconciliation, partial-fill handling, exact account/ticket ownership checks and schema-12 backup support.
-- Adaptive member weighting from prospective 12-bar outcomes; imported ML challengers remain a separate research-only pipeline with no automatic promotion.
-- Native dashboard with 18 pages.
-- Startup and restart are STOPPED; a secondary SOLO toggle does not arm global START.
+The current learner reduces a ready Demo advisor's preference after at least three recent consecutive booked losses in the same strategy/market context. The penalty is capped at 0.20, clears with a newer non-loss or expiration of the 14-day window, and never vetoes a valid candidate. Exploration graduates from 30% toward 5% using total eligible contextual evidence while retaining novelty-weighted sampling. The entry journal shows the frozen streak and penalty. Five-way exits, legacy studies, research-only timing and 16 execution identities remain intact.
 
-Latest verified recovery/execution hardening:
+Windows handoff: `BrainTrade-Windows-Learning-88a341f.zip` (36,203,052 bytes), SHA256 `0f0ffb68f16f6bd04d41e740b1735cc2b477931542b8aae76190f9f9dba8c6bb`. It is the unchanged inner package from successful post-merge artifact `12186286037`. Read `docs/LATEST_WINDOWS_HANDOFF_AR.md` and `docs/latest-learning-validation.json`. Take an application backup before upgrading; older binaries cannot read new five-way study records. Native Demo acceptance is the next evidence step; automatic application of timing recommendations remains unimplemented. This delivery documentation changes no tested execution code.
 
-- reconciled fills stay blocked until the owned position is actually observed;
-- exact submitted broker volume is persisted;
-- Sniper applies the configured broker-cost threshold;
-- unknown intents stay scoped to the bound account across an account switch;
-- split fills reconcile cumulatively without a top-up or duplicate resend;
-- a reused durable intent ID with changed execution identity fails closed;
-- schema-12 restore keeps the durable gateway send journal outside rollback, and regression coverage verifies the journal survives restore unchanged.
 
-Release/promotion state:
+## Previous delivered development checkpoint — PR #62 (2026-10-19)
 
-- `development` contains the reviewed 0.6 candidate.
-- `main` and `development` have a divergent historical merge topology; never force-update or rewrite either branch to promote 0.6.
-- PR #13 is the deliberate promotion path from `development` to `main`.
-- Release-record/documentation commits may sit on top of the tested source checkpoint. They must not silently change runtime behavior; `docs/validation.json` records the executable checkpoint and artifact evidence.
+Continue from `development` merge `29fe6663972651e8e3a1b613b9d957a86590bf6e` (PR #62). **Post-merge Research PASS**: [39240501418](https://github.com/gngoongoog/V4/actions/runs/39240501418); **post-merge Windows/Linux PASS**: [39240501431](https://github.com/gngoongoog/V4/actions/runs/39240501431). Windows preview upload: `BrainTrade-Windows-x64-Preview`, artifact `12180999893`, 34,895,029 bytes, Actions artifact ZIP SHA-256 `7f48e39954bfa7fee0be36939b747e00e3998032745dd0048096f6b74ca119b6`.
 
-Next engineering work after promotion:
+Features: prospective five-way exits with preserved three-way history, independent quote-only 0/250/1000 ms entry-timing research and explicit coverage/exclusion evidence. Timing is not a broker execution policy; booked MT5 PnL is not inferred from comparative quotes. There are still 16 durable broker identities. Read `docs/ENTRY_TIMING_EXIT5_AR.md` and `docs/pr62-learning-validation.json`.
 
-1. Run the native Windows + real Demo MT5 acceptance checklist on the target installation and record it separately from CI.
-2. Test private Telegram delivery using only local credentials that never enter the repository.
-3. Enable branch protection / required checks for `main` and preferably `development` when repository administration policy is available.
-4. Design and validate portfolio-wide exposure management as a separate execution change; do not imply it is already present.
-5. Continue genuine out-of-sample evidence, ablation, correlation/portfolio research and historical-event replay without weakening the current no-lookahead boundaries.
+**Important remaining gate:** target-machine Windows + native MT5 **Demo** acceptance has not been performed. Use `Run-Demo-Acceptance.cmd` from the downloaded package to collect separate Native/Poll samples and share its privacy-safe evidence bundle. Validate actual fills/costs, timing and continued learning before promoting any execution decision. PR #58 remains open and requires compatibility review. Previous PR #55 evidence below is a historical correctness checkpoint, not the latest tested source.
 
-No CI result, package build or simulated broker fixture establishes profitability, guaranteed latency or native broker acceptance.
+## Earlier verified correctness checkpoint — PR #55
+
+PR #55 (comprehensive 0.7 correctness audit) is merged into `development` as `2e05cf3b907073c5faebe25fd16d4a4a523b224d`. Exact tested PR head `892807ec317c856b1215efb569e726554266709b` and the merge share code tree `a85fa0c424e23cf9e82790c649d25461e1547387`. Research run `39067458928` and Windows/Linux run `39067458927` both succeeded on that code.
+
+Verified count: 87 domain Rust tests, 72 runtime Rust tests plus one intentionally ignored official-news public-network test, three desktop Rust tests, and 124 of 125 Windows Python tests passed (one OS-specific fixture skipped). The Windows CI executed the real named-pipe blocking-connect shutdown/rebind regression, built the portable preview and passed simulated execution integration. The Research CI passed browser report and complete native-page rendering. Real Windows/MT5 Demo acceptance remains pending.
+
+PR #55 fixed native pipe shutdown/rebind and dead-worker detection, stopped-only execution-affecting Risk/Trading settings, side-effect-free rejection of invalid `/v1/config`, explicit-only START, final post-journal Core authorization and account recheck before `order_send`, safe timeframe indexing, accurate START audit metadata and complete Python compile checks. It adds `post_journal_authorize_ms` and `post_journal_account_ms` latency evidence without double counting.
+
+Promoted 0.6.0 evidence remains immutable. BrainTrade 0.7.0 is a Development Preview, not production/broker acceptance or a profitability guarantee.
+
+## Implemented runtime and execution
+
+- 16 append-only execution identities with coordinator/advisor/SOLO/RETURNING roles.
+- Broker ownership remains stable: `generated=410613`, `liquidity=410614`, `trend_pullback=410615`.
+- Scalping, Swing, Expert and Sniper modes.
+- Durable broker intent/reconciliation, split-fill handling, account isolation, no blind resend after uncertain results and mandatory final authorization before send.
+- Portfolio Exposure v1, account-scoped commissions and configurable frozen Sniper hold.
+- Sniper Fast Lane and execution-only `PUT /v1/execution/pulse`.
+- Native Windows MT5 bridge using `OnTick` plus `CopyTicks(..., COPY_TICKS_ALL)`, authenticated local transport, bounded FIFO and automatic 5 ms Python polling fallback.
+- Trend Pullback uses completed bars only with EMA20/EMA50 trend structure, controlled pullback, confirmation quality, anti-chasing and structural stop geometry.
+- Exact closed Demo broker-outcome learning using booked `profit + commission + swap + fee` for participating coordinator members.
+- Intelligence V3 weighting using reward/confidence, regime/session context and execution-quality evidence.
+- Native five-section Control Center and persisted runtime state.
+
+## Research boundary
+
+Historical Meta v1/v2, CES v1, KTE v1, Wyckoff, trend/regime/structure/volatility/Gann/liquidity analysis, aligned correlation, chronological holdout/rolling OOS, feature-group ablation, causal official-news replay, snapshots/labels/export and imported challengers are implemented as research/evidence lanes.
+
+Correlation, ablation, news replay and imported ML do not directly authorize broker execution. Imported ML has no automatic Champion promotion route.
+
+## Demo acceptance tooling
+
+The packaged Windows preview now contains:
+
+- `Run-Demo-Acceptance.cmd` at the package root.
+- `Tools\Run-Demo-Acceptance-GUI.ps1` as the one-click Windows Demo Acceptance Center.
+- `Tools\Run-Demo-Acceptance.ps1` for scripted/advanced operation.
+- `DEMO_ACCEPTANCE_AR.md` at the package root.
+- `runtime\gateway\check_runtime.py` as the underlying read-only collector.
+
+The Acceptance Center can run controlled Native, Poll or Auto capture sessions and display acceptance result, Sniper sample count, `queue_to_send` P95/P99, `send_ms` P95, Native/Poll counts/P95 and the largest local pre-send hotspot. It never enables START, binds an account, changes execution settings or submits an order.
+
+PR #53 adds a privacy-safe `تصدير حزمة مشاركة` path for target-machine evidence. The exported ZIP is allowlisted to acceptance JSON/CSV/state/runtime-import evidence plus a reduced summary/README. It intentionally excludes raw MT5 login, `ipc.key`, broker journals/databases, Telegram credentials and GUI stdout/stderr logs.
+
+Windows CI parses both acceptance PowerShell files before packaging and parses the packaged copies again after staging. This proves syntax/package wiring only; it does **not** perform real MT5 Demo acceptance.
+
+## Sniper latency boundary
+
+The engineering target remains **<=20 ms for BrainTrade-local `queue_to_send_ms`** on the intended Windows machine. Use `core_pulse_ms`, `queue_to_gateway_ms`, `authorize_ms`, `journal_ms`, `post_journal_authorize_ms`, `post_journal_account_ms`, `other_pre_send_ms`, `pre_send_ms`, `queue_to_send_ms`, `send_ms` and `total_ms` to locate the measured bottleneck.
+
+Do not remove account identity, quote freshness, ownership, authorization, durable journal or uncertain-send reconciliation merely to improve a benchmark. `send_ms` is MT5/network/broker dependent and is not part of the local <=20 ms claim.
+
+## Exact CI evidence
+
+PR #55 tested head `892807ec317c856b1215efb569e726554266709b`, merged `development` commit `2e05cf3b907073c5faebe25fd16d4a4a523b224d`; matching source tree `a85fa0c424e23cf9e82790c649d25461e1547387`.
+
+- Research: SUCCESS `39067458928`. Artifact `12114515035` (`synthetic-research-validation`), 4309079 bytes, SHA-256 `40d2a26180ad9d054d63a9069a7405b9e33b0ec6b89c813dad8d09ad6485263a`.
+- Windows/Linux: SUCCESS `39067458927`. Portable artifact `12114566161` (`BrainTrade-Windows-x64-Preview`), 34569115 bytes, SHA-256 `79cbde840d3ff0d809da922ea55d9b3551a6007ef2301b12a76e045d31db8f70`.
+- Windows validation: artifact `12114167824`, 1704761 bytes, SHA-256 `1a7a691d35acb7fa52ea941fa5db35a6064c8d013187180f1a84b47ed3dd87c1`.
+- `docs/development-validation.json` contains machine-readable evidence; `docs/QUALITY_AUDIT.md` documents corrected defects and explicit limitations. Promoted 0.6.0 records are untouched.
+
+## Target-machine work still pending
+
+1. On the intended Windows PC, open the packaged `BrainTrade.exe`, connect the intended MT5 **Demo** account and open `Run-Demo-Acceptance.cmd`.
+2. Collect a controlled Native session with `BrainTradeSniperBridge` attached and a separate Poll session with it detached/stopped.
+3. Use `تصدير حزمة مشاركة` after capture so the JSON/CSV/state and reduced summary can be inspected without sending account secrets or broker databases.
+4. Evaluate real retcodes, fees, rejections, partial fills and P50/P95/P99 timing distributions. If local latency misses the target, optimize only the measured dominant component.
+5. Accumulate genuine prospective/OOS evidence for Trend Pullback and the coordinator before changing influence or thresholds.
+6. Test private Telegram delivery with credentials stored only on the target machine.
+7. Enable required branch checks when repository administration access is available.
+
+Startup/restart remains STOPPED. CI does not establish profitability, broker fill quality, guaranteed latency or native MT5 acceptance. The Demo acceptance collector and Acceptance Center remain read-only and must not manufacture trades.

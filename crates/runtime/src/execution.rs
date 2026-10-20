@@ -1,21 +1,304 @@
 //! Execution semantics wrapper: coordinated main brain by default, per-brain SOLO override on demand.
-//! The previous 0.6 WIP engine is preserved verbatim in execution_legacy.rs.
+//! Portfolio exposure v1 is a Core-side fail-closed entry gate across all BrainTrade identities.
+//! The previous 0.6 engine is preserved in execution_legacy.rs and still owns durable broker intents.
 #[path = "execution_legacy.rs"]
 mod legacy;
+#[path = "execution_pulse.rs"]
+mod pulse;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use braintrade_domain::{
-    execution::BrainConfig,
+    execution::{self, BrainConfig},
     studio::FrameBar,
     Config, Status, Telemetry,
 };
-use rusqlite::Connection;
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Instant,
+};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct PortfolioLimits {
+    /// Master switch. Defaults off so upgrading from 0.6 does not silently change execution.
+    enabled: bool,
+    /// Maximum combined open BrainTrade positions plus unresolved open intents.
+    max_positions: u32,
+    /// Maximum combined owned lots plus unresolved open-intent lots.
+    max_lots: f64,
+    /// Maximum estimated stop risk as a percentage of current equity.
+    /// A positive value fails closed when any contributing position/intent risk is unknown.
+    max_risk_percent: f64,
+}
+impl Default for PortfolioLimits {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_positions: 3,
+            max_lots: 0.30,
+            max_risk_percent: 2.0,
+        }
+    }
+}
+impl PortfolioLimits {
+    fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            (1..=100).contains(&self.max_positions),
+            "Portfolio max positions must be 1..100"
+        );
+        anyhow::ensure!(
+            self.max_lots.is_finite() && (0.001..=10_000.0).contains(&self.max_lots),
+            "Portfolio max lots must be 0.001..10000"
+        );
+        anyhow::ensure!(
+            self.max_risk_percent.is_finite()
+                && (0.01..=100.0).contains(&self.max_risk_percent),
+            "Portfolio max risk must be 0.01..100 percent"
+        );
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct Exposure {
+    open_positions: u32,
+    open_intents: u32,
+    lots: f64,
+    estimated_risk: f64,
+    risk_known: bool,
+}
+impl Exposure {
+    fn total_slots(&self) -> u32 {
+        self.open_positions.saturating_add(self.open_intents)
+    }
+    fn json(&self, limits: &PortfolioLimits, equity: f64) -> Value {
+        let risk_percent = if self.risk_known && equity.is_finite() && equity > 0.0 {
+            Some(self.estimated_risk / equity * 100.0)
+        } else {
+            None
+        };
+        json!({
+            "enabled":limits.enabled,
+            "limits":{
+                "max_positions":limits.max_positions,
+                "max_lots":limits.max_lots,
+                "max_risk_percent":limits.max_risk_percent
+            },
+            "open_positions":self.open_positions,
+            "unresolved_open_intents":self.open_intents,
+            "exposure_slots":self.total_slots(),
+            "lots":self.lots,
+            "estimated_stop_risk":if self.risk_known { Value::from(self.estimated_risk) } else { Value::Null },
+            "estimated_stop_risk_percent_equity":risk_percent,
+            "risk_known":self.risk_known,
+            "note":"Portfolio limits block new entries only. Existing positions, broker SL/TP, timed exits and reconciliation remain active."
+        })
+    }
+}
+
+fn context(t: &Telemetry) -> String {
+    crate::coordinator_learning::context(t)
+}
+
+fn owned_position_risk(t: &Telemetry, c: &Config, position: &braintrade_domain::Position) -> Option<f64> {
+    if position.volume <= 0.0 || !position.volume.is_finite()
+        || !position.sl.is_finite() || position.sl <= 0.0
+        || !position.price_open.is_finite() || position.price_open <= 0.0
+    {
+        return None;
+    }
+    let tick = t.tick_size.filter(|v| v.is_finite() && *v > 0.0)?;
+    let tick_value = t
+        .tick_value_loss
+        .zip(t.tick_value_profit)
+        .map(|(loss, profit)| loss.max(profit))
+        .filter(|v| v.is_finite() && *v > 0.0)?;
+    // A breakeven/trailing stop past entry locks in some gross profit and no
+    // longer has downside price risk relative to entry. It is NOT an unknown
+    // stop: count zero price loss plus the estimated round-trip commission.
+    // A genuinely missing/invalid stop still fails closed.
+    let distance = match position.side.as_str() {
+        "BUY" => (position.price_open - position.sl).max(0.0),
+        "SELL" => (position.sl - position.price_open).max(0.0),
+        _ => return None,
+    };
+    if !distance.is_finite() {
+        return None;
+    }
+    Some(
+        distance / tick * tick_value * position.volume
+            + c.risk.commission_per_lot * position.volume,
+    )
+}
+
+fn intent_risk(t: &Telemetry, c: &Config, request: &Value) -> Option<f64> {
+    let lots = request["lots"].as_f64().filter(|v| v.is_finite() && *v > 0.0)?;
+    let stop = request["signal"]["stop_distance"]
+        .as_f64()
+        .filter(|v| v.is_finite() && *v > 0.0)?;
+    let tick = t.tick_size.filter(|v| v.is_finite() && *v > 0.0)?;
+    let tick_value = t
+        .tick_value_loss
+        .zip(t.tick_value_profit)
+        .map(|(loss, profit)| loss.max(profit))
+        .filter(|v| v.is_finite() && *v > 0.0)?;
+    Some(stop / tick * tick_value * lots + c.risk.commission_per_lot * lots)
+}
+
+fn command_values(db: &Connection, key: &str, include_queued: bool) -> Result<Vec<Value>> {
+    let states = if include_queued {
+        "('queued','dispatched','unknown','placed','filled','partial')"
+    } else {
+        "('dispatched','unknown','placed','filled','partial')"
+    };
+    let sql = format!(
+        "SELECT json(payload) FROM broker_commands WHERE context=?1 AND kind='open' AND state IN {states} ORDER BY created_ms,id"
+    );
+    let mut statement = db.prepare(&sql)?;
+    let rows = statement
+        .query_map([key], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|row| Ok(serde_json::from_str(&row)?))
+        .collect()
+}
+
+fn exposure(db: &Connection, t: &Telemetry, c: &Config, include_queued: bool) -> Result<Exposure> {
+    let key = context(t);
+    let mut result = Exposure {
+        risk_known: true,
+        ..Default::default()
+    };
+    let owned: Vec<_> = t
+        .positions
+        .iter()
+        .filter(|position| {
+            position.symbol == t.symbol && execution::brain_for_magic(position.magic).is_some()
+        })
+        .collect();
+    let visible_magics: BTreeSet<u64> = owned.iter().map(|position| position.magic).collect();
+    for position in owned {
+        result.open_positions = result.open_positions.saturating_add(1);
+        result.lots += position.volume.max(0.0);
+        match owned_position_risk(t, c, position) {
+            Some(risk) => result.estimated_risk += risk,
+            None => result.risk_known = false,
+        }
+    }
+    for request in command_values(db, &key, include_queued)? {
+        let magic = request["magic"].as_u64().unwrap_or(0);
+        // A filled/partial intent and its now-visible position are one exposure, not two.
+        if visible_magics.contains(&magic) {
+            continue;
+        }
+        result.open_intents = result.open_intents.saturating_add(1);
+        let lots = request["lots"].as_f64().unwrap_or(0.0);
+        if !lots.is_finite() || lots <= 0.0 {
+            result.risk_known = false;
+        } else {
+            result.lots += lots;
+        }
+        match intent_risk(t, c, &request) {
+            Some(risk) => result.estimated_risk += risk,
+            None => result.risk_known = false,
+        }
+    }
+    if !result.lots.is_finite() || !result.estimated_risk.is_finite() {
+        result.risk_known = false;
+    }
+    Ok(result)
+}
+
+fn portfolio_reason(limits: &PortfolioLimits, next: &Exposure, equity: f64) -> Option<String> {
+    if !limits.enabled {
+        return None;
+    }
+    if next.total_slots() > limits.max_positions {
+        return Some(format!(
+            "Portfolio exposure: {} positions/intents would exceed limit {}",
+            next.total_slots(), limits.max_positions
+        ));
+    }
+    if next.lots > limits.max_lots + 1e-9 {
+        return Some(format!(
+            "Portfolio exposure: {:.4} lots would exceed limit {:.4}",
+            next.lots, limits.max_lots
+        ));
+    }
+    if !next.risk_known || !equity.is_finite() || equity <= 0.0 {
+        return Some("Portfolio exposure: stop risk is unknown; new entry blocked fail-closed".into());
+    }
+    let cap = equity * limits.max_risk_percent / 100.0;
+    if next.estimated_risk > cap + 1e-8 {
+        return Some(format!(
+            "Portfolio exposure: estimated stop risk {:.2} exceeds {:.2}% equity cap {:.2}",
+            next.estimated_risk, limits.max_risk_percent, cap
+        ));
+    }
+    None
+}
+
+fn enforce_portfolio(
+    db: &Connection,
+    t: &Telemetry,
+    c: &Config,
+    limits: &PortfolioLimits,
+) -> Result<Exposure> {
+    if !limits.enabled {
+        return exposure(db, t, c, true);
+    }
+    let key = context(t);
+    // Existing broker exposure and already-dispatched intents form the immutable base.
+    let mut current = exposure(db, t, c, false)?;
+    let mut statement = db.prepare(
+        "SELECT id,payload FROM broker_commands WHERE context=?1 AND kind='open' AND state='queued' ORDER BY created_ms,id",
+    )?;
+    let rows = statement
+        .query_map([&key], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    for (id, raw) in rows {
+        let request: Value = serde_json::from_str(&raw)?;
+        let mut next = current.clone();
+        next.open_intents = next.open_intents.saturating_add(1);
+        let lots = request["lots"].as_f64().unwrap_or(0.0);
+        if lots.is_finite() && lots > 0.0 {
+            next.lots += lots;
+        } else {
+            next.risk_known = false;
+        }
+        match intent_risk(t, c, &request) {
+            Some(risk) => next.estimated_risk += risk,
+            None => next.risk_known = false,
+        }
+        if let Some(reason) = portfolio_reason(limits, &next, t.equity) {
+            let result = json!({
+                "id":id,
+                "state":"cancelled",
+                "reason":reason,
+                "portfolio":current.json(limits,t.equity)
+            });
+            db.execute(
+                "UPDATE broker_commands SET state='cancelled',result=?2 WHERE id=?1 AND state='queued'",
+                params![id, result.to_string()],
+            )?;
+        } else {
+            current = next;
+        }
+    }
+    Ok(current)
+}
 
 pub struct Service {
     inner: legacy::Service,
-    learner:crate::coordinator_learning::Learner,
+    learner: crate::coordinator_learning::Learner,
+    student: crate::student_learning::Student,
+    portfolio: PortfolioLimits,
+    portfolio_state: Value,
+    fast: Option<pulse::FastContext>,
 }
 
 impl Service {
@@ -27,7 +310,43 @@ impl Service {
         if let Some(system) = inner.brains.iter_mut().find(|brain| brain.id == "system") {
             system.enabled = true;
         }
-        Ok(Self { inner,learner:crate::coordinator_learning::Learner::new(db)? })
+        db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS portfolio_execution_settings(\
+             id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);",
+        )?;
+        let raw: Option<String> = db
+            .query_row(
+                "SELECT payload FROM portfolio_execution_settings WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let portfolio: PortfolioLimits = raw
+            .map(|value| serde_json::from_str(&value))
+            .transpose()?
+            .unwrap_or_default();
+        portfolio.validate()?;
+        let portfolio_state = Exposure {
+            risk_known: false,
+            ..Default::default()
+        }
+        .json(&portfolio, 0.0);
+        Ok(Self {
+            inner,
+            learner: crate::coordinator_learning::Learner::new(db)?,
+            student: crate::student_learning::Student::new(db)?,
+            portfolio,
+            portfolio_state,
+            fast: None,
+        })
+    }
+
+    fn save_portfolio(db: &Connection, candidate: &PortfolioLimits) -> Result<()> {
+        db.execute(
+            "INSERT OR REPLACE INTO portfolio_execution_settings VALUES(1,?1)",
+            [serde_json::to_string(candidate)?],
+        )?;
+        Ok(())
     }
 
     fn account_matches(&self, status: &Status) -> bool {
@@ -67,16 +386,41 @@ impl Service {
         if let Some(system) = self.inner.brains.iter_mut().find(|brain| brain.id == "system") {
             system.enabled = true;
         }
-        let available=crate::coordinator_learning::available_frames(telemetry,frames,now);
-        self.inner.weights=self.learner.observe(db,telemetry,config,&self.inner.brains,&available,run,now)?;
+        let available = crate::coordinator_learning::available_frames(telemetry, frames, now);
+        self.inner.weights = self.learner.observe(
+            db,
+            telemetry,
+            config,
+            &self.inner.brains,
+            &available,
+            run,
+            now,
+        )?;
+        crate::sniper_learning::refresh(&mut self.inner.sniper, db, telemetry, now)?;
+        self.student.observe(db,telemetry,now)?;
+        self.inner.student_policies=self.student.policies.clone();
         // Legacy engine still owns durable broker intents/reconciliation. With `system`
-        // forced on, it represents coordinated execution; every other `enabled` flag now
-        // means SOLO override only.
-        self.inner.observe(db, telemetry, config, run, frames, now)
+        // forced on, it represents coordinated execution; every other `enabled` flag means SOLO.
+        self.inner
+            .observe(db, telemetry, config, run, frames, now)?;
+        self.student.capture_entries(self.inner.take_entries(), now);
+        if run {crate::student_learning::log_opportunities(db,telemetry,&self.inner.learning_decisions(),now)?;}
+        // Apply one global entry budget after all brains have proposed their queued opens and
+        // before the gateway can retrieve them. Exits and reconciliation states are untouched.
+        let current = enforce_portfolio(db, telemetry, config, &self.portfolio)?;
+        self.portfolio_state = current.json(&self.portfolio, telemetry.equity);
+        // Cache only data already accepted by the regular reconciled snapshot path. Fast
+        // pulses may overlay a newer quote but can never replace account/position state.
+        self.fast = Some(pulse::FastContext::new(telemetry, config, frames));
+        Ok(())
     }
 
-    fn enrich_roles(mut value: Value, db:&Connection,status:&Status) -> Result<Value> {
-        let key=status.telemetry.as_ref().map(crate::coordinator_learning::context).unwrap_or_default();
+    fn enrich_roles(mut value: Value, db: &Connection, status: &Status) -> Result<Value> {
+        let key = status
+            .telemetry
+            .as_ref()
+            .map(crate::coordinator_learning::context)
+            .unwrap_or_default();
 
         if let Some(brains) = value.get_mut("brains").and_then(Value::as_array_mut) {
             for brain in brains {
@@ -85,10 +429,18 @@ impl Service {
                     .unwrap_or_default()
                     .to_owned();
                 let solo = id != "system" && brain["config"]["enabled"] == true;
-                let in_flight:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",rusqlite::params![key,id],|r|r.get(0))?;
-                let open=status.telemetry.as_ref().is_some_and(|t|t.positions.iter().any(|p|Some(p.magic)==braintrade_domain::execution::magic(&id)&&p.symbol==t.symbol));
-                let returning=id!="system"&&!solo&&(in_flight||open);
-                brain["return_pending"]=json!(returning);
+                let in_flight: bool = db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",
+                    params![key, id],
+                    |row| row.get(0),
+                )?;
+                let open = status.telemetry.as_ref().is_some_and(|t| {
+                    t.positions.iter().any(|position| {
+                        Some(position.magic) == execution::magic(&id) && position.symbol == t.symbol
+                    })
+                });
+                let returning = id != "system" && !solo && (in_flight || open);
+                brain["return_pending"] = json!(returning);
                 brain["role"] = json!(if id == "system" {
                     "coordinator"
                 } else if solo {
@@ -105,8 +457,9 @@ impl Service {
                 }
             }
         }
+        value["learning_review"] = json!(crate::coordinator_learning::broker_review(db,&key)?);
         value["execution_model"] = json!("adaptive-member-coordinator-v1");
-        value["note"] = json!("العقل الرئيسي يعمل مع START. العقول الثانوية تشارك كمستشارين افتراضياً؛ تفعيل SOLO يفصل العقل المختار فقط، وإطفاؤه يعيده بعد تسوية صفقة SOLO المفتوحة. التعلم يحدّث وزن العضو بعد 12 شمعة لاحقة؛ أول 20 عينة تستخدم وزناً محايداً. START/STOP منفصلان عن زر العضوية.");
+        value["note"] = json!("العقل الرئيسي يعمل مع START. العقول الثانوية تشارك كمستشارين افتراضياً؛ تفعيل SOLO يفصل العقل المختار فقط، وإطفاؤه يعيده بعد تسوية صفقة SOLO المفتوحة. الصفقات المغلقة على الديمو تحدّث الوزن من أول نتيجة، بعد التكاليف؛ تقييم 12 شمعة يبقى دليلاً افتراضياً منفصلاً. START/STOP منفصلان عن زر العضوية.");
         Ok(value)
     }
 
@@ -119,6 +472,101 @@ impl Service {
         status: &Status,
         now: u64,
     ) -> Result<Value> {
+        if method=="GET" && path=="/v1/execution/student" {
+            let key=status.telemetry.as_ref().map(crate::coordinator_learning::context).unwrap_or_default();
+            let mut view=crate::student_learning::view(db,&key)?;
+            view["demo_connected"]=json!(status.gateway_fresh && status.telemetry.as_ref().is_some_and(|t|t.connected&&t.demo&&t.account_trade_mode==Some(0)));
+            return Ok(view);
+        }
+        // PUT intentionally avoids the generic POST audit write on every market tick.
+        // The pulse only changes the cached quote, then runs execution/reconciliation
+        // logic and returns gateway work in the same response. Final authorization and
+        // the gateway's synchronous durable send journal still happen before order_send.
+        if method == "PUT" && path == "/v1/execution/pulse" {
+            anyhow::ensure!(
+                status.gateway_fresh,
+                "A fresh reconciled MT5 snapshot is required before Sniper pulse"
+            );
+            let started = Instant::now();
+            let next = self
+                .fast
+                .as_ref()
+                .context("Sniper pulse cache is not ready")?
+                .apply(body, now)?;
+            if let Some(system) = self.inner.brains.iter_mut().find(|brain| brain.id == "system") {
+                system.enabled = true;
+            }
+            self.student.quote(&next.telemetry, now);
+            self.inner.observe(
+                db,
+                &next.telemetry,
+                &next.config,
+                status.requested_run,
+                next.frames.as_ref(),
+                now,
+            )?;
+            self.student.capture_entries(self.inner.take_entries(), now);
+            let current = enforce_portfolio(db, &next.telemetry, &next.config, &self.portfolio)?;
+            self.portfolio_state = current.json(&self.portfolio, next.telemetry.equity);
+
+            let mut pulse_status = status.clone();
+            pulse_status.telemetry = Some(next.telemetry.clone());
+            pulse_status.last_received_ms = Some(now);
+            pulse_status.gateway_fresh = true;
+            pulse_status.execution_enabled = self.enabled(&pulse_status);
+            self.fast = Some(next);
+
+            let mut work = self.inner.route(
+                "GET",
+                "/v1/execution/gateway",
+                &[],
+                db,
+                &pulse_status,
+                now,
+            )?;
+            work["pulse_fast_path"] = json!(true);
+            work["pulse_to_work_us"] = json!(started.elapsed().as_micros() as u64);
+            return Ok(work);
+        }
+
+        if method == "POST" && path == "/v1/execution/portfolio" {
+            anyhow::ensure!(
+                !status.requested_run && !self.pending(db)?,
+                "أوقف النظام وانتظر تسوية كل الأوامر قبل تغيير حدود المحفظة"
+            );
+            let candidate: PortfolioLimits = serde_json::from_slice(body)?;
+            candidate.validate()?;
+            // Persist the proposed policy before replacing the in-memory one;
+            // a disk failure must not leave two inconsistent exposure policies.
+            Self::save_portfolio(db, &candidate)?;
+            self.portfolio = candidate;
+            if let Some(t) = status.telemetry.as_ref().filter(|t| t.connected) {
+                // Read-only refresh; queued entries are not created while STOPPED and exits remain untouched.
+                let config = status
+                    .analysis
+                    .current
+                    .then_some(())
+                    .map(|_| ())
+                    .unwrap_or(());
+                let _ = config; // Status intentionally does not own Config; observe refreshes exact risk state.
+                self.portfolio_state["enabled"] = json!(self.portfolio.enabled);
+                self.portfolio_state["limits"] = json!({
+                    "max_positions":self.portfolio.max_positions,
+                    "max_lots":self.portfolio.max_lots,
+                    "max_risk_percent":self.portfolio.max_risk_percent
+                });
+                self.portfolio_state["account"] = json!({"login":t.login,"server":t.server});
+            } else {
+                self.portfolio_state["enabled"] = json!(self.portfolio.enabled);
+                self.portfolio_state["limits"] = json!({
+                    "max_positions":self.portfolio.max_positions,
+                    "max_lots":self.portfolio.max_lots,
+                    "max_risk_percent":self.portfolio.max_risk_percent
+                });
+            }
+            return Ok(json!({"ok":true,"portfolio":self.portfolio_state}));
+        }
+
         // A brain role change must never arm global START implicitly. START/STOP is a
         // separate master control. The `enabled` bit on a non-system brain means SOLO.
         if method == "POST" && path == "/v1/execution/brain" {
@@ -126,7 +574,9 @@ impl Service {
             if config.id == "system" {
                 config.enabled = true;
                 let encoded = serde_json::to_vec(&config)?;
-                let mut result = self.inner.route(method, path, &encoded, db, status, now)?;
+                let mut result = self
+                    .inner
+                    .route(method, path, &encoded, db, status, now)?;
                 result["start"] = json!(false);
                 result["role"] = json!("coordinator");
                 result["note"] = json!("العقل الرئيسي يتبع START/STOP ولا يحتاج زر تداول منفرد.");
@@ -146,10 +596,231 @@ impl Service {
         }
 
         let value = self.inner.route(method, path, body, db, status, now)?;
+        if method == "POST" && path == "/v1/execution/result" {
+            if let Some(t) = status.telemetry.as_ref().filter(|t| status.gateway_fresh && t.connected) {
+                // Register the acknowledged fill now, before the next quote pulse.
+                self.student.observe(db, t, now)?;
+            }
+        }
         if method == "GET" && path == "/v1/execution" {
-            Self::enrich_roles(value,db,status)
+            let mut value = Self::enrich_roles(value, db, status)?;
+            value["portfolio"] = self.portfolio_state.clone();
+            Ok(value)
         } else {
             Ok(value)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use braintrade_domain::Position;
+
+    fn telemetry() -> Telemetry {
+        Telemetry {
+            connected: true,
+            login: 17,
+            server: "Demo".into(),
+            currency: "USD".into(),
+            symbol: "XAUUSD".into(),
+            equity: 10_000.0,
+            balance: 10_000.0,
+            tick_size: Some(0.01),
+            tick_value_loss: Some(1.0),
+            tick_value_profit: Some(1.0),
+            ..Default::default()
+        }
+    }
+    fn setup() -> Connection {
+        let db = Connection::open_in_memory().unwrap();
+        let _ = Service::new(&db).unwrap();
+        db
+    }
+    fn queue(db: &Connection, t: &Telemetry, id: &str, brain: &str, lots: f64, stop: f64, created: u64) {
+        let key = context(t);
+        let magic = execution::magic(brain).unwrap();
+        let payload = json!({
+            "id":id,"context":key,"brain":brain,"kind":"open","login":t.login,
+            "server":t.server,"currency":t.currency,"target":"demo","symbol":t.symbol,
+            "magic":magic,"position":0,"lots":lots,"created_ms":created,
+            "signal":{"side":1,"stop_distance":stop,"target_distance":stop*2.0}
+        });
+        db.execute(
+            "INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload) VALUES(?1,?2,?3,'open',?4,'queued',?5)",
+            params![id, context(t), brain, created, payload.to_string()],
+        )
+        .unwrap();
+    }
+    fn state(db: &Connection, id: &str) -> String {
+        db.query_row(
+            "SELECT state FROM broker_commands WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn disabled_portfolio_preserves_existing_behavior() {
+        let db = setup();
+        let t = telemetry();
+        queue(&db, &t, "a", "trend", 5.0, 10.0, 1);
+        let limits = PortfolioLimits::default();
+        enforce_portfolio(&db, &t, &Config::default(), &limits).unwrap();
+        assert_eq!(state(&db, "a"), "queued");
+    }
+
+    #[test]
+    fn aggregate_lot_limit_accepts_first_and_cancels_second() {
+        let db = setup();
+        let t = telemetry();
+        queue(&db, &t, "a", "trend", 0.10, 0.05, 1);
+        queue(&db, &t, "b", "gann", 0.10, 0.05, 2);
+        let limits = PortfolioLimits {
+            enabled: true,
+            max_positions: 10,
+            max_lots: 0.15,
+            max_risk_percent: 100.0,
+        };
+        let view = enforce_portfolio(&db, &t, &Config::default(), &limits).unwrap();
+        assert_eq!(state(&db, "a"), "queued");
+        assert_eq!(state(&db, "b"), "cancelled");
+        assert_eq!(view.open_intents, 1);
+        assert!((view.lots - 0.10).abs() < 1e-9);
+    }
+
+    #[test]
+    fn visible_position_and_filled_intent_are_not_double_counted() {
+        let db = setup();
+        let mut t = telemetry();
+        t.positions.push(Position {
+            magic: execution::magic("trend").unwrap(),
+            identifier: 55,
+            ticket: 55,
+            symbol: "XAUUSD".into(),
+            side: "BUY".into(),
+            volume: 0.10,
+            price_open: 2000.0,
+            price_current: 2000.1,
+            profit: 1.0,
+            sl: 1999.9,
+            tp: 2000.2,
+            ..Default::default()
+        });
+        queue(&db, &t, "a", "trend", 0.10, 0.10, 1);
+        db.execute("UPDATE broker_commands SET state='filled' WHERE id='a'", [])
+            .unwrap();
+        let view = exposure(&db, &t, &Config::default(), true).unwrap();
+        assert_eq!(view.open_positions, 1);
+        assert_eq!(view.open_intents, 0);
+        assert!((view.lots - 0.10).abs() < 1e-9);
+    }
+
+    #[test]
+    fn unknown_existing_stop_risk_blocks_new_entry_fail_closed() {
+        let db = setup();
+        let mut t = telemetry();
+        t.positions.push(Position {
+            magic: execution::magic("trend").unwrap(),
+            identifier: 55,
+            ticket: 55,
+            symbol: "XAUUSD".into(),
+            side: "BUY".into(),
+            volume: 0.10,
+            price_open: 2000.0,
+            price_current: 2000.1,
+            profit: 1.0,
+            sl: 0.0,
+            tp: 2000.2,
+            ..Default::default()
+        });
+        queue(&db, &t, "b", "gann", 0.01, 0.10, 2);
+        let limits = PortfolioLimits {
+            enabled: true,
+            max_positions: 10,
+            max_lots: 10.0,
+            max_risk_percent: 2.0,
+        };
+        enforce_portfolio(&db, &t, &Config::default(), &limits).unwrap();
+        assert_eq!(state(&db, "b"), "cancelled");
+    }
+
+    #[test]
+    fn breakeven_and_profit_lock_stops_remain_known_risk_but_missing_sl_fails_closed() {
+        let mut t=telemetry();
+        let mut buy=Position {
+            magic:execution::magic("trend").unwrap(),identifier:50,ticket:50,
+            symbol:"XAUUSD".into(),side:"BUY".into(),volume:0.1,
+            price_open:2000.0,price_current:2001.0,sl:2000.0,tp:2002.0,
+            ..Default::default()
+        };
+        let c=Config::default();
+        let commission=c.risk.commission_per_lot*buy.volume;
+        assert!((owned_position_risk(&t,&c,&buy).unwrap()-commission).abs()<1e-8);
+        buy.sl=2000.5;
+        assert!((owned_position_risk(&t,&c,&buy).unwrap()-commission).abs()<1e-8);
+        buy.sl=0.0;
+        assert!(owned_position_risk(&t,&c,&buy).is_none());
+        buy.sl=f64::NAN;
+        assert!(owned_position_risk(&t,&c,&buy).is_none());
+
+        let sell=Position{
+            magic:execution::magic("gann").unwrap(),identifier:51,ticket:51,
+            symbol:"XAUUSD".into(),side:"SELL".into(),volume:0.1,
+            price_open:2000.0,price_current:1999.0,sl:1999.5,tp:1998.0,
+            ..Default::default()
+        };
+        assert!((owned_position_risk(&t,&c,&sell).unwrap()-commission).abs()<1e-8);
+        t.positions.push(sell);
+        let db=setup();
+        queue(&db,&t,"trailing-advisor","trend",0.01,0.05,1000);
+        let limits=PortfolioLimits{enabled:true,max_positions:3,max_lots:1.0,max_risk_percent:2.0};
+        let exposure=enforce_portfolio(&db,&t,&c,&limits).unwrap();
+        assert!(exposure.risk_known);
+        assert_eq!(state(&db,"trailing-advisor"),"queued");
+    }
+
+    #[test]
+    fn portfolio_settings_wait_for_pending_broker_intents_and_do_not_mutate_on_rejection() {
+        let db=setup();
+        let mut service=Service::new(&db).unwrap();
+        let t=telemetry();
+        let status=Status::default();
+        let updated=PortfolioLimits{enabled:true,max_positions:2,max_lots:0.2,max_risk_percent:1.0};
+        let body=serde_json::to_vec(&updated).unwrap();
+        queue(&db,&t,"in-flight","trend",0.01,0.05,1000);
+        for state_name in ["queued","dispatched","unknown","placed","filled","partial"] {
+            db.execute("UPDATE broker_commands SET state=?1 WHERE id='in-flight'",[state_name]).unwrap();
+            assert!(service.route("POST","/v1/execution/portfolio",&body,&db,&status,1001).is_err(),"{state_name}");
+            assert!(!service.portfolio.enabled);
+            let persisted: i64=db.query_row("SELECT COUNT(*) FROM portfolio_execution_settings",[],|r|r.get(0)).unwrap();
+            assert_eq!(persisted,0);
+        }
+        db.execute("UPDATE broker_commands SET state='observed' WHERE id='in-flight'",[]).unwrap();
+        assert!(service.route("POST","/v1/execution/portfolio",&body,&db,&status,1002).is_ok());
+        assert!(service.portfolio.enabled);
+        let restarted=Service::new(&db).unwrap();
+        assert!(restarted.portfolio.enabled);
+        assert_eq!(restarted.portfolio.max_positions,2);
+    }
+
+    #[test]
+    fn position_count_includes_unresolved_open_intents() {
+        let db = setup();
+        let t = telemetry();
+        queue(&db, &t, "a", "trend", 0.01, 0.05, 1);
+        db.execute("UPDATE broker_commands SET state='unknown' WHERE id='a'", [])
+            .unwrap();
+        queue(&db, &t, "b", "gann", 0.01, 0.05, 2);
+        let limits = PortfolioLimits {
+            enabled: true,
+            max_positions: 1,
+            max_lots: 10.0,
+            max_risk_percent: 100.0,
+        };
+        enforce_portfolio(&db, &t, &Config::default(), &limits).unwrap();
+        assert_eq!(state(&db, "a"), "unknown");
+        assert_eq!(state(&db, "b"), "cancelled");
     }
 }

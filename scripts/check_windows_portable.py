@@ -13,7 +13,11 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
+import tomllib
 import urllib.request
+
+ROOT = Path(__file__).resolve().parents[1]
+VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
 
 
 def unseal(path: Path) -> str:
@@ -45,6 +49,15 @@ def main():
     if os.name != "nt":
         raise SystemExit("This acceptance harness requires Windows")
     executable = args.exe.resolve()
+    package_root = executable.parent
+    native_runtime = package_root / "runtime/gateway/sniper_native.py"
+    native_ea = package_root / "MT5/Experts/BrainTradeSniperBridge.mq5"
+    assert native_runtime.is_file(), native_runtime
+    assert native_ea.is_file(), native_ea
+    ea_source = native_ea.read_text(encoding="utf-8")
+    assert "void OnTick()" in ea_source and "FileFlush(g_pipe)" in ea_source
+    assert "OrderSend" not in ea_source and "CTrade" not in ea_source
+
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with tempfile.TemporaryDirectory(prefix="braintrade-windows-check-") as folder:
         directory = Path(folder)
@@ -71,9 +84,12 @@ def main():
                         time.sleep(0.1)
                 else:
                     raise AssertionError("Packaged Core startup timeout")
-                assert status["version"] == "0.6.0" and status["state"] == "stopped", status
+                assert status["version"] == VERSION and status["state"] == "stopped", status
                 assert status["execution_enabled"] is False
                 assert api("/v1/learning")["champion"] is None
+                student = api("/v1/execution/student")
+                assert student["total_experiences"] == 0 and student["closed_broker_trades"] == 0
+                assert student["demo_connected"] is False
                 assert api("/v1/opportunities/history")["setups"] == []
                 assert api("/v1/stop", {})["state"] == "stopped"
                 config = api("/v1/config")["config"]
@@ -85,7 +101,7 @@ def main():
                     assert api("/v1/config")["config"]["trading"]["mode"] == mode
                 fees = api("/v1/trading/preview", {"lots": 0.1, "commission_per_lot": 7.0, "pip_points": 10.0})
                 assert abs(fees["commission"] - 0.70) < 1e-10
-                assert "costs" not in fees  # No actual broker quote in packaged acceptance.
+                assert "costs" not in fees
 
                 assert (directory / "config.json").is_file()
                 risk = dict(config["risk"])
@@ -120,14 +136,12 @@ def main():
                 assert all(item["valid"] for item in api("/v1/backups")["backups"])
                 api("/v1/shutdown", {})
                 assert process.wait(timeout=15) == 0
-                # Windows GUI-subsystem binaries may outlive a PowerShell invocation.
-                # subprocess.run waits for completion before validating/uploading frames.
                 subprocess.run([str(executable), "--render-check"], env=environment,
                                cwd=directory, check=True, timeout=180)
                 frames = directory / "test-output" / "native-ui"
                 expected = {}
                 for width, height, suffix in [(1120, 820, ""), (880, 700, "-small")]:
-                    for page in range(18):
+                    for page in range(20):
                         expected[f"dashboard-page-{page}{suffix}.ppm"] = (width, height)
                 assert {path.name for path in frames.glob("*.ppm")} == set(expected)
                 for name, (width, height) in expected.items():
@@ -138,9 +152,10 @@ def main():
                 shutil.copytree(frames, args.output.parent / "native-ui", dirs_exist_ok=True)
                 args.output.write_text(json.dumps({"version": status["version"], "result": "PASS",
                     "checks": ["packaged Core startup", "DPAPI IPC", "stopped/unbound default",
-                               "learning API", "four mode settings and restart", "proportional fee calculator", "21-frame studio API", "opportunity history", "config save", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "shutdown", "all 36 complete native frames"],
-                    "native_pages": 18, "rendered_frames": len(expected),
-                    "native_mt5_acceptance": "not performed"}, indent=2), encoding="utf-8")
+                               "native Sniper runtime and source-only MQL5 EA packaged", "MQL5 bridge contains no order submission API",
+                               "learning and student journal APIs", "four mode settings and restart", "proportional fee calculator", "21-frame studio API", "opportunity history", "config save", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "shutdown", "all 40 complete native frames"],
+                    "native_pages": 20, "rendered_frames": len(expected),
+                    "native_mt5_acceptance": "EA source packaged; target-machine MetaEditor compile/attach and real OnTick pipe acceptance not performed"}, indent=2), encoding="utf-8")
             finally:
                 if process.poll() is None:
                     try:

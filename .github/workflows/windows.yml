@@ -4,9 +4,13 @@ on:
   push:
     branches: [main, development]
   pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -19,8 +23,8 @@ jobs:
         run: ./scripts/build-windows.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: BrainTrade-Windows-x64-v0.6.0-Preview
-          path: release/BrainTrade-Windows-x64-v0.6.0-Preview.zip
+          name: BrainTrade-Windows-x64-Preview
+          path: release/BrainTrade-Windows-x64-v*-Preview.zip
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -38,3 +42,5 @@ jobs:
       - run: python3 scripts/check_backup_restore.py
       - run: python3 scripts/check_studio.py
       - run: python3 scripts/check_execution.py
+      - run: python3 scripts/check_flexible_demo.py
+      - run: python3 scripts/check_sniper_learner.py
