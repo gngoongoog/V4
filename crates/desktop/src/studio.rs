@@ -39,6 +39,7 @@ fn load(ui: &Dashboard, c: &Config) {
     ui.set_pip_points(c.trading.pip_points.to_string().into());
     ui.set_cost_fraction(c.trading.max_cost_fraction.to_string().into());
     ui.set_commission_lot(c.risk.commission_per_lot.to_string().into());
+    ui.set_slippage_ticks(c.risk.slippage_ticks.to_string().into());
 }
 fn report(v: &Value) -> String {
     let mut out = format!(
@@ -166,7 +167,7 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
     ui.on_studio_action(move|action|{if let Some(ui)=weak.upgrade(){if ui.get_studio_busy(){return;}let action=action.to_string();let tf=selected_tf(&ui);let basis=if ui.get_commission_basis()==1{"per_side"}else{"round_trip"};let body=(||->anyhow::Result<Value>{Ok(match action.as_str(){"save"=>{let trading=TradingConfig{sniper_brain:if ui.get_sniper_brain()==1{SniperBrain::Learner}else{SniperBrain::Classic},
 sniper_target_mode:if ui.get_sniper_target_mode()==1{SniperTargetMode::Adaptive}else{SniperTargetMode::Fixed},
 sniper_min_target_pips:number(ui.get_sniper_min_target_pips())?,
-sniper_max_target_pips:number(ui.get_sniper_max_target_pips())?,demo_flexible:ui.get_demo_flexible(),adaptive_exits:ui.get_adaptive_exits(),mode:match ui.get_trade_mode(){0=>TradingMode::Scalping,1=>TradingMode::Swing,3=>TradingMode::Sniper,_=>TradingMode::Expert},sniper_target_points:number(ui.get_sniper_target())?*number(ui.get_pip_points())?,sniper_stop_points:number(ui.get_sniper_stop())?,sniper_cooldown_seconds:ui.get_sniper_cooldown().trim().parse()?,sniper_max_hold_seconds:ui.get_sniper_hold().trim().parse()?,pip_points:number(ui.get_pip_points())?,max_cost_fraction:number(ui.get_cost_fraction())?};trading.validate().map_err(anyhow::Error::msg)?;json!({"trading":trading,"commission_per_lot":number(ui.get_commission_lot())?,"commission_basis":basis})},"cost"=>json!({"lots":number(ui.get_preview_lots())?,"commission_per_lot":number(ui.get_commission_lot())?,"commission_basis":basis,"pip_points":number(ui.get_pip_points())?}),"report"=>{use slint::Model;json!({"id":ui.get_studio_ids().row_data(ui.get_studio_report_index().max(0)as usize).unwrap_or_default().to_string()})},"auto_on"=>json!({"enabled":true}),_=>json!({"timeframe":tf})})})();match body{Ok(body)=>{ui.set_studio_busy(true);let _=sender.send((action,body,tf));},Err(e)=>ui.set_studio_message(format!("تحقق من الأرقام: {e}").into())}}});
+sniper_max_target_pips:number(ui.get_sniper_max_target_pips())?,demo_flexible:ui.get_demo_flexible(),adaptive_exits:ui.get_adaptive_exits(),mode:match ui.get_trade_mode(){0=>TradingMode::Scalping,1=>TradingMode::Swing,3=>TradingMode::Sniper,_=>TradingMode::Expert},sniper_target_points:number(ui.get_sniper_target())?*number(ui.get_pip_points())?,sniper_stop_points:number(ui.get_sniper_stop())?,sniper_cooldown_seconds:ui.get_sniper_cooldown().trim().parse()?,sniper_max_hold_seconds:ui.get_sniper_hold().trim().parse()?,pip_points:number(ui.get_pip_points())?,max_cost_fraction:number(ui.get_cost_fraction())?};trading.validate().map_err(anyhow::Error::msg)?;json!({"trading":trading,"commission_per_lot":number(ui.get_commission_lot())?,"commission_basis":basis,"slippage_ticks":number(ui.get_slippage_ticks())?})},"cost"=>json!({"lots":number(ui.get_preview_lots())?,"commission_per_lot":number(ui.get_commission_lot())?,"commission_basis":basis,"pip_points":number(ui.get_pip_points())?,"slippage_ticks":number(ui.get_slippage_ticks())?}),"report"=>{use slint::Model;json!({"id":ui.get_studio_ids().row_data(ui.get_studio_report_index().max(0)as usize).unwrap_or_default().to_string()})},"auto_on"=>json!({"enabled":true}),_=>json!({"timeframe":tf})})})();match body{Ok(body)=>{ui.set_studio_busy(true);let _=sender.send((action,body,tf));},Err(e)=>ui.set_studio_message(format!("تحقق من الأرقام: {e}").into())}}});
     let timer = slint::Timer::default();
     let weak = ui.as_weak();
     timer.start(
@@ -221,7 +222,45 @@ sniper_max_target_pips:number(ui.get_sniper_max_target_pips())?,demo_flexible:ui
                             };
                             ui.set_studio_message(message.into());
                         },
-                        "cost"=>{let c=&v["costs"];let text=if c.is_null(){format!("العمولة: {:.4}\n{}",v["commission"].as_f64().unwrap_or(0.),v["error"].as_str().unwrap_or(""))}else{let n=|key:&str|c[key].as_f64().unwrap_or(0.);format!("{} | {:.3} لوت\nالعمولة ذهاب وإياب: {:.4}\nالسبريد الفعلي: {:.2} نقطة / {:.2} pip = {:.4}\nانزلاق الدخول والخروج: {:.4}\nإجمالي التكلفة: {:.4}\nحركة التعادل من سعر bid: {:.2} نقطة / {:.2} pip\nآخر حساب يدوي؛ اضغط احسب لتحديث السعر.",c["currency"].as_str().unwrap_or(""),n("lots"),n("commission"),n("spread_points"),n("spread_pips"),n("spread_money"),n("slippage_money"),n("total"),n("break_even_points"),n("break_even_pips"))};ui.set_cost_detail(text.into());},
+                        "cost"=>{
+                            let c=&v["costs"];
+                            let text=if c.is_null() {
+                                format!("العمولة للوت المختار: {:.4} من عملة الحساب\n{}\nالسبريد الحقيقي ونقطة التعادل يتطلبان اتصال MT5 وسعراً حديثاً.",v["commission"].as_f64().unwrap_or(0.),v["error"].as_str().unwrap_or("لا تتوفر بيانات العرض"))
+                            } else {
+                                let n=|key:&str|c[key].as_f64().unwrap_or(0.);
+                                format!(
+                                    "عملة الحساب: {}  |  حجم الصفقة: {:.2} لوت\n\
+                                     السعر الحالي: Bid {:.5}   /   Ask {:.5}\n\
+                                     حجم النقطة: {:.5}  |  حجم 1 pip وفق إعدادك: {:.5}\n\
+                                     السبريد الحقيقي (Ask − Bid): {:.5} = {:.2} نقطة = {:.2} pip\n\
+                                     تكلفة السبريد على اللوت المختار: {:.4}\n\
+                                     عمولة ذهاب وإياب / 1.00 لوت: {:.4}\n\
+                                     مثال العمولة: 0.10 لوت = {:.4}  |  0.01 لوت = {:.4}\n\
+                                     عمولة هذا اللوت: {:.4}\n\
+                                     الانزلاق المفترض: {:.2} tick لكل جهة = {:.4} (تقدير وليس سبريد)\n\
+                                     مجموع التكلفة التقديرية: {:.4}\n\
+                                     التعادل من سعر الدخول (Ask شراء / Bid بيع): {:.2} نقطة / {:.2} pip — دون إضافة السبريد مجدداً\n\
+                                     التعادل من السعر قبل الدخول (Bid شراء / Ask بيع): {:.2} نقطة / {:.2} pip — يشمل السبريد مرة واحدة\n\
+                                     سعر التعادل النظري للشراء عند Bid: {:.5}  |  للبيع عند Ask: {:.5}\n\
+                                     معاينة لصفقة جديدة وليست التعادل الفعلي لصفقة مفتوحة؛ القيم وفق سعر MT5 وقت الضغط على احسب.",
+                                    c["currency"].as_str().unwrap_or(""),n("lots"),
+                                    n("bid"),n("ask"),
+                                    n("point_price"),n("pip_price"),
+                                    n("spread_price"),n("spread_points"),n("spread_pips"),
+                                    n("spread_money"),
+                                    n("commission_round_trip_per_lot"),
+                                    n("commission_round_trip_per_lot")*0.1,
+                                    n("commission_round_trip_per_lot")*0.01,
+                                    n("commission"),
+                                    n("slippage_ticks_per_side"),n("slippage_money"),
+                                    n("total"),
+                                    n("break_even_from_entry_points"),n("break_even_from_entry_pips"),
+                                    n("break_even_points"),n("break_even_pips"),
+                                    n("buy_break_even_bid"),n("sell_break_even_ask")
+                                )
+                            };
+                            ui.set_cost_detail(text.into());
+                        },
                         "report"=>ui.set_studio_report(report(&v).into()),
                         "poll"|"refresh"=>paint(&ui,&v,&tf),
                         _=>ui.set_studio_message(serde_json::to_string_pretty(&v).unwrap_or_default().into())
