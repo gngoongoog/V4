@@ -35,6 +35,9 @@ pub struct TradingConfig {
     pub sniper_cooldown_seconds: u64,
     pub sniper_max_hold_seconds: u64,
     pub pip_points: f64,
+    /// Explicit price units for one pip, independent of broker quote digits.
+    /// XAUUSD convention here: 1 pip = 0.10 in gold price, not account PnL.
+    pub sniper_pip_price: f64,
     pub max_cost_fraction: f64,
 }
 impl Default for TradingConfig {
@@ -52,6 +55,7 @@ impl Default for TradingConfig {
             sniper_cooldown_seconds: 0,
             sniper_max_hold_seconds: 120,
             pip_points: 10.,
+            sniper_pip_price: 0.10,
             max_cost_fraction: 0.45,
         }
     }
@@ -62,6 +66,7 @@ impl TradingConfig {
             ("Target points", self.sniper_target_points, 1., 100_000.),
             ("Stop points", self.sniper_stop_points, 1., 100_000.),
             ("Points per pip", self.pip_points, 1., 1000.),
+            ("Sniper pip price", self.sniper_pip_price, 0.00001, 1000.),
             ("Cost fraction", self.max_cost_fraction, 0.01, 0.9),
             ("Adaptive min target pips", self.sniper_min_target_pips, 0.1, 1000.),
             ("Adaptive max target pips", self.sniper_max_target_pips, 0.1, 1000.),
@@ -96,7 +101,7 @@ impl TradingConfig {
             TradingMode::Swing => (2. * atr, 5. * atr),
             TradingMode::Sniper => (
                 self.sniper_stop_points * point,
-                self.sniper_target_points * point,
+                (self.sniper_target_points / self.pip_points) * self.sniper_pip_price,
             ),
         }
     }
@@ -176,10 +181,10 @@ pub fn costs(t: &Telemetry, c: &Config, lots: f64, now: u64) -> Result<CostPrevi
         currency: t.currency.clone(),
         lots,
         spread_points,
-        spread_pips: spread_points / c.trading.pip_points,
+        spread_pips: spread_price / c.trading.sniper_pip_price,
         spread_price,
         point_price: point,
-        pip_price: point * c.trading.pip_points,
+        pip_price: c.trading.sniper_pip_price,
         bid,
         ask,
         spread_money,
@@ -187,14 +192,14 @@ pub fn costs(t: &Telemetry, c: &Config, lots: f64, now: u64) -> Result<CostPrevi
         slippage_money,
         total,
         break_even_points,
-        break_even_pips: break_even_points / c.trading.pip_points,
+        break_even_pips: break_even_points * point / c.trading.sniper_pip_price,
         break_even_from_entry_points,
-        break_even_from_entry_pips: break_even_from_entry_points / c.trading.pip_points,
+        break_even_from_entry_pips: break_even_from_entry_points * point / c.trading.sniper_pip_price,
         buy_break_even_bid: bid + break_even_points * point,
         sell_break_even_ask: ask - break_even_points * point,
         commission_round_trip_per_lot: c.risk.commission_per_lot,
         slippage_ticks_per_side: c.risk.slippage_ticks,
-        desired_net_target_money: c.trading.sniper_target_points * point / tick * profit * lots,
+        desired_net_target_money: c.trading.sniper_target_points / c.trading.pip_points * c.trading.sniper_pip_price / tick * profit * lots,
     };
     if [total, break_even_points, r.buy_break_even_bid, r.sell_break_even_ask, r.desired_net_target_money]
         .iter()
@@ -204,19 +209,14 @@ pub fn costs(t: &Telemetry, c: &Config, lots: f64, now: u64) -> Result<CostPrevi
     }
     Ok(r)
 }
-/// Broker-executable Sniper targets start at Ask for buys / Bid for sells.
-/// The observed spread is already contained in that entry price, so only the
-/// round-trip commission and separately configured slippage are added here.
-/// Using `costs.total` would double-charge the spread in TP geometry.
-pub fn sniper_target_from_entry(cost: &CostPreview, desired_price_distance: f64) -> Result<f64, String> {
+/// A fixed user pip target is an exact gross distance from the executable
+/// entry (Ask for buy / Bid for sell). Never extend it for commission, slippage,
+/// spread, or exit-learning: such costs are handled by the entry cost gate.
+pub fn sniper_target_from_entry(_cost: &CostPreview, desired_price_distance: f64) -> Result<f64, String> {
     if !desired_price_distance.is_finite() || desired_price_distance <= 0. {
         return Err("Sniper target price distance must be positive".into());
     }
-    let target = desired_price_distance + cost.break_even_from_entry_points * cost.point_price;
-    if !target.is_finite() || target <= 0. {
-        return Err("Sniper target including fees is invalid".into());
-    }
-    Ok(target)
+    Ok(desired_price_distance)
 }
 
 pub fn volatility(b: &[Candle]) -> f64 {
@@ -481,7 +481,7 @@ mod tests {
         };
         let preview = costs(&t, &c, 0.1, 1000).unwrap();
         assert!((preview.commission - 0.7).abs() < 1e-10);
-        assert!((sniper_target_from_entry(&preview, 0.50).unwrap() - 0.57).abs() < 1e-8);
+        assert!((sniper_target_from_entry(&preview, 0.50).unwrap() - 0.50).abs() < 1e-8);
         c.risk.commission_per_lot = 0.;
         let free = costs(&t, &c, 0.01, 1000).unwrap();
         assert_eq!(free.commission, 0.);
@@ -492,6 +492,27 @@ mod tests {
         assert_eq!(narrow.commission, 0.);
         assert!(narrow.spread_money < free.spread_money);
         assert!((sniper_target_from_entry(&narrow, 0.50).unwrap() - 0.50).abs() < 1e-8);
+    }
+    #[test]
+    fn fixed_gold_pips_do_not_change_when_broker_digits_change() {
+        let mut c=Config::default();
+        c.trading.mode=TradingMode::Sniper;
+        for point in [0.001,0.01,0.1] {
+            let mut t=Telemetry {connected:true,bid:Some(2500.),ask:Some(2500.20),
+                point:Some(point),tick_size:Some(point),
+                tick_value_loss:Some(1.),tick_value_profit:Some(1.),tick_age_ms:Some(0),
+                ..Default::default()};
+            let preview=costs(&t,&c,0.1,1000).unwrap();
+            assert!((preview.pip_price-0.1).abs()<1e-10);
+            assert!((preview.spread_pips-2.).abs()<1e-8);
+            for (pips,distance) in [(5.,0.5),(10.,1.)] {
+                c.trading.sniper_target_points=pips*c.trading.pip_points;
+                assert!((c.trading.geometry(1.,point).1-distance).abs()<1e-8);
+                assert!((sniper_target_from_entry(&preview,distance).unwrap()-distance).abs()<1e-8);
+            }
+            t.ask=Some(2500.25);
+            assert!((costs(&t,&c,0.1,1000).unwrap().spread_pips-2.5).abs()<1e-8);
+        }
     }
     #[test]
     fn different_broker_profit_loss_tick_values_do_not_multiply_spread_in_break_even() {
