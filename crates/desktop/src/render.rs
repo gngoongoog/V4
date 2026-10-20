@@ -123,7 +123,7 @@ pub fn render() -> anyhow::Result<()> {
             ui.set_nav_section(match page {
                 6 | 14 | 17 | 19 => 1,
                 4 | 8 | 10 | 11 | 12 | 16 | 18 => 2,
-                7 | 9 | 15 => 3,
+                5 | 7 | 9 | 15 => 3,
                 1 | 2 | 3 | 13 => 4,
                 _ => 0,
             });
@@ -169,7 +169,7 @@ pub fn render() -> anyhow::Result<()> {
     click(&ui, 75.0, 116.0);
     anyhow::ensure!(actions.borrow().len() == 2, "Disabled button activated");
     ui.set_busy(false);
-    click(&ui, 185.0, 116.0);
+    click(&ui, 245.0, 116.0);
     anyhow::ensure!(actions.borrow().last().map(String::as_str) == Some("stop"), "Stop pointer binding failed");
     for (y, section, page) in [(229.0,0,0),(283.0,1,14),(337.0,2,4),(391.0,3,7),(445.0,4,1)] {
         click(&ui, 1015.0, y);

@@ -2,6 +2,10 @@
 
 **Package:** `BrainTrade-Windows-x64-v0.7.0-Preview.zip` (a Windows x64 portable ZIP contained within the GitHub Actions downloadable artifact `BrainTrade-Windows-x64-Preview`). This is the combined version for **controlled MT5 Demo acceptance**, not an independently certified profitable trading product.
 
+## Smoke UI consolidation and main promotion
+
+PR #72 combines the guided page content from #70 with the shared smoke theme, five-section sidebar, persistent trading controls and native control checks. Commission editors are separate and the brain selector is disabled while settings load. The owner requested main promotion after exact-head Windows/Linux and Research validation. Native broker acceptance remains separate.
+
 ## Included in this unified build
 
 - Complete Windows `BrainTrade.exe`, Rust Core and embedded Python MT5 gateway, together with the native Sniper EA source and read-only Demo acceptance collector.
@@ -14,7 +18,7 @@
 
 ## Release qualification — must use exact-source test evidence
 
-The Windows and Research workflow checks validate Rust/Python test suites, simulated broker replies, source integrity and packaging. Download **only the artifact from a successful Windows run on the unified PR #69 branch or its merged development commit**. The package carries `package-validation.json` and `SHA256SUMS.json`; check their source commit and archive contents against GitHub Actions.
+The Windows and Research workflow checks validate Rust/Python test suites, simulated broker replies, source integrity and packaging. Download **only the artifact from a successful Windows run on the Smoke UI PR #72 branch or its validated promotion commit**. The package carries `package-validation.json` and `SHA256SUMS.json`; check their source commit and archive contents against GitHub Actions.
 
 A successful automated test suite does **not** validate:
 - actual fills, partial-close behavior or latency on your broker's Windows MT5 Demo installation;

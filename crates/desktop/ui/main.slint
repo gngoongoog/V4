@@ -229,9 +229,9 @@ export component Dashboard inherits Window {
         }
         Rectangle { background: Theme.surface; border-radius: 10px; border-width: 1px; border-color: Theme.line; height: 60px;
             HorizontalLayout { padding: 10px; spacing: 8px;
-                start-control := Button { text: "تشغيل النظام"; primary: true; enabled: !root.busy; clicked => { root.action("start"); } }
-                stop-control := Button { text: "إيقاف النظام"; enabled: !root.busy; clicked => { root.action("stop"); } }
-                Button { text: "إعادة اتصال MT5"; enabled: !root.busy; clicked => { root.action("reconnect"); } }
+                start-control := Button { width: 150px; text: "تشغيل النظام"; primary: true; enabled: !root.busy; clicked => { root.action("start"); } }
+                stop-control := Button { width: 150px; text: "إيقاف النظام"; enabled: !root.busy; clicked => { root.action("stop"); } }
+                Button { width: 162px; text: "إعادة اتصال MT5"; enabled: !root.busy; clicked => { root.action("reconnect"); } }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
                 Text { text: root.execution-active ? "MT5 · تنفيذ فعّال" : "اربط الحساب من صفحة التنفيذ"; color: Theme.secondary; vertical-alignment: center; font-size: 12px; }
             }
@@ -298,7 +298,7 @@ export component Dashboard inherits Window {
             action(value) => { root.correlation-action(value); }
         }
         if root.page == 19: ScrollView { VerticalBox { spacing: 14px;
-            Text { text: "الطالب — من التجربة إلى قرار أفضل"; color: Theme.text; font-size: 22px; font-weight: 700; }
+            Text { text: "تقدّم التعلّم  /  نتائج حقيقية وتجارب بحثية"; color: Theme.text; font-size: 22px; font-weight: 700; }
             Text { text: root.student-status; color: Theme.secondary; wrap: word-wrap; }
             HorizontalBox { spacing: 10px;
                 Card { label: "تجارب دخول مسجّلة"; value: root.student-total; }
@@ -319,7 +319,8 @@ export component Dashboard inherits Window {
             Text { text: "MFE / MAE: أفضل وأسوأ حركة مرصودة بعد تأكيد التنفيذ وحتى الإغلاق. المقارنة الافتراضية تستخدم Bid/Ask والعمولة والانزلاق؛ فجوة وصول الرصد فوق ثانيتين تستبعدها، وهدوء السعر وحده لا يستبعدها. السواب غير محسوب فيها. التحسّن السابق لا يضمن ربحاً لاحقاً."; color: Theme.muted; wrap: word-wrap; }
         } }
         if root.page == 17: ScrollView { VerticalBox { spacing: 10px;
-            Text { text: "تنفيذ MT5 — لكل عقل قراره وصفقاته"; color: Theme.text; font-size: 20px; }
+            Text { text: "تنفيذ MT5  /  إعداد الحساب والعقول"; color: Theme.text; font-size: 22px; font-weight: 700; }
+            Text { text: "الخطوة 1   •   اختر Demo واربط الحساب الحالي بعد التأكد من اسم السيرفر والرمز في MT5."; color: Theme.secondary; wrap: word-wrap; }
             Text { text: root.exec-summary; color: Theme.secondary; wrap: word-wrap; }
             HorizontalBox {
                 ComboBox { model: ["Demo / حساب تجريبي", "Live / أموال حقيقية"]; current-index <=> root.exec-target; }
@@ -327,13 +328,15 @@ export component Dashboard inherits Window {
                 Button { text: "ربط الحساب الحالي"; enabled: !root.exec-busy && root.state == "STOPPED"; clicked => { root.execution-action("bind"); } }
             }
             Text { text: "الربط يثبت رقم الحساب والخادم ونوعه. انتقالك إلى حساب آخر لا يفعّل التداول عليه تلقائيًا."; color: Theme.secondary; wrap: word-wrap; }
+            Rectangle { height: 1px; background: Theme.line; }
+            Text { text: "الخطوة 2   •   حدد العقل، اختر اللوت والخيارات، ثم احفظ. التشغيل المنفرد اختياري."; color: Theme.secondary; font-weight: 700; wrap: word-wrap; }
             ComboBox { enabled: !root.exec-busy; model: root.exec-names; current-index <=> root.exec-selected; selected(value) => { root.execution-action("select"); } }
             HorizontalBox {
                 Button { text: "تشغيل تداول منفرد"; enabled: !root.exec-busy && root.exec-selected != 0 && !root.exec-enabled; clicked => { root.execution-action("enable"); } }
                 Button { text: "حفظ إعدادات العقل"; enabled: !root.exec-busy; clicked => { root.execution-action("save"); } }
                 Button { text: "إرجاع للمنظومة"; enabled: !root.exec-busy && root.exec-selected != 0 && root.exec-enabled; clicked => { root.execution-action("disable"); } }
             }
-            Text { text: root.exec-role == "coordinator" ? "العقل الرئيسي المتعلم — يتبع START/STOP والوضع المختار" : root.exec-role == "returning" ? "بانتظار الرجوع: يكمل إدارة صفقته الحالية ثم يعود تابعاً للرئيسي" : root.exec-role == "solo" ? "منفرد: مستبعد من تصويت المنظومة ويتداول بقراره" : "عضو في المنظومة: يرسل تحليله للرئيسي ولا يفتح صفقة باسمه"; color: root.exec-enabled ? Theme.secondary : Theme.secondary; wrap: word-wrap; }
+            Text { text: root.exec-role == "coordinator" ? "العقل الرئيسي المتعلم — يتبع START/STOP والوضع المختار" : root.exec-role == "returning" ? "بانتظار الرجوع: يكمل إدارة صفقته الحالية ثم يعود تابعاً للرئيسي" : root.exec-role == "solo" ? "منفرد: مستبعد من تصويت المنظومة ويتداول بقراره" : "عضو في المنظومة: يرسل تحليله للرئيسي ولا يفتح صفقة باسمه"; color: root.exec-enabled ? Theme.text : Theme.secondary; wrap: word-wrap; }
             HorizontalBox {
                 Text { text: "الفريم"; color: Theme.secondary; vertical-alignment: center; }
                 ComboBox { model: root.exec-frames; current-index <=> root.exec-frame; }
@@ -351,7 +354,8 @@ export component Dashboard inherits Window {
             CheckBox { text: "تفعيل حدود المخاطرة واللوت والسبريد الاختيارية من صفحة المخاطرة"; checked <=> root.exec-risk; }
             LineEdit { text <=> root.exec-report; placeholder-text: "للعقل المولّد فقط: معرّف تقرير محفوظ من مختبر الاستراتيجيات"; }
             Rectangle { height: 1px; background: Theme.line; }
-            Text { text: "حماية المحفظة — حد إجمالي عبر جميع العقول"; color: Theme.text; font-size: 18px; }
+            Text { text: "الخطوة 3   •   حماية المحفظة"; color: Theme.text; font-size: 18px; font-weight: 700; }
+            Text { text: "تمنع الدخولات الجديدة عند تجاوز عدد الصفقات، إجمالي اللوت أو مخاطرة الوقف. احفظها والنظام متوقف وبعد تسوية الأوامر."; color: Theme.secondary; wrap: word-wrap; }
             CheckBox { text: "تفعيل Portfolio Exposure Gate للدخولات الجديدة"; checked <=> root.portfolio-enabled; }
             Text { text: "أقصى عدد صفقات/أوامر غير محسومة • أقصى مجموع لوت • أقصى خطر وقف % من Equity"; color: Theme.secondary; wrap: word-wrap; }
             HorizontalBox {
@@ -361,6 +365,8 @@ export component Dashboard inherits Window {
                 Button { text: "حفظ حماية المحفظة"; enabled: !root.exec-busy && root.state == "STOPPED"; clicked => { root.execution-action("portfolio"); } }
             }
             Text { text: "غيّر هذه الحدود فقط أثناء STOP. إذا تعذر حساب خطر وقف أي تعرض قائم، يمنع دخول جديد عند تفعيل الحماية؛ الإغلاقات وSL/TP والمصالحة لا تُمنع."; color: Theme.secondary; wrap: word-wrap; }
+            Rectangle { height: 1px; background: Theme.line; }
+            Text { text: "الخطوة 4   •   راقب القرار والأوامر والنتائج. إغلاق الصفقات إجراء حقيقي على الحساب المرتبط."; color: Theme.secondary; wrap: word-wrap; }
             HorizontalBox {
                 Button { text: "إغلاق صفقات هذا العقل"; enabled: !root.exec-busy; clicked => { root.execution-action("close"); } }
                 Button { text: "تحديث النتائج والأوامر"; enabled: !root.exec-busy; clicked => { root.execution-action("poll"); } }
@@ -372,15 +378,16 @@ export component Dashboard inherits Window {
             Text { text: "حساب Hedging يسمح باستقلال صفقات عدة عقول. Netting يسمح بمالك واحد للرمز حتى إغلاقه. الأخبار وتوقعات النماذج الإحصائية تبقى مصادر بحث، وليست استراتيجيات مكتملة للتداول المنفرد."; color: Theme.secondary; wrap: word-wrap; }
         } }
         if root.page == 14: ScrollView { VerticalBox { spacing: 10px;
-            Text { text: "مركز التداول — الوضع والتكلفة والقناص"; font-size: 20px; color: Theme.text; }
-            ComboBox { model: ["Scalping / سكالبنك", "Swing / سوينك", "Expert / الخبير المتعلم", "Sniper / القناص"]; current-index <=> root.trade-mode; }
+            Text { text: "إعداد التداول  /  الوضع والتكاليف والقناص"; font-size: 20px; color: Theme.text; }
+            Text { text: "1   اختر الوضع الذي تريد تشغيله"; color: Theme.secondary; font-weight: 700; }
+            ComboBox { model: ["Scalping / سكالبنك", "Swing / سوينك", "Expert / الخبير المتعلم", "Sniper / القناص"]; current-index <=> root.trade-mode; enabled: root.state == "STOPPED"; }
             Text { text: root.trade-mode == 0 ? "M1 + M5؛ زخم مؤكد، وقف 1.2 ATR وهدف 1.4R، أقصى احتفاظ 15 دقيقة." : root.trade-mode == 1 ? "H1 + H4 + D1؛ اتجاهات متوافقة، وقف 2 ATR وهدف 2.5R، أقصى احتفاظ 3 أيام. السواب غير محسوب." : root.trade-mode == 2 ? (root.demo-flexible ? "الخبير على الديمو المرن: يختار عضواً جاهزاً حسب التعلم والاستكشاف، بوقفه وهدفه ومدته. على الحقيقي يستخدم الإجماع المعتاد." : "الخبير: تصويت الأعضاء بأوزان تتعلم من نتائج لاحقة؛ يستبعد العقول المنفردة. وقف 1.5 ATR وهدف 2R؛ مهلة 30 دقيقة.") : "القناص يستخدم Fast Pulse للقرار اللحظي؛ مدة الاحتفاظ أدناه قابلة للتعديل ولا تتغير على صفقة مفتوحة بعد دخولها."; color: Theme.secondary; wrap: word-wrap; }
             CheckBox { text: "تطبيق الخروج المتعلّم على الديمو"; checked <=> root.adaptive-exits; enabled: root.state == "STOPPED"; }
             CheckBox { text: "تعلّم ديمو مرن"; checked <=> root.demo-flexible; enabled: root.state == "STOPPED"; }
             Text { text: "على الديمو فقط: الخبير يختار إشارة عضو جاهز حسب النتائج والاستكشاف؛ بقية الأوضاع تتبع إشارتها دون فيتو الأعضاء. يصغّر اللوت عند نقص الهامش ولا يزيده عن اختيارك. أوقف الخيار لاسترجاع الإجماع. شروط الوسيط تبقى لازمة."; color: Theme.secondary; wrap: word-wrap; }
-            Rectangle { background: Theme.raised; border-radius: 8px; min-height: 116px;
+            Rectangle { background: Theme.surface; border-radius: 8px; min-height: 116px;
                 VerticalLayout { padding: 12px; spacing: 8px;
-                    Text { text: "تكلفة الحساب"; color: Theme.text; font-weight: 700; }
+                    Text { text: "2   تكلفة التنفيذ الفعلية"; color: Theme.text; font-weight: 700; }
                     Text { text: "أدخل عمولة 1.00 لوت حسب طريقة الوسيط. إذا اخترت لكل جهة يحولها النظام تلقائياً إلى تكلفة ذهاب وإياب."; color: Theme.secondary; wrap: word-wrap; }
                     HorizontalBox {
                         LineEdit { text <=> root.commission-lot; placeholder-text: "العمولة"; }
@@ -390,9 +397,9 @@ export component Dashboard inherits Window {
                     }
                 }
             }
-            Rectangle { background: Theme.raised; border-radius: 8px; min-height: 150px;
+            Rectangle { background: Theme.surface; border-radius: 8px; min-height: 150px;
                 VerticalLayout { padding: 12px; spacing: 8px;
-                    Text { text: "إعداد القناص"; color: Theme.text; font-weight: 700; }
+                    Text { text: "3   إعداد القناص وأهداف Pip"; color: Theme.text; font-weight: 700; }
                     ComboBox { model: ["القناص الكلاسيكي", "القناص المتعلّم / Sniper Learner"]; current-index <=> root.sniper-brain; enabled: root.state == "STOPPED" && root.trade-mode == 3; }
                     Text { text: "اختر القناص المتعلّم ثم احفظ واضغط تشغيل النظام. يعمل بلوت عقل النظام؛ لا يحتاج تشغيل منفرد. يتعلّم من صفقات الديمو المغلقة ويعرض قراره في تنفيذ MT5. يعمل فقط في Sniper."; color: Theme.secondary; wrap: word-wrap; }
                     Text { text: "هدف الربح الصافي بالـ pip؛ الوقف بالنقاط (points). يختلف تعريف Pip بين وسطاء الذهب، راجع خانة نقاط / pip أعلاه."; color: Theme.secondary; wrap: word-wrap; }
@@ -412,8 +419,8 @@ export component Dashboard inherits Window {
                     }
                 }
             }
-            Text { text: "القناص المتعلّم يختبر 4 أهداف pip ضمن الحدّين فقط إذا توفرت إشارة وتجاوز الهدف اختبار التكاليف. المقارنات تعتمد على صفقات MT5 Demo مغلقة، لا تضمن أفضلية مستقبلية. على Live يعود للهدف الثابت. مدة الاحتفاظ من 1 إلى 3600 ثانية."; color: Theme.secondary; wrap: word-wrap; }
-            Button { text: "حفظ إعدادات التداول"; enabled: !root.studio-busy && root.state == "STOPPED"; clicked => { root.studio-action("save"); } }
+            Text { text: "ملخص: القناص المتعلّم يختبر 4 أهداف pip ضمن الحدّين فقط إذا توفرت إشارة وتجاوز الهدف اختبار التكاليف. المقارنات تعتمد على صفقات MT5 Demo مغلقة، لا تضمن أفضلية مستقبلية. على Live يعود للهدف الثابت. مدة الاحتفاظ من 1 إلى 3600 ثانية."; color: Theme.secondary; wrap: word-wrap; }
+            Button { text: "4   حفظ إعدادات التداول"; enabled: !root.studio-busy && root.state == "STOPPED"; clicked => { root.studio-action("save"); } }
             Text { text: "أوقف النظام لتبديل الوضع أو التكاليف. الصفقة المفتوحة تحتفظ بهدفها ووقفها ومدتها التي جُمّدت عند الدخول."; color: Theme.secondary; wrap: word-wrap; }
             HorizontalBox {
                 Text { text: "لوت حساب التكلفة"; color: Theme.secondary; vertical-alignment: center; }
@@ -469,7 +476,17 @@ export component Dashboard inherits Window {
         } }
         if root.page == 0: ScrollView { VerticalBox {
             spacing: 14px;
-            Text { text: root.account; color: Theme.secondary; font-size: 15px; }
+            Rectangle { background: Theme.raised; border-radius: 10px; min-height: 124px;
+                VerticalLayout { padding: 14px; spacing: 10px;
+                    Text { text: "مرحباً بك في مركز التداول"; color: Theme.text; font-size: 17px; font-weight: 700; }
+                    Text { text: root.account; color: Theme.secondary; font-size: 13px; wrap: word-wrap; }
+                    HorizontalLayout { spacing: 8px;
+                        Button { text: "1  ربط MT5"; clicked => { root.nav-section = 4; root.page = 1; } }
+                        Button { text: "2  تجهيز التداول"; clicked => { root.nav-section = 1; root.page = 14; root.studio-action("config"); } }
+                        Button { text: "3  متابعة التنفيذ"; clicked => { root.nav-section = 1; root.page = 17; root.execution-action("refresh"); } }
+                    }
+                }
+            }
             HorizontalLayout {
                 spacing: 12px;
                 Card { label: "BALANCE / الرصيد"; value: root.balance; }
@@ -477,12 +494,12 @@ export component Dashboard inherits Window {
                 Card { label: "TODAY NET / صافي اليوم"; value: root.today; }
             }
             Rectangle {
-                background: Theme.raised; border-radius: 10px; min-height: 140px;
+                background: Theme.surface; border-radius: 10px; min-height: 140px;
                 VerticalLayout { padding: 16px; spacing: 10px;
                     Text { text: "MT5 CONNECTION"; color: Theme.secondary; font-weight: 700; }
                     Text { text: root.connection; color: Theme.text; wrap: word-wrap; }
-                    Text { text: root.diagnostics; color: Theme.muted; wrap: word-wrap; }
-                    Text { text: "Telegram: " + root.telegram-status; color: Theme.muted; wrap: word-wrap; }
+                    Text { text: root.diagnostics; color: Theme.secondary; wrap: word-wrap; }
+                    Text { text: "Telegram: " + root.telegram-status; color: Theme.secondary; wrap: word-wrap; }
                 }
             }
             Text { text: "OPEN POSITIONS / الصفقات المفتوحة"; color: Theme.secondary; font-weight: 700; }
@@ -495,7 +512,8 @@ export component Dashboard inherits Window {
         if root.page == 1: ScrollView {
             VerticalBox {
                 spacing: 12px;
-                Text { text: "MT5 — الإعدادات"; color: Theme.text; font-size: 20px; }
+                Text { text: "الاتصال بوسيط MT5"; color: Theme.text; font-size: 22px; font-weight: 700; }
+            Text { text: "أولاً: اضبط منصة الوسيط والرمز، ثم احفظ وانتظر ظهور الاتصال في الرئيسية. ربط حساب التداول يتم من التداول ← تنفيذ MT5."; color: Theme.secondary; wrap: word-wrap; }
                 Text { text: "اختر terminal64.exe. سجّل دخول حسابك واحفظه داخل MT5 أول مرة."; color: Theme.secondary; wrap: word-wrap; }
                 HorizontalBox {
                     LineEdit { text <=> root.mt5-path; placeholder-text: "C:\\Program Files\\MetaTrader 5\\terminal64.exe"; }
@@ -503,7 +521,8 @@ export component Dashboard inherits Window {
                 }
                 Text { text: "رمز السوق كما يظهر لدى الوسيط، مثال XAUUSDm"; color: Theme.secondary; }
                 LineEdit { text <=> root.symbol; }
-                Text { text: "TELEGRAM — يمكنك إعداده لاحقاً"; color: Theme.text; font-size: 20px; }
+                Rectangle { height: 1px; background: Theme.line; }
+            Text { text: "تنبيهات Telegram  /  اختيارية"; color: Theme.text; font-size: 18px; font-weight: 700; }
                 CheckBox { text: "تفعيل البوت / Enable Telegram"; checked <=> root.telegram-enabled; }
                 LineEdit { text <=> root.telegram-user; placeholder-text: "Your numeric Telegram User ID"; }
                 LineEdit { text <=> root.telegram-chat; placeholder-text: "Private Chat ID (same as User ID)"; }
@@ -555,7 +574,7 @@ export component Dashboard inherits Window {
             HorizontalBox { Text { text: "حد التراجع من القمة % (0.1–30)"; color: Theme.secondary; } LineEdit { text <=> root.drawdown-limit; } }
             HorizontalBox { Text { text: "أقصى سبريد كنسبة ATR (0.01–1)"; color: Theme.secondary; } LineEdit { text <=> root.spread-limit; } }
             HorizontalBox { Text { text: "سقف اللوت (0.001–100)"; color: Theme.secondary; } LineEdit { text <=> root.max-lots; } }
-            HorizontalBox { Text { text: "العمولة الافتراضية ذهاب وإياب / لوت"; color: Theme.secondary; } LineEdit { text <=> root.risk-commission-lot; } }
+            HorizontalBox { Text { text: "عمولة ذهاب وإياب / لوت / عملة الحساب"; color: Theme.secondary; } LineEdit { text <=> root.risk-commission-lot; } }
             HorizontalBox { Text { text: "انزلاق مفترض لكل جانب / ticks (0–1000)"; color: Theme.secondary; } LineEdit { text <=> root.slippage-ticks; } }
             Button { text: "حفظ إعدادات المخاطرة"; enabled: !root.busy && root.state == "STOPPED"; clicked => { root.save-risk(); } }
             Text { text: "SL = 1.5 ATR؛ الهدف ضعف مسافة SL؛ خروج زمني بعد 30 دقيقة. صفقة افتراضية واحدة لكل حساب ورمز. STOP يمنع الدخول ويبقي مخارج المحاكاة فعالة أثناء عمل المحرك."; color: Theme.secondary; wrap: word-wrap; }
@@ -616,10 +635,10 @@ export component Dashboard inherits Window {
             Text {text: root.news-sources; color: Theme.secondary; wrap: word-wrap; horizontal-alignment: left; font-size: 13px;}
             Text {text: "عناوين منشورة؛ ليست تقويماً للأحداث القادمة. التصنيف بالكلمات لا يحدد أثر الخبر أو اتجاه السعر، ولا يدخل في قرار Meta أو الاختبار التاريخي."; color: Theme.secondary; wrap: word-wrap;}
             if root.news-empty: Text {text: "لا توجد عناوين محفوظة. راجع حالة المصادر أعلاه."; color: Theme.secondary;}
-            for item in root.news-items: Rectangle {background: Theme.raised; border-radius: 8px;
+            for item in root.news-items: Rectangle {background: Theme.surface; border-radius: 8px;
                 VerticalLayout {padding: 14px; spacing: 8px;
                     Text {text: item.title; color: Theme.text; font-size: 16px; wrap: word-wrap; horizontal-alignment: left;}
-                    Text {text: item.detail; color: Theme.muted; font-size: 12px; wrap: word-wrap; horizontal-alignment: left;}
+                    Text {text: item.detail; color: Theme.secondary; font-size: 12px; wrap: word-wrap; horizontal-alignment: left;}
                     Button {text: "فتح الخبر في موقع المصدر"; clicked => {root.open-news(item.url);}}
                 }
             }

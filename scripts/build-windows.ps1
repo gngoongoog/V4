@@ -28,6 +28,9 @@ if (-not $SkipTests) {
     Invoke-Checked -Program $Python -Arguments @('-m','unittest','discover','-s','tests','-v')
 }
 Invoke-Checked -Program cargo -Arguments @('build','--release','--locked','-p','braintrade-desktop')
+if (-not $SkipTests) {
+    Invoke-Checked -Program 'target\release\BrainTrade.exe' -Arguments @('--render-check')
+}
 Invoke-Checked -Program $Python -Arguments @('scripts\package-portable.py','--exe','target\release\BrainTrade.exe')
 $PackagedOperator = Join-Path $PWD 'release\BrainTrade\Tools\Run-Demo-Acceptance.ps1'
 $PackagedGui = Join-Path $PWD 'release\BrainTrade\Tools\Run-Demo-Acceptance-GUI.ps1'
