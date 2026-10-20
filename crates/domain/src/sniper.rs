@@ -46,7 +46,7 @@ pub fn definition(t: &Telemetry, c: &Config) -> String {
     // Monetary tick conversion changes must not fragment the same policy's history.
     json!(["sniper-ticks-v1", c.trading.sniper_target_points, c.trading.sniper_stop_points,
         c.trading.sniper_max_hold_seconds, c.risk.commission_per_lot,
-        c.risk.slippage_ticks, t.point, t.tick_size, c.trading.pip_points,
+        c.risk.slippage_ticks, t.point, t.tick_size, c.trading.pip_points, c.trading.sniper_pip_price,
         c.trading.sniper_target_mode, c.trading.sniper_min_target_pips,
         c.trading.sniper_max_target_pips]).to_string()
 }
@@ -130,7 +130,7 @@ impl Engine {
         let mut eligible = Vec::new();
         if adaptive {
             for i in 0..TARGET_ARMS {
-                let desired=arms[i]*c.trading.pip_points*point/tick*t.tick_value_profit.unwrap();
+                let desired=arms[i]*c.trading.sniper_pip_price/tick*t.tick_value_profit.unwrap();
                 if desired.is_finite() && desired>0. && cost.total/(cost.total+desired) <= c.trading.max_cost_fraction {
                     eligible.push(i);
                 }
@@ -161,7 +161,7 @@ impl Engine {
             target_arm=Some(pick);
             arms[pick]
         } else {
-            let desired=c.trading.sniper_target_points*point/tick*t.tick_value_profit.unwrap();
+            let desired=fixed_pips*c.trading.sniper_pip_price/tick*t.tick_value_profit.unwrap();
             if !desired.is_finite() || desired<=0. || cost.total/(cost.total+desired)>c.trading.max_cost_fraction {
                 s.reason=format!(
                     "القناص: الهدف {:.2} pip لا يجتاز حصة التكلفة {:.0}% | السبريد {:.2} pip (حقيقي) | العمولة {:.4}/لوت | الانزلاق {:.2} tick/جهة | الإجمالي {:.4}/لوت. راجع هدف الربح وعمولة الحساب ولا تُخفّض السبريد الحقيقي",
@@ -178,7 +178,7 @@ impl Engine {
         // from target distance: Ask/Bid entry already paid that spread once.
         s.target_distance = match trading::sniper_target_from_entry(
             &cost,
-            target_pips * c.trading.pip_points * point,
+            target_pips * c.trading.sniper_pip_price,
         ) {
             Ok(v) => v,
             Err(error) => { s.side = 0; s.reason = error; return s; }
@@ -261,6 +261,30 @@ mod tests {
         assert!(changed);
     }
     #[test]
+    fn exactly_five_and_ten_gold_pips_even_when_quote_point_is_tenth_of_dollar() {
+        for (pips,want) in [(5.,0.50),(10.,1.00)] {
+            let (mut t,mut c)=fixture();
+            t.point=Some(0.10);
+            t.tick_size=Some(0.10);
+            t.tick_value_profit=Some(10.);
+            t.tick_value_loss=Some(10.);
+            c.risk.commission_per_lot=0.;
+            c.risk.slippage_ticks=0.;
+            c.trading.sniper_target_points=pips*c.trading.pip_points;
+            let mut engine=Engine::default();
+            let mut result=None;
+            for (ts,bid) in [(10000,2000.),(10010,2000.2),(10020,2000.4)] {
+                t.bid=Some(bid);t.ask=Some(bid+0.10);t.quote_time_ms=Some(ts);
+                result=Some(engine.evaluate(&t,&c,ts));
+            }
+            let signal=result.unwrap();
+            assert!(signal.ready,"{}",signal.reason);
+            assert!((signal.target_distance-want).abs()<1e-8);
+            assert_eq!(signal.coordination.unwrap()["selection"]["sniper_target_pips"],pips);
+        }
+    }
+
+    #[test]
     fn zero_commission_zero_slippage_uses_only_observed_spread_and_never_adds_it_to_tp() {
         let (mut t,mut c) = fixture();
         c.risk.commission_per_lot = 0.;
@@ -294,7 +318,7 @@ mod tests {
             if ts==10020 {
                 assert!(s.ready);
                 assert_eq!(s.coordination.as_ref().unwrap()["selection"]["sniper_target_pips"],7.);
-                assert!((s.target_distance-(70.*0.01+0.11)).abs()<1e-8);
+                assert!((s.target_distance-0.7).abs()<1e-8);
             }
         }
         c.trading.sniper_target_mode=SniperTargetMode::Adaptive;
