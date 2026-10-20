@@ -257,11 +257,11 @@ export component Dashboard inherits Window {
         Rectangle {
             background: #1b1d22; border-radius: 14px;
             border-width: 1px; border-color: #34363d;
-            min-height: root.nav-section == 2 ? 114px : 96px;
+            height: root.nav-section == 2 ? 133px : 97px;
             VerticalLayout {
-                padding: 11px; spacing: 7px;
+                padding: 8px; spacing: 5px;
                 HorizontalLayout {
-                    spacing: 9px;
+                    height: 34px; spacing: 9px;
                     Button { text: root.nav-section == 0 ? "●  الرئيسية" : "الرئيسية"; clicked => { root.nav-section = 0; root.page = 0; } }
                     Button { text: root.nav-section == 1 ? "●  التداول" : "التداول"; clicked => { root.nav-section = 1; root.page = 14; root.studio-action("config"); } }
                     Button { text: root.nav-section == 2 ? "●  التحليل" : "التحليل"; clicked => { root.nav-section = 2; root.page = 4; } }
@@ -272,42 +272,42 @@ export component Dashboard inherits Window {
                 }
                 Rectangle { height: 1px; background: #34363d; }
                 if root.nav-section == 0: HorizontalLayout {
-                    spacing: 8px;
+                    height: 33px; spacing: 8px;
                     Text { text: "نظرة سريعة على الحساب والاتصال والصفقات المفتوحة"; color: #aeb1ba; vertical-alignment: center; }
                     Rectangle { horizontal-stretch: 1; background: transparent; }
                     Button { text: "تهيئة MT5"; clicked => { root.nav-section = 4; root.page = 1; } }
                     Button { text: "إعداد التداول"; clicked => { root.nav-section = 1; root.page = 14; root.studio-action("config"); } }
                 }
                 if root.nav-section == 1: HorizontalLayout {
-                    spacing: 8px;
+                    height: 33px; spacing: 8px;
                     Button { text: root.page == 14 ? "●  الأوضاع والتكاليف" : "الأوضاع والتكاليف"; clicked => { root.page = 14; root.studio-action("config"); } }
                     Button { text: root.page == 17 ? "●  تنفيذ MT5" : "تنفيذ MT5"; clicked => { root.page = 17; root.execution-action("refresh"); } }
                     Button { text: root.page == 19 ? "●  تقدّم التعلّم" : "تقدّم التعلّم"; clicked => { root.page = 19; } }
                     Button { text: root.page == 6 ? "●  المخاطرة" : "المخاطرة"; clicked => { root.page = 6; } }
                 }
                 if root.nav-section == 2: VerticalLayout {
-                    spacing: 5px;
-                    HorizontalLayout { spacing: 8px;
+                    height: 70px; spacing: 5px;
+                    HorizontalLayout { height: 32px; spacing: 8px;
                         Button { text: root.page == 4 ? "●  العقول" : "العقول"; clicked => { root.page = 4; } }
                         Button { text: root.page == 10 ? "●  فرص السوق" : "فرص السوق"; clicked => { root.page = 10; } }
                         Button { text: root.page == 12 ? "●  خريطة السوق" : "خريطة السوق"; clicked => { root.page = 12; } }
                         Button { text: root.page == 16 ? "●  وايكوف" : "وايكوف"; clicked => { root.page = 16; root.studio-action("refresh"); } }
                     }
-                    HorizontalLayout { spacing: 8px;
+                    HorizontalLayout { height: 32px; spacing: 8px;
                         Button { text: root.page == 8 ? "●  الأخبار" : "الأخبار"; clicked => { root.page = 8; } }
                         Button { text: root.page == 11 ? "●  نماذج البحث" : "نماذج البحث"; clicked => { root.page = 11; root.learning-action("refresh"); } }
                         Button { text: root.page == 18 ? "●  الارتباط" : "الارتباط"; enabled: !root.corr-busy; clicked => { root.page = 18; root.correlation-action("refresh"); } }
                     }
                 }
                 if root.nav-section == 3: HorizontalLayout {
-                    spacing: 8px;
+                    height: 33px; spacing: 8px;
                     Button { text: root.page == 5 ? "●  المحاكاة" : "المحاكاة"; clicked => { root.page = 5; } }
                     Button { text: root.page == 7 ? "●  Backtest" : "Backtest"; clicked => { root.page = 7; root.backtest-action("refresh"); } }
                     Button { text: root.page == 9 ? "●  التقييم الزمني" : "التقييم الزمني"; clicked => { root.page = 9; root.evaluation-action("refresh"); } }
                     Button { text: root.page == 15 ? "●  مختبر الاستراتيجيات" : "مختبر الاستراتيجيات"; clicked => { root.page = 15; root.studio-action("refresh"); } }
                 }
                 if root.nav-section == 4: HorizontalLayout {
-                    spacing: 8px;
+                    height: 33px; spacing: 8px;
                     Button { text: root.page == 1 ? "●  MT5 وTelegram" : "MT5 وTelegram"; clicked => { root.page = 1; } }
                     Button { text: root.page == 2 ? "●  السجل" : "السجل"; clicked => { root.page = 2; root.action("events"); } }
                     Button { text: root.page == 13 ? "●  النسخ الاحتياطي" : "النسخ الاحتياطي"; enabled: !root.backup-busy; clicked => { root.page = 13; root.backup-action("refresh"); } }
