@@ -70,6 +70,7 @@ export component Dashboard inherits Window {
     in-out property <string> sniper-cooldown: "0";
     in-out property <string> sniper-hold: "120";
     in-out property <string> pip-points: "10";
+    in-out property <string> sniper-pip-price: "0.10";
     in-out property <string> cost-fraction: "0.45";
     in-out property <string> preview-lots: "0.1";
     in property <bool> studio-busy: false;
@@ -488,8 +489,8 @@ export component Dashboard inherits Window {
                             spacing: 14px;
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "عدد نقاط MT5 في 1 pip"; color: #e0e1e4; wrap: word-wrap; }
-                                LineEdit { text <=> root.pip-points; placeholder-text: "مثال: 10"; }
+                                Text { text: "قيمة 1 pip بحركة سعر الذهب (مهم)"; color: #e0e1e4; wrap: word-wrap; }
+                                LineEdit { text <=> root.sniper-pip-price; placeholder-text: "0.10 = كل pip حركة سعر 10 سنت"; }
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
@@ -497,7 +498,7 @@ export component Dashboard inherits Window {
                                 LineEdit { text <=> root.slippage-ticks; placeholder-text: "0 = دون انزلاق مفترض"; }
                             }
                         }
-                        Text { text: "السبريد يُقرأ من Ask − Bid الحقيقي عند الضغط على «احسب»؛ لا نضاعفه ولا نأخذه من حقل الانزلاق. الانزلاق تقدير منفصل، وقيمته 0 تعني عدم افتراض انزلاق. عدد النقاط في pip يغيّر العرض فقط ولا يغيّر سعر السوق."; color: #b7bac3; wrap: word-wrap; }
+                        Text { text: "مثال على الذهب: قيمة pip = 0.10 بالسعر؛ الهدف الثابت 5 pip = تحرّك 0.50 بسعر الذهب، و10 pip = 1.00. هدف القناص لا يكبر بسبب العمولة أو السبريد أو التعلّم. السبريد الحقيقي من MT5 والانزلاق تقدير مستقل. تأكد من تعريف pip مع وسيطك."; color: #b7bac3; wrap: word-wrap; }
                     }
                 }
                 Rectangle {
@@ -563,7 +564,7 @@ export component Dashboard inherits Window {
                                 LineEdit { text <=> root.cost-fraction; placeholder-text: "مثال: 0.45"; }
                             }
                         }
-                        Text { text: "القناص المتعلّم يختبر 4 أهداف pip ضمن النطاق عند وجود إشارة وتجاوز اختبار التكلفة. على Live يعود للهدف الثابت. مدة الاحتفاظ من 1 إلى 3600 ثانية."; color: #b7bac3; wrap: word-wrap; }
+                        Text { text: "الهدف الثابت يبقى نفسه سواء فعّلت الخروج المتعلّم أو لا. نطاق الأهداف المتعلّمة يعمل فقط مع القناص المتعلّم على Demo. إذا رفض الوسيط TP صغير بسبب Stops Level، يرفض النظام فتح تلك الصفقة بدلاً من توسيع الهدف. مدة الاحتفاظ من 1 إلى 3600 ثانية."; color: #b7bac3; wrap: word-wrap; }
                     }
                 }
                 Rectangle {
