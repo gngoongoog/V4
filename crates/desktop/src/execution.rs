@@ -55,6 +55,7 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
     ui.set_exec_role(b["role"].as_str().unwrap_or("advisor").into());
 
     if load {
+        ui.set_exec_settings_loaded(true);
         ui.set_exec_target(if settings["target"] == "live" { 1 } else { 0 });
         ui.set_exec_deviation(settings["deviation_points"].to_string().into());
         ui.set_exec_frame(
@@ -138,6 +139,12 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
             stats["net_booked"].as_f64().unwrap_or(0.),
             stats["floating"].as_f64().unwrap_or(0.)
         );
+    }
+    // The system owns broker deals for delegated Sniper entries. The
+    // specialist receives a learning attribution from that same real close,
+    // never a second MT5 fill. Distinguish ledger ownership from learning.
+    if coordination["version"] == "sniper-learner-v1" {
+        out.push_str("ملاحظة ملكية: صفقة القناص عبر العقل الرئيسي تظهر في صافي صفقات (النظام)؛ عينة تعلم القناص مرجعية لنفس الإغلاق الحقيقي وليست صفقة ثانية أو ربحاً إضافياً.\\n");
     }
     if coordination["version"] == "braintrade-intelligence-v3" {
         let _ = writeln!(
@@ -269,6 +276,10 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
         let index = (ui.get_exec_selected().max(0) as usize).min(BRAINS.len() - 1);
         let id = BRAINS[index].0;
         let action = action.to_string();
+        if matches!(action.as_str(), "select" | "refresh") {
+            // Never allow saving the previous brain while its new settings are loading.
+            ui.set_exec_settings_loaded(false);
+        }
         let body = (|| -> anyhow::Result<Value> {
             Ok(match action.as_str() {
                 "enable" | "save" => {

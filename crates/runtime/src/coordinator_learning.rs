@@ -260,7 +260,27 @@ fn sniper_executed_target_matches(cmd: &Value, result: &Value) -> bool {
 
 fn open_learning_commands(db: &Connection, key: &str) -> Result<Vec<(String, String)>> {
     let mut st = db.prepare(
-        "SELECT payload,result FROM broker_commands c WHERE context=?1 AND kind='open' AND CAST(json_extract(result,'$.deal') AS INTEGER)>0 AND NOT EXISTS(SELECT 1 FROM broker_learning_processed p WHERE p.context=c.context AND p.command_id=c.id) ORDER BY created_ms,id",
+        // Previously reconciled system-owned Sniper trades from older builds
+        // may have only a system sample. Backfill their specialist attribution
+        // from existing complete MT5 booked deals, never synthetic outcomes.
+        // Once a specialist row exists, it is excluded from future scans.
+        "SELECT payload,result FROM broker_commands c
+         WHERE c.context=?1 AND c.kind='open'
+         AND CAST(json_extract(c.result,'$.deal') AS INTEGER)>0
+         AND (
+             NOT EXISTS(SELECT 1 FROM broker_learning_processed p
+                        WHERE p.context=c.context AND p.command_id=c.id)
+             OR (
+                 c.brain='system'
+                 AND json_extract(c.payload,'$.signal.coordination.selection.brain')='sniper_learner'
+                 AND json_extract(c.payload,'$.signal.coordination.selection.policy')='sniper-ticks-v1'
+                 AND NOT EXISTS(
+                     SELECT 1 FROM coordinator_broker_samples s
+                     WHERE s.context=c.context AND s.brain='sniper_learner'
+                       AND json_extract(s.payload,'$.open_command_id')=c.id
+                 )
+             )
+         ) ORDER BY c.created_ms,c.id",
     )?;
     let mapped = st.query_map([key], |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
@@ -347,6 +367,28 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
             // The primary policy also receives its own outcome, including Sniper with no ready advisor.
             members.push(json!({"id":"system","timeframe":learning["timeframe"],"report_id":"",
                 "bar_time":cmd["signal"]["bar_time"],"side":executed_side,"ready":true,"weight":learning["weight_at_entry"]}));
+        }
+        // When the system coordinator executes the Sniper Learner's selected
+        // signal, the broker-owned position carries the SYSTEM magic. Credit
+        // the specialist with the *same real closed Demo result* so its own
+        // policy/target models train in the normal non-SOLO workflow. The
+        // system retains its separately scoped record; no synthetic trade is
+        // created and source_key prevents duplicates on reconciliation.
+        if owner == "system"
+            && mode == TradingMode::Sniper
+            && selected == Some(braintrade_domain::sniper::ID)
+            && coordination["selection"]["policy"] == "sniper-ticks-v1"
+            && !members.iter().any(|m| m["id"] == braintrade_domain::sniper::ID)
+        {
+            members.push(json!({
+                "id": braintrade_domain::sniper::ID,
+                "timeframe": coordination["selection"]["timeframe"].as_str().unwrap_or("M1"),
+                "report_id": "",
+                "bar_time": cmd["signal"]["bar_time"],
+                "side": executed_side,
+                "ready": true,
+                "weight": learning["weight_at_entry"]
+            }));
         }
         let tx=db.unchecked_transaction()?;
         for member in members {
@@ -887,6 +929,100 @@ mod tests {
         for i in 0..3 {add(other,10+i,700-i*100,-1.,"adverse_price_move");}
         assert!(contextual_stats(&db,other,ctx,now).unwrap().4>0.);
         assert_eq!(contextual_stats(&db,source,ctx,now).unwrap().4,0.);
+    }
+
+
+    #[test]
+    fn coordinator_owned_sniper_close_trains_the_specialist_from_exact_demo_deals_once() {
+        let db = Connection::open_in_memory().unwrap();
+        let _learner = Learner::new(&db).unwrap();
+        db.execute_batch(
+            "CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT NOT NULL,brain TEXT NOT NULL,kind TEXT NOT NULL,created_ms INTEGER NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL DEFAULT '{}');
+             CREATE TABLE broker_deals(context TEXT NOT NULL,ticket INTEGER NOT NULL,position_id INTEGER NOT NULL,brain TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,ticket));"
+        ).unwrap();
+        let now = 1_800_000_000_000u64;
+        let t = Telemetry {
+            connected:true, demo:true, account_trade_mode:Some(0),
+            login:99, server:"Demo".into(), currency:"USD".into(), symbol:"XAUUSD".into(),
+            tick_size:Some(0.01), tick_value_profit:Some(1.), tick_value_loss:Some(1.),
+            ..Default::default()
+        };
+        let key = context(&t);
+        let command = json!({
+            "id":"sniper-coordinator-1","brain":"system",
+            "signal":{
+                "bar_time":1000,"side":1,"stop_distance":0.2,"target_distance":0.2,
+                "reason":"confirmed quote momentum",
+                "coordination":{
+                    "trading_mode":"sniper",
+                    "selection":{
+                        "brain":"sniper_learner","policy":"sniper-ticks-v1",
+                        "timeframe":"M1","sniper_policy":"impulse",
+                        "sniper_definition":"fixture-pip-setup","sniper_regime":"directional_normal",
+                        "sniper_target_mode":"adaptive","sniper_target_arm":2,
+                        "sniper_target_pips":5.0
+                    }
+                }
+            },
+            "learning":{
+                "trading_mode":"sniper","timeframe":"M1","report_id":"",
+                "tick_size":0.01,"tick_value_loss":1.0,"tick_value_profit":1.0,
+                "weight_at_entry":1.0
+            }
+        });
+        let result = json!({"deal":800,"volume":0.1,"price":2000.0,
+            "request":{"price":2000.0,"tp":2000.2,"sl":1999.8}});
+        db.execute(
+            "INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload,result)
+             VALUES('sniper-coordinator-1',?1,'system','open',?2,'observed',?3,?4)",
+            params![key,now-60_000,command.to_string(),result.to_string()]
+        ).unwrap();
+        for (ticket,entry,profit,commission,stamp) in [
+            (800,0,0.0,-0.20,now-60_000),
+            (801,1,1.5,-0.20,now-1_000)
+        ] {
+            let payload = json!({"ticket":ticket,"position_id":777,"magic":410600,
+                "entry":entry,"time_msc":stamp,"volume":0.1,"profit":profit,
+                "commission":commission,"swap":0.0,"fee":0.0,"brain":"system"});
+            db.execute(
+                "INSERT INTO broker_deals(context,ticket,position_id,brain,payload)
+                 VALUES(?1,?2,777,'system',?3)",
+                params![key,ticket,payload.to_string()]
+            ).unwrap();
+        }
+        for _ in 0..2 {sync_demo_broker_evidence(&db,&t).unwrap();}
+        let rows:Vec<(String,String)> = db.prepare(
+            "SELECT brain,payload FROM coordinator_broker_samples WHERE context=?1 ORDER BY brain"
+        ).unwrap().query_map([&key],|r|Ok((r.get(0)?,r.get(1)?)))
+            .unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(rows.len(),2); // same physical close; distinct system and specialist evidence
+        assert_eq!(rows[0].0,"sniper_learner");
+        assert_eq!(rows[1].0,"system");
+        let specialist:Value=serde_json::from_str(&rows[0].1).unwrap();
+        assert_eq!(specialist["trade_owner"],"system");
+        assert_eq!(specialist["evidence_source"],"mt5_demo_broker");
+        assert_eq!(specialist["sniper_tp_preserved"],true);
+        assert!((specialist["net"].as_f64().unwrap()-1.10).abs()<1e-9);
+        let mut engine=braintrade_domain::sniper::Engine::default();
+        crate::sniper_learning::refresh(&mut engine,&db,&t,now).unwrap();
+        let policy=engine.models.values().next().unwrap();
+        assert_eq!(policy[0].samples,1);
+        let targets=engine.target_models.values().next().unwrap();
+        assert_eq!(targets[2].samples,1);
+        assert!(targets.iter().enumerate().all(|(arm,p)|arm==2||p.samples==0));
+        // Idempotent re-processing never increases samples.
+        sync_demo_broker_evidence(&db,&t).unwrap();
+        crate::sniper_learning::refresh(&mut engine,&db,&t,now).unwrap();
+        assert_eq!(engine.target_models.values().next().unwrap()[2].samples,1);
+        // Migrating an older installation: the system outcome and processed
+        // marker already exist, but the specialist credit was absent.
+        db.execute("DELETE FROM coordinator_broker_samples WHERE brain='sniper_learner'",[]).unwrap();
+        sync_demo_broker_evidence(&db,&t).unwrap();
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_broker_samples WHERE brain='sniper_learner'",[],|r|r.get::<_,u64>(0)).unwrap(),1);
+        crate::sniper_learning::refresh(&mut engine,&db,&t,now).unwrap();
+        assert_eq!(engine.target_models.values().next().unwrap()[2].samples,1);
+        sync_demo_broker_evidence(&db,&t).unwrap();
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_broker_samples WHERE brain='sniper_learner'",[],|r|r.get::<_,u64>(0)).unwrap(),1);
     }
 
 }
