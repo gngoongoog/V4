@@ -911,4 +911,89 @@ mod tests {
         assert_eq!(contextual_stats(&db,source,ctx,now).unwrap().4,0.);
     }
 
+
+    #[test]
+    fn coordinator_owned_sniper_close_trains_the_specialist_from_exact_demo_deals_once() {
+        let db = Connection::open_in_memory().unwrap();
+        let _learner = Learner::new(&db).unwrap();
+        db.execute_batch(
+            "CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT NOT NULL,brain TEXT NOT NULL,kind TEXT NOT NULL,created_ms INTEGER NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL DEFAULT '{}');
+             CREATE TABLE broker_deals(context TEXT NOT NULL,ticket INTEGER NOT NULL,position_id INTEGER NOT NULL,brain TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,ticket));"
+        ).unwrap();
+        let now = 1_800_000_000_000u64;
+        let t = Telemetry {
+            connected:true, demo:true, account_trade_mode:Some(0),
+            login:99, server:"Demo".into(), currency:"USD".into(), symbol:"XAUUSD".into(),
+            tick_size:Some(0.01), tick_value_profit:Some(1.), tick_value_loss:Some(1.),
+            ..Default::default()
+        };
+        let key = context(&t);
+        let command = json!({
+            "id":"sniper-coordinator-1","brain":"system",
+            "signal":{
+                "bar_time":1000,"side":1,"stop_distance":0.2,"target_distance":0.2,
+                "reason":"confirmed quote momentum",
+                "coordination":{
+                    "trading_mode":"sniper",
+                    "selection":{
+                        "brain":"sniper_learner","policy":"sniper-ticks-v1",
+                        "timeframe":"M1","sniper_policy":"impulse",
+                        "sniper_definition":"fixture-pip-setup","sniper_regime":"directional_normal",
+                        "sniper_target_mode":"adaptive","sniper_target_arm":2,
+                        "sniper_target_pips":5.0
+                    }
+                }
+            },
+            "learning":{
+                "trading_mode":"sniper","timeframe":"M1","report_id":"",
+                "tick_size":0.01,"tick_value_loss":1.0,"tick_value_profit":1.0,
+                "weight_at_entry":1.0
+            }
+        });
+        let result = json!({"deal":800,"volume":0.1,"price":2000.0,
+            "request":{"price":2000.0,"tp":2000.2,"sl":1999.8}});
+        db.execute(
+            "INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload,result)
+             VALUES('sniper-coordinator-1',?1,'system','open',?2,'observed',?3,?4)",
+            params![key,now-60_000,command.to_string(),result.to_string()]
+        ).unwrap();
+        for (ticket,entry,profit,commission,stamp) in [
+            (800,0,0.0,-0.20,now-60_000),
+            (801,1,1.5,-0.20,now-1_000)
+        ] {
+            let payload = json!({"ticket":ticket,"position_id":777,"magic":410600,
+                "entry":entry,"time_msc":stamp,"volume":0.1,"profit":profit,
+                "commission":commission,"swap":0.0,"fee":0.0,"brain":"system"});
+            db.execute(
+                "INSERT INTO broker_deals(context,ticket,position_id,brain,payload)
+                 VALUES(?1,?2,777,'system',?3)",
+                params![key,ticket,payload.to_string()]
+            ).unwrap();
+        }
+        for _ in 0..2 {sync_demo_broker_evidence(&db,&t).unwrap();}
+        let rows:Vec<(String,String)> = db.prepare(
+            "SELECT brain,payload FROM coordinator_broker_samples WHERE context=?1 ORDER BY brain"
+        ).unwrap().query_map([&key],|r|Ok((r.get(0)?,r.get(1)?)))
+            .unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(rows.len(),2); // same physical close; distinct system and specialist evidence
+        assert_eq!(rows[0].0,"sniper_learner");
+        assert_eq!(rows[1].0,"system");
+        let specialist:Value=serde_json::from_str(&rows[0].1).unwrap();
+        assert_eq!(specialist["trade_owner"],"system");
+        assert_eq!(specialist["evidence_source"],"mt5_demo_broker");
+        assert_eq!(specialist["sniper_tp_preserved"],true);
+        assert!((specialist["net"].as_f64().unwrap()-1.10).abs()<1e-9);
+        let mut engine=braintrade_domain::sniper::Engine::default();
+        crate::sniper_learning::refresh(&mut engine,&db,&t,now).unwrap();
+        let policy=engine.models.values().next().unwrap();
+        assert_eq!(policy[0].samples,1);
+        let targets=engine.target_models.values().next().unwrap();
+        assert_eq!(targets[2].samples,1);
+        assert!(targets.iter().enumerate().all(|(arm,p)|arm==2||p.samples==0));
+        // Idempotent re-processing never increases samples.
+        sync_demo_broker_evidence(&db,&t).unwrap();
+        crate::sniper_learning::refresh(&mut engine,&db,&t,now).unwrap();
+        assert_eq!(engine.target_models.values().next().unwrap()[2].samples,1);
+    }
+
 }
