@@ -439,7 +439,7 @@ export component Dashboard inherits Window {
             Text { text: "الخطوة 2 • حدد العقل واضبط اللوت للمراجعة الورقية. تنفيذ MT5 محصور بالعقل الرئيسي للوضع المختار؛ بقية العقول SHADOW/PAPER فقط."; color: #e0e1e4; font-weight: 700; wrap: word-wrap; }
             ComboBox { model: root.exec-names; current-index <=> root.exec-selected; enabled: !root.exec-busy; selected(value) => { root.execution-action("select"); } }
             HorizontalBox {
-                Button { text: "تشغيل تداول منفرد (معطّل بالعزل)"; enabled: false; clicked => { root.execution-action("enable"); } }
+                Button { text: "تشغيل تداول منفرد (معطّل بالعزل)"; enabled: root.exec-settings-loaded && false; clicked => { root.execution-action("enable"); } }
                 Button { text: "حفظ إعدادات العقل"; enabled: !root.exec-busy && root.exec-settings-loaded; clicked => { root.execution-action("save"); } }
                 Button { text: "إرجاع للمنظومة"; enabled: !root.exec-busy && root.exec-settings-loaded && root.exec-selected != 0 && root.exec-enabled; clicked => { root.execution-action("disable"); } }
             }
