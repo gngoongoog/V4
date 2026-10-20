@@ -204,6 +204,21 @@ pub fn costs(t: &Telemetry, c: &Config, lots: f64, now: u64) -> Result<CostPrevi
     }
     Ok(r)
 }
+/// Broker-executable Sniper targets start at Ask for buys / Bid for sells.
+/// The observed spread is already contained in that entry price, so only the
+/// round-trip commission and separately configured slippage are added here.
+/// Using `costs.total` would double-charge the spread in TP geometry.
+pub fn sniper_target_from_entry(cost: &CostPreview, desired_price_distance: f64) -> Result<f64, String> {
+    if !desired_price_distance.is_finite() || desired_price_distance <= 0. {
+        return Err("Sniper target price distance must be positive".into());
+    }
+    let target = desired_price_distance + cost.break_even_from_entry_points * cost.point_price;
+    if !target.is_finite() || target <= 0. {
+        return Err("Sniper target including fees is invalid".into());
+    }
+    Ok(target)
+}
+
 pub fn volatility(b: &[Candle]) -> f64 {
     if b.len() < 15 {
         return 0.;
@@ -449,6 +464,35 @@ mod tests {
         assert!(costs(&t, &Config::default(), 0., 1000).is_err());
     }
 
+    #[test]
+    fn sniper_tp_pays_commission_and_slippage_but_never_doubles_spread() {
+        let mut c = Config::default();
+        c.risk.slippage_ticks = 0.;
+        let mut t = Telemetry {
+            connected: true,
+            bid: Some(2000.),
+            ask: Some(2000.80),
+            point: Some(0.01),
+            tick_size: Some(0.01),
+            tick_value_loss: Some(1.),
+            tick_value_profit: Some(1.),
+            tick_age_ms: Some(0),
+            ..Default::default()
+        };
+        let preview = costs(&t, &c, 0.1, 1000).unwrap();
+        assert!((preview.commission - 0.7).abs() < 1e-10);
+        assert!((sniper_target_from_entry(&preview, 0.50).unwrap() - 0.57).abs() < 1e-8);
+        c.risk.commission_per_lot = 0.;
+        let free = costs(&t, &c, 0.01, 1000).unwrap();
+        assert_eq!(free.commission, 0.);
+        assert!((free.spread_points - 80.).abs() < 1e-8);
+        assert!((sniper_target_from_entry(&free, 0.50).unwrap() - 0.50).abs() < 1e-8);
+        t.ask = Some(2000.02);
+        let narrow = costs(&t, &c, 0.01, 1000).unwrap();
+        assert_eq!(narrow.commission, 0.);
+        assert!(narrow.spread_money < free.spread_money);
+        assert!((sniper_target_from_entry(&narrow, 0.50).unwrap() - 0.50).abs() < 1e-8);
+    }
     #[test]
     fn different_broker_profit_loss_tick_values_do_not_multiply_spread_in_break_even() {
         let mut c = Config::default();
