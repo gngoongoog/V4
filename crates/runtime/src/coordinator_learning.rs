@@ -260,7 +260,27 @@ fn sniper_executed_target_matches(cmd: &Value, result: &Value) -> bool {
 
 fn open_learning_commands(db: &Connection, key: &str) -> Result<Vec<(String, String)>> {
     let mut st = db.prepare(
-        "SELECT payload,result FROM broker_commands c WHERE context=?1 AND kind='open' AND CAST(json_extract(result,'$.deal') AS INTEGER)>0 AND NOT EXISTS(SELECT 1 FROM broker_learning_processed p WHERE p.context=c.context AND p.command_id=c.id) ORDER BY created_ms,id",
+        // Previously reconciled system-owned Sniper trades from older builds
+        // may have only a system sample. Backfill their specialist attribution
+        // from existing complete MT5 booked deals, never synthetic outcomes.
+        // Once a specialist row exists, it is excluded from future scans.
+        "SELECT payload,result FROM broker_commands c
+         WHERE c.context=?1 AND c.kind='open'
+         AND CAST(json_extract(c.result,'$.deal') AS INTEGER)>0
+         AND (
+             NOT EXISTS(SELECT 1 FROM broker_learning_processed p
+                        WHERE p.context=c.context AND p.command_id=c.id)
+             OR (
+                 c.brain='system'
+                 AND json_extract(c.payload,'$.signal.coordination.selection.brain')='sniper_learner'
+                 AND json_extract(c.payload,'$.signal.coordination.selection.policy')='sniper-ticks-v1'
+                 AND NOT EXISTS(
+                     SELECT 1 FROM coordinator_broker_samples s
+                     WHERE s.context=c.context AND s.brain='sniper_learner'
+                       AND json_extract(s.payload,'$.open_command_id')=c.id
+                 )
+             )
+         ) ORDER BY c.created_ms,c.id",
     )?;
     let mapped = st.query_map([key], |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
@@ -994,6 +1014,15 @@ mod tests {
         sync_demo_broker_evidence(&db,&t).unwrap();
         crate::sniper_learning::refresh(&mut engine,&db,&t,now).unwrap();
         assert_eq!(engine.target_models.values().next().unwrap()[2].samples,1);
+        // Migrating an older installation: the system outcome and processed
+        // marker already exist, but the specialist credit was absent.
+        db.execute("DELETE FROM coordinator_broker_samples WHERE brain='sniper_learner'",[]).unwrap();
+        sync_demo_broker_evidence(&db,&t).unwrap();
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_broker_samples WHERE brain='sniper_learner'",[],|r|r.get::<_,u64>(0)).unwrap(),1);
+        crate::sniper_learning::refresh(&mut engine,&db,&t,now).unwrap();
+        assert_eq!(engine.target_models.values().next().unwrap()[2].samples,1);
+        sync_demo_broker_evidence(&db,&t).unwrap();
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_broker_samples WHERE brain='sniper_learner'",[],|r|r.get::<_,u64>(0)).unwrap(),1);
     }
 
 }
