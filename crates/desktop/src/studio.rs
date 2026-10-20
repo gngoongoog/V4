@@ -208,6 +208,9 @@ sniper_max_target_pips:number(ui.get_sniper_max_target_pips())?,demo_flexible:ui
                             ui.set_commission_basis(if v["commission_editor"]["basis"]=="per_side"{1}else{0});
                             let scoped=v["commission_editor"]["saved"]==true;
                             let roundtrip=v["commission_editor"]["round_trip_per_lot"].as_f64().unwrap_or(0.);
+                            // Saving the trading commission may change the fallback risk
+                            // commission. Keep its separate editor in round-trip units.
+                            if action=="save" {ui.set_risk_commission_lot(roundtrip.to_string().into());}
                             let message=if action=="save"{
                                 if scoped{format!("حُفظ الوضع وعمولة الحساب/الرمز. التكلفة الكاملة لكل لوت = {roundtrip:.4}")}
                                 else{format!("حُفظ الوضع والعمولة الافتراضية. التكلفة الكاملة لكل لوت = {roundtrip:.4}")}
