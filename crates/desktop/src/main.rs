@@ -23,6 +23,17 @@ enum Task {
     Browse,
 }
 
+// The Trading editor may display per-side fees; Risk always edits round-trip fees.
+fn paint_risk(ui: &Dashboard, risk: &RiskConfig) {
+    ui.set_risk_percent(risk.risk_percent.to_string().into());
+    ui.set_daily_limit(risk.daily_loss_percent.to_string().into());
+    ui.set_drawdown_limit(risk.max_drawdown_percent.to_string().into());
+    ui.set_spread_limit(risk.max_spread_atr.to_string().into());
+    ui.set_max_lots(risk.max_lots.to_string().into());
+    ui.set_risk_commission_lot(risk.commission_per_lot.to_string().into());
+    ui.set_slippage_ticks(risk.slippage_ticks.to_string().into());
+}
+
 fn paint(ui: &Dashboard, status: Status) {
     ui.set_execution_active(status.execution_enabled);
     ui.set_brains(status.analysis.text().into());
@@ -163,7 +174,7 @@ fn run_ui() -> anyhow::Result<()> {
                 ui.get_drawdown_limit(),
                 ui.get_spread_limit(),
                 ui.get_max_lots(),
-                ui.get_commission_lot(),
+                ui.get_risk_commission_lot(),
                 ui.get_slippage_ticks(),
             ];
             match fields
@@ -219,13 +230,7 @@ fn run_ui() -> anyhow::Result<()> {
                     ui.set_telegram_chat(c.telegram_chat_id.into());
                     ui.set_telegram_enabled(c.telegram_enabled);
                     ui.set_token_saved(saved);
-                    ui.set_risk_percent(c.risk.risk_percent.to_string().into());
-                    ui.set_daily_limit(c.risk.daily_loss_percent.to_string().into());
-                    ui.set_drawdown_limit(c.risk.max_drawdown_percent.to_string().into());
-                    ui.set_spread_limit(c.risk.max_spread_atr.to_string().into());
-                    ui.set_max_lots(c.risk.max_lots.to_string().into());
-                    ui.set_commission_lot(c.risk.commission_per_lot.to_string().into());
-                    ui.set_slippage_ticks(c.risk.slippage_ticks.to_string().into());
+                    paint_risk(&ui, &c.risk);
                 });
             }
         }
@@ -253,6 +258,9 @@ fn run_ui() -> anyhow::Result<()> {
                             false,
                         ),
                         Task::Risk(v) => (client.post("/v1/risk", v), false, false),
+                        Task::Action(a) if a == "risk_config" => {
+                            (client.get("/v1/config"), false, false)
+                        }
                         Task::Action(a) if a == "decisions" => {
                             (client.get("/v1/decisions"), false, false)
                         }
@@ -275,6 +283,10 @@ fn run_ui() -> anyhow::Result<()> {
                     } else {
                         None
                     };
+                    let refreshed_risk = result.as_ref().ok()
+                        .and_then(|v| v.get("config"))
+                        .and_then(|v| serde_json::from_value::<Config>(v.clone()).ok())
+                        .map(|c| c.risk);
                     let (message, events) = match result {
                         Ok(v) if v.get("decisions").is_some() => {
                             let lines = v["decisions"]
@@ -336,6 +348,7 @@ fn run_ui() -> anyhow::Result<()> {
                     };
                     let _ = weak.upgrade_in_event_loop(move |ui| {
                         ui.set_busy(false);
+                        if let Some(risk) = refreshed_risk { paint_risk(&ui, &risk); }
                         ui.set_feedback(message.into());
                         if let Some(rows) = events {
                             ui.set_events(rows.into());

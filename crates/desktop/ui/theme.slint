@@ -1,0 +1,58 @@
+// Shared Smoke theme. Status is also communicated with text, never color alone.
+export global Theme {
+    out property <color> canvas: #181818;
+    out property <color> surface: #222222;
+    out property <color> raised: #2b2b2b;
+    out property <color> line: #3b3b3b;
+    out property <color> text: #f4f4f4;
+    out property <color> secondary: #cccccc;
+    out property <color> muted: #a3a3a3;
+}
+
+export component Button inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> primary: false;
+    in property <bool> selected: false;
+    in property <bool> flat: false;
+    callback clicked();
+    min-width: 68px;
+    min-height: max(36px, label.preferred-height + 16px);
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    border-radius: 7px;
+    border-width: focus.has-focus ? 2px : 1px;
+    border-color: focus.has-focus ? #eeeeee : root.selected ? #858585 : Theme.line;
+    background: !root.enabled ? #242424 : touch.pressed ? #555555 : root.primary ? #eeeeee : root.selected ? #444444 : touch.has-hover ? #3d3d3d : root.flat ? transparent : #303030;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    forward-focus: focus;
+    label := Text {
+        x: 12px; y: 8px; width: parent.width - 24px; height: parent.height - 16px;
+        text: root.text; color: !root.enabled ? #777777 : root.primary ? #161616 : Theme.text;
+        font-size: 13px; font-weight: root.primary || root.selected ? 700 : 500;
+        horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap;
+    }
+    focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return { return accept; }
+            return reject;
+        }
+        key-released(event) => {
+            if root.enabled && (event.text == " " || event.text == Key.Return) { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+}
+
+export component NavItem inherits Button {
+    flat: true;
+    min-height: 46px;
+}

@@ -1,6 +1,10 @@
-# BrainTrade OS V4 — 0.7.0 Unified Windows Demo Release Candidate
+# BrainTrade OS V4 — 0.7.0 Smoke Windows Release
 
 **Package:** `BrainTrade-Windows-x64-v0.7.0-Preview.zip` (a Windows x64 portable ZIP contained within the GitHub Actions downloadable artifact `BrainTrade-Windows-x64-Preview`). This is the combined version for **controlled MT5 Demo acceptance**, not an independently certified profitable trading product.
+
+## Smoke UI consolidation and main promotion
+
+PR #72 combines the guided page content from #70 with the shared smoke theme, five-section sidebar, persistent trading controls and native control checks. Commission editors are separate and the brain selector is disabled while settings load. The owner requested main promotion after exact-head Windows/Linux and Research validation. Native broker acceptance remains separate.
 
 ## Included in this unified build
 
@@ -14,7 +18,7 @@
 
 ## Release qualification — must use exact-source test evidence
 
-The Windows and Research workflow checks validate Rust/Python test suites, simulated broker replies, source integrity and packaging. Download **only the artifact from a successful Windows run on the unified PR #69 branch or its merged development commit**. The package carries `package-validation.json` and `SHA256SUMS.json`; check their source commit and archive contents against GitHub Actions.
+The Windows and Research workflow checks validate Rust/Python test suites, simulated broker replies, source integrity and packaging. Download **only the artifact from a successful Windows run on the Smoke UI PR #72 branch or its validated promotion commit**. The package carries `package-validation.json` and `SHA256SUMS.json`; check their source commit and archive contents against GitHub Actions.
 
 A successful automated test suite does **not** validate:
 - actual fills, partial-close behavior or latency on your broker's Windows MT5 Demo installation;
@@ -27,4 +31,4 @@ See `START_HERE_SNIPER_DEMO_AR.md`, `README_AR.md`, and `Run-Demo-Acceptance.cmd
 
 ## Version history
 
-Version 0.6.0 remains the old promoted baseline on `main`. Version 0.7.0 is the unified development release candidate. A package of 0.7.0 may be feature-complete for Demo trial without being certified as production-safe or consistently profitable. Research-only ML challengers, speculative entry-timing comparisons and news sentiment are not broker execution authorities.
+Version 0.6.0 is a historical baseline. Version 0.7.0 Smoke consolidates the unified trading release and the native control-center review for owner-authorized promotion to `main`; the merged release and exact validation evidence are recorded in `docs/SMOKE_RELEASE_REVIEW_AR.md`. A package of 0.7.0 may be feature-complete for Demo trial without being certified as production-safe or consistently profitable. Research-only ML challengers, speculative entry-timing comparisons and news sentiment are not broker execution authorities.

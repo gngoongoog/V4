@@ -1,7 +1,14 @@
 # BrainTrade OS — project state: verified 0.7.0 Development Preview
 
+## Current release work — Smoke UI consolidation (2026-10-20)
 
-## Latest verified checkpoint — contextual mistake memory (2026-10-19)
+Built on merged PR #69 (`287c27f`): 17 execution identities including Sniper Learner (410617; 410616 reserved), four trading modes, net-pip targets and Demo learning. PR #72 consolidates the guided page content and UI contracts from PR #70 with a five-section sidebar, shared smoke theme, commission-editor isolation and an in-flight brain-selector fix. It supersedes the older presentation-only promotion proposal #71; do not separately merge that stale proposal after #72.
+
+Exact-head Windows/Linux and Research checks, all 20 native pages at two sizes, and native pointer/keyboard/navigation checks are required before promotion to `main`. Main promotion is requested by the owner; it does not certify target-broker fills, latency or profitability. Preserve all learning databases and historical evidence. The next target-machine step remains real MT5 Demo acceptance using `Run-Demo-Acceptance.cmd`.
+
+
+
+## Historical checkpoint — contextual mistake memory (2026-10-19)
 
 PR #64 is merged into `development` as `88a341fc8733deaa1856079fc073bb744a61afcf`, source tree `59efba92fc67eb249336695074e9c67eafb7537b`. This includes PR #62 timing/five-way exits and PR #63 handoff documentation. Post-merge Research `39249735055` and Windows/Linux `39249735059` both passed on that exact merge.
 

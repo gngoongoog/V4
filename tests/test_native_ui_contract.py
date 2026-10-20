@@ -35,7 +35,7 @@ class NativeUiContract(unittest.TestCase):
             src = path.read_text(encoding="utf-8")
             # Every Button {} declaration must have a clicked event; bare or
             # decorative buttons are not accepted into the Windows release.
-            count = len(re.findall(r"\bButton\s*\{", src))
+            count = len(re.findall(r"\b(?:Button|NavItem)\s*\{", src))
             wired = len(re.findall(r"\bclicked\s*=>", src))
             self.assertGreater(count, 0)
             self.assertEqual(count, wired, f"Found inert control in {path.name}")
@@ -54,7 +54,7 @@ class NativeUiContract(unittest.TestCase):
 
     def test_operator_flow_and_execution_controls_stay_wired(self):
         for label in ("1  ربط MT5", "2  تجهيز التداول", "3  متابعة التنفيذ",
-                      "بدء النظام  START", "إيقاف  STOP", "خروج كامل",
+                      "تشغيل النظام", "إيقاف النظام", "خروج كامل",
                       "حفظ إعدادات التداول", "ربط الحساب الحالي",
                       "إرجاع للمنظومة", "حفظ حماية المحفظة"):
             self.assertIn(label, self.dashboard, f"Critical control disappeared: {label}")
@@ -68,8 +68,8 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("root.exec-busy", self.dashboard)
 
     def test_palette_remains_grayscale_including_research_subpage(self):
-        colors = re.findall(r"#[0-9a-fA-F]{6}\b", self.pages)
-        self.assertGreater(len(colors), 70)
+        colors = re.findall(r"#[0-9a-fA-F]{6}\b", self.pages + (SLINT.parent / "theme.slint").read_text(encoding="utf-8"))
+        self.assertGreater(len(colors), 10)
         for color in colors:
             rgb = [int(color[i:i+2], 16) for i in (1, 3, 5)]
             self.assertLessEqual(max(rgb)-min(rgb), 19,
