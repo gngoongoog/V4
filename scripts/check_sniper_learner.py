@@ -144,6 +144,9 @@ def check(exe=None):
             work=api('/v1/execution/gateway')
             if work['command'] is not None:
                 assert work['command']['brain']=='system',work
+                # This is a simulated test without an actual broker send;
+                # finalize the dispatched probe before changing mode.
+                api('/v1/execution/result',dict(id=work['command']['id'],state='cancelled'))
             assert all(c['request']['brain']!='sniper_learner' or c['request']['kind']!='open'
                 for c in api('/v1/execution')['commands'])
             api('/v1/stop',{})
