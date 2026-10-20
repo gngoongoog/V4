@@ -348,6 +348,28 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
             members.push(json!({"id":"system","timeframe":learning["timeframe"],"report_id":"",
                 "bar_time":cmd["signal"]["bar_time"],"side":executed_side,"ready":true,"weight":learning["weight_at_entry"]}));
         }
+        // When the system coordinator executes the Sniper Learner's selected
+        // signal, the broker-owned position carries the SYSTEM magic. Credit
+        // the specialist with the *same real closed Demo result* so its own
+        // policy/target models train in the normal non-SOLO workflow. The
+        // system retains its separately scoped record; no synthetic trade is
+        // created and source_key prevents duplicates on reconciliation.
+        if owner == "system"
+            && mode == TradingMode::Sniper
+            && selected == Some(braintrade_domain::sniper::ID)
+            && coordination["selection"]["policy"] == "sniper-ticks-v1"
+            && !members.iter().any(|m| m["id"] == braintrade_domain::sniper::ID)
+        {
+            members.push(json!({
+                "id": braintrade_domain::sniper::ID,
+                "timeframe": coordination["selection"]["timeframe"].as_str().unwrap_or("M1"),
+                "report_id": "",
+                "bar_time": cmd["signal"]["bar_time"],
+                "side": executed_side,
+                "ready": true,
+                "weight": learning["weight_at_entry"]
+            }));
+        }
         let tx=db.unchecked_transaction()?;
         for member in members {
             if member["ready"]!=true {continue;}
