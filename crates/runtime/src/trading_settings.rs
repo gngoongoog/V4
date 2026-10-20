@@ -31,6 +31,9 @@ struct Update {
     commission_per_lot: f64,
     #[serde(default)]
     commission_basis: Basis,
+    /// Shared execution risk estimate; independent of observed Bid/Ask spread.
+    #[serde(default)]
+    slippage_ticks: Option<f64>,
     #[serde(default)]
     account: Option<Account>,
     #[serde(default)]
@@ -50,6 +53,9 @@ pub fn update(c: &Config, s: &Status, body: &[u8]) -> Result<Config> {
     let requested = u.account.or_else(|| current.map(Account::from_telemetry));
     let mut c = c.clone();
     c.trading = u.trading;
+    if let Some(ticks) = u.slippage_ticks {
+        c.risk.slippage_ticks = ticks;
+    }
     // Keep the most recently entered value as a safe fallback for accounts that
     // do not have an exact profile yet. Exact profiles always win at runtime.
     c.risk.commission_per_lot = total;
@@ -109,6 +115,21 @@ mod tests {
         s.telemetry.as_mut().unwrap().login = 18;
         assert!(update(&c, &s, body.as_bytes()).is_err());
         assert_eq!(view(&saved, &s)["commission_editor"]["saved"], false);
+    }
+
+    #[test]
+    fn slippage_estimate_can_be_disabled_separately_from_broker_spread() {
+        let c = Config::default();
+        let s = connected();
+        let body = serde_json::json!({
+            "trading": c.trading,
+            "commission_per_lot": 7.,
+            "commission_basis": "round_trip",
+            "slippage_ticks": 0.
+        }).to_string();
+        let updated = update(&c, &s, body.as_bytes()).unwrap();
+        assert_eq!(updated.risk.commission_per_lot, 7.);
+        assert_eq!(updated.risk.slippage_ticks, 0.);
     }
 
     #[test]
