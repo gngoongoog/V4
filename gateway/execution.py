@@ -53,20 +53,26 @@ def is_fast_path(cmd):
 
 
 def sniper_broker_geometry(info, tick, stop, target):
-    """Adapt frozen Sniper distances to the quote and broker stop floor at send.
+    """Validate a frozen Sniper TP without ever increasing its user pip target.
 
-    Distances remain measured from executable entry.  For a stop, the current
-    spread consumes part of the distance observed from the opposite exit quote;
-    TP does not pay the spread a second time.  One trade tick is reserved as a
-    rounding cushion so tick-size normalization does not land inside the floor.
+    Both distances are from executable entry. The broker validates SL/TP
+    against the opposite-side exit quote. A full tick cushions tick rounding.
+    If the broker's stops floor is too wide for the requested 5/10 pip TP,
+    reject the entry with an exact explanation instead of silently raising TP
+    to 40/50 pips. Likewise, never silently expand the selected stop loss.
     """
     step = float(info.trade_tick_size)
     spread = float(tick.ask) - float(tick.bid)
     minimum = max(0, getattr(info, 'trade_stops_level', 0)) * float(info.point) + step
-    stop = max(float(stop), spread + minimum)
-    target = max(float(target), max(step, minimum - spread))
+    stop, target = float(stop), float(target)
     if not all(math.isfinite(v) and v > 0 for v in (stop, target, spread + step, minimum)):
         raise ValueError('Invalid Sniper broker geometry')
+    min_stop = spread + minimum
+    min_target = max(step, minimum - spread)
+    if stop + step * 1e-7 < min_stop:
+        raise ValueError(f'Sniper SL too close for broker stop level: requested {stop:.5f}, minimum {min_stop:.5f} in price. SL was not widened.')
+    if target + step * 1e-7 < min_target:
+        raise ValueError(f'Sniper exact pip TP cannot satisfy broker stop level: requested {target:.5f}, minimum {min_target:.5f} in price. TP was NOT widened.')
     return stop, target, minimum, spread
 
 
@@ -274,7 +280,7 @@ class BrokerExecutor:
                 if fast_path:
                     stop, target, minimum, spread = sniper_broker_geometry(info, tick, stop, target)
                     result['pricing'] = dict(
-                        policy='sniper_send_geometry_v1',
+                        policy='sniper_send_geometry_v2_exact_tp',
                         quote_time_ms=int(tick.time_msc),
                         spread_points=spread/info.point,
                         broker_minimum_distance=minimum,
