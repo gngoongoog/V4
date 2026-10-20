@@ -76,6 +76,7 @@ impl Service {
         self.brains.iter().filter(|b|b.enabled).filter_map(|b|self.signals.get(&b.id).map(|v|(b.id.clone(),v.clone()))).collect()
     }
     pub fn new(db: &Connection) -> Result<Self> {
+        crate::shadow_paper::init(db)?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS execution_settings(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS execution_equity(context TEXT PRIMARY KEY,peak REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS brain_configs(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
@@ -328,6 +329,9 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 signal.coordination.get_or_insert_with(||json!({}))["intelligence"]=json!(self.weights.get(&b.id).map(|w|w.intelligence()).unwrap_or_default());
             }
             crate::student_learning::adapt(&mut signal,t,c,&b,&self.student_policies);
+            // Independent price-sampled paper practice for every non-selected
+            // brain. This never queues an MT5 order or enters broker PnL.
+            crate::shadow_paper::observe(db,&key,&b,&signal,t,c,now)?;
             let decision_us = started.elapsed().as_micros() as u64;
             let mut gates = vec![];
             if t.margin_mode!=Some(2)&&db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain<>?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,b.id],|r|r.get::<_,bool>(0))?{gates.push("Netting: أمر لعقل آخر لم تتم تسويته");}
