@@ -24,6 +24,10 @@ enum Task {
 }
 
 fn paint(ui: &Dashboard, status: Status) {
+    // A fresh response from the gateway does not imply an authenticated MT5
+    // account is connected. Both conditions must hold for an ONLINE display.
+    let broker_online = status.gateway_fresh
+        && status.telemetry.as_ref().is_some_and(|t| t.connected);
     ui.set_execution_active(status.execution_enabled);
     ui.set_brains(status.analysis.text().into());
     let opportunities = status.analysis.opportunities.as_ref();
@@ -42,10 +46,10 @@ fn paint(ui: &Dashboard, status: Status) {
     ui.set_decision(status.analysis.action.clone().into());
     ui.set_paper(status.paper.text().into());
     ui.set_state(format!("{:?}", status.state).to_uppercase().into());
-    ui.set_online(status.gateway_fresh);
+    ui.set_online(broker_online);
     ui.set_telegram_status(status.telegram_status.into());
     ui.set_connection(
-        if status.gateway_fresh {
+        if broker_online {
             "CONNECTED / متصل"
         } else {
             "DISCONNECTED OR STALE / غير متصل أو بيانات قديمة"
@@ -53,7 +57,7 @@ fn paint(ui: &Dashboard, status: Status) {
         .into(),
     );
     ui.set_diagnostics(status.message.into());
-    if let Some(t) = status.telemetry.filter(|_| status.gateway_fresh) {
+    if let Some(t) = status.telemetry.filter(|_| broker_online) {
         ui.set_account(
             format!(
                 "{} | {} | {} | {}",
@@ -163,7 +167,7 @@ fn run_ui() -> anyhow::Result<()> {
                 ui.get_drawdown_limit(),
                 ui.get_spread_limit(),
                 ui.get_max_lots(),
-                ui.get_commission_lot(),
+                ui.get_risk_commission_lot(),
                 ui.get_slippage_ticks(),
             ];
             match fields
@@ -224,7 +228,7 @@ fn run_ui() -> anyhow::Result<()> {
                     ui.set_drawdown_limit(c.risk.max_drawdown_percent.to_string().into());
                     ui.set_spread_limit(c.risk.max_spread_atr.to_string().into());
                     ui.set_max_lots(c.risk.max_lots.to_string().into());
-                    ui.set_commission_lot(c.risk.commission_per_lot.to_string().into());
+                    ui.set_risk_commission_lot(c.risk.commission_per_lot.to_string().into());
                     ui.set_slippage_ticks(c.risk.slippage_ticks.to_string().into());
                 });
             }
