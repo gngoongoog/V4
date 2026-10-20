@@ -19,7 +19,7 @@ The Python gateway collects account/positions/orders, quotes, completed bars/his
 
 ## 3. Live market, coordinator and execution path
 
-Completed-bar market state feeds the deterministic research baseline and observational/specialized brains. The broker coordinator has 14 identities with coordinator/advisor/SOLO/RETURNING membership. Four operating modes are available: Scalping, Swing, adaptive Expert and live-quote Sniper.
+Completed-bar market state feeds the deterministic research baseline and observational/specialized brains. The broker coordinator exposes 17 persistent execution identities (16 legacy and the dedicated Sniper Learner at magic 410617; 410616 remains reserved) with coordinator/advisor/SOLO/RETURNING membership. Four operating modes are available: Scalping, Swing, adaptive Expert and live-quote Sniper; Sniper has classic and Demo-learning specialists, and broker ownership is distinct from strategy-learning credit.
 
 Global START/STOP is independent from brain membership. Durable broker intents are persisted before dispatch, authorized again before send, journaled outside application-backup rollback and reconciled after timeout/restart. Partial fills are cumulative without blind top-up/resend. Unknown intents remain scoped to the original account.
 
@@ -83,6 +83,6 @@ CI packaging and simulated MT5 integration are not native acceptance against the
 
 ## 11. Release/version boundary
 
-Promoted release: **0.6.0**. Current development: **0.7.0 Development Preview**. Development Cargo, lockfile, desktop and Windows package versions must stay aligned. Use `docs/validation.json` for promoted-release evidence and `docs/development-validation.json` for the exact current-development validation boundary.
+Promoted source on `main`: **0.7.0** (smoke-gray desktop). Account-specific MT5 Demo acceptance is still unverified; a green CI build is not evidence of trading profitability. Development Cargo, lockfile, desktop and Windows package versions must stay aligned. Use `docs/validation.json` for promoted-release evidence and `docs/development-validation.json` for the exact current-development validation boundary.
 
 No architecture item or test result is a profitability, latency or win-rate guarantee.
