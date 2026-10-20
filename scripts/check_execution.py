@@ -83,75 +83,80 @@ def check(exe=None):
             assert brain('system')['role']=='coordinator' and brain('trend')['role']=='advisor'
             assert brain('liquidity')['role']=='advisor' and not brain('liquidity')['solo_enabled']
             assert brain('trend_pullback')['role']=='advisor' and not brain('trend_pullback')['solo_enabled']
-            configure('trend',enabled=True,lots=.1,max_hold_seconds=2)
-            publish();assert not api('/v1/status')['requested_run'];assert api('/v1/execution/gateway')['command'] is None
-            assert brain('trend')['role']=='solo'
-            members=brain('system')['latest']['signal']['coordination']['members']
-            assert all(m['id']!='trend' for m in members), members
-            api('/v1/start',{});publish()
-            cmd=api('/v1/execution/gateway')['command']
-            if cmd is None:
-                details=brain('trend')['latest']
-                raise AssertionError(f"Expected a fresh independent trend command, got none: {details}")
-            assert cmd['brain']=='trend' and cmd['lots']==.1,cmd
-            broker.raise_send=True
-            result=submit(cmd);assert result['state']=='unknown',result
-            submit(cmd);assert len(broker.sends)==1
-            broker.raise_send=False
-            broker.deals=[N(ticket=77,magic=410603,symbol='XAUUSD',volume=.1,comment='BT:'+cmd['id'][:20])]
-            result=submit(cmd);assert result['state']=='filled',result
-            assert len(broker.sends)==1
-            entry=dict(ticket=77,position_id=55,symbol='XAUUSD',magic=410603,entry=0,profit=0.,commission=-.35,swap=0.,fee=0.)
-            sync=dict(login=17,server='Demo',currency='USD',until_ms=clock_ms(),deals=[entry])
-            api('/v1/execution/sync',sync);publish()
-            assert next(c for c in api('/v1/execution')['commands'] if c['request']['id']==cmd['id'])['state']=='filled'
-            configure('trend',enabled=False,max_hold_seconds=1800)
-            assert brain('trend')['role']=='returning'
-            opened=clock_ms()
-            position=dict(ticket=55,identifier=55,magic=410603,opened_ms=opened,symbol='XAUUSD',side='BUY',volume=.1,price_open=2053.9,price_current=2053.8,profit=-1.,sl=2052.,tp=2056.)
-            snapshot['positions']=[position];broker.positions=[N(**dict(position,type=0))];publish()
-            assert brain('trend')['role']=='returning'
-            api('/v1/stop',{});time.sleep(2.15);publish()
-            close=api('/v1/execution/gateway')['command'];assert close['kind']=='close' and close['position']==55,close
-            assert submit(close)['state']=='filled'
-            snapshot['positions']=[];broker.positions=[];publish()
+            # All historical SOLO flags are now deliberately rejected. Advisors
+            # continue collecting paper outcomes; only the selected-mode
+            # coordinator may produce real MT5 commands.
+            try:
+                configure('trend',enabled=True,lots=.1)
+            except urllib.error.HTTPError:
+                pass
+            else:
+                raise AssertionError('SOLO must be rejected in selected-mode execution')
             assert brain('trend')['role']=='advisor'
-            assert any(m['id']=='trend' for m in brain('system')['latest']['signal']['coordination']['members'])
-            exit_deal=dict(entry,ticket=78,magic=0,entry=1,profit=10.,commission=-.35,swap=-.2)
-            sync.update(until_ms=clock_ms(),deals=[entry,exit_deal]);api('/v1/execution/sync',sync);api('/v1/execution/sync',sync)
-            stats=brain('trend')['stats'];assert stats['deals']==2 and stats['closed_positions']==1 and abs(stats['net_booked']-9.1)<1e-8,stats
-            # A queued primary decision must be cancelled by changing its membership.
-            snapshot['market']['m5']=bars(300,1);snapshot['market']['m15']=bars(900,1)
-            api('/v1/start',{});publish()
-            primary=next(c for c in api('/v1/execution')['commands'] if c['state']=='queued' and c['request']['brain']=='system')
-            configure('momentum',enabled=True)
-            assert next(c for c in api('/v1/execution')['commands'] if c['request']['id']==primary['request']['id'])['state']=='cancelled'
-            publish();stale=api('/v1/execution/gateway')['command'];assert stale['brain']=='momentum',stale
-            configure('gann',enabled=True)
-            assert not api('/v1/execution/authorize',{'id':stale['id']})['authorized']
-            assert submit(stale)['state']=='cancelled';assert len(broker.sends)==2
-            # Unknown intent remains a reconciliation task across Core restart, never a resend.
-            configure('gann',enabled=False);configure('momentum',timeframe='M5')
-            snapshot['market']['m5']=bars(300,-1);snapshot['market']['m15']=bars(900,-1);publish()
-            unknown=api('/v1/execution/gateway')['command'];assert unknown['brain']=='momentum',unknown
-            api('/v1/execution/result',dict(id=unknown['id'],state='unknown'))
-            api('/v1/shutdown',{});process.wait(timeout=10);boot();publish()
+            configure('trend',enabled=False,lots=.1)
+            assert api('/v1/execution/gateway')['command'] is None
             assert not api('/v1/status')['requested_run']
-            persisted=api('/v1/execution/gateway')['command'];assert persisted['id']==unknown['id'] and persisted['state']=='unknown'
-            assert submit(persisted)['state']=='unknown' and len(broker.sends)==2
-            assert abs(brain('trend')['stats']['net_booked']-9.1)<1e-8
+            # Align the primary scalping mode's completed confirmation frames.
+            snapshot['market']['m5']=bars(300,1)
+            snapshot['market']['m15']=bars(900,1)
+            publish()
+            api('/v1/start',{})
+            publish()
+            cmd=api('/v1/execution/gateway')['command']
+            assert cmd and cmd['brain']=='system' and cmd['trading_mode']=='scalping', brain('system')
+            assert cmd['signal']['reason'],cmd
+            assert api('/v1/execution/authorize',{'id':cmd['id']})['authorized']
+            broker.raise_send=True
+            result=submit(cmd)
+            assert result['state']=='unknown',result
+            submit(cmd)
+            assert len(broker.sends)==1
+            broker.raise_send=False
+            broker.deals=[N(ticket=77,magic=410600,symbol='XAUUSD',volume=.01,comment='BT:'+cmd['id'][:20])]
+            result=submit(cmd)
+            assert result['state']=='filled',result
+            assert len(broker.sends)==1
+            api('/v1/stop',{})
+            # Broker's real entry and exit history, including both fee legs.
+            now=clock_ms()
+            entry=dict(ticket=77,position_id=55,symbol='XAUUSD',magic=410600,
+                       entry=0,type=0,time_msc=now-100,volume=result['volume'],price=2053.9,
+                       profit=0.,commission=-.35,swap=0.,fee=0.,reason=3)
+            exit_deal=dict(entry,ticket=78,magic=0,entry=1,time_msc=now,
+                           price=2055.,profit=10.,commission=-.35,swap=-.2)
+            sync=dict(login=17,server='Demo',currency='USD',until_ms=now,deals=[entry,exit_deal])
+            api('/v1/execution/sync',sync)
+            api('/v1/execution/sync',sync)
+            journal=api('/v1/execution/trades',dict(offset=0,limit=50))
+            assert journal['total']==1,journal
+            trade=journal['rows'][0]
+            assert trade['status']=='CLOSED',trade
+            assert trade['origin']['owner']=='system',trade
+            assert trade['origin']['trading_mode']=='scalping',trade
+            assert abs(trade['broker_net_booked']-9.1)<1e-7,trade
+            assert 'shadow_paper' in api('/v1/execution')
+            # Restart does not erase the real account journal or activate MT5.
+            api('/v1/shutdown',{})
+            process.wait(timeout=10)
+            boot()
+            publish()
+            assert not api('/v1/status')['requested_run']
+            restored=api('/v1/execution/trades',dict(offset=0,limit=50))
+            assert restored['rows'][0]['origin']['trading_mode']=='scalping',restored
+            assert abs(restored['rows'][0]['broker_net_booked']-9.1)<1e-7
+            # Switching MT5 accounts never enables broker execution.
             snapshot['login']=99;publish()
-            assert not api('/v1/status')['execution_enabled'];assert api('/v1/execution/gateway')['command'] is None
-            assert brain('trend')['stats']['deals']==0
-            api('/v1/shutdown',{});process.wait(timeout=10)
+            assert not api('/v1/status')['execution_enabled']
+            assert api('/v1/execution/gateway')['command'] is None
+            api('/v1/shutdown',{})
+            process.wait(timeout=10)
             report=dict(result='PASS',version=VERSION,broker='simulated; no native MT5 acceptance',checks=[
-                '17 identities; default coordinator and advisors including liquidity + trend_pullback','SOLO exclusion; no implicit global START',
-                'standalone M1 trend against opposing M5','optional risk caps off',
-                'Core+gateway single submission','unknown-to-fill history retains position barrier','entry history does not release fill barrier',
-                'pending return and frozen timeout exit while STOPPED','advisor rejoins actual votes after close',
-                'manual-exit ownership; actual fees; history deduplication','queued decision invalidation',
-                'dispatched revision checked before send','unknown intent persists without resend',
-                'restart stopped; config/PnL persistence','account isolation'])
+                'only selected-mode system coordinator may dispatch MT5',
+                'former SOLO brains fail closed; their evaluation remains research-only',
+                'Core+gateway unknown send never blindly retries',
+                'durable real trade journal attributes mode and owner, booked profit and all deal fees',
+                'closed trades persist after restart and can be read with pagination',
+                'account switch fails closed; STOP at restart'])
             out=ROOT/'test-output/execution-integration.json';out.parent.mkdir(exist_ok=True);out.write_text(json.dumps(report,indent=2))
             print(json.dumps(report))
         finally:
