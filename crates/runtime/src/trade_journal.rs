@@ -9,6 +9,10 @@ use std::collections::BTreeSet;
 
 fn number(v: &Value, k: &str) -> f64 { v[k].as_f64().filter(|v|v.is_finite()).unwrap_or(0.) }
 fn millis(v: &Value) -> u64 { v["time_msc"].as_u64().unwrap_or(0) }
+fn utc(ms:u64)->String {
+    chrono::DateTime::from_timestamp_millis(ms as i64)
+        .map(|d|d.format("%Y-%m-%d %H:%M:%S UTC").to_string()).unwrap_or_else(||"غير متاح".into())
+}
 fn kind(v: &Value) -> i64 { v["entry"].as_i64().unwrap_or(-1) }
 
 fn originating_command(db: &Connection, context: &str, pid: u64, deal: u64) -> Result<Option<Value>> {
@@ -86,8 +90,9 @@ pub fn list(db: &Connection, context: &str, telemetry: Option<&Telemetry>, offse
             "position_id":pid,"status":state,"symbol":first["symbol"],
             "account_currency":telemetry.map(|t|t.currency.as_str()).unwrap_or(""),
             "side":match first["type"].as_i64(){Some(0)=>"BUY",Some(1)=>"SELL",_=>"UNVERIFIED"},
-            "opened_ms":millis(first),
+            "opened_ms":millis(first),"opened_utc":utc(millis(first)),
             "latest_deal_ms":parsed.last().map(millis).unwrap_or(0),
+            "latest_deal_utc":utc(parsed.last().map(millis).unwrap_or(0)),
             "entry_price":first["price"],
             "lots_opened":open_volume,"lots_closed":close_volume,
             "remaining_lots":position.map(|p|p.volume),
@@ -115,7 +120,7 @@ pub fn list(db: &Connection, context: &str, telemetry: Option<&Telemetry>, offse
                 rows.push(json!({
                     "position_id":if p.identifier>0{p.identifier}else{p.ticket},
                     "status":"OPEN / AWAITING DEAL SYNC","symbol":p.symbol,"side":p.side,
-                    "opened_ms":p.opened_ms,"entry_price":p.price_open,
+                    "opened_ms":p.opened_ms,"opened_utc":utc(p.opened_ms),"entry_price":p.price_open,
                     "remaining_lots":p.volume,"lots_opened":p.volume,
                     "broker_net_booked":Value::Null,"floating_broker_pnl":p.profit,
                     "origin":label(command.as_ref(),brain),"deals":0
