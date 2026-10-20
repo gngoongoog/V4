@@ -46,6 +46,7 @@ pub struct Service {
     last_sync_ms: u64,
     history_until_ms: u64,
     active_mode: Option<TradingMode>,
+    last_paper_sample_ms: u64,
 }
 fn ctx(t: &Telemetry) -> String {
     serde_json::to_string(&(&t.server, t.login, &t.symbol, &t.currency)).unwrap()
@@ -125,6 +126,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             last_sync_ms: 0,
             history_until_ms: 0,
             active_mode: None,
+            last_paper_sample_ms: 0,
         })
     }
     fn matches(&self, t: &Telemetry) -> bool {
@@ -257,6 +259,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             }
         }
         self.active_mode = Some(c.trading.mode);
+        let paper_due = now.saturating_sub(self.last_paper_sample_ms) >= 1_000;
+        if paper_due {self.last_paper_sample_ms=now;}
         let sniper_signal = self.sniper.evaluate(t,c,now);
         let available=crate::coordinator_learning::available_frames(t,frames,now);
         for b in self.brains.clone() {
@@ -331,7 +335,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             crate::student_learning::adapt(&mut signal,t,c,&b,&self.student_policies);
             // Independent price-sampled paper practice for every non-selected
             // brain. This never queues an MT5 order or enters broker PnL.
-            crate::shadow_paper::observe(db,&key,&b,&signal,t,c,now)?;
+            if paper_due {crate::shadow_paper::observe(db,&key,&b,&signal,t,c,now)?;}
             let decision_us = started.elapsed().as_micros() as u64;
             let mut gates = vec![];
             if t.margin_mode!=Some(2)&&db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain<>?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,b.id],|r|r.get::<_,bool>(0))?{gates.push("Netting: أمر لعقل آخر لم تتم تسويته");}
