@@ -209,16 +209,35 @@ class ExecutionTests(unittest.TestCase):
             self.assertIn(key,result)
             self.assertGreaterEqual(result[key],0)
         self.assertEqual(len(self.mt.sends),1)
-    def test_sniper_fast_path_reprices_stop_to_current_broker_floor(self):
+    def test_sniper_fast_path_rejects_unhonorable_stop_instead_of_widening(self):
         self.cmd['signal'].update(key='tick:geometry',stop_distance=.02,target_distance=.02)
         result=self.send()
-        self.assertEqual(result['state'],'filled')
-        self.assertEqual(result['pricing']['policy'],'sniper_send_geometry_v1')
-        self.assertAlmostEqual(result['pricing']['broker_minimum_distance'],.06,places=9)
-        self.assertAlmostEqual(result['pricing']['stop_distance'],.16,places=9)
+        self.assertEqual(result['state'],'rejected')
+        self.assertIn('SL was not widened',result['reason'])
+        self.assertFalse(self.mt.sends)
+    def test_sniper_fast_path_exact_five_pips_after_entry(self):
+        self.cmd['signal'].update(key='tick:five-pips',stop_distance=1.,target_distance=.50)
+        result=self.send()
+        self.assertEqual(result['state'],'filled',result)
+        self.assertEqual(result['pricing']['policy'],'sniper_send_geometry_v2_exact_tp')
+        self.assertAlmostEqual(result['pricing']['target_distance'],.50,places=9)
         request=self.mt.sends[0]
-        self.assertGreaterEqual((self.mt.tick.bid-request['sl'])+1e-9,.05)
-        self.assertGreaterEqual((request['tp']-self.mt.tick.bid)+1e-9,.05)
+        self.assertAlmostEqual(request['tp']-request['price'],.50,places=9)
+    def test_sniper_ten_pips_are_one_gold_price_unit_even_if_broker_uses_0_1_points(self):
+        self.mt.info.point=.10
+        self.mt.info.trade_tick_size=.10
+        self.mt.info.trade_stops_level=1
+        self.cmd['signal'].update(key='tick:ten-pips',stop_distance=1.,target_distance=1.00)
+        result=self.send()
+        self.assertEqual(result['state'],'filled',result)
+        self.assertAlmostEqual(self.mt.sends[0]['tp']-self.mt.sends[0]['price'],1.0,places=9)
+    def test_sniper_large_broker_stops_level_cannot_silently_extend_target_to_five_dollars(self):
+        self.mt.info.trade_stops_level=500
+        self.cmd['signal'].update(key='tick:broker-floor',stop_distance=6.,target_distance=.50)
+        result=self.send()
+        self.assertEqual(result['state'],'rejected')
+        self.assertIn('TP was NOT widened',result['reason'])
+        self.assertFalse(self.mt.sends)
     def test_regular_path_does_not_silently_widen_invalid_geometry(self):
         self.cmd['signal'].update(stop_distance=.02,target_distance=.02)
         result=self.send()
