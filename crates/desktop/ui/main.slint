@@ -46,6 +46,15 @@ export component Dashboard inherits Window {
     in property <string> exec-summary: "اربط حساب Demo ثم START. العقول أعضاء افتراضياً؛ زر منفرد يغيّر عضوية العقل المختار.";
     in property <string> exec-detail;
     in property <string> exec-ledger;
+    in property <[string]> trade-journal-rows;
+    in-out property <int> trade-journal-selected: -1;
+    in property <string> trade-journal-summary: "حمّل سجل الصفقات من MT5";
+    in property <string> trade-journal-detail: "اختر صفقة لعرض كامل تفاصيلها";
+    in property <string> trade-journal-notice: "السجل يُقرأ من صفقات الوسيط المحفوظة، ولا يخلط نتائج PAPER أو SHADOW";
+    in property <bool> trade-journal-busy: false;
+    in property <bool> trade-journal-has-prev: false;
+    in property <bool> trade-journal-has-next: false;
+    callback trade-journal-action(string);
     in property <string> exec-message;
     in property <[string]> exec-frames;
     callback execution-action(string);
@@ -286,6 +295,7 @@ export component Dashboard inherits Window {
                     height: 33px; spacing: 8px;
                     Button { text: root.page == 14 ? "●  الأوضاع والتكاليف" : "الأوضاع والتكاليف"; clicked => { root.page = 14; root.studio-action("config"); } }
                     Button { text: root.page == 17 ? "●  تنفيذ MT5" : "تنفيذ MT5"; clicked => { root.page = 17; root.execution-action("refresh"); } }
+                    Button { text: root.page == 20 ? "●  سجل الصفقات" : "سجل الصفقات"; clicked => { root.page = 20; root.trade-journal-action("refresh"); } }
                     Button { text: root.page == 19 ? "●  تقدّم التعلّم" : "تقدّم التعلّم"; clicked => { root.page = 19; } }
                     Button { text: root.page == 6 ? "●  المخاطرة" : "المخاطرة"; clicked => { root.page = 6; } }
                 }
@@ -383,6 +393,37 @@ export component Dashboard inherits Window {
             Text { text: root.student-journal; color: #b7bac3; wrap: word-wrap; }
             Text { text: "MFE / MAE: أفضل وأسوأ حركة مرصودة بعد تأكيد التنفيذ وحتى الإغلاق. المقارنة الافتراضية تستخدم Bid/Ask والعمولة والانزلاق؛ فجوة وصول الرصد فوق ثانيتين تستبعدها، وهدوء السعر وحده لا يستبعدها. السواب غير محسوب فيها. التحسّن السابق لا يضمن ربحاً لاحقاً."; color: #999ca5; wrap: word-wrap; }
         } }
+        if root.page == 20: ScrollView {
+            VerticalBox {
+                spacing: 13px;
+                Text { text: "سجل الصفقات  /  MT5 TRADE JOURNAL"; color: #f2f2f4; font-size: 22px; font-weight: 700; }
+                Text { text: "كل صفقة فتحها BrainTrade بحسب رقم مركز MT5 • مفتوحة أو مغلقة أو مغلقة جزئياً • السجل محفوظ حتى بعد إغلاق الصفقة أو إعادة تشغيل البرنامج."; color: #c6c8d0; wrap: word-wrap; }
+                Rectangle {
+                    background: #212329; border-radius: 11px; border-width: 1px; border-color: #393c43;
+                    VerticalLayout {
+                        padding: 14px; spacing: 10px;
+                        Text { text: root.trade-journal-summary; color: #f4f4f5; font-size: 15px; font-weight: 700; wrap: word-wrap; }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Button { text: "تحديث السجل"; enabled: !root.trade-journal-busy; clicked => { root.trade-journal-action("refresh"); } }
+                            Button { text: "الصفحة السابقة"; enabled: !root.trade-journal-busy && root.trade-journal-has-prev; clicked => { root.trade-journal-action("prev"); } }
+                            Button { text: "الصفحة التالية"; enabled: !root.trade-journal-busy && root.trade-journal-has-next; clicked => { root.trade-journal-action("next"); } }
+                        }
+                        Text { text: "اختر الصفقة من القائمة لعرض عقل الدخول والوضع والهدف والوقف وتفاصيل الربح والخسارة"; color: #d6d8dc; wrap: word-wrap; }
+                        ComboBox { model: root.trade-journal-rows; current-index <=> root.trade-journal-selected; enabled: !root.trade-journal-busy; selected(value) => { root.trade-journal-action("select"); } }
+                    }
+                }
+                Rectangle {
+                    background: #1e2026; border-radius: 11px; border-width: 1px; border-color: #373a41;
+                    VerticalLayout {
+                        padding: 14px; spacing: 9px;
+                        Text { text: "تفاصيل الصفقة المختارة"; color: #f2f2f4; font-size: 17px; font-weight: 700; }
+                        Text { text: root.trade-journal-detail; color: #e0e2e5; wrap: word-wrap; }
+                    }
+                }
+                Text { text: root.trade-journal-notice; color: #b3b6be; wrap: word-wrap; }
+            }
+        }
         if root.page == 17: ScrollView { VerticalBox { spacing: 10px;
             Text { text: "تنفيذ MT5  /  إعداد الحساب والعقول"; color: #f2f2f4; font-size: 22px; font-weight: 700; }
             Text { text: "الخطوة 1   •   اختر Demo واربط الحساب الحالي بعد التأكد من اسم السيرفر والرمز في MT5."; color: #b7bac3; wrap: word-wrap; }
@@ -394,14 +435,14 @@ export component Dashboard inherits Window {
             }
             Text { text: "الربط يثبت رقم الحساب والخادم ونوعه. انتقالك إلى حساب آخر لا يفعّل التداول عليه تلقائيًا."; color: #b7bac3; wrap: word-wrap; }
             Rectangle { height: 1px; background: #3b3e45; }
-            Text { text: "الخطوة 2   •   حدد العقل، اختر اللوت والخيارات، ثم احفظ. التشغيل المنفرد اختياري."; color: #e0e1e4; font-weight: 700; wrap: word-wrap; }
+            Text { text: "الخطوة 2 • حدد العقل واضبط اللوت للمراجعة الورقية. تنفيذ MT5 محصور بالعقل الرئيسي للوضع المختار؛ بقية العقول SHADOW/PAPER فقط."; color: #e0e1e4; font-weight: 700; wrap: word-wrap; }
             ComboBox { model: root.exec-names; current-index <=> root.exec-selected; enabled: !root.exec-busy; selected(value) => { root.execution-action("select"); } }
             HorizontalBox {
-                Button { text: "تشغيل تداول منفرد"; enabled: !root.exec-busy && root.exec-settings-loaded && root.exec-selected != 0 && !root.exec-enabled; clicked => { root.execution-action("enable"); } }
+                Button { text: "تشغيل تداول منفرد (معطّل بالعزل)"; enabled: false; clicked => { root.execution-action("enable"); } }
                 Button { text: "حفظ إعدادات العقل"; enabled: !root.exec-busy && root.exec-settings-loaded; clicked => { root.execution-action("save"); } }
                 Button { text: "إرجاع للمنظومة"; enabled: !root.exec-busy && root.exec-settings-loaded && root.exec-selected != 0 && root.exec-enabled; clicked => { root.execution-action("disable"); } }
             }
-            Text { text: root.exec-role == "coordinator" ? "العقل الرئيسي المتعلم — يتبع START/STOP والوضع المختار" : root.exec-role == "returning" ? "بانتظار الرجوع: يكمل إدارة صفقته الحالية ثم يعود تابعاً للرئيسي" : root.exec-role == "solo" ? "منفرد: مستبعد من تصويت المنظومة ويتداول بقراره" : "عضو في المنظومة: يرسل تحليله للرئيسي ولا يفتح صفقة باسمه"; color: root.exec-enabled ? #f4f4f5 : #c8cbd1; wrap: word-wrap; }
+            Text { text: root.exec-role == "coordinator" ? "العقل الرئيسي للوضع المختار وحده ينفذ على MT5" : root.exec-role == "returning" ? "بانتظار تسوية صفقة قديمة ثم يرجع للتحليل الافتراضي" : "SHADOW / PAPER: العقل يراقب ويتدرّب افتراضياً فقط؛ لا يرسل أوامر MT5"; color: root.exec-enabled ? #f4f4f5 : #c8cbd1; wrap: word-wrap; }
             HorizontalBox {
                 Text { text: "الفريم"; color: #b7bac3; vertical-alignment: center; }
                 ComboBox { model: root.exec-frames; current-index <=> root.exec-frame; }
