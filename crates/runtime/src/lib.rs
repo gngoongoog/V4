@@ -3,6 +3,7 @@ mod execution;
 mod coordinator_learning;
 mod sniper_learning;
 mod trade_journal;
+mod shadow_paper;
 mod student_learning;
 mod studio;
 mod backtest;
