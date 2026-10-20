@@ -620,6 +620,10 @@ impl Service {
         if method == "GET" && path == "/v1/execution" {
             let mut value = Self::enrich_roles(value, db, status)?;
             value["portfolio"] = self.portfolio_state.clone();
+            let context=status.telemetry.as_ref().map(|t|
+                serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)).unwrap_or_default()
+            ).unwrap_or_default();
+            value["shadow_paper"] = crate::shadow_paper::summary(db,&context)?;
             Ok(value)
         } else {
             Ok(value)
