@@ -1,4 +1,4 @@
-//! Execution semantics wrapper: coordinated main brain by default, per-brain SOLO override on demand.
+//! Execution semantics wrapper: selected-mode coordinator exclusively owns MT5 entries; advisors are paper-only.
 //! Portfolio exposure v1 is a Core-side fail-closed entry gate across all BrainTrade identities.
 //! The previous 0.6 engine is preserved in execution_legacy.rs and still owns durable broker intents.
 #[path = "execution_legacy.rs"]
@@ -583,8 +583,18 @@ impl Service {
                 && t.login == self.inner.settings.login
                 && t.server == self.inner.settings.server
                 && t.currency == self.inner.settings.currency);
-            let key=t.map(|t|serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)))
+            let mut key=t.map(|t|serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)))
                 .transpose()?.unwrap_or_default();
+            if key.is_empty() && self.inner.settings.login>0 {
+                // Offline history remains readable: only use a persisted context
+                // matching the exact previously-bound broker identity, never
+                // another account's private journal.
+                key=db.query_row(
+                    "SELECT context FROM broker_deals WHERE json_extract(context,'$[0]')=?1                      AND CAST(json_extract(context,'$[1]') AS INTEGER)=?2                      AND json_extract(context,'$[3]')=?3 ORDER BY rowid DESC LIMIT 1",
+                    params![self.inner.settings.server,self.inner.settings.login,self.inner.settings.currency],
+                    |row|row.get(0),
+                ).optional()?.unwrap_or_default();
+            }
             return crate::trade_journal::list(db, &key, t, offset as u32, limit as u32);
         }
         if method == "POST" && path == "/v1/execution/brain" {
