@@ -47,7 +47,19 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
         .into(),
     );
 
-    let Some(b) = v["brains"].as_array().and_then(|bs| bs.get(index)) else {
+    let paper=&v["shadow_paper"];
+    let mut paper_text=format!("صفقات افتراضية مفتوحة: {} (لا ترسل MT5)\n", paper["open"]);
+    for brain in paper["brains"].as_array().into_iter().flatten(){
+        let _=writeln!(paper_text,
+            "{} | افتراضية مغلقة {} | ناجحة {} | صافي افتراضي {:.2}",
+            brain["brain"].as_str().unwrap_or("—"),brain["closed"],brain["wins"],
+            brain["net_paper"].as_f64().unwrap_or(0.));
+    }
+    if paper["brains"].as_array().is_none_or(|rows|rows.is_empty()){
+        paper_text.push_str("بانتظار صفقات ورقية مكتملة بأسعار مرصودة. التدريب الورقي مستقل عن أداء الوسيط.");
+    }
+    ui.set_exec_shadow(paper_text.into());
+        let Some(b) = v["brains"].as_array().and_then(|bs| bs.get(index)) else {
         return;
     };
     let config = &b["config"];
