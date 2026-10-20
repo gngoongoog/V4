@@ -140,6 +140,12 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
             stats["floating"].as_f64().unwrap_or(0.)
         );
     }
+    // The system owns broker deals for delegated Sniper entries. The
+    // specialist receives a learning attribution from that same real close,
+    // never a second MT5 fill. Distinguish ledger ownership from learning.
+    if coordination["version"] == "sniper-learner-v1" {
+        out.push_str("ملاحظة ملكية: صفقة القناص عبر العقل الرئيسي تظهر في صافي صفقات (النظام)؛ عينة تعلم القناص مرجعية لنفس الإغلاق الحقيقي وليست صفقة ثانية أو ربحاً إضافياً.\\n");
+    }
     if coordination["version"] == "braintrade-intelligence-v3" {
         let _ = writeln!(
             out,
