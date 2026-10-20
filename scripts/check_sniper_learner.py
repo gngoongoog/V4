@@ -130,26 +130,33 @@ def check(exe=None):
             assert 3.<=selection['sniper_target_pips']<=9.
             assert len(selection['sniper_target_candidates_pips'])==4
             assert selection['sniper_target_samples']==0,selection
-            # Detaching the brain prevents a concurrent coordinator entry.
-            configure('sniper_learner',enabled=True)
+            # A previously separate Sniper Learner may now only advise the
+            # selected-mode system coordinator. No independent MT5 order can
+            # bypass the selected mode, even with legacy SOLO preferences.
+            try:
+                configure('sniper_learner',enabled=True)
+            except urllib.error.HTTPError:
+                pass
+            else:
+                raise AssertionError('Non-system SOLO must be blocked')
+            assert brain('sniper_learner')['role']=='advisor'
             api('/v1/start',{});prices([2054.16])
-            solo=api('/v1/execution/gateway')['command'];assert solo['brain']=='sniper_learner' and solo['magic']==410617,solo
-            assert not brain('system')['latest']['ready']
-            api('/v1/stop',{});configure('sniper_learner',enabled=False)
-            assert brain('sniper_learner')['role']=='returning'
-            assert submit(solo)['state']=='cancelled'
-            assert len(broker.sends)==1
-            publish();assert brain('sniper_learner')['role']=='advisor'
-            # Another mode cannot accidentally execute the tick specialist, even in SOLO.
+            work=api('/v1/execution/gateway')
+            if work['command'] is not None:
+                assert work['command']['brain']=='system',work
+            assert all(c['request']['brain']!='sniper_learner' or c['request']['kind']!='open'
+                for c in api('/v1/execution')['commands'])
+            api('/v1/stop',{})
+            # A change of mode cannot execute the Sniper specialist.
             config['trading']['mode']='scalping'
             api('/v1/trading/settings',dict(trading=config['trading'],commission_per_lot=7.))
-            configure('sniper_learner',enabled=True);prices([2054.20,2054.24,2054.28])
+            prices([2054.20,2054.24,2054.28])
             assert not brain('sniper_learner')['latest']['signal']['ready']
             snapshot['login']=99;publish();assert api('/v1/execution/gateway')['command'] is None
             report=dict(result='PASS',version=VERSION,broker='simulated; no native MT5 acceptance',checks=[
                 'explicit Sniper learner selector; STOP never submits','Fast Pulse tick engine reaches authorized order_send',
                 'duplicate never resends; partial close never trains','net fees credited only to specialist and owner',
-                'restart restores policy history and STOP','SOLO detaches without coordinator duplicate',
+                'restart restores policy history and STOP','SOLO blocked: only selected mode coordinator executes',
                 'inactive outside Sniper; account isolation',
                 'fixed 5-pip target; user-bounded adaptive 3–9-pip Demo-only target selection'])
             out=ROOT/'test-output/sniper-learner-integration.json';out.parent.mkdir(exist_ok=True);out.write_text(json.dumps(report,indent=2))
