@@ -307,8 +307,8 @@ impl Service {
         // `system` is the coordinated main brain. It is controlled by global START/STOP,
         // not by the per-brain SOLO switch. Keep it enabled in memory even when an older
         // 0.6 checkpoint persisted it as false.
-        if let Some(system) = inner.brains.iter_mut().find(|brain| brain.id == "system") {
-            system.enabled = true;
+        for brain in &mut inner.brains {
+            brain.enabled = brain.id == "system";
         }
         db.execute_batch(
             "CREATE TABLE IF NOT EXISTS portfolio_execution_settings(\
@@ -339,6 +339,10 @@ impl Service {
             portfolio_state,
             fast: None,
         })
+    }
+
+    pub fn set_mode(&mut self, mode: braintrade_domain::trading::TradingMode) {
+        self.inner.set_mode(mode);
     }
 
     fn save_portfolio(db: &Connection, candidate: &PortfolioLimits) -> Result<()> {
@@ -428,7 +432,7 @@ impl Service {
                     .as_str()
                     .unwrap_or_default()
                     .to_owned();
-                let solo = id != "system" && brain["config"]["enabled"] == true;
+                let solo = false; // all non-system brains are paper/shadow only
                 let in_flight: bool = db.query_row(
                     "SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",
                     params![key, id],
@@ -569,6 +573,20 @@ impl Service {
 
         // A brain role change must never arm global START implicitly. START/STOP is a
         // separate master control. The `enabled` bit on a non-system brain means SOLO.
+        if path == "/v1/execution/trades" && matches!(method, "GET" | "POST") {
+            let (offset,limit) = if method == "POST" {
+                let input: Value = serde_json::from_slice(body)?;
+                (input["offset"].as_u64().unwrap_or(0), input["limit"].as_u64().unwrap_or(50))
+            } else {(0,50)};
+            anyhow::ensure!(offset<=1_000_000 && (1..=100).contains(&limit), "Invalid journal page");
+            let t = status.telemetry.as_ref().filter(|t|t.connected
+                && t.login == self.inner.settings.login
+                && t.server == self.inner.settings.server
+                && t.currency == self.inner.settings.currency);
+            let key=t.map(|t|serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)))
+                .transpose()?.unwrap_or_default();
+            return crate::trade_journal::list(db, &key, t, offset as u32, limit as u32);
+        }
         if method == "POST" && path == "/v1/execution/brain" {
             let mut config: BrainConfig = serde_json::from_slice(body)?;
             if config.id == "system" {
@@ -582,16 +600,13 @@ impl Service {
                 result["note"] = json!("العقل الرئيسي يتبع START/STOP ولا يحتاج زر تداول منفرد.");
                 return Ok(result);
             }
-            let solo = config.enabled;
+            anyhow::ensure!(!config.enabled,
+                "التداول المنفرد ملغى: الوضع المختار وحده ينفذ، وهذه العقول تراقب وتتعلم افتراضياً");
             let mut result = self.inner.route(method, path, body, db, status, now)?;
             result["start"] = json!(false);
-            result["role"] = json!(if solo { "solo" } else { "advisor" });
-            result["solo_enabled"] = json!(solo);
-            result["note"] = json!(if solo {
-                "تم تفعيل التداول المنفرد لهذا العقل. START العام يبقى منفصلاً."
-            } else {
-                "تم إلغاء التداول المنفرد؛ يعود العقل للمشاركة بعد تسوية أي صفقة أو أمر قائم باسمه."
-            });
+            result["role"] = json!("shadow");
+            result["solo_enabled"] = json!(false);
+            result["note"] = json!("العقل مراقب/تجريبي فقط ولا يرسل أوامر MT5؛ النظام الرئيسي للوضع المختار وحده ينفذ");
             return Ok(result);
         }
 
