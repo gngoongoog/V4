@@ -2,6 +2,7 @@ mod backup;
 mod execution;
 mod coordinator_learning;
 mod sniper_learning;
+mod trade_journal;
 mod student_learning;
 mod studio;
 mod backtest;
@@ -129,6 +130,7 @@ impl Engine{
                 let c=trading_settings::update(&s.config,&s.status,body)?;
                 atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&c)?)?;
                 self.event("trading_mode_changed",json!({"trading":c.trading,"commission_profiles":c.commission_profiles.len(),"default_commission_per_lot":c.risk.commission_per_lot}))?;
+                self.execution.set_mode(c.trading.mode);
                 s.config=c;s.status.analysis=Default::default();
                 return Ok(trading_settings::view(&s.config,&s.status));
             }
