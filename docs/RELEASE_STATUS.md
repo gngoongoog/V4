@@ -14,7 +14,7 @@
 
 ## Release qualification — must use exact-source test evidence
 
-The Windows and Research workflow checks validate Rust/Python test suites, simulated broker replies, source integrity and packaging. Download **only the artifact from a successful Windows run on the unified PR #69 branch or its merged development commit**. The package carries `package-validation.json` and `SHA256SUMS.json`; check their source commit and archive contents against GitHub Actions.
+The Windows and Research workflow checks validate Rust/Python test suites, simulated broker replies, source integrity and packaging. Download only a successful Windows artifact from `main` or an explicitly reviewed audit PR with an identical source tree to the promoted commit. Never use an incomplete build or a ZIP with unknown provenance. The package carries `package-validation.json` and `SHA256SUMS.json`; check their source commit and archive contents against GitHub Actions.
 
 A successful automated test suite does **not** validate:
 - actual fills, partial-close behavior or latency on your broker's Windows MT5 Demo installation;
@@ -27,4 +27,4 @@ See `START_HERE_SNIPER_DEMO_AR.md`, `README_AR.md`, and `Run-Demo-Acceptance.cmd
 
 ## Version history
 
-Version 0.6.0 remains the old promoted baseline on `main`. Version 0.7.0 is the unified development release candidate. A package of 0.7.0 may be feature-complete for Demo trial without being certified as production-safe or consistently profitable. Research-only ML challengers, speculative entry-timing comparisons and news sentiment are not broker execution authorities.
+Version 0.7.0 with the smoke-gray control center is promoted to `main` as of October 20, 2026. Version 0.6.0 is the historical predecessor. Broker-specific MT5 Demo acceptance and out-of-sample profitability validation remain outstanding. A package of 0.7.0 may be feature-complete for Demo trial without being certified as production-safe or consistently profitable. Research-only ML challengers, speculative entry-timing comparisons and news sentiment are not broker execution authorities.
