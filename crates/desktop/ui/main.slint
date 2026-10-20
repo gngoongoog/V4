@@ -26,6 +26,7 @@ export component Dashboard inherits Window {
     in property <bool> exec-busy: false;
     in property <[string]> exec-names;
     in-out property <int> exec-selected: 0;
+    in property <bool> exec-settings-loaded: false;
     in-out property <int> exec-target: 0;
     in-out property <int> exec-frame: 0;
     in-out property <string> exec-lots: "0.01";
@@ -134,6 +135,8 @@ export component Dashboard inherits Window {
     in-out property <string> spread-limit: "0.25";
     in-out property <string> max-lots: "0.10";
     in-out property <string> commission-lot: "7";
+    // Independent round-trip Risk editor: Trading may show per-side commission.
+    in-out property <string> risk-commission-lot: "7";
     in-out property <int> commission-basis: 0;
     in-out property <string> slippage-ticks: "2";
     in-out property <string> bt-from;
@@ -386,16 +389,16 @@ export component Dashboard inherits Window {
             HorizontalBox {
                 ComboBox { model: ["Demo / حساب تجريبي", "Live / أموال حقيقية"]; current-index <=> root.exec-target; }
                 LineEdit { text <=> root.exec-deviation; placeholder-text: "انحراف التنفيذ بالنقاط"; }
-                Button { text: "ربط الحساب الحالي"; enabled: !root.exec-busy; clicked => { root.execution-action("bind"); } }
+                Button { text: "ربط الحساب الحالي"; enabled: !root.exec-busy && root.state == "STOPPED"; clicked => { root.execution-action("bind"); } }
             }
             Text { text: "الربط يثبت رقم الحساب والخادم ونوعه. انتقالك إلى حساب آخر لا يفعّل التداول عليه تلقائيًا."; color: #b7bac3; wrap: word-wrap; }
             Rectangle { height: 1px; background: #3b3e45; }
             Text { text: "الخطوة 2   •   حدد العقل، اختر اللوت والخيارات، ثم احفظ. التشغيل المنفرد اختياري."; color: #e0e1e4; font-weight: 700; wrap: word-wrap; }
-            ComboBox { model: root.exec-names; current-index <=> root.exec-selected; selected(value) => { root.execution-action("select"); } }
+            ComboBox { model: root.exec-names; current-index <=> root.exec-selected; enabled: !root.exec-busy; selected(value) => { root.execution-action("select"); } }
             HorizontalBox {
-                Button { text: "تشغيل تداول منفرد"; enabled: !root.exec-busy && root.exec-selected != 0 && !root.exec-enabled; clicked => { root.execution-action("enable"); } }
-                Button { text: "حفظ إعدادات العقل"; enabled: !root.exec-busy; clicked => { root.execution-action("save"); } }
-                Button { text: "إرجاع للمنظومة"; enabled: !root.exec-busy && root.exec-selected != 0 && root.exec-enabled; clicked => { root.execution-action("disable"); } }
+                Button { text: "تشغيل تداول منفرد"; enabled: !root.exec-busy && root.exec-settings-loaded && root.exec-selected != 0 && !root.exec-enabled; clicked => { root.execution-action("enable"); } }
+                Button { text: "حفظ إعدادات العقل"; enabled: !root.exec-busy && root.exec-settings-loaded; clicked => { root.execution-action("save"); } }
+                Button { text: "إرجاع للمنظومة"; enabled: !root.exec-busy && root.exec-settings-loaded && root.exec-selected != 0 && root.exec-enabled; clicked => { root.execution-action("disable"); } }
             }
             Text { text: root.exec-role == "coordinator" ? "العقل الرئيسي المتعلم — يتبع START/STOP والوضع المختار" : root.exec-role == "returning" ? "بانتظار الرجوع: يكمل إدارة صفقته الحالية ثم يعود تابعاً للرئيسي" : root.exec-role == "solo" ? "منفرد: مستبعد من تصويت المنظومة ويتداول بقراره" : "عضو في المنظومة: يرسل تحليله للرئيسي ولا يفتح صفقة باسمه"; color: root.exec-enabled ? #f4f4f5 : #c8cbd1; wrap: word-wrap; }
             HorizontalBox {
@@ -429,7 +432,7 @@ export component Dashboard inherits Window {
             Rectangle { height: 1px; background: #3b3e45; }
             Text { text: "الخطوة 4   •   راقب القرار والأوامر والنتائج. إغلاق الصفقات إجراء حقيقي على الحساب المرتبط."; color: #c8cbd1; wrap: word-wrap; }
             HorizontalBox {
-                Button { text: "إغلاق صفقات هذا العقل"; enabled: !root.exec-busy; clicked => { root.execution-action("close"); } }
+                Button { text: "إغلاق صفقات هذا العقل"; enabled: !root.exec-busy && root.exec-settings-loaded; clicked => { root.execution-action("close"); } }
                 Button { text: "تحديث النتائج والأوامر"; enabled: !root.exec-busy; clicked => { root.execution-action("poll"); } }
             }
             Text { text: root.exec-message; color: #c8cbd1; wrap: word-wrap; }
@@ -636,9 +639,9 @@ export component Dashboard inherits Window {
             HorizontalBox { Text { text: "حد التراجع من القمة % (0.1–30)"; color: #e0e1e4; } LineEdit { text <=> root.drawdown-limit; } }
             HorizontalBox { Text { text: "أقصى سبريد كنسبة ATR (0.01–1)"; color: #e0e1e4; } LineEdit { text <=> root.spread-limit; } }
             HorizontalBox { Text { text: "سقف اللوت (0.001–100)"; color: #e0e1e4; } LineEdit { text <=> root.max-lots; } }
-            HorizontalBox { Text { text: "عمولة ذهاب وإياب / لوت / عملة الحساب"; color: #e0e1e4; } LineEdit { text <=> root.commission-lot; } }
+            HorizontalBox { Text { text: "عمولة ذهاب وإياب / لوت / عملة الحساب"; color: #e0e1e4; } LineEdit { text <=> root.risk-commission-lot; } }
             HorizontalBox { Text { text: "انزلاق مفترض لكل جانب / ticks (0–1000)"; color: #e0e1e4; } LineEdit { text <=> root.slippage-ticks; } }
-            Button { text: "حفظ إعدادات المخاطرة"; enabled: !root.busy; clicked => { root.save-risk(); } }
+            Button { text: "حفظ إعدادات المخاطرة"; enabled: !root.busy && root.state == "STOPPED"; clicked => { root.save-risk(); } }
             Text { text: "SL = 1.5 ATR؛ الهدف ضعف مسافة SL؛ خروج زمني بعد 30 دقيقة. صفقة افتراضية واحدة لكل حساب ورمز. STOP يمنع الدخول ويبقي مخارج المحاكاة فعالة أثناء عمل المحرك."; color: #b7bac3; wrap: word-wrap; }
             Text { text: "الحد اليومي يتجدد بتوقيت بغداد. قفل التراجع يبقى بعد بلوغه؛ تغيير الإعدادات لا يمسح النتائج أو يفك القفل."; color: #b7bac3; wrap: word-wrap; }
         } }
