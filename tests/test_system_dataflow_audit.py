@@ -63,7 +63,9 @@ class FullSystemDataflowAudit(unittest.TestCase):
                      "pulse.currency == self.telemetry.currency", "pulse.symbol == self.telemetry.symbol",
                      "pulse.quote_time_ms > previous"):
             self.assertIn(item, self.pulse)
-        for item in ("tick_age_ms", "max_quote_age_ms", "order_send"):
+        self.assertIn("tick_age_ms", self.gateway)
+        self.assertIn("tick_age_ms", self.pulse)
+        for item in ("max_quote_age_ms", "order_send"):
             self.assertIn(item, self.gateway_execution)
         self.assertIn("self.student.observe(db,telemetry,now)?;", self.engine)
         self.assertIn("coordinator_learning::available_frames", self.legacy)
