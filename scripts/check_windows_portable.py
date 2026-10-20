@@ -143,7 +143,9 @@ def main():
                 for width, height, suffix in [(1120, 820, ""), (880, 700, "-small")]:
                     for page in range(21):
                         expected[f"dashboard-page-{page}{suffix}.ppm"] = (width, height)
-                assert {path.name for path in frames.glob("*.ppm")} == set(expected)
+                observed = {path.name for path in frames.glob("*.ppm")}
+                required = set(expected)
+                assert observed == required, f"Render output mismatch: missing={sorted(required-observed)} unexpected={sorted(observed-required)} render_directory={frames}"
                 for name, (width, height) in expected.items():
                     raw = (frames / name).read_bytes()
                     header = f"P6\n{width} {height}\n255\n".encode()
