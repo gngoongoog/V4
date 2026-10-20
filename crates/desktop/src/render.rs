@@ -141,10 +141,34 @@ pub fn render() -> anyhow::Result<()> {
                 renderer.render(&mut pixels, width as usize);
             });
             let path = output.join(format!("dashboard-page-{page}{suffix}.ppm"));
-            let mut file = std::fs::File::create(path)?;
+            let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
             write!(file, "P6\n{width} {height}\n255\n")?;
-            for pixel in pixels {
+            for pixel in &pixels {
                 file.write_all(&[pixel.r, pixel.g, pixel.b])?;
+            }
+            file.flush()?;
+            // Check the off-screen settings/save controls too, especially at 880px.
+            if [1, 6, 7, 9, 11, 13, 14, 17, 18, 19].contains(&page) {
+                let position = slint::LogicalPosition::new(70.0, height as f32 / 2.0);
+                ui.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                    position, delta_x: 0.0, delta_y: -10000.0,
+                });
+                std::thread::sleep(Duration::from_millis(250));
+                slint::platform::update_timers_and_animations();
+                ui.window().request_redraw();
+                let mut bottom = vec![Rgb8Pixel::default(); (width * height) as usize];
+                window.draw_if_needed(|renderer| { renderer.render(&mut bottom, width as usize); });
+                if [1, 6, 14, 17].contains(&page) {
+                    anyhow::ensure!(pixels.iter().zip(&bottom).any(|(a,b)| (a.r,a.g,a.b) != (b.r,b.g,b.b)),
+                        "Settings page {page} did not scroll at width {width}");
+                }
+                let mut file = std::io::BufWriter::new(std::fs::File::create(output.join(format!("dashboard-page-{page}{suffix}-bottom.ppm")))?);
+                write!(file, "P6\n{width} {height}\n255\n")?;
+                for pixel in bottom { file.write_all(&[pixel.r, pixel.g, pixel.b])?; }
+                file.flush()?;
+                ui.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                    position, delta_x: 0.0, delta_y: 10000.0,
+                });
             }
         }
     }
@@ -171,7 +195,7 @@ pub fn render() -> anyhow::Result<()> {
     ui.set_busy(false);
     click(&ui, 245.0, 116.0);
     anyhow::ensure!(actions.borrow().last().map(String::as_str) == Some("stop"), "Stop pointer binding failed");
-    for (y, section, page) in [(229.0,0,0),(283.0,1,14),(337.0,2,4),(391.0,3,7),(445.0,4,1)] {
+    for (y, section, page) in [(283.0,1,14),(337.0,2,4),(391.0,3,7),(445.0,4,1),(229.0,0,0)] {
         click(&ui, 1015.0, y);
         anyhow::ensure!(ui.get_nav_section() == section && ui.get_page() == page,
             "Navigation failed: expected section {section} / page {page}, got {} / {}", ui.get_nav_section(), ui.get_page());
@@ -181,7 +205,7 @@ pub fn render() -> anyhow::Result<()> {
     crate::paint_risk(&ui, &braintrade_domain::RiskConfig { commission_per_lot: 7.0, ..Default::default() });
     anyhow::ensure!(ui.get_risk_commission_lot() == "7" && ui.get_commission_lot() == "3.5" && ui.get_commission_basis() == 1,
         "Risk round-trip commission overwrote the per-side Trading editor");
-    std::fs::write(output.join("native-controls.txt"), "PASS: pointer Start/Stop, keyboard activation, disabled button, all five navigation sections, independent commission editors\n")?;
+    std::fs::write(output.join("native-controls.txt"), "PASS: pointer Start/Stop, keyboard activation, disabled button, all five navigation sections, scrollable settings, independent commission editors\n")?;
     ui.hide()?;
     Ok(())
 }

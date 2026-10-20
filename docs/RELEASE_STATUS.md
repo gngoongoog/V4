@@ -1,4 +1,4 @@
-# BrainTrade OS V4 — 0.7.0 Unified Windows Demo Release Candidate
+# BrainTrade OS V4 — 0.7.0 Smoke Windows Release
 
 **Package:** `BrainTrade-Windows-x64-v0.7.0-Preview.zip` (a Windows x64 portable ZIP contained within the GitHub Actions downloadable artifact `BrainTrade-Windows-x64-Preview`). This is the combined version for **controlled MT5 Demo acceptance**, not an independently certified profitable trading product.
 
@@ -31,4 +31,4 @@ See `START_HERE_SNIPER_DEMO_AR.md`, `README_AR.md`, and `Run-Demo-Acceptance.cmd
 
 ## Version history
 
-Version 0.6.0 remains the old promoted baseline on `main`. Version 0.7.0 is the unified development release candidate. A package of 0.7.0 may be feature-complete for Demo trial without being certified as production-safe or consistently profitable. Research-only ML challengers, speculative entry-timing comparisons and news sentiment are not broker execution authorities.
+Version 0.6.0 is a historical baseline. Version 0.7.0 Smoke consolidates the unified trading release and the native control-center review for owner-authorized promotion to `main`; the merged release and exact validation evidence are recorded in `docs/SMOKE_RELEASE_REVIEW_AR.md`. A package of 0.7.0 may be feature-complete for Demo trial without being certified as production-safe or consistently profitable. Research-only ML challengers, speculative entry-timing comparisons and news sentiment are not broker execution authorities.
