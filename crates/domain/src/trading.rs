@@ -107,12 +107,26 @@ pub struct CostPreview {
     pub lots: f64,
     pub spread_points: f64,
     pub spread_pips: f64,
+    /// Bid/Ask price difference, not a monetary amount.
+    pub spread_price: f64,
+    pub point_price: f64,
+    pub pip_price: f64,
+    pub bid: f64,
+    pub ask: f64,
     pub spread_money: f64,
     pub commission: f64,
     pub slippage_money: f64,
     pub total: f64,
+    /// Quote movement from the PRE-entry Bid (buy) or Ask (sell), including spread once.
     pub break_even_points: f64,
     pub break_even_pips: f64,
+    /// Movement needed after the entry Ask (buy) or Bid (sell), excluding the already-paid spread.
+    pub break_even_from_entry_points: f64,
+    pub break_even_from_entry_pips: f64,
+    pub buy_break_even_bid: f64,
+    pub sell_break_even_ask: f64,
+    pub commission_round_trip_per_lot: f64,
+    pub slippage_ticks_per_side: f64,
     pub desired_net_target_money: f64,
 }
 pub fn costs(t: &Telemetry, c: &Config, lots: f64, now: u64) -> Result<CostPreview, String> {
@@ -142,27 +156,47 @@ pub fn costs(t: &Telemetry, c: &Config, lots: f64, now: u64) -> Result<CostPrevi
     if ask < bid {
         return Err("Crossed quote".into());
     }
-    let value = loss.max(profit);
-    let spread_points = (ask - bid) / point;
-    let spread_money = (ask - bid) / tick * value * lots;
+    let spread_price = ask - bid;
+    let spread_points = spread_price / point;
+    // The quote spread is the initial loss from an Ask buy / Bid sell; use the
+    // broker's loss-side tick value rather than max(loss, profit).
+    let spread_money = spread_price / tick * loss * lots;
     let commission = c.risk.commission_per_lot * lots;
-    let slippage_money = 2. * c.risk.slippage_ticks * value * lots;
+    // Assumed slippage is separate from the actual Bid/Ask spread. A user may
+    // explicitly enter 0 ticks to exclude it from a hypothetical preview.
+    let slippage_money = 2. * c.risk.slippage_ticks * loss.max(profit) * lots;
     let total = spread_money + commission + slippage_money;
-    let break_even_points = total / (profit * lots) * tick / point;
+    // Starting from the current Bid for buys (Ask for sells), add the observed
+    // spread ONCE, then only commission and hypothetical slippage in profit
+    // ticks. Dividing spread_money by tick_value_profit incorrectly inflates
+    // the price distance when broker profit/loss tick values differ.
+    let break_even_from_entry_points = (commission + slippage_money) / (profit * lots) * tick / point;
+    let break_even_points = spread_points + break_even_from_entry_points;
     let r = CostPreview {
         currency: t.currency.clone(),
         lots,
         spread_points,
         spread_pips: spread_points / c.trading.pip_points,
+        spread_price,
+        point_price: point,
+        pip_price: point * c.trading.pip_points,
+        bid,
+        ask,
         spread_money,
         commission,
         slippage_money,
         total,
         break_even_points,
         break_even_pips: break_even_points / c.trading.pip_points,
+        break_even_from_entry_points,
+        break_even_from_entry_pips: break_even_from_entry_points / c.trading.pip_points,
+        buy_break_even_bid: bid + break_even_points * point,
+        sell_break_even_ask: ask - break_even_points * point,
+        commission_round_trip_per_lot: c.risk.commission_per_lot,
+        slippage_ticks_per_side: c.risk.slippage_ticks,
         desired_net_target_money: c.trading.sniper_target_points * point / tick * profit * lots,
     };
-    if [total, break_even_points, r.desired_net_target_money]
+    if [total, break_even_points, r.buy_break_even_bid, r.sell_break_even_ask, r.desired_net_target_money]
         .iter()
         .any(|v| !v.is_finite())
     {
@@ -406,7 +440,39 @@ mod tests {
         assert!((p.commission - 0.7).abs() < 1e-10);
         assert!((p.total - 1.3).abs() < 1e-9);
         assert!((p.break_even_points - 13.).abs() < 1e-8);
+        assert!((p.break_even_from_entry_points - 11.).abs() < 1e-8);
+        assert!((p.spread_money - 0.2).abs() < 1e-8);
+        assert!((p.buy_break_even_bid - 100.13).abs() < 1e-8);
+        let small = costs(&t, &Config::default(), 0.01, 1000).unwrap();
+        assert!((small.commission - 0.07).abs() < 1e-10);
+        assert!((small.break_even_points - p.break_even_points).abs() < 1e-8);
         assert!(costs(&t, &Config::default(), 0., 1000).is_err());
+    }
+
+    #[test]
+    fn different_broker_profit_loss_tick_values_do_not_multiply_spread_in_break_even() {
+        let mut c = Config::default();
+        c.risk.slippage_ticks = 0.;
+        let t = Telemetry {
+            connected: true,
+            bid: Some(2000.),
+            ask: Some(2000.80),
+            tick_age_ms: Some(0),
+            point: Some(0.01),
+            tick_size: Some(0.01),
+            tick_value_loss: Some(3.),
+            tick_value_profit: Some(1.),
+            ..Default::default()
+        };
+        let v = costs(&t, &c, 0.1, 1000).unwrap();
+        assert!((v.spread_points - 80.).abs() < 1e-8);
+        assert!((v.spread_pips - 8.).abs() < 1e-8);
+        assert!((v.commission - 0.7).abs() < 1e-8);
+        assert!((v.spread_money - 24.).abs() < 1e-8);
+        assert!((v.break_even_from_entry_points - 7.).abs() < 1e-8);
+        assert!((v.break_even_points - 87.).abs() < 1e-8);
+        assert!((v.buy_break_even_bid - 2000.87).abs() < 1e-8);
+        assert!((v.sell_break_even_ask - 1999.93).abs() < 1e-8);
     }
     #[test]
     fn sniper_holding_time_is_configurable_and_validated() {
