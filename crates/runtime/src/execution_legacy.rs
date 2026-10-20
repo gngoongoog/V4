@@ -364,10 +364,22 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 {
                     gates.push("حد الخسارة اليومي الاختياري أو نتيجته غير متاحة");
                 }
-                if t.bid.zip(t.ask).is_some_and(|(bid, ask)| {
-                    ask - bid > signal.stop_distance * c.risk.max_spread_atr / b.stop_atr
-                }) {
-                    gates.push("حد السبريد الاختياري");
+                // The configurable ratio is spread / ATR, not spread / stop.
+                // Sniper uses a fixed-point stop, so dividing that stop by the
+                // brain's stop_atr fabricated ATR and rejected valid setups.
+                let atr_for_spread = if c.trading.mode == braintrade_domain::trading::TradingMode::Sniper {
+                    t.market.as_ref().map(|m| braintrade_domain::trading::volatility(&m.m1))
+                } else {
+                    Some(signal.stop_distance / b.stop_atr)
+                };
+                match (t.bid.zip(t.ask), atr_for_spread.filter(|v| v.is_finite() && *v > 0.)) {
+                    (Some((bid, ask)), Some(atr)) if (ask-bid) > atr * c.risk.max_spread_atr => {
+                        gates.push("حد السبريد الاختياري: سبريد MT5 تجاوز نسبته من ATR الحقيقي");
+                    }
+                    (_, None) if c.trading.mode == braintrade_domain::trading::TradingMode::Sniper && signal.ready => {
+                        gates.push("حد السبريد الاختياري يحتاج شموع M1 لحساب ATR الحقيقي");
+                    }
+                    _ => {}
                 }
             }
             let seen:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_seen WHERE context=?1 AND brain=?2 AND signal=?3)",params![key,b.id,signal.key],|r|r.get(0))?;
