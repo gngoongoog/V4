@@ -192,9 +192,31 @@ pub fn evaluate(
             format!("bar:{}", s.bar_time)
         };
         if c.trading.mode == TradingMode::Sniper {
-            s.target_distance += c.risk.commission_per_lot / t.tick_value_profit.unwrap_or(0.)
-                * t.tick_size.unwrap_or(0.)
-                + c.risk.slippage_ticks * t.tick_size.unwrap_or(0.);
+            // Match the learned Sniper: executable TP is based on Ask (buy) or
+            // Bid (sell), and must recover BOTH assumed slip sides plus round-
+            // trip commission without paying the observed spread twice.
+            let quote_costs = match trading::costs(t, c, 1., now) {
+                Ok(v) => v,
+                Err(error) => {
+                    s.side = 0;
+                    s.reason = format!("القناص الكلاسيكي: تعذر حساب تكاليف العقد الحقيقية: {error}");
+                    return s;
+                }
+            };
+            s.stop_distance = s.stop_distance.max(
+                quote_costs.spread_price + 2. * t.tick_size.unwrap_or(0.),
+            );
+            s.target_distance = match trading::sniper_target_from_entry(
+                &quote_costs,
+                s.target_distance,
+            ) {
+                Ok(v) => v,
+                Err(error) => {
+                    s.side = 0;
+                    s.reason = error;
+                    return s;
+                }
+            };
         }
     } else {
         let Some(bars) = frames.get(&b.timeframe) else {
