@@ -6,7 +6,7 @@ use std::{sync::{mpsc,Arc,Mutex,atomic::{AtomicU32,Ordering}}, time::Duration};
 use super::Dashboard;
 
 fn value(v:&Value,key:&str)->f64 {v[key].as_f64().unwrap_or(0.)}
-fn name(v:&Value,key:&str)->&str {v[key].as_str().unwrap_or("—")}
+fn name<'a>(v:&'a Value,key:&str)->&'a str {v[key].as_str().unwrap_or("—")}
 fn amount(v:&Value,key:&str)->String {
     v[key].as_f64().map(|x|format!("{x:.2}")).unwrap_or_else(||"غير مؤكّد".into())
 }
