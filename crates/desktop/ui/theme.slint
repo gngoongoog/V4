@@ -37,11 +37,11 @@ export component Button inherits Rectangle {
     focus := FocusScope {
         enabled: root.enabled;
         key-pressed(event) => {
-            if event.text == " " || event.text == "\n" || event.text == "\r" { return accept; }
+            if event.text == " " || event.text == Key.Return { return accept; }
             return reject;
         }
         key-released(event) => {
-            if root.enabled && (event.text == " " || event.text == "\n" || event.text == "\r") { root.clicked(); return accept; }
+            if root.enabled && (event.text == " " || event.text == Key.Return) { root.clicked(); return accept; }
             return reject;
         }
     }
