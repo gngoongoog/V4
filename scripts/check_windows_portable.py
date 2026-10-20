@@ -141,7 +141,7 @@ def main():
                 frames = directory / "test-output" / "native-ui"
                 expected = {}
                 for width, height, suffix in [(1120, 820, ""), (880, 700, "-small")]:
-                    for page in range(20):
+                    for page in range(21):
                         expected[f"dashboard-page-{page}{suffix}.ppm"] = (width, height)
                 assert {path.name for path in frames.glob("*.ppm")} == set(expected)
                 for name, (width, height) in expected.items():
@@ -153,8 +153,8 @@ def main():
                 args.output.write_text(json.dumps({"version": status["version"], "result": "PASS",
                     "checks": ["packaged Core startup", "DPAPI IPC", "stopped/unbound default",
                                "native Sniper runtime and source-only MQL5 EA packaged", "MQL5 bridge contains no order submission API",
-                               "learning and student journal APIs", "four mode settings and restart", "proportional fee calculator", "21-frame studio API", "opportunity history", "config save", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "shutdown", "all 40 complete native frames"],
-                    "native_pages": 20, "rendered_frames": len(expected),
+                               "learning and student journal APIs", "four mode settings and restart", "proportional fee calculator", "21-frame studio API", "opportunity history", "config save", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "shutdown", "all 42 complete native frames"],
+                    "native_pages": 21, "rendered_frames": len(expected),
                     "native_mt5_acceptance": "EA source packaged; target-machine MetaEditor compile/attach and real OnTick pipe acceptance not performed"}, indent=2), encoding="utf-8")
             finally:
                 if process.poll() is None:
