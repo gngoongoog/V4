@@ -2,7 +2,7 @@
 use braintrade_runtime::{data_dir, Client};
 use serde_json::{json, Value};
 use slint::ComponentHandle;
-use std::{cell::{Cell, RefCell}, rc::Rc, sync::mpsc, time::Duration};
+use std::{sync::{mpsc,Arc,Mutex,atomic::{AtomicU32,Ordering}}, time::Duration};
 use super::Dashboard;
 
 fn value(v:&Value,key:&str)->f64 {v[key].as_f64().unwrap_or(0.)}
@@ -41,8 +41,8 @@ fn detail(v:&Value)->String {
     )
 }
 pub fn setup(ui:&Dashboard) -> slint::Timer {
-    let cache=Rc::new(RefCell::new(Vec::<Value>::new()));
-    let offset=Rc::new(Cell::new(0u32));
+    let cache=Arc::new(Mutex::new(Vec::<Value>::new()));
+    let offset=Arc::new(AtomicU32::new(0u32));
     let (tx,rx)=mpsc::channel::<u32>();
     let weak=ui.as_weak();
     let cache_ui=cache.clone();let offset_ui=offset.clone();
@@ -53,19 +53,19 @@ pub fn setup(ui:&Dashboard) -> slint::Timer {
         let action=action.as_str();
         if action=="select" {
             let index=ui.get_trade_journal_selected();
-            let rows=cache_ui.borrow();
+            let rows=cache_ui.lock().unwrap();
             ui.set_trade_journal_detail(rows.get(index.max(0) as usize).map(detail)
                 .unwrap_or_else(||"اختر صفقة من القائمة".into()).into());
             return;
         }
         match action {
-            "next"=>offset_ui.set(offset_ui.get().saturating_add(50)),
-            "prev"=>offset_ui.set(offset_ui.get().saturating_sub(50)),
-            "refresh"=>offset_ui.set(0),
+            "next"=>{offset_ui.fetch_add(50,Ordering::Relaxed);},
+            "prev"=>{offset_ui.fetch_update(Ordering::Relaxed,Ordering::Relaxed,|v|Some(v.saturating_sub(50))).ok();},
+            "refresh"=>{offset_ui.store(0,Ordering::Relaxed);},
             _=>return,
         }
         ui.set_trade_journal_busy(true);
-        let _=sender.send(offset_ui.get());
+        let _=sender.send(offset_ui.load(Ordering::Relaxed));
     });
     let weak=ui.as_weak();
     let auto=tx.clone();let auto_offset=offset.clone();
@@ -74,7 +74,7 @@ pub fn setup(ui:&Dashboard) -> slint::Timer {
         if let Some(ui)=weak.upgrade(){
             if ui.get_page()==20 && !ui.get_trade_journal_busy(){
                 ui.set_trade_journal_busy(true);
-                let _=auto.send(auto_offset.get());
+                let _=auto.send(auto_offset.load(Ordering::Relaxed));
             }
         }
     });
@@ -93,20 +93,20 @@ pub fn setup(ui:&Dashboard) -> slint::Timer {
                         let rows=v["rows"].as_array().cloned().unwrap_or_default();
                         let total=v["total"].as_u64().unwrap_or(0);
                         let labels=rows.iter().map(|v|slint::SharedString::from(row_label(v))).collect::<Vec<_>>();
-                        *rows_cache.borrow_mut()=rows;
+                        *rows_cache.lock().unwrap()=rows;
                         ui.set_trade_journal_rows(slint::ModelRc::new(slint::VecModel::from(labels)));
-                        let selected=if rows_cache.borrow().is_empty(){-1}else{0};
+                        let selected=if rows_cache.lock().unwrap().is_empty(){-1}else{0};
                         ui.set_trade_journal_selected(selected);
-                        ui.set_trade_journal_detail(rows_cache.borrow().first().map(detail)
+                        ui.set_trade_journal_detail(rows_cache.lock().unwrap().first().map(detail)
                             .unwrap_or_else(||"لا توجد صفقات مسجلة لهذا الحساب والرمز بعد".into()).into());
                         ui.set_trade_journal_has_prev(page_offset>0);
                         ui.set_trade_journal_has_next((page_offset as u64 + 50)<total);
                         ui.set_trade_journal_summary(format!(
                             "إجمالي مراكز MT5 المحفوظة: {} | الصفحة: {} | المعروض: {} صفقة",
-                            total,page_offset/50+1,rows_cache.borrow().len()
+                            total,page_offset/50+1,rows_cache.lock().unwrap().len()
                         ).into());
                         ui.set_trade_journal_notice(name(&v,"notice").into());
-                        tracked.set(page_offset);
+                        tracked.store(page_offset,Ordering::Relaxed);
                     },
                     Err(error)=>{
                         ui.set_trade_journal_detail(format!("تعذر تحميل السجل: {error}").into());
