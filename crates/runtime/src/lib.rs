@@ -117,7 +117,7 @@ impl Engine{
         if path.starts_with("/v1/execution") {
             let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
             let result=self.execution.route(method,path,body,&self.db,&status,now_ms())?;
-            if method=="POST"&&!matches!(path,"/v1/execution/sync"|"/v1/execution/authorize") {self.event("broker_execution_action",json!({"path":path,"result":result}))?;}
+            if method=="POST"&&!matches!(path,"/v1/execution/sync"|"/v1/execution/authorize"|"/v1/execution/trades") {self.event("broker_execution_action",json!({"path":path,"result":result}))?;}
             let mut s=self.shared.lock().unwrap();s.status.execution_enabled=self.execution.enabled(&s.status);
             return Ok(result);
         }
