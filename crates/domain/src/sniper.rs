@@ -141,7 +141,12 @@ impl Engine {
         let mut target_exploring=false;
         let target_pips=if adaptive {
             if eligible.is_empty() {
-                s.reason="القناص: لا هدف ضمن نطاق pip المختار يغطي التكلفة الحالية".into();
+                s.reason=format!(
+                    "القناص: لا هدف ضمن {:.2}–{:.2} pip يجتاز حصة التكلفة {:.0}% | سبريد {:.2} pip | عمولة {:.4}/لوت | انزلاق {:.2} tick/جهة | الإجمالي {:.4}/لوت. يمكن تعديل هدف pip أو نسبة التكلفة، لكن السبريد الحقيقي لا يمكن تجاهله",
+                    c.trading.sniper_min_target_pips, c.trading.sniper_max_target_pips,
+                    c.trading.max_cost_fraction*100.,cost.spread_pips,c.risk.commission_per_lot,
+                    c.risk.slippage_ticks,cost.total
+                );
                 return s;
             }
             let best_arm = *eligible.iter().max_by(|a,b|
@@ -158,15 +163,26 @@ impl Engine {
         } else {
             let desired=c.trading.sniper_target_points*point/tick*t.tick_value_profit.unwrap();
             if !desired.is_finite() || desired<=0. || cost.total/(cost.total+desired)>c.trading.max_cost_fraction {
-                s.reason="القناص: هدف pip الثابت لا يغطي حصة التكلفة التي اخترتها".into();
+                s.reason=format!(
+                    "القناص: الهدف {:.2} pip لا يجتاز حصة التكلفة {:.0}% | السبريد {:.2} pip (حقيقي) | العمولة {:.4}/لوت | الانزلاق {:.2} tick/جهة | الإجمالي {:.4}/لوت. راجع هدف الربح وعمولة الحساب ولا تُخفّض السبريد الحقيقي",
+                    fixed_pips,c.trading.max_cost_fraction*100.,cost.spread_pips,
+                    c.risk.commission_per_lot,c.risk.slippage_ticks,cost.total
+                );
                 return s;
             }
             fixed_pips
         };
         s.side = sides[chosen];
         s.stop_distance = (c.trading.sniper_stop_points*point).max(ask-bid+2.*tick);
-        s.target_distance = target_pips*c.trading.pip_points*point
-            + (c.risk.commission_per_lot + 2.*c.risk.slippage_ticks*t.tick_value_loss.unwrap().max(t.tick_value_profit.unwrap())) / t.tick_value_profit.unwrap()*tick;
+        // The shared broker-entry geometry intentionally excludes the spread
+        // from target distance: Ask/Bid entry already paid that spread once.
+        s.target_distance = match trading::sniper_target_from_entry(
+            &cost,
+            target_pips * c.trading.pip_points * point,
+        ) {
+            Ok(v) => v,
+            Err(error) => { s.side = 0; s.reason = error; return s; }
+        };
         s.ready = true;
         s.reason = format!("القناص المتعلّم: {} | {} | هدف {:.2} pip {} | نتائج الاستراتيجية {} / عينات الهدف {}",
             if chosen==0 {"اندفاع سريع"} else {"ارتداد سريع"}, regime, target_pips,
@@ -244,6 +260,29 @@ mod tests {
         }
         assert!(changed);
     }
+    #[test]
+    fn zero_commission_zero_slippage_uses_only_observed_spread_and_never_adds_it_to_tp() {
+        let (mut t,mut c) = fixture();
+        c.risk.commission_per_lot = 0.;
+        c.risk.slippage_ticks = 0.;
+        c.trading.sniper_target_points = 70.;
+        let mut engine = Engine::default();
+        for (ts,bid) in [(10000,2000.),(10010,2000.04),(10020,2000.08)] {
+            let signal=feed(&mut engine,&mut t,&c,ts,bid);
+            if ts==10020 {
+                assert!(signal.ready);
+                assert!((signal.target_distance-0.7).abs()<1e-8);
+            }
+        }
+        // The real broker spread is still a cost and should remain visible
+        // even when commission and hypothetical slippage are both zero.
+        let p=trading::costs(&t,&c,0.01,10020).unwrap();
+        assert_eq!(p.commission,0.);
+        assert_eq!(p.slippage_money,0.);
+        assert!(p.spread_money>0.);
+        assert!((p.break_even_from_entry_points).abs()<1e-8);
+    }
+
     #[test]
     fn user_defined_pip_targets_are_fixed_or_bounded_and_cost_checked() {
         let (mut t,mut c)=fixture();
