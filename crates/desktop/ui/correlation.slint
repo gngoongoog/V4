@@ -1,4 +1,5 @@
-import { Button, ComboBox, LineEdit, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
+import { Theme, Button } from "./theme.slint";
+import { ComboBox, LineEdit, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
 
 export component CorrelationPage inherits Rectangle {
     in property <[string]> sources;
@@ -26,18 +27,18 @@ export component CorrelationPage inherits Rectangle {
     ScrollView {
         VerticalBox {
             spacing: 10px;
-            Text { text: "MULTI-SYMBOL CORRELATION / ارتباط عدة رموز"; color: #eaf0fb; font-size: 20px; }
+            Text { text: "MULTI-SYMBOL CORRELATION / ارتباط عدة رموز"; color: Theme.text; font-size: 20px; }
             Text {
                 text: "تحليل بحثي لنتائج Backtest محفوظة فقط. العائد يحتاج شمعتين M1 متتاليتين فعلياً؛ لا forward-fill ولا أصفار صناعية، ولا يوجد أي ربط بالتنفيذ.";
-                color: #f0c578; wrap: word-wrap;
+                color: Theme.secondary; wrap: word-wrap;
             }
             HorizontalBox {
                 Button { text: "تحديث المصادر والتقارير"; enabled: !root.busy; clicked => { root.action("refresh"); } }
-                Text { text: "أقل overlap"; color: #acbad0; vertical-alignment: center; }
+                Text { text: "أقل overlap"; color: Theme.secondary; vertical-alignment: center; }
                 LineEdit { text <=> root.min-overlap; placeholder-text: "30"; }
                 Button { text: "تحليل وحفظ التقرير"; enabled: !root.busy && root.sources.length >= 2; clicked => { root.action("analyze"); } }
             }
-            Text { text: "المصدران الأولان مطلوبان؛ بقية الخانات اختيارية حتى 8 رموز. اختر كل Backtest مرة واحدة فقط."; color: #acbad0; wrap: word-wrap; }
+            Text { text: "المصدران الأولان مطلوبان؛ بقية الخانات اختيارية حتى 8 رموز. اختر كل Backtest مرة واحدة فقط."; color: Theme.secondary; wrap: word-wrap; }
             HorizontalBox {
                 ComboBox { model: root.sources; current-index <=> root.source-a; }
                 ComboBox { model: root.sources; current-index <=> root.source-b; }
@@ -54,23 +55,23 @@ export component CorrelationPage inherits Rectangle {
                 ComboBox { model: root.sources; current-index <=> root.source-g; }
                 ComboBox { model: root.sources; current-index <=> root.source-h; }
             }
-            Text { text: root.status; color: #76dfc0; wrap: word-wrap; }
-            Rectangle { height: 1px; background: #263145; }
-            Text { text: "تقارير محفوظة"; color: #d5deed; font-size: 16px; }
+            Text { text: root.status; color: Theme.secondary; wrap: word-wrap; }
+            Rectangle { height: 1px; background: Theme.line; }
+            Text { text: "تقارير محفوظة"; color: Theme.secondary; font-size: 16px; }
             HorizontalBox {
                 ComboBox { model: root.reports; current-index <=> root.report-selected; }
                 Button { text: "فتح التقرير"; enabled: !root.busy && root.report-selected >= 0; clicked => { root.action("load"); } }
             }
-            Text { text: root.title; color: #eaf0fb; wrap: word-wrap; font-size: 15px; }
-            Text { text: root.boundary; color: #f0c578; wrap: word-wrap; }
-            Text { text: root.matrix; color: #d5deed; wrap: word-wrap; horizontal-alignment: left; }
-            Rectangle { height: 1px; background: #263145; }
-            Text { text: root.portfolio; color: #8ddfc6; wrap: word-wrap; horizontal-alignment: left; }
-            Text { text: "PROVENANCE / مصادر التقرير"; color: #d5deed; font-size: 16px; }
-            Text { text: root.provenance; color: #acbad0; wrap: word-wrap; horizontal-alignment: left; }
+            Text { text: root.title; color: Theme.text; wrap: word-wrap; font-size: 15px; }
+            Text { text: root.boundary; color: Theme.secondary; wrap: word-wrap; }
+            Text { text: root.matrix; color: Theme.secondary; wrap: word-wrap; horizontal-alignment: left; }
+            Rectangle { height: 1px; background: Theme.line; }
+            Text { text: root.portfolio; color: Theme.secondary; wrap: word-wrap; horizontal-alignment: left; }
+            Text { text: "PROVENANCE / مصادر التقرير"; color: Theme.secondary; font-size: 16px; }
+            Text { text: root.provenance; color: Theme.secondary; wrap: word-wrap; horizontal-alignment: left; }
             Text {
                 text: "Correlation هنا وصف إحصائي تاريخي فقط؛ لا يغيّر قرارات العقول، أحجام اللوت، حدود المحفظة أو فتح/إغلاق أي صفقة.";
-                color: #8d9cb4; wrap: word-wrap;
+                color: Theme.muted; wrap: word-wrap;
             }
         }
     }
