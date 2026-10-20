@@ -52,7 +52,7 @@ pub fn adapt(
     // changes must not restart the same strategy study on every quote.
     identity.as_array_mut().unwrap().push(
         json!({"definition":definition,"sniper_target":c.trading.sniper_target_points,
-        "sniper_stop":c.trading.sniper_stop_points,"sniper_hold":c.trading.sniper_max_hold_seconds,
+        "sniper_stop":c.trading.sniper_stop_points,"sniper_hold":c.trading.sniper_max_hold_seconds, "sniper_pip_price":c.trading.sniper_pip_price,
         "commission":c.risk.commission_per_lot,"slippage":c.risk.slippage_ticks,"tick":t.tick_size}),
     );
     // Keep prior studies intact; new, known market regimes get their own comparison.
@@ -78,13 +78,11 @@ pub fn adapt(
     // Falling back keeps the already-valid baseline entry available.
     let mut cost_fallback = false;
     let mut fallback_reason = "";
-    // One controller owns the executed TP geometry at a time. The Sniper
-    // target bandit labels the exact chosen pip arm at entry: letting the
-    // independent exit learner reshape the TP would corrupt that arm's
-    // booked outcome. Its counterfactual exit studies may still collect,
-    // but their candidate policy is not allowed to alter this entry.
+    // A user's chosen Sniper pips are strict even with Demo adaptive exits ON.
+    // The exit learner may record counterfactual outcomes but must NEVER
+    // extend or shorten the fixed/adaptive pip TP before the broker order.
     if c.trading.mode == braintrade_domain::trading::TradingMode::Sniper
-        && signal.coordination.as_ref().is_some_and(|v| v["selection"]["sniper_target_mode"]=="adaptive")
+        && matches!(b.id.as_str(), "system" | "sniper_learner")
         && profile != ExitProfile::Baseline
     {
         profile = ExitProfile::Baseline;
@@ -800,12 +798,12 @@ mod tests {
         adapt(&mut s, &t, &c, &b, &policies);
         assert!(s.ready);
         assert_eq!(s.target_distance, 2.);
-        assert_eq!(s.coordination.unwrap()["student"]["cost_fallback"], true);
+        assert_eq!(s.coordination.unwrap()["student"]["fallback_reason"], "sniper_pip_target_owned");
         c.trading.max_cost_fraction = 0.5;
         let mut s = signal();
         adapt(&mut s, &t, &c, &b, &policies);
         assert!(s.ready);
-        assert_eq!(s.target_distance, 1.5);
+        assert_eq!(s.target_distance, 2.);
         assert_eq!(s.coordination.unwrap()["student"]["cost_fallback"], false);
     }
     #[test]
@@ -835,11 +833,13 @@ mod tests {
         assert_eq!(coord["student"]["profile"],"baseline");
         assert_eq!(coord["student"]["fallback_reason"],"sniper_pip_target_owned");
         assert_eq!(coord["selection"]["sniper_target_arm"],2);
-        // Ordinary Sniper fixed-target exit learning remains available.
+        // Fixed targets are also owned by the user and cannot be enlarged by learning.
         c.trading.sniper_target_mode=braintrade_domain::trading::SniperTargetMode::Fixed;
         let mut fixed=signal();
-        adapt(&mut fixed,&t,&c,&b,&BTreeMap::new());
+        adapt(&mut fixed,&t,&c,&b,&policies);
         assert!(fixed.ready);
+        assert_eq!(fixed.target_distance,before_target);
+        assert_eq!(fixed.coordination.unwrap()["student"]["profile"],"baseline");
     }
     #[test]
     fn ledger_restart_exact_labels_and_shadow_isolation() {
