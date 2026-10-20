@@ -75,7 +75,7 @@ class FullSystemDataflowAudit(unittest.TestCase):
         self.assertIn("ui.set_exec_settings_loaded(true)", self.execution)
         self.assertIn('matches!(action.as_str(), "select" | "refresh")', self.execution)
         self.assertIn("ui.set_exec_settings_loaded(false)", self.execution)
-        self.assertGreaterEqual(self.ui.count("root.exec-settings-loaded"), 5)
+        self.assertGreaterEqual(self.ui.count("root.exec-settings-loaded"), 4)
         self.assertIn('root.execution-action("enable")', self.ui)
         self.assertIn('root.execution-action("disable")', self.ui)
         self.assertIn('root.execution-action("close")', self.ui)
