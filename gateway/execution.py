@@ -409,7 +409,7 @@ class BrokerExecutor:
             if account_identity(mt5.account_info())==wanted:
                 rows=mt5.history_deals_get(datetime.fromtimestamp(start/1000,timezone.utc),datetime.fromtimestamp(until/1000,timezone.utc))
                 if rows is not None and account_identity(mt5.account_info())==wanted:
-                    fields=('ticket','position_id','magic','symbol','entry','time_msc','volume','price','profit','commission','swap','fee','reason')
+                    fields=('ticket','position_id','magic','symbol','entry','type','time_msc','volume','price','profit','commission','swap','fee','reason')
                     deals=[{k:getattr(d,k,0) for k in fields} for d in rows]
                     api('/v1/execution/sync',dict(identity,deals=deals,until_ms=until))
         return work.get('poll_ms',250)/1000
