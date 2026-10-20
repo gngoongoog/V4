@@ -4,6 +4,7 @@ use braintrade_domain::{
     execution::{self, BrainConfig, Signal, BRAINS},
     studio::FrameBar,
     Config, Status, Telemetry,
+    trading::TradingMode,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -44,6 +45,7 @@ pub struct Service {
     new_entries: Vec<Value>,
     last_sync_ms: u64,
     history_until_ms: u64,
+    active_mode: Option<TradingMode>,
 }
 fn ctx(t: &Telemetry) -> String {
     serde_json::to_string(&(&t.server, t.login, &t.symbol, &t.currency)).unwrap()
@@ -57,6 +59,19 @@ fn json_rows(db: &Connection, sql: &str, key: &str) -> Result<Vec<Value>> {
 }
 impl Service {
     pub fn take_entries(&mut self) -> Vec<Value> { std::mem::take(&mut self.new_entries) }
+    /// Entry execution is reserved to the coordinator of the selected trading
+    /// mode. All other strategies remain analytical/shadow observers. Existing
+    /// owned positions still receive their regular close/reconciliation logic.
+    fn broker_entry_allowed(&self, cmd: &Value) -> bool {
+        let Some(mode) = self.active_mode else { return false; };
+        cmd["kind"] == "open"
+            && cmd["brain"] == "system"
+            && cmd["trading_mode"] == json!(mode)
+    }
+    pub fn set_mode(&mut self, mode: TradingMode) {
+        self.active_mode = Some(mode);
+    }
+
     pub fn learning_decisions(&self)->Vec<(String,Value)> {
         self.brains.iter().filter(|b|b.enabled).filter_map(|b|self.signals.get(&b.id).map(|v|(b.id.clone(),v.clone()))).collect()
     }
@@ -108,6 +123,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             student_policies:BTreeMap::new(),
             last_sync_ms: 0,
             history_until_ms: 0,
+            active_mode: None,
         })
     }
     fn matches(&self, t: &Telemetry) -> bool {
@@ -181,6 +197,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             .unwrap_or(Value::Null);
         let mut p = json!({"id":id,"revision":self.settings.revision,"context":key,"brain":b.id,"kind":kind,"login":t.login,"server":t.server,"currency":t.currency,"target":self.settings.target,"symbol":t.symbol,"magic":execution::magic(&b.id),"position":position,"lots":b.lots,"deviation_points":self.settings.deviation_points,"created_ms":now,"max_quote_age_ms":signal.map(|s|if s.key.starts_with("tick:"){1000}else{3000}).unwrap_or(3000),"expires_ms":if kind=="open"{now+3000}else{now+30_000},"signal":s});
         if let Some(c) = config {
+            p["trading_mode"] = json!(c.trading.mode);
             p["demo_flexible"] = json!(c.trading.demo_flexible && t.demo && t.account_trade_mode==Some(0));
             p["commission_per_lot"] = json!(c.risk.commission_per_lot);
             p["learning"] = json!({"trading_mode":c.trading.mode,"timeframe":b.timeframe,"report_id":b.report_id,
@@ -238,6 +255,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 )?;
             }
         }
+        self.active_mode = Some(c.trading.mode);
         let sniper_signal = self.sniper.evaluate(t,c,now);
         let available=crate::coordinator_learning::available_frames(t,frames,now);
         for b in self.brains.clone() {
@@ -278,10 +296,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     self.queue(db, t, &b, "close", None, p.ticket, now, None)?;
                 }
             }
-            if braintrade_domain::sniper::selected(c) && b.id!="system" && b.id!=braintrade_domain::sniper::ID && !b.enabled {
-                // Keep ownership exits above active; this Sniper specialist does not evaluate inactive slow advisors.
-                continue;
-            }
+            // Do not skip other brains: evaluate them as observation-only advisors.
+            // Their ready signals can feed paper evidence but never MT5 dispatch.
             let genome=crate::coordinator_learning::genome(db,&b,t)?;
             let started = std::time::Instant::now();
             let base=if b.id==braintrade_domain::sniper::ID || (b.id=="system" && braintrade_domain::sniper::selected(c)) {sniper_signal.clone()}
@@ -298,7 +314,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 selected
             } else if b.id=="system" {
                 let mut votes=vec![];
-                for member in self.brains.iter().filter(|m|m.id!="system"&&!m.enabled) {
+                for member in self.brains.iter().filter(|m|m.id!="system") {
                     // Returning SOLO positions finish under their original owner before rejoining.
                     let in_flight:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,member.id],|r|r.get(0))?;
                     if in_flight||t.positions.iter().any(|p|p.magic==execution::magic(&member.id).unwrap()&&p.symbol==t.symbol){continue;}
@@ -319,8 +335,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             if !run {
                 gates.push("النظام متوقف");
             }
-            if !b.enabled {
-                gates.push("التداول المنفرد غير مشغّل");
+            if b.id != "system" {
+                gates.push("SHADOW / PAPER فقط: الوضع المختار يمنع هذا العقل من إرسال صفقات إلى MT5");
             }
             if active {
                 gates.push("أمر قيد التنفيذ أو المصالحة");
@@ -389,7 +405,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             let can = signal.ready && gates.is_empty();
             let result = json!({"signal":signal,"gates":gates,"ready":can,"decision_us":decision_us,"evaluated_ms":now});
             self.signals.insert(b.id.clone(), result.clone());
-            if can {
+            if can && b.id == "system" {
                 let tx = db.unchecked_transaction()?;
                 tx.execute(
                     "INSERT OR IGNORE INTO broker_seen VALUES(?1,?2,?3)",
@@ -553,10 +569,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     if cmd["state"] == "queued" {
                         let allowed = cmd["kind"] == "close"
                             || (self.enabled(status)
-                                && self
-                                    .brains
-                                    .iter()
-                                    .any(|b| b.id == cmd["brain"] && b.enabled));
+                                && self.broker_entry_allowed(cmd));
                         if allowed {
                             db.execute("UPDATE broker_commands SET state='dispatched' WHERE id=?1 AND state='queued'",[id])?;
                         } else {
@@ -584,10 +597,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     && (cmd["kind"] == "close"
                         || (cmd["revision"].as_u64()==Some(self.settings.revision)
                             && self.enabled(status)
-                            && self
-                                .brains
-                                .iter()
-                                .any(|b| b.id == cmd["brain"] && b.enabled)));
+                            && self.broker_entry_allowed(&cmd)));
                 Ok(json!({"authorized":ok}))
             }
             ("POST", "/v1/execution/result") => {
