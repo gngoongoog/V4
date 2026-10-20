@@ -224,7 +224,7 @@ export component Dashboard inherits Window {
                 }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
                 VerticalLayout {
-                    spacing: 5px; cross-axis-alignment: end;
+                    spacing: 5px;
                     Text { text: root.state; color: #f2f2f4; font-size: 17px; font-weight: 700; horizontal-alignment: right; }
                     Text { text: root.online ? "MT5 متصل — بيانات حالية" : "MT5 غير متصل أو بيانات غير حديثة"; color: #aeb1ba; font-size: 12px; horizontal-alignment: right; }
                 }
@@ -236,7 +236,7 @@ export component Dashboard inherits Window {
             border-radius: 11px;
             border-width: 1px; border-color: #3b3d45;
             HorizontalLayout { padding-left: 15px; padding-right: 15px; spacing: 10px;
-                Rectangle { width: 7px; height: 7px; border-radius: 4px; background: root.execution-active ? #edf0f4 : #868a94; cross-axis-self-alignment: center; }
+                Rectangle { width: 7px; height: 7px; border-radius: 4px; background: root.execution-active ? #edf0f4 : #868a94; }
                 Text {
                     text: root.execution-active ? "تنفيذ MT5 مفعّل — أوامر الوسيط تتبع START / STOP"
                                                 : "وضع المراقبة — اربط حساب Demo وراجع الإعدادات قبل تشغيل التنفيذ";
