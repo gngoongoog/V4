@@ -93,6 +93,80 @@ def round_trip_commission(rate_per_lot, lots):
     return rate * volume
 
 
+def size_to_stop_risk(mt5, account, info, symbol, side, entry, stop_price,
+                      requested, risk_percent, commission, slippage_ticks):
+    """Limit order size to an equity-at-risk budget using MT5 contract PnL.
+
+    A requested volume is an UPPER bound, never a minimum. No order can be
+    increased or sent without reliable broker order_calc_profit. The cost
+    budget includes full-roundtrip configured commission and a conservative
+    two-side slippage estimate. This does not guarantee a stop fills at its
+    stop price in a volatile or gapping market.
+    """
+    values=(entry, stop_price, requested, risk_percent, commission, slippage_ticks)
+    if not all(math.isfinite(float(v)) for v in values):
+        raise ValueError('Risk sizing: all prices, lot and fee inputs must be finite')
+    if not (entry > 0 and stop_price > 0 and requested > 0
+            and 0 < risk_percent <= 2.0 and 0 <= commission <= 1000
+            and 0 <= slippage_ticks <= 1000):
+        raise ValueError('Risk sizing: invalid price, lot, risk percent or fee')
+    equity=float(getattr(account,'equity',float('nan')))
+    if not math.isfinite(equity) or equity <= 0:
+        raise ValueError('Risk sizing: fresh positive broker equity required')
+    if (side==1 and stop_price>=entry) or (side==-1 and stop_price<=entry):
+        raise ValueError('Risk sizing: broker stop must represent a real downside loss')
+    if side not in (-1,1):
+        raise ValueError('Risk sizing: invalid trade direction')
+    step=float(info.volume_step)
+    low=math.ceil(float(info.volume_min)/step-1e-9)
+    high=math.floor(min(requested,float(info.volume_max))/step+1e-9)
+    if low>high:
+        raise ValueError('Risk sizing: requested lot is below broker minimum; order NOT enlarged')
+    # Use the broker's own monetary profit calculator rather than assuming
+    # XAUUSD always has a particular USD-per-tick or contract size.
+    ref=round(high*step,10)
+    order_type=mt5.ORDER_TYPE_BUY if side==1 else mt5.ORDER_TYPE_SELL
+    try:
+        pnl=mt5.order_calc_profit(order_type,symbol,ref,entry,stop_price)
+    except Exception as exc:
+        raise ValueError('Risk sizing: broker profit estimate unavailable') from exc
+    if pnl is None or not math.isfinite(float(pnl)) or float(pnl)>=0:
+        raise ValueError('Risk sizing: broker loss estimate unavailable or inconsistent')
+    loss_per_lot=-float(pnl)/ref
+    if slippage_ticks:
+        tick_loss=float(getattr(info,'trade_tick_value_loss',float('nan')))
+        if not math.isfinite(tick_loss) or tick_loss<=0:
+            raise ValueError('Risk sizing: broker loss-side tick value unavailable for slippage')
+        slip_per_lot=2.0*slippage_ticks*tick_loss
+    else:
+        slip_per_lot=0.0
+    unit_risk=loss_per_lot+commission+slip_per_lot
+    if not math.isfinite(unit_risk) or unit_risk<=0:
+        raise ValueError('Risk sizing: invalid total broker stop risk per lot')
+    budget=equity*risk_percent/100.0
+    allowed=math.floor((budget/unit_risk)/step+1e-9)
+    units=min(high,allowed)
+    if units<low:
+        raise ValueError(
+            f'Risk sizing: minimum {low*step:g} lot needs '
+            f'{unit_risk*low*step:.4f} {account.currency} at SL, '
+            f'budget {budget:.4f}; entry rejected, never increased or widened')
+    volume=round(units*step,10)
+    actual=unit_risk*volume
+    if actual>budget+max(1e-8,budget*1e-10):
+        raise ValueError('Risk sizing: projected stop loss exceeds equity budget')
+    return volume,dict(policy='mt5_stop_risk_v1',
+                       requested=requested,sent=volume,
+                       broker_equity=equity,risk_percent=risk_percent,
+                       risk_budget=budget,broker_stop_loss_per_lot=loss_per_lot,
+                       commission_round_trip_per_lot=commission,
+                       slippage_cushion_per_lot=slip_per_lot,
+                       estimated_stop_loss_including_costs=actual,
+                       reduced=volume<requested-1e-9,
+                       source='MT5 order_calc_profit; stop price is not a guaranteed fill')
+
+
+
 def affordable_demo_volume(mt5, account, info, symbol, side, price, requested, commission):
     """Round down and shrink only; broker minimum and free margin remain real constraints.
 
@@ -314,6 +388,26 @@ class BrokerExecutor:
                 minimum=max(0,getattr(info,'trade_stops_level',0))*info.point
                 if request['sl']<=0 or request['tp']<=0 or (exit_price-request['sl'])*side+step*1e-8<minimum or (request['tp']-exit_price)*side+step*1e-8<minimum:
                     raise ValueError('Stop/target too close for current spread or broker stops level')
+
+                # This check runs for every Core-issued opening order, including
+                # Sniper fast-path and REAL. Legacy REAL intents missing a risk
+                # budget are rejected instead of bypassing the safety layer.
+                if 'risk_percent' not in cmd:
+                    if cmd['target']=='live':
+                        raise ValueError('Risk sizing: REAL entry has no Core risk budget; rejected')
+                else:
+                    risk_started=time.perf_counter()
+                    lots,result['risk_sizing']=size_to_stop_risk(
+                        mt5,a,info,symbol,side,price,request['sl'],lots,
+                        float(cmd['risk_percent']),
+                        float(cmd.get('commission_per_lot',float('nan'))),
+                        float(cmd.get('slippage_ticks',float('nan'))))
+                    request['volume']=lots
+                    result['risk_sizing_ms']=(time.perf_counter()-risk_started)*1000
+                    if 'sizing' in result:
+                        result['sizing']['post_risk_sent']=lots
+                        result['sizing']['post_risk_round_trip_commission']=round_trip_commission(
+                            float(cmd.get('commission_per_lot',0)),lots)
 
             # Sniper removes one broker round trip. All equivalent local validations
             # above stay mandatory; the broker can still reject the final order_send.
