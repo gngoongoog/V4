@@ -182,6 +182,21 @@ class ExecutionTests(unittest.TestCase):
         self.assertIn('positive broker equity required',result['reason'])
         self.assertFalse(self.mt.sends)
 
+    def test_broker_equity_drop_after_durable_journal_cancels_send(self):
+        self.mt.account.equity=1000.
+        self.cmd.update(id='risk-equity-final',target='demo',risk_percent=0.5,
+                        commission_per_lot=7.,slippage_ticks=2.,lots=.1)
+        def drop_equity(reads):
+            if reads==3:
+                self.mt.account.equity=200.
+        self.mt.on_account=drop_equity
+        result=self.send()
+        self.assertEqual(result['state'],'cancelled',result)
+        self.assertIn('equity fell',result['reason'])
+        self.assertFalse(self.mt.sends)
+        self.assertEqual(self.send()['state'],'cancelled',
+                         'no duplicate send or automatic retry after Core journal')
+
     def test_demo_margin_shrink_followed_by_stop_risk_never_exceeds_either_cap(self):
         self.mt.account.equity=1000.
         self.mt.account.margin_free=90.
