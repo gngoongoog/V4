@@ -112,8 +112,15 @@ impl Engine {
         // These are quality gates, not a forecast of profitability.
         let efficiency=movement.abs()/path.max(tick);
         let minimum_impulse=(3.*tick).max(0.65*spread);
+        // A modest retracement (<= 35% of remaining directional move) may
+        // still be a valid continuation candidate. Preserve simultaneous
+        // continuation/rebound evidence for the Demo learner's actual policy
+        // choice, but never admit a trend consisting of tiny quote noise.
+        let modest_retrace=movement*step<0. && step.abs()<=movement.abs()*0.35;
         let impulse=if movement.abs() >= minimum_impulse*0.999
-            && efficiency >= 0.55 && movement*step>0. { direction(movement) } else { 0 };
+            && efficiency >= 0.55 && (movement*step>0. || modest_retrace) {
+                direction(movement)
+            } else { 0 };
         // A reversal is valid only after an established measured excursion;
         // never trade an arbitrary single opposing broker tick.
         let prior=q[n-2]-q[0];
