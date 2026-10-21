@@ -483,10 +483,11 @@ impl Service {
             anyhow::ensure!(status.gateway_fresh && self.account_matches(status), "اربط الحساب الحالي وانتظر اتصالاً حديثاً");
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct Request {brain:String, mode:braintrade_domain::trading::TradingMode, control:crate::brain_control::Control}
+            struct Request {context:String, brain:String, mode:braintrade_domain::trading::TradingMode, control:crate::brain_control::Control}
             let request:Request=serde_json::from_slice(body)?;
             anyhow::ensure!(self.inner.active_mode==Some(request.mode), "الوضع تغيّر؛ حدّث الصفحة قبل الحفظ");
             let key=context(status.telemetry.as_ref().unwrap());
+            anyhow::ensure!(request.context==key, "الحساب أو الرمز تغيّر؛ حدّث الصفحة قبل الحفظ");
             crate::brain_control::save(db,&key,request.mode,&request.brain,request.control)?;
             self.inner.controls.insert(request.brain,request.control);
             self.fast=None;

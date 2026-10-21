@@ -47,7 +47,7 @@ pub fn setup(ui:&Dashboard)->slint::Timer {
         let index=ui.get_brain_monitor_selected().max(0) as usize;
         let v=current.lock().unwrap();
         if a=="select" {paint(&ui,&v,index,true);return}
-        let body=json!({"brain":BRAINS.get(index).map(|b|b.0).unwrap_or("system"),"mode":v["trading_mode"],
+        let body=json!({"context":v["context"],"brain":BRAINS.get(index).map(|b|b.0).unwrap_or("system"),"mode":v["trading_mode"],
             "control":{"advisor":ui.get_brain_advisor(),"paper":ui.get_brain_paper()}});
         ui.set_brain_monitor_busy(true);
         let _=sender.send((a.to_string(),body,index));

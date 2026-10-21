@@ -266,6 +266,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         self.active_mode = Some(c.trading.mode);
         let paper_due = now.saturating_sub(self.last_paper_sample_ms) >= 1_000;
         if paper_due {self.last_paper_sample_ms=now;}
+        let mut activity_samples=Vec::new();
         let sniper_signal = self.sniper.evaluate(t,c,now);
         let available=crate::coordinator_learning::available_frames(t,frames,now);
         for b in self.brains.clone() {
@@ -341,7 +342,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             // Independent price-sampled paper practice for every non-selected
             // brain. This never queues an MT5 order or enters broker PnL.
             if paper_due {
-                crate::brain_control::sample(db,&key,c.trading.mode,&b.id,&signal,now)?;
+                activity_samples.push((b.id.clone(),signal.clone()));
                 let mut paper_signal=signal.clone();
                 if !self.controls.get(&b.id).is_none_or(|control|control.paper) {paper_signal.ready=false;}
                 // Pausing new paper entries must still settle previously opened practice.
@@ -435,6 +436,12 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 tx.commit()?;
                 self.new_entries.push(command);
             }
+        }
+        // One durable commit per sampled batch, never one fsync per brain/tick.
+        if !activity_samples.is_empty() {
+            let tx=db.unchecked_transaction()?;
+            for (id,signal) in activity_samples {crate::brain_control::sample(&tx,&key,c.trading.mode,&id,&signal,now)?;}
+            tx.commit()?;
         }
         Ok(())
     }

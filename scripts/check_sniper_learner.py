@@ -89,7 +89,7 @@ def check(exe=None):
             assert api('/v1/execution/gateway')['command'] is None
             # Control scope and actual effect: disable learner participation, then
             # prove it cannot open through the system before re-enabling it.
-            control=dict(brain='sniper_learner',mode='sniper',control=dict(advisor=False,paper=False))
+            control=dict(context=api('/v1/execution/brains')['context'],brain='sniper_learner',mode='sniper',control=dict(advisor=False,paper=False))
             api('/v1/execution/brain-control',control)
             api('/v1/start',{});prices([2053.80,2053.84,2053.88])
             assert not brain('system')['latest']['signal']['ready']
