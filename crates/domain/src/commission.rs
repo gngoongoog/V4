@@ -9,6 +9,24 @@ pub enum Basis {
     RoundTrip,
     PerSide,
 }
+/// Estimated brokerage commission for opening AND fully closing an order.
+///
+/// The configured amount is in account currency per **1.00 lot round trip**.
+/// This never debits the account: the broker charges its actual commissions,
+/// which can differ and must be reconciled against MT5 booked deals.
+pub fn round_trip_charge(rate_per_lot: f64, lots: f64) -> Result<f64, String> {
+    if !rate_per_lot.is_finite() || !(0.0..=1000.0).contains(&rate_per_lot)
+        || !lots.is_finite() || lots <= 0.0 || lots > 100.0
+    {
+        return Err("Commission estimate requires a non-negative valid per-lot rate and positive lot size".into());
+    }
+    let amount=rate_per_lot*lots;
+    if !amount.is_finite() {
+        return Err("Commission estimate overflow".into());
+    }
+    Ok(amount)
+}
+
 impl Basis {
     pub fn round_trip(&self, amount: f64) -> Result<f64, String> {
         let total = amount * if *self == Self::PerSide { 2. } else { 1. };
@@ -83,6 +101,18 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_round_trip_lot_examples_and_zero_fee_are_identical_across_sizes() {
+        for (lots, expected) in [(0.01,0.07),(0.10,0.70),(1.0,7.0)] {
+            assert!((round_trip_charge(7.,lots).unwrap()-expected).abs()<1e-10);
+            assert_eq!(round_trip_charge(0.,lots).unwrap(),0.);
+            assert!((round_trip_charge(Basis::PerSide.round_trip(3.5).unwrap(),lots).unwrap()-expected).abs()<1e-10);
+        }
+        for (rate,lots) in [(f64::NAN,0.1),(-1.,0.1),(7.,0.),(7.,-0.01),(7.,f64::INFINITY)] {
+            assert!(round_trip_charge(rate,lots).is_err());
+        }
+    }
 
     #[test]
     fn proportional_and_account_isolation() {
