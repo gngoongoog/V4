@@ -1,3 +1,7 @@
+# Current 0.7.1 follow-up
+
+PR #74 adds the brain control room, scoped participation/paper controls, four Sniper learner styles and Arabic Telegram. Continue from the latest main; older checkpoints below are historical. See `docs/BRAIN_CONTROL_SNIPER_AR.md` and exact-head CI. Native MT5 demo acceptance remains outstanding.
+
 # BrainTrade OS — Roadmap
 
 GitHub `gngoongoog/V4` is canonical. Read `BUILD_HANDOFF.md`, `PROJECT_STATE.md`, `CONTINUE_HERE.md` and the release/development validation records before editing runtime execution code.
