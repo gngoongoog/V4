@@ -149,15 +149,14 @@ fn run_ui() -> anyhow::Result<()> {
     let sender = tx.clone();
     let weak = ui.as_weak();
     ui.on_action(move |a| {
-        if let Some(ui) = weak.upgrade() {
-            ui.set_busy(true);
-        }
+        let Some(ui) = weak.upgrade() else { return; };
         let action=a.to_string();
         let body=if action=="start" {
             let login=ui.get_live_start_login().trim().to_owned();
             ui.set_live_start_login("".into());
             json!({"confirm_live_login":login})
         }else{json!({})};
+        ui.set_busy(true);
         let _ = sender.send(Task::Action(action,body));
     });
     let sender = tx.clone();
