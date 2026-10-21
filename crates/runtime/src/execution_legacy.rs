@@ -736,14 +736,17 @@ mod execution_persistence_tests {
         c.risk.risk_percent=0.25;
         c.risk.commission_per_lot=7.;
         c.risk.slippage_ticks=2.;
-        let payload=service.queue(&db,&t,b,"open",Some(&Signal::default()),0,12345,Some(&c)).unwrap();
+        let signal=Signal{brain:"system".into(),side:1,key:"risk-stage2".into(),
+            bar_time:12345,stop_distance:1.,target_distance:2.,hold_ms:60000,
+            reason:"risk sizing test".into(),ready:true,coordination:None};
+        let payload=service.queue(&db,&t,b,"open",Some(&signal),0,12345,Some(&c)).unwrap();
         assert_eq!(payload["risk_percent"],0.25);
         assert_eq!(payload["commission_per_lot"],7.);
         assert_eq!(payload["slippage_ticks"],2.);
         assert_eq!(payload["lots"],b.lots);
         assert_eq!(payload["kind"],"open");
         c.risk.commission_per_lot=0.;
-        let free=service.queue(&db,&t,b,"open",Some(&Signal::default()),0,12346,Some(&c)).unwrap();
+        let free=service.queue(&db,&t,b,"open",Some(&signal),0,12346,Some(&c)).unwrap();
         assert_eq!(free["commission_per_lot"],0.);
     }
 
