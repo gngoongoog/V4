@@ -118,6 +118,34 @@ mod tests {
     }
 
     #[test]
+    fn zero_fee_is_saved_for_exact_account_and_survives_reload_without_stale_profile() {
+        let s=connected();
+        let mut c=Config::default();
+        let account=Account::from_telemetry(s.telemetry.as_ref().unwrap());
+        c.commission_profiles.push(Profile{
+            account:account.clone(),label:"old ECN".into(),
+            amount:3.5,basis:Basis::PerSide,
+        });
+        let req=json!({
+            "trading":c.trading,
+            "commission_per_lot":0.0,
+            "commission_basis":"round_trip",
+            "account":account,
+            "label":"zero fee broker"
+        }).to_string();
+        let updated=update(&c,&s,req.as_bytes()).unwrap();
+        let reloaded:Config=serde_json::from_str(&serde_json::to_string(&updated).unwrap()).unwrap();
+        let t=s.telemetry.as_ref().unwrap();
+        assert_eq!(reloaded.commission_profiles.len(),1,"stale paid profile must be replaced");
+        assert_eq!(reloaded.for_account(t).risk.commission_per_lot,0.);
+        assert_eq!(view(&reloaded,&s)["commission_editor"]["round_trip_per_lot"],0.);
+        for lots in [0.01,0.10,1.] {
+            assert_eq!(braintrade_domain::commission::round_trip_charge(
+                reloaded.for_account(t).risk.commission_per_lot,lots).unwrap(),0.);
+        }
+    }
+
+    #[test]
     fn slippage_estimate_can_be_disabled_separately_from_broker_spread() {
         let c = Config::default();
         let s = connected();
