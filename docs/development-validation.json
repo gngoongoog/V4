@@ -1,5 +1,5 @@
 {
-  "version": "0.7.1",
+  "version": "0.7.2",
   "status": "pending-ci",
   "source_state": "PR 74 snapshot before exact-source CI",
   "tested_commit": null,
@@ -16,5 +16,5 @@
     "telegram_live_delivery": "not performed",
     "imported_ml_automatic_promotion": false
   },
-  "note": "This checkout records pre-build state, never inherited success from 0.7.0. Consult PR #74 exact-head Research and Windows runs and packaged source_commit for completed build evidence. Historical 0.6.0 acceptance records remain immutable. Real MT5 and Telegram acceptance remain outstanding."
+  "note": "0.7.2 is a new fail-closed LIVE confirmation protocol. CI status belongs to the exact new commit and must not inherit 0.7.1 results. LIVE and broker-specific MT5 acceptance are not performed; check native Windows and Research workflows before considering Demo validation complete."
 }

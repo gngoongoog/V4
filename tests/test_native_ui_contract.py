@@ -55,7 +55,7 @@ class NativeUiContract(unittest.TestCase):
     def test_operator_flow_and_execution_controls_stay_wired(self):
         for label in ("1  ربط MT5", "2  تجهيز التداول", "3  متابعة التنفيذ",
                       "بدء النظام  START", "إيقاف  STOP", "خروج كامل",
-                      "حفظ إعدادات التداول", "ربط الحساب الحالي",
+                      "حفظ إعدادات التداول", "ربط حساب Demo", "تأكيد وربط حساب REAL",
                       "إرجاع للمنظومة", "حفظ حماية المحفظة"):
             self.assertIn(label, self.dashboard, f"Critical control disappeared: {label}")
         self.assertIn('root.action("start")', self.dashboard)
@@ -66,6 +66,25 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn('root.studio-action("save")', self.dashboard)
         self.assertIn('root.state == "STOPPED"', self.dashboard)
         self.assertIn("root.exec-busy", self.dashboard)
+
+    def test_real_switch_has_two_separate_account_confirmations(self):
+        self.assertIn('ComboBox { model: ["Demo / حساب تجريبي", "Live / أموال حقيقية"]',self.dashboard)
+        self.assertIn("text <=> root.exec-confirm-login",self.dashboard)
+        self.assertIn("text <=> root.live-start-login",self.dashboard)
+        self.assertIn('root.exec-target == 0 || root.exec-confirm-login != ""',self.dashboard)
+        self.assertIn('root.execution-action("bind")',self.dashboard)
+        self.assertIn('root.action("start")',self.dashboard)
+        self.assertIn("ui.get_exec_confirm_login()",self.rust)
+        self.assertIn("ui.get_live_start_login()",self.rust)
+        self.assertIn('ui.set_live_start_login("".into())',self.rust)
+
+    def test_visible_desktop_build_label_matches_current_core_package_version(self):
+        import tomllib
+        version=tomllib.loads((ROOT/"Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
+        self.assertIn("COMMAND CENTER "+version,self.dashboard)
+        self.assertIn("Windows "+version,self.dashboard)
+        self.assertIn("BRAINTRADE OS "+version,self.dashboard)
+        self.assertNotIn("Windows 0.7.1",self.dashboard)
 
     def test_palette_remains_grayscale_including_research_subpage(self):
         colors = re.findall(r"#[0-9a-fA-F]{6}\b", self.pages)

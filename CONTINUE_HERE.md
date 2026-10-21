@@ -1,3 +1,7 @@
+# Current 0.7.2 checkpoint
+
+Continue from the branch/PR implementing explicit LIVE binding/start confirmations, updated Rust/Slint UI and matching 0.7.2 Core protocol. Do not claim old 0.7.1 CI as confirmation of 0.7.2. Validate exact-head Windows + Research before merging. Actual MT5 LIVE acceptance remains unavailable here.
+
 # Current checkpoint: 0.7.1 brain control review
 
 Continue from the latest `main` and PR #74 (`feature/brain-control-sniper-ar`), preserving the newer strict mode isolation, 21-page base and MT5 journal work. This update adds page 21 (22 pages total), scoped advisor/paper controls, four Sniper learner styles and Arabic Telegram reports. Only the selected-mode system coordinator sends new MT5 entries; SOLO remains disabled. See `docs/BRAIN_CONTROL_SNIPER_AR.md` for exact semantics. Require successful exact-source Research and Windows runs before main promotion. Actual MT5 Demo acceptance remains a user-machine step.

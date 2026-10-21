@@ -1,6 +1,6 @@
-# BrainTrade OS V4 — 0.7.1 Unified Windows Demo Release Candidate
+# BrainTrade OS V4 — 0.7.2 Unified Windows Demo Release Candidate
 
-**Package:** `BrainTrade-Windows-x64-v0.7.1-Preview.zip` (a Windows x64 portable ZIP contained within the GitHub Actions downloadable artifact `BrainTrade-Windows-x64-Preview`). This is the combined version for **controlled MT5 Demo acceptance**, not an independently certified profitable trading product.
+**Package:** `BrainTrade-Windows-x64-v0.7.2-Preview.zip` (a Windows x64 portable ZIP contained within the GitHub Actions downloadable artifact `BrainTrade-Windows-x64-Preview`). This is the combined version for **controlled MT5 Demo acceptance**, not an independently certified profitable trading product.
 
 ## Included in this unified build
 
@@ -28,6 +28,10 @@ See `START_HERE_SNIPER_DEMO_AR.md`, `README_AR.md`, and `Run-Demo-Acceptance.cmd
 ## Version history
 
 Version 0.7.0 with the smoke-gray control center is promoted to `main` as of October 20, 2026. Version 0.6.0 is the historical predecessor. Broker-specific MT5 Demo acceptance and out-of-sample profitability validation remain outstanding. A package of 0.7.0 may be feature-complete for Demo trial without being certified as production-safe or consistently profitable. Research-only ML challengers, speculative entry-timing comparisons and news sentiment are not broker execution authorities.
+
+## REAL switch and Core isolation in 0.7.2
+
+The 0.7.2 version bump prevents the native interface from connecting to a stale 0.7.1 Core. REAL binding requires explicit exact MT5 login confirmation and fresh telemetry. Each REAL START must separately confirm the bound login, account trade permissions and enabled portfolio exposure gate. No broker-live acceptance or profitability has been established.
 
 ## Brain control and Sniper follow-up
 

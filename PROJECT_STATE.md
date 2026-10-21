@@ -1,3 +1,7 @@
+# Current 0.7.2 — gated REAL account confirmation
+
+The 0.7.2 Core/UI must be paired (no 0.7.1 Core reuse). LIVE is not certified: every bind and start is separately acknowledged and checked against fresh MT5 broker identity and portfolio protection. This remains a demo-controlled review pending exact-head CI and real-machine acceptance. See `docs/REAL_ACCOUNT_SWITCH_ACCEPTANCE_AR.md`.
+
 # Current 0.7.1 follow-up
 
 PR #74 adds the brain control room, scoped participation/paper controls, four Sniper learner styles and Arabic Telegram. Continue from the latest main; older checkpoints below are historical. See `docs/BRAIN_CONTROL_SNIPER_AR.md` and exact-head CI. Native MT5 demo acceptance remains outstanding.

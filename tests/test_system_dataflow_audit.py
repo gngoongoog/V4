@@ -93,7 +93,9 @@ class FullSystemDataflowAudit(unittest.TestCase):
         self.assertIn("ui.set_risk_commission_lot(roundtrip.to_string().into())", self.studio)
         self.assertIn('"commission_basis":basis', self.studio)
         self.assertIn('root.state == "STOPPED"; clicked => { root.save-risk(); }', self.ui)
-        self.assertIn('root.state == "STOPPED"; clicked => { root.execution-action("bind"); }', self.ui)
+        self.assertIn('root.state == "STOPPED" && (root.exec-target == 0 || root.exec-confirm-login != "")', self.ui)
+        self.assertIn('clicked => { root.execution-action("bind"); }', self.ui)
+        self.assertIn('confirm_live_login', self.execution)
 
     def test_learning_dashboard_only_describes_observed_or_research_specific_data(self):
         self.assertIn('/v1/execution/student', self.student)

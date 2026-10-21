@@ -371,6 +371,37 @@ impl Service {
         status.requested_run && status.gateway_fresh && self.account_matches(status)
     }
 
+    /// Real-money START is independently acknowledged every time. Merely
+    /// selecting Live, restoring prior settings or pressing generic START
+    /// must not enable execution on a real broker account.
+    pub fn is_live_target(&self) -> bool {
+        self.inner.settings.target == "live"
+    }
+
+    pub fn validate_start(&self, status: &Status, body: &[u8]) -> Result<()> {
+        if self.inner.settings.target != "live" {
+            return Ok(());
+        }
+        let request: Value = serde_json::from_slice(body)
+            .context("Real START requires an explicit confirmation payload")?;
+        let login = self.inner.settings.login;
+        anyhow::ensure!(login > 0 && request["confirm_live_login"].as_str()
+            == Some(login.to_string().as_str()),
+            "تأكيد START الحقيقي مطلوب: اكتب رقم حساب REAL المربوط في خانة بدء التداول ثم اضغط START"
+        );
+        anyhow::ensure!(
+            status.gateway_fresh && self.account_matches(status)
+                && status.telemetry.as_ref().is_some_and(|t|
+                    !t.demo && t.account_trade_mode==Some(2)
+                    && t.trade_allowed && t.trade_expert),
+            "تعذر تشغيل LIVE: يجب مطابقة حساب MT5 الحقيقي وتحديث الاتصال والسماح بالتداول الآلي"
+        );
+        anyhow::ensure!(self.portfolio.enabled,
+            "تشغيل REAL يحتاج تفعيل حماية المحفظة أولاً (عدد الصفقات، اللوت الكلي، وخطر الوقف)"
+        );
+        Ok(())
+    }
+
     pub fn pending(&self, db: &Connection) -> Result<bool> {
         self.inner.pending(db)
     }
@@ -769,6 +800,43 @@ mod tests {
         assert_eq!(view.open_positions, 1);
         assert_eq!(view.open_intents, 0);
         assert!((view.lots - 0.10).abs() < 1e-9);
+    }
+
+    #[test]
+    fn real_start_requires_new_exact_login_and_enabled_portfolio_protection() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        svc.inner.settings.target="live".into();
+        svc.inner.settings.login=922244;
+        svc.inner.settings.server="Broker-Real".into();
+        svc.inner.settings.currency="USD".into();
+        let mut status=Status::default();
+        status.gateway_fresh=true;
+        status.telemetry=Some(Telemetry {
+            connected:true, login:922244,server:"Broker-Real".into(),
+            currency:"USD".into(),demo:false,account_trade_mode:Some(2),
+            trade_allowed:true,trade_expert:true,..Default::default()
+        });
+        for payload in [json!({}),json!({"confirm_live_login":"92224"}),json!({"confirm_live_login":922244})] {
+            assert!(svc.validate_start(&status,payload.to_string().as_bytes()).is_err());
+        }
+        let valid=json!({"confirm_live_login":"922244"}).to_string();
+        assert!(svc.validate_start(&status,valid.as_bytes()).is_err(),"portfolio must be on");
+        svc.portfolio.enabled=true;
+        assert!(svc.validate_start(&status,valid.as_bytes()).is_ok());
+        status.gateway_fresh=false;
+        assert!(svc.validate_start(&status,valid.as_bytes()).is_err());
+        status.gateway_fresh=true;
+        status.telemetry.as_mut().unwrap().trade_expert=false;
+        assert!(svc.validate_start(&status,valid.as_bytes()).is_err());
+        status.telemetry.as_mut().unwrap().trade_expert=true;
+        status.telemetry.as_mut().unwrap().login=999999;
+        assert!(svc.validate_start(&status,valid.as_bytes()).is_err());
+        status.telemetry.as_mut().unwrap().login=922244;
+        status.telemetry.as_mut().unwrap().account_trade_mode=Some(0);
+        assert!(svc.validate_start(&status,valid.as_bytes()).is_err());
+        svc.inner.settings.target="demo".into();
+        assert!(svc.validate_start(&status,b"{}").is_ok(),"demo START keeps original monitoring behavior");
     }
 
     #[test]

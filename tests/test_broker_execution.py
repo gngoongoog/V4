@@ -78,6 +78,27 @@ class ExecutionTests(unittest.TestCase):
         self.cmd['id']='new-live';self.cmd['target']='live';self.mt.account.trade_mode=2
         self.assertEqual(self.send()['state'],'rejected')
         self.assertEqual(len(self.mt.sends),1)
+    def test_real_mode_fills_only_matching_real_broker_after_core_authorizes(self):
+        # This is a simulated broker, never a funded MT5 terminal.
+        self.mt.account.trade_mode=2
+        self.cmd['target']='live'
+        self.cmd['id']='real-accepted-01'
+        rejected=self.ex.execute(self.mt,self.cmd,lambda _:False)
+        self.assertEqual(rejected['state'],'cancelled',
+                         'Core final authorization refusal is a cancellation, never a broker fill')
+        self.assertFalse(self.mt.sends)
+        self.cmd['id']='real-accepted-02'
+        accepted=self.ex.execute(self.mt,self.cmd,lambda _:True)
+        self.assertEqual(accepted['state'],'filled',accepted)
+        self.assertEqual(len(self.mt.sends),1)
+        self.assertAlmostEqual(self.mt.sends[0]['volume'],.1)
+        self.assertEqual(self.send()['state'],'filled')
+        self.assertEqual(len(self.mt.sends),1,'intent remains idempotent')
+        self.cmd['id']='real-mismatched-demo'
+        self.mt.account.trade_mode=0
+        self.assertEqual(self.send()['state'],'rejected')
+        self.assertEqual(len(self.mt.sends),1,'real order may never go to a demo account')
+
     def test_flexible_margin_estimate_failure_does_not_guess(self):
         self.cmd.update(demo_flexible=True)
         self.mt.order_calc_margin=lambda *args:None
