@@ -1,12 +1,12 @@
-# BrainTrade OS V4 — 0.7.0 Unified Windows Demo Release Candidate
+# BrainTrade OS V4 — 0.7.1 Unified Windows Demo Release Candidate
 
-**Package:** `BrainTrade-Windows-x64-v0.7.0-Preview.zip` (a Windows x64 portable ZIP contained within the GitHub Actions downloadable artifact `BrainTrade-Windows-x64-Preview`). This is the combined version for **controlled MT5 Demo acceptance**, not an independently certified profitable trading product.
+**Package:** `BrainTrade-Windows-x64-v0.7.1-Preview.zip` (a Windows x64 portable ZIP contained within the GitHub Actions downloadable artifact `BrainTrade-Windows-x64-Preview`). This is the combined version for **controlled MT5 Demo acceptance**, not an independently certified profitable trading product.
 
 ## Included in this unified build
 
 - Complete Windows `BrainTrade.exe`, Rust Core and embedded Python MT5 gateway, together with the native Sniper EA source and read-only Demo acceptance collector.
 - Sixteen legacy durable execution identities preserved; `sniper_learner` owns **410617** and **410616** remains reserved, unowned and explicitly rejected by MT5.
-- Expert multi-brain coordinator, Scalping, Swing, Sniper classic, and the dedicated tick-driven Sniper Learner with direct operator choice, independent/returning SOLO behavior, Demo learning, and explainable signals.
+- Expert multi-brain coordinator, Scalping, Swing, Sniper classic, and the dedicated tick-driven Sniper Learner with direct operator choice, strict selected-mode-only execution and separate shadow training, Demo learning, and explainable signals.
 - Configurable fixed net-pip target or four user-bounded, context-specific **Demo-only** pip alternatives. Only exact closed broker outcomes with matching submitted TP geometry update the chosen target's learner; broker-widened TP is excluded from arm scoring.
 - Adaptive contextual loss-memory, limited exploration, journaled broker sends, partial and unknown-reply reconciliation, cost and margin checks, account-binding persistence before activation, exposure accounting for break-even/trailing stops.
 - Sniper/Scalping M1/M5 readiness independent from unrelated M15 research readiness; closed/finite/fresh bar constraints still apply.
@@ -28,3 +28,7 @@ See `START_HERE_SNIPER_DEMO_AR.md`, `README_AR.md`, and `Run-Demo-Acceptance.cmd
 ## Version history
 
 Version 0.7.0 with the smoke-gray control center is promoted to `main` as of October 20, 2026. Version 0.6.0 is the historical predecessor. Broker-specific MT5 Demo acceptance and out-of-sample profitability validation remain outstanding. A package of 0.7.0 may be feature-complete for Demo trial without being certified as production-safe or consistently profitable. Research-only ML challengers, speculative entry-timing comparisons and news sentiment are not broker execution authorities.
+
+## Brain control and Sniper follow-up
+
+The 22nd native page adds account/symbol/mode-scoped advisor and paper-entry controls with sampled activity, strategy-attributed order acknowledgements, and separate broker-owner history. Four learner styles preserve cost accounting and isolate learned evidence. Telegram system responses and command buttons are Arabic. See `BRAIN_CONTROL_SNIPER_AR.md`; target-machine MT5 acceptance remains outstanding.

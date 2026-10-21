@@ -30,7 +30,7 @@ class DemoRealTrainingContractTests(unittest.TestCase):
         core = self.text("crates/runtime/src/lib.rs")
         self.assertIn("system.enabled = true", wrapper)
         self.assertIn("status.requested_run && status.gateway_fresh && self.account_matches(status)", wrapper)
-        self.assertIn("The coordinator and any SOLO brains may send broker orders only to the fresh bound account", core)
+        self.assertIn("منسّق الوضع المختار وحده يرسل أوامر إلى الحساب المرتبط الحديث", core)
         self.assertIn('"broker_execution_possible":true', core)
         self.assertIn('"requires_fresh_bound_account":true', core)
         self.assertNotIn('result["start"]==true', core)

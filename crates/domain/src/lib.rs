@@ -320,49 +320,54 @@ impl Status {
         }
     }
     pub fn report(&self, command: &str) -> String {
-        let heading = format!(
-            "BRAINTRADE OS {}\nState: {:?}\nMT5 fresh: {}\nBroker execution enabled: {}",
-            self.version, self.state, self.gateway_fresh, self.execution_enabled
-        );
-        if command == "/help" || command == "/start" {
-            return "/status — System status\n/report — Today (Baghdad)\n/positions — MT5 positions\n/health — Connection health\n/brains — Analysis and decision\n/opportunities — Market setups with Entry/SL/TP when valid\n/paper — Virtual trades only\n/news — Official cached headlines\n/backtest — Latest saved historical test\n/help — Commands".into();
+        let yes=|v:bool|if v {"نعم"}else{"لا"};
+        let number=|v:Option<f64>|v.map(|v|format!("{v:.2}")).unwrap_or_else(||"غير متاح".into());
+        let side=|v:&str|match v {"BUY"=>"شراء","SELL"=>"بيع",_=>"انتظار"};
+        let heading = format!("نظام التداول {}\nالحالة: {}\nبيانات MT5 حديثة: {}\nتنفيذ الوسيط مفعّل: {}",
+            self.version,match self.state {RunState::Stopped=>"متوقف",RunState::Starting=>"قيد البدء",RunState::Monitoring=>"يعمل",RunState::Degraded=>"يحتاج مراجعة الاتصال"},yes(self.gateway_fresh),yes(self.execution_enabled));
+        if matches!(command,"/help"|"/start") {
+            return "الأوامر المتاحة — للقراءة فقط:\nالحالة /status — حالة النظام\nتقرير /report — تقرير اليوم بتوقيت بغداد\nالصفقات /positions — المراكز المفتوحة\nالاتصال /health — صحة الاتصال\nالعقول /brains — حالة العقول وإحصاءاتها\nالقناص /sniper — أسلوب القناص وإعداداته\nالفرص /opportunities — فرص التحليل\nالمحاكاة /paper — نتائج افتراضية\nالأخبار /news — روابط الأخبار الرسمية\nالاختبار /backtest — آخر اختبار محفوظ\nمساعدة /help — هذه القائمة".into();
         }
-        if command == "/brains" {
-            return self.analysis.text();
+        if !["/status","/health","/report","/positions","/brains","/opportunities","/paper"].contains(&command) {
+            return "الأمر غير معروف؛ اكتب مساعدة أو /help".into();
         }
-        if command == "/opportunities" {
-            return self
-                .analysis
-                .opportunities
-                .as_ref()
-                .map(|value| value.signals_text())
-                .unwrap_or_else(|| "لا توجد خريطة فرص حالية؛ انتظر بيانات شموع مكتملة من MT5.".into());
+        if !self.gateway_fresh {return format!("{heading}\nبيانات الحساب الحالية غير متاحة؛ الاتصال منقطع أو آخر تحديث قديم.");}
+        if command=="/paper" {
+            return format!("محاكاة افتراضية فقط\nسعر حديث: {}\nالرصيد الافتراضي: {}\nالصافي المحقق افتراضياً: {:.2}\nربح افتراضي عائم: {}\nصفقات مغلقة: {} | رابحة: {} | منقطعة: {}\nتتضمن السبريد والعمولة والانزلاق المحدد؛ لا تمثل تعبئة MT5 فعلية ولا تشمل سواب المبيت.",yes(self.paper.quote_current),number(self.paper.equity.filter(|_|self.paper.quote_current)),self.paper.realized,number(self.paper.unrealized.filter(|_|self.paper.quote_current)),self.paper.trades,self.paper.wins,self.paper.interrupted_trades);
         }
-        if command == "/paper" {
-            return self.paper.text();
+        if command=="/brains" {return format!("تحليل السوق\nبيانات التحليل حديثة: {}\nالقرار: {}\nعدد أصوات التحليل: {}\nهذه خلاصة تحليل وليست تأكيد تنفيذ صفقة.",yes(self.analysis.current),side(&self.analysis.action),self.analysis.votes.len());}
+        if command=="/opportunities" {
+            let Some(map)=self.analysis.opportunities.as_ref().filter(|m|m.current) else {return "لا توجد فرص تحليل حديثة؛ انتظر الشموع المكتملة.".into()};
+            let mut out=String::from("فرص تحليلية؛ ليست أوامر منفذة\n");
+            for (i,s) in map.setups.iter().take(8).enumerate() {
+                out.push_str(&format!("فرصة {}: {} | دخول {} | وقف {} | أهداف {}\n",i+1,if s.side>0 {"شراء"}else if s.side<0 {"بيع"}else{"انتظار"},number(s.entry),number(s.stop),s.targets.iter().map(|v|format!("{v:.5}")).collect::<Vec<_>>().join("، ")));
+            }
+            if map.setups.is_empty(){out.push_str("لا توجد فرصة مكتملة حالياً.");}return out;
         }
-        if !self.gateway_fresh {
-            return format!("{heading}\nCurrent account data unavailable. Last snapshot is stale or disconnected.");
-        }
-        let Some(t) = &self.telemetry else {
-            return heading;
-        };
+        let Some(t)=&self.telemetry else{return heading};
         match command {
-            "/report" => format!("{heading}\nAccount: {} / {}\nDay: {} (UTC+03:00)\nBalance: {:.2} {}\nEquity: {:.2} {}\nAll-account booked deal PnL incl. commission, swap, fees: {}\nDeal records (not closed trades): {}\nOpen positions: {}\nPending orders: {}", t.login, t.server, t.report_day, t.balance, t.currency, t.equity, t.currency,
-                t.today_net.map(|v| format!("{v:.2} {}",t.currency)).unwrap_or("Unavailable".into()),
-                t.today_deals.map(|v| v.to_string()).unwrap_or("Unavailable".into()), t.positions.len(), t.pending_orders),
-            "/positions" => {
-                let rows: Vec<_> = t.positions.iter().take(25).map(|p| format!("#{} {} {} {:.2} lots | PnL {:.2} {} | SL {} TP {}", p.ticket,p.symbol,p.side,p.volume,p.profit,t.currency,p.sl,p.tp)).collect();
-                format!("{heading}\nOpen positions: {}\n{}{}",t.positions.len(),rows.join("\n"),if t.positions.len()>25 {"\nFirst 25 shown; use desktop for all."} else {""})
-            },
-            "/status" | "/health" => format!("{heading}\nAccount: {} / {}\nTelegram: {}\n{}",t.login,t.server,self.telegram_status,self.message),
-            _ => "Unknown command. Use /help".into(),
+            "/report"=>format!("{heading}\nالحساب: {} / {}\nاليوم: {} — بغداد\nالرصيد: {:.2} {}\nحقوق الحساب: {:.2} {}\nصافي سجلات اليوم شاملاً العمولة والسواب والرسوم: {}\nعدد سجلات التنفيذ، وليس الصفقات المغلقة: {}\nمراكز مفتوحة: {} | أوامر معلقة: {}",t.login,t.server,t.report_day,t.balance,t.currency,t.equity,t.currency,number(t.today_net),t.today_deals.map(|v|v.to_string()).unwrap_or_else(||"غير متاح".into()),t.positions.len(),t.pending_orders),
+            "/positions"=>format!("{heading}\nمراكز مفتوحة: {}\n{}{}",t.positions.len(),t.positions.iter().take(25).map(|p|format!("#{} {} {} {:.3} لوت | ربح عائم {:.2} {} | وقف {} | هدف {}",p.ticket,p.symbol,side(&p.side),p.volume,p.profit,t.currency,p.sl,p.tp)).collect::<Vec<_>>().join("\n"),if t.positions.len()>25 {"\nعُرضت أول 25؛ التفاصيل الكاملة في الداشبورد."}else{""}),
+            _=>format!("{heading}\nالحساب: {} / {}\nالأوامر هنا للاستعلام فقط. تشغيل النظام والتحكم بالعقول من الداشبورد.\nراجع سجل الداشبورد لتفاصيل أي خطأ اتصال.",t.login,t.server),
         }
     }
+
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn telegram_reports_are_arabic_and_do_not_echo_raw_errors() {
+        let mut s=super::Status::default();s.gateway_fresh=true;
+        s.telemetry=Some(super::Telemetry::default());s.message="RAW_ENGLISH_INTERNAL_ERROR".into();
+        for cmd in ["/help","/status","/report","/positions","/health","/brains","/paper","/opportunities","/invalid"] {
+            let text=s.report(cmd);
+            assert!(text.chars().any(|c| ('\u{0600}'..='\u{06ff}').contains(&c)),"{cmd}: {text}");
+            assert!(!text.contains("RAW_ENGLISH_INTERNAL_ERROR"));
+            assert!(!text.contains("Unknown command"));
+        }
+    }
+
     use super::*;
     #[test]
     fn lifecycle_fails_closed_and_never_enables_execution() {

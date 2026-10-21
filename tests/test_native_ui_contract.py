@@ -1,4 +1,4 @@
-"""Static wiring regression for the native 21-page Slint dashboard.
+"""Static wiring regression for the native 22-page Slint dashboard.
 
 This guards against a polished but dead UI: every navigation destination must
 be renderable, every button must dispatch an action, and every declared Slint
@@ -22,10 +22,10 @@ class NativeUiContract(unittest.TestCase):
         cls.pages = cls.dashboard + "\n" + CORRELATION.read_text(encoding="utf-8")
         cls.rust = "\n".join(p.read_text(encoding="utf-8") for p in RUST.glob("*.rs"))
 
-    def test_all_twenty_one_pages_have_a_visible_navigation_destination(self):
+    def test_all_twenty_two_pages_have_a_visible_navigation_destination(self):
         visible = {int(i) for i in re.findall(r"if\s+root\.page\s*==\s*(\d+)", self.dashboard)}
         reachable = {int(i) for i in re.findall(r"root\.page\s*=\s*(\d+)", self.dashboard)}
-        self.assertEqual(visible, set(range(21)), "All 21 compiled pages must be renderable")
+        self.assertEqual(visible, set(range(22)), "All 22 compiled pages must be renderable")
         self.assertEqual(reachable, visible, "Navigation must be able to open all pages")
         for section in range(5):
             self.assertRegex(self.dashboard, rf"root\.nav-section\s*==\s*{section}")

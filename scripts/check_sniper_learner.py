@@ -87,6 +87,23 @@ def check(exe=None):
             prices([2053.80,2053.84,2053.88])
             assert brain('system')['latest']['signal']['ready'],brain('system')
             assert api('/v1/execution/gateway')['command'] is None
+            # Control scope and actual effect: disable learner participation, then
+            # prove it cannot open through the system before re-enabling it.
+            control=dict(context=api('/v1/execution/brains')['context'],brain='sniper_learner',mode='sniper',control=dict(advisor=False,paper=False))
+            api('/v1/execution/brain-control',control)
+            api('/v1/start',{});prices([2053.80,2053.84,2053.88])
+            assert not brain('system')['latest']['signal']['ready']
+            assert api('/v1/execution/gateway')['command'] is None
+            try: api('/v1/execution/brain-control',control)
+            except urllib.error.HTTPError: pass
+            else: raise AssertionError('Running control mutation must fail')
+            api('/v1/stop',{})
+            control['control']=dict(advisor=True,paper=True)
+            api('/v1/execution/brain-control',control)
+            view=api('/v1/execution/brains')
+            assert len(view['brains'])==17 and view['trading_mode']=='sniper'
+            assert all('activity' in b and 'paper_stats' in b for b in view['brains'])
+            prices([2053.80,2053.84,2053.88])
             api('/v1/start',{});work=pulse(2053.92);assert work['pulse_fast_path']
             cmd=work['command'];assert cmd and cmd['brain']=='system',brain('system')
             selection=cmd['signal']['coordination']['selection']
