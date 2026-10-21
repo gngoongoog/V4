@@ -197,6 +197,16 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(self.send()['state'],'cancelled',
                          'no duplicate send or automatic retry after Core journal')
 
+    def test_unavailable_final_broker_equity_persists_explicit_no_send_result(self):
+        self.mt.account.equity=1000.
+        self.cmd.update(id='risk-equity-null-final',risk_percent=0.5,
+                        commission_per_lot=7.,slippage_ticks=2.,lots=.1)
+        self.mt.on_account=lambda reads: setattr(self.mt.account,'equity',None) if reads==3 else None
+        result=self.send()
+        self.assertEqual(result['state'],'cancelled',result)
+        self.assertFalse(self.mt.sends)
+        self.assertEqual(self.send()['state'],'cancelled')
+
     def test_demo_margin_shrink_followed_by_stop_risk_never_exceeds_either_cap(self):
         self.mt.account.equity=1000.
         self.mt.account.margin_free=90.
