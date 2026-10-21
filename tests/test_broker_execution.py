@@ -274,7 +274,16 @@ class ExecutionTests(unittest.TestCase):
             before=getattr(self.mt.account,field);setattr(self.mt.account,field,value);self.assertEqual(self.send()['state'],'rejected');setattr(self.mt.account,field,before)
         self.assertFalse(self.mt.sends)
     def test_live_requires_matching_live_binding(self):
-        self.cmd['target']='live';self.assertEqual(self.send()['state'],'rejected');self.mt.account.trade_mode=2;self.assertEqual(self.send()['state'],'filled')
+        self.cmd['target']='live'
+        self.assertEqual(self.send()['state'],'rejected')
+        self.mt.account.trade_mode=2
+        no_budget=self.send()
+        self.assertEqual(no_budget['state'],'rejected')
+        self.assertIn('no Core risk budget',no_budget['reason'])
+        self.assertFalse(self.mt.sends)
+        self.cmd.update(risk_percent=.25,commission_per_lot=7.,slippage_ticks=2.)
+        self.assertEqual(self.send()['state'],'filled')
+        self.assertAlmostEqual(self.mt.sends[0]['volume'],.1)
     def test_account_switch_during_check_and_stop_before_send(self):
         self.mt.on_check=lambda:setattr(self.mt.account,'login',88);self.assertEqual(self.send()['state'],'rejected');self.assertFalse(self.mt.sends)
         self.mt.on_check=None;self.mt.account.login=17;self.assertEqual(self.ex.execute(self.mt,self.cmd,lambda _:False)['state'],'cancelled');self.assertFalse(self.mt.sends)
