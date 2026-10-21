@@ -1,3 +1,9 @@
+# Current checkpoint: 0.7.1 brain control review
+
+Continue from the latest `main` and PR #74 (`feature/brain-control-sniper-ar`), preserving the newer strict mode isolation, 21-page base and MT5 journal work. This update adds page 21 (22 pages total), scoped advisor/paper controls, four Sniper learner styles and Arabic Telegram reports. Only the selected-mode system coordinator sends new MT5 entries; SOLO remains disabled. See `docs/BRAIN_CONTROL_SNIPER_AR.md` for exact semantics. Require successful exact-source Research and Windows runs before main promotion. Actual MT5 Demo acceptance remains a user-machine step.
+
+The following material is historical context, not the current branch/release instruction:
+
 # Continue BrainTrade 0.7.0 Development
 
 GitHub `gngoongoog/V4` is canonical. Continue from `development`; do not restart from `main` unless preparing a promoted release.

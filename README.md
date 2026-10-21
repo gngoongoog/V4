@@ -1,4 +1,6 @@
-# BRAINTRADE OS — 0.7.0 Development Preview
+# BRAINTRADE OS — 0.7.1 Demo Review
+
+Current follow-up: [Brain control room and Sniper styles](docs/BRAIN_CONTROL_SNIPER_AR.md). Adds a 22nd page, scoped controls and Arabic Telegram reports. Historical 0.7.0 audit files below describe earlier revisions.
 
 Native Windows desktop with an embedded Core and Python MT5 bridge. Launch `BrainTrade.exe`; set the broker terminal path, connect the saved Demo account, bind it on Execution and press START. Initial startup and restart are STOPPED.
 

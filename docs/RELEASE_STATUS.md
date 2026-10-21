@@ -1,6 +1,6 @@
-# BrainTrade OS V4 — 0.7.0 Unified Windows Demo Release Candidate
+# BrainTrade OS V4 — 0.7.1 Unified Windows Demo Release Candidate
 
-**Package:** `BrainTrade-Windows-x64-v0.7.0-Preview.zip` (a Windows x64 portable ZIP contained within the GitHub Actions downloadable artifact `BrainTrade-Windows-x64-Preview`). This is the combined version for **controlled MT5 Demo acceptance**, not an independently certified profitable trading product.
+**Package:** `BrainTrade-Windows-x64-v0.7.1-Preview.zip` (a Windows x64 portable ZIP contained within the GitHub Actions downloadable artifact `BrainTrade-Windows-x64-Preview`). This is the combined version for **controlled MT5 Demo acceptance**, not an independently certified profitable trading product.
 
 ## Included in this unified build
 
