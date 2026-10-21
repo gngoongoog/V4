@@ -727,6 +727,27 @@ mod execution_persistence_tests {
     }
 
     #[test]
+    fn every_new_core_entry_records_the_exact_risk_budget_and_full_roundtrip_fee() {
+        let db=Connection::open_in_memory().unwrap();
+        let service=Service::new(&db).unwrap();
+        let t=demo();
+        let b=service.brains.iter().find(|b|b.id=="system").unwrap();
+        let mut c=Config::default();
+        c.risk.risk_percent=0.25;
+        c.risk.commission_per_lot=7.;
+        c.risk.slippage_ticks=2.;
+        let payload=service.queue(&db,&t,b,"open",Some(&Signal::default()),0,12345,Some(&c)).unwrap();
+        assert_eq!(payload["risk_percent"],0.25);
+        assert_eq!(payload["commission_per_lot"],7.);
+        assert_eq!(payload["slippage_ticks"],2.);
+        assert_eq!(payload["lots"],b.lots);
+        assert_eq!(payload["kind"],"open");
+        c.risk.commission_per_lot=0.;
+        let free=service.queue(&db,&t,b,"open",Some(&Signal::default()),0,12346,Some(&c)).unwrap();
+        assert_eq!(free["commission_per_lot"],0.);
+    }
+
+    #[test]
     fn selected_mode_only_can_dispatch_and_authorize_its_coordinator() {
         let db=Connection::open_in_memory().unwrap();
         let mut service=Service::new(&db).unwrap();
