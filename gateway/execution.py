@@ -467,7 +467,10 @@ class BrokerExecutor:
             if not closing and 'risk_sizing' in result:
                 # The broker equity may change while sizing and authorization run.
                 # Never use a stale higher equity budget for the final send.
-                final_equity=float(getattr(final_account,'equity',float('nan')))
+                try:
+                    final_equity=float(getattr(final_account,'equity',float('nan')))
+                except (TypeError,ValueError):
+                    final_equity=float('nan')
                 original_risk=result['risk_sizing']['estimated_stop_loss_including_costs']
                 risk_percent=result['risk_sizing']['risk_percent']
                 budget=final_equity*risk_percent/100
