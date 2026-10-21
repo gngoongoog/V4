@@ -19,7 +19,7 @@ mod trade_journal;
 mod brain_monitor;
 
 enum Task {
-    Action(String),
+    Action(String, Value),
     Save(Value),
     Risk(Value),
     Browse,
@@ -152,7 +152,13 @@ fn run_ui() -> anyhow::Result<()> {
         if let Some(ui) = weak.upgrade() {
             ui.set_busy(true);
         }
-        let _ = sender.send(Task::Action(a.to_string()));
+        let action=a.to_string();
+        let body=if action=="start" {
+            let login=ui.get_live_start_login().trim().to_owned();
+            ui.set_live_start_login("".into());
+            json!({"confirm_live_login":login})
+        }else{json!({})};
+        let _ = sender.send(Task::Action(action,body));
     });
     let sender = tx.clone();
     let weak = ui.as_weak();
@@ -261,14 +267,14 @@ fn run_ui() -> anyhow::Result<()> {
                             false,
                         ),
                         Task::Risk(v) => (client.post("/v1/risk", v), false, false),
-                        Task::Action(a) if a == "decisions" => {
+                        Task::Action(a, _) if a == "decisions" => {
                             (client.get("/v1/decisions"), false, false)
                         }
-                        Task::Action(a) if a == "events" => {
+                        Task::Action(a, _) if a == "events" => {
                             (client.get("/v1/events"), false, false)
                         }
-                        Task::Action(a) => (
-                            client.post(&format!("/v1/{a}"), json!({})),
+                        Task::Action(a, body) => (
+                            client.post(&format!("/v1/{a}"), body),
                             false,
                             a == "shutdown",
                         ),
