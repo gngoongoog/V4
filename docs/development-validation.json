@@ -1,5 +1,5 @@
 {
-  "version": "0.7.3",
+  "version": "0.7.4",
   "status": "pending-ci",
   "source_state": "PR 74 snapshot before exact-source CI",
   "tested_commit": null,
@@ -16,5 +16,5 @@
     "telegram_live_delivery": "not performed",
     "imported_ml_automatic_promotion": false
   },
-  "note": "0.7.3 retains the fail-closed LIVE confirmation protocol and adds one shared commission contract across Rust, MT5 demo sizing, Core preview and UI. CI status belongs to the exact new commit and must not inherit 0.7.1 results. LIVE and broker-specific MT5 acceptance are not performed; check native Windows and Research workflows before considering Demo validation complete."
+  "note": "0.7.4 introduces mandatory MT5 order_calc_profit-based stop risk lot reduction for fresh Core entries in Demo and REAL, using equity, exact rounded stop, full-roundtrip configured commission, and slippage allowance. CI status belongs only to the exact 0.7.4 commit. MT5 native broker acceptance and profitability are not certified."
 }
