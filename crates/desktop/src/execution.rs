@@ -312,6 +312,7 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
                 }
                 "bind" => json!({
                     "target":if ui.get_exec_target()==1{"live"}else{"demo"},
+                    "confirm_live_login":ui.get_exec_confirm_login().trim(),
                     "deviation_points":ui.get_exec_deviation().trim().parse::<u32>()?
                 }),
                 "portfolio" => json!({
@@ -326,6 +327,7 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
         match body {
             Ok(body) => {
                 ui.set_exec_busy(true);
+                if action=="bind" {ui.set_exec_confirm_login("".into());}
                 let _ = sender.send((action, body, index));
             }
             Err(e) => ui.set_exec_message(format!("تحقق من الإعدادات: {e}").into()),
