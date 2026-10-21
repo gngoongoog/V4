@@ -526,6 +526,16 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 if t.account_trade_mode != Some(if target == "demo" { 0 } else { 2 }) {
                     bail!("نوع حساب MT5 لا يطابق Demo/Live المختار");
                 }
+                // A live selection by itself must NEVER bind a real-money
+                // account. The operator must enter the exact observed MT5
+                // login in an explicit non-persisted confirmation field.
+                if target == "live" {
+                    anyhow::ensure!(
+                        status.gateway_fresh && !t.demo && t.login>0
+                          && v["confirm_live_login"].as_str()==Some(t.login.to_string().as_str()),
+                        "تأكيد حساب REAL مطلوب: اكتب رقم الدخول الحقيقي المعروض في MT5 بدقة ثم اربط الحساب"
+                    );
+                }
                 self.bind_with_settings(db, t, now, candidate)?;
                 Ok(json!({"ok":true,"settings":self.settings}))
             }
@@ -744,6 +754,29 @@ mod execution_persistence_tests {
         let result=service.route("POST","/v1/execution/authorize",
             json!({"id":"valid-sniper"}).to_string().as_bytes(),&db,&status,201).unwrap();
         assert_eq!(result["authorized"],false);
+    }
+
+    #[test]
+    fn real_account_requires_exact_login_confirmation_and_fresh_telemetry_to_bind() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let mut t=demo();
+        t.demo=false;t.account_trade_mode=Some(2);t.login=981234;t.server="Real-Server".into();
+        let mut status=Status::default();status.gateway_fresh=true;status.telemetry=Some(t.clone());
+        for confirm in [json!(null),json!("98123"),json!("17")] {
+            let v=json!({"target":"live","deviation_points":20,"confirm_live_login":confirm});
+            assert!(service.route("POST","/v1/execution/settings",v.to_string().as_bytes(),&db,&status,100).is_err());
+            assert_eq!(service.settings.target,"demo");
+            assert_eq!(service.settings.login,0);
+        }
+        status.gateway_fresh=false;
+        let v=json!({"target":"live","deviation_points":20,"confirm_live_login":"981234"});
+        assert!(service.route("POST","/v1/execution/settings",v.to_string().as_bytes(),&db,&status,101).is_err());
+        status.gateway_fresh=true;
+        service.route("POST","/v1/execution/settings",v.to_string().as_bytes(),&db,&status,102).unwrap();
+        assert_eq!(service.settings.target,"live");
+        assert_eq!(service.settings.login,981234);
+        assert_eq!(Service::new(&db).unwrap().settings.target,"live");
     }
 
     #[test]
