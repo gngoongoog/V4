@@ -67,6 +67,15 @@ def sniper_broker_geometry(info, tick, stop, target):
     stop, target = float(stop), float(target)
     if not all(math.isfinite(v) and v > 0 for v in (stop, target, spread + step, minimum)):
         raise ValueError('Invalid Sniper broker geometry')
+    # Frozen Sniper targets must be exactly representable on this broker's
+    # actual tick grid. The later price-normalization ceil/floor would
+    # otherwise silently extend a 5-pip request by up to one tick.
+    tick_steps = target / step
+    if abs(tick_steps - round(tick_steps)) > 1e-6:
+        raise ValueError(
+            f'Sniper exact pip TP {target:.5f} is not a multiple of broker tick size {step:.5f}; '
+            'TP was NOT rounded or widened. Choose a tick-representable target.'
+        )
     min_stop = spread + minimum
     min_target = max(step, minimum - spread)
     if stop + step * 1e-7 < min_stop:

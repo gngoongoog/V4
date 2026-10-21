@@ -411,7 +411,7 @@ export component Dashboard inherits Window {
             Text { text: "غرفة العقول • الحالة والتحكم"; color: #f6f6f7; font-size: 24px; font-weight: 700; }
             Text { text: root.brain-monitor-summary; color: #b8bbc3; wrap: word-wrap; }
             ComboBox { model: root.brain-monitor-names; current-index <=> root.brain-monitor-selected; enabled: !root.brain-monitor-busy; selected(value) => { root.brain-monitor-action("select"); } }
-            Text { text: "المشاركة تؤثر في مستشاري الخبير، أو القناص المتعلّم عند اختياره. بقية الأوضاع تحتفظ باستراتيجيتها. التدريب الجديد مستقل، والتحليل يستمر."; color: #b8bbc3; wrap: word-wrap; }
+            Text { text: "المشاركة تؤثر في قرار الخبير أو القناص المتعلّم فقط عند اختياره. سكالبينغ وسوينغ والقناص الكلاسيكي لا تتوقف إشاراتها بسبب اعتراض العقول الأخرى. صفقات Paper تحسب نتائج افتراضية من الأسعار المرصودة فقط، ولا تعلّم تلقائياً أوزان تنفيذ MT5. التعلم المطبق يعتمد على أدلة MT5 Demo المغلقة أو رصد لاحق موسوم بوضوح."; color: #b8bbc3; wrap: word-wrap; }
             CheckBox { text: "السماح بالمشاركة في قرار الوضع الحالي"; checked <=> root.brain-advisor; enabled: root.brain-monitor-available && !root.brain-monitor-busy && root.brain-monitor-selected != 0 && root.state == "STOPPED"; }
             CheckBox { text: "السماح بصفقات تدريب افتراضية جديدة"; checked <=> root.brain-paper; enabled: root.brain-monitor-available && !root.brain-monitor-busy && root.brain-monitor-selected != 0 && root.state == "STOPPED"; }
             HorizontalBox {

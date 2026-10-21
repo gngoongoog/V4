@@ -192,10 +192,10 @@ pub fn coordinate(mut primary:Signal,c:&Config,votes:Vec<(BrainConfig,Signal,Lea
     if expert {
         primary.side=if net>=required_net{1}else if net<=-required_net{-1}else{0};
         primary.ready=primary.side!=0&&primary.stop_distance>0.&&primary.target_distance>0.&&members.iter().any(|v|v["ready"]==true);
-    } else if primary.ready {
-        let against=if primary.side==1{sell}else{buy};let with=if primary.side==1{buy}else{sell};
-        if against>=2.&&against>with+0.5 {primary.ready=false;}
     }
+    // Strict mode ownership: slower advisors may be reported diagnostically,
+    // but cannot veto Scalping, Swing or Classic Sniper (on Demo OR Live).
+    // Only Expert consensus/selection may change the active entry decision.
     let broker_members=members.iter().filter(|v|v["broker_samples"].as_u64().unwrap_or(0)>0).count();
     primary.reason=format!("{} | Intelligence V3: شراء {:.2} / بيع {:.2}؛ regime={}؛ quality {:.2}؛ uncertainty {:.2}؛ {} أعضاء؛ {} بتعلم MT5 Demo",primary.reason,buy,sell,intelligence.regime,intelligence.execution_quality,uncertainty,members.len(),broker_members);
     primary.coordination=Some(serde_json::json!({
@@ -267,8 +267,20 @@ pub fn coordinate(mut primary:Signal,c:&Config,votes:Vec<(BrainConfig,Signal,Lea
         let mut c=Config::default();c.trading.mode=TradingMode::Sniper;
         let t=Telemetry{demo:true,account_trade_mode:Some(0),..Default::default()};
         let votes=vec!["trend","gann","momentum"].into_iter().map(|id|(BrainConfig{id:id.into(),..Default::default()},signal(id,-1),LearnedWeight::default())).collect::<Vec<_>>();
-        assert!(!coordinate(signal("system",1),&c,votes.clone()).ready);
+        assert!(coordinate(signal("system",1),&c,votes.clone()).ready);
         assert!(coordinate_for_account(signal("system",1),&c,&t,votes.clone()).ready);
+        let live=Telemetry{demo:false,account_trade_mode:Some(2),..Default::default()};
+        let mut no_flex=c.clone();no_flex.trading.demo_flexible=false;
+        for mode in [TradingMode::Sniper,TradingMode::Scalping,TradingMode::Swing] {
+            let mut mode_config=no_flex.clone();mode_config.trading.mode=mode;
+            for broker in [&t,&live] {
+                let initial=signal("system",1);
+                let result=coordinate_for_account(initial.clone(),&mode_config,broker,votes.clone());
+                assert!(result.ready,"{mode:?} must not be vetoed by another mode's brain");
+                assert_eq!(result.side,initial.side);
+                assert_eq!(result.target_distance,initial.target_distance);
+            }
+        }
         let mut invalid=signal("system",1);invalid.ready=false;
         assert!(!coordinate_for_account(invalid,&c,&t,votes).ready);
     }
