@@ -28,6 +28,8 @@ export component Dashboard inherits Window {
     in-out property <int> exec-selected: 0;
     in property <bool> exec-settings-loaded: false;
     in-out property <int> exec-target: 0;
+    in-out property <string> exec-confirm-login: "";
+    in-out property <string> live-start-login: "";
     in-out property <int> exec-frame: 0;
     in-out property <string> exec-lots: "0.01";
     in-out property <string> exec-stop: "1.5";
@@ -280,6 +282,11 @@ export component Dashboard inherits Window {
             Rectangle { horizontal-stretch: 1; background: transparent; }
             Text { text: root.decision; color: #d9dbe0; vertical-alignment: center; font-weight: 600; }
         }
+        HorizontalLayout {
+            spacing: 9px;
+            Text { text: "لـ REAL فقط: اكتب رقم حساب MT5 الحقيقي قبل كل START"; color: #e5dad3; vertical-alignment: center; }
+            LineEdit { text <=> root.live-start-login; placeholder-text: "رقم حساب REAL للتأكيد"; }
+        }
         Rectangle {
             background: #1b1d22; border-radius: 14px;
             border-width: 1px; border-color: #34363d;
@@ -456,14 +463,19 @@ export component Dashboard inherits Window {
         }
         if root.page == 17: ScrollView { VerticalBox { spacing: 10px;
             Text { text: "تنفيذ MT5  /  إعداد الحساب والعقول"; color: #f2f2f4; font-size: 22px; font-weight: 700; }
-            Text { text: "الخطوة 1   •   اختر Demo واربط الحساب الحالي بعد التأكد من اسم السيرفر والرمز في MT5."; color: #b7bac3; wrap: word-wrap; }
+            Text { text: "الخطوة 1 • اختر Demo أو REAL من القائمة. التحويل إلى حساب حقيقي لا يفتح صفقة تلقائياً؛ يلزم ربط صريح ورقم حساب مطابق ثم تأكيد START مرة أخرى."; color: #b7bac3; wrap: word-wrap; }
             Text { text: root.exec-summary; color: #d7dadf; wrap: word-wrap; }
             HorizontalBox {
                 ComboBox { model: ["Demo / حساب تجريبي", "Live / أموال حقيقية"]; current-index <=> root.exec-target; }
                 LineEdit { text <=> root.exec-deviation; placeholder-text: "انحراف التنفيذ بالنقاط"; }
-                Button { text: "ربط الحساب الحالي"; enabled: !root.exec-busy && root.state == "STOPPED"; clicked => { root.execution-action("bind"); } }
+                Button { text: root.exec-target == 1 ? "تأكيد وربط حساب REAL" : "ربط حساب Demo"; enabled: !root.exec-busy && root.state == "STOPPED" && (root.exec-target == 0 || root.exec-confirm-login != ""); clicked => { root.execution-action("bind"); } }
             }
-            Text { text: "الربط يثبت رقم الحساب والخادم ونوعه. انتقالك إلى حساب آخر لا يفعّل التداول عليه تلقائيًا."; color: #b7bac3; wrap: word-wrap; }
+            HorizontalLayout {
+                spacing: 9px;
+                Text { text: "تأكيد REAL: اكتب رقم الحساب المفتوح حالياً في MT5"; color: #e5dad3; vertical-alignment: center; }
+                LineEdit { text <=> root.exec-confirm-login; placeholder-text: "رقم دخول حساب REAL"; enabled: root.exec-target == 1 && root.state == "STOPPED"; }
+            }
+            Text { text: "LIVE يحتاج رقم الحساب المطابق عند الربط، ثم نفس الرقم قبل كل START، وتفعيل حماية المحفظة. الربط وحده لا يبدأ التداول؛ تغيير حساب الوسيط يوقف دخول صفقات جديدة."; color: #b7bac3; wrap: word-wrap; }
             Rectangle { height: 1px; background: #3b3e45; }
             Text { text: "الخطوة 2 • حدد العقل واضبط اللوت للمراجعة الورقية. تنفيذ MT5 محصور بالعقل الرئيسي للوضع المختار؛ بقية العقول SHADOW/PAPER فقط."; color: #e0e1e4; font-weight: 700; wrap: word-wrap; }
             ComboBox { model: root.exec-names; current-index <=> root.exec-selected; enabled: !root.exec-busy; selected(value) => { root.execution-action("select"); } }
