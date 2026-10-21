@@ -374,6 +374,10 @@ impl Service {
     /// Real-money START is independently acknowledged every time. Merely
     /// selecting Live, restoring prior settings or pressing generic START
     /// must not enable execution on a real broker account.
+    pub fn is_live_target(&self) -> bool {
+        self.inner.settings.target == "live"
+    }
+
     pub fn validate_start(&self, status: &Status, body: &[u8]) -> Result<()> {
         if self.inner.settings.target != "live" {
             return Ok(());
