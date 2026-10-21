@@ -1,4 +1,8 @@
-# BrainTrade OS 0.7.0 Development Preview — broker execution and membership
+# Historical BrainTrade 0.7.0 execution design — superseded by 0.7.1
+
+> **Do not use the old SOLO/veto/target-compensation descriptions below as operating instructions.** In v0.7.1 and its October 21 audit, SOLO broker entries are disabled; the selected-mode `system` coordinator alone submits new MT5 entries. Expert advisor consensus cannot veto Scalping, Swing or Sniper decisions; MT5 journal and Paper observations are separate; fixed Sniper TP is never widened silently. For current details see [brain controls](BRAIN_CONTROL_SNIPER_AR.md) and [the execution integrity audit](AUDIT_2026_10_21_EXECUTION_LEARNING_INTEGRITY.md).
+
+## Historical 0.7.0 background (not current behavior)
 
 The bound Demo MT5 account can receive actual orders when global START is active. Initial startup/restart is STOPPED; execution is initially unbound. The account type is checked against the broker: Demo=0, Live=2. Live must be selected and rebound explicitly while stopped and without unresolved intents or owned positions. Changing accounts never silently transfers ownership.
 
