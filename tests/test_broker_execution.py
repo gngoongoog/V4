@@ -231,6 +231,17 @@ class ExecutionTests(unittest.TestCase):
         result=self.send()
         self.assertEqual(result['state'],'filled',result)
         self.assertAlmostEqual(self.mt.sends[0]['tp']-self.mt.sends[0]['price'],1.0,places=9)
+    def test_sniper_target_not_a_multiple_of_broker_tick_is_never_rounded_or_sent(self):
+        self.mt.info.point=.1
+        self.mt.info.trade_tick_size=.1
+        self.mt.info.trade_stops_level=1
+        self.cmd['signal'].update(key='tick:nonrepresentable',stop_distance=1.,target_distance=.55)
+        result=self.send()
+        self.assertEqual(result['state'],'rejected')
+        self.assertIn('not a multiple of broker tick size',result['reason'])
+        self.assertIn('TP was NOT rounded or widened',result['reason'])
+        self.assertFalse(self.mt.sends)
+
     def test_sniper_large_broker_stops_level_cannot_silently_extend_target_to_five_dollars(self):
         self.mt.info.trade_stops_level=500
         self.cmd['signal'].update(key='tick:broker-floor',stop_distance=6.,target_distance=.50)
