@@ -534,7 +534,7 @@ dependencies = [
 
 [[package]]
 name = "braintrade-desktop"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "anyhow",
  "braintrade-domain",
@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "braintrade-domain"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -555,7 +555,7 @@ dependencies = [
 
 [[package]]
 name = "braintrade-runtime"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "anyhow",
  "braintrade-domain",
