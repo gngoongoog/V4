@@ -1,3 +1,7 @@
+# Current 0.7.3 — P0 fee/lot-contract stage 1
+
+Commission fee model for round-trip lot sizes is aligned across Core, Rust trading and risk, demo margin downsize, native preview and test suite. 7 per 1 lot -> 0.07 / 0.70 / 7.00 for 0.01 / 0.10 / 1.00; 0 means zero modeled broker commission only. Risk-sized lot based on stop is a future separately tested stage. Exact commit Research+Windows CI must pass before merging. See docs/P0_COMMISSION_STAGE_1_AR.md.
+
 # Current 0.7.2 Demo/REAL safety audit
 
 0.7.2 changes the Core/native protocol for REAL binding and start; it must never reuse 0.7.1 Core. New LIVE starts require fresh broker identity, exact typed login on both bind and START, permitted Algo trading and enabled portfolio protection. Research and Windows CI for the exact 0.7.2 commit are required before release. Real broker testing remains pending. See `docs/REAL_ACCOUNT_SWITCH_ACCEPTANCE_AR.md`.
