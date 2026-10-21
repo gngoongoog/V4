@@ -84,7 +84,8 @@ class ExecutionTests(unittest.TestCase):
         self.cmd['target']='live'
         self.cmd['id']='real-accepted-01'
         rejected=self.ex.execute(self.mt,self.cmd,lambda _:False)
-        self.assertEqual(rejected['state'],'rejected')
+        self.assertEqual(rejected['state'],'cancelled',
+                         'Core final authorization refusal is a cancellation, never a broker fill')
         self.assertFalse(self.mt.sends)
         self.cmd['id']='real-accepted-02'
         accepted=self.ex.execute(self.mt,self.cmd,lambda _:True)
