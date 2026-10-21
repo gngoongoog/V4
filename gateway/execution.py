@@ -464,6 +464,19 @@ class BrokerExecutor:
                 result.update(state='cancelled',reason='Account changed or intent expired after durable journal; order not sent')
                 result['total_ms']=(time.perf_counter()-started)*1000
                 return self._save(cmd,result)
+            if not closing and 'risk_sizing' in result:
+                # The broker equity may change while sizing and authorization run.
+                # Never use a stale higher equity budget for the final send.
+                final_equity=float(getattr(final_account,'equity',float('nan')))
+                original_risk=result['risk_sizing']['estimated_stop_loss_including_costs']
+                risk_percent=result['risk_sizing']['risk_percent']
+                budget=final_equity*risk_percent/100
+                if (not math.isfinite(budget) or budget<=0
+                        or original_risk>budget+max(1e-8,budget*1e-10)):
+                    result.update(state='cancelled',
+                                  reason='Broker equity fell or became invalid after sizing; risk budget no longer permits this entry')
+                    result['total_ms']=(time.perf_counter()-started)*1000
+                    return self._save(cmd,result)
 
             result['pre_send_ms']=(time.perf_counter()-started)*1000
             result['queue_to_send_ms']=max(0,clock_ms()-cmd['created_ms'])
