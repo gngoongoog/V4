@@ -104,12 +104,22 @@ impl Engine {
         let movement = q[n-1] - q[0];
         let step = q[n-1] - q[n-2];
         let path: f64 = q.windows(2).map(|w| (w[1]-w[0]).abs()).sum();
-        let threshold = tick.max((ask-bid)*0.15);
+        let spread = ask-bid;
+        let threshold = tick.max(spread*0.15);
         let direction = |v: f64| if v >= threshold * 0.999 { 1 } else if v <= -threshold * 0.999 { -1 } else { 0 };
-        let impulse = if movement.abs()/path.max(tick) >= 0.5 { direction(movement) } else { 0 };
-        // A measured reversal after a prior excursion; never an arbitrary opposite trade.
-        let prior = q[n-2] - q[0];
-        let rebound = if prior.abs() >= threshold*2. && step*prior < 0. { direction(step) } else { 0 };
+        // A few tiny quote changes were previously enough for a real order.
+        // Require a substantial price excursion AND directional efficiency.
+        // These are quality gates, not a forecast of profitability.
+        let efficiency=movement.abs()/path.max(tick);
+        let minimum_impulse=(3.*tick).max(0.65*spread);
+        let impulse=if movement.abs() >= minimum_impulse*0.999
+            && efficiency >= 0.55 && movement*step>0. { direction(movement) } else { 0 };
+        // A reversal is valid only after an established measured excursion;
+        // never trade an arbitrary single opposing broker tick.
+        let prior=q[n-2]-q[0];
+        let minimum_excursion=(4.*tick).max(spread*0.75);
+        let rebound=if prior.abs() >= minimum_excursion*0.999
+            && step.abs()>=tick*0.999 && step*prior<0. { direction(step) } else { 0 };
         let sides = match c.trading.sniper_style {
             SniperStyle::Auto => [impulse, rebound],
             SniperStyle::Impulse => [impulse, 0],
@@ -124,7 +134,10 @@ impl Engine {
             if cost.total/(cost.total+cost.desired_net_target_money) > 0.25 {"costly"} else {"normal"});
         let policies = self.models.get(&(def.clone(), regime.clone())).cloned().unwrap_or_default();
         let candidates: Vec<usize> = (0..2).filter(|i| sides[*i] != 0).collect();
-        if candidates.is_empty() { s.reason = format!("القناص — {}: ينتظر حركة تستوفي شروط هذا الأسلوب", c.trading.sniper_style.label()); return s; }
+        if candidates.is_empty() {
+            s.reason = format!("القناص — {}: WAIT | حركة {:.5} | شرط الاندفاع {:.5} | كفاءة {:.2} | سبريد {:.5} | رجوع {:.5}؛ الشروط غير مكتملة",c.trading.sniper_style.label(),movement,minimum_impulse,efficiency,spread,step.abs());
+            return s;
+        }
         let demo = t.demo && t.account_trade_mode == Some(0);
         let total: u64 = policies.iter().map(|p| p.samples).sum();
         let epsilon = if demo { crate::student::exploration_rate(total) } else { 0. };
@@ -198,9 +211,9 @@ impl Engine {
             Err(error) => { s.side = 0; s.reason = error; return s; }
         };
         s.ready = true;
-        s.reason = format!("القناص المتعلّم: {} | {} | هدف {:.2} pip {} | نتائج الاستراتيجية {} / عينات الهدف {}",
-            if chosen==0 {"اندفاع سريع"} else {"ارتداد سريع"}, regime, target_pips,
-            if adaptive {"تجريبي مرن"} else {"ثابت"}, total,target_total);
+        s.reason = format!("القناص المتعلّم: {} | حركة {:.5} | كفاءة {:.2} | سبريد {:.5} | {} | هدف {:.2} pip {} | نتائج MT5 المغلقة {} / عينات الهدف {}",
+            if chosen==0 {"اندفاع مقاس"} else {"ارتداد بعد حركة"},movement,efficiency,spread,regime,target_pips,
+            if adaptive {"تجريبي مرن"} else {"ثابت"},total,target_total);
         s.coordination = Some(json!({"version":"sniper-learner-v1","trading_mode":"sniper",
             "selection":{"sniper_style":c.trading.sniper_style,"brain":ID,"timeframe":"M1","report_id":"","policy":"sniper-ticks-v1",
                 "sniper_policy":POLICIES[chosen],"sniper_definition":def,"sniper_regime":regime,
@@ -230,6 +243,19 @@ mod tests {
     fn feed(e:&mut Engine,t:&mut Telemetry,c:&Config,ts:u64,bid:f64)->Signal {
         t.bid=Some(bid);t.ask=Some(bid+0.01);t.quote_time_ms=Some(ts);e.evaluate(t,c,ts)
     }
+    #[test]
+    fn two_tiny_ticks_are_not_a_tradable_sniper_impulse_or_rebound() {
+        let (mut t,mut c)=fixture();
+        for style in [SniperStyle::Auto,SniperStyle::Impulse,SniperStyle::Rebound,SniperStyle::Confirmed] {
+            c.trading.sniper_style=style;
+            let mut e=Engine::default();
+            for (i,price) in [2000.,2000.01,2000.02,2000.01,2000.02].iter().enumerate(){
+                let out=feed(&mut e,&mut t,&c,10_000+i as u64*10,*price);
+                assert!(!out.ready,"{style:?} accepted tiny noise: {}",out.reason);
+            }
+        }
+    }
+
     #[test]
     fn substyles_are_isolated_and_confirmation_waits_for_evidence() {
         let (mut t,mut c)=fixture();let original=definition(&t,&c);
