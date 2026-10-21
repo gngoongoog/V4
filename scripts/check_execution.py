@@ -79,6 +79,22 @@ def check(exe=None):
             api('/v1/trading/settings',dict(trading=config['trading'],commission_per_lot=7.))
             config['risk']['max_lots']=.01;api('/v1/risk',config['risk'])
             publish();api('/v1/execution/settings',dict(target='demo',deviation_points=20))
+            # The same commission contract must survive Core API, Rust cost
+            # calculation and the broker Python path. A zero-rate account
+            # is zero in modeled fees, never a waiver of actual broker fees.
+            for rate in (7.,0.):
+                for lots in (.01,.10,1.):
+                    preview=api('/v1/trading/preview',dict(
+                        commission_per_lot=rate,commission_basis='round_trip',
+                        pip_points=10.,sniper_pip_price=.10,
+                        lots=lots,slippage_ticks=0.))
+                    assert abs(preview['commission']-rate*lots)<1e-9,preview
+                    e=preview['commission_examples']
+                    assert abs(e['one_hundredth_lot']-rate*.01)<1e-9,preview
+                    assert abs(e['one_tenth_lot']-rate*.1)<1e-9,preview
+                    assert abs(e['one_lot']-rate)<1e-9,preview
+                    if preview.get('costs'):
+                        assert abs(preview['costs']['commission']-rate*lots)<1e-9,preview
             assert len(api('/v1/execution')['brains'])==17
             assert brain('system')['role']=='coordinator' and brain('trend')['role']=='advisor'
             assert brain('liquidity')['role']=='advisor' and not brain('liquidity')['solo_enabled']
@@ -182,7 +198,8 @@ def check(exe=None):
                 'closed trades persist after restart and can be read with pagination',
                 'account switch fails closed; STOP at restart',
                 'real-money account bind rejects missing or wrong login, REAL START independently requires exact login and enabled portfolio',
-                'account switch disables execution even after explicit REAL START'])
+                'account switch disables execution even after explicit REAL START',
+                'Core real-quote preview matches commission 7 and 0 across 0.01, 0.10 and 1.00 lots'])
             out=ROOT/'test-output/execution-integration.json';out.parent.mkdir(exist_ok=True);out.write_text(json.dumps(report,indent=2))
             print(json.dumps(report))
         finally:
