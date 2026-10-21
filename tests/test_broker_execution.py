@@ -6,16 +6,16 @@ import tempfile
 from types import SimpleNamespace as N
 import unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'gateway'))
-from execution import BrokerExecutor,clock_ms,round_trip_commission
+from execution import BrokerExecutor,clock_ms,round_trip_commission,size_to_stop_risk
 
 class Broker:
     TRADE_ACTION_DEAL=1; ORDER_TYPE_BUY=0; ORDER_TYPE_SELL=1; POSITION_TYPE_BUY=0
     ORDER_TIME_GTC=0; ORDER_FILLING_FOK=0; ORDER_FILLING_IOC=1; ORDER_FILLING_RETURN=2
     ACCOUNT_MARGIN_MODE_RETAIL_HEDGING=2; SYMBOL_TRADE_EXECUTION_MARKET=2
     def __init__(self):
-        self.account=N(margin_free=10000.,login=17,server='Demo',currency='USD',trade_mode=0,margin_mode=2,trade_allowed=True,trade_expert=True)
+        self.account=N(equity=10000.,margin_free=10000.,login=17,server='Demo',currency='USD',trade_mode=0,margin_mode=2,trade_allowed=True,trade_expert=True)
         self.terminal=N(connected=True,trade_allowed=True,tradeapi_disabled=False)
-        self.info=N(point=.01,trade_tick_size=.01,volume_min=.01,volume_step=.01,volume_max=100.,filling_mode=3,trade_exemode=2,trade_stops_level=5)
+        self.info=N(point=.01,trade_tick_size=.01,volume_min=.01,volume_step=.01,volume_max=100.,filling_mode=3,trade_exemode=2,trade_stops_level=5,trade_tick_value_loss=1.0)
         self.tick=N(bid=2000.,ask=2000.10,time_msc=clock_ms())
         self.positions=[];self.orders=[];self.deals=[];self.sends=[];self.code=10009;self.raise_send=False;self.check_code=0;self.on_check=None
         self.account_reads=0;self.on_account=None;self.reply_deal=77
@@ -30,6 +30,8 @@ class Broker:
     def orders_get(self,**kw):return self.orders
     def history_deals_get(self,*a):return self.deals
     def order_calc_margin(self,side,symbol,volume,price):return volume*1000.
+    def order_calc_profit(self,side,symbol,volume,entry,close):
+        return (close-entry if side==self.ORDER_TYPE_BUY else entry-close)*100.*volume
     def order_check(self,r):
         if self.on_check:self.on_check()
         return N(retcode=self.check_code,comment='check')
@@ -108,6 +110,7 @@ class ExecutionTests(unittest.TestCase):
         # This is a simulated broker, never a funded MT5 terminal.
         self.mt.account.trade_mode=2
         self.cmd['target']='live'
+        self.cmd.update(risk_percent=0.25,commission_per_lot=7.,slippage_ticks=2.)
         self.cmd['id']='real-accepted-01'
         rejected=self.ex.execute(self.mt,self.cmd,lambda _:False)
         self.assertEqual(rejected['state'],'cancelled',
@@ -124,6 +127,74 @@ class ExecutionTests(unittest.TestCase):
         self.mt.account.trade_mode=0
         self.assertEqual(self.send()['state'],'rejected')
         self.assertEqual(len(self.mt.sends),1,'real order may never go to a demo account')
+
+    def test_risk_sizing_is_lot_cap_not_lot_increase_and_commission_is_proportional(self):
+        self.mt.account.equity=1000.
+        self.cmd.update(id='risk-lot-cap',risk_percent=0.5,
+                        commission_per_lot=7.,slippage_ticks=2.,lots=.1)
+        result=self.send()
+        self.assertEqual(result['state'],'filled',result)
+        # SL is one gold price unit: $100 per 1.00 lot on this mock
+        # + $7 round-trip fee + $4 two-sided slippage reserve per lot.
+        self.assertAlmostEqual(result['risk_sizing']['broker_stop_loss_per_lot'],100.)
+        self.assertAlmostEqual(result['risk_sizing']['commission_round_trip_per_lot'],7.)
+        self.assertAlmostEqual(result['risk_sizing']['slippage_cushion_per_lot'],4.)
+        self.assertAlmostEqual(result['risk_sizing']['risk_budget'],5.)
+        self.assertAlmostEqual(result['request']['volume'],.04)
+        self.assertLessEqual(result['risk_sizing']['estimated_stop_loss_including_costs'],5.)
+        self.assertAlmostEqual(self.mt.sends[0]['volume'],.04)
+
+    def test_risk_sizing_rejects_broker_minimum_without_fabricating_lot(self):
+        self.mt.account.equity=100.
+        self.cmd.update(id='risk-min',risk_percent=0.25,commission_per_lot=7.,
+                        slippage_ticks=2.,lots=.01)
+        result=self.send()
+        self.assertEqual(result['state'],'rejected')
+        self.assertIn('minimum 0.01 lot needs',result['reason'])
+        self.assertEqual(self.mt.sends,[])
+
+    def test_risk_sizing_zero_commission_and_unavailable_broker_profit_fail_closed(self):
+        self.mt.account.equity=1000.
+        self.cmd.update(id='risk-free-fee',risk_percent=0.5,
+                        commission_per_lot=0.,slippage_ticks=0.,lots=.1)
+        result=self.send()
+        self.assertEqual(result['state'],'filled',result)
+        self.assertEqual(result['risk_sizing']['commission_round_trip_per_lot'],0.)
+        self.assertAlmostEqual(result['request']['volume'],.05)
+        self.cmd['id']='risk-no-profit-estimate'
+        self.mt.order_calc_profit=lambda *args:None
+        rejected=self.send()
+        self.assertEqual(rejected['state'],'rejected')
+        self.assertIn('broker loss estimate unavailable',rejected['reason'])
+        self.assertEqual(len(self.mt.sends),1)
+
+    def test_real_missing_risk_budget_and_bad_equity_are_rejected_before_send(self):
+        self.mt.account.trade_mode=2
+        self.cmd.update(id='risk-real-missing',target='live')
+        result=self.send()
+        self.assertEqual(result['state'],'rejected')
+        self.assertIn('no Core risk budget',result['reason'])
+        self.cmd.update(id='risk-real-bad-equity',risk_percent=0.25,
+                        commission_per_lot=7.,slippage_ticks=2.)
+        self.mt.account.equity=float('nan')
+        result=self.send()
+        self.assertEqual(result['state'],'rejected')
+        self.assertIn('positive broker equity required',result['reason'])
+        self.assertFalse(self.mt.sends)
+
+    def test_demo_margin_shrink_followed_by_stop_risk_never_exceeds_either_cap(self):
+        self.mt.account.equity=1000.
+        self.mt.account.margin_free=90.
+        self.cmd.update(id='risk-and-margin',lots=.5,demo_flexible=True,
+                        risk_percent=0.5,commission_per_lot=7.,slippage_ticks=2.)
+        result=self.send()
+        self.assertEqual(result['state'],'filled',result)
+        self.assertAlmostEqual(result['sizing']['sent'],.08)
+        self.assertAlmostEqual(result['risk_sizing']['sent'],.04)
+        self.assertAlmostEqual(result['sizing']['post_risk_sent'],.04)
+        self.assertAlmostEqual(result['sizing']['post_risk_round_trip_commission'],.28)
+        self.assertAlmostEqual(self.mt.sends[0]['volume'],.04)
+        self.assertLessEqual(result['risk_sizing']['estimated_stop_loss_including_costs'],5.)
 
     def test_flexible_margin_estimate_failure_does_not_guess(self):
         self.cmd.update(demo_flexible=True)
