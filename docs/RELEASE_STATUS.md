@@ -1,6 +1,10 @@
-# BrainTrade OS V4 — 0.7.2 Unified Windows Demo Release Candidate
+# BrainTrade OS V4 — 0.7.3 Unified Windows Demo Release Candidate
 
-**Package:** `BrainTrade-Windows-x64-v0.7.2-Preview.zip` (a Windows x64 portable ZIP contained within the GitHub Actions downloadable artifact `BrainTrade-Windows-x64-Preview`). This is the combined version for **controlled MT5 Demo acceptance**, not an independently certified profitable trading product.
+**Package:** `BrainTrade-Windows-x64-v0.7.3-Preview.zip` (a Windows x64 portable ZIP contained within the GitHub Actions downloadable artifact `BrainTrade-Windows-x64-Preview`). This is the combined version for **controlled MT5 Demo acceptance**, not an independently certified profitable trading product.
+
+## P0 commission milestone (v0.7.3)
+
+All estimated round-trip commission displays, broker-demo margin volume sizing and Core risk accounting share validated proportional fees. At 7 per 1.00 lot: 0.01=0.07, 0.10=0.70 and 1.00=7.00; zero is an estimated zero only and does not change broker charges. Risk-based automatic volume is explicitly reserved for the next independently tested milestone.
 
 ## Included in this unified build
 
