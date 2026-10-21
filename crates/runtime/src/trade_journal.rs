@@ -80,8 +80,17 @@ pub fn list(db: &Connection, context: &str, telemetry: Option<&Telemetry>, offse
         let swap: f64=parsed.iter().map(|d|number(d,"swap")).sum();
         let open_volume:f64=parsed.iter().filter(|d|kind(d)==0).map(|d|number(d,"volume")).sum();
         let close_volume:f64=parsed.iter().filter(|d|matches!(kind(d),1|3)).map(|d|number(d,"volume")).sum();
+        // A partial OUT deal does not prove the position was fully closed,
+        // especially when the terminal is offline or its history is delayed.
+        // Require a fresh, authoritative zero-open-position snapshot or exact
+        // covered open volume. INOUT netting reversals remain unverified offline.
+        let fully_covered=has_exit && open_volume>0.
+            && !parsed.iter().any(|d|kind(d)==2)
+            && close_volume+1e-8>=open_volume;
         let state=if position.is_some() {if has_exit {"PARTIAL / OPEN"}else{"OPEN"}}
-            else if has_exit {"CLOSED"}else{"AWAITING CLOSE HISTORY"};
+            else if has_exit && (fully_covered || telemetry.is_some()) {"CLOSED"}
+            else if has_exit {"EXIT SEEN / CLOSE NOT VERIFIED"}
+            else {"AWAITING CLOSE HISTORY"};
         let opening_ticket=first["ticket"].as_u64().unwrap_or(0);
         let command=originating_command(db,context,*pid,opening_ticket)?;
         let owner=if owners.len()==1 {owners.iter().next().unwrap().as_str()}else{"mixed_history"};
@@ -157,6 +166,23 @@ mod tests {
         assert_eq!(rows["rows"][0]["origin"]["opening_brain"],"UNVERIFIED_OPENING_STRATEGY");
         assert_ne!(rows["rows"][0]["origin"]["reason"],"UNRELATED_TRADE");
         assert_eq!(rows["rows"][0]["origin"]["owner"],"system");
+    }
+
+    #[test]
+    fn partial_close_without_live_snapshot_is_not_labeled_fully_closed() {
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let ctx="[\"Demo\",17,\"XAUUSD\",\"USD\"]";
+        for (ticket,entry,volume) in [(51,0,0.1),(52,1,0.04)] {
+            let d=json!({"ticket":ticket,"entry":entry,"type":0,"position_id":99,
+                "volume":volume,"time_msc":ticket*1000,"symbol":"XAUUSD",
+                "price":2000.,"profit":0.,"commission":0.,"swap":0.,"fee":0.});
+            db.execute("INSERT INTO broker_deals VALUES (?1,?2,99,'system',?3)",
+                params![ctx,ticket,d.to_string()]).unwrap();
+        }
+        let v=list(&db,ctx,None,0,50).unwrap();
+        assert_eq!(v["rows"][0]["status"],"EXIT SEEN / CLOSE NOT VERIFIED");
+        assert!((v["rows"][0]["lots_closed"].as_f64().unwrap()-0.04).abs()<1e-10);
     }
 
     #[test]
