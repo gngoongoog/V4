@@ -245,7 +245,14 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
         let q = &cmd["request"];
         let r = &cmd["result"];
         if let Some(sizing)=r.get("sizing") {
-            let _=writeln!(out,"لوت مطلوب {} → مرسل {} | هامش مقدّر {} / متاح {}",sizing["requested"],sizing["sent"],sizing["estimated_margin"],sizing["free_margin"]);
+            let _=writeln!(out,"لوت مطلوب {} → بعد الهامش {} | هامش مقدّر {} / متاح {}",sizing["requested"],sizing["sent"],sizing["estimated_margin"],sizing["free_margin"]);
+        }
+        if let Some(risk)=r.get("risk_sizing") {
+            let _=writeln!(out,"حساب اللوت بالمخاطرة: مطلوب {} → مرسل {} | سقف الخسارة {:.2}% = {:.4} | مخاطرة الستوب مع العمولة والانزلاق {:.4} {}",
+                risk["requested"],risk["sent"],risk["risk_percent"].as_f64().unwrap_or(0.),
+                risk["risk_budget"].as_f64().unwrap_or(0.),
+                risk["estimated_stop_loss_including_costs"].as_f64().unwrap_or(0.),
+                v["settings"]["currency"].as_str().unwrap_or("عملة الحساب"));
         }
         let _ = writeln!(
             out,
