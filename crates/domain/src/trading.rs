@@ -17,12 +17,23 @@ pub enum SniperBrain { #[default] Classic, Learner }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SniperTargetMode { #[default] Fixed, Adaptive }
+/// Separate signal families; these do not change the gateway polling interval.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SniperStyle { #[default] Auto, Impulse, Rebound, Confirmed }
+impl SniperStyle {
+    pub fn label(self) -> &'static str { match self {
+        Self::Auto => "تلقائي متعلّم", Self::Impulse => "اندفاع سريع",
+        Self::Rebound => "ارتداد سريع", Self::Confirmed => "اندفاع مؤكد",
+    }}
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TradingConfig {
     pub mode: TradingMode,
     pub sniper_brain: SniperBrain,
+    pub sniper_style: SniperStyle,
     pub sniper_target_mode: SniperTargetMode,
     pub sniper_min_target_pips: f64,
     pub sniper_max_target_pips: f64,
@@ -45,6 +56,7 @@ impl Default for TradingConfig {
         Self {
             mode: TradingMode::Expert,
             sniper_brain: SniperBrain::Classic,
+            sniper_style: SniperStyle::Auto,
             sniper_target_mode: SniperTargetMode::Fixed,
             sniper_min_target_pips: 2.0,
             sniper_max_target_pips: 10.0,

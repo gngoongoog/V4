@@ -191,7 +191,7 @@ def main():
     (output / "runtime/python/python313._pth").write_text("python313.zip\n.\nLib/site-packages\n../gateway\nimport site\n", encoding="ascii")
     copy_runtime_assets(output)
     copy_operator_assets(output)
-    for source, target in (("QUICKSTART_AR.md", "README_AR.md"), ("SNIPER_LEARNER_AR.md", "SNIPER_LEARNER_AR.md"), ("TRY_SNIPER_DEMO_WINDOWS_AR.md", "START_HERE_SNIPER_DEMO_AR.md"), ("RELEASE_STATUS.md", "RELEASE_STATUS.md"), ("THIRD_PARTY.md", "THIRD_PARTY.md")):
+    for source, target in (("BRAIN_CONTROL_SNIPER_AR.md", "BRAIN_CONTROL_SNIPER_AR.md"), ("QUICKSTART_AR.md", "README_AR.md"), ("SNIPER_LEARNER_AR.md", "SNIPER_LEARNER_AR.md"), ("TRY_SNIPER_DEMO_WINDOWS_AR.md", "START_HERE_SNIPER_DEMO_AR.md"), ("RELEASE_STATUS.md", "RELEASE_STATUS.md"), ("THIRD_PARTY.md", "THIRD_PARTY.md")):
         shutil.copy2(ROOT / "docs" / source, output / target)
     source_copy(output / "Source")
     count = collect_licenses(output / "licenses/rust", args.cargo)

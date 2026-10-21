@@ -1,6 +1,6 @@
 //! Quote-driven Sniper specialist. Learning uses closed Demo broker evidence only;
 //! the tick path reads a cached model and never trains or touches storage.
-use crate::{execution::Signal, trading::{self, SniperBrain, SniperTargetMode, TradingMode}, Config, Telemetry};
+use crate::{execution::Signal, trading::{self, SniperBrain, SniperStyle, SniperTargetMode, TradingMode}, Config, Telemetry};
 use serde::Serialize;
 use serde_json::json;
 use std::collections::{BTreeMap, VecDeque};
@@ -44,11 +44,16 @@ pub fn selected(c: &Config) -> bool {
 }
 pub fn definition(t: &Telemetry, c: &Config) -> String {
     // Monetary tick conversion changes must not fragment the same policy's history.
-    json!(["sniper-ticks-v1", c.trading.sniper_target_points, c.trading.sniper_stop_points,
+    let mut definition = json!(["sniper-ticks-v1", c.trading.sniper_target_points, c.trading.sniper_stop_points,
         c.trading.sniper_max_hold_seconds, c.risk.commission_per_lot,
         c.risk.slippage_ticks, t.point, t.tick_size, c.trading.pip_points, c.trading.sniper_pip_price,
         c.trading.sniper_target_mode, c.trading.sniper_min_target_pips,
-        c.trading.sniper_max_target_pips]).to_string()
+        c.trading.sniper_max_target_pips]);
+    // Preserve existing Auto evidence; never mix a new style into that history.
+    if c.trading.sniper_style != SniperStyle::Auto {
+        definition.as_array_mut().unwrap().push(json!(c.trading.sniper_style));
+    }
+    definition.to_string()
 }
 #[derive(Default)]
 pub struct Engine {
@@ -105,12 +110,21 @@ impl Engine {
         // A measured reversal after a prior excursion; never an arbitrary opposite trade.
         let prior = q[n-2] - q[0];
         let rebound = if prior.abs() >= threshold*2. && step*prior < 0. { direction(step) } else { 0 };
-        let sides = [impulse, rebound];
+        let sides = match c.trading.sniper_style {
+            SniperStyle::Auto => [impulse, rebound],
+            SniperStyle::Impulse => [impulse, 0],
+            SniperStyle::Rebound => [0, rebound],
+            SniperStyle::Confirmed => {
+                let same_direction = n >= 5 && q[n-3..].windows(2)
+                    .all(|w| (w[1]-w[0]) * impulse as f64 > 0.);
+                [if same_direction && movement.abs()/path.max(tick) >= 0.75 {impulse} else {0}, 0]
+            }
+        };
         let regime = format!("{}_{}", if movement.abs()/path.max(tick) >= 0.6 {"directional"} else {"choppy"},
             if cost.total/(cost.total+cost.desired_net_target_money) > 0.25 {"costly"} else {"normal"});
         let policies = self.models.get(&(def.clone(), regime.clone())).cloned().unwrap_or_default();
         let candidates: Vec<usize> = (0..2).filter(|i| sides[*i] != 0).collect();
-        if candidates.is_empty() { s.reason = "القناص: لا يوجد اندفاع أو ارتداد مكتمل في الأسعار الحالية".into(); return s; }
+        if candidates.is_empty() { s.reason = format!("القناص — {}: ينتظر حركة تستوفي شروط هذا الأسلوب", c.trading.sniper_style.label()); return s; }
         let demo = t.demo && t.account_trade_mode == Some(0);
         let total: u64 = policies.iter().map(|p| p.samples).sum();
         let epsilon = if demo { crate::student::exploration_rate(total) } else { 0. };
@@ -188,7 +202,7 @@ impl Engine {
             if chosen==0 {"اندفاع سريع"} else {"ارتداد سريع"}, regime, target_pips,
             if adaptive {"تجريبي مرن"} else {"ثابت"}, total,target_total);
         s.coordination = Some(json!({"version":"sniper-learner-v1","trading_mode":"sniper",
-            "selection":{"brain":ID,"timeframe":"M1","report_id":"","policy":"sniper-ticks-v1",
+            "selection":{"sniper_style":c.trading.sniper_style,"brain":ID,"timeframe":"M1","report_id":"","policy":"sniper-ticks-v1",
                 "sniper_policy":POLICIES[chosen],"sniper_definition":def,"sniper_regime":regime,
                 "definition":["sniper-ticks-v1",POLICIES[chosen]],"exploring":exploring,
                 "exploration_rate":epsilon,"selection_probability":probability,"broker_samples":total,
@@ -215,6 +229,31 @@ mod tests {
     }
     fn feed(e:&mut Engine,t:&mut Telemetry,c:&Config,ts:u64,bid:f64)->Signal {
         t.bid=Some(bid);t.ask=Some(bid+0.01);t.quote_time_ms=Some(ts);e.evaluate(t,c,ts)
+    }
+    #[test]
+    fn substyles_are_isolated_and_confirmation_waits_for_evidence() {
+        let (mut t,mut c)=fixture();let original=definition(&t,&c);
+        for style in [SniperStyle::Impulse,SniperStyle::Rebound,SniperStyle::Confirmed] {
+            c.trading.sniper_style=style;
+            assert_ne!(original,definition(&t,&c));
+            let mut e=Engine::default();
+            feed(&mut e,&mut t,&c,10000,2000.);
+            feed(&mut e,&mut t,&c,10010,2000.08);
+            let signal=feed(&mut e,&mut t,&c,10020,2000.06);
+            match style {
+                SniperStyle::Impulse=>{assert!(signal.ready);assert_eq!(signal.side,1);},
+                SniperStyle::Rebound=>{assert!(signal.ready);assert_eq!(signal.side,-1);},
+                SniperStyle::Confirmed=>assert!(!signal.ready),
+                _=>unreachable!(),
+            }
+        }
+        c.trading.sniper_style=SniperStyle::Confirmed;let mut e=Engine::default();
+        for i in 0..5 {
+            let signal=feed(&mut e,&mut t,&c,11000+i*10,2000.+i as f64*0.04);
+            assert_eq!(signal.ready,i==4);
+        }
+        c.trading.sniper_style=SniperStyle::Rebound;
+        assert!(!feed(&mut e,&mut t,&c,11060,2000.20).ready,"style switch must warm up again");
     }
     #[test] fn ticks_costs_mode_freshness_and_reversal() {
         let (mut t,mut c)=fixture(); let mut e=Engine::default();

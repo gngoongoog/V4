@@ -343,6 +343,7 @@ impl Service {
 
     pub fn set_mode(&mut self, mode: braintrade_domain::trading::TradingMode) {
         self.inner.set_mode(mode);
+        self.fast = None; // Never execute a new selection using a previous cached config.
     }
 
     fn save_portfolio(db: &Connection, candidate: &PortfolioLimits) -> Result<()> {
@@ -390,6 +391,7 @@ impl Service {
         if let Some(system) = self.inner.brains.iter_mut().find(|brain| brain.id == "system") {
             system.enabled = true;
         }
+        self.inner.controls = crate::brain_control::load(db, &context(telemetry), config.trading.mode)?;
         let available = crate::coordinator_learning::available_frames(telemetry, frames, now);
         self.inner.weights = self.learner.observe(
             db,
@@ -476,6 +478,28 @@ impl Service {
         status: &Status,
         now: u64,
     ) -> Result<Value> {
+        if method=="POST" && path=="/v1/execution/brain-control" {
+            anyhow::ensure!(!status.requested_run && !self.pending(db)?, "أوقف النظام وانتظر تسوية الأوامر قبل تعديل مشاركة العقول");
+            anyhow::ensure!(status.gateway_fresh && self.account_matches(status), "اربط الحساب الحالي وانتظر اتصالاً حديثاً");
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request {brain:String, mode:braintrade_domain::trading::TradingMode, control:crate::brain_control::Control}
+            let request:Request=serde_json::from_slice(body)?;
+            anyhow::ensure!(self.inner.active_mode==Some(request.mode), "الوضع تغيّر؛ حدّث الصفحة قبل الحفظ");
+            let key=context(status.telemetry.as_ref().unwrap());
+            crate::brain_control::save(db,&key,request.mode,&request.brain,request.control)?;
+            self.inner.controls.insert(request.brain,request.control);
+            self.fast=None;
+            self.inner.set_mode(request.mode);
+            return Ok(json!({"ok":true}));
+        }
+        if method=="GET" && path=="/v1/execution/brains" {
+            let mut value=self.route("GET","/v1/execution",&[],db,status,now)?;
+            let key=if status.gateway_fresh && self.account_matches(status) {context(status.telemetry.as_ref().unwrap())}else{String::new()};
+            crate::brain_control::enrich(&mut value,db,&key,self.inner.active_mode.unwrap_or_default())?;
+            value["controls_available"]=json!(!key.is_empty());
+            return Ok(value);
+        }
         if method=="GET" && path=="/v1/execution/student" {
             let key=status.telemetry.as_ref().map(crate::coordinator_learning::context).unwrap_or_default();
             let mut view=crate::student_learning::view(db,&key)?;

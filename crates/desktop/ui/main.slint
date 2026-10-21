@@ -70,6 +70,18 @@ export component Dashboard inherits Window {
     in property <string> student-timing;
     in-out property <int> trade-mode: 2;
     in-out property <int> sniper-brain: 0;
+    in-out property <int> sniper-style: 0;
+    in property <[string]> brain-monitor-names;
+    in-out property <int> brain-monitor-selected: 0;
+    in property <bool> brain-monitor-busy: false;
+    in property <bool> brain-monitor-available: false;
+    in-out property <bool> brain-advisor: true;
+    in-out property <bool> brain-paper: true;
+    in property <string> brain-monitor-summary: "بانتظار اتصال الحساب";
+    in property <string> brain-monitor-overview;
+    in property <string> brain-monitor-detail;
+    in property <string> brain-monitor-message;
+    callback brain-monitor-action(string);
     in-out property <int> sniper-target-mode: 0;
     in-out property <string> sniper-min-target-pips: "2";
     in-out property <string> sniper-max-target-pips: "10";
@@ -309,6 +321,7 @@ export component Dashboard inherits Window {
                         Button { text: root.page == 16 ? "●  وايكوف" : "وايكوف"; clicked => { root.page = 16; root.studio-action("refresh"); } }
                     }
                     HorizontalLayout { height: 32px; spacing: 8px;
+                        Button { text: "حالة العقول والتحكم"; clicked => { root.page = 21; root.brain-monitor-action("refresh"); } }
                         Button { text: root.page == 8 ? "●  الأخبار" : "الأخبار"; clicked => { root.page = 8; } }
                         Button { text: root.page == 11 ? "●  نماذج البحث" : "نماذج البحث"; clicked => { root.page = 11; root.learning-action("refresh"); } }
                         Button { text: root.page == 18 ? "●  الارتباط" : "الارتباط"; enabled: !root.corr-busy; clicked => { root.page = 18; root.correlation-action("refresh"); } }
@@ -393,6 +406,22 @@ export component Dashboard inherits Window {
             Text { text: "دفتر التجارب — أحدث 20 دخولاً"; color: #f2f2f4; font-size: 18px; font-weight: 700; }
             Text { text: root.student-journal; color: #b7bac3; wrap: word-wrap; }
             Text { text: "MFE / MAE: أفضل وأسوأ حركة مرصودة بعد تأكيد التنفيذ وحتى الإغلاق. المقارنة الافتراضية تستخدم Bid/Ask والعمولة والانزلاق؛ فجوة وصول الرصد فوق ثانيتين تستبعدها، وهدوء السعر وحده لا يستبعدها. السواب غير محسوب فيها. التحسّن السابق لا يضمن ربحاً لاحقاً."; color: #999ca5; wrap: word-wrap; }
+        } }
+        if root.page == 21: ScrollView { VerticalBox { spacing: 14px;
+            Text { text: "غرفة العقول • الحالة والتحكم"; color: #f6f6f7; font-size: 24px; font-weight: 700; }
+            Text { text: root.brain-monitor-summary; color: #b8bbc3; wrap: word-wrap; }
+            ComboBox { model: root.brain-monitor-names; current-index <=> root.brain-monitor-selected; enabled: !root.brain-monitor-busy; selected(value) => { root.brain-monitor-action("select"); } }
+            Text { text: "المشاركة تؤثر في مستشاري الخبير، أو القناص المتعلّم عند اختياره. بقية الأوضاع تحتفظ باستراتيجيتها. التدريب الجديد مستقل، والتحليل يستمر."; color: #b8bbc3; wrap: word-wrap; }
+            CheckBox { text: "السماح بالمشاركة في قرار الوضع الحالي"; checked <=> root.brain-advisor; enabled: root.brain-monitor-available && !root.brain-monitor-busy && root.brain-monitor-selected != 0 && root.state == "STOPPED"; }
+            CheckBox { text: "السماح بصفقات تدريب افتراضية جديدة"; checked <=> root.brain-paper; enabled: root.brain-monitor-available && !root.brain-monitor-busy && root.brain-monitor-selected != 0 && root.state == "STOPPED"; }
+            HorizontalBox {
+                Button { text: "حفظ تحكم العقل"; enabled: root.brain-monitor-available && !root.brain-monitor-busy && root.brain-monitor-selected != 0 && root.state == "STOPPED"; clicked => { root.brain-monitor-action("save"); } }
+                Button { text: "تحديث الحالة"; enabled: !root.brain-monitor-busy; clicked => { root.brain-monitor-action("refresh"); } }
+            }
+            Text { text: root.brain-monitor-message; color: #d0d3da; wrap: word-wrap; }
+            Text { text: root.brain-monitor-detail; color: #e3e5e9; wrap: word-wrap; }
+            Text { text: "كل العقول • الوضع الحالي"; color: #f6f6f7; font-size: 20px; }
+            Text { text: root.brain-monitor-overview; color: #b8bbc3; wrap: word-wrap; }
         } }
         if root.page == 20: ScrollView {
             VerticalBox {
@@ -557,6 +586,9 @@ export component Dashboard inherits Window {
                                 horizontal-stretch: 1; spacing: 6px;
                                 Text { text: "نوع عقل القناص"; color: #e0e1e4; }
                                 ComboBox { model: ["القناص الكلاسيكي", "القناص المتعلّم / Sniper Learner"]; current-index <=> root.sniper-brain; enabled: root.state == "STOPPED" && root.trade-mode == 3; }
+                                Text { text: "أسلوب القناص المتعلّم"; color: #b8bbc3; }
+                                ComboBox { model: ["تلقائي متعلّم", "اندفاع سريع فقط", "ارتداد سريع فقط", "اندفاع مؤكد"]; current-index <=> root.sniper-style; enabled: root.state == "STOPPED" && root.trade-mode == 3 && root.sniper-brain == 1; }
+                                Text { text: root.sniper-style == 3 ? "ينتظر 5 أسعار متتابعة واتجاهاً أوضح؛ قد يقلّ عدد الدخول." : root.sniper-style == 2 ? "يرصد رجوع السعر بعد حركة سابقة؛ لا يعاكس السوق عشوائياً." : root.sniper-style == 1 ? "يتبع اندفاعاً واضحاً من أسعار حديثة؛ 3 أسعار على الأقل." : "يتعلّم الاختيار بين الاندفاع والارتداد من نتائج ديمو المغلقة."; color: #b8bbc3; wrap: word-wrap; }
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;

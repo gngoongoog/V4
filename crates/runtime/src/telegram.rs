@@ -16,7 +16,7 @@ pub fn spawn(shared: Arc<Mutex<Shared>>) {
                 (s.config.clone(), s.token.clone())
             };
             if !config.telegram_enabled || token.is_none() {
-                shared.lock().unwrap().status.telegram_status = "Disabled / not configured".into();
+                shared.lock().unwrap().status.telegram_status = "معطّل أو غير مهيّأ".into();
                 std::thread::sleep(Duration::from_secs(2));
                 continue;
             }
@@ -49,7 +49,7 @@ pub fn spawn(shared: Arc<Mutex<Shared>>) {
                         }
                     }
                     shared.lock().unwrap().status.telegram_status =
-                        "Connected (private read-only commands)".into();
+                        "متصل — أوامر خاصة للقراءة فقط".into();
                     if let Some(updates) = v["result"].as_array() {
                         for update in updates {
                             let Some(id) = update["update_id"].as_i64() else {
@@ -76,9 +76,12 @@ pub fn spawn(shared: Arc<Mutex<Shared>>) {
                                 "المحاكاة" => "/paper",
                                 "الأخبار" | "اخبار" => "/news",
                                 "الاختبار" => "/backtest",
+                                "القناص" => "/sniper",
+                                "الاتصال" => "/health",
+                                "مساعدة" => "/help",
                                 other => other,
                             };
-                            let response = if command == "/news" || command == "/backtest" {
+                            let response = if matches!(command,"/news"|"/backtest"|"/brains"|"/sniper") {
                                 research_report(command).unwrap_or_else(|_| {
                                     "تعذر قراءة التقرير من المحرك؛ أعد المحاولة".into()
                                 })
@@ -88,17 +91,17 @@ pub fn spawn(shared: Arc<Mutex<Shared>>) {
                                 s.status.report(command)
                             };
                             let text: String = response.chars().take(3800).collect();
-                            let sent=http.post(format!("https://api.telegram.org/bot{token}/sendMessage")).json(&json!({"chat_id":config.telegram_chat_id,"text":text,"reply_markup":{"keyboard":[["/status","/report"],["/positions","/health"],["/brains","/opportunities"],["/paper","/news"],["/backtest","/help"]],"resize_keyboard":true}})).send().and_then(|r|r.error_for_status()).and_then(|r|r.json::<Value>());
+                            let sent=http.post(format!("https://api.telegram.org/bot{token}/sendMessage")).json(&json!({"chat_id":config.telegram_chat_id,"text":text,"reply_markup":{"keyboard":[["الحالة","تقرير"],["الصفقات","الاتصال"],["العقول","القناص"],["الفرص","المحاكاة"],["الأخبار","الاختبار"],["مساعدة"]],"resize_keyboard":true}})).send().and_then(|r|r.error_for_status()).and_then(|r|r.json::<Value>());
                             if !matches!(sent,Ok(ref v) if v["ok"]==true) {
                                 shared.lock().unwrap().status.telegram_status =
-                                    "Reply failed; check connectivity / bot permissions".into();
+                                    "تعذر إرسال الرد؛ افحص الاتصال وصلاحيات البوت".into();
                             }
                         }
                     }
                 }
                 _ => {
                     shared.lock().unwrap().status.telegram_status =
-                        "Connection failed; check token, network, or existing webhook/poller"
+                        "فشل الاتصال؛ افحص رمز البوت والشبكة وعدم تشغيل اتصال آخر للبوت"
                             .into();
                     std::thread::sleep(Duration::from_secs(5));
                 }
@@ -108,34 +111,37 @@ pub fn spawn(shared: Arc<Mutex<Shared>>) {
 }
 fn research_report(command: &str) -> Result<String> {
     let c = Client::new(&data_dir())?;
-    if command == "/backtest" {
-        let state = c.get("/v1/backtest")?;
-        let Some(id) = state["latest_id"].as_str() else {
-            return Ok("لا يوجد اختبار محفوظ. شغّل الاختبار من الداشبورد أولاً.".into());
-        };
-        let r = c.post("/v1/backtest/report", json!({"id":id}))?;
-        return Ok(format!(
-            "آخر اختبار محفوظ — ليس تقرير حساب MT5\n{}",
-            r["summary"].as_str().unwrap_or("غير متاح")
-        ));
+    if command=="/brains" {
+        let v=c.get("/v1/execution/brains")?;
+        if v["controls_available"]!=true {return Ok("اربط الحساب وانتظر تحديث MT5 لعرض حالة العقول الحالية.".into())}
+        let mut out=String::from("حالة العقول — الوضع المختار وحده ينفذ\nالإشارات مرصودة بعينة/ثانية؛ التدريب افتراضي ومنفصل عن الوسيط.\n");
+        for (i,b) in v["brains"].as_array().into_iter().flatten().enumerate() {
+            let name=braintrade_domain::execution::BRAINS.get(i).map(|(_,n)|*n).unwrap_or("عقل");
+            out.push_str(&format!("{}\nإشارات {} | دخول منسوب {} | تعبئة مؤكدة {}\nتدريب مغلق {} / رابح {} | صافي افتراضي {:.2}\n",
+                name,b["activity"]["signals"],b["attributed_orders"]["requested"],b["attributed_orders"]["fill_acknowledged"],
+                b["paper_stats"]["closed"],b["paper_stats"]["wins"],b["paper_stats"]["net"].as_f64().unwrap_or(0.)));
+        }return Ok(out);
     }
-    let v = c.get("/v1/news")?;
-    let mut text = format!(
-        "{}\n\nأخبار رسمية محفوظة\n{}\n\n",
-        v["macro_text"].as_str().unwrap_or("MACRO / NEWS CONTEXT — غير متاح"),
-        v["sources_text"].as_str().unwrap_or("الحالة غير متاحة")
-    );
-    for item in v["items"].as_array().into_iter().flatten().take(4) {
-        text.push_str(&format!(
-            "{}\n{} | {}\n{}\n\n",
-            item["title"].as_str().unwrap_or(""),
-            item["source"].as_str().unwrap_or(""),
-            item["published"].as_str().unwrap_or("غير متاح"),
-            item["url"].as_str().unwrap_or("")
-        ));
+    if command=="/sniper" {
+        let v=c.get("/v1/trading/settings")?;
+        let t=&v["config"]["trading"];
+        let style=match t["sniper_style"].as_str().unwrap_or("auto") {"impulse"=>"اندفاع سريع فقط","rebound"=>"ارتداد سريع فقط","confirmed"=>"اندفاع مؤكد بخمسة أسعار",_=>"تلقائي متعلّم بين الاندفاع والارتداد"};
+        return Ok(format!("إعداد القناص المحفوظ\nالوضع الحالي قناص: {}\nالعقل: {}\nالأسلوب: {}\nأقصى مدة احتفاظ: {} ثانية\nفاصل الدخول: {} ثانية\nزمن القرار يقاس في صفحة التنفيذ؛ زمن تعبئة الوسيط يختلف ولا يضمنه أسلوب القناص.\nتغيير الإعدادات من الداشبورد أثناء توقف النظام.",
+            if t["mode"]=="sniper" {"نعم"}else{"لا"},if t["sniper_brain"]=="learner" {"المتعلّم"}else{"الكلاسيكي — الأسلوب الفرعي لا يطبق عليه"},style,t["sniper_max_hold_seconds"],t["sniper_cooldown_seconds"]));
     }
-    text.push_str("وقت النشر UTC؛ العناوين ليست توصية أو تقويم أحداث مستقبلية.");
-    Ok(text)
+    if command=="/backtest" {
+        let state=c.get("/v1/backtest")?;
+        let Some(id)=state["latest_id"].as_str() else{return Ok("لا يوجد اختبار محفوظ. شغّل الاختبار من الداشبورد أولاً.".into())};
+        let r=c.post("/v1/backtest/report",json!({"id":id}))?;let m=&r["metrics"];
+        return Ok(format!("آخر اختبار تاريخي — محاكاة وليست أرباح حساب MT5\nصفقات {} | رابحة {} | خاسرة {}\nصافي افتراضي {:.2} | أقصى تراجع {:.2}%\nالعمولات المحتسبة {:.2}",m["trades"],m["wins"],m["losses"],m["net"].as_f64().unwrap_or(0.),m["max_drawdown_percent"].as_f64().unwrap_or(0.),m["commissions"].as_f64().unwrap_or(0.)));
+    }
+    let v=c.get("/v1/news")?;
+    let mut text=String::from("روابط الأخبار الرسمية المحفوظة\nالمحتوى الأصلي قد يكون بلغة المصدر؛ لا تتوفر ترجمة آلية موثوقة للعناوين.\n");
+    for (i,item) in v["items"].as_array().into_iter().flatten().take(4).enumerate() {
+        text.push_str(&format!("خبر {} | نشر {} بتوقيت غرينتش\n{}\n",i+1,item["published"].as_str().unwrap_or("غير متاح"),item["url"].as_str().unwrap_or("")));
+    }
+    if v["items"].as_array().is_none_or(|v|v.is_empty()) {text.push_str("لا توجد أخبار محفوظة حالياً.\n");}
+    text.push_str("الأخبار سياق معلوماتي وليست توصية تداول.");Ok(text)
 }
 fn authorized(message: &Value, config: &Config) -> bool {
     message["chat"]["type"] == "private"

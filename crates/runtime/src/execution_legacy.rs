@@ -41,11 +41,12 @@ pub struct Service {
     pub brains: Vec<BrainConfig>,
     pub weights:BTreeMap<String,braintrade_domain::execution::LearnedWeight>,
     pub student_policies:BTreeMap<String,braintrade_domain::student::ExitStudy>,
+    pub controls: BTreeMap<String, crate::brain_control::Control>,
     signals: BTreeMap<String, Value>,
     new_entries: Vec<Value>,
     last_sync_ms: u64,
     history_until_ms: u64,
-    active_mode: Option<TradingMode>,
+    pub active_mode: Option<TradingMode>,
     last_paper_sample_ms: u64,
 }
 fn ctx(t: &Telemetry) -> String {
@@ -71,6 +72,8 @@ impl Service {
     }
     pub fn set_mode(&mut self, mode: TradingMode) {
         self.active_mode = Some(mode);
+        self.sniper.reset_quotes();
+        self.signals.clear();
     }
 
     pub fn learning_decisions(&self)->Vec<(String,Value)> {
@@ -78,6 +81,7 @@ impl Service {
     }
     pub fn new(db: &Connection) -> Result<Self> {
         crate::shadow_paper::init(db)?;
+        crate::brain_control::init(db)?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS execution_settings(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS execution_equity(context TEXT PRIMARY KEY,peak REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS brain_configs(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
@@ -120,6 +124,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             settings,
             brains,
             signals: BTreeMap::new(),
+            controls: BTreeMap::new(),
             new_entries: Vec::new(),
             weights:BTreeMap::new(),
             student_policies:BTreeMap::new(),
@@ -312,14 +317,14 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 let pending:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain='sniper_learner' AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",[&key],|r|r.get(0))?;
                 let occupied=t.positions.iter().any(|p|p.magic==410_617 && p.symbol==t.symbol);
                 let mut selected=sniper_signal.clone(); selected.brain="system".into();
-                if member.enabled || pending || occupied {
-                    selected.ready=false;selected.reason="القناص المتعلّم منفرد أو ينتظر تسوية صفقته قبل الرجوع".into();
+                if !self.controls.get(braintrade_domain::sniper::ID).is_none_or(|c|c.advisor) || member.enabled || pending || occupied {
+                    selected.ready=false;selected.reason="مشاركة القناص موقوفة أو توجد صفقة قديمة تنتظر التسوية".into();
                 }
                 selected.coordination.get_or_insert_with(||json!({}))["intelligence"]=json!(self.weights.get(braintrade_domain::sniper::ID).map(|w|w.intelligence()).unwrap_or_default());
                 selected
             } else if b.id=="system" {
                 let mut votes=vec![];
-                for member in self.brains.iter().filter(|m|m.id!="system") {
+                for member in self.brains.iter().filter(|m|m.id!="system" && self.controls.get(&m.id).is_none_or(|c|c.advisor)) {
                     // Returning SOLO positions finish under their original owner before rejoining.
                     let in_flight:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,member.id],|r|r.get(0))?;
                     if in_flight||t.positions.iter().any(|p|p.magic==execution::magic(&member.id).unwrap()&&p.symbol==t.symbol){continue;}
@@ -335,7 +340,13 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             crate::student_learning::adapt(&mut signal,t,c,&b,&self.student_policies);
             // Independent price-sampled paper practice for every non-selected
             // brain. This never queues an MT5 order or enters broker PnL.
-            if paper_due {crate::shadow_paper::observe(db,&key,&b,&signal,t,c,now)?;}
+            if paper_due {
+                crate::brain_control::sample(db,&key,c.trading.mode,&b.id,&signal,now)?;
+                let mut paper_signal=signal.clone();
+                if !self.controls.get(&b.id).is_none_or(|control|control.paper) {paper_signal.ready=false;}
+                // Pausing new paper entries must still settle previously opened practice.
+                crate::shadow_paper::observe(db,&key,&b,&paper_signal,t,c,now)?;
+            }
             let decision_us = started.elapsed().as_micros() as u64;
             let mut gates = vec![];
             if t.margin_mode!=Some(2)&&db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain<>?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,b.id],|r|r.get::<_,bool>(0))?{gates.push("Netting: أمر لعقل آخر لم تتم تسويته");}
