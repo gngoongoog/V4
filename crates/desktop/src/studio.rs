@@ -227,7 +227,12 @@ sniper_max_target_pips:number(ui.get_sniper_max_target_pips())?,demo_flexible:ui
                         "cost"=>{
                             let c=&v["costs"];
                             let text=if c.is_null() {
-                                format!("العمولة للوت المختار: {:.4} من عملة الحساب\n{}\nالسبريد الحقيقي ونقطة التعادل يتطلبان اتصال MT5 وسعراً حديثاً.",v["commission"].as_f64().unwrap_or(0.),v["error"].as_str().unwrap_or("لا تتوفر بيانات العرض"))
+                                format!("العمولة المقدّرة للوت المختار: {:.4} من عملة الحساب\n1.00 لوت: {:.4} | 0.10 لوت: {:.4} | 0.01 لوت: {:.4}\n{}\nالسبريد الحقيقي ونقطة التعادل يتطلبان اتصال MT5 وسعراً حديثاً.\nتنبيه: وضع العمولة = 0 يزيلها من تقديرات البرنامج فقط، ولا يغيّر الرسوم الفعلية التي يفرضها وسيط MT5.",
+                                    v["commission"].as_f64().unwrap_or(0.),
+                                    v["commission_examples"]["one_lot"].as_f64().unwrap_or(0.),
+                                    v["commission_examples"]["one_tenth_lot"].as_f64().unwrap_or(0.),
+                                    v["commission_examples"]["one_hundredth_lot"].as_f64().unwrap_or(0.),
+                                    v["error"].as_str().unwrap_or("لا تتوفر بيانات العرض"))
                             } else {
                                 let n=|key:&str|c[key].as_f64().unwrap_or(0.);
                                 format!(
@@ -237,19 +242,20 @@ sniper_max_target_pips:number(ui.get_sniper_max_target_pips())?,demo_flexible:ui
                                      السبريد الحقيقي (Ask − Bid): {:.5} = {:.2} نقطة = {:.2} pip\n\
                                      تكلفة السبريد على اللوت المختار: {:.4}\n\
                                      عمولة ذهاب وإياب / 1.00 لوت: {:.4}\n\
-                                     مثال العمولة: 0.10 لوت = {:.4}  |  0.01 لوت = {:.4}\n\
+                                     أمثلة العمولة: 1.00 لوت = {:.4} | 0.10 لوت = {:.4} | 0.01 لوت = {:.4}\n\
                                      عمولة هذا اللوت: {:.4}\n\
                                      الانزلاق المفترض: {:.2} tick لكل جهة = {:.4} (تقدير وليس سبريد)\n\
                                      مجموع التكلفة التقديرية: {:.4}\n\
                                      التعادل من سعر الدخول (Ask شراء / Bid بيع): {:.2} نقطة / {:.2} pip — دون إضافة السبريد مجدداً\n\
                                      التعادل من السعر قبل الدخول (Bid شراء / Ask بيع): {:.2} نقطة / {:.2} pip — يشمل السبريد مرة واحدة\n\
                                      سعر التعادل النظري للشراء عند Bid: {:.5}  |  للبيع عند Ask: {:.5}\n\
-                                     معاينة لصفقة جديدة وليست التعادل الفعلي لصفقة مفتوحة؛ القيم وفق سعر MT5 وقت الضغط على احسب.",
+                                     معاينة لصفقة جديدة وليست التعادل الفعلي لصفقة مفتوحة؛ القيم وفق سعر MT5 وقت الضغط على احسب. وضع العمولة = 0 لا يعفيك من عمولة الوسيط الحقيقية.",
                                     c["currency"].as_str().unwrap_or(""),n("lots"),
                                     n("bid"),n("ask"),
                                     n("point_price"),n("pip_price"),
                                     n("spread_price"),n("spread_points"),n("spread_pips"),
                                     n("spread_money"),
+                                    n("commission_round_trip_per_lot"),
                                     n("commission_round_trip_per_lot"),
                                     n("commission_round_trip_per_lot")*0.1,
                                     n("commission_round_trip_per_lot")*0.01,

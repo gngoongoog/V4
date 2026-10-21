@@ -85,6 +85,14 @@ def sniper_broker_geometry(info, tick, stop, target):
     return stop, target, minimum, spread
 
 
+def round_trip_commission(rate_per_lot, lots):
+    """Estimated broker fee in account currency for entry AND exit, never a broker charge."""
+    rate, volume = float(rate_per_lot), float(lots)
+    if not math.isfinite(rate) or not 0 <= rate <= 1000 or not math.isfinite(volume) or not 0 < volume <= 100:
+        raise ValueError('Commission estimate requires non-negative round-trip rate and positive lot size')
+    return rate * volume
+
+
 def affordable_demo_volume(mt5, account, info, symbol, side, price, requested, commission):
     """Round down and shrink only; broker minimum and free margin remain real constraints.
 
@@ -105,7 +113,7 @@ def affordable_demo_volume(mt5, account, info, symbol, side, price, requested, c
         margin = mt5.order_calc_margin(order_type, symbol, volume, price)
         if margin is None or not math.isfinite(margin) or margin < 0:
             raise ValueError('Demo sizing: broker margin estimate unavailable')
-        return volume, float(margin), float(margin) + commission * volume
+        return volume, float(margin), float(margin) + round_trip_commission(commission, volume)
     chosen = estimate(high)
     if chosen[2] > free:
         minimum = estimate(low)
@@ -124,6 +132,8 @@ def affordable_demo_volume(mt5, account, info, symbol, side, price, requested, c
     volume, margin, total = chosen
     return volume, dict(policy='demo_downsize_only_v1', requested=requested, sent=volume,
                         free_margin=free, estimated_margin=margin, estimated_margin_plus_commission=total,
+                        commission_round_trip_per_lot=commission,
+                        estimated_round_trip_commission=round_trip_commission(commission,volume),
                         broker_minimum=info.volume_min, reduced=volume < requested - 1e-9)
 
 

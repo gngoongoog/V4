@@ -6,7 +6,7 @@ import tempfile
 from types import SimpleNamespace as N
 import unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'gateway'))
-from execution import BrokerExecutor,clock_ms
+from execution import BrokerExecutor,clock_ms,round_trip_commission
 
 class Broker:
     TRADE_ACTION_DEAL=1; ORDER_TYPE_BUY=0; ORDER_TYPE_SELL=1; POSITION_TYPE_BUY=0
@@ -55,6 +55,32 @@ class ExecutionTests(unittest.TestCase):
         self.cmd['signal']['key']='tick:123'
         self.assertEqual(self.send()['state'],'filled')
         self.assertEqual(len(self.mt.sends),1)
+
+    def test_exact_commission_schedule_roundtrip_and_no_commission_account(self):
+        for lots, fee in ((0.01,0.07),(0.10,0.70),(1.0,7.0)):
+            self.assertAlmostEqual(round_trip_commission(7.,lots),fee)
+            self.assertEqual(round_trip_commission(0.,lots),0.)
+        for rate,lots in ((float('nan'),.1),(-7.,.1),(7.,0),(7.,-1.)):
+            with self.assertRaises(ValueError):
+                round_trip_commission(rate,lots)
+
+        self.mt.account.margin_free=2000.
+        for i,(lots,fee) in enumerate(((0.01,0.07),(.1,.7),(1.,7.))):
+            self.cmd.update(id=f'commission-normal-{i}',lots=lots,
+                            demo_flexible=True,commission_per_lot=7.)
+            result=self.send()
+            self.assertEqual(result['state'],'filled',result)
+            self.assertAlmostEqual(result['request']['volume'],lots)
+            self.assertAlmostEqual(result['sizing']['estimated_round_trip_commission'],fee)
+            self.assertAlmostEqual(result['sizing']['commission_round_trip_per_lot'],7.)
+
+        self.cmd.update(id='commission-free',lots=.1,
+                        demo_flexible=True,commission_per_lot=0.)
+        result=self.send()
+        self.assertEqual(result['state'],'filled',result)
+        self.assertEqual(result['sizing']['estimated_round_trip_commission'],0.)
+        self.assertAlmostEqual(result['sizing']['estimated_margin_plus_commission'],
+                               result['sizing']['estimated_margin'])
 
     def test_flexible_100_dollar_demo_downsizes_before_one_real_send(self):
         self.mt.account.margin_free=100.

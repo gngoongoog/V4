@@ -391,7 +391,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 let loss = signal.stop_distance / t.tick_size.unwrap_or(0.)
                     * t.tick_value_loss.unwrap_or(0.)
                     * b.lots
-                    + c.risk.commission_per_lot * b.lots;
+                    + braintrade_domain::commission::round_trip_charge(c.risk.commission_per_lot,b.lots).map_err(anyhow::Error::msg)?;
                 if loss > t.equity * c.risk.risk_percent / 100. {
                     gates.push("ميزانية المخاطرة الاختيارية");
                 }

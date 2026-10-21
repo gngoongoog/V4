@@ -178,7 +178,7 @@ pub fn costs(t: &Telemetry, c: &Config, lots: f64, now: u64) -> Result<CostPrevi
     // The quote spread is the initial loss from an Ask buy / Bid sell; use the
     // broker's loss-side tick value rather than max(loss, profit).
     let spread_money = spread_price / tick * loss * lots;
-    let commission = c.risk.commission_per_lot * lots;
+    let commission = crate::commission::round_trip_charge(c.risk.commission_per_lot, lots)?;
     // Assumed slippage is separate from the actual Bid/Ask spread. A user may
     // explicitly enter 0 ticks to exclude it from a hypothetical preview.
     let slippage_money = 2. * c.risk.slippage_ticks * loss.max(profit) * lots;

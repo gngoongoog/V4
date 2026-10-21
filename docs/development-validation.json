@@ -1,5 +1,5 @@
 {
-  "version": "0.7.2",
+  "version": "0.7.3",
   "status": "pending-ci",
   "source_state": "PR 74 snapshot before exact-source CI",
   "tested_commit": null,
@@ -16,5 +16,5 @@
     "telegram_live_delivery": "not performed",
     "imported_ml_automatic_promotion": false
   },
-  "note": "0.7.2 is a new fail-closed LIVE confirmation protocol. CI status belongs to the exact new commit and must not inherit 0.7.1 results. LIVE and broker-specific MT5 acceptance are not performed; check native Windows and Research workflows before considering Demo validation complete."
+  "note": "0.7.3 retains the fail-closed LIVE confirmation protocol and adds one shared commission contract across Rust, MT5 demo sizing, Core preview and UI. CI status belongs to the exact new commit and must not inherit 0.7.1 results. LIVE and broker-specific MT5 acceptance are not performed; check native Windows and Research workflows before considering Demo validation complete."
 }

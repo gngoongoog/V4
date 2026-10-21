@@ -130,7 +130,7 @@ fn owned_position_risk(t: &Telemetry, c: &Config, position: &braintrade_domain::
     }
     Some(
         distance / tick * tick_value * position.volume
-            + c.risk.commission_per_lot * position.volume,
+            + braintrade_domain::commission::round_trip_charge(c.risk.commission_per_lot,position.volume).ok()?,
     )
 }
 
@@ -145,7 +145,7 @@ fn intent_risk(t: &Telemetry, c: &Config, request: &Value) -> Option<f64> {
         .zip(t.tick_value_profit)
         .map(|(loss, profit)| loss.max(profit))
         .filter(|v| v.is_finite() && *v > 0.0)?;
-    Some(stop / tick * tick_value * lots + c.risk.commission_per_lot * lots)
+    Some(stop / tick * tick_value * lots + braintrade_domain::commission::round_trip_charge(c.risk.commission_per_lot,lots).ok()?)
 }
 
 fn command_values(db: &Connection, key: &str, include_queued: bool) -> Result<Vec<Value>> {
