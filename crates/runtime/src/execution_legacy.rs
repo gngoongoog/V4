@@ -208,6 +208,11 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             p["trading_mode"] = json!(c.trading.mode);
             p["demo_flexible"] = json!(c.trading.demo_flexible && t.demo && t.account_trade_mode==Some(0));
             p["commission_per_lot"] = json!(c.risk.commission_per_lot);
+            // Mandatory for every new entry (Demo and REAL). The broker uses
+            // order_calc_profit at the EXACT final stop and account equity to
+            // cap the requested volume without ever increasing it.
+            p["risk_percent"] = json!(c.risk.risk_percent);
+            p["slippage_ticks"] = json!(c.risk.slippage_ticks);
             p["learning"] = json!({"trading_mode":c.trading.mode,"timeframe":b.timeframe,"report_id":b.report_id,
                 "tick_size":t.tick_size,"tick_value_loss":t.tick_value_loss,"tick_value_profit":t.tick_value_profit,
                 "slippage_ticks":c.risk.slippage_ticks,"bid":t.bid,"ask":t.ask,"quote_time_ms":t.quote_time_ms,"quote_age_ms":t.tick_age_ms,
