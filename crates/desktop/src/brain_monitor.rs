@@ -30,12 +30,20 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
         else if b["participates_in_coordinator"]==true {"مستشار مؤهل لقرار الخبير"}
         else {"مراقبة/تدريب؛ لا يرسل أوامر مستقلة"};
     let gates=s["gates"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(" • ");
-    ui.set_brain_monitor_detail(format!("{}\n{}\nآخر إشارة: {} | جاهزية الإرسال: {}\n{}\nسبب الانتظار: {}\nزمن آخر حساب: {} ميكروثانية؛ ليس زمن تنفيذ الوسيط\n\nالوضع الحالي — تدريب: مغلقة {} / رابحة {} / صافي افتراضي {:.2}\nتدريب مفتوح من كل الأوضاع: {}؛ يستمر إغلاقه حتى عند إيقاف التدريب الجديد\n\nسجل ملكية MT5 عبر كل الأوضاع — مغلقة {} / رابحة {} / مفتوحة {}\nصافي مسجل {:.2} | عائم {:.2}\nالدخول المنسوب للاستراتيجية في الأعلى مختلف عن ملكية الصفقة: المنفّذ الحالي هو النظام.",
+    let mut detail=format!("{}\n{}\nآخر إشارة: {} | جاهزية الإرسال: {}\n{}\nسبب الانتظار: {}\nزمن آخر حساب: {} ميكروثانية؛ ليس زمن تنفيذ الوسيط\n\nالوضع الحالي — رصد ورقي محاكى: مغلقة {} / رابحة {} / صافي افتراضي {:.2}\nصفقات ورقية مفتوحة من كل الأوضاع: {}؛ هذه الإحصاءات لا تغيّر أوزان التنفيذ الحقيقي\n\nسجل ملكية MT5 عبر كل الأوضاع — مغلقة {} / رابحة {} / مفتوحة {}\nصافي مسجل {:.2} | عائم {:.2}\nالدخول المنسوب للاستراتيجية في الأعلى مختلف عن ملكية الصفقة: المنفّذ الحالي هو النظام.",
         b["name"].as_str().unwrap_or("—"),role,
         match s["signal"]["side"].as_i64(){Some(1)=>"شراء",Some(-1)=>"بيع",_=>"انتظار"},yes(&s["ready"]),
         s["signal"]["reason"].as_str().unwrap_or("لا توجد إشارة حديثة؛ انتظر الاتصال"),gates,
         s["decision_us"],paper["closed"],paper["wins"],amount(&paper["net"]),paper["open_all_modes"],
-        stats["closed_positions"],stats["wins"],stats["open_positions"],amount(&stats["net_booked"]),amount(&stats["floating"])).into());
+        stats["closed_positions"],stats["wins"],stats["open_positions"],amount(&stats["net_booked"]),amount(&stats["floating"]));
+    let learned=&b["learning"];
+    detail.push_str(&format!(
+        "\n\nالدليل الذي يستخدمه العقل فعلياً: عينات MT5 Demo مغلقة {} | نتائج رصد سببي لاحق {} | مصدر الترجيح {} | الوزن المعروض {}.\nنتائج Paper لا تُضاف تلقائياً لأوزان MT5.",
+        learned["broker_samples"],learned["forward_samples"],
+        learned["evidence_source"].as_str().unwrap_or("لا توجد أدلة مؤكدة"),
+        b["learned_weight"]
+    ));
+    ui.set_brain_monitor_detail(detail.into());
 }
 pub fn setup(ui:&Dashboard)->slint::Timer {
     ui.set_brain_monitor_names(slint::ModelRc::new(slint::VecModel::from(BRAINS.iter().map(|(_,n)|slint::SharedString::from(*n)).collect::<Vec<_>>())));
