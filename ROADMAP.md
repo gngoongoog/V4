@@ -1,3 +1,7 @@
+# Current 0.7.2 — broker live confirmation and verified portability
+
+Check the exact current 0.7.2 version in GitHub Actions. New REAL login confirmation is deliberately separate for binding and every START; live activation requires fresh broker identity and portfolio gate. A real MT5 fill validation campaign is still required.
+
 # Current 0.7.1 follow-up
 
 PR #74 adds the brain control room, scoped participation/paper controls, four Sniper learner styles and Arabic Telegram. Continue from the latest main; older checkpoints below are historical. See `docs/BRAIN_CONTROL_SNIPER_AR.md` and exact-head CI. Native MT5 demo acceptance remains outstanding.
