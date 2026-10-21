@@ -1,3 +1,7 @@
+# Current 0.7.2 Demo/REAL safety audit
+
+0.7.2 changes the Core/native protocol for REAL binding and start; it must never reuse 0.7.1 Core. New LIVE starts require fresh broker identity, exact typed login on both bind and START, permitted Algo trading and enabled portfolio protection. Research and Windows CI for the exact 0.7.2 commit are required before release. Real broker testing remains pending. See `docs/REAL_ACCOUNT_SWITCH_ACCEPTANCE_AR.md`.
+
 # Current 0.7.1 follow-up
 
 PR #74 adds the brain control room, scoped participation/paper controls, four Sniper learner styles and Arabic Telegram. Continue from the latest main; older checkpoints below are historical. See `docs/BRAIN_CONTROL_SNIPER_AR.md` and exact-head CI. Native MT5 demo acceptance remains outstanding.
