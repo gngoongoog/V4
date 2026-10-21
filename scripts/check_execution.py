@@ -148,6 +148,30 @@ def check(exe=None):
             snapshot['login']=99;publish()
             assert not api('/v1/status')['execution_enabled']
             assert api('/v1/execution/gateway')['command'] is None
+            # Simulated Demo -> REAL operator promotion must require two
+            # independent typed confirmations. There is NO real MT5 connection.
+            snapshot.update(login=990024,server='Real-Test',account_trade_mode=2,demo=False)
+            publish()
+            for v in [
+                dict(target='live',deviation_points=20),
+                dict(target='live',deviation_points=20,confirm_live_login='99002'),
+            ]:
+                try: api('/v1/execution/settings',v)
+                except urllib.error.HTTPError: pass
+                else: raise AssertionError('REAL bind accepted missing/wrong login confirmation')
+            assert api('/v1/execution')['settings']['target']=='demo'
+            api('/v1/execution/settings',
+                dict(target='live',deviation_points=20,confirm_live_login='990024'))
+            assert api('/v1/execution')['settings']['target']=='live'
+            for body in ({},{'confirm_live_login':'17'},{'confirm_live_login':'990024'}):
+                try: api('/v1/start',body)
+                except urllib.error.HTTPError: pass
+                else: raise AssertionError('REAL START accepted missing login or disabled portfolio')
+            api('/v1/execution/portfolio',dict(enabled=True,max_positions=1,max_lots=.02,max_risk_percent=1.))
+            assert api('/v1/start',dict(confirm_live_login='990024'))['requested_run']
+            api('/v1/stop',{})
+            snapshot.update(login=990025);publish()
+            assert not api('/v1/status')['execution_enabled']
             api('/v1/shutdown',{})
             process.wait(timeout=10)
             report=dict(result='PASS',version=VERSION,broker='simulated; no native MT5 acceptance',checks=[
@@ -156,7 +180,9 @@ def check(exe=None):
                 'Core+gateway unknown send never blindly retries',
                 'durable real trade journal attributes mode and owner, booked profit and all deal fees',
                 'closed trades persist after restart and can be read with pagination',
-                'account switch fails closed; STOP at restart'])
+                'account switch fails closed; STOP at restart',
+                'real-money account bind rejects missing or wrong login, REAL START independently requires exact login and enabled portfolio',
+                'account switch disables execution even after explicit REAL START'])
             out=ROOT/'test-output/execution-integration.json';out.parent.mkdir(exist_ok=True);out.write_text(json.dumps(report,indent=2))
             print(json.dumps(report))
         finally:
