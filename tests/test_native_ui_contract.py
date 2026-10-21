@@ -78,6 +78,14 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("ui.get_live_start_login()",self.rust)
         self.assertIn('ui.set_live_start_login("".into())',self.rust)
 
+    def test_visible_desktop_build_label_matches_current_core_package_version(self):
+        import tomllib
+        version=tomllib.loads((ROOT/"Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
+        self.assertIn("COMMAND CENTER "+version,self.dashboard)
+        self.assertIn("Windows "+version,self.dashboard)
+        self.assertIn("BRAINTRADE OS "+version,self.dashboard)
+        self.assertNotIn("Windows 0.7.1",self.dashboard)
+
     def test_palette_remains_grayscale_including_research_subpage(self):
         colors = re.findall(r"#[0-9a-fA-F]{6}\b", self.pages)
         self.assertGreater(len(colors), 70)
