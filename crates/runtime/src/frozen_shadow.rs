@@ -83,7 +83,9 @@ pub fn observe(db:&Connection,context:&str,mode:TradingMode,source_brain:&str,ad
              WHERE p.context=frozen_shadow_runs.context
                AND p.brain='frozen_'||frozen_shadow_runs.id)
            OR EXISTS(SELECT 1 FROM frozen_shadow_markouts m
-               WHERE m.run_id=frozen_shadow_runs.id AND m.state='pending'))
+               WHERE m.run_id=frozen_shadow_runs.id AND m.state='pending')
+           OR EXISTS(SELECT 1 FROM frozen_shadow_trade_pairs p
+               WHERE p.run_id=frozen_shadow_runs.id AND p.state='open'))
          ORDER BY created_ms,id")?;
     let rows=stmt.query_map(params![context,mode,source_brain],|r|
         Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,
@@ -118,6 +120,10 @@ pub fn observe(db:&Connection,context:&str,mode:TradingMode,source_brain:&str,ad
         // and identical prices, lot and assumed execution costs for both arms.
         // Retired trials only settle already opened markouts; never add one.
         crate::matched_forward::observe(
+            db,&id,created,post_freeze,&signal,adaptive,t,&c,now)?;
+        // Matched policy exit lifecycle; both sides begin on the same quote
+        // but independently apply their own entry-time stops, targets, hold.
+        crate::matched_trade::observe(
             db,&id,created,post_freeze,&signal,adaptive,t,&c,now)?;
         if post_freeze {
             db.execute(
@@ -171,6 +177,7 @@ pub fn report(db:&Connection,context:&str,mode:TradingMode,brain:&str)->Result<V
         "paper_trades_closed":closed,"paper_wins":wins,"paper_net_after_assumed_costs":net,
         "paper_position_open":open,
         "matched_five_minute":crate::matched_forward::summary(db,&id)?,
+        "matched_full_exits":crate::matched_trade::summary(db,&id)?,
         "execution_permission":false,
         "adaptive_reference":"Live signal on same observed bar; descriptive comparison only",
         "provenance":"Forward quote-sampled shadow; no actual broker fills",
@@ -184,6 +191,7 @@ mod tests{
         let db=Connection::open_in_memory().unwrap();
         init(&db).unwrap();
         crate::matched_forward::init(&db).unwrap();
+        crate::matched_trade::init(&db).unwrap();
         crate::shadow_paper::init(&db).unwrap();
         db
     }
