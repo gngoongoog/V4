@@ -1,3 +1,11 @@
+# Current continuation — 2026-10-22, Stage 3F-U (v0.7.4)
+
+Continue from latest `main`, preserving all newer changes. PR #109 (3F-T closed Demo Sniper policy quality) merged as `392a8143ae9cc2b58f52784db9f66f2cc39bfe9b` after exact-head Research `39779107057` and Windows/Linux `39779107116` succeeded on `ae7eb22ccb91edb7fd73f765e8a191fe4b5f6896`.
+
+3F-U adds bounded, account-scoped Demo Sniper decision sampling with first-blocker reasons, exact same-evaluation order links and a separate five-second prospective quote comparison. It never changes execution, learning weights or promotion; Fast Pulse does not record these observations. Read `docs/SNIPER_OPPORTUNITY_REVIEW_3FU_AR.md`. Require successful exact-source Research and Windows/Linux checks before merging new source. Next: collect target-machine Demo broker acceptance and review measured rejection/coverage/outcome evidence before any policy change. Native MT5 fills, profitability, latency and private Telegram delivery remain unverified.
+
+Older checkpoint instructions below are historical. Preserve learning data, immutable research evidence, strict selected-mode ownership and all broker correctness boundaries.
+
 # Latest work: 0.7.4 P0 phase 2 risk-based maximum lot
 
 Fresh broker-entry commands use equity and broker order_calc_profit at rounded SL to limit (never enlarge) the requested lot after including configured roundtrip commission and two-sided slippage. Above-budget broker-minimum sizes are rejected; REAL commands missing the risk budget are denied. Maintain a coherent 0.7.4 UI/Core/Gateway and verify exact SHA with Windows and Research CI. MT5 native acceptance is not established.

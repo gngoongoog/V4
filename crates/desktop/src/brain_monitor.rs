@@ -67,6 +67,36 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
     ));
     if b["config"]["id"]=="system" {
         if v["trading_mode"]=="sniper" {
+            let opportunities=&b["sniper_opportunities"];
+            detail.push_str(&format!(
+                "\n\nلماذا ينتظر القناص؟ — رصد Demo تشخيصي:\nآخر {} ملاحظة | غير مؤهلة للدخول {} | أوامر مرتبطة بدقة {}\nرصد بحد أقصى مرة بالثانية من تحديثات الحساب العادية؛ لا يشمل كل النبضات السريعة ولا يمثل عدد فرص أو صفقات مستقلة.\nللإشارات الجاهزة ذات الاتجاه: مقارنة افتراضية بعد 5–6.5 ثانية بسعر الشراء/البيع، وعمولة الحساب وانزلاق مقدّر. ليست صفقة منفذة ولا تختبر مسار الهدف والوقف. السبب المصنف هو أول مانع؛ بقية الموانع تبقى محفوظة.",
+                opportunities["sampled_observations"],opportunities["not_entry_ready_observations"],
+                opportunities["linked_unique_commands"]
+            ));
+            for group in opportunities["groups"].as_array().into_iter().flatten().take(6) {
+                let style=match group["style"].as_str(){
+                    Some("impulse")=>"اندفاع",Some("rebound")=>"ارتداد",
+                    Some("confirmed")=>"مؤكد",_=>"تلقائي"
+                };
+                detail.push_str(&format!(
+                    "\n{} / {} | ملاحظات {} | رصد لاحق {}، موجب بعد التكلفة {} | متوسط افتراضي/لوت {} | بانتظار رصد {} | نتيجة مجهولة {} | بلا اتجاه جاهز/بيانات دراسة {}",
+                    group["label_ar"].as_str().unwrap_or("غير متاح"),style,group["observations"],
+                    group["endpoint_observed"],group["endpoint_positive"],
+                    maybe_number(&group["mean_hypothetical_net_per_lot"]),group["pending"],
+                    group["unknown_endpoint"],group["no_directional_study"]
+                ));
+            }
+            detail.push_str("\nقد تتكرر تسمية السبب عند اختلاف إعداد السياسة أو حالة السوق؛ المجموعات منفصلة. لا يغير هذا الرصد الأوزان أو أذونات التداول. النتيجة المفقودة ليست خسارة أو صفراً.");
+            for row in opportunities["recent"].as_array().into_iter().flatten().take(3) {
+                let state=match row["command_state"].as_str(){
+                    Some("queued")=>"بالانتظار",Some("dispatched")=>"أرسل للبوابة",
+                    Some("filled")=>"رد تعبئة",Some("observed")=>"رُصد في السجل",
+                    Some("cancelled")=>"ملغي",Some("expired")=>"منتهي",
+                    Some("rejected")=>"مرفوض",Some("uncertain")=>"غير محسوم",
+                    Some(_)=>"راجع سجل التنفيذ",None=>"لا أمر مرتبط بهذه الملاحظة"
+                };
+                detail.push_str(&format!("\nآخر رصد: {} | {}",row["reason"].as_str().unwrap_or("—"),state));
+            }
             let quality=&b["sniper_policy_quality"];
             detail.push_str(&format!(
                 "\n\nتقييم أساليب القناص من صفقات MT5 Demo المغلقة فقط:\nمراكز مكتملة {} | مرفوضة/غير منسوبة {} | مكررة {} | مجموعات بحسب الأسلوب وحالة السوق وإصدار السياسة {}\nالنتائج وصفية للمراقبة فقط؛ آخر الصفقات ليست اختباراً مستقلاً، ولا يوجد اعتماد تلقائي لأسلوب جديد.",

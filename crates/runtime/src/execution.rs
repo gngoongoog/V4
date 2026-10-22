@@ -296,6 +296,7 @@ pub struct Service {
     inner: legacy::Service,
     learner: crate::coordinator_learning::Learner,
     student: crate::student_learning::Student,
+    sniper_opportunities: crate::sniper_opportunities::Recorder,
     portfolio: PortfolioLimits,
     portfolio_state: Value,
     fast: Option<pulse::FastContext>,
@@ -308,6 +309,7 @@ impl Service {
         crate::coordinator_paper::init(db)?;
         crate::matched_forward::init(db)?;
         crate::matched_trade::init(db)?;
+        crate::sniper_opportunities::init(db)?;
         let mut inner = legacy::Service::new(db)?;
         // `system` is the coordinated main brain. It is controlled by global START/STOP,
         // not by the per-brain SOLO switch. Keep it enabled in memory even when an older
@@ -340,6 +342,7 @@ impl Service {
             inner,
             learner: crate::coordinator_learning::Learner::new(db)?,
             student: crate::student_learning::Student::new(db)?,
+            sniper_opportunities: crate::sniper_opportunities::Recorder::default(),
             portfolio,
             portfolio_state,
             fast: None,
@@ -475,6 +478,19 @@ impl Service {
         // before the gateway can retrieve them. Exits and reconciliation states are untouched.
         let current = enforce_portfolio(db, telemetry, config, &self.portfolio)?;
         self.portfolio_state = current.json(&self.portfolio, telemetry.equity);
+        // Diagnostic sampling uses normal reconciled snapshots only, after
+        // broker intents and portfolio decisions. Never add this to Fast Pulse.
+        if self.inner.matches_bound_telemetry(telemetry) {
+            let decisions = self.inner.learning_decisions();
+            let system = decisions.iter().find(|(id,_)| id == "system").map(|(_,d)| d);
+            if let Err(error) = self.sniper_opportunities.observe(db,telemetry,config,run,system,now) {
+                let _ = db.execute(
+                    "INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,?2,?3)",
+                    params![now,"sniper_opportunity_observation_error",
+                        json!({"context":context(telemetry),
+                            "error":error.to_string().chars().take(240).collect::<String>()}).to_string()]);
+            }
+        }
         // Cache only data already accepted by the regular reconciled snapshot path. Fast
         // pulses may overlay a newer quote but can never replace account/position state.
         self.fast = Some(pulse::FastContext::new(telemetry, config, frames));
