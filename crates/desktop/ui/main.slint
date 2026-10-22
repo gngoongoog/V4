@@ -112,6 +112,7 @@ export component Dashboard inherits Window {
     in property <string> spread-display: "—";
     in property <string> quote-age-display: "—";
     in property <[ChartCandle]> chart-bars;
+    in property <bool> render-fixture: false;
     in-out property <int> chart-frame: 0;
     in-out property <int> page: 0;
     in-out property <int> nav-section: 0;
@@ -1081,6 +1082,15 @@ export component Dashboard inherits Window {
                                     height: (bar.body-bottom - bar.body-top) * (parent.height - 16px) + 2px;
                                     background: bar.up ? #16caaa : #ee6174;
                                     border-radius: 1px;
+                                }
+                                // Test screenshots alone may use synthetic illustration
+                                // data, clearly overlaid; runtime default is always false.
+                                if root.render-fixture: Rectangle {
+                                    x:12px;y:10px;height:22px;width:232px;
+                                    background:#253a50d9;border-radius:5px;
+                                    Text {text:"RENDER FIXTURE • NOT LIVE MT5";
+                                        color:#f5d398;font-size:10px;font-weight:700;
+                                        horizontal-alignment:center;vertical-alignment:center;}
                                 }
                                 if root.chart-bars.length == 0: Text {
                                     text: "بانتظار شموع MT5 مكتملة وحديثة لهذا الرمز — لا نعرض شارتاً افتراضياً";
