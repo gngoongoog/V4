@@ -289,7 +289,7 @@ export component Dashboard inherits Window {
                 Button { text: root.width < 1120px ? "≡" : "≡   سجل النظام"; clicked => {root.nav-section=4;root.page=2;root.action("events");} }
                 Button { text: root.width < 1120px ? "⚙" : "⚙   الإعدادات"; clicked => {root.nav-section=4;root.page=1;} }
                 Rectangle { vertical-stretch:1; background:transparent; }
-                Text { text: root.width < 1120px ? "V4" : "Windows • Rust / Slint"; color: root.theme-choice == 1 ? #7d8ba1 : #93a8bc; font-size:10px; horizontal-alignment:center; }
+                Text { text: root.width < 1120px ? "V4" : "Windows 0.7.4 • Rust / Slint"; color: root.theme-choice == 1 ? #7d8ba1 : #93a8bc; font-size:10px; horizontal-alignment:center; }
                 Text { text: root.online ? (root.width < 1120px ? "●" : "●  MT5 ONLINE") : (root.width < 1120px ? "○" : "○  MT5 OFFLINE"); color: root.online ? #18c9a7 : #d99870; font-size:12px; horizontal-alignment:center; }
             }
         }
