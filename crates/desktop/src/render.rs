@@ -18,6 +18,29 @@ pub fn render() -> anyhow::Result<()> {
         window: window.clone(),
     }))?;
     let ui = Dashboard::new()?;
+    // Synthetic render-only candles demonstrate layout fidelity in CI.
+    // This function is never executed during the real dashboard loop.
+    ui.set_render_fixture(true);
+    let visual_bars: Vec<ChartCandle> = (0..66).map(|i| {
+        let t = i as f32;
+        let wave = (t * 0.22).sin() * 0.13 + (t * 0.07).sin() * 0.08;
+        let middle = (0.54 - wave).clamp(0.26, 0.78);
+        let up = i % 7 != 0 && i % 11 != 0 && i % 3 != 0;
+        let open = (middle + if up {0.027} else {-0.016}).clamp(0.17,0.88);
+        let close = (middle + if up {-0.021} else {0.029}).clamp(0.16,0.89);
+        let top = open.min(close);
+        let bottom = open.max(close);
+        ChartCandle {
+            x: (t + 0.5) / 66.0,
+            high_y: (top - 0.025).max(0.03),
+            low_y: (bottom + 0.026).min(0.98),
+            body_top: top,
+            body_bottom: bottom,
+            up,
+            volume: ((i * 19 % 49) as f32 + 8.0) / 65.0,
+        }
+    }).collect();
+    ui.set_chart_bars(slint::ModelRc::new(slint::VecModel::from(visual_bars)));
     ui.set_state("STOPPED".into());
     ui.set_connection("MT5 is not connected / بانتظار الاتصال".into());
     ui.set_diagnostics(
@@ -166,6 +189,25 @@ pub fn render() -> anyhow::Result<()> {
             }
             }
         }
+    }
+    // Fidelity previews at the native 1540x920 target window size, rather than
+    // forcing the user to judge the institutional layout from tiny 880px shots.
+    // These screenshots are synthetic fixtures (see overlay), never live MT5.
+    let reference_dir = std::path::Path::new("test-output").join("reference-preview");
+    std::fs::create_dir_all(&reference_dir)?;
+    for (theme, name) in [(0,"dark"),(1,"white"),(2,"smoke")] {
+        ui.set_theme_choice(theme);
+        ui.set_page(0);
+        window.set_size(slint::PhysicalSize::new(1540, 920));
+        slint::platform::update_timers_and_animations();
+        ui.window().request_redraw();
+        let mut pixels=vec![Rgb8Pixel::default();1540*920];
+        window.draw_if_needed(|renderer| {renderer.render(&mut pixels,1540);});
+        let file=reference_dir.join(format!("reference-command-center-{name}.ppm"));
+        let mut writer=std::io::BufWriter::new(std::fs::File::create(file)?);
+        write!(writer,"P6\n1540 920\n255\n")?;
+        for pixel in pixels {writer.write_all(&[pixel.r,pixel.g,pixel.b])?;}
+        writer.flush()?;
     }
     ui.hide()?;
     Ok(())

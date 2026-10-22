@@ -76,7 +76,7 @@ class NativeUiContract(unittest.TestCase):
                     else:
                         self.assertRegex(element,r"\bchecked\s*<=>")
         # Catch missing fields silently disappearing from nested layouts.
-        self.assertEqual(total,{"Button":130,"ComboBox":29,"LineEdit":49,"CheckBox":12})
+        self.assertEqual(total,{"Button":115,"ComboBox":29,"LineEdit":49,"CheckBox":12})
 
     def test_premium_native_dashboard_keeps_real_market_provenance(self):
         main=(RUST / "main.rs").read_text(encoding="utf-8")
@@ -91,6 +91,39 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("market.valid()",main)
         self.assertIn("captured_ms <= 120_000",main) if "captured_ms <= 120_000" in main else self.assertIn("now_ms.saturating_sub(market.captured_ms) <= 120_000",main)
 
+    def test_original_reference_has_full_size_three_palette_screenshots(self):
+        renderer=(RUST / "render.rs").read_text(encoding="utf-8")
+        checker=(ROOT / "scripts/check_native_ui_visuals.py").read_text(encoding="utf-8")
+        self.assertIn("reference-command-center-{name}.ppm",renderer)
+        self.assertIn("reference-command-center-{palette}.ppm",checker)
+        self.assertIn("1540, 920",checker)
+        self.assertIn("Synthetic",renderer) if "Synthetic" in renderer else self.assertIn("synthetic",renderer)
+
+    def test_render_only_example_market_chart_is_never_live_trading_data(self):
+        runtime=(RUST / "main.rs").read_text(encoding="utf-8")
+        render=(RUST / "render.rs").read_text(encoding="utf-8")
+        self.assertIn("in property <bool> render-fixture: false;",self.dashboard)
+        self.assertIn("RENDER FIXTURE • NOT LIVE MT5",self.dashboard)
+        self.assertIn("ui.set_render_fixture(true)",render)
+        self.assertIn("ui.set_chart_bars",render)
+        self.assertNotIn("set_render_fixture(true)",runtime)
+        self.assertIn("native_chart_candles",runtime)
+
+    def test_reference_mockup_navigation_and_actions_are_all_wired(self):
+        self.assertEqual(len(re.findall(r"\bDeskNav\s*\{",self.dashboard)), 12)
+        self.assertEqual(len(re.findall(r"\bDeskAction\s*\{",self.dashboard)), 6)
+        self.assertEqual(len(re.findall(r"\bDeskMetric\s*\{",self.dashboard)), 12)
+        self.assertIn("visible:root.width >= 1280px",self.dashboard)
+        self.assertIn("visible:root.width < 1280px",self.dashboard)
+        self.assertEqual(len(re.findall(r"\bTouchArea\s*\{\s*clicked\s*=>",self.dashboard)),2)
+        self.assertIn("root.pressed();",self.dashboard)
+        self.assertIn("root.trade-journal-rows[0]",self.dashboard)
+        self.assertIn("root.brain-monitor-overview",self.dashboard)
+        self.assertIn("root.risk-monitor-text",self.dashboard)
+        self.assertIn("root.online && root.state==\"STOPPED\"",self.dashboard)
+        self.assertIn('root.action("start")',self.dashboard)
+        self.assertIn('root.action("stop")',self.dashboard)
+
     def test_no_button_is_rendered_without_a_click_handler(self):
         for path in (SLINT, CORRELATION):
             src = path.read_text(encoding="utf-8")
@@ -98,11 +131,15 @@ class NativeUiContract(unittest.TestCase):
             # decorative buttons are not accepted into the Windows release.
             count = len(re.findall(r"\bButton\s*\{", src))
             wired = len(re.findall(r"\bclicked\s*=>", src))
+            # UI-07 uses 2 custom Rectangle+TouchArea components for
+            # interactive sidebar entries and premium order buttons.
+            touch = len(re.findall(r"\bTouchArea\s*\{\s*clicked\s*=>", src))
             self.assertGreater(count, 0)
-            self.assertEqual(count, wired, f"Found inert control in {path.name}")
+            self.assertEqual(count, wired-touch, f"Found inert control in {path.name}")
 
     def test_every_declared_callback_is_registered_in_the_desktop(self):
-        callbacks = set(re.findall(r"(?m)^\s*callback\s+([a-z0-9-]+)\s*\(", self.dashboard))
+        dashboard_root=self.dashboard.split("export component Dashboard inherits Window {",1)[1]
+        callbacks = set(re.findall(r"(?m)^\s*callback\s+([a-z0-9-]+)\s*\(", dashboard_root))
         callbacks.update(re.findall(r"(?m)^\s*callback\s+([a-z0-9-]+)\s*\(", CORRELATION.read_text(encoding="utf-8")))
         # Correlation callback is forwarded to Dashboard; not a Rust callback itself.
         handlers = set(re.findall(r"\bui\.on_([a-z0-9_]+)\s*\(", self.rust))
