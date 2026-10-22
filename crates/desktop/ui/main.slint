@@ -854,7 +854,7 @@ export component Dashboard inherits Window {
                     VerticalLayout {
                         padding: 16px; spacing: 12px;
                         Text { text: "4  •  حفظ الإعدادات ومعاينة تكلفة صفقة جديدة"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 16px; font-weight: 700; }
-                        Button { text: "4   حفظ إعدادات التداول"; enabled: !root.studio-busy && root.state == "STOPPED"; clicked => { root.studio-action("save"); } }
+                        Button { text: "4   حفظ إعدادات التداول"; enabled: !root.studio-busy && !root.studio-cancel-busy && root.state == "STOPPED"; clicked => { root.studio-action("save"); } }
                         Text { text: "أوقف النظام لتبديل الوضع أو التكاليف. الصفقة المفتوحة تحتفظ بهدفها ووقفها ومدتها التي جُمّدت عند الدخول."; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
                         HorizontalLayout {
                             spacing: 14px;
@@ -866,7 +866,7 @@ export component Dashboard inherits Window {
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
                                 Text { text: "سعر MT5 اللحظي والسبريد"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
-                                Button { text: "احسب التكلفة الحالية"; enabled: !root.studio-busy; clicked => { root.studio-action("cost"); } }
+                                Button { text: "احسب التكلفة الحالية"; enabled: !root.studio-busy && !root.studio-cancel-busy; clicked => { root.studio-action("cost"); } }
                             }
                         }
                         Rectangle { height: 1px; background: root.theme-choice == 1 ? #e3e9f0 : #3d4047; }
@@ -882,21 +882,21 @@ export component Dashboard inherits Window {
             Text { text: "يبني 40 تركيباً من الاختراق والارتداد والاتجاه واختبارات وايكوف، ثم يرتبها بالتدريب والتحقق الزمني. الاختبار النهائي محفوظ ولا يختار الاستراتيجية. لا تفعيل تلقائي للنتائج."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             ComboBox { model: root.studio-frames; current-index <=> root.studio-tf; }
             HorizontalBox {
-                Button { text: "توليد وتقييم"; enabled: !root.studio-busy; clicked => { root.studio-action("run"); } }
-                Button { text: "تعلم تلقائي"; enabled: !root.studio-busy; clicked => { root.studio-action("auto_on"); } }
+                Button { text: "توليد وتقييم"; enabled: !root.studio-busy && !root.studio-cancel-busy; clicked => { root.studio-action("run"); } }
+                Button { text: "تعلم تلقائي"; enabled: !root.studio-busy && !root.studio-cancel-busy; clicked => { root.studio-action("auto_on"); } }
                 Button { text: root.studio-cancel-busy ? "جارٍ إلغاء المختبر..." : "إيقاف وإلغاء"; enabled: !root.studio-cancel-busy; clicked => { root.studio-action("cancel"); } }
             }
             Text { text: "التعلم التلقائي ينتظر اختباراً نهائياً جديداً. يدعم فريمات MT5 الـ21 ولا يعوض التاريخ المفقود ببيانات مصطنعة."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             Text { text: root.studio-message; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
             ComboBox { model: root.studio-reports; current-index <=> root.studio-report-index; }
-            Button { text: "فتح النتيجة المحفوظة"; enabled: !root.studio-busy && root.studio-reports.length > 0; clicked => { root.studio-action("report"); } }
+            Button { text: "فتح النتيجة المحفوظة"; enabled: !root.studio-busy && !root.studio-cancel-busy && root.studio-reports.length > 0; clicked => { root.studio-action("report"); } }
             Text { text: root.studio-report; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; horizontal-alignment: left; }
             Text { text: root.studio-summary; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
         } }
         if root.page == 16: ScrollView { VerticalBox { spacing: 10px;
             Text { text: "عقل وايكوف — الرصد وقياس النتيجة"; font-size: 20px; color: root.theme-choice == 1 ? #19283b : #f2f2f4; }
             ComboBox { model: root.studio-frames; current-index <=> root.studio-tf; selected => { root.studio-action("refresh"); } }
-            Button { text: "تحديث التحليل"; enabled: !root.studio-busy; clicked => { root.studio-action("refresh"); } }
+            Button { text: "تحديث التحليل"; enabled: !root.studio-busy && !root.studio-cancel-busy; clicked => { root.studio-action("refresh"); } }
             Text { text: "يرصد Spring / Upthrust واختبارهما وSOS → LPS وSOW → LPSY. يحفظ أول إشارة ثم يقيس الصافي بعد 12 شمعة لاحقة مع التكلفة. نتائج التعلم تُعرض هنا؛ تشغيل وايكوف منفرداً من صفحة التنفيذ."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             Text { text: root.wyckoff-detail; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; horizontal-alignment: left; }
             Text { text: root.studio-message; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
