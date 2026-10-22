@@ -202,7 +202,7 @@ pub fn render() -> anyhow::Result<()> {
         slint::platform::update_timers_and_animations();
         ui.window().request_redraw();
         let mut pixels=vec![Rgb8Pixel::default();1540*920];
-        window.draw_if_needed(|renderer|renderer.render(&mut pixels,1540));
+        window.draw_if_needed(|renderer| {renderer.render(&mut pixels,1540);});
         let file=reference_dir.join(format!("reference-command-center-{name}.ppm"));
         let mut writer=std::io::BufWriter::new(std::fs::File::create(file)?);
         write!(writer,"P6\n1540 920\n255\n")?;
