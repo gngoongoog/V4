@@ -49,6 +49,7 @@ fn native_chart_candles(market: &braintrade_domain::MarketData, frame: i32) -> V
     let upper = high + padding;
     let denom = upper - lower;
     let at = |price: f64| ((upper - price) / denom).clamp(0.0, 1.0) as f32;
+    let max_tick_volume = subset.iter().map(|c| c.tick_volume).max().unwrap_or(0);
     subset.iter().enumerate().map(|(i, candle)| ChartCandle {
         x: (i as f32 + 0.5) / subset.len() as f32,
         high_y: at(candle.high),
@@ -56,6 +57,9 @@ fn native_chart_candles(market: &braintrade_domain::MarketData, frame: i32) -> V
         body_top: at(candle.open.max(candle.close)),
         body_bottom: at(candle.open.min(candle.close)),
         up: candle.close >= candle.open,
+        volume: if max_tick_volume == 0 { 0.0 } else {
+            (candle.tick_volume as f32 / max_tick_volume as f32).clamp(0.0, 1.0)
+        },
     }).collect()
 }
 
