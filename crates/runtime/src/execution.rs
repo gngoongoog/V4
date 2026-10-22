@@ -304,6 +304,7 @@ pub struct Service {
 impl Service {
     pub fn new(db: &Connection) -> Result<Self> {
         crate::frozen_shadow::init(db)?;
+        crate::matched_forward::init(db)?;
         let mut inner = legacy::Service::new(db)?;
         // `system` is the coordinated main brain. It is controlled by global START/STOP,
         // not by the per-brain SOLO switch. Keep it enabled in memory even when an older
