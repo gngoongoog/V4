@@ -43,23 +43,26 @@ fn classify(result:&Value, history:&[Value])->(&'static str,&'static str){
         || valid_positive(&record["price"]).is_none(){
         return ("unsupported_or_incomplete_deal","سجل التنفيذ غير مكتمل أو ليس دخولاً بسيطاً؛ لا نستنتج تعبئة");
     }
-    if let (Some(request_type),Some(deal_type))=
-        (result["request"]["type"].as_i64(),record["type"].as_i64()){
-        if request_type!=deal_type{
-            return ("conflicting_history","اتجاه Deal لا يطابق اتجاه أمر MT5");
-        }
+    let (Some(request_type),Some(deal_type))=
+        (result["request"]["type"].as_i64(),record["type"].as_i64()) else{
+        return ("unsupported_or_incomplete_deal","اتجاه الطلب أو Deal مفقود؛ لا يمكن تأكيد المطابقة");
+    };
+    if !matches!(request_type,0|1) || request_type!=deal_type {
+        return ("conflicting_history","اتجاه Deal لا يطابق اتجاه أمر MT5");
     }
-    if let (Some(symbol),Some(actual))=
-        (result["request"]["symbol"].as_str(),record["symbol"].as_str()){
-        if symbol!=actual{
-            return ("conflicting_history","رمز سجل Deal يختلف عن الأمر");
-        }
+    let (Some(symbol),Some(actual))=
+        (result["request"]["symbol"].as_str(),record["symbol"].as_str()) else{
+        return ("unsupported_or_incomplete_deal","رمز الطلب أو صفقة الوسيط مفقود");
+    };
+    if symbol.is_empty() || symbol!=actual {
+        return ("conflicting_history","رمز سجل Deal يختلف عن الأمر");
     }
-    if let Some(requested)=valid_positive(&result["request"]["volume"]){
-        let observed=valid_positive(&record["volume"]).unwrap();
-        if observed>requested+1e-8{
-            return ("conflicting_history","حجم Deal أكبر من الحجم المطلوب في الأمر");
-        }
+    let Some(requested)=valid_positive(&result["request"]["volume"]) else{
+        return ("unsupported_or_incomplete_deal","الحجم المطلوب في أمر البوابة مفقود");
+    };
+    let observed=valid_positive(&record["volume"]).unwrap();
+    if observed>requested+1e-8{
+        return ("conflicting_history","حجم Deal أكبر من الحجم المطلوب في الأمر");
     }
     if let Some(supplied)=result["position_id"].as_u64().filter(|v|*v>0){
         if record["position_id"].as_u64()!=Some(supplied){
@@ -227,6 +230,18 @@ mod tests {
             [malformed.to_string()]).unwrap();
         let r=audit(&db,"a").unwrap();
         assert_eq!(r["unsupported_or_incomplete_deals"],2);
+        assert_eq!(r["exact_synced_entry_deal_ticket_links"],0);
+    }
+    #[test]
+    fn incomplete_request_geometry_never_claims_exact_broker_link(){
+        let db=db();
+        let cmd=json!({"deal":70,"retcode":10009,
+            "request":{"symbol":"XAUUSD","volume":0.04}});
+        db.execute("INSERT INTO broker_commands VALUES('no-type','a','open',1000,'filled',?1,?2)",
+            params![json!({"trading_mode":"sniper"}).to_string(),cmd.to_string()]).unwrap();
+        add_deal(&db,"a",70,0.04,0,0);
+        let r=audit(&db,"a").unwrap();
+        assert_eq!(r["unsupported_or_incomplete_deals"],1);
         assert_eq!(r["exact_synced_entry_deal_ticket_links"],0);
     }
     #[test]
