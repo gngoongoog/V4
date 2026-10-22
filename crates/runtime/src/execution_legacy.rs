@@ -356,6 +356,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         let paper_due = now.saturating_sub(self.last_paper_sample_ms) >= 1_000;
         if paper_due {self.last_paper_sample_ms=now;}
         let mut activity_samples=Vec::new();
+        // A single SYSTEM decision per 1 Hz activity batch; no per-Tick disk log.
+        let mut sniper_funnel_sample:Option<Value>=None;
         let sniper_signal = self.sniper.evaluate(t,c,now);
         let available=crate::coordinator_learning::available_frames(t,frames,now);
         for b in self.brains.clone() {
@@ -536,6 +538,9 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             }
             let can = signal.ready && gates.is_empty();
             let result = json!({"signal":signal,"gates":gates,"ready":can,"decision_us":decision_us,"evaluated_ms":now});
+            if paper_due && b.id=="system" && c.trading.mode==braintrade_domain::trading::TradingMode::Sniper {
+                sniper_funnel_sample=Some(result.clone());
+            }
             self.signals.insert(b.id.clone(), result.clone());
             if can && b.id == "system" {
                 let tx = db.unchecked_transaction()?;
@@ -553,6 +558,11 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         if !activity_samples.is_empty() {
             let tx=db.unchecked_transaction()?;
             for (id,signal) in activity_samples {crate::brain_control::sample(&tx,&key,c.trading.mode,&id,&signal,now)?;}
+            if let Some(ref sample)=sniper_funnel_sample {
+                // Audit is best-effort: never block MT5 execution or abort
+                // a valid trade because of optional diagnostic telemetry.
+                let _=crate::sniper_entry_funnel::record(&tx,&key,sample,now);
+            }
             tx.commit()?;
         }
         Ok(())
