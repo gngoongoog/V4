@@ -86,17 +86,97 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("BRAINTRADE OS "+version,self.dashboard)
         self.assertNotIn("Windows 0.7.1",self.dashboard)
 
+    def test_compact_navigation_preserves_all_22_real_page_actions(self):
+        self.assertIn("current-index <=> root.page",self.dashboard)
+        self.assertIn("visible: root.expanded-workspaces",self.dashboard)
+        self.assertIn('if root.account-mode-label == "REAL": HorizontalLayout',self.dashboard)
+        self.assertIn("text <=> root.live-start-login",self.dashboard)
+        self.assertIn("root.expanded-workspaces = !root.expanded-workspaces",self.dashboard)
+        for action in ('root.studio-action("config")',
+                       'root.execution-action("refresh")',
+                       'root.trade-journal-action("refresh")',
+                       'root.brain-monitor-action("refresh")',
+                       'root.risk-monitor-refresh()',
+                       'root.correlation-action("refresh")',
+                       'root.action("events")'):
+            self.assertIn(action,self.dashboard)
+    def test_institutional_risk_brain_and_execution_cards_reuse_real_state(self):
+        checks = (
+            'label:"MODE / الوضع الحالي"',
+            'value:root.trade-mode == 3 ? "SNIPER"',
+            'label:"BROKER / نوع الحساب"',
+            'value:root.account-mode-label',
+            'label:"BRAIN MONITOR / حالة البيانات"',
+            'value:root.brain-monitor-busy',
+            'label:"EXECUTION / الحالة"',
+            'value:root.exec-busy',
+            'label:"RISK MONITOR / تحديث"',
+            'value:root.risk-monitor-busy',
+            'text: root.brain-monitor-detail',
+            'text: root.risk-monitor-text',
+            'root.brain-monitor-action("save")',
+            'root.execution-action("bind")',
+            'root.save-risk()'
+        )
+        for expression in checks:
+            self.assertIn(expression, self.dashboard, expression)
+        for index in range(22):
+            self.assertIn(f'root.page == {index} ?',self.dashboard,
+                          f"Missing per-page live breadcrumb for page {index}")
+
+    def test_studio_cancel_really_works_while_studio_is_busy(self):
+        src=(RUST / "studio.rs").read_text(encoding="utf-8")
+        self.assertIn('if action=="cancel"',src)
+        self.assertIn('ui.set_studio_cancel_busy(true)',src)
+        self.assertIn('ui.set_studio_cancel_busy(false)',src)
+        self.assertIn('"/v1/studio/cancel"',src)
+        self.assertLess(src.index('if action=="cancel"'), src.index('if ui.get_studio_busy(){return;}'))
+        self.assertIn('enabled: !root.studio-cancel-busy; clicked => { root.studio-action("cancel"); }',self.dashboard)
+        self.assertIn('in property <bool> studio-cancel-busy: false;',self.dashboard)
+
+    def test_status_strip_responsive_and_white_theme_legible(self):
+        self.assertIn('visible: root.width >= 1100px;', self.dashboard)
+        self.assertIn('visible: root.width >= 1250px;', self.dashboard)
+        self.assertIn('visible: root.width >= 1400px;', self.dashboard)
+        self.assertIn('#e9eff6', self.dashboard)
+        self.assertIn('#dff5ee', self.dashboard)
+
+    def test_global_page_refresh_is_only_wired_to_real_supported_handlers(self):
+        for page, callback in (
+            (2, 'root.action("events")'),
+            (6, 'root.risk-monitor-refresh()'),
+            (7, 'root.backtest-action("refresh")'),
+            (8, 'root.news-action("refresh")'),
+            (9, 'root.evaluation-action("refresh")'),
+            (11, 'root.learning-action("refresh")'),
+            (13, 'root.backup-action("refresh")'),
+            (14, 'root.studio-action("config")'),
+            (17, 'root.execution-action("refresh")'),
+            (18, 'root.correlation-action("refresh")'),
+            (20, 'root.trade-journal-action("refresh")'),
+            (21, 'root.brain-monitor-action("refresh")'),
+        ):
+            self.assertIn(f"root.page == {page}", self.dashboard)
+            self.assertIn(callback, self.dashboard)
+        self.assertIn('text: "↻ تحديث الصفحة"', self.dashboard)
+        self.assertIn("!root.news-refreshing", self.dashboard)
+        self.assertIn("!root.brain-monitor-busy", self.dashboard)
+        self.assertIn('root.page == 15 || root.page == 16', self.dashboard)
+        self.assertIn("root.save-appearance(root.theme-choice,root.compact-sidebar,root.expanded-workspaces)", self.dashboard)
+
     def test_entire_22_page_windows_dashboard_supports_saved_appearance(self):
         main = (RUST / "main.rs").read_text(encoding="utf-8")
         render = (RUST / "render.rs").read_text(encoding="utf-8")
         correlation = CORRELATION.read_text(encoding="utf-8")
-        for token in ("callback save-appearance(int, bool)", "root.save-appearance(",
+        for token in ("callback save-appearance(int, bool, bool)", "root.save-appearance(",
                       "changed theme-choice =>", "root.compact-sidebar"):
             self.assertIn(token, self.dashboard)
         self.assertIn("ui.on_save_appearance", main)
         self.assertIn('data_dir().join("ui-appearance.json")', main)
         self.assertIn("ui.set_theme_choice(initial_theme)", main)
         self.assertIn("ui.set_compact_sidebar(initial_compact)", main)
+        self.assertIn("ui.set_expanded_workspaces(initial_expanded)", main)
+        self.assertIn('"expanded_workspaces":expanded', main)
         self.assertIn("theme-choice: root.theme-choice", self.dashboard)
         self.assertIn("in property <int> theme-choice: 0;", correlation)
         for marker in ('[(0,"dark"),(1,"white"),(2,"smoke")]', "for page in 0..22",
@@ -112,8 +192,6 @@ class NativeUiContract(unittest.TestCase):
             self.assertIn(f'text:"{mode}"',self.dashboard)
             self.assertIn(palette,self.dashboard)
         self.assertIn("theme-choice: 0",self.dashboard)
-        # Slint 1.16 Fluent light palette renders near-white button labels on white;
-        # retain dark native controls on light workspace for readable text.
         self.assertIn("changed theme-choice => { Palette.color-scheme = ColorScheme.dark; }",self.dashboard)
         self.assertIn("root.chart-bars",self.dashboard)
         self.assertIn("بانتظار شموع MT5",self.dashboard)
