@@ -172,6 +172,14 @@ class NativeUiContract(unittest.TestCase):
             self.assertIn(f'root.page == {index} ?',self.dashboard,
                           f"Missing per-page live breadcrumb for page {index}")
 
+    def test_windows_gui_render_process_is_synchronous_before_screenshot_check(self):
+        script=(ROOT / "scripts/build-windows.ps1").read_text(encoding="utf-8")
+        self.assertIn("Start-Process -FilePath",script)
+        self.assertIn("-PassThru -Wait",script)
+        self.assertIn("-WorkingDirectory $PWD.Path",script)
+        self.assertIn("$NativeRenderer.ExitCode -ne 0",script)
+        self.assertLess(script.index("Start-Process -FilePath"),script.index("scripts\\check_native_ui_visuals.py"))
+
     def test_packaged_windows_visual_contract_accepts_all_three_palettes(self):
         portable=(ROOT / "scripts/check_windows_portable.py").read_text(encoding="utf-8")
         self.assertIn("review_pages = {0, 6, 14, 17, 18, 19, 21}",portable)
