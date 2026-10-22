@@ -67,6 +67,23 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
     ));
     if b["config"]["id"]=="system" {
         if v["trading_mode"]=="sniper" {
+            let funnel=&b["sniper_entry_funnel"];
+            let outcomes=&funnel["outcomes"];
+            detail.push_str(&format!(
+                "\n\nقمع قرارات دخول القناص (عينة تقريبية كل ثانية، آخر 24–25 ساعة):\nعينات قرار {} | إشارة غير جاهزة {} | إشارة جاهزة منعتها الضوابط {} | اجتازت الفحص للطابور {}\nالعدد لا يمثل جميع Ticks أو فرصاً رابحة ضائعة؛ اجتياز الفحص لا يؤكد إرسال أمر أو تعبئة صفقة.",
+                funnel["sampled_decisions"],
+                outcomes["strategy_not_ready"],
+                outcomes["ready_but_blocked"],
+                outcomes["eligible_for_queue"]
+            ));
+            for reason in funnel["top_causes"].as_array().into_iter().flatten().take(8) {
+                detail.push_str(&format!(
+                    "\n  {}: {} عيّنة",
+                    reason["label_ar"].as_str().unwrap_or("غير مصنف"),
+                    reason["samples"]
+                ));
+            }
+            detail.push_str("\nقد يُمنع القرار الجاهز بأكثر من بوابة، لذلك مجموع الأسباب قد يتجاوز عدد الإشارات المحظورة. هذه بيانات رصد لا تقدّر ربح الفرص الفائتة.");
             let quality=&b["sniper_policy_quality"];
             detail.push_str(&format!(
                 "\n\nتقييم أساليب القناص من صفقات MT5 Demo المغلقة فقط:\nمراكز مكتملة {} | مرفوضة/غير منسوبة {} | مكررة {} | مجموعات بحسب الأسلوب وحالة السوق وإصدار السياسة {}\nالنتائج وصفية للمراقبة فقط؛ آخر الصفقات ليست اختباراً مستقلاً، ولا يوجد اعتماد تلقائي لأسلوب جديد.",
