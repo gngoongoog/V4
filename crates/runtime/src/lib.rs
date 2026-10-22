@@ -11,6 +11,7 @@ mod coordinator_paper;
 mod research_order_lifecycle;
 mod research_admission;
 mod research_execution_bridge;
+mod research_demo_deal_audit;
 mod matched_forward;
 mod matched_trade;
 mod student_learning;
@@ -134,6 +135,9 @@ impl Engine{
         }
         if path=="/v1/research/execution-bridge" && method=="POST" {
             return research_execution_bridge::compare(body);
+        }
+        if path=="/v1/research/demo-deal-audit" && method=="POST" {
+            return research_demo_deal_audit::audit(body);
         }
         if method=="GET" && path=="/v1/risk/monitor" {
             let (cfg,status)={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());
