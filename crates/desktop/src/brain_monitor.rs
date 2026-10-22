@@ -21,6 +21,8 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
         v["activity_note"].as_str().unwrap_or("")).into());
     ui.set_brain_monitor_overview(overview.into());
     ui.set_brain_monitor_available(v["controls_available"]==true);
+    ui.set_frozen_trial_available(v["controls_available"]==true
+        && v["settings"]["target"]=="demo" && v["trading_mode"]=="expert");
     let Some(b)=rows.and_then(|r|r.get(index)) else {return};
     if load {
         ui.set_brain_advisor(b["control"]["advisor"]==true);
@@ -63,6 +65,20 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
         q["recent"]["win_rate"].as_f64().map(|v|format!("{:.1}%",v*100.)).unwrap_or_else(||"—".into()),
         maybe_number(&q["all"]["net_booked"]),maybe_number(&q["all"]["cost_drag"]),q["all"]["gross_positive_but_net_nonpositive"]
     ));
+    let frozen=&b["frozen_trial"];
+    let stage=match frozen["status"].as_str().unwrap_or("") {
+        "active"=>"نشطة — نسخة الإعدادات لا تتعلم وتتداول Paper فقط",
+        "stopped"=>"منتهية — السجل محفوظ",
+        "not_started"=>"لا توجد تجربة بعد",
+        _=>"التجربة غير متاحة دون حساب Demo مربوط"
+    };
+    detail.push_str(&format!(
+        "\n\nنسخة Shadow مجمّدة: {}\nالشموع المستقبلية المقارنة {} | إشارتان جاهزتان {} | اتجاه متوافق {}\nصفقات ورقية منتهية {} | رابحة {} | صافي افتراضي بعد تكاليف مفترضة {}\n{}",
+        stage,frozen["paired_bars"],frozen["both_ready"],frozen["side_agreements"],
+        frozen["paper_trades_closed"],frozen["paper_wins"],
+        maybe_number(&frozen["paper_net_after_assumed_costs"]),
+        "هذه نسخة سياسة مستشار ثابتة على Demo فقط، لا تتلقى تحديثاً بعد التجميد ولا تدخل أوامر MT5؛ نتائجها ليست أرباحاً حقيقية ولا اختباراً للقناص أو النظام الرئيسي."
+    ));
     ui.set_brain_monitor_detail(detail.into());
 }
 pub fn setup(ui:&Dashboard)->slint::Timer {
@@ -75,8 +91,14 @@ pub fn setup(ui:&Dashboard)->slint::Timer {
         let index=ui.get_brain_monitor_selected().max(0) as usize;
         let v=current.lock().unwrap();
         if a=="select" {paint(&ui,&v,index,true);return}
-        let body=json!({"context":v["context"],"brain":BRAINS.get(index).map(|b|b.0).unwrap_or("system"),"mode":v["trading_mode"],
-            "control":{"advisor":ui.get_brain_advisor(),"paper":ui.get_brain_paper()}});
+        let body=if a=="freeze"||a=="stop_frozen" {
+            json!({"action":if a=="freeze"{"freeze"}else{"stop"},
+                "context":v["context"],"brain":BRAINS.get(index).map(|b|b.0).unwrap_or("system"),
+                "mode":v["trading_mode"]})
+        }else{
+            json!({"context":v["context"],"brain":BRAINS.get(index).map(|b|b.0).unwrap_or("system"),"mode":v["trading_mode"],
+                "control":{"advisor":ui.get_brain_advisor(),"paper":ui.get_brain_paper()}})
+        };
         ui.set_brain_monitor_busy(true);
         let _=sender.send((a.to_string(),body,index));
     });
@@ -90,6 +112,7 @@ pub fn setup(ui:&Dashboard)->slint::Timer {
     thread::spawn(move ||while let Ok((action,body,index))=rx.recv(){
         let result=(||->anyhow::Result<Value>{let c=Client::new(&data_dir())?;
             if action=="save"{c.post("/v1/execution/brain-control",body)?;}
+            else if action=="freeze"||action=="stop_frozen"{c.post("/v1/execution/frozen-shadow",body)?;}
             c.get("/v1/execution/brains")})();
         let cache=cache.clone();
         let _=weak.upgrade_in_event_loop(move |ui|{
@@ -98,6 +121,8 @@ pub fn setup(ui:&Dashboard)->slint::Timer {
                 let changed={let previous=cache.lock().unwrap();previous["trading_mode"]!=v["trading_mode"] || previous["context"]!=v["context"]};
                 paint(&ui,&v,index,action!="poll"||changed);*cache.lock().unwrap()=v;
                 if action=="save"{ui.set_brain_monitor_message("حُفظت المشاركة والتدريب لهذا الحساب والرمز والوضع فقط".into());}
+                if action=="freeze"{ui.set_brain_monitor_message("أنشئت نسخة مستشار Shadow ثابتة؛ ستُقاس على شموع جديدة دون إرسال أوامر MT5".into());}
+                if action=="stop_frozen"{ui.set_brain_monitor_message("أُنهِي استقبال دخول Shadow جديد؛ الصفقة الافتراضية المفتوحة ستُسوى عند وصول سعر لاحق".into());}
             },Err(e)=>ui.set_brain_monitor_message(format!("تعذر التحديث: {e}").into())}
         });
     });timer

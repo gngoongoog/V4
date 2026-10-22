@@ -5,6 +5,7 @@ mod sniper_learning;
 mod brain_control;
 mod trade_journal;
 mod shadow_paper;
+mod frozen_shadow;
 mod student_learning;
 mod studio;
 mod backtest;
@@ -122,6 +123,13 @@ impl Engine{
             let (cfg,status)={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());
                 (s.config.clone(),s.status.clone())};
             return risk_monitor::snapshot(&self.db,&cfg,&status,now_ms());
+        }
+        if path=="/v1/execution/frozen-shadow" {
+            let (cfg,status)={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());(s.config.clone(),s.status.clone())};
+            let per_account=status.telemetry.as_ref().map(|t|cfg.for_account(t)).unwrap_or(cfg);
+            let result=self.execution.frozen_route(method,body,&self.db,&status,&per_account,now_ms())?;
+            if method=="POST"{self.event("frozen_demo_shadow_action",json!({"result":result}))?;}
+            return Ok(result);
         }
         if path.starts_with("/v1/execution") {
             let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};

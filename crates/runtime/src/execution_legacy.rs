@@ -430,6 +430,20 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 if !self.controls.get(&b.id).is_none_or(|control|control.paper) {paper_signal.ready=false;}
                 // Pausing new paper entries must still settle previously opened practice.
                 crate::shadow_paper::observe(db,&key,&b,&paper_signal,t,c,now)?;
+                // Frozen trials are isolated quote-observed paper evidence, not
+                // orders and not input to the adaptive coordinator learner.
+                if b.id!="system"{
+                    // Shadow failures must NEVER abort the actual broker execution
+                    // coordinator or prevent closing positions. Record for audit.
+                    if let Err(error)=crate::frozen_shadow::observe(db,&key,c.trading.mode,&b.id,&signal,t,now,&available){
+                        let _=db.execute(
+                            "INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,?2,?3)",
+                            params![now,"frozen_shadow_observe_error",
+                                json!({"context":key,"brain":b.id,
+                                    "error":error.to_string().chars().take(240).collect::<String>()}).to_string()]
+                        );
+                    }
+                }
             }
             let decision_us = started.elapsed().as_micros() as u64;
             let mut gates = vec![];

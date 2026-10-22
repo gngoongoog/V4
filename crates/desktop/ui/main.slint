@@ -83,6 +83,7 @@ export component Dashboard inherits Window {
     in property <string> brain-monitor-overview;
     in property <string> brain-monitor-detail;
     in property <string> brain-monitor-message;
+    in property <bool> frozen-trial-available: false;
     callback brain-monitor-action(string);
     in-out property <int> sniper-target-mode: 0;
     in-out property <string> sniper-min-target-pips: "2";
@@ -436,6 +437,11 @@ export component Dashboard inherits Window {
             HorizontalBox {
                 Button { text: "حفظ تحكم العقل"; enabled: root.brain-monitor-available && !root.brain-monitor-busy && root.brain-monitor-selected != 0 && root.state == "STOPPED"; clicked => { root.brain-monitor-action("save"); } }
                 Button { text: "تحديث الحالة"; enabled: !root.brain-monitor-busy; clicked => { root.brain-monitor-action("refresh"); } }
+            }
+            Text { text: "اختبار Shadow مجمّد — ينسخ إعدادات العقل المستشار الحالية كما هي، ويقارنها على أسعار لاحقة فقط، ولا يرسل أي أمر إلى MT5"; color: #b8bbc3; wrap: word-wrap; }
+            HorizontalBox {
+                Button { text: "جمّد نسخة تجريبية"; enabled: root.frozen-trial-available && !root.brain-monitor-busy && root.brain-monitor-selected > 0 && root.brain-monitor-selected != 16 && root.state == "STOPPED"; clicked => { root.brain-monitor-action("freeze"); } }
+                Button { text: "إنهاء التجربة المجمّدة"; enabled: root.frozen-trial-available && !root.brain-monitor-busy && root.brain-monitor-selected > 0 && root.brain-monitor-selected != 16 && root.state == "STOPPED"; clicked => { root.brain-monitor-action("stop_frozen"); } }
             }
             Text { text: root.brain-monitor-message; color: #d0d3da; wrap: word-wrap; }
             Text { text: root.brain-monitor-detail; color: #e3e5e9; wrap: word-wrap; }

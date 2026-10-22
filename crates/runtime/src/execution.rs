@@ -303,6 +303,7 @@ pub struct Service {
 
 impl Service {
     pub fn new(db: &Connection) -> Result<Self> {
+        crate::frozen_shadow::init(db)?;
         let mut inner = legacy::Service::new(db)?;
         // `system` is the coordinated main brain. It is controlled by global START/STOP,
         // not by the per-brain SOLO switch. Keep it enabled in memory even when an older
@@ -500,6 +501,48 @@ impl Service {
         Ok(value)
     }
 
+    /// Isolated Demo-only frozen advisor trials. Never returns a broker command.
+    pub fn frozen_route(
+        &mut self,method:&str,body:&[u8],db:&Connection,status:&Status,
+        config:&Config,now:u64
+    )->Result<Value>{
+        let current=status.telemetry.as_ref()
+            .filter(|t|status.gateway_fresh && t.connected && self.account_matches(status));
+        if method=="GET" {
+            let Some(t)=current else {return Ok(json!({"status":"unbound","trials":[]}));};
+            let key=context(t);
+            let mut trials=Vec::new();
+            for b in self.inner.brains.iter().filter(|b|b.id!="system"){
+                trials.push(json!({"brain":b.id,
+                    "trial":crate::frozen_shadow::report(db,&key,config.trading.mode,&b.id)?}));
+            }
+            return Ok(json!({"status":"read_only","trials":trials,
+                "broker_effect":false,"training_effect":false}));
+        }
+        anyhow::ensure!(method=="POST","Unknown frozen-shadow method");
+        anyhow::ensure!(!status.requested_run && !self.pending(db)?,
+            "أوقف النظام وانتظر تسوية أوامر MT5 قبل حفظ نسخة مجمدة");
+        let t=current.context("حساب MT5 المرتبط غير متصل أو بياناته قديمة")?;
+        anyhow::ensure!(t.demo && t.account_trade_mode==Some(0),
+            "تجميد Shadow متاح لحساب MT5 Demo فقط");
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Request{action:String,context:String,mode:braintrade_domain::trading::TradingMode,brain:String}
+        let req:Request=serde_json::from_slice(body)?;
+        anyhow::ensure!(req.context==context(t) && req.mode==config.trading.mode
+            && self.inner.active_mode==Some(req.mode),
+            "حساب أو رمز أو وضع التداول تغير؛ حدّث الصفحة قبل الحفظ");
+        let b=self.inner.brains.iter().find(|b|b.id==req.brain)
+            .context("العقل المحدد غير موجود")?;
+        match req.action.as_str(){
+            "freeze"=>{
+                let g=crate::coordinator_learning::genome(db,b,t)?;
+                crate::frozen_shadow::freeze(db,&req.context,req.mode,b,config,g.as_ref(),now)
+            }
+            "stop"=>crate::frozen_shadow::stop(db,&req.context,req.mode,&req.brain),
+            _=>anyhow::bail!("Unknown frozen-shadow action")
+        }
+    }
     pub fn route(
         &mut self,
         method: &str,
