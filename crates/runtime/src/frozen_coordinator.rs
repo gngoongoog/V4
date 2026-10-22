@@ -243,10 +243,10 @@ mod tests{
         t.quote_time_ms=Some(241_000);
         observe(&db,&t,&c,&adaptive,&sample(180),241_000).unwrap();
         observe(&db,&t,&c,&adaptive,&sample(180),242_000).unwrap();
-        let report=report(&db,&context(&t)).unwrap();
-        assert_eq!(report["bars_compared"],1);
-        assert_eq!(report["adaptive_only_ready"],1);
-        assert_eq!(report["no_broker_orders"],true);
+        let status=report(&db,&context(&t)).unwrap();
+        assert_eq!(status["bars_compared"],1);
+        assert_eq!(status["adaptive_only_ready"],1);
+        assert_eq!(status["no_broker_orders"],true);
         // Historical replay too late after close cannot create fabricated new rows.
         t.quote_time_ms=Some(999_000);
         observe(&db,&t,&c,&adaptive,&sample(240),999_000).unwrap();
