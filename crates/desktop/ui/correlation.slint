@@ -1,6 +1,7 @@
 import { Button, ComboBox, LineEdit, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
 
 export component CorrelationPage inherits Rectangle {
+    in property <int> theme-choice: 0;
     in property <[string]> sources;
     in-out property <int> source-a: -1;
     in-out property <int> source-b: -1;
@@ -26,18 +27,18 @@ export component CorrelationPage inherits Rectangle {
     ScrollView {
         VerticalBox {
             spacing: 10px;
-            Text { text: "تحليل ارتباط الرموز  /  مقارنة تاريخية"; color: #f2f2f4; font-size: 20px; }
+            Text { text: "تحليل ارتباط الرموز  /  مقارنة تاريخية"; color: root.theme-choice == 1 ? #182c40 : #f2f2f4; font-size: 20px; }
             Text {
                 text: "تحليل بحثي لنتائج Backtest محفوظة فقط. العائد يحتاج شمعتين M1 متتاليتين فعلياً؛ لا forward-fill ولا أصفار صناعية، ولا يوجد أي ربط بالتنفيذ.";
-                color: #c8cbd1; wrap: word-wrap;
+                color: root.theme-choice == 1 ? #51687c : #c8cbd1; wrap: word-wrap;
             }
             HorizontalBox {
                 Button { text: "تحديث المصادر والتقارير"; enabled: !root.busy; clicked => { root.action("refresh"); } }
-                Text { text: "أقل overlap"; color: #b7bac3; vertical-alignment: center; }
+                Text { text: "أقل overlap"; color: root.theme-choice == 1 ? #65788b : #b7bac3; vertical-alignment: center; }
                 LineEdit { text <=> root.min-overlap; placeholder-text: "30"; }
                 Button { text: "تحليل وحفظ التقرير"; enabled: !root.busy && root.sources.length >= 2; clicked => { root.action("analyze"); } }
             }
-            Text { text: "المصدران الأولان مطلوبان؛ بقية الخانات اختيارية حتى 8 رموز. اختر كل Backtest مرة واحدة فقط."; color: #b7bac3; wrap: word-wrap; }
+            Text { text: "المصدران الأولان مطلوبان؛ بقية الخانات اختيارية حتى 8 رموز. اختر كل Backtest مرة واحدة فقط."; color: root.theme-choice == 1 ? #65788b : #b7bac3; wrap: word-wrap; }
             HorizontalBox {
                 ComboBox { model: root.sources; current-index <=> root.source-a; }
                 ComboBox { model: root.sources; current-index <=> root.source-b; }
@@ -54,23 +55,23 @@ export component CorrelationPage inherits Rectangle {
                 ComboBox { model: root.sources; current-index <=> root.source-g; }
                 ComboBox { model: root.sources; current-index <=> root.source-h; }
             }
-            Text { text: root.status; color: #e0e2e5; wrap: word-wrap; }
-            Rectangle { height: 1px; background: #3b3e45; }
-            Text { text: "التقارير المحفوظة"; color: #e0e1e4; font-size: 16px; }
+            Text { text: root.status; color: root.theme-choice == 1 ? #344a5e : #e0e2e5; wrap: word-wrap; }
+            Rectangle { height: 1px; background: root.theme-choice == 1 ? #e1e8ef : #3b3e45; }
+            Text { text: "التقارير المحفوظة"; color: root.theme-choice == 1 ? #283f54 : #e0e1e4; font-size: 16px; }
             HorizontalBox {
                 ComboBox { model: root.reports; current-index <=> root.report-selected; }
                 Button { text: "فتح التقرير"; enabled: !root.busy && root.report-selected >= 0; clicked => { root.action("load"); } }
             }
-            Text { text: root.title; color: #f2f2f4; wrap: word-wrap; font-size: 15px; }
-            Text { text: root.boundary; color: #c8cbd1; wrap: word-wrap; }
-            Text { text: root.matrix; color: #e0e1e4; wrap: word-wrap; horizontal-alignment: left; }
-            Rectangle { height: 1px; background: #3b3e45; }
-            Text { text: root.portfolio; color: #d7dadf; wrap: word-wrap; horizontal-alignment: left; }
-            Text { text: "PROVENANCE / مصادر التقرير"; color: #e0e1e4; font-size: 16px; }
-            Text { text: root.provenance; color: #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
+            Text { text: root.title; color: root.theme-choice == 1 ? #182c40 : #f2f2f4; wrap: word-wrap; font-size: 15px; }
+            Text { text: root.boundary; color: root.theme-choice == 1 ? #51687c : #c8cbd1; wrap: word-wrap; }
+            Text { text: root.matrix; color: root.theme-choice == 1 ? #283f54 : #e0e1e4; wrap: word-wrap; horizontal-alignment: left; }
+            Rectangle { height: 1px; background: root.theme-choice == 1 ? #e1e8ef : #3b3e45; }
+            Text { text: root.portfolio; color: root.theme-choice == 1 ? #42596e : #d7dadf; wrap: word-wrap; horizontal-alignment: left; }
+            Text { text: "PROVENANCE / مصادر التقرير"; color: root.theme-choice == 1 ? #283f54 : #e0e1e4; font-size: 16px; }
+            Text { text: root.provenance; color: root.theme-choice == 1 ? #65788b : #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
             Text {
                 text: "Correlation هنا وصف إحصائي تاريخي فقط؛ لا يغيّر قرارات العقول، أحجام اللوت، حدود المحفظة أو فتح/إغلاق أي صفقة.";
-                color: #999ca5; wrap: word-wrap;
+                color: root.theme-choice == 1 ? #687d90 : #999ca5; wrap: word-wrap;
             }
         }
     }
