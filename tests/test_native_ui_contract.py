@@ -86,6 +86,18 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("BRAINTRADE OS "+version,self.dashboard)
         self.assertNotIn("Windows 0.7.1",self.dashboard)
 
+    def test_compact_navigation_preserves_all_22_real_page_actions(self):
+        self.assertIn("current-index <=> root.page",self.dashboard)
+        self.assertIn("visible: root.expanded-workspaces",self.dashboard)
+        self.assertIn("root.expanded-workspaces = !root.expanded-workspaces",self.dashboard)
+        for action in ('root.studio-action("config")',
+                       'root.execution-action("refresh")',
+                       'root.trade-journal-action("refresh")',
+                       'root.brain-monitor-action("refresh")',
+                       'root.risk-monitor-refresh()',
+                       'root.correlation-action("refresh")',
+                       'root.action("events")'):
+            self.assertIn(action,self.dashboard)
     def test_institutional_risk_brain_and_execution_cards_reuse_real_state(self):
         checks = (
             'label:"MODE / الوضع الحالي"',
