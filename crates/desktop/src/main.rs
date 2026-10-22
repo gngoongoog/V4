@@ -17,6 +17,7 @@ mod execution;
 mod student;
 mod trade_journal;
 mod brain_monitor;
+mod risk_monitor;
 
 enum Task {
     Action(String, Value),
@@ -163,6 +164,7 @@ fn run_ui() -> anyhow::Result<()> {
     let _student_timer=student::setup(&ui);
     let _trade_journal_timer=trade_journal::setup(&ui);
     let _brain_monitor_timer=brain_monitor::setup(&ui);
+    let _risk_monitor_timer=risk_monitor::setup(&ui);
     let (tx, rx) = mpsc::channel::<Task>();
     let sender = tx.clone();
     let weak = ui.as_weak();
