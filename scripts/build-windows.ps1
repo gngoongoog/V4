@@ -28,6 +28,12 @@ if (-not $SkipTests) {
     Invoke-Checked -Program $Python -Arguments @('-m','unittest','discover','-s','tests','-v')
 }
 Invoke-Checked -Program cargo -Arguments @('build','--release','--locked','-p','braintrade-desktop')
+if (-not $SkipTests) {
+    # Native software rendering works without a broker; assert all 22 pages
+    # render in three themes and two viewport sizes before packaging the exe.
+    Invoke-Checked -Program (Join-Path $PWD 'target\release\BrainTrade.exe') -Arguments @('--render-check')
+    Invoke-Checked -Program $Python -Arguments @('scripts\check_native_ui_visuals.py')
+}
 Invoke-Checked -Program $Python -Arguments @('scripts\package-portable.py','--exe','target\release\BrainTrade.exe')
 $PackagedOperator = Join-Path $PWD 'release\BrainTrade\Tools\Run-Demo-Acceptance.ps1'
 $PackagedGui = Join-Path $PWD 'release\BrainTrade\Tools\Run-Demo-Acceptance-GUI.ps1'
