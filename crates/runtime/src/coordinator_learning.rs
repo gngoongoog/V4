@@ -298,6 +298,24 @@ fn position_deals(db: &Connection, key: &str, position_id: u64) -> Result<Vec<St
     Ok(rows)
 }
 
+/// Monetary fields must be explicitly present: missing commission, swap or fee
+/// cannot silently become zero, because that manufactures a positive learning
+/// label from an incomplete MT5 Demo broker history page.
+fn audited_demo_deal(d: &Value) -> Option<(f64, f64, f64, f64, f64, u64, i64)> {
+    let amount = |field: &str| d[field].as_f64()
+        .filter(|v| v.is_finite() && v.abs() <= 1e12);
+    let profit = amount("profit")?;
+    let commission = amount("commission")?;
+    let swap = amount("swap")?;
+    let fee = amount("fee")?;
+    let volume = amount("volume").filter(|v| *v > 0. && *v <= 10_000.)?;
+    let time = d["time_msc"].as_u64().filter(|v| *v > 0)?;
+    // INOUT represents a netting reversal; OUT_BY needs a separate close-by
+    // lifecycle audit. Neither is a trustworthy simple round-trip label.
+    let entry = d["entry"].as_i64().filter(|v| matches!(v, 0 | 1))?;
+    Some((profit, commission, swap, fee, volume, time, entry))
+}
+
 /// Credit only complete closed broker positions. A partial history page or partial
 /// close is not a training label; no synthetic fills or opposing-member losses.
 fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
@@ -316,18 +334,23 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
         let mut valid=true;
         for raw in position_deals(db,&key,position_id)? {
             let d:Value=serde_json::from_str(&raw)?;
-            gross+=d["profit"].as_f64().unwrap_or(0.);
-            commission+=d["commission"].as_f64().unwrap_or(0.);
-            swap+=d["swap"].as_f64().unwrap_or(0.);
-            fee+=d["fee"].as_f64().unwrap_or(0.);
-            let volume=d["volume"].as_f64().unwrap_or(0.);
-            match d["entry"].as_i64() {
-                Some(0)=>entry_volume+=volume,
-                Some(1)|Some(3)=>{exit_volume+=volume;closed_ms=closed_ms.max(d["time_msc"].as_u64().unwrap_or(0));
-                    if let Some(reason)=d["reason"].as_i64(){if !reasons.contains(&reason){reasons.push(reason);}}},
-                // Netting reversal mixes an opening and an exit: do not guess attribution.
-                Some(2)=>valid=false,
-                _=>{}
+            let Some((p,c,s,f,volume,stamp,entry))=audited_demo_deal(&d) else{
+                // Do not credit or learn from partial/ambiguous money fields.
+                // A later broker-history refresh can make the record complete.
+                valid=false;break;
+            };
+            gross+=p;
+            commission+=c;
+            swap+=s;
+            fee+=f;
+            if entry==0 {
+                entry_volume+=volume;
+            } else {
+                exit_volume+=volume;
+                closed_ms=closed_ms.max(stamp);
+                if let Some(reason)=d["reason"].as_i64(){
+                    if !reasons.contains(&reason){reasons.push(reason);}
+                }
             }
         }
         let net=gross+commission+swap+fee;
@@ -867,7 +890,7 @@ mod tests {
             "learning":{"trading_mode":"expert","timeframe":"M1","report_id":"","tick_size":0.01,"tick_value_loss":1.,"weight_at_entry":1.}});
         db.execute("INSERT INTO broker_commands VALUES('solo',?1,'trend','open',1,'observed',?2,?3)",params![key,cmd.to_string(),json!({"deal":1,"request":{"price":2000.,"sl":1999.}}).to_string()]).unwrap();
         let insert=|ticket:u64,entry:i64,volume:f64,profit:f64,commission:f64| {
-            db.execute("INSERT INTO broker_deals VALUES(?1,?2,90,'trend',?3)",params![key,ticket,json!({"entry":entry,"volume":volume,"profit":profit,"commission":commission,"time_msc":1000+ticket,"reason":5}).to_string()]).unwrap();
+            db.execute("INSERT INTO broker_deals VALUES(?1,?2,90,'trend',?3)",params![key,ticket,json!({"entry":entry,"volume":volume,"profit":profit,"commission":commission,"swap":0.0,"fee":0.0,"time_msc":1000+ticket,"reason":5}).to_string()]).unwrap();
         };
         insert(1,0,0.1,0.,-0.35);insert(2,1,0.04,0.2,-0.14);
         sync_demo_broker_evidence(&db,&t).unwrap();assert!(broker_review(&db,&key).unwrap().is_empty());
