@@ -10,6 +10,7 @@ mod frozen_coordinator;
 mod coordinator_paper;
 mod research_order_lifecycle;
 mod research_admission;
+mod research_execution_bridge;
 mod matched_forward;
 mod matched_trade;
 mod student_learning;
@@ -130,6 +131,9 @@ impl Engine{
         }
         if path=="/v1/research/execution-admission" && method=="POST" {
             return research_admission::evaluate(body);
+        }
+        if path=="/v1/research/execution-bridge" && method=="POST" {
+            return research_execution_bridge::compare(body);
         }
         if method=="GET" && path=="/v1/risk/monitor" {
             let (cfg,status)={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());
