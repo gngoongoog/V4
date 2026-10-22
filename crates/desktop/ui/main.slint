@@ -22,6 +22,55 @@ component Card inherits Rectangle {
         Text { text: root.value; color: theme-choice == 1 ? #172235 : #f6f9ff; font-size: 24px; font-weight: 800; }
     }
 }
+// Dashboard-only dense metric cards: values and supporting captions come from
+// Core-backed properties, never render fixtures or guessed profitability rates.
+component DeskMetric inherits Rectangle {
+    in property <string> glyph;
+    in property <string> title;
+    in property <string> value;
+    in property <string> footer;
+    in property <color> accent: #2ad1b5;
+    in property <int> theme-choice: 2;
+    min-height: 106px;
+    background: theme-choice == 1 ? #ffffff : theme-choice == 2 ? #282f39 : #101d2b;
+    border-radius: 11px;
+    border-width: 1px;
+    border-color: theme-choice == 1 ? #dce6ec : theme-choice == 2 ? #414c5a : #23404e;
+    VerticalLayout {
+        padding: 10px; spacing: 5px;
+        HorizontalLayout {spacing: 7px;
+            Rectangle {
+                width: 26px; height: 26px; border-radius: 6px;
+                background: root.accent;
+                Text {text:root.glyph;color:#10212a;horizontal-alignment:center;vertical-alignment:center;font-weight:800;font-size:15px;}
+            }
+            Text {text:root.title;color:theme-choice==1?#536b7a:#b6c9d1;font-size:11px;wrap:word-wrap;vertical-alignment:center;}
+        }
+        Text {text:root.value;color:theme-choice==1?#172839:#f6fbfc;font-size:22px;font-weight:800;max-height:27px;overflow:elide;}
+        Text {text:root.footer;color:root.accent;font-size:10px;overflow:elide;}
+    }
+}
+
+// Styled native Windows action, not a decorative fake. Every invocation below
+// is wired to an already existing Rust/Core callback and respects enabled.
+component DeskAction inherits Rectangle {
+    in property <string> label;
+    in property <color> fill-color: #24c9ac;
+    in property <bool> enabled: true;
+    in property <bool> primary: true;
+    callback pressed();
+    height: 37px;
+    border-radius: 8px; border-width: 1px;
+    border-color: root.enabled ? root.fill-color : #46515f;
+    background: root.enabled ? root.fill-color : #343b47;
+    Text {
+        text:root.label;
+        color:root.enabled ? (root.primary ? #091e23 : #f6fbff) : #a9b0bc;
+        font-size:12px;font-weight:700;
+        horizontal-alignment:center; vertical-alignment:center;
+    }
+    TouchArea {clicked => {if (root.enabled) {root.pressed();}}}
+}
 export component Dashboard inherits Window {
     init => { Palette.color-scheme = ColorScheme.dark; }
     title: "BRAINTRADE V4 — Institutional Windows Terminal";
