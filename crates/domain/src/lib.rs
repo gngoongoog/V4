@@ -145,6 +145,9 @@ pub struct Telemetry {
     #[serde(default)] pub trade_expert: bool,
     pub balance: f64,
     pub equity: f64,
+    #[serde(default)] pub leverage: Option<u32>,
+    #[serde(default)] pub margin_free: Option<f64>,
+    #[serde(default)] pub minimum_lot_margin: Option<f64>,
     pub positions: Vec<Position>,
     pub pending_orders: u32,
     pub today_net: Option<f64>,
@@ -187,6 +190,8 @@ impl Telemetry {
                 self.tick_value_loss,
                 self.tick_value_profit,
                 self.point,
+                self.margin_free,
+                self.minimum_lot_margin,
             ]
             .iter()
             .flatten()

@@ -126,7 +126,8 @@ def empty_snapshot(error: str) -> dict:
                 demo=False, balance=0.0, equity=0.0, positions=[], pending_orders=0,
                 today_net=None, today_deals=None, report_day="", bid=None, ask=None,
                 tick_age_ms=None, quote_time_ms=None, source_quote_time_ms=None,
-                native_event_id=None, symbol="", volume_min=None, volume_step=None,
+                native_event_id=None, symbol="", leverage=None, margin_free=None,
+                minimum_lot_margin=None, volume_min=None, volume_step=None,
                 tick_size=None, dom_available=False,dom=[],volume_max=None,
                 tick_value_loss=None,tick_value_profit=None,market=None,point=None)
 
@@ -174,6 +175,31 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
         errors.append(f"Symbol {symbol} is unavailable; choose its exact broker name in Settings.")
     if deals is None:
         errors.append("Deal history unavailable; daily PnL is unknown.")
+    # Actual account leverage is broker-owned; scenario leverage never enters trading.
+    raw_leverage = getattr(account, "leverage", None)
+    try:
+        leverage = int(raw_leverage) if raw_leverage is not None else None
+        if leverage is not None and leverage <= 0:
+            leverage = None
+    except (ValueError, TypeError, OverflowError):
+        leverage = None
+    raw_free = getattr(account, "margin_free", None)
+    try:
+        margin_free = float(raw_free) if raw_free is not None else None
+        if margin_free is not None and (not math.isfinite(margin_free) or margin_free < 0):
+            margin_free = None
+    except (ValueError, TypeError, OverflowError):
+        margin_free = None
+    minimum_lot_margin = None
+    if (info is not None and tick is not None
+            and hasattr(mt5, "order_calc_margin") and hasattr(mt5, "ORDER_TYPE_BUY")):
+        try:
+            raw = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, symbol,
+                                       float(info.volume_min), float(tick.ask))
+            if raw is not None and math.isfinite(float(raw)) and float(raw) >= 0:
+                minimum_lot_margin = float(raw)
+        except (ValueError, TypeError, OverflowError, RuntimeError):
+            pass
     result = empty_snapshot(" ".join(errors))
     tms=int(tick.time_msc) if tick else None
     result.update(connected=True, login=account.login, server=account.server,
@@ -181,6 +207,8 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
                   account_trade_mode=int(account.trade_mode),margin_mode=getattr(account,"margin_mode",None),
                   trade_allowed=bool(getattr(account,"trade_allowed",False) and getattr(terminal,"trade_allowed",False) and not getattr(terminal,"tradeapi_disabled",False)),trade_expert=bool(getattr(account,"trade_expert",False)),
                   balance=account.balance, equity=account.equity,
+                  leverage=leverage, margin_free=margin_free,
+                  minimum_lot_margin=minimum_lot_margin,
                   positions=[dict(ticket=p.ticket, symbol=p.symbol,magic=getattr(p,"magic",0),identifier=getattr(p,"identifier",p.ticket),opened_ms=getattr(p,"time_msc",0),
                                   side="BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL",
                                   volume=p.volume, price_open=p.price_open,
