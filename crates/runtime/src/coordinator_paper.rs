@@ -146,7 +146,18 @@ fn observe_trial(db:&Connection,id:&str,created:u64,active:bool,decision_bar:u64
     let pending:bool=db.query_row(
         "SELECT EXISTS(SELECT 1 FROM frozen_coordinator_trade_pairs
          WHERE run_id=?1 AND state='open')", [id],|r|r.get(0))?;
-    if pending {return Ok(())}
+    if pending{return Ok(())}
+    // A ready advisor signal may remain true across several M1 observations.
+    // Broker seen-keys would not execute it again: never manufacture another
+    // profitable paper pair from that SAME underlying frozen or adaptive key.
+    if frozen.key.trim().is_empty()||adaptive.key.trim().is_empty(){return Ok(())}
+    let replayed:bool=db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM frozen_coordinator_trade_pairs
+         WHERE run_id=?1 AND
+          (json_extract(payload,'$.frozen.signal_key')=?2
+           OR json_extract(payload,'$.adaptive.signal_key')=?3))",
+        params![id,frozen.key,adaptive.key],|r|r.get(0))?;
+    if replayed{return Ok(())}
     let payload=json!({
         "policy":POLICY,"observed_ms":q.at,"bar_time":decision_bar,
         "source":"MT5 Demo BID/ASK paired prospective quote; no order_send",
@@ -384,6 +395,22 @@ mod tests{
         assert_eq!(r["open_pairs"],0);
         observe(&db,&closed,&c,opened+2000).unwrap();
         assert_eq!(summary(&db,"coordinator-test").unwrap()["completed_pairs"],1);
+    }
+
+    #[test]
+    fn same_signal_keys_cannot_be_reentered_on_later_observation_bars(){
+        let db=db();let c=Config::default();let opened=1_000_100_000u64;
+        let created=1_000_000_000u64;let bar=1_000_001u64;
+        let same=sig(1,bar,0.5,0.5,3000);
+        observe_trial(&db,"r1",created,true,bar,&same,&same,
+            &q(opened,100.,100.2),&c,opened).unwrap();
+        observe_trial(&db,"r1",created,false,bar,&same,&same,
+            &q(opened+1000,101.0,101.2),&c,opened+1000).unwrap();
+        assert_eq!(summary(&db,"r1").unwrap()["completed_pairs"],1);
+        observe_trial(&db,"r1",created,true,bar+60,&same,&same,
+            &q(opened+3000,101.1,101.3),&c,opened+3000).unwrap();
+        assert_eq!(summary(&db,"r1").unwrap()["completed_pairs"],1);
+        assert_eq!(summary(&db,"r1").unwrap()["open_pairs"],0);
     }
 
 }
