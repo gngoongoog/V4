@@ -165,6 +165,9 @@ export component Dashboard inherits Window {
     in-out property <string> daily-limit: "2";
     in-out property <bool> daily-breaker-demo-enabled: false;
     in-out property <bool> daily-breaker-real-enabled: true;
+    in property <bool> risk-monitor-busy: false;
+    in property <string> risk-monitor-text: "حالة القاطع: بانتظار قراءة MT5. هذه شاشة مراقبة، وليست موافقة إرسال أوامر.";
+    callback risk-monitor-refresh();
     in-out property <string> drawdown-limit: "5";
     in-out property <string> spread-limit: "0.25";
     in-out property <string> max-lots: "0.10";
@@ -326,7 +329,7 @@ export component Dashboard inherits Window {
                     Button { text: root.page == 17 ? "●  تنفيذ MT5" : "تنفيذ MT5"; clicked => { root.page = 17; root.execution-action("refresh"); } }
                     Button { text: root.page == 20 ? "●  سجل الصفقات" : "سجل الصفقات"; clicked => { root.page = 20; root.trade-journal-action("refresh"); } }
                     Button { text: root.page == 19 ? "●  تقدّم التعلّم" : "تقدّم التعلّم"; clicked => { root.page = 19; } }
-                    Button { text: root.page == 6 ? "●  المخاطرة" : "المخاطرة"; clicked => { root.page = 6; } }
+                    Button { text: root.page == 6 ? "●  المخاطرة" : "المخاطرة"; clicked => { root.page = 6; root.risk-monitor-refresh(); } }
                 }
                 if root.nav-section == 2: VerticalLayout {
                     height: 70px; spacing: 5px;
@@ -831,6 +834,9 @@ export component Dashboard inherits Window {
         if root.page == 6: ScrollView { VerticalBox {
             spacing: 10px;
             Text { text: "المخاطرة — المحاكاة والحدود الاختيارية"; color: #f2f2f4; font-size: 20px; }
+            Text { text: "مراقبة الحساب والقاطع اليومي — بيانات فقط، لا تغيّر حالة التداول"; color: #f2f2f4; font-weight: 700; }
+            Button { text: "تحديث حالة القاطع"; enabled: !root.risk-monitor-busy; clicked => { root.risk-monitor-refresh(); } }
+            Text { text: root.risk-monitor-text; color: #d4d6dc; wrap: word-wrap; }
             Text { text: "تطبق على المحاكاة، وعلى العقل الحقيقي إذا فعّلت حدوده الاختيارية. العمولة هنا تقدير؛ سجل التنفيذ يأخذ الرسوم الفعلية من الوسيط."; color: #b7bac3; wrap: word-wrap; }
             HorizontalBox { Text { text: root.micro-demo-risk-opt-in ? "المخاطرة لكل صفقة % (0.01–5 Demo فقط)" : "المخاطرة لكل صفقة % (0.01–2)"; color: #e0e1e4; } LineEdit { text <=> root.risk-percent; } }
             CheckBox { text: "موافقة صريحة: مخاطرة أعلى للحساب الصغير على Demo فقط"; checked <=> root.micro-demo-risk-opt-in; enabled: root.state == "STOPPED" && !root.busy; }
