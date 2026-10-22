@@ -55,6 +55,7 @@ pub fn enrich(value:&mut Value,db:&Connection,key:&str,mode:TradingMode)->Result
             b["frozen_coordinator"]=crate::frozen_coordinator::report(db,key)?;
             if mode==TradingMode::Sniper {
                 b["sniper_execution_latency"]=crate::sniper_latency_audit::audit(db,key)?;
+                b["sniper_deal_link"]=crate::sniper_deal_link_audit::audit(db,key)?;
             }
         }
         let (closed,wins,net):(u64,u64,f64)=db.query_row("SELECT COUNT(*),COALESCE(SUM(CASE WHEN json_extract(payload,'$.net_paper')>0 THEN 1 ELSE 0 END),0),COALESCE(SUM(json_extract(payload,'$.net_paper')),0.0) FROM paper_brain_outcomes WHERE context=?1 AND brain=?2 AND json_extract(payload,'$.trading_mode_at_open')=?3",params![key,id,serde_json::to_value(mode)?.as_str().unwrap()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
