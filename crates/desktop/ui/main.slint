@@ -1170,41 +1170,106 @@ export component Dashboard inherits Window {
                         }
                     }
                 }
-                HorizontalLayout {spacing:11px;
+                // Lower reference-matched trading workspace: three independent
+                // data feeds, followed by risk, learning and broker health.
+                HorizontalLayout {spacing:9px;alignment:start;
                     Rectangle {
-                        horizontal-stretch: 3; min-height: 183px;
-                        background:root.theme-choice==1?#ffffff:root.theme-choice==2?#292e35:#162231;
-                        border-radius:13px;border-width:1px;border-color:root.theme-choice==1?#dfe6ef:#2c4053;
-                        VerticalLayout {padding:13px;spacing:8px;
-                            HorizontalLayout {
-                                Text {text:"المراكز النشطة  /  MT5 POSITIONS";color:root.theme-choice==1?#1a3045:#eef7ff;font-size:15px;font-weight:700;}
+                        horizontal-stretch: 3;min-height:176px;
+                        background:root.theme-choice==1?#ffffff:root.theme-choice==2?#2a313b:#111f2d;
+                        border-radius:11px;border-width:1px;border-color:root.theme-choice==1?#dce5ee:#294454;
+                        VerticalLayout {padding:12px;spacing:7px;
+                            HorizontalLayout {spacing:7px;
+                                Text {text:"▣  المراكز النشطة / OPEN POSITIONS";color:root.theme-choice==1?#1a3045:#e6f5fb;font-size:13px;font-weight:800;}
                                 Rectangle {horizontal-stretch:1;background:transparent;}
-                                Button {text:"السجل الكامل";clicked=>{root.nav-section=1;root.page=20;root.trade-journal-action("refresh");}}
+                                Button {text:"عرض الكل";clicked=>{root.nav-section=1;root.page=20;root.trade-journal-action("refresh");}}
                             }
-                            Text {text:root.positions; color:root.theme-choice==1?#3c5063:#c7d4df;wrap:word-wrap;font-size:12px;}
+                            Rectangle {height:1px;background:root.theme-choice==1?#dfeaf0:#325164;}
+                            Text {text:root.online?"بيانات المراكز من آخر لقطة MT5 موثوقة":"لا توجد لقطة MT5 موثوقة الآن";
+                                color:root.online?#35cbaa:#b08b83;font-size:10px;}
+                            Text {text:root.positions;color:root.theme-choice==1?#365268:#c3dae5;
+                                font-size:11px;wrap:word-wrap;overflow:elide;max-height:90px;}
                         }
                     }
                     Rectangle {
-                        width:315px;min-height:183px;
-                        background:root.theme-choice==1?#ffffff:root.theme-choice==2?#292e35:#162231;
-                        border-radius:13px;border-width:1px;border-color:root.theme-choice==1?#dfe6ef:#2c4053;
-                        VerticalLayout {padding:13px;spacing:9px;
-                            Text {text:"حالة البيانات والتعلّم";color:root.theme-choice==1?#1a3045:#eef7ff;font-weight:700;font-size:15px;}
-                            Text {text:root.online?"MT5 متصل • البيانات تخضع للتحقق":"لا بيانات وسـيط موثوقة الآن";color:root.theme-choice==1?#41586d:#c7d4df;wrap:word-wrap;}
-                            Text {text:"نسبة نجاح أو تعلّم: غير محسوبة بدون تعريف وعينة معتمدة";color:root.theme-choice==1?#65798e:#a8bac9;wrap:word-wrap;font-size:12px;}
-                            Button {text:"تقدم التعلم الفعلي";clicked=>{root.nav-section=1;root.page=19;}}
-                            Button {text:"قرارات وموانع القناص";clicked=>{root.nav-section=2;root.page=21;root.brain-monitor-action("refresh");}}
+                        horizontal-stretch: 3;min-height:176px;
+                        background:root.theme-choice==1?#ffffff:root.theme-choice==2?#2a313b:#111f2d;
+                        border-radius:11px;border-width:1px;border-color:root.theme-choice==1?#dce5ee:#294454;
+                        VerticalLayout {padding:12px;spacing:7px;
+                            HorizontalLayout {spacing:7px;
+                                Text {text:"◷  أحدث الصفقات / TRADE JOURNAL";color:root.theme-choice==1?#1a3045:#e6f5fb;font-size:13px;font-weight:800;}
+                                Rectangle {horizontal-stretch:1;background:transparent;}
+                                Button {text:"تحديث";enabled:!root.trade-journal-busy;clicked=>{root.trade-journal-action("refresh");}}
+                            }
+                            Rectangle {height:1px;background:root.theme-choice==1?#dfeaf0:#325164;}
+                            if root.trade-journal-rows.length==0: Text {
+                                text:"سجل MT5 لم يُحمّل بعد. اضغط تحديث لإظهار الصفقات الحقيقية.";
+                                color:root.theme-choice==1?#698091:#a1b1bc;font-size:11px;wrap:word-wrap;
+                            }
+                            if root.trade-journal-rows.length>0: Text {
+                                text:root.trade-journal-rows[0];color:root.theme-choice==1?#3d6372:#82d9bf;font-size:11px;overflow:elide;
+                            }
+                            if root.trade-journal-rows.length>1: Text {
+                                text:root.trade-journal-rows[1];color:root.theme-choice==1?#3d6372:#c4d1dc;font-size:11px;overflow:elide;
+                            }
+                            if root.trade-journal-rows.length>2: Text {
+                                text:root.trade-journal-rows[2];color:root.theme-choice==1?#3d6372:#c4d1dc;font-size:11px;overflow:elide;
+                            }
+                        }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 2;min-height:176px;
+                        background:root.theme-choice==1?#ffffff:root.theme-choice==2?#2a313b:#111f2d;
+                        border-radius:11px;border-width:1px;border-color:root.theme-choice==1?#dce5ee:#294454;
+                        VerticalLayout {padding:12px;spacing:6px;
+                            HorizontalLayout {spacing:5px;
+                                Text {text:"✦  مراقبة العقول / BRAIN STATUS";color:root.theme-choice==1?#1a3045:#e6f5fb;font-size:12px;font-weight:800;}
+                                Rectangle {horizontal-stretch:1;background:transparent;}
+                                Button {text:"↻";enabled:!root.brain-monitor-busy;clicked=>{root.brain-monitor-action("refresh");}}
+                            }
+                            Rectangle {height:1px;background:root.theme-choice==1?#dfeaf0:#325164;}
+                            Text {text:root.brain-monitor-overview!=""?root.brain-monitor-overview:root.brain-monitor-summary;
+                                color:root.theme-choice==1?#365268:#b8d0d9;font-size:10px;wrap:word-wrap;overflow:elide;max-height:118px;}
                         }
                     }
                 }
-                Rectangle {
-                    background:root.theme-choice==1?#ffffff:root.theme-choice==2?#292e35:#162231;
-                    border-radius:13px;border-width:1px;border-color:root.theme-choice==1?#dfe6ef:#2c4053;
-                    VerticalLayout {padding:13px;spacing:6px;
-                        Text {text:"حالة الوسيط  /  BROKER HEALTH";color:root.theme-choice==1?#1a3045:#eff7ff;font-weight:700;}
-                        Text {text:root.connection;color:root.theme-choice==1?#52677d:#b9c9d6;wrap:word-wrap;}
-                        Text {text:root.diagnostics;color:root.theme-choice==1?#667a8b:#a4b5c3;wrap:word-wrap;font-size:12px;}
-                        Text {text:"Telegram: "+root.telegram-status;color:root.theme-choice==1?#667a8b:#a4b5c3;wrap:word-wrap;font-size:12px;}
+                HorizontalLayout {spacing:9px;alignment:start;
+                    Rectangle {
+                        horizontal-stretch: 3;min-height:124px;
+                        background:root.theme-choice==1?#ffffff:root.theme-choice==2?#28313a:#111e2c;
+                        border-radius:11px;border-width:1px;border-color:root.theme-choice==1?#dce5ee:#294454;
+                        VerticalLayout {padding:12px;spacing:7px;
+                            Text {text:"≋  ACCOUNT PERFORMANCE / أداء الحساب";color:root.theme-choice==1?#1a3045:#e6f5fb;font-size:12px;font-weight:800;}
+                            HorizontalLayout {spacing:12px;
+                                Text {text:"Equity: "+root.equity;color:root.theme-choice==1?#178576:#47d9b2;font-size:13px;font-weight:700;}
+                                Text {text:"Net Today: "+root.today;color:root.theme-choice==1?#3b7186:#9dcbe4;font-size:13px;}
+                            }
+                            Text {text:"لا نرسم منحنى أداء وهمياً بدون سلسلة Equity تاريخية موثوقة من الحساب.";
+                                color:root.theme-choice==1?#718495:#9aaeba;font-size:10px;wrap:word-wrap;}
+                        }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 2;min-height:124px;
+                        background:root.theme-choice==1?#ffffff:root.theme-choice==2?#28313a:#111e2c;
+                        border-radius:11px;border-width:1px;border-color:root.theme-choice==1?#dce5ee:#294454;
+                        VerticalLayout {padding:12px;spacing:7px;
+                            HorizontalLayout {
+                                Text {text:"◇  RISK WATCH / مراقبة المخاطر";color:root.theme-choice==1?#1a3045:#e6f5fb;font-size:12px;font-weight:800;}
+                                Rectangle {horizontal-stretch:1;background:transparent;}
+                                Button {text:"↻";enabled:!root.risk-monitor-busy;clicked=>{root.risk-monitor-refresh();}}
+                            }
+                            Text {text:root.risk-monitor-text;color:root.theme-choice==1?#5d7182:#b2c7d5;font-size:10px;wrap:word-wrap;overflow:elide;max-height:60px;}
+                        }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 3;min-height:124px;
+                        background:root.theme-choice==1?#ffffff:root.theme-choice==2?#28313a:#111e2c;
+                        border-radius:11px;border-width:1px;border-color:root.theme-choice==1?#dce5ee:#294454;
+                        VerticalLayout {padding:12px;spacing:7px;
+                            Text {text:"◎  BROKER HEALTH / حالة الوسيط";color:root.theme-choice==1?#1a3045:#e6f5fb;font-size:12px;font-weight:800;}
+                            Text {text:root.connection;color:root.online?#35cbaa:#d69d74;font-size:12px;}
+                            Text {text:root.diagnostics;color:root.theme-choice==1?#647788:#a4b5c3;font-size:10px;overflow:elide;}
+                            Text {text:"Telegram: "+root.telegram-status;color:root.theme-choice==1?#647788:#a4b5c3;font-size:10px;overflow:elide;}
+                        }
                     }
                 }
             }
