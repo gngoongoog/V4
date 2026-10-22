@@ -1067,11 +1067,25 @@ export component Dashboard inherits Window {
             ScrollView { vertical-stretch: 1; VerticalBox { alignment: start; Text { text: root.paper; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; horizontal-alignment: left; font-size: 14px; } } }
         }
         if root.page == 6: ScrollView { VerticalBox {
-            spacing: 10px;
+            spacing: 12px;
+            HorizontalLayout {spacing:11px;
+                Card {theme-choice:root.theme-choice;label:"EQUITY / حقوق الحساب";value:root.equity;}
+                Card {theme-choice:root.theme-choice;label:"ACCOUNT / نوع الحساب";value:root.account-mode-label;}
+                Card {theme-choice:root.theme-choice;label:"EXPOSURE / التنفيذ";value:root.execution-active?"مفعّل":"مراقبة / متوقف";}
+                Card {theme-choice:root.theme-choice;label:"RISK MONITOR / تحديث";value:root.risk-monitor-busy?"جارٍ الفحص":"افتح التقرير أدناه";}
+            }
             Text { text: "المخاطرة — المحاكاة والحدود الاختيارية"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 20px; }
             Text { text: "مراقبة الحساب والقاطع اليومي — بيانات فقط، لا تغيّر حالة التداول"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-weight: 700; }
             Button { text: "تحديث حالة القاطع"; enabled: !root.risk-monitor-busy; clicked => { root.risk-monitor-refresh(); } }
+            Rectangle {
+                background:root.theme-choice==1?#ffffff:root.theme-choice==2?#30353d:#162432;
+                border-width:1px;border-color:root.theme-choice==1?#e0e6ed:#344556;
+                border-radius:13px;
+                VerticalLayout {padding:14px;spacing:9px;
+                    Text {text:"نتيجة الفحص من Core — ليس تصريحاً بفتح صفقة";color:root.theme-choice==1?#263c51:#e1eef8;font-weight:700;}
             Text { text: root.risk-monitor-text; color: root.theme-choice == 1 ? #42586c : #d4d6dc; wrap: word-wrap; }
+                }
+            }
             Text { text: "حساب وقف الخسارة والهامش والعقد على MT5 إلزامي، أمّا قاطع الخسارة اليومية فهو اختياري حسب Demo/REAL. العمولة هنا تقدير؛ سجل التنفيذ يأخذ الرسوم الفعلية من الوسيط."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             HorizontalBox { Text { text: root.micro-demo-risk-opt-in ? "المخاطرة لكل صفقة % (0.01–5 Demo فقط)" : "المخاطرة لكل صفقة % (0.01–2)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; } LineEdit { text <=> root.risk-percent; } }
             CheckBox { text: "موافقة صريحة: مخاطرة أعلى للحساب الصغير على Demo فقط"; checked <=> root.micro-demo-risk-opt-in; enabled: root.state == "STOPPED" && !root.busy; }
