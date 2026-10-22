@@ -109,7 +109,7 @@ mod tests {
         let now=1_729_500_000_000u64;
         let mut t=Telemetry{connected:true,account_trade_mode:Some(2),demo:false,login:19,
             server:"Broker".into(),currency:"USD".into(),balance:50.,equity:49.5,
-            today_net:Some(-.5),report_day:day_at(now).unwrap(),..Default::default()};
+            today_net:Some(-0.5),report_day:day_at(now).unwrap(),..Default::default()};
         let c=Config::default();
         let mut status=Status{gateway_fresh:true,telemetry:Some(t.clone()),..Default::default()};
         assert_eq!(snapshot(&db,&c,&status,now).unwrap()["state"],"ready");
