@@ -53,8 +53,8 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("action", handlers)
 
     def test_operator_flow_and_execution_controls_stay_wired(self):
-        for label in ("1  ربط MT5", "2  تجهيز التداول", "3  متابعة التنفيذ",
-                      "بدء النظام  START", "إيقاف  STOP", "خروج كامل",
+        for label in ("مركز التداول", "وضع القناص", "حالة العقل الرئيسي",
+                      "▶  START", "■  STOP", "خروج كامل",
                       "حفظ إعدادات التداول", "ربط حساب Demo", "تأكيد وربط حساب REAL",
                       "إرجاع للمنظومة", "حفظ حماية المحفظة"):
             self.assertIn(label, self.dashboard, f"Critical control disappeared: {label}")
@@ -81,18 +81,25 @@ class NativeUiContract(unittest.TestCase):
     def test_visible_desktop_build_label_matches_current_core_package_version(self):
         import tomllib
         version=tomllib.loads((ROOT/"Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
-        self.assertIn("COMMAND CENTER "+version,self.dashboard)
+        self.assertIn("BRAINTRADE V4 — Institutional Windows Terminal",self.dashboard)
         self.assertIn("Windows "+version,self.dashboard)
         self.assertIn("BRAINTRADE OS "+version,self.dashboard)
         self.assertNotIn("Windows 0.7.1",self.dashboard)
 
-    def test_palette_remains_grayscale_including_research_subpage(self):
-        colors = re.findall(r"#[0-9a-fA-F]{6}\b", self.pages)
-        self.assertGreater(len(colors), 70)
-        for color in colors:
-            rgb = [int(color[i:i+2], 16) for i in (1, 3, 5)]
-            self.assertLessEqual(max(rgb)-min(rgb), 19,
-                                 f"Colored accent {color} breaks smoke/black/white palette")
+    def test_three_institutional_themes_and_real_market_chart_are_explicit(self):
+        for mode, palette in (("داكن","ColorScheme.dark"),
+                              ("أبيض","ColorScheme.light"),
+                              ("رمادي","ColorScheme.dark")):
+            self.assertIn(f'text:"{mode}"',self.dashboard)
+            self.assertIn(palette,self.dashboard)
+        self.assertIn("theme-choice: 0",self.dashboard)
+        self.assertIn("root.chart-bars",self.dashboard)
+        self.assertIn("بانتظار شموع MT5",self.dashboard)
+        self.assertIn("QUOTE AGE / عمر السعر",self.dashboard)
+        # A quote-age metric must not be marketed as broker execution latency.
+        self.assertNotIn('Latency " + root.quote-age-display',self.dashboard)
+        self.assertIn('root.execution-action("bind")',self.dashboard)
+
 
 
 if __name__ == "__main__":
