@@ -25,6 +25,7 @@ export component Dashboard inherits Window {
     background: root.theme-choice == 1 ? #f4f7fb : root.theme-choice == 2 ? #242930 : #0c141e;
     in-out property <int> theme-choice: 0;
     in-out property <bool> compact-sidebar: false;
+    in-out property <bool> expanded-workspaces: false;
     callback save-appearance(int, bool);
     changed theme-choice => { Palette.color-scheme = root.theme-choice == 1 ? ColorScheme.light : ColorScheme.dark; }
     in property <string> account-mode-label: "NOT CONNECTED";
@@ -361,6 +362,7 @@ export component Dashboard inherits Window {
             Button { text: "بدء النظام  START"; enabled: !root.busy && root.state == "STOPPED"; clicked => { root.action("start"); } }
             Button { text: "إيقاف  STOP"; enabled: !root.busy && root.state != "STOPPED"; clicked => { root.action("stop"); } }
             Button { text: "إعادة اتصال MT5"; enabled: !root.busy; clicked => { root.action("reconnect"); } }
+            Button { text: root.expanded-workspaces ? "−  إخفاء الأقسام" : "+  جميع الصفحات"; clicked => {root.expanded-workspaces = !root.expanded-workspaces;} }
             Rectangle { horizontal-stretch: 1; background: transparent; }
             Text { text: root.decision; color: root.theme-choice == 1 ? #28384b : #d9dbe0; vertical-alignment: center; font-weight: 600; }
         }
@@ -372,7 +374,8 @@ export component Dashboard inherits Window {
         Rectangle {
             background: root.theme-choice == 1 ? #f8fbfe : #1b1d22; border-radius: 14px;
             border-width: 1px; border-color: root.theme-choice == 1 ? #e3e9f0 : #34363d;
-            height: root.nav-section == 2 ? 123px : 88px;
+            height: root.expanded-workspaces ? (root.nav-section == 2 ? 123px : 88px) : 0px;
+            visible: root.expanded-workspaces;
             VerticalLayout {
                 padding: 8px; spacing: 5px;
                 HorizontalLayout {
@@ -462,12 +465,31 @@ export component Dashboard inherits Window {
                 color: root.theme-choice == 1 ? #17283d : #f0f0f2; font-weight: 700; font-size: 15px;
             }
             Rectangle { horizontal-stretch: 1; background: transparent; }
-            Text {
-                text: root.nav-section == 1 ? "حساب Demo أولاً • حفظ الإعدادات قبل START"
-                    : root.nav-section == 3 ? "البحث لا يرسل أوامر إلى MT5"
-                    : root.nav-section == 2 ? "الإشارات المرصودة ليست ضمان نجاح"
-                    : "إعداداتك وبيانات التعلم محفوظة محلياً";
-                color: root.theme-choice == 1 ? #62758b : #9195a0; font-size: 12px;
+            ComboBox {
+                model: ["نظرة عامة","MT5 وTelegram","سجلات النظام","حول النظام",
+                    "التحليل والعقول","المحاكاة","إدارة المخاطر","الاختبارات التاريخية",
+                    "الأخبار الرسمية","التقييم الزمني","فرص السوق","نماذج التعلم",
+                    "خريطة السوق","النسخ الاحتياطي","مركز التداول والقناص",
+                    "مختبر الاستراتيجيات","مراحل وايكوف","التنفيذ والأوامر",
+                    "تحليل الارتباط","نتائج التعلم","سجل صفقات MT5","غرفة العقول"];
+                current-index <=> root.page;
+                selected(value) => {
+                    root.nav-section = root.page == 0 ? 0
+                        : root.page == 6 || root.page == 14 || root.page == 17 || root.page == 19 || root.page == 20 ? 1
+                        : root.page == 4 || root.page == 8 || root.page == 10 || root.page == 11 || root.page == 12 || root.page == 16 || root.page == 18 || root.page == 21 ? 2
+                        : root.page == 5 || root.page == 7 || root.page == 9 || root.page == 15 ? 3 : 4;
+                    if (root.page == 14 || root.page == 16 || root.page == 15) {root.studio-action(root.page == 14 ? "config" : "refresh");}
+                    if (root.page == 17) {root.execution-action("refresh");}
+                    if (root.page == 20) {root.trade-journal-action("refresh");}
+                    if (root.page == 21) {root.brain-monitor-action("refresh");}
+                    if (root.page == 6) {root.risk-monitor-refresh();}
+                    if (root.page == 7) {root.backtest-action("refresh");}
+                    if (root.page == 9) {root.evaluation-action("refresh");}
+                    if (root.page == 11) {root.learning-action("refresh");}
+                    if (root.page == 13) {root.backup-action("refresh");}
+                    if (root.page == 18) {root.correlation-action("refresh");}
+                    if (root.page == 2) {root.action("events");}
+                }
             }
         }
         if root.page == 18: CorrelationPage {
