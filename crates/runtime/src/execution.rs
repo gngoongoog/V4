@@ -305,6 +305,7 @@ impl Service {
     pub fn new(db: &Connection) -> Result<Self> {
         crate::frozen_shadow::init(db)?;
         crate::frozen_coordinator::init(db)?;
+        crate::coordinator_paper::init(db)?;
         crate::matched_forward::init(db)?;
         crate::matched_trade::init(db)?;
         let mut inner = legacy::Service::new(db)?;
@@ -455,6 +456,18 @@ impl Service {
                         json!({"context":context(telemetry),
                             "error":error.to_string().chars().take(240).collect::<String>()}).to_string()]);
             }
+        }
+        // Paired coordinator Paper trades observe the same quote but NEVER
+        // call the broker. Their errors are isolated from order management.
+        if self.inner.matches_bound_telemetry(telemetry) {
+          if let Err(error)=crate::coordinator_paper::observe(
+            db,telemetry,config,now){
+            let _=db.execute(
+                "INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,?2,?3)",
+                params![now,"coordinator_paper_observation_error",
+                    json!({"context":context(telemetry),
+                        "error":error.to_string().chars().take(240).collect::<String>()}).to_string()]);
+          }
         }
         self.student.capture_entries(self.inner.take_entries(), now);
         if run {crate::student_learning::log_opportunities(db,telemetry,&self.inner.learning_decisions(),now)?;}

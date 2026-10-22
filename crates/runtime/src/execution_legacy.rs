@@ -85,6 +85,9 @@ impl Service {
         self.signals.clear();
     }
 
+    /// Read-only identity guard for detached policy/Paper observations.
+    pub fn matches_bound_telemetry(&self,t:&Telemetry)->bool{self.matches(t)}
+
     pub fn last_system_signal(&self)->Option<Signal>{
         serde_json::from_value(self.signals.get("system")?.get("signal")?.clone()).ok()
     }

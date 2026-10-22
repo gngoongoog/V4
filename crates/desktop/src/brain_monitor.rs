@@ -74,6 +74,16 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
             twin["same_direction"],twin["different_direction"],
             twin["frozen_only_ready"],twin["adaptive_only_ready"]
         ));
+        let matched=&twin["paired_quote_paper"];
+        detail.push_str(&format!(
+            "\n\nتجربة Paper مزدوجة للمنسّق — نفس Bid/Ask ولوت 0.01:\nأزواج مكتملة {} | مفتوحة {} | فجوات أسعار {}\nمتوسط صافي المجمّد لكل لوت {} | المتعلّم {} | الفرق بينهما {}\nصفقات رابحة بعد العمولة المفترضة: المجمّد {} | المتعلّم {}\nالعينة تشمل فقط لحظات جاهزية السياستين. الستوب والهدف والوقت يتحققون عند أول سعر مرصود، وليس محاكاة تنفيذ وسيط؛ لا تشمل بوابات المخاطرة أو الهامش أو الانزلاق الحقيقي.",
+            matched["completed_pairs"],matched["open_pairs"],
+            matched["pairs_with_observation_gaps"],
+            maybe_number(&matched["mean_frozen_net_per_lot"]),
+            maybe_number(&matched["mean_adaptive_net_per_lot"]),
+            maybe_number(&matched["mean_difference_frozen_minus_adaptive_per_lot"]),
+            matched["frozen_wins_after_costs"],matched["adaptive_wins_after_costs"]
+        ));
     }
     let frozen=&b["frozen_trial"];
     let stage=match frozen["status"].as_str().unwrap_or("") {
