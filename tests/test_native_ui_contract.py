@@ -217,7 +217,7 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn('ui.set_studio_cancel_busy(true)',src)
         self.assertIn('ui.set_studio_cancel_busy(false)',src)
         self.assertIn('"/v1/studio/cancel"',src)
-        self.assertLess(src.index('if action=="cancel"'), src.index('if ui.get_studio_busy(){return;}'))
+        self.assertLess(src.index('if action=="cancel"'), src.index('if ui.get_studio_busy() || ui.get_studio_cancel_busy(){return;}'))
         self.assertIn('enabled: !root.studio-cancel-busy; clicked => { root.studio-action("cancel"); }',self.dashboard)
         self.assertIn('in property <bool> studio-cancel-busy: false;',self.dashboard)
 
