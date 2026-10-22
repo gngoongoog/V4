@@ -1033,15 +1033,15 @@ export component Dashboard inherits Window {
                                 height: 48px;clip:true;border-radius:7px;
                                 background:root.theme-choice==1?#f5f9fb:root.theme-choice==2?#222831:#111f2a;
                                 for bar in root.chart-bars: Rectangle {
-                                    x:10px+bar.x*(parent.width-24px);
-                                    y:4px+(1.0-bar.volume)*(parent.height-8px);
-                                    width:root.chart-bars.length>0?(parent.width-24px)/root.chart-bars.length*0.60:4px;
-                                    height:bar.volume*(parent.height-8px);
+                                    x:10px+bar.x*(parent.width - 24px);
+                                    y:4px+(1.0-bar.volume)*(parent.height - 8px);
+                                    width:root.chart-bars.length>0?(parent.width - 24px)/root.chart-bars.length*0.60:4px;
+                                    height:bar.volume*(parent.height - 8px);
                                     background:bar.up?#287b70:#88606b;
                                 }
                                 if root.chart-bars.length==0: Text {
                                     text:"MT5 TICK ACTIVITY  /  بانتظار بيانات حجم النشاط";
-                                    x:12px;width:parent.width-24px;height:parent.height;
+                                    x:12px;width:parent.width - 24px;height:parent.height;
                                     color:root.theme-choice==1?#7c8b98:#85949e;
                                     font-size:10px;vertical-alignment:center;
                                 }
