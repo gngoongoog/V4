@@ -208,6 +208,11 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             p["trading_mode"] = json!(c.trading.mode);
             p["demo_flexible"] = json!(c.trading.demo_flexible && t.demo && t.account_trade_mode==Some(0));
             p["commission_per_lot"] = json!(c.risk.commission_per_lot);
+            // Mandatory for every new entry (Demo and REAL). The broker uses
+            // order_calc_profit at the EXACT final stop and account equity to
+            // cap the requested volume without ever increasing it.
+            p["risk_percent"] = json!(c.risk.risk_percent);
+            p["slippage_ticks"] = json!(c.risk.slippage_ticks);
             p["learning"] = json!({"trading_mode":c.trading.mode,"timeframe":b.timeframe,"report_id":b.report_id,
                 "tick_size":t.tick_size,"tick_value_loss":t.tick_value_loss,"tick_value_profit":t.tick_value_profit,
                 "slippage_ticks":c.risk.slippage_ticks,"bid":t.bid,"ask":t.ask,"quote_time_ms":t.quote_time_ms,"quote_age_ms":t.tick_age_ms,
@@ -719,6 +724,30 @@ mod execution_persistence_tests {
             login: 17, server: "Demo-Test".into(), currency: "USD".into(),
             symbol: "XAUUSD".into(), ..Default::default()
         }
+    }
+
+    #[test]
+    fn every_new_core_entry_records_the_exact_risk_budget_and_full_roundtrip_fee() {
+        let db=Connection::open_in_memory().unwrap();
+        let service=Service::new(&db).unwrap();
+        let t=demo();
+        let b=service.brains.iter().find(|b|b.id=="system").unwrap();
+        let mut c=Config::default();
+        c.risk.risk_percent=0.25;
+        c.risk.commission_per_lot=7.;
+        c.risk.slippage_ticks=2.;
+        let signal=Signal{brain:"system".into(),side:1,key:"risk-stage2".into(),
+            bar_time:12345,stop_distance:1.,target_distance:2.,hold_ms:60000,
+            reason:"risk sizing test".into(),ready:true,coordination:None};
+        let payload=service.queue(&db,&t,b,"open",Some(&signal),0,12345,Some(&c)).unwrap();
+        assert_eq!(payload["risk_percent"],0.25);
+        assert_eq!(payload["commission_per_lot"],7.);
+        assert_eq!(payload["slippage_ticks"],2.);
+        assert_eq!(payload["lots"],b.lots);
+        assert_eq!(payload["kind"],"open");
+        c.risk.commission_per_lot=0.;
+        let free=service.queue(&db,&t,b,"open",Some(&signal),0,12346,Some(&c)).unwrap();
+        assert_eq!(free["commission_per_lot"],0.);
     }
 
     #[test]

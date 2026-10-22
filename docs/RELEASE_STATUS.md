@@ -1,6 +1,10 @@
-# BrainTrade OS V4 — 0.7.3 Unified Windows Demo Release Candidate
+# BrainTrade OS V4 — 0.7.4 Unified Windows Demo Release Candidate
 
-**Package:** `BrainTrade-Windows-x64-v0.7.3-Preview.zip` (a Windows x64 portable ZIP contained within the GitHub Actions downloadable artifact `BrainTrade-Windows-x64-Preview`). This is the combined version for **controlled MT5 Demo acceptance**, not an independently certified profitable trading product.
+**Package:** `BrainTrade-Windows-x64-v0.7.4-Preview.zip` (a Windows x64 portable ZIP contained within the GitHub Actions downloadable artifact `BrainTrade-Windows-x64-Preview`). This is the combined version for **controlled MT5 Demo acceptance**, not an independently certified profitable trading product.
+
+## P0 stage 2: account-risk lot cap (v0.7.4)
+
+New Core-origin entries carry risk percent, full roundtrip commission and per-side slippage assumptions. The MT5 adapter uses current broker equity and order_calc_profit to limit requested volume from the actual rounded SL, rounding *down* to volume_step or rejecting below minimum. REAL opens without a risk budget are rejected. This is estimated stop-loss risk, never a guarantee in gaps or illiquidity. Verify in native Demo before any REAL acceptance. See docs/P0_RISK_LOTS_STAGE_2_AR.md.
 
 ## P0 commission milestone (v0.7.3)
 

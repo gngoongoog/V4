@@ -1,3 +1,7 @@
+# Latest work: 0.7.4 P0 phase 2 risk-based maximum lot
+
+Fresh broker-entry commands use equity and broker order_calc_profit at rounded SL to limit (never enlarge) the requested lot after including configured roundtrip commission and two-sided slippage. Above-budget broker-minimum sizes are rejected; REAL commands missing the risk budget are denied. Maintain a coherent 0.7.4 UI/Core/Gateway and verify exact SHA with Windows and Research CI. MT5 native acceptance is not established.
+
 # Current 0.7.3 — P0 fee/lot-contract stage 1
 
 Commission fee model for round-trip lot sizes is aligned across Core, Rust trading and risk, demo margin downsize, native preview and test suite. 7 per 1 lot -> 0.07 / 0.70 / 7.00 for 0.01 / 0.10 / 1.00; 0 means zero modeled broker commission only. Risk-sized lot based on stop is a future separately tested stage. Exact commit Research+Windows CI must pass before merging. See docs/P0_COMMISSION_STAGE_1_AR.md.
