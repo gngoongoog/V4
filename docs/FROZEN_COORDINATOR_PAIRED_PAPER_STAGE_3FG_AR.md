@@ -8,6 +8,7 @@
 ## Controls and durability
 - Frozen snapshots and sampled decision pairs remain immutable, account/symbol scoped and preserved after STOP.
 - New entries require an active frozen coordinator policy, a *fresh same-cycle* M1 decision record and both signals ready with valid distances.
+- Repeated underlying strategy signal keys are not re-opened on a later M1 comparison; matching an unchanged actionable signal is not a new trade opportunity.
 - Only one open pair per frozen policy at a time. Already open simulated positions continue settling after policy stop, mode changes or application restart when fresh Demo quotes arrive.
 - A delayed observation, older decision row, invalid/stale quote, or no matching broker account cannot fabricate a new pair or profits.
 - All results are in `frozen_coordinator_trade_pairs`, separate from order journal, MT5 reported deals, optimizer rewards and adaptive learner evidence. The system row on `حالة العقول والتحكم` shows completed/open pairs, quote gaps, winning pairs and separate mean hypothetical net-per-lot for each policy.
