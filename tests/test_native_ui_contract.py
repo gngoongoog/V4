@@ -82,7 +82,7 @@ class NativeUiContract(unittest.TestCase):
         main=(RUST / "main.rs").read_text(encoding="utf-8")
         self.assertIn("COMMAND CENTER  /  مركز القيادة",self.dashboard)
         self.assertIn("PROFESSIONAL CHART",self.dashboard)
-        self.assertIn("CORE INTELLIGENCE  /  العقل الرئيسي",self.dashboard)
+        self.assertIn("CORE INTELLIGENCE  /  حالة العقل الرئيسي",self.dashboard)
         self.assertIn("MT5 TICK ACTIVITY",self.dashboard)
         self.assertIn("volume:float",self.dashboard)
         self.assertIn("bar.volume",self.dashboard)
