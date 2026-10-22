@@ -832,7 +832,7 @@ export component Dashboard inherits Window {
             Text { text: "تطبق على المحاكاة، وعلى العقل الحقيقي إذا فعّلت حدوده الاختيارية. العمولة هنا تقدير؛ سجل التنفيذ يأخذ الرسوم الفعلية من الوسيط."; color: #b7bac3; wrap: word-wrap; }
             HorizontalBox { Text { text: root.micro-demo-risk-opt-in ? "المخاطرة لكل صفقة % (0.01–5 Demo فقط)" : "المخاطرة لكل صفقة % (0.01–2)"; color: #e0e1e4; } LineEdit { text <=> root.risk-percent; } }
             CheckBox { text: "موافقة صريحة: مخاطرة أعلى للحساب الصغير على Demo فقط"; checked <=> root.micro-demo-risk-opt-in; enabled: root.state == "STOPPED" && !root.busy; }
-            Text { text: "فوق 2% مخاطرة مرتفعة وقد تخسر 5$ أو أكثر لكل 100$ عند الستوب. الرافعة لا تخفف الخسارة. REAL يرفض أي دخول فوق 2% حتى لو فُعل الاختيار. حد الخسارة اليومي لبعض العقول اختياري حالياً؛ لا تعتبره قاطعاً مؤسسياً مستقلاً."; color: #c8cbd1; wrap: word-wrap; }
+            Text { text: "فوق 2% مخاطرة مرتفعة وقد تخسر 5$ أو أكثر لكل 100$ عند الستوب. الرافعة لا تخفف الخسارة. خيار Demo وحده لا يسمح بتجاوز 2% في REAL؛ للحساب الحقيقي الصغير يلزم تفعيل الوضع المؤقت المنفصل أدناه. حد الخسارة اليومي لبعض العقول اختياري حالياً؛ لا تعتبره قاطعاً مؤسسياً مستقلاً."; color: #c8cbd1; wrap: word-wrap; }
             Text { text: "حساب صغير / MICRO CAPITAL — افحص الهامش قبل اختيار حجم اللوت"; color: #e0e1e4; font-weight: 700; }
             Text { text: "وضع REAL المؤقت — تخفيف سقف المخاطرة التقليدي، وليس إلغاء إدارة المخاطر"; color: #f2f2f4; font-weight: 700; }
             CheckBox { text: "تفعيل مخاطرة مرنة لحساب REAL صغير مؤقتاً (موافقة صريحة)"; checked <=> root.micro-real-temporary; enabled: root.state == "STOPPED" && !root.busy; }
