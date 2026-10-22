@@ -68,11 +68,11 @@ pub fn stop(db:&Connection,context:&str,mode:TradingMode,brain:&str)->Result<Val
         params![context,mode_key(mode)?,brain])?;
     Ok(json!({"ok":true,"stopped":count,"no_broker_orders":true}))
 }
-pub fn observe(db:&Connection,context:&str,source_brain:&str,adaptive:&Signal,
+pub fn observe(db:&Connection,context:&str,mode:TradingMode,source_brain:&str,adaptive:&Signal,
     t:&Telemetry,now:u64,frames:&BTreeMap<String,Vec<FrameBar>>)->Result<()>{
-    if !t.connected||!t.demo||t.account_trade_mode!=Some(0)
+    if mode!=TradingMode::Expert || !t.connected||!t.demo||t.account_trade_mode!=Some(0)
         ||!t.tick_age_ms.is_some_and(|v|v<=3000){return Ok(())}
-    let mode=mode_key(TradingMode::Expert)?;
+    let mode=mode_key(mode)?;
     // Retired runs with a virtual position still get their exit checked; no new entries.
     let mut stmt=db.prepare(
         "SELECT id,snapshot,created_ms,active
