@@ -361,6 +361,14 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             if !run {
                 gates.push("النظام متوقف");
             }
+            // Elevated risk is deliberately Demo-only. Reject in Core before
+            // queueing to avoid a stream of guaranteed broker rejections on REAL.
+            // The MT5 adapter independently enforces the exact broker mode.
+            if c.risk.risk_percent > 2.0
+                && (self.settings.target != "demo" || t.account_trade_mode != Some(0))
+            {
+                gates.push("المخاطرة فوق 2% تجريبية على حساب MT5 Demo فقط؛ REAL يبقى بحد 2%");
+            }
             if b.id != "system" {
                 gates.push("SHADOW / PAPER فقط: الوضع المختار يمنع هذا العقل من إرسال صفقات إلى MT5");
             }
