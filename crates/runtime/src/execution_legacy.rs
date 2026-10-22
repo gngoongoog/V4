@@ -190,7 +190,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         let loss=baseline-t.equity;
         if loss>=baseline*limit/100. {
             db.execute("INSERT OR IGNORE INTO daily_loss_locks VALUES(?1,?2,?3,?4)",
-                params![micro_account_key(t),day,now,loss])?;
+                params![daily_account_key(t),day,now,loss])?;
             return Ok(true);
         }
         Ok(false)
