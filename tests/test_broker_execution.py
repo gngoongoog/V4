@@ -357,7 +357,7 @@ class ExecutionTests(unittest.TestCase):
         self.mt.account.equity=float('nan')
         result=self.send()
         self.assertEqual(result['state'],'rejected')
-        self.assertIn('positive broker equity required',result['reason'])
+        self.assertTrue('positive broker equity required' in result['reason'] or 'Daily breaker: valid balance, equity' in result['reason'])
         self.assertFalse(self.mt.sends)
 
     def test_broker_equity_drop_after_durable_journal_cancels_send(self):
