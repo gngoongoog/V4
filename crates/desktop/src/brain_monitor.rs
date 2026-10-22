@@ -66,6 +66,25 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
         maybe_number(&q["all"]["net_booked"]),maybe_number(&q["all"]["cost_drag"]),q["all"]["gross_positive_but_net_nonpositive"]
     ));
     if b["config"]["id"]=="system" {
+        if v["trading_mode"]=="sniper" {
+            let a=&b["sniper_execution_latency"];
+            let measurements=&a["metrics"];
+            detail.push_str(&format!(
+                "\\n\\nتدقيق سرعة تنفيذ القناص — سجلات بوابة MT5 الفعلية فقط:\\nآخر {} أمر دخول للقناص (حد العينة 250) | ردود مسجلة {} | قياسات إرسال مكتملة {} | ناقصة {}\\nقائمة/إلى الإرسال P50 / P95 / P99: {} / {} / {} ms\\nاستدعاء order_send P50 / P95 / P99: {} / {} / {} ms\\nكل المعالجة داخل البوابة P95: {} ms | إجمالي دورة البوابة P95: {} ms\\nأوامر غير محسومة أو جزئية عند أخذ العينة {} | ACK برقم deal {}\\nمن دخلت ضمن 20 ms من قياسات قائمة-إرسال: {} من {}\\nهذه أوقات محلية للبوابة وليست زمناً من Tick حتى تأكيد تعبئة الوسيط؛ قيم فارغة تعني بيانات ناقصة، وليست صفراً.",
+                a["sampled_commands"],a["results_available"],
+                a["complete_queue_plus_send_timing"],a["missing_or_invalid_queue_or_send_timing"],
+                maybe_number(&measurements["queue_to_send_ms"]["p50_ms"]),
+                maybe_number(&measurements["queue_to_send_ms"]["p95_ms"]),
+                maybe_number(&measurements["queue_to_send_ms"]["p99_ms"]),
+                maybe_number(&measurements["send_ms"]["p50_ms"]),
+                maybe_number(&measurements["send_ms"]["p95_ms"]),
+                maybe_number(&measurements["send_ms"]["p99_ms"]),
+                maybe_number(&measurements["pre_send_ms"]["p95_ms"]),
+                maybe_number(&measurements["total_ms"]["p95_ms"]),
+                a["unresolved_or_partial_at_snapshot"],a["broker_ack_with_deal_ticket"],
+                a["queue_to_send_le_20ms_observed"],a["queue_to_send_observed"]
+            ));
+        }
         let twin=&b["frozen_coordinator"];
         detail.push_str(&format!(
             "\n\nمنسّق Expert المجمّد — رصد سياسة فقط:\nالحالة {} | شموع مستقبلية مقارنة {} | جاهزية مشتركة {}\nاتجاه متفق {} | اتجاه مختلف {} | مجمّد فقط {} | متعلّم فقط {}\nهذه نسخة ثابتة لإعدادات المنسق وأصوات وأوزان المستشارين وملفات الخروج. لا تعيد تشغيل بوابات الأوامر والهامش والتنفيذ ولا تقيس الربحية.",
