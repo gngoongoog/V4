@@ -129,9 +129,14 @@ pub fn render() -> anyhow::Result<()> {
 الدخول المنسوب: 4 / تعبئة مؤكدة 3".into());
     ui.set_brain_monitor_overview("القناص | إشارات 30 | دخول منسوب 4 / تعبئة مؤكدة 3
 وايكوف | إشارات 10 | تدريب مغلق 7 / رابح 4".into());
-    for (width, height, suffix) in [(1120, 820, ""), (880, 700, "-small")] {
-        window.set_size(slint::PhysicalSize::new(width, height));
-        for page in 0..22 {
+    // Exercise ALL 22 pages under each institutional palette and both viewport
+    // sizes. Keep the original dark-mode full screenshots and save comparison
+    // screenshots for seven operationally sensitive pages in Light/Smoke.
+    for (theme,name) in [(0,"dark"),(1,"white"),(2,"smoke")] {
+        ui.set_theme_choice(theme);
+        for (width, height, suffix) in [(1120, 820, ""), (880, 700, "-small")] {
+            window.set_size(slint::PhysicalSize::new(width, height));
+            for page in 0..22 {
             ui.set_page(page);
             if [6,14,17,19,20].contains(&page) {ui.set_nav_section(1);}
             if page==21 {ui.set_nav_section(2);}
@@ -148,13 +153,18 @@ pub fn render() -> anyhow::Result<()> {
             window.draw_if_needed(|renderer| {
                 renderer.render(&mut pixels, width as usize);
             });
-            let path = output.join(format!("dashboard-page-{page}{suffix}.ppm"));
-            let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
-            write!(file, "P6\n{width} {height}\n255\n")?;
-            for pixel in pixels {
-                file.write_all(&[pixel.r, pixel.g, pixel.b])?;
+            // Render every combination; retain screenshots for comprehensive
+            // dark regression and representative palette accessibility checks.
+            if theme == 0 || [0,6,14,17,18,19,21].contains(&page) {
+                let path = output.join(if theme == 0 {format!("dashboard-page-{page}{suffix}.ppm")} else {format!("dashboard-page-{page}{suffix}-{name}.ppm")});
+                let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
+                write!(file, "P6\n{width} {height}\n255\n")?;
+                for pixel in pixels {
+                    file.write_all(&[pixel.r, pixel.g, pixel.b])?;
+                }
+                file.flush()?;
             }
-            file.flush()?;
+            }
         }
     }
     ui.hide()?;

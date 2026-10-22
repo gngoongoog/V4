@@ -86,13 +86,35 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("BRAINTRADE OS "+version,self.dashboard)
         self.assertNotIn("Windows 0.7.1",self.dashboard)
 
+    def test_entire_22_page_windows_dashboard_supports_saved_appearance(self):
+        main = (RUST / "main.rs").read_text(encoding="utf-8")
+        render = (RUST / "render.rs").read_text(encoding="utf-8")
+        correlation = CORRELATION.read_text(encoding="utf-8")
+        for token in ("callback save-appearance(int, bool)", "root.save-appearance(",
+                      "changed theme-choice =>", "root.compact-sidebar"):
+            self.assertIn(token, self.dashboard)
+        self.assertIn("ui.on_save_appearance", main)
+        self.assertIn('data_dir().join("ui-appearance.json")', main)
+        self.assertIn("ui.set_theme_choice(initial_theme)", main)
+        self.assertIn("ui.set_compact_sidebar(initial_compact)", main)
+        self.assertIn("theme-choice: root.theme-choice", self.dashboard)
+        self.assertIn("in property <int> theme-choice: 0;", correlation)
+        for marker in ('[(0,"dark"),(1,"white"),(2,"smoke")]', "for page in 0..22",
+                       "if theme == 0 || [0,6,14,17,18,19,21].contains(&page)"):
+            self.assertIn(marker, render)
+        # Zero-connection monitoring is explicitly unknown, not a fabricated score.
+        self.assertIn("نسبة نجاح أو تعلّم: غير محسوبة", self.dashboard)
+
     def test_three_institutional_themes_and_real_market_chart_are_explicit(self):
         for mode, palette in (("داكن","ColorScheme.dark"),
-                              ("أبيض","ColorScheme.light"),
+                              ("أبيض","ColorScheme.dark"),
                               ("رمادي","ColorScheme.dark")):
             self.assertIn(f'text:"{mode}"',self.dashboard)
             self.assertIn(palette,self.dashboard)
         self.assertIn("theme-choice: 0",self.dashboard)
+        # Slint 1.16 Fluent light palette renders near-white button labels on white;
+        # retain dark native controls on light workspace for readable text.
+        self.assertIn("changed theme-choice => { Palette.color-scheme = ColorScheme.dark; }",self.dashboard)
         self.assertIn("root.chart-bars",self.dashboard)
         self.assertIn("بانتظار شموع MT5",self.dashboard)
         self.assertIn("QUOTE AGE / عمر السعر",self.dashboard)

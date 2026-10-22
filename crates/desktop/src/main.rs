@@ -217,8 +217,47 @@ fn main() {
         std::process::exit(1);
     }
 }
+/// Appearance preferences are local UI-only state. No broker/risk/core config is changed.
+fn parse_appearance(raw:&str)->(i32,bool){
+    let Ok(v)=serde_json::from_str::<Value>(raw) else{return (0,false)};
+    let theme=v["theme"].as_i64().filter(|v|(0..=2).contains(v))
+        .map(|v|v as i32).unwrap_or(0);
+    (theme,v["sidebar_collapsed"].as_bool().unwrap_or(false))
+}
+fn appearance_path()->std::path::PathBuf{
+    data_dir().join("ui-appearance.json")
+}
+fn load_appearance()->(i32,bool){
+    std::fs::read_to_string(appearance_path())
+        .ok().map(|s|parse_appearance(&s)).unwrap_or((0,false))
+}
+fn save_appearance(theme:i32,collapsed:bool)->anyhow::Result<()>{
+    anyhow::ensure!((0..=2).contains(&theme),"Unsupported desktop theme");
+    let file=appearance_path();
+    if let Some(parent)=file.parent(){std::fs::create_dir_all(parent)?;}
+    std::fs::write(file,serde_json::to_vec(&json!({
+        "schema":1,"theme":theme,"sidebar_collapsed":collapsed,
+    }))?)?;
+    Ok(())
+}
+#[cfg(test)]
+mod appearance_tests{
+    use super::*;
+    #[test]
+    fn no_invalid_theme_may_be_restored(){
+        assert_eq!(parse_appearance("{\"theme\":1,\"sidebar_collapsed\":true}"),(1,true));
+        assert_eq!(parse_appearance("{\"theme\":2}"),(2,false));
+        assert_eq!(parse_appearance("{\"theme\":-99,\"sidebar_collapsed\":true}"),(0,true));
+        assert_eq!(parse_appearance("{\"theme\":100}"),(0,false));
+        assert_eq!(parse_appearance("not json"),(0,false));
+    }
+}
+
 fn run_ui() -> anyhow::Result<()> {
     let ui = Dashboard::new()?;
+    let (initial_theme,initial_compact)=load_appearance();
+    ui.set_theme_choice(initial_theme);
+    ui.set_compact_sidebar(initial_compact);
     backtest::setup(&ui);
     correlation::setup(&ui);
     backup::setup(&ui);
@@ -231,6 +270,14 @@ fn run_ui() -> anyhow::Result<()> {
     let _trade_journal_timer=trade_journal::setup(&ui);
     let _brain_monitor_timer=brain_monitor::setup(&ui);
     let _risk_monitor_timer=risk_monitor::setup(&ui);
+    let weak = ui.as_weak();
+    ui.on_save_appearance(move |theme, collapsed| {
+        if let Err(err)=save_appearance(theme,collapsed){
+            if let Some(ui)=weak.upgrade(){
+                ui.set_feedback(format!("تعذر حفظ ثيم الواجهة محلياً: {err}").into());
+            }
+        }
+    });
     let (tx, rx) = mpsc::channel::<Task>();
     let sender = tx.clone();
     let weak = ui.as_weak();
