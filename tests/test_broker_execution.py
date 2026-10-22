@@ -237,6 +237,30 @@ class ExecutionTests(unittest.TestCase):
         self.assertIn(out['state'],('cancelled','rejected'),out)
         self.assertEqual(len(self.mt.sends),0)
 
+    def test_real_margin_preflight_is_mandatory_in_fast_path(self):
+        self.mt.account.trade_mode=2
+        self.mt.account.equity=50.
+        self.mt.account.margin_free=5.
+        self.cmd.update(target='live',id='micro-fast-margin',lots=.01,
+                        risk_percent=10.,commission_per_lot=7.,slippage_ticks=2.,
+                        micro_real_recovery_equity=500.,micro_real_temporary=True)
+        self.cmd['signal'].update(key='tick:77',stop_distance=3.)
+        rejected=self.send()
+        self.assertEqual(rejected['state'],'rejected',rejected)
+        self.assertIn('REAL margin preflight',rejected['reason'])
+        self.assertEqual(self.mt.sends,[])
+
+        self.mt.account.margin_free=50.
+        self.mt.account_reads=0
+        def decline(n):
+            if n>=3:self.mt.account.margin_free=1.
+        self.mt.on_account=decline
+        self.cmd['id']='micro-fast-margin-declined'
+        cancelled=self.send()
+        self.assertEqual(cancelled['state'],'cancelled',cancelled)
+        self.assertIn('free margin dropped',cancelled['reason'])
+        self.assertEqual(self.mt.sends,[])
+
     def test_risk_sizing_zero_commission_and_unavailable_broker_profit_fail_closed(self):
         self.mt.account.equity=1000.
         self.cmd.update(id='risk-free-fee',risk_percent=0.5,
