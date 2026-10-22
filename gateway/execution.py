@@ -245,7 +245,7 @@ class BrokerExecutor:
         if enabled is not True:
             return False
         try:
-            limit=float(cmd.get('daily_breaker_limit_percent',float('nan')))
+            limit=float(cmd.get('daily_breaker_limit_percent',2.0))
             balance=float(account.balance)
             equity=float(account.equity)
         except (TypeError, ValueError, AttributeError):
