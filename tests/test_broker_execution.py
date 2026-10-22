@@ -305,6 +305,7 @@ class ExecutionTests(unittest.TestCase):
         self.cmd.update(id='daily-demo-open',target='demo',symbol='XAUUSD',
                         risk_percent=2.,micro_real_temporary=False,
                         daily_breaker_enabled=False)
+        self.cmd['signal']['stop_distance']=.5
         self.mt.history_deals_get=lambda *a:None
         self.mt.account.equity=50.
         self.mt.account.balance=50.
