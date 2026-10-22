@@ -67,6 +67,20 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
     ));
     if b["config"]["id"]=="system" {
         if v["trading_mode"]=="sniper" {
+            let lineage=&b["sniper_demo_lineage"];
+            detail.push_str(&format!(
+                "\n\nسلسلة دليل القناص من القرار إلى صفقات Demo المغلقة (رقم الأمر الدقيق فقط):\nعينات {} | مغلقة ومصالحة {} | رابحة بعد التكلفة {} | صافي المغلقة {}\nإشارة غير جاهزة {} | جاهزة لكن ممنوعة {} | اجتازت بدون أمر مطابق {} | أمر لم يحسم {} | تنفيذ مرفوض/ملغى {} | دليل متعارض {}\nالمرفوضات ليست صفقات وسجل الأرباح لا ينسب إليها أي نتيجة. آخر ملاحظات Demo (عينة كل ثانية) لا تشمل بالضرورة Fast Pulse السريع.",
+                lineage["sampled_decisions"],
+                lineage["exact_closed_demo_positions"],
+                lineage["closed_demo_wins"],
+                maybe_number(&lineage["closed_demo_net_after_booked_costs"]),
+                lineage["counts"]["not_ready"],
+                lineage["counts"]["ready_blocked"],
+                lineage["counts"]["eligible_without_command"],
+                lineage["counts"]["command_unsettled"],
+                lineage["counts"]["broker_rejected_or_cancelled"],
+                lineage["counts"]["contradictory_closed_evidence"]
+            ));
             let breakdown=&b["sniper_multigate_breakdown"];
             detail.push_str(&format!(
                 "\n\nتفصيل جميع أسباب منع القناص من نفس العينات (24 ساعة):\nعينات سليمة {} | شروط الاستراتيجية لم تكتمل {} | إشارة جاهزة منعتها بوابة تنفيذ {} | مؤهلة للطابور {} | بيانات معيبة {}\nلا نضيف عينات جديدة؛ كل قرار محظور قد يحمل عدة أسباب. لا تعني الإشارة المؤهلة أنه تم تنفيذ صفقة.",
