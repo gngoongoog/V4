@@ -76,7 +76,7 @@ class NativeUiContract(unittest.TestCase):
                     else:
                         self.assertRegex(element,r"\bchecked\s*<=>")
         # Catch missing fields silently disappearing from nested layouts.
-        self.assertEqual(total,{"Button":130,"ComboBox":29,"LineEdit":49,"CheckBox":12})
+        self.assertEqual(total,{"Button":115,"ComboBox":29,"LineEdit":49,"CheckBox":12})
 
     def test_premium_native_dashboard_keeps_real_market_provenance(self):
         main=(RUST / "main.rs").read_text(encoding="utf-8")
@@ -91,6 +91,19 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("market.valid()",main)
         self.assertIn("captured_ms <= 120_000",main) if "captured_ms <= 120_000" in main else self.assertIn("now_ms.saturating_sub(market.captured_ms) <= 120_000",main)
 
+    def test_reference_mockup_navigation_and_actions_are_all_wired(self):
+        self.assertEqual(len(re.findall(r"\bDeskNav\s*\{",self.dashboard)), 12)
+        self.assertEqual(len(re.findall(r"\bDeskAction\s*\{",self.dashboard)), 6)
+        self.assertEqual(len(re.findall(r"\bDeskMetric\s*\{",self.dashboard)), 6)
+        self.assertEqual(len(re.findall(r"\bTouchArea\s*\{\s*clicked\s*=>",self.dashboard)),2)
+        self.assertIn("root.pressed();",self.dashboard)
+        self.assertIn("root.trade-journal-rows[0]",self.dashboard)
+        self.assertIn("root.brain-monitor-overview",self.dashboard)
+        self.assertIn("root.risk-monitor-text",self.dashboard)
+        self.assertIn("root.online && root.state==\"STOPPED\"",self.dashboard)
+        self.assertIn('root.action("start")',self.dashboard)
+        self.assertIn('root.action("stop")',self.dashboard)
+
     def test_no_button_is_rendered_without_a_click_handler(self):
         for path in (SLINT, CORRELATION):
             src = path.read_text(encoding="utf-8")
@@ -98,8 +111,11 @@ class NativeUiContract(unittest.TestCase):
             # decorative buttons are not accepted into the Windows release.
             count = len(re.findall(r"\bButton\s*\{", src))
             wired = len(re.findall(r"\bclicked\s*=>", src))
+            # UI-07 uses 2 custom Rectangle+TouchArea components for
+            # interactive sidebar entries and premium order buttons.
+            touch = len(re.findall(r"\bTouchArea\s*\{\s*clicked\s*=>", src))
             self.assertGreater(count, 0)
-            self.assertEqual(count, wired, f"Found inert control in {path.name}")
+            self.assertEqual(count, wired-touch, f"Found inert control in {path.name}")
 
     def test_every_declared_callback_is_registered_in_the_desktop(self):
         callbacks = set(re.findall(r"(?m)^\s*callback\s+([a-z0-9-]+)\s*\(", self.dashboard))
