@@ -38,6 +38,8 @@ def finite_cash(value):
 
 
 def identity(value, name):
+    if isinstance(value, bool) or not isinstance(value, (str, int)) or (type(value) is int and value <= 0):
+        raise DemoEvidenceError(f"{name} must be a valid bounded text or positive numeric identifier")
     value = str(value)
     if IDENT.fullmatch(value) is None:
         raise DemoEvidenceError(f"{name} must be a bounded alphanumeric identifier")
@@ -82,7 +84,10 @@ def capture(mt5, symbol, from_ms, to_ms, mapping=None, now_ms=None):
     demo_constant = getattr(mt5, "ACCOUNT_TRADE_MODE_DEMO", None)
     if demo_constant is None or getattr(account, "trade_mode", None) != demo_constant:
         raise DemoEvidenceError("Real/contest/unverified MT5 account refused: only Demo allowed")
-    login = identity(getattr(account, "login", ""), "MT5 login")
+    broker_login = getattr(account, "login", None)
+    if type(broker_login) is not int or broker_login <= 0:
+        raise DemoEvidenceError("A valid positive MT5 broker login is required")
+    login = identity(broker_login, "MT5 login")
     server = identity(getattr(account, "server", ""), "MT5 server")
     currency = identity(getattr(account, "currency", ""), "Account currency")
     if not getattr(mt5, "symbol_info", lambda _: None)(symbol):
