@@ -3,16 +3,18 @@ use super::*;
 use braintrade_domain::execution::BRAINS;
 use std::{thread, sync::{Arc,Mutex}};
 fn amount(v:&Value)->f64 {v.as_f64().unwrap_or(0.)}
+fn maybe_number(v:&Value)->String {v.as_f64().filter(|n|n.is_finite()).map(|n|format!("{n:.2}")).unwrap_or_else(||"—".into())}
 fn yes(v:&Value)->&'static str {if *v==true {"نعم"}else{"لا"}}
 fn mode(v:&Value)->&'static str {match v.as_str().unwrap_or("") {"sniper"=>"القناص","scalping"=>"سكالبينغ","swing"=>"سوينغ",_=>"الخبير"}}
 fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
     let rows=v["brains"].as_array();
     let mut overview=String::new();
     for b in rows.into_iter().flatten() {
-        overview.push_str(&format!("{} | إشارات {} | دخول منسوب {} / تعبئة مؤكدة {} | تدريب مغلق {} / رابح {}\n",
+        overview.push_str(&format!("{} | إشارات {} | دخول منسوب {} / تعبئة مؤكدة {} | تدريب مغلق {} / رابح {} | تقييم Demo مغلق {} ({}؛ لا يرقي تلقائياً)\n",
             b["name"].as_str().unwrap_or("—"),b["activity"]["signals"],
             b["attributed_orders"]["requested"],b["attributed_orders"]["fill_acknowledged"],
-            b["paper_stats"]["closed"],b["paper_stats"]["wins"]));
+            b["paper_stats"]["closed"],b["paper_stats"]["wins"],
+            b["quality"]["broker_samples"],b["quality"]["status"].as_str().unwrap_or("unknown")));
     }
     ui.set_brain_monitor_summary(format!("الوضع: {} | الحساب {} / {} | التنفيذ: {}\n{}",
         mode(&v["trading_mode"]),v["settings"]["login"],v["settings"]["server"].as_str().unwrap_or("—"),yes(&v["armed"]),
@@ -42,6 +44,24 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
         learned["broker_samples"],learned["forward_samples"],
         learned["evidence_source"].as_str().unwrap_or("لا توجد أدلة مؤكدة"),
         b["learned_weight"]
+    ));
+    let q=&b["quality"];
+    let description=match q["status"].as_str().unwrap_or("") {
+        "insufficient_evidence"=>"أدلة Broker غير كافية للتقييم الزمني",
+        "mixed_policy_monitor_only"=>"المصدر/الفريم تغيّر: لا تخلط النسخ لتقرر التحسن",
+        "recent_deterioration"=>"تحذير: متوسط صافي الصفقات الأحدث غير موجب",
+        "monitor_only"=>"بيانات كافية للمراقبة فقط؛ ليست دليلاً على نجاح خارج العينة",
+        _=>"تقييم غير متاح",
+    };
+    detail.push_str(&format!(
+        "\n\nتدقيق جودة التعلّم — صفقات MT5 Demo مغلقة فقط، وليس Paper/Shadow:\n{}\nعينات صالحة {} | مستبعدة {} | تكرارات متقاطعة {} | مصادر استراتيجية {}\nالجزء الأقدم: {} صفقة | متوسط صافي/لوت {} | معدل ربح بعد التكلفة {}\nآخر {} صفقات: {} صفقة | متوسط صافي/لوت {} | معدل ربح بعد التكلفة {}\nالإجمالي: صافي محقق {} | عمولات ورسوم وسواب {} | صفقات محا الربحَ فيها أثرُ التكلفة {}\nالجزء الأخير مراقبة زمنية وليس اختبار OOS مستقلاً؛ قد يكون العقل تعلّم من هذه الصفقات بالفعل. لا يوجد تعديل آلي للأوزان أو الموافقة على تنفيذ جديد بهذه الصفحة.",
+        description,
+        q["broker_samples"],q["invalid_samples"],q["duplicate_position_samples"],q["distinct_strategy_sources"],
+        q["earlier"]["samples"],maybe_number(&q["earlier"]["mean_net_per_lot"]),
+        q["earlier"]["win_rate"].as_f64().map(|v|format!("{:.1}%",v*100.)).unwrap_or_else(||"—".into()),
+        q["recent_window"],q["recent"]["samples"],maybe_number(&q["recent"]["mean_net_per_lot"]),
+        q["recent"]["win_rate"].as_f64().map(|v|format!("{:.1}%",v*100.)).unwrap_or_else(||"—".into()),
+        maybe_number(&q["all"]["net_booked"]),maybe_number(&q["all"]["cost_drag"]),q["all"]["gross_positive_but_net_nonpositive"]
     ));
     ui.set_brain_monitor_detail(detail.into());
 }
