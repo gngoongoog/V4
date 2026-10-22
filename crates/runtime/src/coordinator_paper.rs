@@ -340,4 +340,50 @@ mod tests{
             &sig(1,bar+60,1.,2.,1000),&q(opened+3000,101.,101.2),&c,opened+3000).unwrap();
         assert_eq!(summary(&db,"r1").unwrap()["completed_pairs"],1);
     }
+    #[test]
+    fn only_same_cycle_coordinator_decisions_open_and_closed_runs_still_settle(){
+        let db=Connection::open_in_memory().unwrap();
+        crate::frozen_coordinator::init(&db).unwrap();
+        init(&db).unwrap();
+        let c=Config::default();
+        let opened=1_000_100_000u64;
+        let created=1_000_000_000u64;
+        let t=q(opened,100.,100.2);
+        let key=crate::coordinator_learning::context(&t);
+        db.execute(
+            "INSERT INTO frozen_coordinator_runs
+             (id,context,mode,created_ms,snapshot,active)
+             VALUES('coordinator-test',?1,'expert',?2,'{}',1)",
+            params![key,created]).unwrap();
+        // Coordinator can select M1 and M5 advisors on the SAME observation
+        // minute, so unlike an individual advisor trial signal bar times differ.
+        let first=sig(1,1_000_001,1.,2.,20_000);
+        let second=sig(1,999_960,1.,2.,20_000);
+        db.execute(
+            "INSERT INTO frozen_coordinator_decisions
+             (run_id,bar_time,observed_ms,frozen,adaptive)
+             VALUES('coordinator-test',?1,?2,?3,?4)",
+            params![1_000_001u64,opened-1000,
+                serde_json::to_string(&first).unwrap(),
+                serde_json::to_string(&second).unwrap()]).unwrap();
+        // A delayed API observation may not invent a new entry.
+        observe(&db,&t,&c,opened).unwrap();
+        assert_eq!(summary(&db,"coordinator-test").unwrap()["open_pairs"],0);
+        db.execute(
+            "UPDATE frozen_coordinator_decisions SET observed_ms=?1",
+            [opened]).unwrap();
+        observe(&db,&t,&c,opened).unwrap();
+        assert_eq!(summary(&db,"coordinator-test").unwrap()["open_pairs"],1);
+        db.execute(
+            "UPDATE frozen_coordinator_runs SET active=0 WHERE id='coordinator-test'",
+            []).unwrap();
+        let closed=q(opened+2000,103.,103.2);
+        observe(&db,&closed,&c,opened+2000).unwrap();
+        let r=summary(&db,"coordinator-test").unwrap();
+        assert_eq!(r["completed_pairs"],1);
+        assert_eq!(r["open_pairs"],0);
+        observe(&db,&closed,&c,opened+2000).unwrap();
+        assert_eq!(summary(&db,"coordinator-test").unwrap()["completed_pairs"],1);
+    }
+
 }
