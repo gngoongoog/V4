@@ -99,7 +99,9 @@ pub fn observe(db:&Connection,context:&str,source_brain:&str,adaptive:&Signal,
         let signal=if active {
             execution::evaluate(&b,t,&c,frames,g.as_ref(),now)
         } else {
-            Signal{brain:b.id.clone(),ready:false,..Signal::default()}
+            Signal{brain:b.id.clone(),side:0,key:String::new(),bar_time:0,
+                stop_distance:0.,target_distance:0.,hold_ms:0,
+                reason:"Frozen trial retired".into(),ready:false,coordination:None}
         };
         let post_freeze=active && signal.bar_time>0
             && signal.bar_time.checked_mul(1000).is_some_and(|ms|ms>created && ms<=now);
