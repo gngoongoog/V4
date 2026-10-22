@@ -79,6 +79,16 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
         maybe_number(&frozen["paper_net_after_assumed_costs"]),
         "هذه نسخة سياسة مستشار ثابتة على Demo فقط، لا تتلقى تحديثاً بعد التجميد ولا تدخل أوامر MT5؛ نتائجها ليست أرباحاً حقيقية ولا اختباراً للقناص أو النظام الرئيسي."
     ));
+    let pair=&frozen["matched_five_minute"];
+    detail.push_str(&format!(
+        "\n\nمقارنة مستقبلية على نفس سعر الدخول والأفق (5 دقائق؛ بدون TP أو SL):\nنتائج مكتملة {} | بانتظار انتهاء الأفق {} | استُبعدت لغياب سعر قريب من الاستحقاق {}\nمتوسط صافي العقل المجمد لكل لوت {} | المتعلّم لكل لوت {} | فرق المجمد ناقص المتعلّم لكل لوت {}\nالنتائج ذات التفوق الافتراضي للمجمد {} | التعادل {} | الحالة {}\nالجهتان تستعملان نفس Bid/Ask واللوت 0.01 وعمولة وانزلاق مفترضين. هذا قياس اتجاه افتراضي، وليس مقارنة أرباح التنفيذ أو إثبات تحسن إحصائي.",
+        pair["matched_five_minute_samples"],pair["pending"],pair["expired_no_quote"],
+        maybe_number(&pair["frozen_mean_net_per_lot"]),
+        maybe_number(&pair["adaptive_mean_net_per_lot"]),
+        maybe_number(&pair["mean_delta_frozen_minus_adaptive_per_lot"]),
+        pair["frozen_outperforms_pairs"],pair["exact_ties"],
+        pair["status"].as_str().unwrap_or("غير متاح")
+    ));
     ui.set_brain_monitor_detail(detail.into());
 }
 pub fn setup(ui:&Dashboard)->slint::Timer {
