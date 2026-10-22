@@ -342,7 +342,7 @@ export component Dashboard inherits Window {
             }
         }
         Rectangle {
-            min-height: 47px;
+            min-height: 40px;
             background: root.execution-active ? #303239 : #22242a;
             border-radius: 11px;
             border-width: 1px; border-color: root.theme-choice == 1 ? #e3e9f0 : #3b3d45;
@@ -366,7 +366,7 @@ export component Dashboard inherits Window {
             Rectangle { horizontal-stretch: 1; background: transparent; }
             Text { text: root.decision; color: root.theme-choice == 1 ? #28384b : #d9dbe0; vertical-alignment: center; font-weight: 600; }
         }
-        HorizontalLayout {
+        if root.account-mode-label == "REAL": HorizontalLayout {
             spacing: 9px;
             Text { text: "لـ REAL فقط: اكتب رقم حساب MT5 الحقيقي قبل كل START"; color: root.theme-choice == 1 ? #82533c : #e5dad3; vertical-alignment: center; }
             LineEdit { text <=> root.live-start-login; placeholder-text: "رقم حساب REAL للتأكيد"; }
