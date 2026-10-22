@@ -53,6 +53,7 @@ pub fn enrich(value:&mut Value,db:&Connection,key:&str,mode:TradingMode)->Result
         let (closed,wins,net):(u64,u64,f64)=db.query_row("SELECT COUNT(*),COALESCE(SUM(CASE WHEN json_extract(payload,'$.net_paper')>0 THEN 1 ELSE 0 END),0),COALESCE(SUM(json_extract(payload,'$.net_paper')),0.0) FROM paper_brain_outcomes WHERE context=?1 AND brain=?2 AND json_extract(payload,'$.trading_mode_at_open')=?3",params![key,id,serde_json::to_value(mode)?.as_str().unwrap()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
         let open:u64=db.query_row("SELECT COUNT(*) FROM paper_brain_positions WHERE context=?1 AND brain=?2",params![key,id],|r|r.get(0))?;
         b["paper_stats"]=json!({"closed":closed,"wins":wins,"net":net,"open_all_modes":open});
+        b["quality"]=crate::learning_quality::audit(db,key,mode,&id)?;
         let (orders,fills):(u64,u64)=db.query_row("SELECT COUNT(*),COALESCE(SUM(CASE WHEN CAST(json_extract(result,'$.deal') AS INTEGER)>0 THEN 1 ELSE 0 END),0) FROM broker_commands WHERE context=?1 AND kind='open' AND json_extract(payload,'$.trading_mode')=?2 AND COALESCE(json_extract(payload,'$.signal.coordination.selection.brain'),brain)=?3",params![key,serde_json::to_value(mode)?.as_str().unwrap(),id],|r|Ok((r.get(0)?,r.get(1)?)))?;
         b["attributed_orders"]=json!({"requested":orders,"fill_acknowledged":fills});
     }
