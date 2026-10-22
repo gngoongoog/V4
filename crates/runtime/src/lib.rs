@@ -9,6 +9,7 @@ mod frozen_shadow;
 mod frozen_coordinator;
 mod coordinator_paper;
 mod research_order_lifecycle;
+mod research_admission;
 mod matched_forward;
 mod matched_trade;
 mod student_learning;
@@ -128,6 +129,9 @@ impl Engine{
         // the live execution queue. Auth is supplied by the normal local API.
         if path=="/v1/research/execution-lifecycle" && method=="POST" {
             return research_order_lifecycle::replay(body);
+        }
+        if path=="/v1/research/execution-admission" && method=="POST" {
+            return research_admission::evaluate(body);
         }
         if method=="GET" && path=="/v1/risk/monitor" {
             let (cfg,status)={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());
