@@ -215,6 +215,44 @@ mod tests{
         assert_ne!(next["run_id"],started["run_id"]);
     }
     #[test]
+    fn observations_are_future_only_and_one_per_completed_bar(){
+        use braintrade_domain::Candle;
+        let db=fixture();
+        let mut t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            tick_age_ms:Some(0),server:"Demo".into(),login:123,
+            symbol:"XAUUSD".into(),currency:"USD".into(),
+            bid:Some(100.),ask:Some(100.1),..Default::default()};
+        let c=Config::default();
+        let brains=vec![BrainConfig{id:"system".into(),..Default::default()}];
+        freeze(&db,&t,&c,&brains,&BTreeMap::new(),
+            &BTreeMap::new(),&BTreeMap::new(),123_000).unwrap();
+        let sample=|bar|BTreeMap::from([("M1".into(),vec![FrameBar{
+            candle:Candle{time:bar,open:100.,high:101.,low:99.,close:100.5,tick_volume:200},
+            spread_points:20,real_volume:0
+        }])]);
+        let adaptive=Signal{brain:"system".into(),side:1,key:"bar:180".into(),
+            bar_time:180,stop_distance:1.,target_distance:2.,hold_ms:60000,
+            reason:"snapshot".into(),ready:true,coordination:None};
+        // Bar 90 opened before freeze, even if it CLOSED later: not eligible.
+        t.quote_time_ms=Some(151_000);
+        observe(&db,&t,&c,&adaptive,&sample(90),151_000).unwrap();
+        let count:usize=db.query_row("SELECT COUNT(*) FROM frozen_coordinator_decisions",
+            [],|r|r.get(0)).unwrap();
+        assert_eq!(count,0);
+        // Bar 180 started after freeze and has completed at 240 seconds.
+        t.quote_time_ms=Some(241_000);
+        observe(&db,&t,&c,&adaptive,&sample(180),241_000).unwrap();
+        observe(&db,&t,&c,&adaptive,&sample(180),242_000).unwrap();
+        let report=report(&db,&context(&t)).unwrap();
+        assert_eq!(report["bars_compared"],1);
+        assert_eq!(report["adaptive_only_ready"],1);
+        assert_eq!(report["no_broker_orders"],true);
+        // Historical replay too late after close cannot create fabricated new rows.
+        t.quote_time_ms=Some(999_000);
+        observe(&db,&t,&c,&adaptive,&sample(240),999_000).unwrap();
+        assert_eq!(report(&db,&context(&t)).unwrap()["bars_compared"],1);
+    }
+    #[test]
     fn real_or_non_expert_cannot_start_policy_trial(){
         let db=fixture();
         let mut t=Telemetry{connected:true,demo:false,account_trade_mode:Some(2),
