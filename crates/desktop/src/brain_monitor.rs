@@ -21,6 +21,8 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
         v["activity_note"].as_str().unwrap_or("")).into());
     ui.set_brain_monitor_overview(overview.into());
     ui.set_brain_monitor_available(v["controls_available"]==true);
+    ui.set_frozen_trial_available(v["controls_available"]==true
+        && v["settings"]["target"]=="demo" && v["trading_mode"]=="expert");
     let Some(b)=rows.and_then(|r|r.get(index)) else {return};
     if load {
         ui.set_brain_advisor(b["control"]["advisor"]==true);
