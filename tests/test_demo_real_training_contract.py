@@ -54,8 +54,14 @@ class DemoRealTrainingContractTests(unittest.TestCase):
         compact = "".join(source.split())
         self.assertIn("coordinator_broker_samples", source)
         self.assertIn('"mt5_demo_broker"', source)
-        for field in ('d["profit"]', 'd["commission"]', 'd["swap"]', 'd["fee"]'):
-            self.assertIn(field, source)
+        # A booked Demo outcome is usable only after every financial field
+        # is explicitly present and finite; a missing fee is NOT zero.
+        self.assertIn("fn audited_demo_deal(d: &Value)", source)
+        for field in ('"profit"', '"commission"', '"swap"', '"fee"'):
+            self.assertIn(f'amount({field})?', source)
+        self.assertIn("let Some((p,c,s,f,volume,stamp,entry))=audited_demo_deal(&d)", source)
+        self.assertNotIn('d["commission"].as_f64().unwrap_or(0.)', source)
+        self.assertNotIn('d["fee"].as_f64().unwrap_or(0.)', source)
         self.assertIn("!t.demo||t.account_trade_mode!=Some(0)", compact)
         self.assertIn('member["ready"]!=true', compact)
         # Intelligence V3 names the agreement explicitly so the same value can also be
