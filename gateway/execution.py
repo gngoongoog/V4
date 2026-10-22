@@ -11,7 +11,7 @@ that work removes one localhost request from the critical path; final Core
 authorization and the durable send journal remain mandatory before order_send.
 """
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
 import math
 import sqlite3
@@ -231,8 +231,62 @@ class BrokerExecutor:
         self.db.execute('PRAGMA busy_timeout=50')
         self.db.execute('CREATE TABLE IF NOT EXISTS sends(id TEXT PRIMARY KEY, request TEXT NOT NULL, result TEXT, created_ms INTEGER NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS micro_real_recovered(account_key TEXT PRIMARY KEY, reached_ms INTEGER NOT NULL, reached_equity REAL NOT NULL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS daily_loss_locks(account_key TEXT NOT NULL, report_day TEXT NOT NULL, reached_ms INTEGER NOT NULL, loss_amount REAL NOT NULL, PRIMARY KEY(account_key,report_day))')
         self.db.commit()
         self.next_history = 0.0
+
+    def _daily_loss_blocked(self, mt5, cmd, account):
+        """Daily equity circuit breaker across all symbols and external positions.
+
+        A disabled switch removes only this gate, never stop/margin/identity
+        checks. Existing daily lock is retained and applies if re-enabled.
+        """
+        enabled = cmd.get('daily_breaker_enabled',cmd.get('target')=='live')
+        if enabled is not True:
+            return False
+        try:
+            limit=float(cmd.get('daily_breaker_limit_percent',2.0))
+            balance=float(account.balance)
+            equity=float(account.equity)
+        except (TypeError, ValueError, AttributeError):
+            raise ValueError('Daily breaker: invalid broker account or limit')
+        if not all(math.isfinite(v) for v in (limit,balance,equity)) or not 0.1<=limit<=10 or balance<=0 or equity<=0:
+            raise ValueError('Daily breaker: valid balance, equity and percentage required')
+        now=datetime.now(timezone.utc)
+        local=now.astimezone(timezone(timedelta(hours=3)))
+        day=local.date().isoformat()
+        key=json.dumps((*account_identity(account),int(account.trade_mode)),ensure_ascii=False,separators=(',',':'))
+        if self.db.execute('SELECT 1 FROM daily_loss_locks WHERE account_key=? AND report_day=?',(key,day)).fetchone():
+            return True
+        day_begin=local.replace(hour=0,minute=0,second=0,microsecond=0).astimezone(timezone.utc)
+        try:
+            deals=mt5.history_deals_get(day_begin,now)
+            positions=mt5.positions_get()
+        except Exception as exc:
+            raise ValueError('Daily breaker: broker history/positions unavailable') from exc
+        if deals is None or positions is None:
+            raise ValueError('Daily breaker: broker history/positions unavailable')
+        # Positions_get() without a symbol deliberately verifies all symbols.
+        # Account equity includes all floating PnL, swaps and external positions.
+        trading={mt5.DEAL_TYPE_BUY,mt5.DEAL_TYPE_SELL}
+        net=0.0
+        for d in deals:
+            if d.type not in trading:
+                continue
+            value=sum(float(getattr(d,k,0.0)) for k in ('profit','commission','swap','fee'))
+            if not math.isfinite(value):
+                raise ValueError('Daily breaker: invalid broker deal costs')
+            net+=value
+        baseline=balance-net
+        if not math.isfinite(baseline) or baseline<=0:
+            raise ValueError('Daily breaker: invalid start-of-day trading balance estimate')
+        loss=baseline-equity
+        if loss>=baseline*limit/100.0:
+            self.db.execute('INSERT OR IGNORE INTO daily_loss_locks VALUES(?,?,?,?)',
+                            (key,day,clock_ms(),loss))
+            self.db.commit()
+            return True
+        return False
 
     def _micro_real_active(self, cmd, account):
         """Verified REAL, explicit switch, and a one-way durable equity milestone.
@@ -351,6 +405,8 @@ class BrokerExecutor:
             target_mode = 0 if cmd['target']=='demo' else 2 if cmd['target']=='live' else -1
             if account_identity(a)!=expected(cmd) or a.trade_mode!=target_mode:
                 raise ValueError('Bound account or Demo/Live mode changed')
+            if cmd.get('kind')=='open' and self._daily_loss_blocked(mt5,cmd,a):
+                raise ValueError('Daily breaker: account daily loss limit reached or locked; new entries blocked')
             if (cmd.get('kind')=='open' and cmd.get('micro_real_temporary') is True
                     and not self._micro_real_active(cmd,a)):
                 raise ValueError('Micro REAL recovery milestone reached/locked; stale relaxed-risk entry rejected')
@@ -520,6 +576,11 @@ class BrokerExecutor:
             result['post_journal_account_ms']=(time.perf_counter()-post_account_start)*1000
             if account_identity(final_account)!=expected(cmd) or getattr(final_account,'trade_mode',None)!=target_mode or clock_ms()>cmd['expires_ms']:
                 result.update(state='cancelled',reason='Account changed or intent expired after durable journal; order not sent')
+                result['total_ms']=(time.perf_counter()-started)*1000
+                return self._save(cmd,result)
+            if not closing and self._daily_loss_blocked(mt5,cmd,final_account):
+                result.update(state='cancelled',
+                    reason='Daily breaker reached/locked after validation; new entry not sent')
                 result['total_ms']=(time.perf_counter()-started)*1000
                 return self._save(cmd,result)
             if not closing and 'real_margin_check' in result:

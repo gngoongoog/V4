@@ -163,6 +163,8 @@ export component Dashboard inherits Window {
     in-out property <string> micro-real-recovery-equity: "500";
     in-out property <string> micro-real-cap-percent: "10";
     in-out property <string> daily-limit: "2";
+    in-out property <bool> daily-breaker-demo-enabled: false;
+    in-out property <bool> daily-breaker-real-enabled: true;
     in-out property <string> drawdown-limit: "5";
     in-out property <string> spread-limit: "0.25";
     in-out property <string> max-lots: "0.10";
@@ -845,7 +847,11 @@ export component Dashboard inherits Window {
                 LineEdit { text <=> root.scenario-leverage; placeholder-text: "500"; }
             }
             Text { text: root.leverage-note; color: #c8cbd1; wrap: word-wrap; }
-            HorizontalBox { Text { text: "حد الخسارة اليومية % (0.1–10)"; color: #e0e1e4; } LineEdit { text <=> root.daily-limit; } }
+            Text { text: "قاطع الخسارة اليومي الشامل للحساب — إعداد مستقل عن العقول"; color: #f2f2f4; font-weight: 700; }
+            CheckBox { text: "تشغيل قاطع الخسارة اليومي على Demo (مطفأ افتراضياً لحرية التجارب)"; checked <=> root.daily-breaker-demo-enabled; enabled: root.state == "STOPPED" && !root.busy; }
+            CheckBox { text: "تشغيل قاطع الخسارة اليومي على REAL (مفعّل افتراضياً)"; checked <=> root.daily-breaker-real-enabled; enabled: root.state == "STOPPED" && !root.busy; }
+            HorizontalBox { Text { text: "حد الخسارة اليومية % (0.1–10) عند تفعيل القاطع"; color: #e0e1e4; } LineEdit { text <=> root.daily-limit; } }
+            Text { text: "عند التفعيل يُحسب التراجع اليومي من Equity ونتيجة الصفقات لجميع الرموز على الحساب، ويُقفل الدخول حتى اليوم التالي بتوقيت بغداد؛ الإطفاء يسمح بالدخول لكنه لا يمسح سجل القفل. إطفاؤه في REAL يزيد خطر استنزاف رأس المال. تعلّم العقول وتجارب SHADOW/PAPER لا تتوقف بسبب القاطع."; color: #c8cbd1; wrap: word-wrap; }
             HorizontalBox { Text { text: "حد التراجع من القمة % (0.1–30)"; color: #e0e1e4; } LineEdit { text <=> root.drawdown-limit; } }
             HorizontalBox { Text { text: "أقصى سبريد كنسبة ATR (0.01–1)"; color: #e0e1e4; } LineEdit { text <=> root.spread-limit; } }
             HorizontalBox { Text { text: "سقف اللوت (0.001–100)"; color: #e0e1e4; } LineEdit { text <=> root.max-lots; } }
