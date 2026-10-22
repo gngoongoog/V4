@@ -17,7 +17,7 @@ class FakeMT5:
     DEAL_TYPE_BUY=0
     DEAL_TYPE_SELL=1
     def __init__(self):
-        self.account=NS(login=123,server="Test",currency="USD",trade_mode=0,balance=1000.0,equity=1010.0)
+        self.account=NS(login=123,server="Test",currency="USD",trade_mode=0,balance=1000.0,equity=1010.0,leverage=500,margin_free=995.0)
         self.positions=[];self.orders=[];self.deals=[]
     def terminal_info(self):return NS(connected=True)
     def account_info(self):return self.account
@@ -84,6 +84,18 @@ class Tests(unittest.TestCase):
     def test_cashflows_excluded_and_fees_included(self):
         m=FakeMT5();m.deals=[NS(type=0,profit=10,commission=-2,swap=-1,fee=-0.5),NS(type=2,profit=500,commission=0,swap=0,fee=0)]
         s=gateway.collect(m,"XAUUSD");self.assertEqual(s["today_net"],6.5);self.assertEqual(s["today_deals"],1)
+    def test_actual_broker_leverage_and_micro_margin_snapshot(self):
+        m=FakeMT5();m.ORDER_TYPE_BUY=0
+        m.order_calc_margin=lambda side,symbol,lots,price:25.0
+        snapshot=gateway.collect(m,"XAUUSD")
+        self.assertEqual(snapshot["leverage"],500)
+        self.assertEqual(snapshot["margin_free"],995.0)
+        self.assertEqual(snapshot["minimum_lot_margin"],25.0)
+        m.account.leverage=0
+        m.order_calc_margin=lambda *args:None
+        snapshot=gateway.collect(m,"XAUUSD")
+        self.assertIsNone(snapshot["leverage"])
+        self.assertIsNone(snapshot["minimum_lot_margin"])
     def test_no_history_is_unknown_not_zero(self):
         m=FakeMT5();m.deals=None
         s=gateway.collect(m,"XAUUSD");self.assertIsNone(s["today_net"]);self.assertTrue(s["connected"])
