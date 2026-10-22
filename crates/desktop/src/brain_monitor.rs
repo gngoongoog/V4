@@ -112,7 +112,7 @@ pub fn setup(ui:&Dashboard)->slint::Timer {
     thread::spawn(move ||while let Ok((action,body,index))=rx.recv(){
         let result=(||->anyhow::Result<Value>{let c=Client::new(&data_dir())?;
             if action=="save"{c.post("/v1/execution/brain-control",body)?;}
-            if action=="freeze"||action=="stop_frozen"{c.post("/v1/execution/frozen-shadow",body)?;}
+            else if action=="freeze"||action=="stop_frozen"{c.post("/v1/execution/frozen-shadow",body)?;}
             c.get("/v1/execution/brains")})();
         let cache=cache.clone();
         let _=weak.upgrade_in_event_loop(move |ui|{
