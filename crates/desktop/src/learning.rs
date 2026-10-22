@@ -19,6 +19,14 @@ fn summary(value: &Value) -> String {
         performance["status"].as_str().unwrap_or("insufficient_evidence"),performance["samples"],
         performance["eligible_for_human_consideration"],performance["insufficient_reason_codes"],
         performance["reject_reason_codes"],performance["warning_codes"]);
+    let _=writeln!(out,"\nتقييم توقعات النموذج الثابت المستقبلية: {} | توقعات صالحة {} | نتائج مستقبلية ناضجة {} | تنتظر {} | مستبعدة للتسريب/عدم الاتساق {}\nAccuracy {} | Log-loss {} | Brier {}\nلا يقيم أداء العقول المتغيرة أو صافي تداول MT5؛ ولا يسمح بترقية النموذج تلقائياً.",
+        forward["status"].as_str().unwrap_or("insufficient_evidence"),
+        forward["valid_predictions"],forward["scored_future_labels"],
+        forward["pending_future_labels"],forward["invalid_predictions"],
+        forward["accuracy"],forward["mean_log_loss"],forward["mean_brier"]);
+    if forward["invalid_predictions"].as_u64().unwrap_or(0)>0 {
+        let _=writeln!(out,"تحذيرات تسلسل الدليل: {}",forward["invalid_reasons"]);
+    }
     for group in scoring["groups"].as_array().into_iter().flatten() {
         let m=&group["metrics"];
         let number=|key:&str|m[key].as_f64().map(|v|format!("{v:.4}")).unwrap_or_else(||"—".into());
