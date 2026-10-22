@@ -554,6 +554,9 @@ pub mod tests {
         assert_eq!(config.risk.risk_percent, 0.25);
         assert!(!config.risk.micro_demo_risk_opt_in);
         assert!(config.validate().is_ok());
+        assert!(!serde_json::to_value(&config.risk).unwrap().as_object().unwrap()
+            .contains_key("micro_demo_risk_opt_in"),
+            "disabled opt-in must not alter historical report fingerprints");
     }
 }
 
