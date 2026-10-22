@@ -4,6 +4,7 @@ mod coordinator_learning;
 mod sniper_learning;
 mod brain_control;
 mod sniper_latency_audit;
+mod sniper_deal_link_audit;
 mod trade_journal;
 mod shadow_paper;
 mod frozen_shadow;
