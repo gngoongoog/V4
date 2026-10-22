@@ -7,6 +7,9 @@ pub use regime::{MetaBrainV2, RegimeBrain, TrendBrain, TrendFrame};
 fn micro_demo_opt_in_is_false(value: &bool) -> bool { !*value }
 fn default_micro_recovery() -> f64 { 500.0 }
 fn default_micro_cap() -> f64 { 10.0 }
+fn default_breaker_real_enabled() -> bool { true }
+fn breaker_real_default(value: &bool) -> bool { *value }
+
 fn micro_real_restore_is_default(value: &f64) -> bool { *value == 500.0 }
 fn micro_real_cap_is_default(value: &f64) -> bool { *value == 10.0 }
 
@@ -28,6 +31,12 @@ pub struct RiskConfig {
     #[serde(default = "default_micro_cap", skip_serializing_if = "micro_real_cap_is_default")]
     pub micro_real_cap_percent: f64,
     pub daily_loss_percent: f64,
+    /// DEMO can opt into the hard account-wide daily lock. Training defaults OFF.
+    #[serde(default, skip_serializing_if = "micro_demo_opt_in_is_false")]
+    pub daily_breaker_demo_enabled: bool,
+    /// REAL defaults ON; explicitly disabling it is permitted but high risk.
+    #[serde(default = "default_breaker_real_enabled", skip_serializing_if = "breaker_real_default")]
+    pub daily_breaker_real_enabled: bool,
     pub max_drawdown_percent: f64,
     pub max_spread_atr: f64,
     pub max_lots: f64,
@@ -43,6 +52,8 @@ impl Default for RiskConfig {
             micro_real_recovery_equity: default_micro_recovery(),
             micro_real_cap_percent: default_micro_cap(),
             daily_loss_percent: 2.0,
+            daily_breaker_demo_enabled: false,
+            daily_breaker_real_enabled: true,
             max_drawdown_percent: 5.0,
             max_spread_atr: 0.25,
             max_lots: 0.10,
@@ -565,6 +576,21 @@ pub mod tests {
         assert_eq!(decoded.risk_percent, 5.0);
     }
     #[test]
+    fn breaker_switches_have_independent_backward_compatible_defaults() {
+        let mut cfg = RiskConfig::default();
+        assert!(!cfg.daily_breaker_demo_enabled);
+        assert!(cfg.daily_breaker_real_enabled);
+        let json=serde_json::to_value(&cfg).unwrap();
+        assert!(json.get("daily_breaker_demo_enabled").is_none());
+        assert!(json.get("daily_breaker_real_enabled").is_none());
+        cfg.daily_breaker_demo_enabled=true;
+        cfg.daily_breaker_real_enabled=false;
+        let decoded:RiskConfig=serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        assert!(decoded.daily_breaker_demo_enabled);
+        assert!(!decoded.daily_breaker_real_enabled);
+        assert!(cfg.validate().is_ok());
+    }
+    #[test]
     fn micro_real_mode_is_opt_in_and_bounded_with_backward_compatible_json() {
         let mut r = RiskConfig::default();
         let json=serde_json::to_value(&r).unwrap();
@@ -587,6 +613,8 @@ pub mod tests {
         let config: crate::Config = serde_json::from_str(old).unwrap();
         assert_eq!(config.risk.risk_percent, 0.25);
         assert!(!config.risk.micro_demo_risk_opt_in);
+        assert!(!config.risk.daily_breaker_demo_enabled);
+        assert!(config.risk.daily_breaker_real_enabled);
         assert!(!config.risk.micro_real_temporary);
         assert_eq!(config.risk.micro_real_recovery_equity,500.);
         assert!(config.validate().is_ok());
