@@ -147,10 +147,14 @@ def size_to_stop_risk(mt5, account, info, symbol, side, entry, stop_price,
     allowed=math.floor((budget/unit_risk)/step+1e-9)
     units=min(high,allowed)
     if units<low:
+        minimum_risk = unit_risk * low * step
+        required_percent = minimum_risk / equity * 100.0
         raise ValueError(
             f'Risk sizing: minimum {low*step:g} lot needs '
-            f'{unit_risk*low*step:.4f} {account.currency} at SL, '
-            f'budget {budget:.4f}; entry rejected, never increased or widened')
+            f'{minimum_risk:.4f} {account.currency} at SL '
+            f'({required_percent:.3f}% of equity), '
+            f'budget {budget:.4f} ({risk_percent:.3f}%); entry rejected, '
+            'never increased or widened. Leverage changes margin, not stop loss.')
     volume=round(units*step,10)
     actual=unit_risk*volume
     if actual>budget+max(1e-8,budget*1e-10):
