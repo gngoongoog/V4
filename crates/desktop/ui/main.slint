@@ -282,17 +282,17 @@ export component Dashboard inherits Window {
                 }
                 Button {text:root.compact-sidebar?"☰":"☰  طي القائمة";clicked=>{root.compact-sidebar=!root.compact-sidebar;root.save-appearance(root.theme-choice,root.compact-sidebar,root.expanded-workspaces);}}
                 Rectangle {height:1px; background:root.theme-choice == 1 ? #e2e8f0 : #304052;}
-                Button { text: root.compact-sidebar ? "⌂" : "⌂   نظرة عامة"; clicked => {root.nav-section=0;root.page=0;} }
-                Button { text: root.compact-sidebar ? "↗" : "↗   مركز التداول"; clicked => {root.nav-section=1;root.page=14;root.studio-action("config");} }
+                Button { text: root.compact-sidebar ? (root.page == 0 ? "●" : "⌂") : (root.page == 0 ? "●   نظرة عامة" : "⌂   نظرة عامة"); clicked => {root.nav-section=0;root.page=0;} }
+                Button { text: root.compact-sidebar ? (root.page == 14 ? "●" : "↗") : (root.page == 14 ? "●   مركز التداول" : "↗   مركز التداول"); clicked => {root.nav-section=1;root.page=14;root.studio-action("config");} }
                 Button { text: root.compact-sidebar ? "◎" : "◎   وضع القناص"; clicked => {root.nav-section=1;root.page=14;root.studio-action("config");} }
-                Button { text: root.compact-sidebar ? "✦" : "✦   العقول"; clicked => {root.nav-section=2;root.page=21;root.brain-monitor-action("refresh");} }
-                Button { text: root.compact-sidebar ? "◇" : "◇   إدارة المخاطر"; clicked => {root.nav-section=1;root.page=6;root.risk-monitor-refresh();} }
-                Button { text: root.compact-sidebar ? "⇄" : "⇄   التنفيذ MT5"; clicked => {root.nav-section=1;root.page=17;root.execution-action("refresh");} }
-                Button { text: root.compact-sidebar ? "▤" : "▤   التحليلات"; clicked => {root.nav-section=2;root.page=4;} }
-                Button { text: root.compact-sidebar ? "▣" : "▣   سجل الصفقات"; clicked => {root.nav-section=1;root.page=20;root.trade-journal-action("refresh");} }
-                Button { text: root.compact-sidebar ? "◴" : "◴   تقدّم التعلّم"; clicked => {root.nav-section=1;root.page=19;} }
+                Button { text: root.compact-sidebar ? (root.page == 21 ? "●" : "✦") : (root.page == 21 ? "●   العقول" : "✦   العقول"); clicked => {root.nav-section=2;root.page=21;root.brain-monitor-action("refresh");} }
+                Button { text: root.compact-sidebar ? (root.page == 6 ? "●" : "◇") : (root.page == 6 ? "●   إدارة المخاطر" : "◇   إدارة المخاطر"); clicked => {root.nav-section=1;root.page=6;root.risk-monitor-refresh();} }
+                Button { text: root.compact-sidebar ? (root.page == 17 ? "●" : "⇄") : (root.page == 17 ? "●   التنفيذ MT5" : "⇄   التنفيذ MT5"); clicked => {root.nav-section=1;root.page=17;root.execution-action("refresh");} }
+                Button { text: root.compact-sidebar ? (root.page == 4 ? "●" : "▤") : (root.page == 4 ? "●   التحليلات" : "▤   التحليلات"); clicked => {root.nav-section=2;root.page=4;} }
+                Button { text: root.compact-sidebar ? (root.page == 20 ? "●" : "▣") : (root.page == 20 ? "●   سجل الصفقات" : "▣   سجل الصفقات"); clicked => {root.nav-section=1;root.page=20;root.trade-journal-action("refresh");} }
+                Button { text: root.compact-sidebar ? (root.page == 19 ? "●" : "◴") : (root.page == 19 ? "●   تقدّم التعلّم" : "◴   تقدّم التعلّم"); clicked => {root.nav-section=1;root.page=19;} }
                 Button { text: root.compact-sidebar ? "✉" : "✉   Telegram"; clicked => {root.nav-section=4;root.page=1;} }
-                Button { text: root.compact-sidebar ? "≡" : "≡   سجل النظام"; clicked => {root.nav-section=4;root.page=2;root.action("events");} }
+                Button { text: root.compact-sidebar ? (root.page == 2 ? "●" : "≡") : (root.page == 2 ? "●   سجل النظام" : "≡   سجل النظام"); clicked => {root.nav-section=4;root.page=2;root.action("events");} }
                 Button { text: root.compact-sidebar ? "⚙" : "⚙   الإعدادات"; clicked => {root.nav-section=4;root.page=1;} }
                 Rectangle { vertical-stretch:1; background:transparent; }
                 Text { text: root.compact-sidebar ? "V4" : "Windows 0.7.4 • Rust / Slint"; color: root.theme-choice == 1 ? #7d8ba1 : #93a8bc; font-size:10px; horizontal-alignment:center; }
