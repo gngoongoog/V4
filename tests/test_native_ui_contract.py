@@ -78,6 +78,19 @@ class NativeUiContract(unittest.TestCase):
         # Catch missing fields silently disappearing from nested layouts.
         self.assertEqual(total,{"Button":130,"ComboBox":29,"LineEdit":49,"CheckBox":12})
 
+    def test_premium_native_dashboard_keeps_real_market_provenance(self):
+        main=(RUST / "main.rs").read_text(encoding="utf-8")
+        self.assertIn("COMMAND CENTER  /  مركز القيادة",self.dashboard)
+        self.assertIn("PROFESSIONAL CHART",self.dashboard)
+        self.assertIn("CORE INTELLIGENCE  /  العقل الرئيسي",self.dashboard)
+        self.assertIn("MT5 TICK ACTIVITY",self.dashboard)
+        self.assertIn("volume:float",self.dashboard)
+        self.assertIn("bar.volume",self.dashboard)
+        self.assertIn("max_tick_volume = subset.iter().map(|c| c.tick_volume).max()",main)
+        self.assertIn("if max_tick_volume == 0",main)
+        self.assertIn("market.valid()",main)
+        self.assertIn("captured_ms <= 120_000",main) if "captured_ms <= 120_000" in main else self.assertIn("now_ms.saturating_sub(market.captured_ms) <= 120_000",main)
+
     def test_no_button_is_rendered_without_a_click_handler(self):
         for path in (SLINT, CORRELATION):
             src = path.read_text(encoding="utf-8")
