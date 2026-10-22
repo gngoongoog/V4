@@ -124,6 +124,13 @@ class NativeUiContract(unittest.TestCase):
             self.assertIn(f'root.page == {index} ?',self.dashboard,
                           f"Missing per-page live breadcrumb for page {index}")
 
+    def test_packaged_windows_visual_contract_accepts_all_three_palettes(self):
+        portable=(ROOT / "scripts/check_windows_portable.py").read_text(encoding="utf-8")
+        self.assertIn("review_pages = {0, 6, 14, 17, 18, 19, 21}",portable)
+        self.assertIn('for palette in ("white", "smoke")',portable)
+        self.assertIn('all 72 saved native theme frames',portable)
+        self.assertNotIn('all 44 complete native frames',portable)
+
     def test_standalone_app_uses_smoke_as_default_without_overwriting_saved_theme(self):
         main=(RUST / "main.rs").read_text(encoding="utf-8")
         self.assertIn("else{return (2,false,false)}",main)
