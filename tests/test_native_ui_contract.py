@@ -143,11 +143,12 @@ class NativeUiContract(unittest.TestCase):
 
     def test_three_institutional_themes_and_real_market_chart_are_explicit(self):
         for mode, palette in (("داكن","ColorScheme.dark"),
-                              ("أبيض","ColorScheme.light"),
+                              ("أبيض","ColorScheme.dark"),
                               ("رمادي","ColorScheme.dark")):
             self.assertIn(f'text:"{mode}"',self.dashboard)
             self.assertIn(palette,self.dashboard)
         self.assertIn("theme-choice: 0",self.dashboard)
+        self.assertIn("changed theme-choice => { Palette.color-scheme = ColorScheme.dark; }",self.dashboard)
         self.assertIn("root.chart-bars",self.dashboard)
         self.assertIn("بانتظار شموع MT5",self.dashboard)
         self.assertIn("QUOTE AGE / عمر السعر",self.dashboard)
