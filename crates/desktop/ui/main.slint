@@ -1,25 +1,38 @@
 import { AboutSlint, Palette, ComboBox, Button, LineEdit, CheckBox, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
 import { CorrelationPage } from "./correlation.slint";
 export struct NewsRow {title:string,detail:string,url:string}
+export struct ChartCandle {x:float, high-y:float, low-y:float, body-top:float, body-bottom:float, up:bool}
 
 component Card inherits Rectangle {
     in property <string> label;
     in property <string> value;
-    background: #212329;
-    border-radius: 14px;
-    border-width: 1px; border-color: #373a41;
-    min-height: 105px;
+    in property <int> theme-choice: 0;
+    background: theme-choice == 1 ? #ffffff : theme-choice == 2 ? #292e35 : #151e2a;
+    border-radius: 13px;
+    border-width: 1px;
+    border-color: theme-choice == 1 ? #e2e8f0 : theme-choice == 2 ? #464b53 : #273543;
+    min-height: 100px;
     VerticalLayout {
-        padding: 18px; spacing: 10px;
-        Text { text: root.label; color: #999ca5; font-size: 13px; }
-        Text { text: root.value; color: #f6f6f7; font-size: 23px; font-weight: 700; }
+        padding: 14px; spacing: 10px;
+        Text { text: root.label; color: theme-choice == 1 ? #64748b : #aebbc7; font-size: 12px; }
+        Text { text: root.value; color: theme-choice == 1 ? #172235 : #f6f9ff; font-size: 20px; font-weight: 700; }
     }
 }
 export component Dashboard inherits Window {
     init => { Palette.color-scheme = ColorScheme.dark; }
-    title: "BRAINTRADE OS • COMMAND CENTER 0.7.4";
-    preferred-width: 1260px; preferred-height: 860px; min-width: 880px; min-height: 700px;
-    background: #111216;
+    title: "BRAINTRADE V4 — Institutional Windows Terminal";
+    preferred-width: 1540px; preferred-height: 920px; min-width: 960px; min-height: 700px;
+    background: root.theme-choice == 1 ? #f4f7fb : root.theme-choice == 2 ? #242930 : #0c141e;
+    in-out property <int> theme-choice: 0;
+    in property <string> account-mode-label: "NOT CONNECTED";
+    in property <string> free-margin: "—";
+    in property <string> active-positions: "—";
+    in property <string> bid-display: "—";
+    in property <string> ask-display: "—";
+    in property <string> spread-display: "—";
+    in property <string> quote-age-display: "—";
+    in property <[ChartCandle]> chart-bars;
+    in-out property <int> chart-frame: 0;
     in-out property <int> page: 0;
     in-out property <int> nav-section: 0;
     in property <bool> execution-active: false;
@@ -248,26 +261,78 @@ export component Dashboard inherits Window {
     callback action(string);
     callback save-settings();
     callback browse-mt5();
-    VerticalLayout {
-        padding: 18px; spacing: 11px;
-        // Operational status is always visible while navigating all 20 workspaces.
+    HorizontalLayout {
+        padding: 0px; spacing: 0px;
         Rectangle {
-            min-height: 104px;
-            background: #1c1e23; border-radius: 15px;
-            border-width: 1px; border-color: #35373d;
-            HorizontalLayout {
-                padding: 19px; spacing: 17px;
-                Rectangle { width: 6px; background: #b9bcc4; border-radius: 3px; }
-                VerticalLayout {
-                    spacing: 5px;
-                    Text { text: "BRAINTRADE  /  OS"; color: #f8f8f9; font-size: 25px; font-weight: 800; }
-                    Text { text: "مركز تشغيل منظومة العقول  •  Windows 0.7.4"; color: #aeb1ba; font-size: 13px; }
+            width: root.width < 1120px ? 70px : 190px;
+            background: root.theme-choice == 1 ? #ffffff : root.theme-choice == 2 ? #292e35 : #101a26;
+            border-width: 1px; border-color: root.theme-choice == 1 ? #e4e9f0 : #263543;
+            VerticalLayout {
+                padding: 9px; spacing: 6px;
+                Rectangle { height: 73px; background: transparent;
+                    VerticalLayout { padding: 5px; spacing: 4px;
+                        Text { text: root.width < 1120px ? "BT" : "BRAINTRADE V4"; color: root.theme-choice == 1 ? #13243b : #e6f7ff; font-size: root.width < 1120px ? 18px : 20px; font-weight: 800; }
+                        Text { text: root.width < 1120px ? "V4" : "Institutional Trading Terminal"; color: root.theme-choice == 1 ? #56708c : #6eddd4; font-size: 10px; }
+                    }
                 }
-                Rectangle { horizontal-stretch: 1; background: transparent; }
-                VerticalLayout {
-                    spacing: 5px;
-                    Text { text: root.state; color: #f2f2f4; font-size: 17px; font-weight: 700; horizontal-alignment: right; }
-                    Text { text: root.online ? "MT5 متصل — بيانات حالية" : "MT5 غير متصل أو بيانات غير حديثة"; color: #aeb1ba; font-size: 12px; horizontal-alignment: right; }
+                Rectangle {height:1px; background:root.theme-choice == 1 ? #e2e8f0 : #304052;}
+                Button { text: root.width < 1120px ? "⌂" : "⌂   نظرة عامة"; clicked => {root.nav-section=0;root.page=0;} }
+                Button { text: root.width < 1120px ? "↗" : "↗   مركز التداول"; clicked => {root.nav-section=1;root.page=14;root.studio-action("config");} }
+                Button { text: root.width < 1120px ? "◎" : "◎   وضع القناص"; clicked => {root.nav-section=1;root.page=14;root.studio-action("config");} }
+                Button { text: root.width < 1120px ? "✦" : "✦   العقول"; clicked => {root.nav-section=2;root.page=21;root.brain-monitor-action("refresh");} }
+                Button { text: root.width < 1120px ? "◇" : "◇   إدارة المخاطر"; clicked => {root.nav-section=1;root.page=6;root.risk-monitor-refresh();} }
+                Button { text: root.width < 1120px ? "⇄" : "⇄   التنفيذ MT5"; clicked => {root.nav-section=1;root.page=17;root.execution-action("refresh");} }
+                Button { text: root.width < 1120px ? "▤" : "▤   التحليلات"; clicked => {root.nav-section=2;root.page=4;} }
+                Button { text: root.width < 1120px ? "▣" : "▣   سجل الصفقات"; clicked => {root.nav-section=1;root.page=20;root.trade-journal-action("refresh");} }
+                Button { text: root.width < 1120px ? "◴" : "◴   تقدّم التعلّم"; clicked => {root.nav-section=1;root.page=19;} }
+                Button { text: root.width < 1120px ? "✉" : "✉   Telegram"; clicked => {root.nav-section=4;root.page=1;} }
+                Button { text: root.width < 1120px ? "≡" : "≡   سجل النظام"; clicked => {root.nav-section=4;root.page=2;root.action("events");} }
+                Button { text: root.width < 1120px ? "⚙" : "⚙   الإعدادات"; clicked => {root.nav-section=4;root.page=1;} }
+                Rectangle { vertical-stretch:1; background:transparent; }
+                Text { text: root.width < 1120px ? "V4" : "Windows • Rust / Slint"; color: root.theme-choice == 1 ? #7d8ba1 : #93a8bc; font-size:10px; horizontal-alignment:center; }
+                Text { text: root.online ? (root.width < 1120px ? "●" : "●  MT5 ONLINE") : (root.width < 1120px ? "○" : "○  MT5 OFFLINE"); color: root.online ? #18c9a7 : #d99870; font-size:12px; horizontal-alignment:center; }
+            }
+        }
+        VerticalLayout {
+            padding: 12px; spacing: 8px;
+            // Operational status stays visible on all 22 native pages.
+        Rectangle {
+            height: 71px;
+            background: root.theme-choice == 1 ? #ffffff : root.theme-choice == 2 ? #313740 : #152230;
+            border-radius: 13px;
+            border-width: 1px; border-color: root.theme-choice == 1 ? #dfe6ef : #2e4052;
+            HorizontalLayout {
+                padding: 12px; spacing: 14px;
+                VerticalLayout {spacing: 3px;
+                    Text {text: "BROKER / ACCOUNT"; color: root.theme-choice == 1 ? #65758a : #92a9bd; font-size: 10px;}
+                    Text {text: root.online ? root.account : "MT5 • غير متصل"; color: root.theme-choice == 1 ? #17273b : #f2f7fb; font-weight: 700; font-size: 12px; }
+                }
+                Rectangle { width: 1px; background: root.theme-choice == 1 ? #dfe6ef : #344657; }
+                VerticalLayout {spacing:3px;
+                    Text {text: "ACCOUNT MODE"; color: root.theme-choice == 1 ? #65758a : #92a9bd; font-size:10px;}
+                    Text {text: root.account-mode-label; color: root.online ? (root.account-mode-label == "REAL" ? #f1ab73 : #1cc8a9) : #a4afbc; font-weight:700;}
+                }
+                Rectangle {horizontal-stretch: 1; background: transparent;}
+                VerticalLayout {spacing:3px;
+                    Text {text: "EQUITY"; color: root.theme-choice == 1 ? #65758a : #92a9bd; font-size:10px;}
+                    Text {text: root.equity; color: root.theme-choice == 1 ? #14273c : #f2f7fb; font-weight:700;}
+                }
+                VerticalLayout {spacing:3px;
+                    Text {text: "BALANCE"; color: root.theme-choice == 1 ? #65758a : #92a9bd; font-size:10px;}
+                    Text {text: root.balance; color: root.theme-choice == 1 ? #14273c : #f2f7fb; font-weight:700;}
+                }
+                VerticalLayout {spacing:3px;
+                    Text {text: "DAILY NET"; color: root.theme-choice == 1 ? #65758a : #92a9bd; font-size:10px;}
+                    Text {text: root.today; color: root.theme-choice == 1 ? #187b69 : #3ce3b8; font-weight:700;}
+                }
+                Rectangle {width:1px; background: root.theme-choice == 1 ? #dfe6ef : #344657;}
+                VerticalLayout {spacing:3px;
+                    Text {text: "APPEARANCE"; color: root.theme-choice == 1 ? #65758a : #92a9bd; font-size:10px;}
+                    HorizontalLayout {spacing:4px;
+                        Button { text:"داكن"; clicked => {root.theme-choice=0; Palette.color-scheme=ColorScheme.dark;} }
+                        Button { text:"أبيض"; clicked => {root.theme-choice=1; Palette.color-scheme=ColorScheme.light;} }
+                        Button { text:"رمادي"; clicked => {root.theme-choice=2; Palette.color-scheme=ColorScheme.dark;} }
+                    }
                 }
             }
         }
@@ -281,10 +346,10 @@ export component Dashboard inherits Window {
                 Text {
                     text: root.execution-active ? "تنفيذ MT5 مفعّل — أوامر الوسيط تتبع START / STOP"
                                                 : "وضع المراقبة — اربط حساب Demo وراجع الإعدادات قبل تشغيل التنفيذ";
-                    color: #e0e1e4; vertical-alignment: center; wrap: word-wrap;
+                    color: root.theme-choice == 1 ? #28384b : #e0e1e4; vertical-alignment: center; wrap: word-wrap;
                 }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
-                Text { text: root.online ? "CONNECTED" : "OFFLINE"; color: #aeb1ba; font-size: 11px; vertical-alignment: center; }
+                Text { text: root.online ? "CONNECTED" : "OFFLINE"; color: root.theme-choice == 1 ? #62758b : #aeb1ba; font-size: 11px; vertical-alignment: center; }
             }
         }
         HorizontalLayout {
@@ -301,9 +366,9 @@ export component Dashboard inherits Window {
             LineEdit { text <=> root.live-start-login; placeholder-text: "رقم حساب REAL للتأكيد"; }
         }
         Rectangle {
-            background: #1b1d22; border-radius: 14px;
+            background: root.theme-choice == 1 ? #f8fbfe : #1b1d22; border-radius: 14px;
             border-width: 1px; border-color: #34363d;
-            height: root.nav-section == 2 ? 133px : 97px;
+            height: root.nav-section == 2 ? 123px : 88px;
             VerticalLayout {
                 padding: 8px; spacing: 5px;
                 HorizontalLayout {
@@ -314,12 +379,12 @@ export component Dashboard inherits Window {
                     Button { text: root.nav-section == 3 ? "●  المختبر" : "المختبر"; clicked => { root.nav-section = 3; root.page = 7; root.backtest-action("refresh"); } }
                     Button { text: root.nav-section == 4 ? "●  الإعدادات" : "الإعدادات"; clicked => { root.nav-section = 4; root.page = 1; } }
                     Rectangle { horizontal-stretch: 1; background: transparent; }
-                    Text { text: "اختر قسماً، ثم الصفحة المطلوبة"; color: #92969f; font-size: 12px; vertical-alignment: center; }
+                    Text { text: "اختر قسماً، ثم الصفحة المطلوبة"; color: root.theme-choice == 1 ? #62758b : #92969f; font-size: 12px; vertical-alignment: center; }
                 }
                 Rectangle { height: 1px; background: #34363d; }
                 if root.nav-section == 0: HorizontalLayout {
                     height: 33px; spacing: 8px;
-                    Text { text: "نظرة سريعة على الحساب والاتصال والصفقات المفتوحة"; color: #aeb1ba; vertical-alignment: center; }
+                    Text { text: "نظرة سريعة على الحساب والاتصال والصفقات المفتوحة"; color: root.theme-choice == 1 ? #62758b : #aeb1ba; vertical-alignment: center; }
                     Rectangle { horizontal-stretch: 1; background: transparent; }
                     Button { text: "تهيئة MT5"; clicked => { root.nav-section = 4; root.page = 1; } }
                     Button { text: "إعداد التداول"; clicked => { root.nav-section = 1; root.page = 14; root.studio-action("config"); } }
@@ -380,7 +445,7 @@ export component Dashboard inherits Window {
                     : root.nav-section == 3 ? "البحث لا يرسل أوامر إلى MT5"
                     : root.nav-section == 2 ? "الإشارات المرصودة ليست ضمان نجاح"
                     : "إعداداتك وبيانات التعلم محفوظة محلياً";
-                color: #9195a0; font-size: 12px;
+                color: root.theme-choice == 1 ? #62758b : #9195a0; font-size: 12px;
             }
         }
         if root.page == 18: CorrelationPage {
@@ -407,28 +472,28 @@ export component Dashboard inherits Window {
             action(value) => { root.correlation-action(value); }
         }
         if root.page == 19: ScrollView { VerticalBox { spacing: 14px;
-            Text { text: "تقدّم التعلّم  /  نتائج حقيقية وتجارب بحثية"; color: #f2f2f4; font-size: 22px; font-weight: 700; }
-            Text { text: root.student-status; color: #d7dadf; wrap: word-wrap; }
+            Text { text: "تقدّم التعلّم  /  نتائج حقيقية وتجارب بحثية"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 22px; font-weight: 700; }
+            Text { text: root.student-status; color: root.theme-choice == 1 ? #3b4b60 : #d7dadf; wrap: word-wrap; }
             HorizontalBox { spacing: 10px;
-                Card { label: "تجارب دخول مسجّلة"; value: root.student-total; }
-                Card { label: "صفقات MT5 مغلقة"; value: root.student-closed; }
-                Card { label: "مقارنات دخلت التعلّم"; value: root.student-pairs; }
+                Card { theme-choice: root.theme-choice; label: "تجارب دخول مسجّلة"; value: root.student-total; }
+                Card { theme-choice: root.theme-choice; label: "صفقات MT5 مغلقة"; value: root.student-closed; }
+                Card { theme-choice: root.theme-choice; label: "مقارنات دخلت التعلّم"; value: root.student-pairs; }
             }
-            Text { text: "شنو يتكرر بالنتائج؟"; color: #f2f2f4; font-size: 18px; font-weight: 700; }
-            Text { text: "آخر 100 تجربة كحد أقصى. هذه أنماط مرصودة؛ سبب الخسارة قد يحتاج أدلة إضافية."; color: #999ca5; wrap: word-wrap; }
-            Text { text: root.student-patterns; color: #c8cbd1; wrap: word-wrap; }
-            Text { text: "شنو تغيّر بالخروج؟"; color: #f2f2f4; font-size: 18px; font-weight: 700; }
-            Text { text: root.student-policies; color: #b7bac3; wrap: word-wrap; }
-            Text { text: "20 مقارنة للتدريب، ثم 20 دخولاً جديداً لاختبار البديل. الإعداد الأصلي يبقى يعمل خلال التعلّم. التطبيق الآلي للديمو فقط؛ تغييره من صفحة الوضع والتكلفة."; color: #999ca5; wrap: word-wrap; }
-            Text { text: "توقيت الدخول — مقارنة افتراضية"; color: #f2f2f4; font-size: 18px; font-weight: 700; }
-            Text { text: "فور الإشارة، بعد 250 ms، أو بعد 1000 ms. مقارنة على أسعار لاحقة بنفس المهلة والتكاليف، ولا تؤخّر إرسال الأوامر. الرصد البطيء يُستبعد بدل تخمين الأسعار."; color: #999ca5; wrap: word-wrap; }
-            Text { text: root.student-timing; color: #b7bac3; wrap: word-wrap; }
-            Text { text: "دفتر التجارب — أحدث 20 دخولاً"; color: #f2f2f4; font-size: 18px; font-weight: 700; }
-            Text { text: root.student-journal; color: #b7bac3; wrap: word-wrap; }
-            Text { text: "MFE / MAE: أفضل وأسوأ حركة مرصودة بعد تأكيد التنفيذ وحتى الإغلاق. المقارنة الافتراضية تستخدم Bid/Ask والعمولة والانزلاق؛ فجوة وصول الرصد فوق ثانيتين تستبعدها، وهدوء السعر وحده لا يستبعدها. السواب غير محسوب فيها. التحسّن السابق لا يضمن ربحاً لاحقاً."; color: #999ca5; wrap: word-wrap; }
+            Text { text: "شنو يتكرر بالنتائج؟"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 18px; font-weight: 700; }
+            Text { text: "آخر 100 تجربة كحد أقصى. هذه أنماط مرصودة؛ سبب الخسارة قد يحتاج أدلة إضافية."; color: root.theme-choice == 1 ? #62758b : #999ca5; wrap: word-wrap; }
+            Text { text: root.student-patterns; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
+            Text { text: "شنو تغيّر بالخروج؟"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 18px; font-weight: 700; }
+            Text { text: root.student-policies; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
+            Text { text: "20 مقارنة للتدريب، ثم 20 دخولاً جديداً لاختبار البديل. الإعداد الأصلي يبقى يعمل خلال التعلّم. التطبيق الآلي للديمو فقط؛ تغييره من صفحة الوضع والتكلفة."; color: root.theme-choice == 1 ? #62758b : #999ca5; wrap: word-wrap; }
+            Text { text: "توقيت الدخول — مقارنة افتراضية"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 18px; font-weight: 700; }
+            Text { text: "فور الإشارة، بعد 250 ms، أو بعد 1000 ms. مقارنة على أسعار لاحقة بنفس المهلة والتكاليف، ولا تؤخّر إرسال الأوامر. الرصد البطيء يُستبعد بدل تخمين الأسعار."; color: root.theme-choice == 1 ? #62758b : #999ca5; wrap: word-wrap; }
+            Text { text: root.student-timing; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
+            Text { text: "دفتر التجارب — أحدث 20 دخولاً"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 18px; font-weight: 700; }
+            Text { text: root.student-journal; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
+            Text { text: "MFE / MAE: أفضل وأسوأ حركة مرصودة بعد تأكيد التنفيذ وحتى الإغلاق. المقارنة الافتراضية تستخدم Bid/Ask والعمولة والانزلاق؛ فجوة وصول الرصد فوق ثانيتين تستبعدها، وهدوء السعر وحده لا يستبعدها. السواب غير محسوب فيها. التحسّن السابق لا يضمن ربحاً لاحقاً."; color: root.theme-choice == 1 ? #62758b : #999ca5; wrap: word-wrap; }
         } }
         if root.page == 21: ScrollView { VerticalBox { spacing: 14px;
-            Text { text: "غرفة العقول • الحالة والتحكم"; color: #f6f6f7; font-size: 24px; font-weight: 700; }
+            Text { text: "غرفة العقول • الحالة والتحكم"; color: root.theme-choice == 1 ? #172235 : #f6f6f7; font-size: 24px; font-weight: 700; }
             Text { text: root.brain-monitor-summary; color: #b8bbc3; wrap: word-wrap; }
             ComboBox { model: root.brain-monitor-names; current-index <=> root.brain-monitor-selected; enabled: !root.brain-monitor-busy; selected(value) => { root.brain-monitor-action("select"); } }
             Text { text: "المشاركة تؤثر في قرار الخبير أو القناص المتعلّم فقط عند اختياره. سكالبينغ وسوينغ والقناص الكلاسيكي لا تتوقف إشاراتها بسبب اعتراض العقول الأخرى. صفقات Paper تحسب نتائج افتراضية من الأسعار المرصودة فقط، ولا تعلّم تلقائياً أوزان تنفيذ MT5. التعلم المطبق يعتمد على أدلة MT5 Demo المغلقة أو رصد لاحق موسوم بوضوح."; color: #b8bbc3; wrap: word-wrap; }
@@ -448,21 +513,21 @@ export component Dashboard inherits Window {
                 Button { text: "جمّد سياسة المنسّق"; enabled: root.frozen-trial-available && !root.brain-monitor-busy && root.brain-monitor-selected == 0 && root.state == "STOPPED"; clicked => { root.brain-monitor-action("freeze_coordinator"); } }
                 Button { text: "إنهاء تدقيق المنسّق"; enabled: root.frozen-trial-available && !root.brain-monitor-busy && root.brain-monitor-selected == 0 && root.state == "STOPPED"; clicked => { root.brain-monitor-action("stop_coordinator"); } }
             }
-            Text { text: root.brain-monitor-message; color: #d0d3da; wrap: word-wrap; }
-            Text { text: root.brain-monitor-detail; color: #e3e5e9; wrap: word-wrap; }
-            Text { text: "كل العقول • الوضع الحالي"; color: #f6f6f7; font-size: 20px; }
+            Text { text: root.brain-monitor-message; color: root.theme-choice == 1 ? #526477 : #d0d3da; wrap: word-wrap; }
+            Text { text: root.brain-monitor-detail; color: root.theme-choice == 1 ? #28384b : #e3e5e9; wrap: word-wrap; }
+            Text { text: "كل العقول • الوضع الحالي"; color: root.theme-choice == 1 ? #172235 : #f6f6f7; font-size: 20px; }
             Text { text: root.brain-monitor-overview; color: #b8bbc3; wrap: word-wrap; }
         } }
         if root.page == 20: ScrollView {
             VerticalBox {
                 spacing: 13px;
-                Text { text: "سجل الصفقات  /  MT5 TRADE JOURNAL"; color: #f2f2f4; font-size: 22px; font-weight: 700; }
+                Text { text: "سجل الصفقات  /  MT5 TRADE JOURNAL"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 22px; font-weight: 700; }
                 Text { text: "كل صفقة فتحها BrainTrade بحسب رقم مركز MT5 • مفتوحة أو مغلقة أو مغلقة جزئياً • السجل محفوظ حتى بعد إغلاق الصفقة أو إعادة تشغيل البرنامج."; color: #c6c8d0; wrap: word-wrap; }
                 Rectangle {
-                    background: #212329; border-radius: 11px; border-width: 1px; border-color: #393c43;
+                    background: root.theme-choice == 1 ? #ffffff : #212329; border-radius: 11px; border-width: 1px; border-color: #393c43;
                     VerticalLayout {
                         padding: 14px; spacing: 10px;
-                        Text { text: root.trade-journal-summary; color: #f4f4f5; font-size: 15px; font-weight: 700; wrap: word-wrap; }
+                        Text { text: root.trade-journal-summary; color: root.theme-choice == 1 ? #19283b : #f4f4f5; font-size: 15px; font-weight: 700; wrap: word-wrap; }
                         HorizontalLayout {
                             spacing: 10px;
                             Button { text: "تحديث السجل"; enabled: !root.trade-journal-busy; clicked => { root.trade-journal-action("refresh"); } }
@@ -474,20 +539,20 @@ export component Dashboard inherits Window {
                     }
                 }
                 Rectangle {
-                    background: #1e2026; border-radius: 11px; border-width: 1px; border-color: #373a41;
+                    background: root.theme-choice == 1 ? #ffffff : #1e2026; border-radius: 11px; border-width: 1px; border-color: #373a41;
                     VerticalLayout {
                         padding: 14px; spacing: 9px;
-                        Text { text: "تفاصيل الصفقة المختارة"; color: #f2f2f4; font-size: 17px; font-weight: 700; }
-                        Text { text: root.trade-journal-detail; color: #e0e2e5; wrap: word-wrap; }
+                        Text { text: "تفاصيل الصفقة المختارة"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 17px; font-weight: 700; }
+                        Text { text: root.trade-journal-detail; color: root.theme-choice == 1 ? #28384b : #e0e2e5; wrap: word-wrap; }
                     }
                 }
                 Text { text: root.trade-journal-notice; color: #b3b6be; wrap: word-wrap; }
             }
         }
         if root.page == 17: ScrollView { VerticalBox { spacing: 10px;
-            Text { text: "تنفيذ MT5  /  إعداد الحساب والعقول"; color: #f2f2f4; font-size: 22px; font-weight: 700; }
-            Text { text: "الخطوة 1 • اختر Demo أو REAL من القائمة. التحويل إلى حساب حقيقي لا يفتح صفقة تلقائياً؛ يلزم ربط صريح ورقم حساب مطابق ثم تأكيد START مرة أخرى."; color: #b7bac3; wrap: word-wrap; }
-            Text { text: root.exec-summary; color: #d7dadf; wrap: word-wrap; }
+            Text { text: "تنفيذ MT5  /  إعداد الحساب والعقول"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 22px; font-weight: 700; }
+            Text { text: "الخطوة 1 • اختر Demo أو REAL من القائمة. التحويل إلى حساب حقيقي لا يفتح صفقة تلقائياً؛ يلزم ربط صريح ورقم حساب مطابق ثم تأكيد START مرة أخرى."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
+            Text { text: root.exec-summary; color: root.theme-choice == 1 ? #3b4b60 : #d7dadf; wrap: word-wrap; }
             HorizontalBox {
                 ComboBox { model: ["Demo / حساب تجريبي", "Live / أموال حقيقية"]; current-index <=> root.exec-target; }
                 LineEdit { text <=> root.exec-deviation; placeholder-text: "انحراف التنفيذ بالنقاط"; }
@@ -498,9 +563,9 @@ export component Dashboard inherits Window {
                 Text { text: "تأكيد REAL: اكتب رقم الحساب المفتوح حالياً في MT5"; color: #e5dad3; vertical-alignment: center; }
                 LineEdit { text <=> root.exec-confirm-login; placeholder-text: "رقم دخول حساب REAL"; enabled: root.exec-target == 1 && root.state == "STOPPED"; }
             }
-            Text { text: "LIVE يحتاج رقم الحساب المطابق عند الربط، ثم نفس الرقم قبل كل START، وتفعيل حماية المحفظة. الربط وحده لا يبدأ التداول؛ تغيير حساب الوسيط يوقف دخول صفقات جديدة."; color: #b7bac3; wrap: word-wrap; }
+            Text { text: "LIVE يحتاج رقم الحساب المطابق عند الربط، ثم نفس الرقم قبل كل START، وتفعيل حماية المحفظة. الربط وحده لا يبدأ التداول؛ تغيير حساب الوسيط يوقف دخول صفقات جديدة."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             Rectangle { height: 1px; background: #3b3e45; }
-            Text { text: "الخطوة 2 • حدد العقل واضبط اللوت للمراجعة الورقية. تنفيذ MT5 محصور بالعقل الرئيسي للوضع المختار؛ بقية العقول SHADOW/PAPER فقط."; color: #e0e1e4; font-weight: 700; wrap: word-wrap; }
+            Text { text: "الخطوة 2 • حدد العقل واضبط اللوت للمراجعة الورقية. تنفيذ MT5 محصور بالعقل الرئيسي للوضع المختار؛ بقية العقول SHADOW/PAPER فقط."; color: root.theme-choice == 1 ? #28384b : #e0e1e4; font-weight: 700; wrap: word-wrap; }
             ComboBox { model: root.exec-names; current-index <=> root.exec-selected; enabled: !root.exec-busy; selected(value) => { root.execution-action("select"); } }
             HorizontalBox {
                 Button { text: "تشغيل تداول منفرد (معطّل بالعزل)"; enabled: root.exec-settings-loaded && false; clicked => { root.execution-action("enable"); } }
@@ -509,57 +574,57 @@ export component Dashboard inherits Window {
             }
             Text { text: root.exec-role == "coordinator" ? "العقل الرئيسي للوضع المختار وحده ينفذ على MT5" : root.exec-role == "returning" ? "بانتظار تسوية صفقة قديمة ثم يرجع للتحليل الافتراضي" : "SHADOW / PAPER: العقل يراقب ويتدرّب افتراضياً فقط؛ لا يرسل أوامر MT5"; color: root.exec-enabled ? #f4f4f5 : #c8cbd1; wrap: word-wrap; }
             HorizontalBox {
-                Text { text: "الفريم"; color: #b7bac3; vertical-alignment: center; }
+                Text { text: "الفريم"; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; vertical-alignment: center; }
                 ComboBox { model: root.exec-frames; current-index <=> root.exec-frame; }
-                Text { text: "اللوت الثابت"; color: #b7bac3; vertical-alignment: center; }
+                Text { text: "اللوت الثابت"; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; vertical-alignment: center; }
                 LineEdit { text <=> root.exec-lots; }
             }
-            Text { text: "الوقف ATR / الهدف R / أقصى احتفاظ بالثواني (0 بلا مهلة) / فاصل دخول بالثواني"; color: #b7bac3; wrap: word-wrap; }
+            Text { text: "الوقف ATR / الهدف R / أقصى احتفاظ بالثواني (0 بلا مهلة) / فاصل دخول بالثواني"; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             HorizontalBox {
                 LineEdit { text <=> root.exec-stop; }
                 LineEdit { text <=> root.exec-reward; }
                 LineEdit { text <=> root.exec-hold; }
                 LineEdit { text <=> root.exec-cooldown; }
             }
-            Text { text: "عقل النظام والقناص المتعلّم يستخدمان هدف ووقف ومدة الوضع المختار. KTE يستخدم وقفه البنيوي؛ الاستراتيجية المولدة تستخدم إعدادات تقريرها."; color: #b7bac3; wrap: word-wrap; }
+            Text { text: "عقل النظام والقناص المتعلّم يستخدمان هدف ووقف ومدة الوضع المختار. KTE يستخدم وقفه البنيوي؛ الاستراتيجية المولدة تستخدم إعدادات تقريرها."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             CheckBox { text: "تفعيل حدود المخاطرة واللوت والسبريد الاختيارية من صفحة المخاطرة"; checked <=> root.exec-risk; }
             LineEdit { text <=> root.exec-report; placeholder-text: "للعقل المولّد فقط: معرّف تقرير محفوظ من مختبر الاستراتيجيات"; }
             Rectangle { height: 1px; background: #3b3e45; }
-            Text { text: "الخطوة 3   •   حماية المحفظة"; color: #f2f2f4; font-size: 18px; font-weight: 700; }
-            Text { text: "تمنع الدخولات الجديدة عند تجاوز عدد الصفقات، إجمالي اللوت أو مخاطرة الوقف. احفظها والنظام متوقف وبعد تسوية الأوامر."; color: #b7bac3; wrap: word-wrap; }
+            Text { text: "الخطوة 3   •   حماية المحفظة"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 18px; font-weight: 700; }
+            Text { text: "تمنع الدخولات الجديدة عند تجاوز عدد الصفقات، إجمالي اللوت أو مخاطرة الوقف. احفظها والنظام متوقف وبعد تسوية الأوامر."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             CheckBox { text: "تفعيل Portfolio Exposure Gate للدخولات الجديدة"; checked <=> root.portfolio-enabled; }
-            Text { text: "أقصى عدد صفقات/أوامر غير محسومة • أقصى مجموع لوت • أقصى خطر وقف % من Equity"; color: #b7bac3; wrap: word-wrap; }
+            Text { text: "أقصى عدد صفقات/أوامر غير محسومة • أقصى مجموع لوت • أقصى خطر وقف % من Equity"; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             HorizontalBox {
                 LineEdit { text <=> root.portfolio-max-positions; placeholder-text: "3"; }
                 LineEdit { text <=> root.portfolio-max-lots; placeholder-text: "0.30"; }
                 LineEdit { text <=> root.portfolio-max-risk; placeholder-text: "2.0"; }
                 Button { text: "حفظ حماية المحفظة"; enabled: !root.exec-busy && root.state == "STOPPED"; clicked => { root.execution-action("portfolio"); } }
             }
-            Text { text: "غيّر هذه الحدود فقط أثناء STOP. إذا تعذر حساب خطر وقف أي تعرض قائم، يمنع دخول جديد عند تفعيل الحماية؛ الإغلاقات وSL/TP والمصالحة لا تُمنع."; color: #c8cbd1; wrap: word-wrap; }
+            Text { text: "غيّر هذه الحدود فقط أثناء STOP. إذا تعذر حساب خطر وقف أي تعرض قائم، يمنع دخول جديد عند تفعيل الحماية؛ الإغلاقات وSL/TP والمصالحة لا تُمنع."; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
             Rectangle { height: 1px; background: #3b3e45; }
-            Text { text: "الخطوة 4   •   راقب القرار والأوامر والنتائج. إغلاق الصفقات إجراء حقيقي على الحساب المرتبط."; color: #c8cbd1; wrap: word-wrap; }
+            Text { text: "الخطوة 4   •   راقب القرار والأوامر والنتائج. إغلاق الصفقات إجراء حقيقي على الحساب المرتبط."; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
             HorizontalBox {
                 Button { text: "إغلاق صفقات هذا العقل"; enabled: !root.exec-busy && root.exec-settings-loaded; clicked => { root.execution-action("close"); } }
                 Button { text: "تحديث النتائج والأوامر"; enabled: !root.exec-busy; clicked => { root.execution-action("poll"); } }
             }
-            Text { text: root.exec-message; color: #c8cbd1; wrap: word-wrap; }
-            Text { text: root.exec-detail; color: #dadce1; wrap: word-wrap; }
-            Text { text: "نتائج مستقلة لكل عقل وسجل التنفيذ"; color: #f2f2f4; font-size: 18px; }
-            Text { text: "سجل التعلّم الورقي للعقول الأخرى (غير حقيقي)"; color: #f2f2f4; font-size: 18px; font-weight: 700; }
-            Text { text: root.exec-shadow; color: #b7bac3; wrap: word-wrap; }
-            Text { text: root.exec-ledger; color: #b7bac3; wrap: word-wrap; }
-            Text { text: "حساب Hedging يسمح باستقلال صفقات عدة عقول. Netting يسمح بمالك واحد للرمز حتى إغلاقه. الأخبار وتوقعات النماذج الإحصائية تبقى مصادر بحث، وليست استراتيجيات مكتملة للتداول المنفرد."; color: #b7bac3; wrap: word-wrap; }
+            Text { text: root.exec-message; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
+            Text { text: root.exec-detail; color: root.theme-choice == 1 ? #314358 : #dadce1; wrap: word-wrap; }
+            Text { text: "نتائج مستقلة لكل عقل وسجل التنفيذ"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 18px; }
+            Text { text: "سجل التعلّم الورقي للعقول الأخرى (غير حقيقي)"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 18px; font-weight: 700; }
+            Text { text: root.exec-shadow; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
+            Text { text: root.exec-ledger; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
+            Text { text: "حساب Hedging يسمح باستقلال صفقات عدة عقول. Netting يسمح بمالك واحد للرمز حتى إغلاقه. الأخبار وتوقعات النماذج الإحصائية تبقى مصادر بحث، وليست استراتيجيات مكتملة للتداول المنفرد."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
         } }
         if root.page == 14: ScrollView {
             VerticalBox {
                 spacing: 16px;
-                Text { text: "إعداد التداول  /  الوضع والتكاليف والقناص"; font-size: 21px; color: #f2f2f4; font-weight: 700; }
-                Text { text: "كل خانة تحت عنوانها. عدّل القيم والنظام متوقف، ثم احفظها؛ عرض التكلفة يستعمل أسعار Bid / Ask الحالية من MT5."; color: #b7bac3; wrap: word-wrap; }
+                Text { text: "إعداد التداول  /  الوضع والتكاليف والقناص"; font-size: 21px; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-weight: 700; }
+                Text { text: "كل خانة تحت عنوانها. عدّل القيم والنظام متوقف، ثم احفظها؛ عرض التكلفة يستعمل أسعار Bid / Ask الحالية من MT5."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
                 Rectangle {
-                    background: #212329; border-radius: 12px; border-width: 1px; border-color: #393c43;
+                    background: root.theme-choice == 1 ? #ffffff : #212329; border-radius: 12px; border-width: 1px; border-color: #393c43;
                     VerticalLayout {
                         padding: 16px; spacing: 12px;
-                        Text { text: "1  •  وضع التداول"; color: #f2f2f4; font-size: 16px; font-weight: 700; }
+                        Text { text: "1  •  وضع التداول"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 16px; font-weight: 700; }
                         Text { text: "اختر الوضع الذي يحدد طريقة الدخول والخروج"; color: #bfc2ca; }
                         ComboBox { model: ["Scalping / سكالبنك", "Swing / سوينك", "Expert / الخبير المتعلم", "Sniper / القناص"]; current-index <=> root.trade-mode; enabled: root.state == "STOPPED"; }
                         Text {
@@ -567,29 +632,29 @@ export component Dashboard inherits Window {
                                 : root.trade-mode == 1 ? "H1 + H4 + D1؛ وقف 2 ATR وهدف 2.5R، أقصى احتفاظ 3 أيام. السواب غير محسوب."
                                 : root.trade-mode == 2 ? (root.demo-flexible ? "الخبير المرن على Demo يختار عضواً جاهزاً بحسب التعلّم والاستكشاف. على Live يستخدم الإجماع." : "الخبير يستخدم إجماع الأعضاء؛ وقف 1.5 ATR وهدف 2R، مهلة 30 دقيقة.")
                                 : "القناص يستخدم Fast Pulse. مدة الاحتفاظ تُضبط أدناه وتثبت عند فتح الصفقة.";
-                            color: #b7bac3; wrap: word-wrap;
+                            color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap;
                         }
                         CheckBox { text: "تطبيق الخروج المتعلّم على الديمو"; checked <=> root.adaptive-exits; enabled: root.state == "STOPPED"; }
                         CheckBox { text: "تعلّم ديمو مرن"; checked <=> root.demo-flexible; enabled: root.state == "STOPPED"; }
-                        Text { text: "التعلّم المرن على Demo فقط. شروط الوسيط وحدود التنفيذ ما زالت مطبّقة."; color: #aeb1ba; wrap: word-wrap; }
+                        Text { text: "التعلّم المرن على Demo فقط. شروط الوسيط وحدود التنفيذ ما زالت مطبّقة."; color: root.theme-choice == 1 ? #62758b : #aeb1ba; wrap: word-wrap; }
                     }
                 }
                 Rectangle {
-                    background: #212329; border-radius: 12px; border-width: 1px; border-color: #393c43;
+                    background: root.theme-choice == 1 ? #ffffff : #212329; border-radius: 12px; border-width: 1px; border-color: #393c43;
                     VerticalLayout {
                         padding: 16px; spacing: 12px;
-                        Text { text: "2  •  عمولة الوسيط ووحدات السعر"; color: #f2f2f4; font-size: 16px; font-weight: 700; }
+                        Text { text: "2  •  عمولة الوسيط ووحدات السعر"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 16px; font-weight: 700; }
                         Text { text: "مثال: 7 لعملة الحساب لكل 1.00 لوت ذهاب وإياب = 0.70 للوت 0.10 و0.07 للوت 0.01. إذا الوسيط يقول العمولة لكل جهة، اختر «لكل جهة» وأدخل قيمتها لجهة واحدة."; color: #c6c8ce; wrap: word-wrap; }
                         HorizontalLayout {
                             spacing: 14px;
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "العمولة لكل 1.00 لوت (عملة الحساب)"; color: #e0e1e4; wrap: word-wrap; }
+                                Text { text: "العمولة لكل 1.00 لوت (عملة الحساب)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
                                 LineEdit { text <=> root.commission-lot; placeholder-text: "مثال: 7"; }
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "طريقة احتساب العمولة"; color: #e0e1e4; }
+                                Text { text: "طريقة احتساب العمولة"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
                                 ComboBox { model: ["ذهاب وإياب / Round trip", "لكل جهة / Per side"]; current-index <=> root.commission-basis; }
                             }
                         }
@@ -597,29 +662,29 @@ export component Dashboard inherits Window {
                             spacing: 14px;
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "قيمة 1 pip بحركة سعر الذهب (مهم)"; color: #e0e1e4; wrap: word-wrap; }
+                                Text { text: "قيمة 1 pip بحركة سعر الذهب (مهم)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
                                 LineEdit { text <=> root.sniper-pip-price; placeholder-text: "0.10 = كل pip حركة سعر 10 سنت"; }
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "الانزلاق المفترض لكل جهة (ticks)"; color: #e0e1e4; wrap: word-wrap; }
+                                Text { text: "الانزلاق المفترض لكل جهة (ticks)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
                                 LineEdit { text <=> root.slippage-ticks; placeholder-text: "0 = دون انزلاق مفترض"; }
                             }
                         }
-                        Text { text: "مثال على الذهب: قيمة pip = 0.10 بالسعر؛ الهدف الثابت 5 pip = تحرّك 0.50 بسعر الذهب، و10 pip = 1.00. هدف القناص لا يكبر بسبب العمولة أو السبريد أو التعلّم. السبريد الحقيقي من MT5 والانزلاق تقدير مستقل. تأكد من تعريف pip مع وسيطك."; color: #b7bac3; wrap: word-wrap; }
+                        Text { text: "مثال على الذهب: قيمة pip = 0.10 بالسعر؛ الهدف الثابت 5 pip = تحرّك 0.50 بسعر الذهب، و10 pip = 1.00. هدف القناص لا يكبر بسبب العمولة أو السبريد أو التعلّم. السبريد الحقيقي من MT5 والانزلاق تقدير مستقل. تأكد من تعريف pip مع وسيطك."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
                     }
                 }
                 Rectangle {
-                    background: #212329; border-radius: 12px; border-width: 1px; border-color: #393c43;
+                    background: root.theme-choice == 1 ? #ffffff : #212329; border-radius: 12px; border-width: 1px; border-color: #393c43;
                     VerticalLayout {
                         padding: 16px; spacing: 12px;
-                        Text { text: "3  •  إعداد القناص وأهداف Pip"; color: #f2f2f4; font-size: 16px; font-weight: 700; }
+                        Text { text: "3  •  إعداد القناص وأهداف Pip"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 16px; font-weight: 700; }
                         Text { text: "يعمل القناص المتعلّم بوضع Sniper بعد الحفظ والتشغيل، ويستند إلى صفقات Demo المغلقة. الهدف بـ pip، والوقف بنقاط MT5."; color: #c6c8ce; wrap: word-wrap; }
                         HorizontalLayout {
                             spacing: 14px;
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "نوع عقل القناص"; color: #e0e1e4; }
+                                Text { text: "نوع عقل القناص"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
                                 ComboBox { model: ["القناص الكلاسيكي", "القناص المتعلّم / Sniper Learner"]; current-index <=> root.sniper-brain; enabled: root.state == "STOPPED" && root.trade-mode == 3; }
                                 Text { text: "أسلوب القناص المتعلّم"; color: #b8bbc3; }
                                 ComboBox { model: ["تلقائي متعلّم", "اندفاع سريع فقط", "ارتداد سريع فقط", "اندفاع مؤكد"]; current-index <=> root.sniper-style; enabled: root.state == "STOPPED" && root.trade-mode == 3 && root.sniper-brain == 1; }
@@ -627,7 +692,7 @@ export component Dashboard inherits Window {
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "طريقة تحديد هدف الربح"; color: #e0e1e4; }
+                                Text { text: "طريقة تحديد هدف الربح"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
                                 ComboBox { model: ["هدف pip ثابت تختاره", "تعلّم هدف pip ضمن نطاق — Demo فقط"]; current-index <=> root.sniper-target-mode; enabled: root.state == "STOPPED" && root.trade-mode == 3 && root.sniper-brain == 1; }
                             }
                         }
@@ -635,17 +700,17 @@ export component Dashboard inherits Window {
                             spacing: 14px;
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "هدف الربح الثابت (pip)"; color: #e0e1e4; wrap: word-wrap; }
+                                Text { text: "هدف الربح الثابت (pip)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
                                 LineEdit { text <=> root.sniper-target; placeholder-text: "مثال: 5"; }
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "وقف الخسارة (points)"; color: #e0e1e4; wrap: word-wrap; }
+                                Text { text: "وقف الخسارة (points)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
                                 LineEdit { text <=> root.sniper-stop; placeholder-text: "مثال: 80"; }
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "انتظار بين الدخولات (ثانية)"; color: #e0e1e4; wrap: word-wrap; }
+                                Text { text: "انتظار بين الدخولات (ثانية)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
                                 LineEdit { text <=> root.sniper-cooldown; placeholder-text: "مثال: 0"; }
                             }
                         }
@@ -653,12 +718,12 @@ export component Dashboard inherits Window {
                             spacing: 14px;
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "أدنى هدف متعلّم (pip)"; color: #e0e1e4; wrap: word-wrap; }
+                                Text { text: "أدنى هدف متعلّم (pip)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
                                 LineEdit { text <=> root.sniper-min-target-pips; placeholder-text: "مثال: 2"; enabled: root.sniper-target-mode == 1 && root.trade-mode == 3 && root.sniper-brain == 1; }
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "أعلى هدف متعلّم (pip)"; color: #e0e1e4; wrap: word-wrap; }
+                                Text { text: "أعلى هدف متعلّم (pip)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
                                 LineEdit { text <=> root.sniper-max-target-pips; placeholder-text: "مثال: 10"; enabled: root.sniper-target-mode == 1 && root.trade-mode == 3 && root.sniper-brain == 1; }
                             }
                         }
@@ -666,78 +731,78 @@ export component Dashboard inherits Window {
                             spacing: 14px;
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "أقصى احتفاظ بالصفقة (ثانية)"; color: #e0e1e4; wrap: word-wrap; }
+                                Text { text: "أقصى احتفاظ بالصفقة (ثانية)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
                                 LineEdit { text <=> root.sniper-hold; placeholder-text: "1 – 3600"; }
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "أقصى حصة تكلفة من الهدف (0.01 – 0.90)"; color: #e0e1e4; wrap: word-wrap; }
+                                Text { text: "أقصى حصة تكلفة من الهدف (0.01 – 0.90)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
                                 LineEdit { text <=> root.cost-fraction; placeholder-text: "مثال: 0.45"; }
                             }
                         }
-                        Text { text: "الهدف الثابت يبقى نفسه سواء فعّلت الخروج المتعلّم أو لا. نطاق الأهداف المتعلّمة يعمل فقط مع القناص المتعلّم على Demo. إذا رفض الوسيط TP صغير بسبب Stops Level، يرفض النظام فتح تلك الصفقة بدلاً من توسيع الهدف. مدة الاحتفاظ من 1 إلى 3600 ثانية."; color: #b7bac3; wrap: word-wrap; }
+                        Text { text: "الهدف الثابت يبقى نفسه سواء فعّلت الخروج المتعلّم أو لا. نطاق الأهداف المتعلّمة يعمل فقط مع القناص المتعلّم على Demo. إذا رفض الوسيط TP صغير بسبب Stops Level، يرفض النظام فتح تلك الصفقة بدلاً من توسيع الهدف. مدة الاحتفاظ من 1 إلى 3600 ثانية."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
                     }
                 }
                 Rectangle {
-                    background: #212329; border-radius: 12px; border-width: 1px; border-color: #393c43;
+                    background: root.theme-choice == 1 ? #ffffff : #212329; border-radius: 12px; border-width: 1px; border-color: #393c43;
                     VerticalLayout {
                         padding: 16px; spacing: 12px;
-                        Text { text: "4  •  حفظ الإعدادات ومعاينة تكلفة صفقة جديدة"; color: #f2f2f4; font-size: 16px; font-weight: 700; }
+                        Text { text: "4  •  حفظ الإعدادات ومعاينة تكلفة صفقة جديدة"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 16px; font-weight: 700; }
                         Button { text: "4   حفظ إعدادات التداول"; enabled: !root.studio-busy && root.state == "STOPPED"; clicked => { root.studio-action("save"); } }
-                        Text { text: "أوقف النظام لتبديل الوضع أو التكاليف. الصفقة المفتوحة تحتفظ بهدفها ووقفها ومدتها التي جُمّدت عند الدخول."; color: #c8cbd1; wrap: word-wrap; }
+                        Text { text: "أوقف النظام لتبديل الوضع أو التكاليف. الصفقة المفتوحة تحتفظ بهدفها ووقفها ومدتها التي جُمّدت عند الدخول."; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
                         HorizontalLayout {
                             spacing: 14px;
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "حجم اللوت للمعاينة فقط"; color: #e0e1e4; }
+                                Text { text: "حجم اللوت للمعاينة فقط"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
                                 LineEdit { text <=> root.preview-lots; placeholder-text: "مثال: 0.10"; }
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "سعر MT5 اللحظي والسبريد"; color: #e0e1e4; }
+                                Text { text: "سعر MT5 اللحظي والسبريد"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
                                 Button { text: "احسب التكلفة الحالية"; enabled: !root.studio-busy; clicked => { root.studio-action("cost"); } }
                             }
                         }
                         Rectangle { height: 1px; background: #3d4047; }
-                        Text { text: "تفاصيل التكلفة ونقطة التعادل"; color: #f2f2f4; font-weight: 700; }
-                        Text { text: root.cost-detail; color: #e0e2e5; wrap: word-wrap; }
+                        Text { text: "تفاصيل التكلفة ونقطة التعادل"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-weight: 700; }
+                        Text { text: root.cost-detail; color: root.theme-choice == 1 ? #28384b : #e0e2e5; wrap: word-wrap; }
                         Text { text: root.studio-message; color: #bfc2ca; wrap: word-wrap; }
                     }
                 }
             }
         }
         if root.page == 15: ScrollView { VerticalBox { spacing: 10px;
-            Text { text: "مختبر توليد الاستراتيجيات"; font-size: 20px; color: #f2f2f4; }
-            Text { text: "يبني 40 تركيباً من الاختراق والارتداد والاتجاه واختبارات وايكوف، ثم يرتبها بالتدريب والتحقق الزمني. الاختبار النهائي محفوظ ولا يختار الاستراتيجية. لا تفعيل تلقائي للنتائج."; color: #b7bac3; wrap: word-wrap; }
+            Text { text: "مختبر توليد الاستراتيجيات"; font-size: 20px; color: root.theme-choice == 1 ? #19283b : #f2f2f4; }
+            Text { text: "يبني 40 تركيباً من الاختراق والارتداد والاتجاه واختبارات وايكوف، ثم يرتبها بالتدريب والتحقق الزمني. الاختبار النهائي محفوظ ولا يختار الاستراتيجية. لا تفعيل تلقائي للنتائج."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             ComboBox { model: root.studio-frames; current-index <=> root.studio-tf; }
             HorizontalBox {
                 Button { text: "توليد وتقييم"; enabled: !root.studio-busy; clicked => { root.studio-action("run"); } }
                 Button { text: "تعلم تلقائي"; enabled: !root.studio-busy; clicked => { root.studio-action("auto_on"); } }
                 Button { text: "إيقاف وإلغاء"; enabled: !root.studio-busy; clicked => { root.studio-action("cancel"); } }
             }
-            Text { text: "التعلم التلقائي ينتظر اختباراً نهائياً جديداً. يدعم فريمات MT5 الـ21 ولا يعوض التاريخ المفقود ببيانات مصطنعة."; color: #b7bac3; wrap: word-wrap; }
-            Text { text: root.studio-message; color: #c8cbd1; wrap: word-wrap; }
+            Text { text: "التعلم التلقائي ينتظر اختباراً نهائياً جديداً. يدعم فريمات MT5 الـ21 ولا يعوض التاريخ المفقود ببيانات مصطنعة."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
+            Text { text: root.studio-message; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
             ComboBox { model: root.studio-reports; current-index <=> root.studio-report-index; }
             Button { text: "فتح النتيجة المحفوظة"; enabled: !root.studio-busy && root.studio-reports.length > 0; clicked => { root.studio-action("report"); } }
-            Text { text: root.studio-report; color: #e0e1e4; wrap: word-wrap; horizontal-alignment: left; }
-            Text { text: root.studio-summary; color: #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
+            Text { text: root.studio-report; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; horizontal-alignment: left; }
+            Text { text: root.studio-summary; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
         } }
         if root.page == 16: ScrollView { VerticalBox { spacing: 10px;
-            Text { text: "عقل وايكوف — الرصد وقياس النتيجة"; font-size: 20px; color: #f2f2f4; }
+            Text { text: "عقل وايكوف — الرصد وقياس النتيجة"; font-size: 20px; color: root.theme-choice == 1 ? #19283b : #f2f2f4; }
             ComboBox { model: root.studio-frames; current-index <=> root.studio-tf; selected => { root.studio-action("refresh"); } }
             Button { text: "تحديث التحليل"; enabled: !root.studio-busy; clicked => { root.studio-action("refresh"); } }
-            Text { text: "يرصد Spring / Upthrust واختبارهما وSOS → LPS وSOW → LPSY. يحفظ أول إشارة ثم يقيس الصافي بعد 12 شمعة لاحقة مع التكلفة. نتائج التعلم تُعرض هنا؛ تشغيل وايكوف منفرداً من صفحة التنفيذ."; color: #b7bac3; wrap: word-wrap; }
-            Text { text: root.wyckoff-detail; color: #e0e1e4; wrap: word-wrap; horizontal-alignment: left; }
-            Text { text: root.studio-message; color: #c8cbd1; wrap: word-wrap; }
+            Text { text: "يرصد Spring / Upthrust واختبارهما وSOS → LPS وSOW → LPSY. يحفظ أول إشارة ثم يقيس الصافي بعد 12 شمعة لاحقة مع التكلفة. نتائج التعلم تُعرض هنا؛ تشغيل وايكوف منفرداً من صفحة التنفيذ."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
+            Text { text: root.wyckoff-detail; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; horizontal-alignment: left; }
+            Text { text: root.studio-message; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
         } }
         if root.page == 13: ScrollView { VerticalBox { spacing: 12px;
-            Text { text: "النسخ الاحتياطية ونقل العقل"; color: #f2f2f4; font-size: 20px; }
-            Text { text: "Brain Snapshot ينقل التعلم المتراكم، نماذج التعلم، نتائج الصفقات/Coordinator وStrategy Studio إلى كمبيوتر آخر بملف .btbrain واحد. لا ينقل أسرار Telegram ولا journal إرسال الأوامر. للاستمرار الدقيق بأوزان Coordinator استخدم نفس الحساب/Server/Symbol."; color: #e0e1e4; wrap: word-wrap; }
+            Text { text: "النسخ الاحتياطية ونقل العقل"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 20px; }
+            Text { text: "Brain Snapshot ينقل التعلم المتراكم، نماذج التعلم، نتائج الصفقات/Coordinator وStrategy Studio إلى كمبيوتر آخر بملف .btbrain واحد. لا ينقل أسرار Telegram ولا journal إرسال الأوامر. للاستمرار الدقيق بأوزان Coordinator استخدم نفس الحساب/Server/Symbol."; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
             HorizontalBox {
                 Button { text: "حفظ العقل إلى ملف"; enabled: !root.backup-busy; clicked => { root.backup-action("brain_export"); } }
                 Button { text: "استيراد العقل من ملف"; enabled: !root.backup-busy && root.state == "STOPPED"; clicked => { root.backup-action("brain_import"); } }
             }
-            Text { text: "النسخ الداخلية الكاملة"; color: #999ca5; font-size: 14px; }
+            Text { text: "النسخ الداخلية الكاملة"; color: root.theme-choice == 1 ? #62758b : #999ca5; font-size: 14px; }
             HorizontalBox {
                 Button { text: "تحديث القائمة"; enabled: !root.backup-busy; clicked => { root.backup-action("refresh"); } }
                 Button { text: "إنشاء نسخة الآن"; enabled: !root.backup-busy; clicked => { root.backup-action("create"); } }
@@ -747,16 +812,16 @@ export component Dashboard inherits Window {
                 Button { text: "فحص النسخة المختارة"; enabled: !root.backup-busy && root.backup-names.length > 0; clicked => { root.backup-action("validate"); } }
                 Button { text: "استعادة وإغلاق التطبيق"; enabled: !root.backup-busy && root.backup-names.length > 0 && root.state == "STOPPED"; clicked => { root.backup-action("restore"); } }
             }
-            Text { text: "أوقف النظام أولاً للاستعادة. افتح BrainTrade.exe بعد الإغلاق، ثم راجع نتيجة الاستعادة أدناه. النسخ القديمة غير المتوافقة تظهر مع سبب الرفض."; color: #c8cbd1; wrap: word-wrap; }
-            Text { text: root.backup-detail; color: #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
+            Text { text: "أوقف النظام أولاً للاستعادة. افتح BrainTrade.exe بعد الإغلاق، ثم راجع نتيجة الاستعادة أدناه. النسخ القديمة غير المتوافقة تظهر مع سبب الرفض."; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
+            Text { text: root.backup-detail; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
         } }
         if root.page == 0: ScrollView { VerticalBox {
             spacing: 14px;
-            Rectangle { background: #24262c; border-radius: 12px; min-height: 73px;
+            Rectangle { background: root.theme-choice == 1 ? #edf4fa : #24262c; border-radius: 12px; min-height: 73px;
                 HorizontalLayout { padding: 12px; spacing: 10px;
                     VerticalLayout { spacing: 4px;
-                        Text { text: "مرحباً بك في مركز التداول"; color: #f2f2f4; font-size: 17px; font-weight: 700; }
-                        Text { text: root.account; color: #b7bac3; font-size: 13px; wrap: word-wrap; }
+                        Text { text: "مرحباً بك في مركز التداول"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 17px; font-weight: 700; }
+                        Text { text: root.account; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; font-size: 13px; wrap: word-wrap; }
                     }
                     Rectangle { horizontal-stretch: 1; background: transparent; }
                     Button { text: "1  ربط MT5"; clicked => { root.nav-section = 4; root.page = 1; } }
@@ -766,244 +831,244 @@ export component Dashboard inherits Window {
             }
             HorizontalLayout {
                 spacing: 12px;
-                Card { label: "BALANCE / الرصيد"; value: root.balance; }
-                Card { label: "EQUITY / حقوق الحساب"; value: root.equity; }
-                Card { label: "TODAY NET / صافي اليوم"; value: root.today; }
+                Card { theme-choice: root.theme-choice; label: "BALANCE / الرصيد"; value: root.balance; }
+                Card { theme-choice: root.theme-choice; label: "EQUITY / حقوق الحساب"; value: root.equity; }
+                Card { theme-choice: root.theme-choice; label: "TODAY NET / صافي اليوم"; value: root.today; }
             }
             Rectangle {
-                background: #212329; border-radius: 10px; min-height: 140px;
+                background: root.theme-choice == 1 ? #ffffff : #212329; border-radius: 10px; min-height: 140px;
                 VerticalLayout { padding: 16px; spacing: 10px;
-                    Text { text: "MT5 CONNECTION"; color: #e0e2e5; font-weight: 700; }
-                    Text { text: root.connection; color: #f1f1f2; wrap: word-wrap; }
-                    Text { text: root.diagnostics; color: #a5a8b0; wrap: word-wrap; }
-                    Text { text: "Telegram: " + root.telegram-status; color: #a5a8b0; wrap: word-wrap; }
+                    Text { text: "MT5 CONNECTION"; color: root.theme-choice == 1 ? #28384b : #e0e2e5; font-weight: 700; }
+                    Text { text: root.connection; color: root.theme-choice == 1 ? #172235 : #f1f1f2; wrap: word-wrap; }
+                    Text { text: root.diagnostics; color: root.theme-choice == 1 ? #62758b : #a5a8b0; wrap: word-wrap; }
+                    Text { text: "Telegram: " + root.telegram-status; color: root.theme-choice == 1 ? #62758b : #a5a8b0; wrap: word-wrap; }
                 }
             }
-            Text { text: "OPEN POSITIONS / الصفقات المفتوحة"; color: #e0e1e4; font-weight: 700; }
+            Text { text: "OPEN POSITIONS / الصفقات المفتوحة"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; font-weight: 700; }
             ScrollView {
                 min-height: 140px; vertical-stretch: 1;
-                VerticalBox { alignment: start; Text { text: root.positions; color: #d4d6da; wrap: word-wrap; font-size: 14px; horizontal-alignment: left; } }
+                VerticalBox { alignment: start; Text { text: root.positions; color: root.theme-choice == 1 ? #3b4b60 : #d4d6da; wrap: word-wrap; font-size: 14px; horizontal-alignment: left; } }
             }
         }
         }
         if root.page == 1: ScrollView {
             VerticalBox {
                 spacing: 12px;
-                Text { text: "الاتصال بوسيط MT5"; color: #f2f2f4; font-size: 22px; font-weight: 700; }
-            Text { text: "أولاً: اضبط منصة الوسيط والرمز، ثم احفظ وانتظر ظهور الاتصال في الرئيسية. ربط حساب التداول يتم من التداول ← تنفيذ MT5."; color: #b7bac3; wrap: word-wrap; }
-                Text { text: "اختر terminal64.exe. سجّل دخول حسابك واحفظه داخل MT5 أول مرة."; color: #b7bac3; wrap: word-wrap; }
+                Text { text: "الاتصال بوسيط MT5"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 22px; font-weight: 700; }
+            Text { text: "أولاً: اضبط منصة الوسيط والرمز، ثم احفظ وانتظر ظهور الاتصال في الرئيسية. ربط حساب التداول يتم من التداول ← تنفيذ MT5."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
+                Text { text: "اختر terminal64.exe. سجّل دخول حسابك واحفظه داخل MT5 أول مرة."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
                 HorizontalBox {
                     LineEdit { text <=> root.mt5-path; placeholder-text: "C:\\Program Files\\MetaTrader 5\\terminal64.exe"; }
                     Button { text: "اختيار الملف…"; clicked => { root.browse-mt5(); } }
                 }
-                Text { text: "رمز السوق كما يظهر لدى الوسيط، مثال XAUUSDm"; color: #b7bac3; }
+                Text { text: "رمز السوق كما يظهر لدى الوسيط، مثال XAUUSDm"; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; }
                 LineEdit { text <=> root.symbol; }
                 Rectangle { height: 1px; background: #3b3e45; }
-            Text { text: "تنبيهات Telegram  /  اختيارية"; color: #f2f2f4; font-size: 18px; font-weight: 700; }
+            Text { text: "تنبيهات Telegram  /  اختيارية"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 18px; font-weight: 700; }
                 CheckBox { text: "تفعيل البوت / Enable Telegram"; checked <=> root.telegram-enabled; }
                 LineEdit { text <=> root.telegram-user; placeholder-text: "Your numeric Telegram User ID"; }
                 LineEdit { text <=> root.telegram-chat; placeholder-text: "Private Chat ID (same as User ID)"; }
                 LineEdit { text <=> root.telegram-token; input-type: password; placeholder-text: "Bot token — leave blank to keep saved token"; }
-                Text { text: root.token-saved ? "Token saved securely with Windows DPAPI" : "No bot token saved"; color: #999ca5; }
+                Text { text: root.token-saved ? "Token saved securely with Windows DPAPI" : "No bot token saved"; color: root.theme-choice == 1 ? #62758b : #999ca5; }
                 CheckBox { text: "حذف التوكن المحفوظ / Remove saved token"; checked <=> root.clear-token; }
                 Button { text: "حفظ الإعدادات وإعادة الاتصال"; enabled: !root.busy; clicked => { root.save-settings(); } }
-                Text { text: "إغلاق الواجهة يبقي المحرك شغالاً. الخروج الكامل يوقف البرنامج ولا يغلق صفقات MT5."; color: #b7bac3; wrap: word-wrap; }
+                Text { text: "إغلاق الواجهة يبقي المحرك شغالاً. الخروج الكامل يوقف البرنامج ولا يغلق صفقات MT5."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             }
         }
         if root.page == 2: VerticalLayout {
             spacing: 12px;
-            Text { text: "AUDIT LOG — آخر 100 حدث"; color: #f2f2f4; font-size: 20px; }
+            Text { text: "AUDIT LOG — آخر 100 حدث"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 20px; }
             HorizontalLayout {
                 Button { text: "أحداث النظام"; enabled: !root.busy; clicked => { root.action("events"); } }
                 Button { text: "قرارات العقول والمخاطرة"; enabled: !root.busy; clicked => { root.action("decisions"); } }
             }
-            ScrollView { VerticalBox { alignment: start; Text { text: root.events; color: #c9cbd1; wrap: word-wrap; font-size: 14px; horizontal-alignment: left; } } }
+            ScrollView { VerticalBox { alignment: start; Text { text: root.events; color: root.theme-choice == 1 ? #56687b : #c9cbd1; wrap: word-wrap; font-size: 14px; horizontal-alignment: left; } } }
         }
         if root.page == 3: VerticalLayout {
             spacing: 16px; alignment: start; vertical-stretch: 1;
-            Text { text: "BRAINTRADE OS 0.7.4"; color: #f2f2f4; font-size: 24px; }
-            Text { text: "عقول تحليلية، مختبر تاريخي، تقييم زمني وتعلم بحثي للمراقبة. تنفيذ Demo/Live مرتبط بالحساب؛ اختيار الاستراتيجيات المولّدة يدوي، وأوزان الأعضاء تتعلم من نتائج لاحقة."; color: #b7bac3; wrap: word-wrap; }
-            Text { text: "Windows x64 • Core + Desktop + MT5 bootstrap"; color: #b7bac3; }
+            Text { text: "BRAINTRADE OS 0.7.4"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 24px; }
+            Text { text: "عقول تحليلية، مختبر تاريخي، تقييم زمني وتعلم بحثي للمراقبة. تنفيذ Demo/Live مرتبط بالحساب؛ اختيار الاستراتيجيات المولّدة يدوي، وأوزان الأعضاء تتعلم من نتائج لاحقة."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
+            Text { text: "Windows x64 • Core + Desktop + MT5 bootstrap"; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; }
             AboutSlint { max-height: 110px; }
         }
         if root.page == 4: VerticalLayout {
             spacing: 12px;
             HorizontalLayout { spacing: 12px;
-                Card { label: "REGIME / حالة السوق"; value: root.regime; }
-                Card { label: "META / القرار الحالي"; value: root.decision; }
+                Card { theme-choice: root.theme-choice; label: "REGIME / حالة السوق"; value: root.regime; }
+                Card { theme-choice: root.theme-choice; label: "META / القرار الحالي"; value: root.decision; }
             }
-            Text { text: "اتجاه M1 / M5 / M15 + زخم + اختراق نطاق 20 شمعة"; color: #b7bac3; }
-            ScrollView { vertical-stretch: 1; VerticalBox { alignment: start; Text { text: root.brains; color: #e0e1e4; wrap: word-wrap; horizontal-alignment: left; font-size: 14px; } } }
+            Text { text: "اتجاه M1 / M5 / M15 + زخم + اختراق نطاق 20 شمعة"; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; }
+            ScrollView { vertical-stretch: 1; VerticalBox { alignment: start; Text { text: root.brains; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; horizontal-alignment: left; font-size: 14px; } } }
         }
         if root.page == 5: VerticalLayout {
             spacing: 12px;
-            Text { text: "SHADOW LEDGER / سجل الصفقات الافتراضية"; color: #f2f2f4; font-size: 20px; }
-            Text { text: "نتائج افتراضية مستقلة عن رصيد MT5، تحفظ تلقائياً عند إغلاق الواجهة."; color: #b7bac3; wrap: word-wrap; }
+            Text { text: "SHADOW LEDGER / سجل الصفقات الافتراضية"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 20px; }
+            Text { text: "نتائج افتراضية مستقلة عن رصيد MT5، تحفظ تلقائياً عند إغلاق الواجهة."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             Button { text: "تصدير الشموع والقرارات ونتائج المحاكاة"; enabled: !root.busy; clicked => { root.action("export"); } }
-            ScrollView { vertical-stretch: 1; VerticalBox { alignment: start; Text { text: root.paper; color: #e0e1e4; wrap: word-wrap; horizontal-alignment: left; font-size: 14px; } } }
+            ScrollView { vertical-stretch: 1; VerticalBox { alignment: start; Text { text: root.paper; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; horizontal-alignment: left; font-size: 14px; } } }
         }
         if root.page == 6: ScrollView { VerticalBox {
             spacing: 10px;
-            Text { text: "المخاطرة — المحاكاة والحدود الاختيارية"; color: #f2f2f4; font-size: 20px; }
-            Text { text: "مراقبة الحساب والقاطع اليومي — بيانات فقط، لا تغيّر حالة التداول"; color: #f2f2f4; font-weight: 700; }
+            Text { text: "المخاطرة — المحاكاة والحدود الاختيارية"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 20px; }
+            Text { text: "مراقبة الحساب والقاطع اليومي — بيانات فقط، لا تغيّر حالة التداول"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-weight: 700; }
             Button { text: "تحديث حالة القاطع"; enabled: !root.risk-monitor-busy; clicked => { root.risk-monitor-refresh(); } }
             Text { text: root.risk-monitor-text; color: #d4d6dc; wrap: word-wrap; }
-            Text { text: "حساب وقف الخسارة والهامش والعقد على MT5 إلزامي، أمّا قاطع الخسارة اليومية فهو اختياري حسب Demo/REAL. العمولة هنا تقدير؛ سجل التنفيذ يأخذ الرسوم الفعلية من الوسيط."; color: #b7bac3; wrap: word-wrap; }
-            HorizontalBox { Text { text: root.micro-demo-risk-opt-in ? "المخاطرة لكل صفقة % (0.01–5 Demo فقط)" : "المخاطرة لكل صفقة % (0.01–2)"; color: #e0e1e4; } LineEdit { text <=> root.risk-percent; } }
+            Text { text: "حساب وقف الخسارة والهامش والعقد على MT5 إلزامي، أمّا قاطع الخسارة اليومية فهو اختياري حسب Demo/REAL. العمولة هنا تقدير؛ سجل التنفيذ يأخذ الرسوم الفعلية من الوسيط."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
+            HorizontalBox { Text { text: root.micro-demo-risk-opt-in ? "المخاطرة لكل صفقة % (0.01–5 Demo فقط)" : "المخاطرة لكل صفقة % (0.01–2)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; } LineEdit { text <=> root.risk-percent; } }
             CheckBox { text: "موافقة صريحة: مخاطرة أعلى للحساب الصغير على Demo فقط"; checked <=> root.micro-demo-risk-opt-in; enabled: root.state == "STOPPED" && !root.busy; }
-            Text { text: "فوق 2% مخاطرة مرتفعة وقد تخسر 5$ أو أكثر لكل 100$ عند الستوب. الرافعة لا تخفف الخسارة. خيار Demo وحده لا يسمح بتجاوز 2% في REAL؛ للحساب الحقيقي الصغير يلزم تفعيل الوضع المؤقت المنفصل أدناه. قاطع اليوم مستقل عن حدود العقول الاختيارية، ويمنع الدخول فقط عند تفعيله؛ نتائجه تقديرية من حساب الوسيط ولا يضمن أقصى خسارة محققة."; color: #c8cbd1; wrap: word-wrap; }
-            Text { text: "حساب صغير / MICRO CAPITAL — افحص الهامش قبل اختيار حجم اللوت"; color: #e0e1e4; font-weight: 700; }
-            Text { text: "وضع REAL المؤقت — تخفيف سقف المخاطرة التقليدي، وليس إلغاء إدارة المخاطر"; color: #f2f2f4; font-weight: 700; }
+            Text { text: "فوق 2% مخاطرة مرتفعة وقد تخسر 5$ أو أكثر لكل 100$ عند الستوب. الرافعة لا تخفف الخسارة. خيار Demo وحده لا يسمح بتجاوز 2% في REAL؛ للحساب الحقيقي الصغير يلزم تفعيل الوضع المؤقت المنفصل أدناه. قاطع اليوم مستقل عن حدود العقول الاختيارية، ويمنع الدخول فقط عند تفعيله؛ نتائجه تقديرية من حساب الوسيط ولا يضمن أقصى خسارة محققة."; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
+            Text { text: "حساب صغير / MICRO CAPITAL — افحص الهامش قبل اختيار حجم اللوت"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; font-weight: 700; }
+            Text { text: "وضع REAL المؤقت — تخفيف سقف المخاطرة التقليدي، وليس إلغاء إدارة المخاطر"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-weight: 700; }
             CheckBox { text: "تفعيل مخاطرة مرنة لحساب REAL صغير مؤقتاً (موافقة صريحة)"; checked <=> root.micro-real-temporary; enabled: root.state == "STOPPED" && !root.busy; }
-            HorizontalBox { Text { text: "الرجوع الآلي لإدارة المخاطر عند Equity (عملة الحساب)"; color: #e0e1e4; } LineEdit { text <=> root.micro-real-recovery-equity; placeholder-text: "500"; } }
-            HorizontalBox { Text { text: "أقصى مخاطرة للصفقة في REAL المؤقت % (0.01–20)"; color: #e0e1e4; } LineEdit { text <=> root.micro-real-cap-percent; placeholder-text: "10"; } }
-            Text { text: "مثال: حساب 50$ وسقف 10% يسمح بخسارة متوقعة حتى 5$ للصفقة عند الستوب؛ وقد تزيد بسبب الفجوات والانزلاق. عند وصول Equity إلى 500$ ترجع مخاطرة الصفقة العادية وتُقفل الرخصة المرنة لهذا الحساب حتى لو انخفض بعدها. لا يُرفع الحد الحقيقي للرافعة ولا يزال الستوب والعمولة وفحص وسيط MT5 إلزامياً. قاطع الخسارة اليومي المستقل يمكن تفعيله أو إيقافه لكل من Demo وREAL بشكل منفصل."; color: #c8cbd1; wrap: word-wrap; }
-            Text { text: "رافعة MT5 الفعلية: " + root.broker-leverage + " | تغيير الرافعة الحقيقية يتم من الوسيط"; color: #b7bac3; wrap: word-wrap; }
+            HorizontalBox { Text { text: "الرجوع الآلي لإدارة المخاطر عند Equity (عملة الحساب)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; } LineEdit { text <=> root.micro-real-recovery-equity; placeholder-text: "500"; } }
+            HorizontalBox { Text { text: "أقصى مخاطرة للصفقة في REAL المؤقت % (0.01–20)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; } LineEdit { text <=> root.micro-real-cap-percent; placeholder-text: "10"; } }
+            Text { text: "مثال: حساب 50$ وسقف 10% يسمح بخسارة متوقعة حتى 5$ للصفقة عند الستوب؛ وقد تزيد بسبب الفجوات والانزلاق. عند وصول Equity إلى 500$ ترجع مخاطرة الصفقة العادية وتُقفل الرخصة المرنة لهذا الحساب حتى لو انخفض بعدها. لا يُرفع الحد الحقيقي للرافعة ولا يزال الستوب والعمولة وفحص وسيط MT5 إلزامياً. قاطع الخسارة اليومي المستقل يمكن تفعيله أو إيقافه لكل من Demo وREAL بشكل منفصل."; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
+            Text { text: "رافعة MT5 الفعلية: " + root.broker-leverage + " | تغيير الرافعة الحقيقية يتم من الوسيط"; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             HorizontalBox {
-                Text { text: "رافعة تجربة افتراضية 1: (مثال 500)"; color: #e0e1e4; }
+                Text { text: "رافعة تجربة افتراضية 1: (مثال 500)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
                 LineEdit { text <=> root.scenario-leverage; placeholder-text: "500"; }
             }
-            Text { text: root.leverage-note; color: #c8cbd1; wrap: word-wrap; }
-            Text { text: "قاطع الخسارة اليومي الشامل للحساب — إعداد مستقل عن العقول"; color: #f2f2f4; font-weight: 700; }
+            Text { text: root.leverage-note; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
+            Text { text: "قاطع الخسارة اليومي الشامل للحساب — إعداد مستقل عن العقول"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-weight: 700; }
             CheckBox { text: "تشغيل قاطع الخسارة اليومي على Demo (مطفأ افتراضياً لحرية التجارب)"; checked <=> root.daily-breaker-demo-enabled; enabled: root.state == "STOPPED" && !root.busy; }
             CheckBox { text: "تشغيل قاطع الخسارة اليومي على REAL (مفعّل افتراضياً)"; checked <=> root.daily-breaker-real-enabled; enabled: root.state == "STOPPED" && !root.busy; }
-            HorizontalBox { Text { text: "حد الخسارة اليومية % (0.1–10) عند تفعيل القاطع"; color: #e0e1e4; } LineEdit { text <=> root.daily-limit; } }
-            Text { text: "عند التفعيل يُحسب التراجع اليومي من Equity ونتيجة الصفقات لجميع الرموز على الحساب، ويُقفل الدخول حتى اليوم التالي بتوقيت بغداد؛ الإطفاء يسمح بالدخول لكنه لا يمسح سجل القفل. إطفاؤه في REAL يزيد خطر استنزاف رأس المال. تعلّم العقول وتجارب SHADOW/PAPER لا تتوقف بسبب القاطع."; color: #c8cbd1; wrap: word-wrap; }
-            HorizontalBox { Text { text: "حد التراجع من القمة % (0.1–30)"; color: #e0e1e4; } LineEdit { text <=> root.drawdown-limit; } }
-            HorizontalBox { Text { text: "أقصى سبريد كنسبة ATR (0.01–1)"; color: #e0e1e4; } LineEdit { text <=> root.spread-limit; } }
-            HorizontalBox { Text { text: "سقف اللوت (0.001–100)"; color: #e0e1e4; } LineEdit { text <=> root.max-lots; } }
-            HorizontalBox { Text { text: "عمولة ذهاب وإياب / لوت / عملة الحساب"; color: #e0e1e4; } LineEdit { text <=> root.risk-commission-lot; } }
-            HorizontalBox { Text { text: "انزلاق مفترض لكل جانب / ticks (0–1000)"; color: #e0e1e4; } LineEdit { text <=> root.slippage-ticks; } }
+            HorizontalBox { Text { text: "حد الخسارة اليومية % (0.1–10) عند تفعيل القاطع"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; } LineEdit { text <=> root.daily-limit; } }
+            Text { text: "عند التفعيل يُحسب التراجع اليومي من Equity ونتيجة الصفقات لجميع الرموز على الحساب، ويُقفل الدخول حتى اليوم التالي بتوقيت بغداد؛ الإطفاء يسمح بالدخول لكنه لا يمسح سجل القفل. إطفاؤه في REAL يزيد خطر استنزاف رأس المال. تعلّم العقول وتجارب SHADOW/PAPER لا تتوقف بسبب القاطع."; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
+            HorizontalBox { Text { text: "حد التراجع من القمة % (0.1–30)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; } LineEdit { text <=> root.drawdown-limit; } }
+            HorizontalBox { Text { text: "أقصى سبريد كنسبة ATR (0.01–1)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; } LineEdit { text <=> root.spread-limit; } }
+            HorizontalBox { Text { text: "سقف اللوت (0.001–100)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; } LineEdit { text <=> root.max-lots; } }
+            HorizontalBox { Text { text: "عمولة ذهاب وإياب / لوت / عملة الحساب"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; } LineEdit { text <=> root.risk-commission-lot; } }
+            HorizontalBox { Text { text: "انزلاق مفترض لكل جانب / ticks (0–1000)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; } LineEdit { text <=> root.slippage-ticks; } }
             Button { text: "حفظ إعدادات المخاطرة"; enabled: !root.busy && root.state == "STOPPED"; clicked => { root.save-risk(); } }
-            Text { text: "SL = 1.5 ATR؛ الهدف ضعف مسافة SL؛ خروج زمني بعد 30 دقيقة. صفقة افتراضية واحدة لكل حساب ورمز. STOP يمنع الدخول ويبقي مخارج المحاكاة فعالة أثناء عمل المحرك."; color: #b7bac3; wrap: word-wrap; }
-            Text { text: "الحد اليومي يتجدد بتوقيت بغداد. قفل التراجع يبقى بعد بلوغه؛ تغيير الإعدادات لا يمسح النتائج أو يفك القفل."; color: #b7bac3; wrap: word-wrap; }
+            Text { text: "SL = 1.5 ATR؛ الهدف ضعف مسافة SL؛ خروج زمني بعد 30 دقيقة. صفقة افتراضية واحدة لكل حساب ورمز. STOP يمنع الدخول ويبقي مخارج المحاكاة فعالة أثناء عمل المحرك."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
+            Text { text: "الحد اليومي يتجدد بتوقيت بغداد. قفل التراجع يبقى بعد بلوغه؛ تغيير الإعدادات لا يمسح النتائج أو يفك القفل."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
         } }
         if root.page == 7: ScrollView { VerticalBox {
             spacing: 12px;
-            Text {text: "استراتيجية الاختبار الجديد / التجربة على بيانات محفوظة"; color: #e0e1e4;}
+            Text {text: "استراتيجية الاختبار الجديد / التجربة على بيانات محفوظة"; color: root.theme-choice == 1 ? #28384b : #e0e1e4;}
             ComboBox {model: ["Meta v1 — اتجاه متعدد الفريمات", "CES v1 — الانتروبيا والضغط", "KTE v1 — اندفاع وارتداد / أهداف جزئية", "Meta v2 — مرشح متعدد العقول", "Explore v1 — استكشاف وتعلّم افتراضي 100$"]; current-index <=> root.bt-strategy;}
-            Text {text: root.bt-strategy == 4 ? "Explore v1: يتعلم تدريجياً من صفقات تاريخية افتراضية عديدة بأسلوبين Trend/Reversion ويحدث درجة كل أسلوب بعد إغلاق الصفقة. يسمح بلوت بحثي كسري دون حد MT5؛ لا يُنفذ في الديمو أو الحقيقي، ولا يمثل الهامش." : root.bt-strategy == 3 ? "Meta v2: اختبار مرشح الاتجاه والبنية والزخم مع بوابات التذبذب؛ يحفظ أسباب قبول ورفض الإشارات. اختر نتيجة Meta v1 ثم تجربة الاستراتيجية للمقارنة بنفس البيانات والتكاليف." : root.bt-strategy == 0 ? "Meta v1: اتفاق اتجاه M1/M5/M15 مع تأكيد زخم أو اختراق؛ وقف 1.5 ATR وهدف 2R وحد زمني 30 دقيقة." : root.bt-strategy == 2 ? "KTE: أهداف 1R/2R/3R، وقف عند الدخول بعد TP1 وتتبع ATR بعد TP2. تقسيم اللوت 40/30/الباقي؛ يُرفض الحجم الذي لا يقبل ثلاثة أجزاء. المحاكاة المباشرة تبقى Meta." : "CES: حجم ticks؛ دخول بالافتتاح التالي، وقف 0.5 وهدف 1.5 من TR3، خروج EG موجب أو 8 دقائق. المحاكاة المباشرة تبقى Meta."; color: #b7bac3; wrap: word-wrap;}
-            Text { text: "BACKTEST / مختبر الاستراتيجية"; color: #f2f2f4; font-size: 20px; }
-            Text { text: "فترة من يوم إلى 30 يوماً بصيغة YYYY-MM-DD وبوقت UTC؛ يوم النهاية غير مشمول. يستخدم إعدادات المخاطرة المحفوظة لحظة الطلب."; color: #b7bac3; wrap: word-wrap; }
+            Text {text: root.bt-strategy == 4 ? "Explore v1: يتعلم تدريجياً من صفقات تاريخية افتراضية عديدة بأسلوبين Trend/Reversion ويحدث درجة كل أسلوب بعد إغلاق الصفقة. يسمح بلوت بحثي كسري دون حد MT5؛ لا يُنفذ في الديمو أو الحقيقي، ولا يمثل الهامش." : root.bt-strategy == 3 ? "Meta v2: اختبار مرشح الاتجاه والبنية والزخم مع بوابات التذبذب؛ يحفظ أسباب قبول ورفض الإشارات. اختر نتيجة Meta v1 ثم تجربة الاستراتيجية للمقارنة بنفس البيانات والتكاليف." : root.bt-strategy == 0 ? "Meta v1: اتفاق اتجاه M1/M5/M15 مع تأكيد زخم أو اختراق؛ وقف 1.5 ATR وهدف 2R وحد زمني 30 دقيقة." : root.bt-strategy == 2 ? "KTE: أهداف 1R/2R/3R، وقف عند الدخول بعد TP1 وتتبع ATR بعد TP2. تقسيم اللوت 40/30/الباقي؛ يُرفض الحجم الذي لا يقبل ثلاثة أجزاء. المحاكاة المباشرة تبقى Meta." : "CES: حجم ticks؛ دخول بالافتتاح التالي، وقف 0.5 وهدف 1.5 من TR3، خروج EG موجب أو 8 دقائق. المحاكاة المباشرة تبقى Meta."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap;}
+            Text { text: "BACKTEST / مختبر الاستراتيجية"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 20px; }
+            Text { text: "فترة من يوم إلى 30 يوماً بصيغة YYYY-MM-DD وبوقت UTC؛ يوم النهاية غير مشمول. يستخدم إعدادات المخاطرة المحفوظة لحظة الطلب."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             HorizontalBox {
-                Text { text: "من UTC"; color: #e0e1e4; }
+                Text { text: "من UTC"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
                 LineEdit { text <=> root.bt-from; placeholder-text: "2026-10-01"; }
-                Text { text: "إلى UTC"; color: #e0e1e4; }
+                Text { text: "إلى UTC"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
                 LineEdit { text <=> root.bt-to; placeholder-text: "2026-10-08"; }
             }
             HorizontalBox {
-                Text { text: "رأس مال افتراضي / عملة الحساب"; color: #e0e1e4; }
+                Text { text: "رأس مال افتراضي / عملة الحساب"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
                 LineEdit { text <=> root.bt-equity; }
-                Text { text: "أقل سبريد / سعر الرمز"; color: #e0e1e4; }
+                Text { text: "أقل سبريد / سعر الرمز"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
                 LineEdit { text <=> root.bt-spread; }
             }
-            Text { text: "0.20 مثال للذهب؛ عدّل السبريد لرمزك. اضغط STOP قبل جلب التاريخ وانتظر إغلاق أي صفقة افتراضية مفتوحة."; color: #b7bac3; wrap: word-wrap; }
+            Text { text: "0.20 مثال للذهب؛ عدّل السبريد لرمزك. اضغط STOP قبل جلب التاريخ وانتظر إغلاق أي صفقة افتراضية مفتوحة."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             HorizontalBox {
                 Button { text: "جلب التاريخ وتشغيل الاختبار"; enabled: !root.bt-busy && !root.bt-active; clicked => { root.backtest-action("start"); } }
                 Button { text: "إلغاء الاختبار"; enabled: !root.bt-busy && root.bt-active; clicked => { root.backtest-action("cancel"); } }
                 Button { text: "تحديث القائمة"; enabled: !root.bt-busy; clicked => { root.backtest-action("refresh"); } }
             }
-            Text { text: root.bt-status; color: #e0e2e5; wrap: word-wrap; font-size: 14px; }
-            Text { text: "اختبارات محفوظة — فتح وإعادة اختبار دون اتصال MT5"; color: #e0e1e4; }
+            Text { text: root.bt-status; color: root.theme-choice == 1 ? #28384b : #e0e2e5; wrap: word-wrap; font-size: 14px; }
+            Text { text: "اختبارات محفوظة — فتح وإعادة اختبار دون اتصال MT5"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
             ComboBox { model: root.bt-runs; current-index <=> root.bt-selected; }
             HorizontalBox {
                 Button { text: "فتح النتيجة المختارة"; enabled: !root.bt-busy && root.bt-selected >= 0; clicked => { root.backtest-action("load"); } }
                 Button { text: "إعادة الاختبار بنفس البيانات"; enabled: !root.bt-busy && !root.bt-active && root.bt-selected >= 0; clicked => { root.backtest-action("replay"); } }
                 Button { text: "فتح التقرير ومخطط الصفقات"; enabled: !root.bt-busy && root.bt-report-id != ""; clicked => { root.backtest-action("export"); } }
             }
-            Text { text: "النتيجة المعروضة / تجربة محفوظة"; color: #e0e1e4; }
+            Text { text: "النتيجة المعروضة / تجربة محفوظة"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
             Button {text: "تجربة الاستراتيجية المختارة على بيانات النتيجة المحددة"; enabled: !root.bt-busy && !root.bt-active && root.bt-selected >= 0; clicked => {root.backtest-action("experiment");}}
-            Text {text: "التجربة على نتيجة محفوظة تغيّر الاستراتيجية فقط؛ رأس المال والسبريد والمخاطرة تبقى من تلك النتيجة."; color: #b7bac3; wrap: word-wrap;}
+            Text {text: "التجربة على نتيجة محفوظة تغيّر الاستراتيجية فقط؛ رأس المال والسبريد والمخاطرة تبقى من تلك النتيجة."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap;}
             HorizontalLayout { spacing: 12px;
-                Card { label: "NET / الصافي"; value: root.bt-net; }
-                Card { label: "TRADES / الصفقات"; value: root.bt-trades; }
-                Card { label: "MAX DRAWDOWN / التراجع"; value: root.bt-drawdown; }
+                Card { theme-choice: root.theme-choice; label: "NET / الصافي"; value: root.bt-net; }
+                Card { theme-choice: root.theme-choice; label: "TRADES / الصفقات"; value: root.bt-trades; }
+                Card { theme-choice: root.theme-choice; label: "MAX DRAWDOWN / التراجع"; value: root.bt-drawdown; }
             }
-            Text { text: root.bt-report; color: #e0e1e4; wrap: word-wrap; horizontal-alignment: left; font-size: 14px; }
-            Text { text: "نموذج شموع تقريبي: وقف أولاً عند لمس الوقف والهدف معاً، ولا ملء للفجوات. ليست نتيجة تنفيذ حقيقي أو اختباراً خارج العينة. التصدير يضم تقرير HTML مع منحنى الرصيد وCSV/JSON كاملين."; color: #b7bac3; wrap: word-wrap; }
+            Text { text: root.bt-report; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; horizontal-alignment: left; font-size: 14px; }
+            Text { text: "نموذج شموع تقريبي: وقف أولاً عند لمس الوقف والهدف معاً، ولا ملء للفجوات. ليست نتيجة تنفيذ حقيقي أو اختباراً خارج العينة. التصدير يضم تقرير HTML مع منحنى الرصيد وCSV/JSON كاملين."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
         } }
         if root.page == 8: ScrollView {VerticalBox {spacing: 12px;
-            Text {text: "OFFICIAL NEWS / الأخبار الرسمية"; color: #f2f2f4; font-size: 20px;}
-            Text {text: "عناوين من الاحتياطي الفدرالي والبنك المركزي الأوروبي. وقت الخبر UTC؛ تحديث الاتصال لا يعني أن الخبر جديد."; color: #b7bac3; wrap: word-wrap;}
+            Text {text: "OFFICIAL NEWS / الأخبار الرسمية"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 20px;}
+            Text {text: "عناوين من الاحتياطي الفدرالي والبنك المركزي الأوروبي. وقت الخبر UTC؛ تحديث الاتصال لا يعني أن الخبر جديد."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap;}
             HorizontalBox {
                 Button {text: "تحديث الآن"; enabled: root.news-enabled && !root.news-refreshing; clicked => {root.news-action("refresh");}}
                 Button {text: root.news-enabled ? "إيقاف تحديث الأخبار" : "تفعيل تحديث الأخبار"; clicked => {root.news-action(root.news-enabled ? "disable" : "enable");}}
             }
-            Text {text: root.news-status; color: #e0e2e5; wrap: word-wrap;}
-            Text {text: root.news-sources; color: #b7bac3; wrap: word-wrap; horizontal-alignment: left; font-size: 13px;}
-            Text {text: "عناوين منشورة؛ ليست تقويماً للأحداث القادمة. التصنيف بالكلمات لا يحدد أثر الخبر أو اتجاه السعر، ولا يدخل في قرار Meta أو الاختبار التاريخي."; color: #c8cbd1; wrap: word-wrap;}
-            if root.news-empty: Text {text: "لا توجد عناوين محفوظة. راجع حالة المصادر أعلاه."; color: #e0e1e4;}
-            for item in root.news-items: Rectangle {background: #212329; border-radius: 8px;
+            Text {text: root.news-status; color: root.theme-choice == 1 ? #28384b : #e0e2e5; wrap: word-wrap;}
+            Text {text: root.news-sources; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; horizontal-alignment: left; font-size: 13px;}
+            Text {text: "عناوين منشورة؛ ليست تقويماً للأحداث القادمة. التصنيف بالكلمات لا يحدد أثر الخبر أو اتجاه السعر، ولا يدخل في قرار Meta أو الاختبار التاريخي."; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap;}
+            if root.news-empty: Text {text: "لا توجد عناوين محفوظة. راجع حالة المصادر أعلاه."; color: root.theme-choice == 1 ? #28384b : #e0e1e4;}
+            for item in root.news-items: Rectangle {background: root.theme-choice == 1 ? #ffffff : #212329; border-radius: 8px;
                 VerticalLayout {padding: 14px; spacing: 8px;
-                    Text {text: item.title; color: #f2f2f4; font-size: 16px; wrap: word-wrap; horizontal-alignment: left;}
-                    Text {text: item.detail; color: #a5a8b0; font-size: 12px; wrap: word-wrap; horizontal-alignment: left;}
+                    Text {text: item.title; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 16px; wrap: word-wrap; horizontal-alignment: left;}
+                    Text {text: item.detail; color: root.theme-choice == 1 ? #62758b : #a5a8b0; font-size: 12px; wrap: word-wrap; horizontal-alignment: left;}
                     Button {text: "فتح الخبر في موقع المصدر"; clicked => {root.open-news(item.url);}}
                 }
             }
         }}
         if root.page == 9: ScrollView { VerticalBox {
             spacing: 12px;
-            Text { text: "CHRONOLOGICAL EVALUATION / التقييم الزمني"; color: #f2f2f4; font-size: 20px; }
-            Text { text: "يقارن Meta v1 وMeta v2 على نفس History والتكاليف ضمن نوافذ زمنية مستقلة. لا يوجد random split ولا tuning تلقائي ولا ترقية نموذج."; color: #b7bac3; wrap: word-wrap; }
-            Text { text: "مصدر التقييم — اختبارات Meta المحفوظة فقط"; color: #e0e1e4; }
+            Text { text: "CHRONOLOGICAL EVALUATION / التقييم الزمني"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 20px; }
+            Text { text: "يقارن Meta v1 وMeta v2 على نفس History والتكاليف ضمن نوافذ زمنية مستقلة. لا يوجد random split ولا tuning تلقائي ولا ترقية نموذج."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
+            Text { text: "مصدر التقييم — اختبارات Meta المحفوظة فقط"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
             ComboBox { model: root.ev-source-runs; current-index <=> root.ev-source-selected; }
-            Text { text: "خطة التقسيم"; color: #e0e1e4; }
+            Text { text: "خطة التقسيم"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
             ComboBox { model: ["Holdout — development ثم جزء أخير محجوز", "Rolling — نوافذ development/holdout متتابعة"]; current-index <=> root.ev-plan; }
             if root.ev-plan == 0: HorizontalBox {
-                Text { text: "نسبة Holdout %"; color: #e0e1e4; }
+                Text { text: "نسبة Holdout %"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
                 LineEdit { text <=> root.ev-holdout-percent; placeholder-text: "30"; }
             }
             if root.ev-plan == 1: HorizontalBox {
-                Text { text: "Development days"; color: #e0e1e4; }
+                Text { text: "Development days"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
                 LineEdit { text <=> root.ev-development-days; }
-                Text { text: "Holdout days"; color: #e0e1e4; }
+                Text { text: "Holdout days"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
                 LineEdit { text <=> root.ev-holdout-days; }
-                Text { text: "Step days"; color: #e0e1e4; }
+                Text { text: "Step days"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
                 LineEdit { text <=> root.ev-step-days; }
             }
-            Text { text: "كل نافذة تبدأ بدفتر صفقات ورأس مال افتراضي جديد؛ الإحماء يقرأ شموعاً أقدم فقط ولا يسمح بدخول قبل بداية النافذة."; color: #c8cbd1; wrap: word-wrap; }
+            Text { text: "كل نافذة تبدأ بدفتر صفقات ورأس مال افتراضي جديد؛ الإحماء يقرأ شموعاً أقدم فقط ولا يسمح بدخول قبل بداية النافذة."; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
             HorizontalBox {
                 Button { text: "تشغيل التقييم الزمني"; enabled: !root.ev-busy && !root.ev-active && root.ev-source-selected >= 0; clicked => { root.evaluation-action("start"); } }
                 Button { text: "إلغاء"; enabled: !root.ev-busy && root.ev-active; clicked => { root.evaluation-action("cancel"); } }
                 Button { text: "تحديث المصادر والأدلة"; enabled: !root.ev-busy; clicked => { root.evaluation-action("refresh"); } }
             }
-            Text { text: root.ev-status; color: #e0e2e5; wrap: word-wrap; font-size: 14px; }
-            Text { text: "أدلة تقييم محفوظة immutable"; color: #e0e1e4; }
+            Text { text: root.ev-status; color: root.theme-choice == 1 ? #28384b : #e0e2e5; wrap: word-wrap; font-size: 14px; }
+            Text { text: "أدلة تقييم محفوظة immutable"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
             ComboBox { model: root.ev-runs; current-index <=> root.ev-selected; }
             HorizontalBox {
                 Button { text: "فتح الدليل المختار"; enabled: !root.ev-busy && root.ev-selected >= 0; clicked => { root.evaluation-action("load"); } }
                 Button { text: "تصدير JSON + هوية المصدر"; enabled: !root.ev-busy && root.ev-selected >= 0; clicked => { root.evaluation-action("export"); } }
             }
             HorizontalLayout { spacing: 12px;
-                Card { label: "META V1 NET-SUM"; value: root.ev-v1-net; }
-                Card { label: "META V2 NET-SUM"; value: root.ev-v2-net; }
-                Card { label: "AVG Δ NET V2−V1"; value: root.ev-delta; }
+                Card { theme-choice: root.theme-choice; label: "META V1 NET-SUM"; value: root.ev-v1-net; }
+                Card { theme-choice: root.theme-choice; label: "META V2 NET-SUM"; value: root.ev-v2-net; }
+                Card { theme-choice: root.theme-choice; label: "AVG Δ NET V2−V1"; value: root.ev-delta; }
             }
-            Text { text: root.ev-report; color: #e0e1e4; wrap: word-wrap; horizontal-alignment: left; font-size: 14px; }
-            Text { text: "مهم: net-sum والمتوسطات تجمع نوافذ مستقلة وليست منحنى حساب متصل. Holdout/rolling دليل تقييم بحثي فقط، وليس إثبات ربحية ولا إذناً لـShadow أو LIVE."; color: #c8cbd1; wrap: word-wrap; }
+            Text { text: root.ev-report; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; horizontal-alignment: left; font-size: 14px; }
+            Text { text: "مهم: net-sum والمتوسطات تجمع نوافذ مستقلة وليست منحنى حساب متصل. Holdout/rolling دليل تقييم بحثي فقط، وليس إثبات ربحية ولا إذناً لـShadow أو LIVE."; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
         } }
         if root.page == 10: ScrollView { VerticalBox { spacing: 12px;
-            Text { text: "فرص السوق — طلب وعرض، ارتداد، اختراق وزخم"; color: #f2f2f4; font-size: 20px; wrap: word-wrap; }
-            Text { text: "تتغير الخطة مع السعر، وتُسحب عند الإيقاف أو تقادم البيانات. قوة الخصائص ليست احتمال نجاح."; color: #c8cbd1; wrap: word-wrap; }
-            Text { text: root.opportunities; color: #e0e1e4; wrap: word-wrap; horizontal-alignment: left; }
+            Text { text: "فرص السوق — طلب وعرض، ارتداد، اختراق وزخم"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 20px; wrap: word-wrap; }
+            Text { text: "تتغير الخطة مع السعر، وتُسحب عند الإيقاف أو تقادم البيانات. قوة الخصائص ليست احتمال نجاح."; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
+            Text { text: root.opportunities; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; horizontal-alignment: left; }
             Button { text: "عرض آخر 100 فرصة محفوظة"; clicked => { root.load-opportunity-history(); } }
-            Text { text: root.opportunity-history; color: #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
+            Text { text: root.opportunity-history; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
         } }
         if root.page == 12: ScrollView { VerticalBox { spacing: 12px;
-            Text { text: "خريطة السوق والعقول المتخصصة"; color: #f2f2f4; font-size: 20px; }
-            Text { text: "المناطق والقمم والقيعان • الزخم والتباعد • Gann • DOM • ملف نشاط ticks والجلسات"; color: #b7bac3; wrap: word-wrap; }
-            Text { text: root.market-map; color: #e0e1e4; wrap: word-wrap; horizontal-alignment: left; }
+            Text { text: "خريطة السوق والعقول المتخصصة"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 20px; }
+            Text { text: "المناطق والقمم والقيعان • الزخم والتباعد • Gann • DOM • ملف نشاط ticks والجلسات"; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
+            Text { text: root.market-map; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; horizontal-alignment: left; }
         } }
         if root.page == 11: ScrollView { VerticalBox { spacing: 12px;
-            Text { text: "التعلم والتوقعات البحثية"; color: #f2f2f4; font-size: 20px; }
-            Text { text: root.learning-status; color: #e0e2e5; wrap: word-wrap; }
+            Text { text: "التعلم والتوقعات البحثية"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 20px; }
+            Text { text: root.learning-status; color: root.theme-choice == 1 ? #28384b : #e0e2e5; wrap: word-wrap; }
             HorizontalBox {
                 Button { text: "تحديث"; enabled: !root.learning-busy; clicked => { root.learning-action("refresh"); } }
                 Button { text: "تصدير بيانات التدريب"; enabled: !root.learning-busy; clicked => { root.learning-action("export"); } }
                 Button { text: "استيراد نموذج JSON"; enabled: !root.learning-busy; clicked => { root.learning-action("register"); } }
             }
-            Text { text: root.learning-summary; color: #e0e1e4; wrap: word-wrap; horizontal-alignment: left; }
-            Text { text: "راجع هوية النموذج والدليل الزمني في التفاصيل قبل التسجيل. تسجيل الأهلية يتيح توقعات مراقبة فقط."; color: #c8cbd1; wrap: word-wrap; }
+            Text { text: root.learning-summary; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; horizontal-alignment: left; }
+            Text { text: "راجع هوية النموذج والدليل الزمني في التفاصيل قبل التسجيل. تسجيل الأهلية يتيح توقعات مراقبة فقط."; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
             LineEdit { text <=> root.learning-note; placeholder-text: "ملاحظة المراجعة (حتى 500 حرف)"; }
             Button { text: "تسجيل أهلية المراجعة الحالية"; enabled: !root.learning-busy && root.learning-review-ready; clicked => { root.learning-action("review"); } }
             HorizontalBox {
@@ -1018,14 +1083,15 @@ export component Dashboard inherits Window {
             }
             LineEdit { text <=> root.learning-record; placeholder-text: "معرّف مراجعة الأداء المحفوظة من السجل"; }
             Button { text: "فتح المراجعة المحفوظة"; enabled: !root.learning-busy && root.learning-record != ""; clicked => { root.learning-action("report"); } }
-            Text { text: root.learning-detail; color: #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
+            Text { text: root.learning-detail; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
         } }
         Rectangle { height: 1px; background: #3b3e45; }
-        Text { text: root.feedback; color: #c8cbd1; wrap: word-wrap; min-height: 36px; }
+        Text { text: root.feedback; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; min-height: 36px; }
         HorizontalLayout {
             Text { text: "Core يبقى شغالاً عند إغلاق النافذة."; color: #878b94; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; background: transparent; }
             Button { text: "خروج كامل"; enabled: !root.busy; clicked => { root.action("shutdown"); } }
         }
+            }
     }
 }
