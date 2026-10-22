@@ -95,7 +95,8 @@ def round_trip_commission(rate_per_lot, lots):
 
 def size_to_stop_risk(mt5, account, info, symbol, side, entry, stop_price,
                       requested, risk_percent, commission, slippage_ticks,
-                      micro_demo_risk_opt_in=False, broker_demo=False):
+                      micro_demo_risk_opt_in=False, broker_demo=False,
+                      micro_real_active=False):
     """Limit order size to an equity-at-risk budget using MT5 contract PnL.
 
     A requested volume is an UPPER bound, never a minimum. No order can be
@@ -107,7 +108,9 @@ def size_to_stop_risk(mt5, account, info, symbol, side, entry, stop_price,
     values=(entry, stop_price, requested, risk_percent, commission, slippage_ticks)
     if not all(math.isfinite(float(v)) for v in values):
         raise ValueError('Risk sizing: all prices, lot and fee inputs must be finite')
-    allowed_risk_percent = 5.0 if micro_demo_risk_opt_in and broker_demo else 2.0
+    allowed_risk_percent = (20.0 if micro_real_active
+                            else 5.0 if micro_demo_risk_opt_in and broker_demo
+                            else 2.0)
     if not (entry > 0 and stop_price > 0 and requested > 0
             and 0 < risk_percent <= allowed_risk_percent
             and 0 <= commission <= 1000
@@ -227,8 +230,34 @@ class BrokerExecutor:
         self.db.execute('PRAGMA synchronous=FULL')
         self.db.execute('PRAGMA busy_timeout=50')
         self.db.execute('CREATE TABLE IF NOT EXISTS sends(id TEXT PRIMARY KEY, request TEXT NOT NULL, result TEXT, created_ms INTEGER NOT NULL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS micro_real_recovered(account_key TEXT PRIMARY KEY, reached_ms INTEGER NOT NULL, reached_equity REAL NOT NULL)')
         self.db.commit()
         self.next_history = 0.0
+
+    def _micro_real_active(self, cmd, account):
+        """Verified REAL, explicit switch, and a one-way durable equity milestone.
+
+        This only relaxes the *per-order equity risk budget*. Stop loss, lot,
+        margin and duplicate protections must not be bypassed.
+        """
+        if cmd.get('micro_real_temporary') is not True:
+            return False
+        if cmd.get('target') != 'live' or getattr(account,'trade_mode',None)!=2:
+            return False
+        threshold=float(cmd.get('micro_real_recovery_equity',float('nan')))
+        cap=float(cmd.get('risk_percent',float('nan')))
+        equity=float(getattr(account,'equity',float('nan')))
+        if not (math.isfinite(threshold) and 50<=threshold<=1_000_000
+                and math.isfinite(cap) and 0<cap<=20
+                and math.isfinite(equity) and equity>0):
+            raise ValueError('Micro REAL: invalid broker equity, recovery threshold, or risk cap')
+        key=json.dumps(account_identity(account),ensure_ascii=False,separators=(',',':'))
+        if equity>=threshold:
+            self.db.execute('INSERT OR IGNORE INTO micro_real_recovered VALUES(?,?,?)',
+                            (key,clock_ms(),equity))
+            self.db.commit()
+        locked=self.db.execute('SELECT 1 FROM micro_real_recovered WHERE account_key=?',(key,)).fetchone()
+        return equity<threshold and locked is None
 
     def close(self):
         self.db.close()
@@ -322,6 +351,9 @@ class BrokerExecutor:
             target_mode = 0 if cmd['target']=='demo' else 2 if cmd['target']=='live' else -1
             if account_identity(a)!=expected(cmd) or a.trade_mode!=target_mode:
                 raise ValueError('Bound account or Demo/Live mode changed')
+            if (cmd.get('kind')=='open' and cmd.get('micro_real_temporary') is True
+                    and not self._micro_real_active(cmd,a)):
+                raise ValueError('Micro REAL recovery milestone reached/locked; stale relaxed-risk entry rejected')
             if not terminal or not terminal.connected or not terminal.trade_allowed or getattr(terminal,'tradeapi_disabled',False) or not a.trade_allowed or not a.trade_expert:
                 raise ValueError('Enable Algo Trading and external Python trading in MT5; account must permit trading')
             if cmd['magic'] not in OWNED_MAGICS:
@@ -410,7 +442,8 @@ class BrokerExecutor:
                         float(cmd.get('commission_per_lot',float('nan'))),
                         float(cmd.get('slippage_ticks',float('nan'))),
                         micro_demo_risk_opt_in=cmd.get('micro_demo_risk_opt_in') is True,
-                        broker_demo=cmd['target']=='demo' and a.trade_mode==0)
+                        broker_demo=cmd['target']=='demo' and a.trade_mode==0,
+                        micro_real_active=self._micro_real_active(cmd,a))
                     request['volume']=lots
                     result['risk_sizing_ms']=(time.perf_counter()-risk_started)*1000
                     if 'sizing' in result:
@@ -418,6 +451,22 @@ class BrokerExecutor:
                         result['sizing']['post_risk_round_trip_commission']=round_trip_commission(
                             float(cmd.get('commission_per_lot',0)),lots)
 
+            # REAL margin is checked even on Sniper's no-order_check fast path.
+            # No hidden leverage assumption: ask MT5 for this exact contract.
+            if not closing and cmd['target']=='live':
+                try:
+                    margin=mt5.order_calc_margin(request['type'],symbol,request['volume'],price)
+                except Exception as exc:
+                    raise ValueError('REAL margin preflight: broker calculator failed') from exc
+                free=float(getattr(a,'margin_free',float('nan')))
+                if margin is None or not math.isfinite(float(margin)) or float(margin)<0 or not math.isfinite(free) or free<0:
+                    raise ValueError('REAL margin preflight: broker margin or free margin unavailable')
+                full_fee=round_trip_commission(float(cmd.get('commission_per_lot',float('nan'))),request['volume'])
+                needed=float(margin)+full_fee
+                if needed>free+1e-8:
+                    raise ValueError(f'REAL margin preflight: needs {needed:.4f} {a.currency} incl. estimated fee, only {free:.4f} free')
+                result['real_margin_check']=dict(estimated_margin=float(margin),free_margin=free,
+                                                  full_roundtrip_fee=full_fee,required=needed)
             # Sniper removes one broker round trip. All equivalent local validations
             # above stay mandatory; the broker can still reject the final order_send.
             if fast_path:
@@ -473,7 +522,23 @@ class BrokerExecutor:
                 result.update(state='cancelled',reason='Account changed or intent expired after durable journal; order not sent')
                 result['total_ms']=(time.perf_counter()-started)*1000
                 return self._save(cmd,result)
+            if not closing and 'real_margin_check' in result:
+                current_free=float(getattr(final_account,'margin_free',float('nan')))
+                if (not math.isfinite(current_free)
+                        or current_free+1e-8<result['real_margin_check']['required']):
+                    result.update(state='cancelled',
+                        reason='REAL free margin dropped below broker preflight requirement before send')
+                    result['total_ms']=(time.perf_counter()-started)*1000
+                    return self._save(cmd,result)
             if not closing and 'risk_sizing' in result:
+                # Re-check the irrevocable REAL recovery milestone immediately
+                # before send, even if it was crossed after initial sizing.
+                if (cmd.get('micro_real_temporary') is True
+                        and not self._micro_real_active(cmd,final_account)):
+                    result.update(state='cancelled',
+                        reason='Micro REAL recovery milestone reached or permanently locked; regular risk restored')
+                    result['total_ms']=(time.perf_counter()-started)*1000
+                    return self._save(cmd,result)
                 # The broker equity may change while sizing and authorization run.
                 # Never use a stale higher equity budget for the final send.
                 try:

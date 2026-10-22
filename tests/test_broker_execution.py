@@ -181,6 +181,86 @@ class ExecutionTests(unittest.TestCase):
         rejected=self.send()
         self.assertEqual(rejected['state'],'rejected')
         self.assertEqual(len(self.mt.sends),1)
+    def test_real_micro_temporary_risk_until_recovery_is_durable(self):
+        self.mt.account.trade_mode=2
+        self.mt.account.equity=50.
+        self.mt.account.margin_free=50.
+        self.cmd.update(target='live',id='real-micro-without-switch',lots=.01,
+                        risk_percent=10.,commission_per_lot=7.,slippage_ticks=2.,
+                        micro_real_recovery_equity=500.)
+        self.cmd['signal']['stop_distance']=3.
+        disabled=self.send()
+        self.assertEqual(disabled['state'],'rejected',disabled)
+        self.assertEqual(len(self.mt.sends),0)
+
+        self.cmd.update(id='real-micro-enabled',micro_real_temporary=True)
+        permitted=self.send()
+        self.assertEqual(permitted['state'],'filled',permitted)
+        self.assertAlmostEqual(permitted['risk_sizing']['estimated_stop_loss_including_costs'],3.11)
+        self.assertAlmostEqual(permitted['risk_sizing']['risk_budget'],5.)
+        self.assertEqual(len(self.mt.sends),1)
+
+        self.mt.account.equity=500.
+        self.mt.account.margin_free=500.
+        self.cmd['id']='real-micro-hit-milestone'
+        reached=self.send()
+        self.assertEqual(reached['state'],'rejected',reached)
+        self.assertIn('recovery milestone',reached['reason'])
+        self.mt.account.equity=50.
+        self.mt.account.margin_free=50.
+        self.cmd['id']='real-micro-fell-below'
+        again=self.send()
+        self.assertEqual(again['state'],'rejected',again)
+        self.assertIn('recovery milestone',again['reason'])
+        self.assertEqual(len(self.mt.sends),1)
+        self.ex.close()
+        self.ex=BrokerExecutor(self.path)
+        self.cmd['id']='real-micro-after-restart'
+        restarted=self.send()
+        self.assertEqual(restarted['state'],'rejected',restarted)
+        self.assertEqual(len(self.mt.sends),1)
+
+    def test_real_micro_recovery_during_validation_cancels_before_send(self):
+        self.mt.account.trade_mode=2
+        self.mt.account.equity=50.
+        self.mt.account.margin_free=50.
+        self.cmd.update(target='live',id='real-micro-equity-jump',lots=.01,
+                        risk_percent=10.,commission_per_lot=7.,slippage_ticks=2.,
+                        micro_real_recovery_equity=500.,micro_real_temporary=True)
+        self.cmd['signal']['stop_distance']=3.
+        def jump(n):
+            if n>=3:
+                self.mt.account.equity=501.
+                self.mt.account.margin_free=501.
+        self.mt.on_account=jump
+        out=self.send()
+        self.assertIn(out['state'],('cancelled','rejected'),out)
+        self.assertEqual(len(self.mt.sends),0)
+
+    def test_real_margin_preflight_is_mandatory_in_fast_path(self):
+        self.mt.account.trade_mode=2
+        self.mt.account.equity=50.
+        self.mt.account.margin_free=5.
+        self.cmd.update(target='live',id='micro-fast-margin',lots=.01,
+                        risk_percent=10.,commission_per_lot=7.,slippage_ticks=2.,
+                        micro_real_recovery_equity=500.,micro_real_temporary=True)
+        self.cmd['signal'].update(key='tick:77',stop_distance=3.)
+        rejected=self.send()
+        self.assertEqual(rejected['state'],'rejected',rejected)
+        self.assertIn('REAL margin preflight',rejected['reason'])
+        self.assertEqual(self.mt.sends,[])
+
+        self.mt.account.margin_free=50.
+        self.mt.account_reads=0
+        def decline(n):
+            if n>=3:self.mt.account.margin_free=1.
+        self.mt.on_account=decline
+        self.cmd['id']='micro-fast-margin-declined'
+        cancelled=self.send()
+        self.assertEqual(cancelled['state'],'cancelled',cancelled)
+        self.assertIn('free margin dropped',cancelled['reason'])
+        self.assertEqual(self.mt.sends,[])
+
     def test_risk_sizing_zero_commission_and_unavailable_broker_profit_fail_closed(self):
         self.mt.account.equity=1000.
         self.cmd.update(id='risk-free-fee',risk_percent=0.5,

@@ -196,6 +196,8 @@ fn run_ui() -> anyhow::Result<()> {
                 ui.get_max_lots(),
                 ui.get_risk_commission_lot(),
                 ui.get_slippage_ticks(),
+                ui.get_micro_real_recovery_equity(),
+                ui.get_micro_real_cap_percent(),
             ];
             match fields
                 .iter()
@@ -206,6 +208,9 @@ fn run_ui() -> anyhow::Result<()> {
                     let risk = RiskConfig {
                         risk_percent: v[0],
                         micro_demo_risk_opt_in: ui.get_micro_demo_risk_opt_in(),
+                        micro_real_temporary: ui.get_micro_real_temporary(),
+                        micro_real_recovery_equity: v[7],
+                        micro_real_cap_percent: v[8],
                         daily_loss_percent: v[1],
                         max_drawdown_percent: v[2],
                         max_spread_atr: v[3],
@@ -253,6 +258,9 @@ fn run_ui() -> anyhow::Result<()> {
                     ui.set_token_saved(saved);
                     ui.set_risk_percent(c.risk.risk_percent.to_string().into());
                     ui.set_micro_demo_risk_opt_in(c.risk.micro_demo_risk_opt_in);
+                    ui.set_micro_real_temporary(c.risk.micro_real_temporary);
+                    ui.set_micro_real_recovery_equity(c.risk.micro_real_recovery_equity.to_string().into());
+                    ui.set_micro_real_cap_percent(c.risk.micro_real_cap_percent.to_string().into());
                     ui.set_daily_limit(c.risk.daily_loss_percent.to_string().into());
                     ui.set_drawdown_limit(c.risk.max_drawdown_percent.to_string().into());
                     ui.set_spread_limit(c.risk.max_spread_atr.to_string().into());

@@ -126,7 +126,7 @@ mod tests {
         Contract{point:1.0,tick_size:1.0,tick_loss:1.0,tick_profit:1.0,volume_min:0.1,volume_step:0.1,volume_max:10.0}
     }
     fn risk()->RiskConfig {
-        RiskConfig{risk_percent:1.0,micro_demo_risk_opt_in:false,daily_loss_percent:10.0,max_drawdown_percent:30.0,max_spread_atr:1.0,max_lots:10.0,commission_per_lot:0.0,slippage_ticks:0.0}
+        RiskConfig{risk_percent:1.0,micro_demo_risk_opt_in:false,micro_real_temporary:false,micro_real_recovery_equity:500.0,micro_real_cap_percent:10.0,daily_loss_percent:10.0,max_drawdown_percent:30.0,max_spread_atr:1.0,max_lots:10.0,commission_per_lot:0.0,slippage_ticks:0.0}
     }
     fn ledger()->Ledger {
         Ledger{balance:10_000.0,peak:10_000.0,day:0,day_start:10_000.0,daily_locked:false,dd_locked:false,metrics:Metrics::default(),trades:vec![]}

@@ -159,6 +159,9 @@ export component Dashboard inherits Window {
     in property <string> decision: "WAIT";
     in-out property <string> risk-percent: "0.25";
     in-out property <bool> micro-demo-risk-opt-in: false;
+    in-out property <bool> micro-real-temporary: false;
+    in-out property <string> micro-real-recovery-equity: "500";
+    in-out property <string> micro-real-cap-percent: "10";
     in-out property <string> daily-limit: "2";
     in-out property <string> drawdown-limit: "5";
     in-out property <string> spread-limit: "0.25";
@@ -829,8 +832,13 @@ export component Dashboard inherits Window {
             Text { text: "تطبق على المحاكاة، وعلى العقل الحقيقي إذا فعّلت حدوده الاختيارية. العمولة هنا تقدير؛ سجل التنفيذ يأخذ الرسوم الفعلية من الوسيط."; color: #b7bac3; wrap: word-wrap; }
             HorizontalBox { Text { text: root.micro-demo-risk-opt-in ? "المخاطرة لكل صفقة % (0.01–5 Demo فقط)" : "المخاطرة لكل صفقة % (0.01–2)"; color: #e0e1e4; } LineEdit { text <=> root.risk-percent; } }
             CheckBox { text: "موافقة صريحة: مخاطرة أعلى للحساب الصغير على Demo فقط"; checked <=> root.micro-demo-risk-opt-in; enabled: root.state == "STOPPED" && !root.busy; }
-            Text { text: "فوق 2% مخاطرة مرتفعة وقد تخسر 5$ أو أكثر لكل 100$ عند الستوب. الرافعة لا تخفف الخسارة. REAL يرفض أي دخول فوق 2% حتى لو فُعل الاختيار. حد الخسارة اليومي لبعض العقول اختياري حالياً؛ لا تعتبره قاطعاً مؤسسياً مستقلاً."; color: #c8cbd1; wrap: word-wrap; }
+            Text { text: "فوق 2% مخاطرة مرتفعة وقد تخسر 5$ أو أكثر لكل 100$ عند الستوب. الرافعة لا تخفف الخسارة. خيار Demo وحده لا يسمح بتجاوز 2% في REAL؛ للحساب الحقيقي الصغير يلزم تفعيل الوضع المؤقت المنفصل أدناه. حد الخسارة اليومي لبعض العقول اختياري حالياً؛ لا تعتبره قاطعاً مؤسسياً مستقلاً."; color: #c8cbd1; wrap: word-wrap; }
             Text { text: "حساب صغير / MICRO CAPITAL — افحص الهامش قبل اختيار حجم اللوت"; color: #e0e1e4; font-weight: 700; }
+            Text { text: "وضع REAL المؤقت — تخفيف سقف المخاطرة التقليدي، وليس إلغاء إدارة المخاطر"; color: #f2f2f4; font-weight: 700; }
+            CheckBox { text: "تفعيل مخاطرة مرنة لحساب REAL صغير مؤقتاً (موافقة صريحة)"; checked <=> root.micro-real-temporary; enabled: root.state == "STOPPED" && !root.busy; }
+            HorizontalBox { Text { text: "الرجوع الآلي لإدارة المخاطر عند Equity (عملة الحساب)"; color: #e0e1e4; } LineEdit { text <=> root.micro-real-recovery-equity; placeholder-text: "500"; } }
+            HorizontalBox { Text { text: "أقصى مخاطرة للصفقة في REAL المؤقت % (0.01–20)"; color: #e0e1e4; } LineEdit { text <=> root.micro-real-cap-percent; placeholder-text: "10"; } }
+            Text { text: "مثال: حساب 50$ وسقف 10% يسمح بخسارة متوقعة حتى 5$ للصفقة عند الستوب؛ وقد تزيد بسبب الفجوات والانزلاق. عند وصول Equity إلى 500$ ترجع مخاطرة الصفقة العادية وتُقفل الرخصة المرنة لهذا الحساب حتى لو انخفض بعدها. لا يُرفع الحد الحقيقي للرافعة ولا يزال الستوب والعمولة وفحص وسيط MT5 إلزامياً. حد الخسارة اليومي الحالي ليس قاطعاً مستقلاً شاملاً."; color: #c8cbd1; wrap: word-wrap; }
             Text { text: "رافعة MT5 الفعلية: " + root.broker-leverage + " | تغيير الرافعة الحقيقية يتم من الوسيط"; color: #b7bac3; wrap: word-wrap; }
             HorizontalBox {
                 Text { text: "رافعة تجربة افتراضية 1: (مثال 500)"; color: #e0e1e4; }
