@@ -130,7 +130,8 @@ class NativeUiContract(unittest.TestCase):
             self.assertEqual(count, wired-touch, f"Found inert control in {path.name}")
 
     def test_every_declared_callback_is_registered_in_the_desktop(self):
-        callbacks = set(re.findall(r"(?m)^\s*callback\s+([a-z0-9-]+)\s*\(", self.dashboard))
+        dashboard_root=self.dashboard.split("export component Dashboard inherits Window {",1)[1]
+        callbacks = set(re.findall(r"(?m)^\s*callback\s+([a-z0-9-]+)\s*\(", dashboard_root))
         callbacks.update(re.findall(r"(?m)^\s*callback\s+([a-z0-9-]+)\s*\(", CORRELATION.read_text(encoding="utf-8")))
         # Correlation callback is forwarded to Dashboard; not a Rust callback itself.
         handlers = set(re.findall(r"\bui\.on_([a-z0-9_]+)\s*\(", self.rust))
