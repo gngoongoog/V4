@@ -351,6 +351,9 @@ class BrokerExecutor:
             target_mode = 0 if cmd['target']=='demo' else 2 if cmd['target']=='live' else -1
             if account_identity(a)!=expected(cmd) or a.trade_mode!=target_mode:
                 raise ValueError('Bound account or Demo/Live mode changed')
+            if (cmd.get('kind')=='open' and cmd.get('micro_real_temporary') is True
+                    and not self._micro_real_active(cmd,a)):
+                raise ValueError('Micro REAL recovery milestone reached/locked; stale relaxed-risk entry rejected')
             if not terminal or not terminal.connected or not terminal.trade_allowed or getattr(terminal,'tradeapi_disabled',False) or not a.trade_allowed or not a.trade_expert:
                 raise ValueError('Enable Algo Trading and external Python trading in MT5; account must permit trading')
             if cmd['magic'] not in OWNED_MAGICS:
@@ -507,8 +510,7 @@ class BrokerExecutor:
                 # Re-check the irrevocable REAL recovery milestone immediately
                 # before send, even if it was crossed after initial sizing.
                 if (cmd.get('micro_real_temporary') is True
-                        and not self._micro_real_active(cmd,final_account)
-                        and result['risk_sizing']['risk_percent']>2.0):
+                        and not self._micro_real_active(cmd,final_account)):
                     result.update(state='cancelled',
                         reason='Micro REAL recovery milestone reached or permanently locked; regular risk restored')
                     result['total_ms']=(time.perf_counter()-started)*1000
