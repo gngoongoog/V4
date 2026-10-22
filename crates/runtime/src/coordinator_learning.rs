@@ -151,10 +151,15 @@ fn valid_cached_broker_score(p:&Value, closed_ms:u64)->Option<(f64,f64)> {
     let volume=monetary("closed_volume").filter(|v|*v>0.&&*v<=10000.)?;
     let net_per_lot=monetary("net_per_lot")?;
     let reward=monetary("reward").filter(|v|(-1.0..=1.0).contains(v))?;
+    let risk_money=monetary("risk_money").filter(|v|*v>=0.)?;
+    let r_multiple=monetary("r_multiple")?;
+    let (calculated_r,calculated_reward)=reward_v2(net,risk_money);
     let sum=gross+commission+swap+fee;
     if !sum.is_finite()
         ||(sum-net).abs()>1e-6_f64.max(net.abs()*1e-8)
-        ||(net/volume-net_per_lot).abs()>1e-6_f64.max(net_per_lot.abs()*1e-8) {
+        ||(net/volume-net_per_lot).abs()>1e-6_f64.max(net_per_lot.abs()*1e-8)
+        ||(calculated_r-r_multiple).abs()>1e-6_f64.max(calculated_r.abs()*1e-8)
+        ||(calculated_reward-reward).abs()>1e-6 {
         return None;
     }
     Some((net_per_lot,reward))
@@ -920,17 +925,19 @@ mod tests {
             "closed_ms":ts,"position_id":91,"gross":1.30,
             "commission":-0.20,"swap":-0.10,"fee":0.,
             "net":1.0,"closed_volume":0.10,"net_per_lot":10.,
-            "reward":0.4,"regime":"trending"});
-        assert_eq!(valid_cached_broker_score(&good,ts),Some((10.,0.4)));
+            "risk_money":2.0,"r_multiple":0.5,
+            "reward":(0.5_f64).tanh(),"regime":"trending"});
+        assert_eq!(valid_cached_broker_score(&good,ts),Some((10.,(0.5_f64).tanh())));
         for field in ["gross","commission","swap","fee","net","closed_volume",
-                      "net_per_lot","reward","position_id","closed_ms","evidence_source"]{
+                      "net_per_lot","reward","risk_money","r_multiple","position_id","closed_ms","evidence_source"]{
             let mut bad=good.clone();
             bad.as_object_mut().unwrap().remove(field);
             assert_eq!(valid_cached_broker_score(&bad,ts),None,"missing {field} rejected");
         }
         for (field,replacement) in [
             ("net",json!(1.20)),("net_per_lot",json!(11.)),
-            ("reward",json!(2.)),("commission",json!(null)),
+            ("reward",json!(2.)),("reward",json!(-0.5)),
+            ("r_multiple",json!(2.)),("risk_money",json!(3.)),("commission",json!(null)),
             ("gross",json!("1.30")),("closed_volume",json!(0.)),
             ("evidence_source",json!("paper"))]{
             let mut bad=good.clone();
@@ -948,7 +955,8 @@ mod tests {
             "closed_ms":ts,"position_id":91,"gross":1.30,
             "commission":-0.20,"swap":-0.10,"fee":0.,
             "net":1.0,"closed_volume":0.10,"net_per_lot":10.,
-            "reward":0.4,"regime":"trending"});
+            "risk_money":2.0,"r_multiple":0.5,
+            "reward":(0.5_f64).tanh(),"regime":"trending"});
         let add=|db:&Connection,id:u64,score:&Value|{
             db.execute("INSERT INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload)
                 VALUES(?1,?2,'account','trend',?3,?4)",
