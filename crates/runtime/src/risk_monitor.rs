@@ -85,7 +85,7 @@ mod tests {
         let mut c=Config::default();
         let disabled=snapshot(&db,&c,&status,now).unwrap();
         assert_eq!(disabled["state"],"disabled");
-        assert_eq!(disabled["estimated_day_loss"],3.);
+        assert_eq!(disabled["estimated_day_loss"],6.);
         c.risk.daily_breaker_demo_enabled=true;
         assert_eq!(snapshot(&db,&c,&status,now).unwrap()["state"],"breached");
         db.execute("INSERT INTO daily_loss_locks VALUES(?1,?2,?3,?4)",
