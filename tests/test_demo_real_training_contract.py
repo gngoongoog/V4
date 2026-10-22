@@ -33,7 +33,10 @@ class DemoRealTrainingContractTests(unittest.TestCase):
         self.assertIn('t.account_trade_mode != Some(0)', core)
         self.assertIn("micro_demo_risk_opt_in=cmd.get('micro_demo_risk_opt_in') is True", broker)
         self.assertIn("broker_demo=cmd['target']=='demo' and a.trade_mode==0", broker)
-        self.assertIn("allowed_risk_percent = 5.0 if micro_demo_risk_opt_in and broker_demo else 2.0", broker)
+        self.assertIn("20.0 if micro_real_active", broker)
+        self.assertIn("5.0 if micro_demo_risk_opt_in and broker_demo", broker)
+        self.assertIn("else 2.0", broker)
+        self.assertIn("micro_real_recovered", broker)
 
     def test_coordinator_is_not_shadow_locked_and_start_remains_explicit(self):
         wrapper = self.text("crates/runtime/src/execution.rs")
