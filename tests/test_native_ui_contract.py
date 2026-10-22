@@ -89,6 +89,8 @@ class NativeUiContract(unittest.TestCase):
     def test_compact_navigation_preserves_all_22_real_page_actions(self):
         self.assertIn("current-index <=> root.page",self.dashboard)
         self.assertIn("visible: root.expanded-workspaces",self.dashboard)
+        self.assertIn('if root.account-mode-label == "REAL": HorizontalLayout',self.dashboard)
+        self.assertIn("text <=> root.live-start-login",self.dashboard)
         self.assertIn("root.expanded-workspaces = !root.expanded-workspaces",self.dashboard)
         for action in ('root.studio-action("config")',
                        'root.execution-action("refresh")',
