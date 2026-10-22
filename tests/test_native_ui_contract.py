@@ -201,6 +201,16 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("if validated != 72",checker)
         self.assertIn("if len({dark, white, smoke}) != 3",checker)
 
+    def test_canceling_studio_blocks_new_studio_actions_until_ack(self):
+        src=(RUST / "studio.rs").read_text(encoding="utf-8")
+        self.assertIn('if ui.get_studio_busy() || ui.get_studio_cancel_busy(){return;}',src)
+        # At least all the buttons bound to the ordinary studio-busy guard
+        # must also be disabled during cancellation; never replace the actual
+        # Cancel button's separate busy state.
+        self.assertNotIn('enabled: !root.studio-busy;',self.dashboard)
+        self.assertIn('enabled: !root.studio-busy && !root.studio-cancel-busy',self.dashboard)
+        self.assertIn('enabled: !root.studio-cancel-busy; clicked => { root.studio-action("cancel"); }',self.dashboard)
+
     def test_studio_cancel_really_works_while_studio_is_busy(self):
         src=(RUST / "studio.rs").read_text(encoding="utf-8")
         self.assertIn('if action=="cancel"',src)
