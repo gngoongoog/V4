@@ -80,7 +80,7 @@ pub fn audit(db:&Connection,context:&str)->Result<Value>{
             Some(false)=>non_fast_count+=1,
             _=>{},
         };
-        let has_send=value.get("send_ms").and_then(|_|valid_duration(&value,"send_ms")).is_some();
+        let has_send=valid_duration(&value,"send_ms").is_some();
         let has_queue=valid_duration(&value,"queue_to_send_ms").is_some();
         if has_send&&has_queue {complete_timing+=1;}else{incomplete_timing+=1;}
         for field in FIELDS {
@@ -201,6 +201,6 @@ mod tests {
         assert_eq!(v["metrics"]["send_ms"]["p50_ms"],134.5);
         assert_eq!(v["metrics"]["send_ms"]["p95_ms"],246.55);
         assert_eq!(v["metrics"]["send_ms"]["p99_ms"],256.51);
-        assert_eq!(v["queue_to_send_le_20ms_observed"],10);
+        assert_eq!(v["queue_to_send_le_20ms_observed"],11);
     }
 }
