@@ -190,6 +190,25 @@ pub fn render() -> anyhow::Result<()> {
             }
         }
     }
+    // Fidelity previews at the native 1540x920 target window size, rather than
+    // forcing the user to judge the institutional layout from tiny 880px shots.
+    // These screenshots are synthetic fixtures (see overlay), never live MT5.
+    let reference_dir = std::path::Path::new("test-output").join("reference-preview");
+    std::fs::create_dir_all(&reference_dir)?;
+    for (theme, name) in [(0,"dark"),(1,"white"),(2,"smoke")] {
+        ui.set_theme_choice(theme);
+        ui.set_page(0);
+        window.set_size(slint::PhysicalSize::new(1540, 920));
+        slint::platform::update_timers_and_animations();
+        ui.window().request_redraw();
+        let mut pixels=vec![Rgb8Pixel::default();1540*920];
+        window.draw_if_needed(|renderer|renderer.render(&mut pixels,1540));
+        let file=reference_dir.join(format!("reference-command-center-{name}.ppm"));
+        let mut writer=std::io::BufWriter::new(std::fs::File::create(file)?);
+        write!(writer,"P6\n1540 920\n255\n")?;
+        for pixel in pixels {writer.write_all(&[pixel.r,pixel.g,pixel.b])?;}
+        writer.flush()?;
+    }
     ui.hide()?;
     Ok(())
 }
