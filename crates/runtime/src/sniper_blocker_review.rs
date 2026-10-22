@@ -102,6 +102,7 @@ pub fn report(db:&Connection,context:&str,now:u64)->Result<Value>{
         let Some(gates)=p["gates"].as_array() else{
             malformed+=1;continue;
         };
+        if entry_ready && !gates.is_empty() {malformed+=1;continue;}
         if gates.len()>20 || gates.iter().any(|g|g.as_str().is_none()) {
             malformed+=1;continue;
         }
@@ -192,10 +193,11 @@ mod tests {
         add(&d,"b",now-2000,true,true,vec![],"");
         add(&d,"a",now-30*60*60*1000,true,true,vec![],"");
         add(&d,"a",now-3000,false,true,vec![],"");
+        add(&d,"a",now-5000,true,true,vec!["فاصل الدخول المختار"],"");
         d.execute("INSERT INTO sniper_opportunity_samples VALUES('a',?1,0,'broken-json')",[now-4000]).unwrap();
         let r=report(&d,"a",now).unwrap();
         assert_eq!(r["sampled_decisions"],1);
-        assert_eq!(r["malformed_or_inconsistent_rows"],2);
+        assert_eq!(r["malformed_or_inconsistent_rows"],3);
         assert_eq!(r["entry_eligible_at_snapshot"],1);
         assert_eq!(report(&d,"b",now).unwrap()["sampled_decisions"],1);
         assert_eq!(report(&d,"",now).unwrap()["status"],"unbound");
