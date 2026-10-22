@@ -130,6 +130,74 @@ fn settle(db:&Connection,id:&str,q:Quote)->Result<()>{
     }
     Ok(())
 }
+/// Recorded, conservative quote-time *research hint*. This never calls
+/// MT5 order_check/order_calc_margin and is NOT a broker admission authority.
+/// Missing contract data is UNKNOWN rather than silently approved.
+fn indicative_contract(t:&Telemetry,c:&Config,f:&Signal,a:&Signal,q:Quote)->Value{
+    const LOT:f64=0.01;
+    let volume=match (t.volume_min,t.volume_step,t.volume_max){
+        (Some(min),Some(step),Some(max))
+          if [min,step,max].iter().all(|x|x.is_finite()&&*x>0.)&&min<=max=>{
+            let n=(LOT-min)/step;
+            if LOT+1e-9>=min && LOT<=max+1e-9
+                && n>=-1e-9 && (n-n.round()).abs()<1e-6{"pass"}
+            else{"fail"}
+        },
+        _=>"unknown"
+    };
+    // This is a proportional *indication*, not true per-order margin because
+    // hedged positions, pricing, account leverage and conversion can differ.
+    let estimated_margin=match (t.minimum_lot_margin,t.volume_min){
+        (Some(m),Some(min)) if m.is_finite()&&m>0.&&min.is_finite()&&min>0.=>{
+            let v=m*LOT/min;
+            if v.is_finite()&&v>0.{Some(v)}else{None}
+        },_=>None
+    };
+    let margin=match (estimated_margin,t.margin_free){
+        (Some(needed),Some(free)) if free.is_finite()&&free>=0.=>{
+            if free+1e-9>=needed{"pass"}else{"fail"}
+        },_=>"unknown"
+    };
+    let permissions=if t.trade_allowed&&t.trade_expert{"pass"}else{"fail"};
+    let budget=if t.equity.is_finite()&&t.equity>0.
+        &&c.risk.risk_percent.is_finite()&&c.risk.risk_percent>0.{
+            Some(t.equity*c.risk.risk_percent/100.)
+        }else{None};
+    let risk=|signal:&Signal|{
+        let risk=(signal.stop_distance/q.tick
+            *q.loss_tick.max(q.profit_tick)*LOT)
+            +LOT*c.risk.commission_per_lot
+            +2.*c.risk.slippage_ticks*q.loss_tick.max(q.profit_tick)*LOT;
+        let valid=risk.is_finite()&&risk>=0.
+            &&signal.stop_distance.is_finite()&&signal.stop_distance>0.
+            &&c.risk.commission_per_lot.is_finite()&&c.risk.commission_per_lot>=0.
+            &&c.risk.slippage_ticks.is_finite()&&c.risk.slippage_ticks>=0.;
+        let state=match (valid,budget){
+            (true,Some(max))=>if risk<=max+1e-9{"pass"}else{"fail"},
+            _=>"unknown"
+        };
+        json!({"status":state,"estimated_loss_at_stop":if valid{Some(risk)}else{None},
+            "account_risk_budget":budget})
+    };
+    let fr=risk(f);
+    let ar=risk(a);
+    let parts=[volume,margin,permissions,
+        fr["status"].as_str().unwrap_or("unknown"),
+        ar["status"].as_str().unwrap_or("unknown")];
+    let status=if parts.contains(&"fail"){"fail"}
+        else if parts.contains(&"unknown"){"unknown"}
+        else{"pass"};
+    json!({"status":status,"volume":volume,"margin":margin,
+        "permissions":permissions,"frozen_stop_risk":fr,"adaptive_stop_risk":ar,
+        "requested_paper_lots":LOT,
+        "broker_min_volume":t.volume_min,"broker_volume_step":t.volume_step,
+        "broker_max_volume":t.volume_max,
+        "broker_margin_free":t.margin_free,
+        "estimated_margin_linear":estimated_margin,
+        "assumption":"Informational conservative signal-contract check only. Does NOT include full broker order_check, current order price normalization, exact order_calc_margin/order_calc_profit, portfolio slots, pending intents, cooldown, market execution, or fills.",
+        "broker_effect":false})
+}
+
 fn observe_trial(db:&Connection,id:&str,created:u64,active:bool,decision_bar:u64,
     frozen:&Signal,adaptive:&Signal,t:&Telemetry,c:&Config,now:u64)->Result<()>{
     let Some(q)=Quote::read(t,now)else{return Ok(())};
@@ -166,6 +234,7 @@ fn observe_trial(db:&Connection,id:&str,created:u64,active:bool,decision_bar:u64
         "loss_tick":q.loss_tick,"commission_per_lot":c.risk.commission_per_lot,
         "slippage_ticks":c.risk.slippage_ticks,
         "entry_bid":q.bid,"entry_ask":q.ask,
+        "indicative_contract":indicative_contract(t,c,frozen,adaptive,q),
         "limitations":"Missing prices between samples can move exit beyond stop/target; same-quote entry does not model broker fills or latency",
     });
     db.execute(
@@ -223,6 +292,8 @@ pub fn summary(db:&Connection,id:&str)->Result<Value>{
     let (mut completed,mut pending,mut won_f,mut won_a,mut better_f,mut ties)=(0usize,0usize,0usize,0usize,0usize,0usize);
     let (mut sum_f,mut sum_a,mut gaps)=(0.,0.,0usize);
     let (mut stop_f,mut stop_a,mut target_f,mut target_a)=(0usize,0usize,0usize,0usize);
+    let (mut contract_pass,mut contract_fail,mut contract_unknown)=(0usize,0usize,0usize);
+    let (mut pass_f,mut pass_a)=(0.0,0.0);
     for(state,raw)in rows{
         if state=="open"{pending+=1;continue}
         if state!="complete"{continue}
@@ -233,6 +304,11 @@ pub fn summary(db:&Connection,id:&str)->Result<Value>{
         )else{continue};
         if !f.is_finite()||!a.is_finite(){continue}
         completed+=1;sum_f+=f;sum_a+=a;
+        match p["indicative_contract"]["status"].as_str().unwrap_or("unknown"){
+            "pass"=>{contract_pass+=1;pass_f+=f;pass_a+=a;},
+            "fail"=>contract_fail+=1,
+            _=>contract_unknown+=1
+        }
         if f>0.{won_f+=1};if a>0.{won_a+=1}
         if f>a+1e-8{better_f+=1}else if (f-a).abs()<=1e-8{ties+=1}
         if p["frozen"]["result"]["gap_risk"]==true||p["adaptive"]["result"]["gap_risk"]==true{gaps+=1}
@@ -245,6 +321,14 @@ pub fn summary(db:&Connection,id:&str)->Result<Value>{
         "status":if completed<MIN_COMPLETE{"insufficient_complete_pairs"}else{"descriptive_only"},
         "policy":POLICY,"completed_pairs":completed,"open_pairs":pending,
         "frozen_wins_after_costs":won_f,"adaptive_wins_after_costs":won_a,
+        "indicative_contract_pass_pairs":contract_pass,
+        "indicative_contract_fail_pairs":contract_fail,
+        "indicative_contract_unknown_pairs":contract_unknown,
+        "indicative_pass_frozen_mean_net_per_lot":
+          if contract_pass>0{Some(pass_f/contract_pass as f64)}else{None},
+        "indicative_pass_adaptive_mean_net_per_lot":
+          if contract_pass>0{Some(pass_a/contract_pass as f64)}else{None},
+        "contract_hints_are_not_broker_approvals":true,
         "frozen_stops":stop_f,"adaptive_stops":stop_a,
         "frozen_targets":target_f,"adaptive_targets":target_a,
         "frozen_outperforms_pairs":better_f,"exact_ties":ties,
@@ -411,6 +495,53 @@ mod tests{
             &q(opened+3000,101.1,101.3),&c,opened+3000).unwrap();
         assert_eq!(summary(&db,"r1").unwrap()["completed_pairs"],1);
         assert_eq!(summary(&db,"r1").unwrap()["open_pairs"],0);
+    }
+
+    #[test]
+    fn paper_profit_does_not_mean_broker_lot_is_allowed(){
+        let mut t=q(1_000_100_000,100.,100.2);
+        t.volume_min=Some(0.1);t.volume_step=Some(0.01);t.volume_max=Some(20.);
+        t.minimum_lot_margin=Some(40.);t.margin_free=Some(200.);
+        t.trade_allowed=true;t.trade_expert=true;t.equity=100.;
+        let c=Config::default();
+        let q=Quote::read(&t,1_000_100_000).unwrap();
+        let s=sig(1,1_000_001,1.,2.,5000);
+        let evidence=indicative_contract(&t,&c,&s,&s,q);
+        assert_eq!(evidence["volume"],"fail");
+        assert_eq!(evidence["status"],"fail");
+        assert_eq!(evidence["broker_effect"],false);
+    }
+    #[test]
+    fn contract_check_is_unknown_without_real_broker_volume_or_margin_data(){
+        let mut t=q(1_000_100_000,100.,100.2);
+        t.trade_allowed=true;t.trade_expert=true;t.equity=100.;
+        let c=Config::default();
+        let q=Quote::read(&t,1_000_100_000).unwrap();
+        let s=sig(1,1_000_001,1.,2.,5000);
+        let evidence=indicative_contract(&t,&c,&s,&s,q);
+        assert_eq!(evidence["volume"],"unknown");
+        assert_eq!(evidence["margin"],"unknown");
+        assert_eq!(evidence["status"],"unknown");
+    }
+    #[test]
+    fn stop_risk_is_evaluated_independently_for_two_exit_policies(){
+        let mut t=q(1_000_100_000,100.,100.2);
+        t.trade_allowed=true;t.trade_expert=true;t.equity=100.;
+        t.volume_min=Some(0.01);t.volume_step=Some(0.01);
+        t.volume_max=Some(20.);t.minimum_lot_margin=Some(1.);
+        t.margin_free=Some(100.);
+        let mut c=Config::default();
+        c.risk.risk_percent=2.;
+        c.risk.commission_per_lot=7.;
+        let q=Quote::read(&t,1_000_100_000).unwrap();
+        let small=sig(1,1_000_001,1.,2.,5000);
+        let big=sig(1,1_000_001,50.,2.,5000);
+        let evidence=indicative_contract(&t,&c,&small,&big,q);
+        assert_eq!(evidence["volume"],"pass");
+        assert_eq!(evidence["margin"],"pass");
+        assert_eq!(evidence["frozen_stop_risk"]["status"],"pass");
+        assert_eq!(evidence["adaptive_stop_risk"]["status"],"fail");
+        assert_eq!(evidence["status"],"fail");
     }
 
 }

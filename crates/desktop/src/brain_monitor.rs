@@ -84,6 +84,14 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
             maybe_number(&matched["mean_difference_frozen_minus_adaptive_per_lot"]),
             matched["frozen_wins_after_costs"],matched["adaptive_wins_after_costs"]
         ));
+        detail.push_str(&format!(
+            "\n\nفلترة صلاحية Paper بشكل استرشادي — ليست موافقة MT5:\nأزواج مكتملة توافق شروط اللوت والهامش والميزانية تقريبياً {} | مخالفة {} | بيانات الوسيط ناقصة {}\nالمتوسط الافتراضي لكل لوت ضمن الأزواج التي اجتازت الفحص فقط: المجمّد {} | المتعلم {}\nغياب البيانات يُصنّف مجهولاً، لا يُعتبر موافقة. حساب الهامش والخسارة تقديري وقد تختلف موافقة وسيط MT5 الحقيقية؛ لا تشمل هذه الفلترة جميع بوابات التنفيذ.",
+            matched["indicative_contract_pass_pairs"],
+            matched["indicative_contract_fail_pairs"],
+            matched["indicative_contract_unknown_pairs"],
+            maybe_number(&matched["indicative_pass_frozen_mean_net_per_lot"]),
+            maybe_number(&matched["indicative_pass_adaptive_mean_net_per_lot"])
+        ));
     }
     let frozen=&b["frozen_trial"];
     let stage=match frozen["status"].as_str().unwrap_or("") {
