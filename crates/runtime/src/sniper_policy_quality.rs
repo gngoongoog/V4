@@ -135,9 +135,13 @@ pub fn report(db:&Connection,context:&str)->Result<Value>{
             .then_with(||b["last_closed_ms"].as_u64().cmp(&a["last_closed_ms"].as_u64()))
             .then_with(||a["policy"].as_str().cmp(&b["policy"].as_str()))
     });
+    // A large total pooled across many tiny strategies is not adequate
+    // evidence for any one strategy/market/revision cohort.
+    let any_group_descriptive=out.iter().any(|v|
+        v["all"]["samples"].as_u64().unwrap_or(0)>=MIN_GROUP as u64);
     out.truncate(MAX_GROUPS);
     Ok(json!({
-        "status":if count<MIN_GROUP{"insufficient_closed_demo_evidence"}
+        "status":if !any_group_descriptive{"insufficient_closed_demo_evidence"}
             else{"descriptive_broker_outcome_monitor_only"},
         "source":"coordinator_broker_samples: MT5 Demo closed reconciled positions",
         "policy":"sniper_policy_demo_quality_v1",
@@ -229,6 +233,17 @@ mod tests {
         assert_eq!(s["groups"][0]["older"]["samples"],28);
         assert_eq!(s["groups"][0]["all"]["net_booked"],4.);
         assert_eq!(s["groups"][0]["no_statistical_edge_certification"],true);
+    }
+    #[test]
+    fn pooled_small_cohorts_do_not_pass_sample_minimum(){
+        let d=db();
+        for i in 1..=20{add(&d,"a",i,"impulse","v1","trending",1.,"mt5_demo_broker");}
+        for i in 21..=40{add(&d,"a",i,"rebound","v1","trending",1.,"mt5_demo_broker");}
+        let r=report(&d,"a").unwrap();
+        assert_eq!(r["closed_demo_positions"],40);
+        assert_eq!(r["status"],"insufficient_closed_demo_evidence");
+        assert_eq!(r["groups"][0]["status"],"insufficient_demo_sample");
+        assert_eq!(r["groups"][1]["status"],"insufficient_demo_sample");
     }
     #[test]
     fn empty_context_and_no_samples_are_not_success(){
