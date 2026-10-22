@@ -121,6 +121,8 @@ pub fn setup(ui:&Dashboard)->slint::Timer {
                 let changed={let previous=cache.lock().unwrap();previous["trading_mode"]!=v["trading_mode"] || previous["context"]!=v["context"]};
                 paint(&ui,&v,index,action!="poll"||changed);*cache.lock().unwrap()=v;
                 if action=="save"{ui.set_brain_monitor_message("حُفظت المشاركة والتدريب لهذا الحساب والرمز والوضع فقط".into());}
+                if action=="freeze"{ui.set_brain_monitor_message("أنشئت نسخة مستشار Shadow ثابتة؛ ستُقاس على شموع جديدة دون إرسال أوامر MT5".into());}
+                if action=="stop_frozen"{ui.set_brain_monitor_message("أُنهِي استقبال دخول Shadow جديد؛ الصفقة الافتراضية المفتوحة ستُسوى عند وصول سعر لاحق".into());}
             },Err(e)=>ui.set_brain_monitor_message(format!("تعذر التحديث: {e}").into())}
         });
     });timer
