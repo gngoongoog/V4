@@ -1,3 +1,11 @@
+# Current continuation — 2026-10-22, Stage 3F-U (v0.7.4)
+
+Continue from latest `main`, preserving all newer changes. PR #109 (3F-T closed Demo Sniper policy quality) merged as `392a8143ae9cc2b58f52784db9f66f2cc39bfe9b` after exact-head Research `39779107057` and Windows/Linux `39779107116` succeeded on `ae7eb22ccb91edb7fd73f765e8a191fe4b5f6896`.
+
+3F-U adds bounded, account-scoped Demo Sniper decision sampling with first-blocker reasons, exact same-evaluation order links and a separate five-second prospective quote comparison. It never changes execution, learning weights or promotion; Fast Pulse does not record these observations. Read `docs/SNIPER_OPPORTUNITY_REVIEW_3FU_AR.md`. Require successful exact-source Research and Windows/Linux checks before merging new source. Next: collect target-machine Demo broker acceptance and review measured rejection/coverage/outcome evidence before any policy change. Native MT5 fills, profitability, latency and private Telegram delivery remain unverified.
+
+Older checkpoint instructions below are historical. Preserve learning data, immutable research evidence, strict selected-mode ownership and all broker correctness boundaries.
+
 # P0 Stage 2 / v0.7.4 — isolated mandatory stop-risk lot cap
 
 Risk-based sizing occurs at MT5 broker verification for each fresh Core entry, preserving requested lot as an upper bound. Uses actual broker order_calc_profit, account equity, configured fee and slippage estimates. This is not a tick-level profit model or a guarantee of maximum realized loss. Requires exact-head CI and native Demo tests before real-money use.

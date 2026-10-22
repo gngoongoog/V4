@@ -91,9 +91,12 @@ def check(exe=None):
             # prove it cannot open through the system before re-enabling it.
             control=dict(context=api('/v1/execution/brains')['context'],brain='sniper_learner',mode='sniper',control=dict(advisor=False,paper=False))
             api('/v1/execution/brain-control',control)
-            api('/v1/start',{});prices([2053.80,2053.84,2053.88])
+            api('/v1/start',{});time.sleep(1.05);prices([2053.80,2053.84,2053.88])
             assert not brain('system')['latest']['signal']['ready']
             assert api('/v1/execution/gateway')['command'] is None
+            observed=api('/v1/execution/brains')['brains'][0]['sniper_opportunities']
+            assert observed['sampled_observations']>=1 and observed['demo_only']
+            assert observed['no_execution_effect'] and not observed['learning_effect']
             try: api('/v1/execution/brain-control',control)
             except urllib.error.HTTPError: pass
             else: raise AssertionError('Running control mutation must fail')
@@ -104,7 +107,10 @@ def check(exe=None):
             assert len(view['brains'])==17 and view['trading_mode']=='sniper'
             assert all('activity' in b and 'paper_stats' in b for b in view['brains'])
             prices([2053.80,2053.84,2053.88])
-            api('/v1/start',{});work=pulse(2053.92);assert work['pulse_fast_path']
+            api('/v1/start',{})
+            audit_before=api('/v1/execution/brains')['brains'][0]['sniper_opportunities']['sampled_observations']
+            work=pulse(2053.92);assert work['pulse_fast_path']
+            assert api('/v1/execution/brains')['brains'][0]['sniper_opportunities']['sampled_observations']==audit_before
             cmd=work['command'];assert cmd and cmd['brain']=='system',brain('system')
             selection=cmd['signal']['coordination']['selection']
             assert selection['brain']=='sniper_learner' and selection['sniper_policy']=='impulse'
