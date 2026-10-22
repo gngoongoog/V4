@@ -143,8 +143,14 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
     fn micro_real_active(&self, db: &Connection, t: &Telemetry, c: &Config) -> Result<bool> {
         if !c.risk.micro_real_temporary || self.settings.target != "live"
             || t.account_trade_mode != Some(2) || !t.equity.is_finite()
-            || t.equity <= 0. || t.equity >= c.risk.micro_real_recovery_equity
+            || t.equity <= 0.
         { return Ok(false); }
+        if t.equity >= c.risk.micro_real_recovery_equity {
+            // One-way, committed recovery latch persists through restarts.
+            db.execute("INSERT OR IGNORE INTO micro_real_recovered VALUES(?1,?2,?3)",
+                params![micro_account_key(t),crate::now_ms(),t.equity])?;
+            return Ok(false);
+        }
         let locked: bool = db.query_row(
             "SELECT EXISTS(SELECT 1 FROM micro_real_recovered WHERE account_key=?1)",
             [micro_account_key(t)], |row| row.get(0)
@@ -259,15 +265,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             return Ok(());
         }
         let key = ctx(t);
-        if c.risk.micro_real_temporary && self.settings.target == "live"
-            && t.account_trade_mode == Some(2)
-            && t.equity.is_finite() && t.equity >= c.risk.micro_real_recovery_equity
-        {
-            // Durable one-way latch: changing symbol or falling equity does not
-            // reopen relaxed REAL risk. Close/repair orders remain unaffected.
-            db.execute("INSERT OR IGNORE INTO micro_real_recovered VALUES(?1,?2,?3)",
-                params![micro_account_key(t),now,t.equity])?;
-        }
+        // Checking eligibility also durably records the milestone once it is reached.
         let micro_real = self.micro_real_active(db, t, c)?;
         db.execute("INSERT INTO execution_equity VALUES(?1,?2) ON CONFLICT(context) DO UPDATE SET peak=MAX(peak,excluded.peak)",params![key,t.equity])?;
         let peak:f64=db.query_row("SELECT peak FROM execution_equity WHERE context=?1",[&key],|r|r.get(0))?;
