@@ -304,6 +304,7 @@ pub struct Service {
 impl Service {
     pub fn new(db: &Connection) -> Result<Self> {
         crate::frozen_shadow::init(db)?;
+        crate::frozen_coordinator::init(db)?;
         crate::matched_forward::init(db)?;
         crate::matched_trade::init(db)?;
         let mut inner = legacy::Service::new(db)?;
@@ -443,6 +444,18 @@ impl Service {
         // forced on, it represents coordinated execution; every other `enabled` flag means SOLO.
         self.inner
             .observe(db, telemetry, config, run, frames, now)?;
+        // Immutable Demo coordinator policy is a separate prospective study.
+        // An audit failure cannot interfere with LIVE broker execution or exits.
+        if let Some(active_signal)=self.inner.last_system_signal(){
+            if let Err(error)=crate::frozen_coordinator::observe(
+                db,telemetry,config,&active_signal,&available,now){
+                let _=db.execute(
+                    "INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,?2,?3)",
+                    params![now,"frozen_coordinator_observation_error",
+                        json!({"context":context(telemetry),
+                            "error":error.to_string().chars().take(240).collect::<String>()}).to_string()]);
+            }
+        }
         self.student.capture_entries(self.inner.take_entries(), now);
         if run {crate::student_learning::log_opportunities(db,telemetry,&self.inner.learning_decisions(),now)?;}
         // Apply one global entry budget after all brains have proposed their queued opens and
@@ -503,6 +516,38 @@ impl Service {
         Ok(value)
     }
 
+    /// Frozen Expert Demo *decision-policy* only; NOT a broker or risk-gate twin.
+    pub fn coordinator_twin_route(&mut self,method:&str,body:&[u8],
+        db:&Connection,status:&Status,config:&Config,now:u64)->Result<Value>{
+        let current=status.telemetry.as_ref()
+            .filter(|t|status.gateway_fresh && t.connected && self.account_matches(status));
+        if method=="GET"{
+            let Some(t)=current else{return Ok(json!({"status":"unbound","broker_effect":false}))};
+            return crate::frozen_coordinator::report(db,&context(t));
+        }
+        anyhow::ensure!(method=="POST","Unknown frozen-coordinator method");
+        anyhow::ensure!(!status.requested_run && !self.pending(db)?,
+            "أوقف التداول وسوِّ جميع الأوامر قبل تجميد سياسة المنسق");
+        let t=current.context("اربط MT5 Demo بقراءة حديثة أولاً")?;
+        anyhow::ensure!(t.demo&&t.account_trade_mode==Some(0)
+            &&config.trading.mode==braintrade_domain::trading::TradingMode::Expert,
+            "اختبار منسق Expert مسموح في Demo فقط");
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Request {action:String,context:String,mode:braintrade_domain::trading::TradingMode}
+        let req:Request=serde_json::from_slice(body)?;
+        anyhow::ensure!(req.context==context(t) && req.mode==config.trading.mode,
+            "الحساب أو الوضع تغيّر؛ أعد تحميل البيانات");
+        match req.action.as_str(){
+            "freeze"=>{
+                let controls=crate::brain_control::load(db,&req.context,req.mode)?;
+                crate::frozen_coordinator::freeze(db,t,config,&self.inner.brains,
+                    &self.inner.weights,&controls,&self.inner.student_policies,now)
+            },
+            "stop"=>crate::frozen_coordinator::stop(db,&req.context),
+            _=>anyhow::bail!("Unknown frozen coordinator action")
+        }
+    }
     /// Isolated Demo-only frozen advisor trials. Never returns a broker command.
     pub fn frozen_route(
         &mut self,method:&str,body:&[u8],db:&Connection,status:&Status,
