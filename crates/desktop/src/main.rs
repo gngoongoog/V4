@@ -72,6 +72,22 @@ fn paint(ui: &Dashboard, status: Status) {
         );
         ui.set_balance(format!("{:.2} {}", t.balance, t.currency).into());
         ui.set_equity(format!("{:.2} {}", t.equity, t.currency).into());
+        ui.set_broker_leverage(t.leverage.map(|v| format!("1:{v}")).unwrap_or_else(|| "غير متاحة".into()).into());
+        let scenario = ui.get_scenario_leverage().trim().parse::<u32>();
+        let note = match (scenario, t.leverage.filter(|n| *n > 0), t.minimum_lot_margin,
+                          t.margin_free, t.volume_min) {
+            (Ok(s), Some(actual), Some(min_margin), Some(free), Some(min_lot))
+                if (1..=3000).contains(&s) && min_margin.is_finite() && min_margin >= 0.
+                    && free.is_finite() && free >= 0. && min_lot.is_finite() && min_lot > 0. => {
+                let approximation = min_margin * f64::from(actual) / f64::from(s);
+                format!("أقل لوت لدى الوسيط: {:.3} | الهامش الحالي المقدّر: {:.2} {} | الهامش الحر: {:.2} {}. عند 1:{} الهامش الافتراضي التقريبي: {:.2} {}. مقارنة تعليمية بتناسب عكسي فقط؛ قد لا تنطبق على الذهب أو شروط الهامش الخاصة. لا تغيّر رافعة الحساب أو أوامر MT5 أو خسارة الستوب.",
+                    min_lot, min_margin, t.currency, free, t.currency, s, approximation, t.currency)
+            }
+            (Err(_), _, _, _, _) => "أدخل رافعة صحيحة مثل 100 أو 200 أو 500.".into(),
+            (Ok(s), _, _, _, _) if !(1..=3000).contains(&s) => "مدى سيناريو الرافعة: من 1:1 إلى 1:3000، للتخطيط فقط.".into(),
+            _ => "بيانات الهامش أو رافعة MT5 غير متوفرة؛ لن نخترع تقديراً. تحقق من اتصال الوسيط وعقد الرمز.".into(),
+        };
+        ui.set_leverage_note(note.into());
         ui.set_today(
             t.today_net
                 .map(|v| format!("{v:.2} {}", t.currency))
@@ -94,6 +110,8 @@ fn paint(ui: &Dashboard, status: Status) {
         ui.set_account("Waiting for a complete current MT5 account snapshot".into());
         ui.set_balance("—".into());
         ui.set_equity("—".into());
+        ui.set_broker_leverage("—".into());
+        ui.set_leverage_note("بانتظار حساب MT5 متصل وبيانات هامش حديثة؛ إدخال الرافعة لا يغيّر الحساب الحقيقي.".into());
         ui.set_today("—".into());
         ui.set_positions("Current positions unavailable — not assumed to be empty.".into());
     }
