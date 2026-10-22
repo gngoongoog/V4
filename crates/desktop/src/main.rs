@@ -219,9 +219,9 @@ fn main() {
 }
 /// Appearance preferences are local UI-only state. No broker/risk/core config is changed.
 fn parse_appearance(raw:&str)->(i32,bool,bool){
-    let Ok(v)=serde_json::from_str::<Value>(raw) else{return (0,false,false)};
+    let Ok(v)=serde_json::from_str::<Value>(raw) else{return (2,false,false)};
     let theme=v["theme"].as_i64().filter(|v|(0..=2).contains(v))
-        .map(|v|v as i32).unwrap_or(0);
+        .map(|v|v as i32).unwrap_or(2);
     (theme,
         v["sidebar_collapsed"].as_bool().unwrap_or(false),
         v["expanded_workspaces"].as_bool().unwrap_or(false))
@@ -232,7 +232,7 @@ fn appearance_path()->std::path::PathBuf{
 }
 fn load_appearance()->(i32,bool,bool){
     std::fs::read_to_string(appearance_path())
-        .ok().map(|s|parse_appearance(&s)).unwrap_or((0,false,false))
+        .ok().map(|s|parse_appearance(&s)).unwrap_or((2,false,false))
 }
 fn save_appearance(theme:i32,collapsed:bool,expanded:bool)->anyhow::Result<()>{
     anyhow::ensure!((0..=2).contains(&theme),"Unsupported desktop theme");
@@ -251,10 +251,10 @@ mod appearance_tests{
     fn no_invalid_theme_may_be_restored(){
         assert_eq!(parse_appearance("{\"theme\":1,\"sidebar_collapsed\":true,\"expanded_workspaces\":true}"),(1,true,true));
         assert_eq!(parse_appearance("{\"theme\":2}"),(2,false,false));
-        assert_eq!(parse_appearance("{\"theme\":-99,\"sidebar_collapsed\":true}"),(0,true,false));
-        assert_eq!(parse_appearance("{\"theme\":100,\"expanded_workspaces\":true}"),(0,false,true));
+        assert_eq!(parse_appearance("{\"theme\":-99,\"sidebar_collapsed\":true}"),(2,true,false));
+        assert_eq!(parse_appearance("{\"theme\":100,\"expanded_workspaces\":true}"),(2,false,true));
         assert_eq!(parse_appearance("{\"theme\":1,\"expanded_workspaces\":\"yes\"}"),(1,false,false));
-        assert_eq!(parse_appearance("not json"),(0,false,false));
+        assert_eq!(parse_appearance("not json"),(2,false,false));
     }
 }
 
