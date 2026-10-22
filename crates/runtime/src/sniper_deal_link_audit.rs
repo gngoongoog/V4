@@ -98,7 +98,7 @@ pub fn audit(db:&Connection,context:&str)->Result<Value>{
             )?;
             q.query_map(params![context,deal_id],|r|r.get::<_,String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?
-                .into_iter().filter_map(|raw|serde_json::from_str(&raw).ok())
+                .into_iter().map(|raw|serde_json::from_str(&raw).unwrap_or(Value::Null))
                 .collect::<Vec<Value>>()
         }else{Vec::new()};
         let (quality,note)=classify(&value,&history);
