@@ -151,6 +151,8 @@ class ExecutionTests(unittest.TestCase):
         result=self.send()
         self.assertEqual(result['state'],'rejected')
         self.assertIn('minimum 0.01 lot needs',result['reason'])
+        self.assertIn('of equity',result['reason'])
+        self.assertIn('Leverage changes margin, not stop loss.',result['reason'])
         self.assertEqual(self.mt.sends,[])
 
     def test_risk_sizing_zero_commission_and_unavailable_broker_profit_fail_closed(self):
