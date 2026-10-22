@@ -230,7 +230,7 @@ mod tests{
         assert_eq!(summary["paper_position_open"],false);
         assert_eq!(summary["paired_bars"],0);
         assert!(summary["paper_net_after_assumed_costs"].as_f64().unwrap()>0.);
-        observe(&db,"A","trend",&adaptive,&t,3000,&BTreeMap::new()).unwrap();
+        observe(&db,"A",TradingMode::Expert,"trend",&adaptive,&t,3000,&BTreeMap::new()).unwrap();
         assert_eq!(report(&db,"A",TradingMode::Expert,"trend").unwrap()["paper_trades_closed"],1);
     }
 
