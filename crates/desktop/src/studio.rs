@@ -193,7 +193,7 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
                 });
                 return;
             }
-            if ui.get_studio_busy(){return;}
+            if ui.get_studio_busy() || ui.get_studio_cancel_busy(){return;}
             let tf=selected_tf(&ui);let basis=if ui.get_commission_basis()==1{"per_side"}else{"round_trip"};let body=(||->anyhow::Result<Value>{Ok(match action.as_str(){"save"=>{let trading=TradingConfig{sniper_style:match ui.get_sniper_style(){1=>braintrade_domain::trading::SniperStyle::Impulse,2=>braintrade_domain::trading::SniperStyle::Rebound,3=>braintrade_domain::trading::SniperStyle::Confirmed,_=>braintrade_domain::trading::SniperStyle::Auto},sniper_brain:if ui.get_sniper_brain()==1{SniperBrain::Learner}else{SniperBrain::Classic},
 sniper_target_mode:if ui.get_sniper_target_mode()==1{SniperTargetMode::Adaptive}else{SniperTargetMode::Fixed},
 sniper_min_target_pips:number(ui.get_sniper_min_target_pips())?,
