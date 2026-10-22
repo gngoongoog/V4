@@ -124,6 +124,16 @@ class NativeUiContract(unittest.TestCase):
             self.assertIn(f'root.page == {index} ?',self.dashboard,
                           f"Missing per-page live breadcrumb for page {index}")
 
+    def test_visual_qa_is_enforced_in_research_and_windows_package(self):
+        research=(ROOT / ".github/workflows/research.yml").read_text(encoding="utf-8")
+        windows=(ROOT / "scripts/build-windows.ps1").read_text(encoding="utf-8")
+        checker=(ROOT / "scripts/check_native_ui_visuals.py").read_text(encoding="utf-8")
+        self.assertEqual(research.count("run: python3 scripts/check_native_ui_visuals.py"), 2)
+        self.assertIn("scripts\\check_native_ui_visuals.py",windows)
+        self.assertIn("for page in range(22)",checker)
+        self.assertIn("if validated != 72",checker)
+        self.assertIn("if len({dark, white, smoke}) != 3",checker)
+
     def test_studio_cancel_really_works_while_studio_is_busy(self):
         src=(RUST / "studio.rs").read_text(encoding="utf-8")
         self.assertIn('if action=="cancel"',src)
