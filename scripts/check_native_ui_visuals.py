@@ -55,6 +55,9 @@ def main() -> None:
             validated += 2
             if len({dark, white, smoke}) != 3:
                 raise AssertionError(f"UI palette did not change for page={page}, size={size}")
+    for palette in PALETTES:
+        check_ppm(ROOT / "test-output" / "reference-preview" /
+                  f"reference-command-center-{palette}.ppm", 1540, 920)
     if validated != 72:
         raise AssertionError(f"Expected 72 saved renders, checked {validated}")
     print(f"Native Slint render QA OK: {validated} RGB screenshots; "
