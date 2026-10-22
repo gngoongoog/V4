@@ -7,6 +7,7 @@ mod trade_journal;
 mod shadow_paper;
 mod frozen_shadow;
 mod frozen_coordinator;
+mod coordinator_paper;
 mod matched_forward;
 mod matched_trade;
 mod student_learning;
