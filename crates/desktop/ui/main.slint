@@ -1092,26 +1092,53 @@ export component Dashboard inherits Window {
                         background: root.theme-choice==1?#ffffff:root.theme-choice==2?#292e35:#162231;
                         border-radius:13px;border-width:1px;border-color:root.theme-choice==1?#dfe6ef:#2c4053;
                         VerticalLayout {padding:13px;spacing:10px;
-                            Text {text:"EXECUTION CONSOLE";color:root.theme-choice==1?#14283e:#f0f8ff;font-size:20px;font-weight:800;}
-                            Text {text:"وحدة التشغيل والمراقبة";color:root.theme-choice==1?#6b8194:#a4b8c8;font-size:11px;}
+                            HorizontalLayout {spacing:8px;
+                                Rectangle {width:4px;background:#31cdb2;border-radius:2px;}
+                                Text {text:"TRADING OPERATIONS / مركز التشغيل";color:root.theme-choice==1?#14283e:#f0f8ff;font-size:15px;font-weight:800;vertical-alignment:center;}
+                                Rectangle {horizontal-stretch:1;background:transparent;}
+                                Text {text:root.execution-active?"● ARMED":"○ IDLE";color:root.execution-active?#24d3ac:#96a4b5;font-size:10px;vertical-alignment:center;}
+                            }
+                            Rectangle {
+                                min-height:33px; background:root.theme-choice==1?#eef3f8:#1c2732;border-radius:7px;
+                                HorizontalLayout {padding:3px;spacing:3px;
+                                    Button {text:"التداول المباشر";clicked=>{root.nav-section=1;root.page=17;root.execution-action("refresh");}}
+                                    Button {text:"إدارة الأوامر";clicked=>{root.nav-section=1;root.page=20;root.trade-journal-action("refresh");}}
+                                    Button {text:"أدوات المخاطر";clicked=>{root.nav-section=1;root.page=6;root.risk-monitor-refresh();}}
+                                }
+                            }
+                            HorizontalLayout {spacing:7px;
+                                DeskAction {label:"▶  START";fill-color:#23d5a9;
+                                    enabled:!root.busy && root.online && root.state=="STOPPED";
+                                    pressed=>{root.action("start");}}
+                                DeskAction {label:"■  STOP";fill-color:#e45c6c;primary:false;
+                                    enabled:!root.busy && root.state!="STOPPED";
+                                    pressed=>{root.action("stop");}}
+                                DeskAction {label:"◈ SHADOW";fill-color:#4b6c81;primary:false;
+                                    pressed=>{root.nav-section=1;root.page=17;root.execution-action("refresh");}}
+                            }
                             HorizontalLayout {spacing:6px;
-                                Button {text:"▶  START";enabled:!root.busy&&root.state=="STOPPED";clicked=>{root.action("start");}}
-                                Button {text:"■  STOP";enabled:!root.busy&&root.state!="STOPPED";clicked=>{root.action("stop");}}
+                                DeskAction {label:"Demo / Real";fill-color:#447ba3;primary:false;
+                                    pressed=>{root.nav-section=1;root.page=17;root.execution-action("refresh");}}
+                                DeskAction {label:"أوضاع القناص";fill-color:#3a687d;primary:false;
+                                    pressed=>{root.nav-section=1;root.page=14;root.studio-action("config");}}
+                                DeskAction {label:"تعلّم العقول";fill-color:#536b8a;primary:false;
+                                    pressed=>{root.nav-section=2;root.page=21;root.brain-monitor-action("refresh");}}
                             }
-                            Button {text:"↻  إعادة اتصال MT5";enabled:!root.busy;clicked=>{root.action("reconnect");}}
-                            Text {text:root.online?"حساب "+root.account-mode-label+" متصل":"غير متصل — لا يمكن تأكيد حالة التداول";
-                                  color:root.online?#1bcbaa:#e6a074;font-size:12px;wrap:word-wrap;}
-                            Rectangle {height:1px;background:root.theme-choice==1?#e1e8ef:#354756;}
-                            Text {text:"أوضاع التداول / التنفيذ";color:root.theme-choice==1?#21374d:#dfedfa;font-weight:700;}
-                            HorizontalLayout {spacing:5px;
-                                Button {text:"Scalping";clicked=>{root.nav-section=1;root.page=14;root.studio-action("config");}}
-                                Button {text:"Sniper";clicked=>{root.nav-section=1;root.page=14;root.studio-action("config");}}
+                            Rectangle {
+                                height:37px;background:root.theme-choice==1?#edf7f4:#173b36;border-radius:8px;
+                                border-width:1px;border-color:#257563;
+                                HorizontalLayout {padding:9px;spacing:7px;
+                                    Rectangle {width:8px;height:8px;border-radius:4px;background:root.online?#27d6ae:#d99b74;}
+                                    Text {text:root.online?"حساب "+root.account-mode-label+" متصل":"بانتظار اتصال وسيط MT5";
+                                        color:root.theme-choice==1?#1c564b:#c3f1e2;font-size:11px;vertical-alignment:center;}
+                                    Rectangle {horizontal-stretch:1;background:transparent;}
+                                    Text {text:root.execution-active?"RISK ARMED":"EXECUTION OFF";
+                                        color:root.theme-choice==1?#28614c:#7bcab0;font-size:10px;vertical-alignment:center;}
+                                }
                             }
-                            HorizontalLayout {spacing:5px;
-                                Button {text:"Demo / Real";clicked=>{root.nav-section=1;root.page=17;root.execution-action("refresh");}}
-                                Button {text:"Risk";clicked=>{root.nav-section=1;root.page=6;root.risk-monitor-refresh();}}
-                            }
-                            Text {text:"تغيير وضع التداول أو الحساب يتم من صفحات الإعدادات، مع الحفظ والتأكيد المطلوب. هذه الاختصارات لا تحول الحساب تلقائياً.";color:root.theme-choice==1?#687b90:#9aadbf;font-size:11px;wrap:word-wrap;}
+                            // Shortcuts navigate to safeguarded pages; do not silently
+                            // switch the trading account or disable risk checks.
+                            Text {text:"كل أوضاع التشغيل تظل خاضعة لتأكيد الحساب وحماية Core.";color:root.theme-choice==1?#607484:#91aabb;wrap:word-wrap;font-size:10px;}
                             Rectangle {height:1px;background:root.theme-choice==1?#e1e8ef:#354756;}
                             Text {text:"CORE INTELLIGENCE  /  حالة العقل الرئيسي";color:root.theme-choice==1?#21374d:#dfedfa;font-weight:700;}
                             Text {text:"السوق: "+root.regime; color:root.theme-choice==1?#485e73:#b0c3d4;wrap:word-wrap;}
