@@ -134,11 +134,45 @@ fn forward_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result
     for(raw_p,raw_o)in rows{let p:Value=serde_json::from_str(&raw_p)?;let o:Value=serde_json::from_str(&raw_o)?;let sample_regime=p["regime"].as_str().unwrap_or("legacy");if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}let net=o["net"].as_f64().unwrap_or(0.);let reward=o["reward"].as_f64().unwrap_or_else(||reward_v2(net,0.).1);let ts=o["scored_ms"].as_u64().or_else(||p["observed_ms"].as_u64()).unwrap_or(now);let w=decay_weight(ts,now,FORWARD_HALF_LIFE_MS);samples+=1;if net>0.{wins+=1;weighted_wins+=w;}weighted_net+=net*w;weighted_reward+=reward*w;effective+=w;}
     Ok(finish_stats(samples,wins,weighted_wins,weighted_net,weighted_reward,effective))
 }
+/// An older or edited cached score is NOT automatically reliable because a
+/// broker position once existed. Re-check booked economics on every weight read.
+/// Without this, a missing net_per_lot becomes a fabricated break-even sample.
+fn valid_cached_broker_score(p:&Value, closed_ms:u64)->Option<(f64,f64)> {
+    if p["evidence_source"]!="mt5_demo_broker" ||
+       p["closed_ms"].as_u64()!=Some(closed_ms) ||
+       p["position_id"].as_u64().filter(|v|*v>0).is_none() { return None; }
+    let monetary=|field:&str|p[field].as_f64()
+        .filter(|v|v.is_finite()&&v.abs()<=1e12);
+    let gross=monetary("gross")?;
+    let commission=monetary("commission")?;
+    let swap=monetary("swap")?;
+    let fee=monetary("fee")?;
+    let net=monetary("net")?;
+    let volume=monetary("closed_volume").filter(|v|*v>0.&&*v<=10000.)?;
+    let net_per_lot=monetary("net_per_lot")?;
+    let reward=monetary("reward").filter(|v|(-1...=1.).contains(v))?;
+    let sum=gross+commission+swap+fee;
+    if !sum.is_finite()
+        ||(sum-net).abs()>1e-6_f64.max(net.abs()*1e-8)
+        ||(net/volume-net_per_lot).abs()>1e-6_f64.max(net_per_lot.abs()*1e-8) {
+        return None;
+    }
+    Some((net_per_lot,reward))
+}
 fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<Stats>{
     let mut st=db.prepare("SELECT closed_ms,payload FROM coordinator_broker_samples WHERE source=?1 ORDER BY closed_ms DESC LIMIT 4000")?;
     let rows=st.query_map([source],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let(mut samples,mut wins,mut weighted_wins,mut weighted_net,mut weighted_reward,mut effective)=(0u64,0u64,0.,0.,0.,0.);
-    for(ts,raw)in rows{let p:Value=serde_json::from_str(&raw)?;let sample_regime=p["regime"].as_str().unwrap_or("legacy");if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}let net=p["net_per_lot"].as_f64().unwrap_or(0.);let reward=p["reward"].as_f64().unwrap_or_else(||reward_v2(net,0.).1);let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);samples+=1;if net>0.{wins+=1;weighted_wins+=w;}weighted_net+=net*w;weighted_reward+=reward*w;effective+=w;}
+    for(ts,raw)in rows{
+        let Ok(p)=serde_json::from_str::<Value>(&raw) else {continue;};
+        let sample_regime=p["regime"].as_str().unwrap_or("legacy");
+        if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}
+        let Some((net,reward))=valid_cached_broker_score(&p,ts) else {continue;};
+        let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);
+        samples+=1;
+        if net>0.{wins+=1;weighted_wins+=w;}
+        weighted_net+=net*w;weighted_reward+=reward*w;effective+=w;
+    }
     Ok(finish_stats(samples,wins,weighted_wins,weighted_net,weighted_reward,effective))
 }
 // Repeated-mistake memory uses only exact completed Demo broker evidence already
@@ -879,6 +913,59 @@ mod tests {
         assert!(worse<good);
     }
 
+    #[test]
+    fn cached_demo_scores_refuse_zero_imputation_and_edited_economics(){
+        let ts=1710000000100_u64;
+        let good=json!({"evidence_source":"mt5_demo_broker",
+            "closed_ms":ts,"position_id":91,"gross":1.30,
+            "commission":-0.20,"swap":-0.10,"fee":0.,
+            "net":1.0,"closed_volume":0.10,"net_per_lot":10.,
+            "reward":0.4,"regime":"trending"});
+        assert_eq!(valid_cached_broker_score(&good,ts),Some((10.,0.4)));
+        for field in ["gross","commission","swap","fee","net","closed_volume",
+                      "net_per_lot","reward","position_id","closed_ms","evidence_source"]{
+            let mut bad=good.clone();
+            bad.as_object_mut().unwrap().remove(field);
+            assert_eq!(valid_cached_broker_score(&bad,ts),None,"missing {field} rejected");
+        }
+        for (field,replacement) in [
+            ("net",json!(1.20)),("net_per_lot",json!(11.)),
+            ("reward",json!(2.)),("commission",json!(null)),
+            ("gross",json!("1.30")),("closed_volume",json!(0.)),
+            ("evidence_source",json!("paper"))]{
+            let mut bad=good.clone();
+            bad[field]=replacement;
+            assert_eq!(valid_cached_broker_score(&bad,ts),None,"bad {field} rejected");
+        }
+        assert_eq!(valid_cached_broker_score(&good,ts+1),None);
+    }
+    #[test]
+    fn corrupted_cached_demo_outcomes_do_not_change_learned_broker_weights(){
+        let db=Connection::open_in_memory().unwrap();let _=Learner::new(&db).unwrap();
+        let ts=1710000000100_u64;
+        let source="demo-policy/one";
+        let mut score=json!({"evidence_source":"mt5_demo_broker",
+            "closed_ms":ts,"position_id":91,"gross":1.30,
+            "commission":-0.20,"swap":-0.10,"fee":0.,
+            "net":1.0,"closed_volume":0.10,"net_per_lot":10.,
+            "reward":0.4,"regime":"trending"});
+        let add=|db:&Connection,id:u64,score:&Value|{
+            db.execute("INSERT INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload)
+                VALUES(?1,?2,'account','trend',?3,?4)",
+                params![source,id,ts,score.to_string()]).unwrap();
+        };
+        add(&db,91,&score);
+        score["position_id"]=json!(92);
+        score["commission"]=Value::Null;
+        score["net_per_lot"]=json!(1000.);
+        add(&db,92,&score);
+        let stats=broker_stats(&db,source,None,ts+1).unwrap();
+        assert_eq!(stats.samples,1);
+        assert_eq!(stats.wins,1);
+        assert!((stats.mean_net_per_lot-10.).abs()<1e-8);
+        let other=broker_stats(&db,"another-account",None,ts+1).unwrap();
+        assert_eq!(other.samples,0);
+    }
     #[test]
     fn broker_deal_costs_must_be_explicit_finite_and_complete_before_learning(){
         let good=json!({"entry":1,"time_msc":1710000000100_u64,
