@@ -24,6 +24,7 @@ export component Dashboard inherits Window {
     preferred-width: 1540px; preferred-height: 920px; min-width: 960px; min-height: 700px;
     background: root.theme-choice == 1 ? #f4f7fb : root.theme-choice == 2 ? #242930 : #0c141e;
     in-out property <int> theme-choice: 0;
+    in-out property <bool> compact-sidebar: false;
     in property <string> account-mode-label: "NOT CONNECTED";
     in property <string> free-margin: "—";
     in property <string> active-positions: "—";
@@ -264,33 +265,34 @@ export component Dashboard inherits Window {
     HorizontalLayout {
         padding: 0px; spacing: 0px;
         Rectangle {
-            width: root.width < 1120px ? 70px : 190px;
+            width: root.compact-sidebar ? 70px : 188px;
             background: root.theme-choice == 1 ? #ffffff : root.theme-choice == 2 ? #292e35 : #101a26;
             border-width: 1px; border-color: root.theme-choice == 1 ? #e4e9f0 : #263543;
             VerticalLayout {
                 padding: 9px; spacing: 6px;
                 Rectangle { height: 73px; background: transparent;
                     VerticalLayout { padding: 5px; spacing: 4px;
-                        Text { text: root.width < 1120px ? "BT" : "BRAINTRADE V4"; color: root.theme-choice == 1 ? #13243b : #e6f7ff; font-size: root.width < 1120px ? 18px : 20px; font-weight: 800; }
-                        Text { text: root.width < 1120px ? "V4" : "Institutional Trading Terminal"; color: root.theme-choice == 1 ? #56708c : #6eddd4; font-size: 10px; }
+                        Text { text: root.compact-sidebar ? "BT" : "BRAINTRADE V4"; color: root.theme-choice == 1 ? #13243b : #e6f7ff; font-size: root.compact-sidebar ? 18px : 20px; font-weight: 800; }
+                        Text { text: root.compact-sidebar ? "V4" : "Institutional Trading Terminal"; color: root.theme-choice == 1 ? #56708c : #6eddd4; font-size: 10px; }
                     }
                 }
+                Button {text:root.compact-sidebar?"☰":"☰  طي القائمة";clicked=>{root.compact-sidebar=!root.compact-sidebar;}}
                 Rectangle {height:1px; background:root.theme-choice == 1 ? #e2e8f0 : #304052;}
-                Button { text: root.width < 1120px ? "⌂" : "⌂   نظرة عامة"; clicked => {root.nav-section=0;root.page=0;} }
-                Button { text: root.width < 1120px ? "↗" : "↗   مركز التداول"; clicked => {root.nav-section=1;root.page=14;root.studio-action("config");} }
-                Button { text: root.width < 1120px ? "◎" : "◎   وضع القناص"; clicked => {root.nav-section=1;root.page=14;root.studio-action("config");} }
-                Button { text: root.width < 1120px ? "✦" : "✦   العقول"; clicked => {root.nav-section=2;root.page=21;root.brain-monitor-action("refresh");} }
-                Button { text: root.width < 1120px ? "◇" : "◇   إدارة المخاطر"; clicked => {root.nav-section=1;root.page=6;root.risk-monitor-refresh();} }
-                Button { text: root.width < 1120px ? "⇄" : "⇄   التنفيذ MT5"; clicked => {root.nav-section=1;root.page=17;root.execution-action("refresh");} }
-                Button { text: root.width < 1120px ? "▤" : "▤   التحليلات"; clicked => {root.nav-section=2;root.page=4;} }
-                Button { text: root.width < 1120px ? "▣" : "▣   سجل الصفقات"; clicked => {root.nav-section=1;root.page=20;root.trade-journal-action("refresh");} }
-                Button { text: root.width < 1120px ? "◴" : "◴   تقدّم التعلّم"; clicked => {root.nav-section=1;root.page=19;} }
-                Button { text: root.width < 1120px ? "✉" : "✉   Telegram"; clicked => {root.nav-section=4;root.page=1;} }
-                Button { text: root.width < 1120px ? "≡" : "≡   سجل النظام"; clicked => {root.nav-section=4;root.page=2;root.action("events");} }
-                Button { text: root.width < 1120px ? "⚙" : "⚙   الإعدادات"; clicked => {root.nav-section=4;root.page=1;} }
+                Button { text: root.compact-sidebar ? "⌂" : "⌂   نظرة عامة"; clicked => {root.nav-section=0;root.page=0;} }
+                Button { text: root.compact-sidebar ? "↗" : "↗   مركز التداول"; clicked => {root.nav-section=1;root.page=14;root.studio-action("config");} }
+                Button { text: root.compact-sidebar ? "◎" : "◎   وضع القناص"; clicked => {root.nav-section=1;root.page=14;root.studio-action("config");} }
+                Button { text: root.compact-sidebar ? "✦" : "✦   العقول"; clicked => {root.nav-section=2;root.page=21;root.brain-monitor-action("refresh");} }
+                Button { text: root.compact-sidebar ? "◇" : "◇   إدارة المخاطر"; clicked => {root.nav-section=1;root.page=6;root.risk-monitor-refresh();} }
+                Button { text: root.compact-sidebar ? "⇄" : "⇄   التنفيذ MT5"; clicked => {root.nav-section=1;root.page=17;root.execution-action("refresh");} }
+                Button { text: root.compact-sidebar ? "▤" : "▤   التحليلات"; clicked => {root.nav-section=2;root.page=4;} }
+                Button { text: root.compact-sidebar ? "▣" : "▣   سجل الصفقات"; clicked => {root.nav-section=1;root.page=20;root.trade-journal-action("refresh");} }
+                Button { text: root.compact-sidebar ? "◴" : "◴   تقدّم التعلّم"; clicked => {root.nav-section=1;root.page=19;} }
+                Button { text: root.compact-sidebar ? "✉" : "✉   Telegram"; clicked => {root.nav-section=4;root.page=1;} }
+                Button { text: root.compact-sidebar ? "≡" : "≡   سجل النظام"; clicked => {root.nav-section=4;root.page=2;root.action("events");} }
+                Button { text: root.compact-sidebar ? "⚙" : "⚙   الإعدادات"; clicked => {root.nav-section=4;root.page=1;} }
                 Rectangle { vertical-stretch:1; background:transparent; }
-                Text { text: root.width < 1120px ? "V4" : "Windows 0.7.4 • Rust / Slint"; color: root.theme-choice == 1 ? #7d8ba1 : #93a8bc; font-size:10px; horizontal-alignment:center; }
-                Text { text: root.online ? (root.width < 1120px ? "●" : "●  MT5 ONLINE") : (root.width < 1120px ? "○" : "○  MT5 OFFLINE"); color: root.online ? #18c9a7 : #d99870; font-size:12px; horizontal-alignment:center; }
+                Text { text: root.compact-sidebar ? "V4" : "Windows 0.7.4 • Rust / Slint"; color: root.theme-choice == 1 ? #7d8ba1 : #93a8bc; font-size:10px; horizontal-alignment:center; }
+                Text { text: root.online ? (root.compact-sidebar ? "●" : "●  MT5 ONLINE") : (root.compact-sidebar ? "○" : "○  MT5 OFFLINE"); color: root.online ? #18c9a7 : #d99870; font-size:12px; horizontal-alignment:center; }
             }
         }
         VerticalLayout {
@@ -878,7 +880,7 @@ export component Dashboard inherits Window {
                                     text: "بانتظار شموع MT5 مكتملة وحديثة لهذا الرمز — لا نعرض شارتاً افتراضياً";
                                     color: root.theme-choice == 1 ? #61758b : #a8b6c6;
                                     horizontal-alignment: center; vertical-alignment:center;wrap:word-wrap;
-                                    width:parent.width-36px;height:parent.height;
+                                    width:parent.width - 36px;height:parent.height;
                                     x:18px;
                                 }
                             }
