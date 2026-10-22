@@ -163,9 +163,11 @@ pub fn report(db:&Connection,key:&str)->Result<Value>{
             if f.side==a.side{same+=1}else{different+=1}
         }else if f.ready{frozen_only+=1}else if a.ready{adaptive_only+=1}
     }
+    let paired=crate::coordinator_paper::summary(db,&id)?;
     Ok(json!({"status":if active{"active"}else{"stopped"},
         "run_id":id,"frozen_ms":created,"policy":POLICY,
         "bars_compared":total,"both_actionable":both,
+        "paired_quote_paper":paired,
         "same_direction":same,"different_direction":different,
         "frozen_only_ready":frozen_only,"adaptive_only_ready":adaptive_only,
         "frozen_weights_immutable":true,"no_broker_orders":true,
