@@ -35,7 +35,7 @@ class NativeUiContract(unittest.TestCase):
         # or invokes a selection callback. This is source wiring, not a
         # replacement for interacting with native widgets on Windows.
         def controls(source, kind):
-            pattern=re.compile(r"\\b"+kind+r"\\s*\\{")
+            pattern=re.compile(r"\b"+kind+r"\s*\{")
             for match in pattern.finditer(source):
                 start=source.index("{",match.start())
                 depth=0
@@ -46,7 +46,7 @@ class NativeUiContract(unittest.TestCase):
                     if quoted:
                         if escaped:
                             escaped=False
-                        elif ch=="\\\\":
+                        elif ch=="\\":
                             escaped=True
                         elif ch=='"':
                             quoted=False
@@ -68,13 +68,13 @@ class NativeUiContract(unittest.TestCase):
                 for element in controls(code,kind):
                     total[kind]+=1
                     if kind=="Button":
-                        self.assertRegex(element,r"\\bclicked\\s*=>")
+                        self.assertRegex(element,r"\bclicked\s*=>")
                     elif kind=="ComboBox":
-                        self.assertRegex(element,r"(current-index\\s*<=>|selected\\s*(?:\\([^)]*\\))?\\s*=>)")
+                        self.assertRegex(element,r"(current-index\s*<=>|selected\s*(?:\([^)]*\))?\s*=>)")
                     elif kind=="LineEdit":
-                        self.assertRegex(element,r"\\btext\\s*<=>")
+                        self.assertRegex(element,r"\btext\s*<=>")
                     else:
-                        self.assertRegex(element,r"\\bchecked\\s*<=>")
+                        self.assertRegex(element,r"\bchecked\s*<=>")
         # Catch missing fields silently disappearing from nested layouts.
         self.assertEqual(total,{"Button":130,"ComboBox":29,"LineEdit":49,"CheckBox":12})
 
