@@ -57,6 +57,10 @@ fn ctx(t: &Telemetry) -> String {
 fn micro_account_key(t: &Telemetry) -> String {
     serde_json::to_string(&(&t.server, t.login, &t.currency)).unwrap()
 }
+// Daily lock isolates Demo/REAL as well as the account; recovery lock is separate.
+fn daily_account_key(t: &Telemetry) -> String {
+    serde_json::to_string(&(&t.server, t.login, &t.currency, t.account_trade_mode)).unwrap()
+}
 fn json_rows(db: &Connection, sql: &str, key: &str) -> Result<Vec<Value>> {
     let mut st = db.prepare(sql)?;
     let rows = st
