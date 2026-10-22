@@ -54,6 +54,7 @@ pub fn report(db:&Connection,context:&str)->Result<Value>{
     let mut count=BTreeMap::<String,u64>::new();
     let mut examples=Vec::<Value>::new();
     let mut seen_cmd=BTreeSet::<String>::new();
+    let mut seen_closed_positions=BTreeSet::<u64>::new();
     let mut malformed=0u64;
     let mut closed=0u64;
     let mut net_total=0.;
@@ -64,7 +65,10 @@ pub fn report(db:&Connection,context:&str)->Result<Value>{
         };
         let Some(ready)=obs["signal_ready"].as_bool() else {malformed+=1;continue;};
         let Some(eligible)=obs["entry_ready"].as_bool() else{malformed+=1;continue;};
-        if obs["observed_ms"].as_u64()!=Some(*stamp)||eligible&&!ready {
+        let Some(gates)=obs["gates"].as_array() else {malformed+=1;continue;};
+        if obs["observed_ms"].as_u64()!=Some(*stamp)||eligible&&!ready
+            || eligible&&!gates.is_empty()
+            || (ready&&!eligible&&gates.is_empty()) {
             malformed+=1;continue;
         }
         let category=if !ready{"not_ready"}
@@ -108,6 +112,7 @@ pub fn report(db:&Connection,context:&str)->Result<Value>{
                                     else if let Some((position,time,p))=matches.first(){
                                         let evidence=serde_json::from_str::<Value>(p).unwrap_or(Value::Null);
                                         if !context_closed(&evidence,*position,id,*time)
+                                            || seen_closed_positions.contains(position)
                                             || !matches!(state.as_str(),"observed"|"filled"|"partial"|"placed")
                                             || result["deal"].as_u64().unwrap_or(0)==0
                                             || evidence["open_deal"]!=result["deal"]
@@ -116,6 +121,7 @@ pub fn report(db:&Connection,context:&str)->Result<Value>{
                                             || evidence["selection"]["sniper_definition"]!=cmd["signal"]["coordination"]["selection"]["sniper_definition"]
                                         {"contradictory_closed_evidence"}else{
                                             let net=finite(&evidence["net"]).unwrap();
+                                            seen_closed_positions.insert(*position);
                                             closed+=1;net_total+=net;wins+=u64::from(net>0.);
                                             "closed_demo_exact"
                                         }
@@ -170,6 +176,7 @@ mod tests{
     }
     fn decision(db:&Connection,ctx:&str,time:u64,ready:bool,eligible:bool,id:Option<&str>){
         let p=json!({"observed_ms":time,"signal_ready":ready,"entry_ready":eligible,
+            "gates":if ready&&!eligible{vec!["فاصل الدخول المختار"]}else{vec![]},
             "command_id":id,"signal_key":format!("tick:{time}")});
         db.execute("INSERT INTO sniper_opportunity_samples VALUES(?1,?2,0,?3)",
             params![ctx,time,p.to_string()]).unwrap();
@@ -232,6 +239,18 @@ mod tests{
         closed(&db,"a",901,"cmd",0.5);
         let r=report(&db,"a").unwrap();
         assert_eq!(r["counts"]["contradictory_closed_evidence"],1);
+        assert_eq!(r["exact_closed_demo_positions"],0);
+    }
+    #[test]
+    fn contradictory_snapshot_is_not_a_broker_winning_trade(){
+        let db=d();
+        decision(&db,"a",5000,true,true,Some("cmd"));
+        db.execute("UPDATE sniper_opportunity_samples SET payload=json_set(payload,
+              '$.gates',json_array('فاصل الدخول المختار')) WHERE observed_ms=5000",[]).unwrap();
+        command(&db,"a",5000,"cmd","sniper",55);
+        closed(&db,"a",900,"cmd",20.);
+        let r=report(&db,"a").unwrap();
+        assert_eq!(r["malformed_rows"],1);
         assert_eq!(r["exact_closed_demo_positions"],0);
     }
     #[test]
