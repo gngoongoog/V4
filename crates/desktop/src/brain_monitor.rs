@@ -67,6 +67,20 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
     ));
     if b["config"]["id"]=="system" {
         if v["trading_mode"]=="sniper" {
+            let breakdown=&b["sniper_multigate_breakdown"];
+            detail.push_str(&format!(
+                "\n\nتفصيل جميع أسباب منع القناص من نفس العينات (24 ساعة):\nعينات سليمة {} | شروط الاستراتيجية لم تكتمل {} | إشارة جاهزة منعتها بوابة تنفيذ {} | مؤهلة للطابور {} | بيانات معيبة {}\nلا نضيف عينات جديدة؛ كل قرار محظور قد يحمل عدة أسباب. لا تعني الإشارة المؤهلة أنه تم تنفيذ صفقة.",
+                breakdown["sampled_decisions"],breakdown["strategy_not_ready"],
+                breakdown["strategy_ready_but_blocked"],breakdown["entry_eligible_at_snapshot"],
+                breakdown["malformed_or_inconsistent_rows"]
+            ));
+            for cause in breakdown["top_causes"].as_array().into_iter().flatten().take(8){
+                detail.push_str(&format!(
+                    "\n • {}: {} عينة",
+                    cause["label_ar"].as_str().unwrap_or("غير مصنف"),
+                    cause["sampled_decisions_with_cause"]
+                ));
+            }
             let opportunities=&b["sniper_opportunities"];
             detail.push_str(&format!(
                 "\n\nلماذا ينتظر القناص؟ — رصد Demo تشخيصي:\nآخر {} ملاحظة | غير مؤهلة للدخول {} | أوامر مرتبطة بدقة {}\nرصد بحد أقصى مرة بالثانية من تحديثات الحساب العادية؛ لا يشمل كل النبضات السريعة ولا يمثل عدد فرص أو صفقات مستقلة.\nللإشارات الجاهزة ذات الاتجاه: مقارنة افتراضية بعد 5–6.5 ثانية بسعر الشراء/البيع، وعمولة الحساب وانزلاق مقدّر. ليست صفقة منفذة ولا تختبر مسار الهدف والوقف. السبب المصنف هو أول مانع؛ بقية الموانع تبقى محفوظة.",
