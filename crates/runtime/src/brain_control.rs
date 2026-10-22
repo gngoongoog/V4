@@ -13,6 +13,7 @@ impl Default for Control {fn default()->Self {Self{advisor:true,paper:true}}}
 pub fn init(db:&Connection)->Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS brain_controls(context TEXT NOT NULL,mode TEXT NOT NULL,brain TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,mode,brain));
         CREATE TABLE IF NOT EXISTS brain_activity(context TEXT NOT NULL,mode TEXT NOT NULL,brain TEXT NOT NULL,checks INTEGER NOT NULL,signals INTEGER NOT NULL,last_key TEXT NOT NULL,last_ms INTEGER NOT NULL,PRIMARY KEY(context,mode,brain));")?;
+    crate::sniper_entry_funnel::init(db)?;
     Ok(())
 }
 fn mode_key(mode:TradingMode)->String {serde_json::to_string(&mode).unwrap()}
@@ -57,6 +58,7 @@ pub fn enrich(value:&mut Value,db:&Connection,key:&str,mode:TradingMode)->Result
                 b["sniper_execution_latency"]=crate::sniper_latency_audit::audit(db,key)?;
                 b["sniper_deal_link"]=crate::sniper_deal_link_audit::audit(db,key)?;
                 b["sniper_policy_quality"]=crate::sniper_policy_quality::report(db,key)?;
+                b["sniper_entry_funnel"]=crate::sniper_entry_funnel::report(db,key,crate::now_ms())?;
             }
         }
         let (closed,wins,net):(u64,u64,f64)=db.query_row("SELECT COUNT(*),COALESCE(SUM(CASE WHEN json_extract(payload,'$.net_paper')>0 THEN 1 ELSE 0 END),0),COALESCE(SUM(json_extract(payload,'$.net_paper')),0.0) FROM paper_brain_outcomes WHERE context=?1 AND brain=?2 AND json_extract(payload,'$.trading_mode_at_open')=?3",params![key,id,serde_json::to_value(mode)?.as_str().unwrap()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
