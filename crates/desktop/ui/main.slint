@@ -1,7 +1,7 @@
 import { AboutSlint, Palette, ComboBox, Button, LineEdit, CheckBox, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
 import { CorrelationPage } from "./correlation.slint";
 export struct NewsRow {title:string,detail:string,url:string}
-export struct ChartCandle {x:float, high-y:float, low-y:float, body-top:float, body-bottom:float, up:bool}
+export struct ChartCandle {x:float, high-y:float, low-y:float, body-top:float, body-bottom:float, up:bool, volume:float}
 
 component Card inherits Rectangle {
     in property <string> label;
