@@ -4,10 +4,17 @@ use serde::{Deserialize, Serialize};
 mod regime;
 pub use regime::{MetaBrainV2, RegimeBrain, TrendBrain, TrendFrame};
 
+fn micro_demo_opt_in_is_false(value: &bool) -> bool { !*value }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RiskConfig {
     pub risk_percent: f64,
+    /// Explicit opt-in permits up to 5% per trade in verified MT5 Demo only.
+    /// Omit false from serialized legacy backtest reports to preserve golden hashes.
+    /// The broker adapter rejects this elevated budget on REAL accounts.
+    #[serde(default, skip_serializing_if = "micro_demo_opt_in_is_false")]
+    pub micro_demo_risk_opt_in: bool,
     pub daily_loss_percent: f64,
     pub max_drawdown_percent: f64,
     pub max_spread_atr: f64,
@@ -19,6 +26,7 @@ impl Default for RiskConfig {
     fn default() -> Self {
         Self {
             risk_percent: 0.25,
+            micro_demo_risk_opt_in: false,
             daily_loss_percent: 2.0,
             max_drawdown_percent: 5.0,
             max_spread_atr: 0.25,
@@ -31,7 +39,7 @@ impl Default for RiskConfig {
 impl RiskConfig {
     pub fn validate(&self) -> Result<(), String> {
         let ranges = [
-            (self.risk_percent, 0.01, 2.0),
+            (self.risk_percent, 0.01, if self.micro_demo_risk_opt_in { 5.0 } else { 2.0 }),
             (self.daily_loss_percent, 0.1, 10.0),
             (self.max_drawdown_percent, 0.1, 30.0),
             (self.max_spread_atr, 0.01, 1.0),
@@ -525,11 +533,30 @@ pub mod tests {
     }
 
     #[test]
+    fn elevated_micro_demo_risk_requires_explicit_opt_in() {
+        let mut risk = RiskConfig::default();
+        risk.risk_percent = 4.0;
+        assert!(risk.validate().is_err());
+        risk.micro_demo_risk_opt_in = true;
+        assert!(risk.validate().is_ok());
+        risk.risk_percent = 5.01;
+        assert!(risk.validate().is_err());
+        risk.risk_percent = 5.0;
+        assert!(risk.validate().is_ok());
+        let decoded: RiskConfig = serde_json::from_str(&serde_json::to_string(&risk).unwrap()).unwrap();
+        assert!(decoded.micro_demo_risk_opt_in);
+        assert_eq!(decoded.risk_percent, 5.0);
+    }
+    #[test]
     fn old_config_gets_risk_defaults() {
         let old = r#"{"schema":1,"mt5_path":"","symbol":"XAUUSD","telegram_user_id":"","telegram_chat_id":"","telegram_enabled":false}"#;
         let config: crate::Config = serde_json::from_str(old).unwrap();
         assert_eq!(config.risk.risk_percent, 0.25);
+        assert!(!config.risk.micro_demo_risk_opt_in);
         assert!(config.validate().is_ok());
+        assert!(!serde_json::to_value(&config.risk).unwrap().as_object().unwrap()
+            .contains_key("micro_demo_risk_opt_in"),
+            "disabled opt-in must not alter historical report fingerprints");
     }
 }
 

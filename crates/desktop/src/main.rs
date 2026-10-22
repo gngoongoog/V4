@@ -205,6 +205,7 @@ fn run_ui() -> anyhow::Result<()> {
                 Ok(v) => {
                     let risk = RiskConfig {
                         risk_percent: v[0],
+                        micro_demo_risk_opt_in: ui.get_micro_demo_risk_opt_in(),
                         daily_loss_percent: v[1],
                         max_drawdown_percent: v[2],
                         max_spread_atr: v[3],
@@ -251,6 +252,7 @@ fn run_ui() -> anyhow::Result<()> {
                     ui.set_telegram_enabled(c.telegram_enabled);
                     ui.set_token_saved(saved);
                     ui.set_risk_percent(c.risk.risk_percent.to_string().into());
+                    ui.set_micro_demo_risk_opt_in(c.risk.micro_demo_risk_opt_in);
                     ui.set_daily_limit(c.risk.daily_loss_percent.to_string().into());
                     ui.set_drawdown_limit(c.risk.max_drawdown_percent.to_string().into());
                     ui.set_spread_limit(c.risk.max_spread_atr.to_string().into());

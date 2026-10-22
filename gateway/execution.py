@@ -94,7 +94,8 @@ def round_trip_commission(rate_per_lot, lots):
 
 
 def size_to_stop_risk(mt5, account, info, symbol, side, entry, stop_price,
-                      requested, risk_percent, commission, slippage_ticks):
+                      requested, risk_percent, commission, slippage_ticks,
+                      micro_demo_risk_opt_in=False, broker_demo=False):
     """Limit order size to an equity-at-risk budget using MT5 contract PnL.
 
     A requested volume is an UPPER bound, never a minimum. No order can be
@@ -106,8 +107,10 @@ def size_to_stop_risk(mt5, account, info, symbol, side, entry, stop_price,
     values=(entry, stop_price, requested, risk_percent, commission, slippage_ticks)
     if not all(math.isfinite(float(v)) for v in values):
         raise ValueError('Risk sizing: all prices, lot and fee inputs must be finite')
+    allowed_risk_percent = 5.0 if micro_demo_risk_opt_in and broker_demo else 2.0
     if not (entry > 0 and stop_price > 0 and requested > 0
-            and 0 < risk_percent <= 2.0 and 0 <= commission <= 1000
+            and 0 < risk_percent <= allowed_risk_percent
+            and 0 <= commission <= 1000
             and 0 <= slippage_ticks <= 1000):
         raise ValueError('Risk sizing: invalid price, lot, risk percent or fee')
     equity=float(getattr(account,'equity',float('nan')))
@@ -405,7 +408,9 @@ class BrokerExecutor:
                         mt5,a,info,symbol,side,price,request['sl'],lots,
                         float(cmd['risk_percent']),
                         float(cmd.get('commission_per_lot',float('nan'))),
-                        float(cmd.get('slippage_ticks',float('nan'))))
+                        float(cmd.get('slippage_ticks',float('nan'))),
+                        micro_demo_risk_opt_in=cmd.get('micro_demo_risk_opt_in') is True,
+                        broker_demo=cmd['target']=='demo' and a.trade_mode==0)
                     request['volume']=lots
                     result['risk_sizing_ms']=(time.perf_counter()-risk_started)*1000
                     if 'sizing' in result:

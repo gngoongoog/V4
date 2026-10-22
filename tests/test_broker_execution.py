@@ -155,6 +155,32 @@ class ExecutionTests(unittest.TestCase):
         self.assertIn('Leverage changes margin, not stop loss.',result['reason'])
         self.assertEqual(self.mt.sends,[])
 
+    def test_micro_demo_opt_in_enables_costed_minimum_without_live_override(self):
+        self.mt.account.equity=100.
+        self.mt.account.margin_free=100.
+        self.cmd.update(id='micro-no-optin',lots=.01,demo_flexible=True,
+                        risk_percent=2.0,commission_per_lot=7.,
+                        slippage_ticks=2.)
+        self.cmd['signal']['stop_distance']=3.
+        blocked=self.send()
+        self.assertEqual(blocked['state'],'rejected',blocked)
+        self.assertEqual(len(self.mt.sends),0)
+        self.cmd.update(id='micro-demo-accepted',risk_percent=4.0,
+                        micro_demo_risk_opt_in=True)
+        accepted=self.send()
+        self.assertEqual(accepted['state'],'filled',accepted)
+        self.assertAlmostEqual(accepted['request']['volume'],.01)
+        self.assertAlmostEqual(accepted['risk_sizing']['estimated_stop_loss_including_costs'],3.11)
+        self.assertEqual(len(self.mt.sends),1)
+        self.cmd.update(id='micro-demo-no-consent',micro_demo_risk_opt_in=False)
+        rejected=self.send()
+        self.assertEqual(rejected['state'],'rejected')
+        self.assertEqual(len(self.mt.sends),1)
+        self.cmd.update(id='micro-real-reject',target='live',micro_demo_risk_opt_in=True)
+        self.mt.account.trade_mode=2
+        rejected=self.send()
+        self.assertEqual(rejected['state'],'rejected')
+        self.assertEqual(len(self.mt.sends),1)
     def test_risk_sizing_zero_commission_and_unavailable_broker_profit_fail_closed(self):
         self.mt.account.equity=1000.
         self.cmd.update(id='risk-free-fee',risk_percent=0.5,
