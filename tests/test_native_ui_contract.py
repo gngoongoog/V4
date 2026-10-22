@@ -91,6 +91,16 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("market.valid()",main)
         self.assertIn("captured_ms <= 120_000",main) if "captured_ms <= 120_000" in main else self.assertIn("now_ms.saturating_sub(market.captured_ms) <= 120_000",main)
 
+    def test_render_only_example_market_chart_is_never_live_trading_data(self):
+        runtime=(RUST / "main.rs").read_text(encoding="utf-8")
+        render=(RUST / "render.rs").read_text(encoding="utf-8")
+        self.assertIn("in property <bool> render-fixture: false;",self.dashboard)
+        self.assertIn("RENDER FIXTURE • NOT LIVE MT5",self.dashboard)
+        self.assertIn("ui.set_render_fixture(true)",render)
+        self.assertIn("ui.set_chart_bars",render)
+        self.assertNotIn("set_render_fixture(true)",runtime)
+        self.assertIn("native_chart_candles",runtime)
+
     def test_reference_mockup_navigation_and_actions_are_all_wired(self):
         self.assertEqual(len(re.findall(r"\bDeskNav\s*\{",self.dashboard)), 12)
         self.assertEqual(len(re.findall(r"\bDeskAction\s*\{",self.dashboard)), 6)
