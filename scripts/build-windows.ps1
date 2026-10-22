@@ -31,7 +31,14 @@ Invoke-Checked -Program cargo -Arguments @('build','--release','--locked','-p','
 if (-not $SkipTests) {
     # Native software rendering works without a broker; assert all 22 pages
     # render in three themes and two viewport sizes before packaging the exe.
-    Invoke-Checked -Program (Join-Path $PWD 'target\release\BrainTrade.exe') -Arguments @('--render-check')
+    $NativeScreenshots = Join-Path $PWD 'test-output\native-ui'
+    if (Test-Path $NativeScreenshots) { Remove-Item -LiteralPath $NativeScreenshots -Recurse -Force }
+    # BrainTrade.exe is compiled as a Windows GUI subsystem application.
+    # A plain '& BrainTrade.exe --render-check' returns before the GUI child
+    # finishes its Slint software-render pass; use Start-Process -Wait.
+    $NativeRenderer = Start-Process -FilePath (Join-Path $PWD 'target\release\BrainTrade.exe') `
+        -ArgumentList @('--render-check') -WorkingDirectory $PWD.Path -PassThru -Wait
+    if ($NativeRenderer.ExitCode -ne 0) { throw "Native Windows render failed ($($NativeRenderer.ExitCode))" }
     Invoke-Checked -Program $Python -Arguments @('scripts\check_native_ui_visuals.py')
 }
 Invoke-Checked -Program $Python -Arguments @('scripts\package-portable.py','--exe','target\release\BrainTrade.exe')
