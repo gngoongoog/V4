@@ -26,6 +26,39 @@ enum Task {
     Browse,
 }
 
+// Plot only MT5-sourced, valid, completed OHLC bars. Values are normalized
+// against the plotted series; these are not order markers or simulated fills.
+fn native_chart_candles(market: &braintrade_domain::MarketData, frame: i32) -> Vec<ChartCandle> {
+    if !market.valid() { return Vec::new(); }
+    let candles = match frame {
+        0 => &market.m1,
+        1 => &market.m5,
+        2 => &market.m15,
+        _ => return Vec::new(),
+    };
+    let subset = &candles[candles.len().saturating_sub(70)..];
+    if subset.len() < 3 { return Vec::new(); }
+    let low = subset.iter().map(|c| c.low).fold(f64::INFINITY, f64::min);
+    let high = subset.iter().map(|c| c.high).fold(f64::NEG_INFINITY, f64::max);
+    let extent = high - low;
+    if !extent.is_finite() || extent <= 0.0 || !low.is_finite() || !high.is_finite() {
+        return Vec::new();
+    }
+    let padding = extent * 0.05;
+    let lower = low - padding;
+    let upper = high + padding;
+    let denom = upper - lower;
+    let at = |price: f64| ((upper - price) / denom).clamp(0.0, 1.0) as f32;
+    subset.iter().enumerate().map(|(i, candle)| ChartCandle {
+        x: (i as f32 + 0.5) / subset.len() as f32,
+        high_y: at(candle.high),
+        low_y: at(candle.low),
+        body_top: at(candle.open.max(candle.close)),
+        body_bottom: at(candle.open.min(candle.close)),
+        up: candle.close >= candle.open,
+    }).collect()
+}
+
 fn paint(ui: &Dashboard, status: Status) {
     // A fresh response from the gateway does not imply an authenticated MT5
     // account is connected. Both conditions must hold for an ONLINE display.
@@ -61,6 +94,31 @@ fn paint(ui: &Dashboard, status: Status) {
     );
     ui.set_diagnostics(status.message.into());
     if let Some(t) = status.telemetry.filter(|_| broker_online) {
+        ui.set_account_mode_label(if t.demo { "DEMO".into() }
+            else if t.account_trade_mode == Some(2) { "REAL".into() }
+            else { "OTHER".into() });
+        ui.set_free_margin(t.margin_free.map(|v| format!("{v:.2} {}", t.currency))
+            .unwrap_or_else(|| "—".into()).into());
+        ui.set_active_positions(t.positions.len().to_string().into());
+        ui.set_bid_display(t.bid.filter(|v| v.is_finite() && *v > 0.)
+            .map(|v| format!("{v:.5}")).unwrap_or_else(|| "—".into()).into());
+        ui.set_ask_display(t.ask.filter(|v| v.is_finite() && *v > 0.)
+            .map(|v| format!("{v:.5}")).unwrap_or_else(|| "—".into()).into());
+        ui.set_spread_display(t.bid.zip(t.ask)
+            .filter(|(bid,ask)| bid.is_finite() && ask.is_finite() && *bid > 0. && *ask >= *bid)
+            .map(|(bid,ask)| format!("{:.5} price", ask-bid))
+            .unwrap_or_else(|| "—".into()).into());
+        ui.set_quote_age_display(t.tick_age_ms.map(|ms| format!("{ms} ms"))
+            .unwrap_or_else(|| "—".into()).into());
+        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map(|v| v.as_millis() as u64).unwrap_or(0);
+        let bars = t.market.as_ref()
+            .filter(|market| market.captured_ms > 0
+                && now_ms >= market.captured_ms
+                && now_ms.saturating_sub(market.captured_ms) <= 120_000)
+            .map(|market| native_chart_candles(market, ui.get_chart_frame()))
+            .unwrap_or_default();
+        ui.set_chart_bars(slint::ModelRc::new(slint::VecModel::from(bars)));
         ui.set_account(
             format!(
                 "{} | {} | {} | {}",
@@ -108,6 +166,14 @@ fn paint(ui: &Dashboard, status: Status) {
         }));
         ui.set_positions(rows.join("\n\n").into());
     } else {
+        ui.set_account_mode_label("NOT CONNECTED".into());
+        ui.set_free_margin("—".into());
+        ui.set_active_positions("—".into());
+        ui.set_bid_display("—".into());
+        ui.set_ask_display("—".into());
+        ui.set_spread_display("—".into());
+        ui.set_quote_age_display("—".into());
+        ui.set_chart_bars(slint::ModelRc::new(slint::VecModel::<ChartCandle>::default()));
         ui.set_account("Waiting for a complete current MT5 account snapshot".into());
         ui.set_balance("—".into());
         ui.set_equity("—".into());
@@ -436,4 +502,27 @@ fn run_ui() -> anyhow::Result<()> {
     });
     ui.run()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod institutional_dashboard_tests {
+    use super::*;
+    #[test]
+    fn real_ohlc_chart_requires_at_least_three_complete_candles() {
+        let mut m = braintrade_domain::MarketData::default();
+        assert!(native_chart_candles(&m, 0).is_empty());
+        for i in 0..4 {
+            m.m1.push(braintrade_domain::Candle {
+                time: 1_800_000_000 + i * 60,
+                open: 5000.0 + i as f64, high: 5002.0 + i as f64,
+                low: 4999.0 + i as f64, close: 5001.0 + i as f64,
+                tick_volume: 30,
+            });
+        }
+        let view = native_chart_candles(&m, 0);
+        assert_eq!(view.len(), 4);
+        assert!(view.iter().all(|c| c.high_y <= c.body_top
+            && c.body_top <= c.body_bottom && c.body_bottom <= c.low_y));
+        assert!(native_chart_candles(&m, 2).is_empty());
+    }
 }
