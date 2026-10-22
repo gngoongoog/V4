@@ -580,6 +580,18 @@ mod institutional_dashboard_tests {
         assert_eq!(view.len(), 4);
         assert!(view.iter().all(|c| c.high_y <= c.body_top
             && c.body_top <= c.body_bottom && c.body_bottom <= c.low_y));
+        assert!(view.iter().all(|c| (c.volume - 1.0).abs() < f32::EPSILON));
+        m.m1[0].tick_volume = 0;
+        m.m1[1].tick_volume = 10;
+        m.m1[2].tick_volume = 30;
+        m.m1[3].tick_volume = 15;
+        let updated = native_chart_candles(&m, 0);
+        assert_eq!(updated[0].volume, 0.0);
+        assert!((updated[1].volume - (1.0 / 3.0)).abs() < 0.0001);
+        assert_eq!(updated[2].volume, 1.0);
+        assert_eq!(updated[3].volume, 0.5);
+        for candle in &mut m.m1 { candle.tick_volume = 0; }
+        assert!(native_chart_candles(&m, 0).iter().all(|c| c.volume == 0.0));
         assert!(native_chart_candles(&m, 2).is_empty());
     }
 }
