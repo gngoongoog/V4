@@ -8,6 +8,7 @@ mod shadow_paper;
 mod frozen_shadow;
 mod frozen_coordinator;
 mod coordinator_paper;
+mod research_order_lifecycle;
 mod matched_forward;
 mod matched_trade;
 mod student_learning;
@@ -123,6 +124,11 @@ impl Engine{
     fn stop_gateway(&mut self){if let Some(mut child)=self.gateway.take(){let _=child.kill();let _=child.wait();}}
     fn tick(&mut self){let cfg=self.shared.lock().unwrap().config.clone();self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
     fn route(&mut self,method:&str,path:&str,body:&[u8])->Result<Value>{
+        // Fully detached, explicit-event replay: never touches MT5, DB, or
+        // the live execution queue. Auth is supplied by the normal local API.
+        if path=="/v1/research/execution-lifecycle" && method=="POST" {
+            return research_order_lifecycle::replay(body);
+        }
         if method=="GET" && path=="/v1/risk/monitor" {
             let (cfg,status)={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());
                 (s.config.clone(),s.status.clone())};
