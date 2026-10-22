@@ -824,6 +824,35 @@ mod execution_persistence_tests {
     }
 
     #[test]
+    fn independent_daily_breaker_latches_across_symbols_but_resets_next_baghdad_day() {
+        let db=Connection::open_in_memory().unwrap();
+        let service=Service::new(&db).unwrap();
+        let mut t=demo();
+        t.balance=100.;t.equity=97.;t.today_net=Some(-3.);
+        let now=crate::now_ms();
+        let zone=chrono::FixedOffset::east_opt(3*3600).unwrap();
+        let stamp=chrono::DateTime::<chrono::Utc>::from_timestamp_millis(now as i64).unwrap();
+        t.report_day=stamp.with_timezone(&zone).format("%Y-%m-%d").to_string();
+        assert!(service.daily_breaker_blocked(&db,&t,now,true,2.).unwrap());
+        t.today_net=Some(0.);t.equity=100.;
+        t.symbol="EURUSD".into();
+        assert!(service.daily_breaker_blocked(&db,&t,now,true,2.).unwrap());
+        assert!(!service.daily_breaker_blocked(&db,&t,now,false,2.).unwrap());
+        // OFF never erases the lock: ON again stays blocked until tomorrow.
+        assert!(service.daily_breaker_blocked(&db,&t,now,true,2.).unwrap());
+        let tomorrow=now+86_400_000;
+        let next=chrono::DateTime::<chrono::Utc>::from_timestamp_millis(tomorrow as i64).unwrap();
+        t.report_day=next.with_timezone(&zone).format("%Y-%m-%d").to_string();
+        assert!(!service.daily_breaker_blocked(&db,&t,tomorrow,true,2.).unwrap());
+        t.today_net=None;
+        assert!(service.daily_breaker_blocked(&db,&t,tomorrow,true,2.).unwrap());
+        assert!(!service.daily_breaker_blocked(&db,&t,tomorrow,false,2.).unwrap());
+        let reloaded=Service::new(&db).unwrap();
+        t.report_day=stamp.with_timezone(&zone).format("%Y-%m-%d").to_string();
+        assert!(reloaded.daily_breaker_blocked(&db,&t,now,true,2.).unwrap());
+    }
+
+    #[test]
     fn real_micro_risk_is_consented_latched_by_broker_account_and_restored() {
         let db=Connection::open_in_memory().unwrap();
         let mut svc=Service::new(&db).unwrap();
