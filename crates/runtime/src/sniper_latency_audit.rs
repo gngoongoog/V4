@@ -199,8 +199,8 @@ mod tests {
         assert_eq!(v["sampled_commands"],250);
         assert_eq!(v["status"],"descriptive_gateway_latency_only");
         assert_eq!(v["metrics"]["send_ms"]["p50_ms"],134.5);
-        assert_eq!(v["metrics"]["send_ms"]["p95_ms"],246.55);
-        assert_eq!(v["metrics"]["send_ms"]["p99_ms"],256.51);
+        assert!((v["metrics"]["send_ms"]["p95_ms"].as_f64().unwrap()-246.55).abs()<1e-8);
+        assert!((v["metrics"]["send_ms"]["p99_ms"].as_f64().unwrap()-256.51).abs()<1e-8);
         assert_eq!(v["queue_to_send_le_20ms_observed"],11);
     }
 }
