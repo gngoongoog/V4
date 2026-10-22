@@ -980,45 +980,34 @@ export component Dashboard inherits Window {
         } }
         if root.page == 0: ScrollView {
             VerticalBox { spacing: 14px;
-                // Compact hero: confidence and decision come directly from the Core,
-                // never from render-fixture numbers or a synthetic performance score.
+                // Geometry tracks the original user-approved reference:
+                // a narrow command heading, then six information-dense live KPIs.
                 Rectangle {
-                    min-height: 74px;
-                    background: root.theme-choice==1?#e8f1f3:root.theme-choice==2?#2b333c:#142933;
-                    border-radius: 14px;
-                    border-width: 1px;
-                    border-color: root.theme-choice==1?#d0e4e7:#35606a;
-                    HorizontalLayout {padding:14px;spacing:14px;
-                        Rectangle {width:4px;border-radius:3px;background:#28cbb7;}
-                        VerticalLayout {spacing:5px;
-                            Text {text:"COMMAND CENTER  /  مركز القيادة";color:root.theme-choice==1?#183849:#f0fafb;font-size:21px;font-weight:800;}
-                            Text {text:"XAUUSD  •  MT5 DATA  •  LIVE EXECUTION GUARDS";color:root.theme-choice==1?#537283:#95b7c0;font-size:10px;}
-                        }
+                    height: 45px;
+                    background: root.theme-choice==1?#e8f2f5:root.theme-choice==2?#2d3640:#112634;
+                    border-radius: 10px;border-width:1px;
+                    border-color:root.theme-choice==1?#d5e6ee:#24525c;
+                    HorizontalLayout {padding-left:13px;padding-right:13px;spacing:10px;
+                        Rectangle {width:4px;background:#21d4b5;border-radius:3px;}
+                        Text {text:"COMMAND CENTER  /  مركز القيادة";color:root.theme-choice==1?#17364a:#e8f9f6;font-size:17px;font-weight:800;vertical-alignment:center;}
                         Rectangle {horizontal-stretch:1;background:transparent;}
-                        VerticalLayout {spacing:5px;
-                            Text {text:root.online?"●  MT5 CONNECTED":"○  MT5 OFFLINE";color:root.online?#42d9be:#ecaa7d;font-weight:700;font-size:12px;horizontal-alignment:right;}
-                            Text {text:root.execution-active?"EXECUTION ARMED":root.state=="STOPPED"?"SYSTEM STOPPED":"MONITOR ONLY";color:root.theme-choice==1?#536c7b:#d3dce4;font-size:11px;horizontal-alignment:right;}
-                        }
+                        Text {text:root.symbol+"  •  "+root.regime;color:root.theme-choice==1?#49788a:#99c4cf;font-size:11px;vertical-alignment:center;}
+                        Text {text:root.online?"●  MT5 متصل":"○  MT5 غير متصل";color:root.online?#2bddae:#eda17a;font-size:11px;font-weight:700;vertical-alignment:center;}
                     }
                 }
-                // Four core economic metrics stay above the fold at laptop resolutions.
-                HorizontalLayout {spacing:10px;
-                    Card {theme-choice:root.theme-choice;label:"EQUITY / حقوق الحساب";value:root.equity;}
-                    Card {theme-choice:root.theme-choice;label:"BALANCE / الرصيد";value:root.balance;}
-                    Card {theme-choice:root.theme-choice;label:"DAILY NET / صافي اليوم";value:root.today;}
-                    Card {theme-choice:root.theme-choice;label:"FREE MARGIN / الهامش الحر";value:root.free-margin;}
-                }
-                Rectangle {
-                    min-height: 37px;
-                    background:root.theme-choice==1?#ffffff:root.theme-choice==2?#2b3038:#1a2734;
-                    border-radius:10px;border-width:1px;border-color:root.theme-choice==1?#dfe8ef:#394750;
-                    HorizontalLayout {padding-left:13px;padding-right:13px;spacing:16px;
-                        Text {text:"ACTIVE POSITIONS / المراكز  "+root.active-positions;color:root.theme-choice==1?#4a6878:#bdcdd3;font-size:11px;vertical-alignment:center;}
-                        Rectangle {width:1px;background:root.theme-choice==1?#dae6ec:#41515d;}
-                        Text {text:"QUOTE AGE / عمر السعر  "+root.quote-age-display;color:root.theme-choice==1?#4a6878:#bdcdd3;font-size:11px;vertical-alignment:center;}
-                        Rectangle {horizontal-stretch:1;background:transparent;}
-                        Text {text:"MARKET: "+root.regime;color:root.theme-choice==1?#497884:#8ed7c9;font-size:11px;font-weight:700;vertical-alignment:center;}
-                    }
+                HorizontalLayout {spacing:8px;
+                    DeskMetric {glyph:"◈";title:"EQUITY / حقوق الملكية";value:root.equity;
+                        footer:root.online?"MT5 ACCOUNT":"NO FRESH DATA";theme-choice:root.theme-choice;accent:#24d3ae;}
+                    DeskMetric {glyph:"↗";title:"DAILY NET / صافي اليوم";value:root.today;
+                        footer:root.online?"BROKER DAY P&L":"WAITING FOR MT5";theme-choice:root.theme-choice;accent:#20c89d;}
+                    DeskMetric {glyph:"≋";title:"BALANCE / الرصيد";value:root.balance;
+                        footer:root.online?"BROKER BALANCE":"DISCONNECTED";theme-choice:root.theme-choice;accent:#4aa4ee;}
+                    DeskMetric {glyph:"▤";title:"FREE MARGIN / الهامش";value:root.free-margin;
+                        footer:root.online?"AVAILABLE MARGIN":"UNAVAILABLE";theme-choice:root.theme-choice;accent:#e5b454;}
+                    DeskMetric {glyph:"▣";title:"ACTIVE POSITIONS";value:root.active-positions;
+                        footer:root.online?"OPEN MT5 POSITIONS":"UNKNOWN";theme-choice:root.theme-choice;accent:#e88e77;}
+                    DeskMetric {glyph:"◷";title:"QUOTE AGE / عمر السعر";value:root.quote-age-display;
+                        footer:root.online?"MT5 TICK FRESHNESS":"NO QUOTE";theme-choice:root.theme-choice;accent:#71c4ee;}
                 }
                 HorizontalLayout {spacing: 11px; alignment: start;
                     Rectangle {
