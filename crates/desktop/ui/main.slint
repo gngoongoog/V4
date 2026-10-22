@@ -113,6 +113,9 @@ export component Dashboard inherits Window {
     in property <string> connection: "Waiting for core";
     in property <string> balance: "—";
     in property <string> equity: "—";
+    in property <string> broker-leverage: "—";
+    in-out property <string> scenario-leverage: "500";
+    in property <string> leverage-note: "الرافعة الافتراضية للتخطيط فقط؛ الهامش الفعلي يحسبه وسيط MT5.";
     in property <string> today: "—";
     in property <string> positions: "No current MT5 snapshot";
     in property <string> diagnostics: "";
@@ -824,6 +827,13 @@ export component Dashboard inherits Window {
             Text { text: "المخاطرة — المحاكاة والحدود الاختيارية"; color: #f2f2f4; font-size: 20px; }
             Text { text: "تطبق على المحاكاة، وعلى العقل الحقيقي إذا فعّلت حدوده الاختيارية. العمولة هنا تقدير؛ سجل التنفيذ يأخذ الرسوم الفعلية من الوسيط."; color: #b7bac3; wrap: word-wrap; }
             HorizontalBox { Text { text: "المخاطرة لكل صفقة % (0.01–2)"; color: #e0e1e4; } LineEdit { text <=> root.risk-percent; } }
+            Text { text: "حساب صغير / MICRO CAPITAL — افحص الهامش قبل اختيار حجم اللوت"; color: #e0e1e4; font-weight: 700; }
+            Text { text: "رافعة MT5 الفعلية: " + root.broker-leverage + " | تغيير الرافعة الحقيقية يتم من الوسيط"; color: #b7bac3; wrap: word-wrap; }
+            HorizontalBox {
+                Text { text: "رافعة تجربة افتراضية 1: (مثال 500)"; color: #e0e1e4; }
+                LineEdit { text <=> root.scenario-leverage; placeholder-text: "500"; }
+            }
+            Text { text: root.leverage-note; color: #c8cbd1; wrap: word-wrap; }
             HorizontalBox { Text { text: "حد الخسارة اليومية % (0.1–10)"; color: #e0e1e4; } LineEdit { text <=> root.daily-limit; } }
             HorizontalBox { Text { text: "حد التراجع من القمة % (0.1–30)"; color: #e0e1e4; } LineEdit { text <=> root.drawdown-limit; } }
             HorizontalBox { Text { text: "أقصى سبريد كنسبة ATR (0.01–1)"; color: #e0e1e4; } LineEdit { text <=> root.spread-limit; } }
