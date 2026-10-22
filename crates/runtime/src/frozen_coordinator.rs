@@ -26,6 +26,8 @@ pub fn init(db:&Connection)->Result<()>{
           frozen TEXT NOT NULL,adaptive TEXT NOT NULL,
           PRIMARY KEY(run_id,bar_time),
           FOREIGN KEY(run_id) REFERENCES frozen_coordinator_runs(id));")?;
+    // Keep direct frozen_coordinator init, test fixtures and full Service init in sync.
+    crate::coordinator_paper::init(db)?;
     Ok(())
 }
 pub fn freeze(db:&Connection,t:&Telemetry,c:&Config,brains:&[BrainConfig],
