@@ -89,6 +89,18 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
         pair["frozen_outperforms_pairs"],pair["exact_ties"],
         pair["status"].as_str().unwrap_or("غير متاح")
     ));
+    let full=&frozen["matched_full_exits"];
+    detail.push_str(&format!(
+        "\n\nدراسة مستقبلية للصفقة الكاملة — نفس لحظة الدخول، ستوب/هدف/وقت خاص بكل عقل:\nأزواج صفقات منتهية {} | قيد الرصد {} | نتائج بها فجوات أسعار {}\nصافي مجمّد افتراضي لكل لوت {} | المتعلم {} | الفرق (المجمّد - المتعلّم) {}\nالمجمّد: رابحة {} / ستوبات {} / أهداف {} | المتعلّم: رابحة {} / ستوبات {} / أهداف {}\nتفوق المجمّد في أزواج {} | تعادل {} | جودة الدليل {}\nيُحسب الخروج على أول Bid/Ask مرصود يلامس الستوب أو الهدف أو ينتهي الوقت، مع احتساب عمولة كاملة وانزلاق مفترضين. ليس تنفيذ MT5، ولا يشمل الحركة غير المرصودة، وممنوع استعماله وحده لاعتماد REAL.",
+        full["completed_pairs"],full["open_pairs"],full["pairs_with_observation_gaps"],
+        maybe_number(&full["mean_frozen_net_per_lot"]),
+        maybe_number(&full["mean_adaptive_net_per_lot"]),
+        maybe_number(&full["mean_difference_frozen_minus_adaptive_per_lot"]),
+        full["frozen_wins_after_costs"],full["frozen_stops"],full["frozen_targets"],
+        full["adaptive_wins_after_costs"],full["adaptive_stops"],full["adaptive_targets"],
+        full["frozen_outperforms_pairs"],full["exact_ties"],
+        full["status"].as_str().unwrap_or("غير متاح")
+    ));
     ui.set_brain_monitor_detail(detail.into());
 }
 pub fn setup(ui:&Dashboard)->slint::Timer {
