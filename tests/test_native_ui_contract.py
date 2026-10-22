@@ -124,6 +124,23 @@ class NativeUiContract(unittest.TestCase):
             self.assertIn(f'root.page == {index} ?',self.dashboard,
                           f"Missing per-page live breadcrumb for page {index}")
 
+    def test_studio_cancel_really_works_while_studio_is_busy(self):
+        src=(RUST / "studio.rs").read_text(encoding="utf-8")
+        self.assertIn('if action=="cancel"',src)
+        self.assertIn('ui.set_studio_cancel_busy(true)',src)
+        self.assertIn('ui.set_studio_cancel_busy(false)',src)
+        self.assertIn('"/v1/studio/cancel"',src)
+        self.assertLess(src.index('if action=="cancel"'), src.index('if ui.get_studio_busy(){return;}'))
+        self.assertIn('enabled: !root.studio-cancel-busy; clicked => { root.studio-action("cancel"); }',self.dashboard)
+        self.assertIn('in property <bool> studio-cancel-busy: false;',self.dashboard)
+
+    def test_status_strip_responsive_and_white_theme_legible(self):
+        self.assertIn('visible: root.width >= 1100px;', self.dashboard)
+        self.assertIn('visible: root.width >= 1250px;', self.dashboard)
+        self.assertIn('visible: root.width >= 1400px;', self.dashboard)
+        self.assertIn('#e9eff6', self.dashboard)
+        self.assertIn('#dff5ee', self.dashboard)
+
     def test_global_page_refresh_is_only_wired_to_real_supported_handlers(self):
         for page, callback in (
             (2, 'root.action("events")'),
