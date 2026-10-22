@@ -201,6 +201,40 @@ mod tests{
         assert_ne!(newer["run_id"],started["run_id"]);
     }
     #[test]
+    fn stopped_trial_settles_existing_paper_position_without_new_entries(){
+        let db=db();let b=brain();let c=cfg();
+        let started=freeze(&db,"A",TradingMode::Expert,&b,&c,None,500).unwrap();
+        let id=started["run_id"].as_str().unwrap();
+        let pos=json!({
+            "mode":"expert","opened_ms":1000,"brain":paper_id(id),
+            "lots":0.01,"side":1,"entry":100.1,
+            "stop_distance":1.,"target_distance":1.,
+            "hold_ms":10000,"tick_size":0.1,"profit_tick_value":1.,
+            "loss_tick_value":1.,"commission_per_lot":7.,"slippage_ticks":0.,
+            "signal_reason":"synthetic open virtual position"
+        });
+        db.execute("INSERT INTO paper_brain_positions VALUES(?1,?2,?3)",
+            params!["A",paper_id(id),pos.to_string()]).unwrap();
+        stop(&db,"A",TradingMode::Expert,"trend").unwrap();
+        let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            symbol:"XAUUSD".into(),bid:Some(101.2),ask:Some(101.3),
+            quote_time_ms:Some(2000),tick_age_ms:Some(0),
+            tick_size:Some(0.1),tick_value_profit:Some(1.),
+            tick_value_loss:Some(1.),..Default::default()};
+        let adaptive=Signal{brain:"trend".into(),side:0,key:String::new(),
+            bar_time:0,stop_distance:0.,target_distance:0.,hold_ms:0,
+            reason:"idle".into(),ready:false,coordination:None};
+        observe(&db,"A","trend",&adaptive,&t,2000,&BTreeMap::new()).unwrap();
+        let summary=report(&db,"A",TradingMode::Expert,"trend").unwrap();
+        assert_eq!(summary["paper_trades_closed"],1);
+        assert_eq!(summary["paper_position_open"],false);
+        assert_eq!(summary["paired_bars"],0);
+        assert!(summary["paper_net_after_assumed_costs"].as_f64().unwrap()>0.);
+        observe(&db,"A","trend",&adaptive,&t,3000,&BTreeMap::new()).unwrap();
+        assert_eq!(report(&db,"A",TradingMode::Expert,"trend").unwrap()["paper_trades_closed"],1);
+    }
+
+    #[test]
     fn no_system_or_sniper_or_unresolved_generated_policy_can_freeze(){
         let db=db();let mut b=brain();let c=cfg();
         b.id="system".into();
