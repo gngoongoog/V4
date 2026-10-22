@@ -249,8 +249,9 @@ mod tests{
         assert_eq!(total["frozen_targets"],1);
         assert_eq!(total["adaptive_targets"],1);
         assert_eq!(total["open_pairs"],0);
-        assert!(total["mean_frozen_net_per_lot"].as_f64().unwrap()>0.);
-        assert_eq!(total["frozen_wins_after_costs"],1);
+        assert!(total["mean_frozen_net_per_lot"].as_f64().unwrap()<0.,
+            "The 0.5 USD target is not profitable at 0.01 lots with $0.07 roundtrip fees");
+        assert_eq!(total["frozen_wins_after_costs"],0);
         // Exact full round-trip $7/lot for each of the 0.01 lot paper arms.
         let raw:String=db.query_row(
             "SELECT payload FROM frozen_shadow_trade_pairs",[],|r|r.get(0)).unwrap();
