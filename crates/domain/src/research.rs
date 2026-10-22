@@ -4,12 +4,16 @@ use serde::{Deserialize, Serialize};
 mod regime;
 pub use regime::{MetaBrainV2, RegimeBrain, TrendBrain, TrendFrame};
 
+fn micro_demo_opt_in_is_false(value: &bool) -> bool { !*value }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RiskConfig {
     pub risk_percent: f64,
     /// Explicit opt-in permits up to 5% per trade in verified MT5 Demo only.
+    /// Omit false from serialized legacy backtest reports to preserve golden hashes.
     /// The broker adapter rejects this elevated budget on REAL accounts.
+    #[serde(default, skip_serializing_if = "micro_demo_opt_in_is_false")]
     pub micro_demo_risk_opt_in: bool,
     pub daily_loss_percent: f64,
     pub max_drawdown_percent: f64,
