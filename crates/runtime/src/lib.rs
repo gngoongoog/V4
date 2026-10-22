@@ -15,6 +15,7 @@ mod learning_inference;
 mod learning_performance_review;
 mod learning_review;
 mod learning_scoring;
+mod learning_quality;
 mod trading_settings;
 pub mod news;
 mod research;
