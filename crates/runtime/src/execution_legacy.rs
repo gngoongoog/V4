@@ -795,7 +795,11 @@ mod execution_persistence_tests {
         let normal=svc.queue(&db,&t,b,"open",Some(&signal),0,12346,Some(&c)).unwrap();
         assert_eq!(normal["risk_percent"],0.25);
         assert_eq!(normal["micro_real_temporary"],false);
-        let restarted=Service::new(&db).unwrap();
+        let mut restarted=Service::new(&db).unwrap();
+        restarted.settings.target="live".into();
+        restarted.settings.login=t.login;
+        restarted.settings.server=t.server.clone();
+        restarted.settings.currency=t.currency.clone();
         assert!(!restarted.micro_real_active(&db,&t,&c).unwrap());
     }
 
