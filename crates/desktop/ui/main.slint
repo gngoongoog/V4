@@ -443,6 +443,11 @@ export component Dashboard inherits Window {
                 Button { text: "جمّد نسخة تجريبية"; enabled: root.frozen-trial-available && !root.brain-monitor-busy && root.brain-monitor-selected > 0 && root.brain-monitor-selected != 16 && root.state == "STOPPED"; clicked => { root.brain-monitor-action("freeze"); } }
                 Button { text: "إنهاء التجربة المجمّدة"; enabled: root.frozen-trial-available && !root.brain-monitor-busy && root.brain-monitor-selected > 0 && root.brain-monitor-selected != 16 && root.state == "STOPPED"; clicked => { root.brain-monitor-action("stop_frozen"); } }
             }
+            Text { text: "نسخة سياسة منسّق Expert ثابتة (Demo فقط) — تراقب اختلاف قرارات SYSTEM ولا ترسل أوامر؛ ليست نسخة محاكاة للوسيط أو قاطع المخاطرة."; color: #b8bbc3; wrap: word-wrap; }
+            HorizontalBox {
+                Button { text: "جمّد سياسة المنسّق"; enabled: root.frozen-trial-available && !root.brain-monitor-busy && root.brain-monitor-selected == 0 && root.state == "STOPPED"; clicked => { root.brain-monitor-action("freeze_coordinator"); } }
+                Button { text: "إنهاء تدقيق المنسّق"; enabled: root.frozen-trial-available && !root.brain-monitor-busy && root.brain-monitor-selected == 0 && root.state == "STOPPED"; clicked => { root.brain-monitor-action("stop_coordinator"); } }
+            }
             Text { text: root.brain-monitor-message; color: #d0d3da; wrap: word-wrap; }
             Text { text: root.brain-monitor-detail; color: #e3e5e9; wrap: word-wrap; }
             Text { text: "كل العقول • الوضع الحالي"; color: #f6f6f7; font-size: 20px; }
