@@ -438,6 +438,11 @@ export component Dashboard inherits Window {
                 Button { text: "حفظ تحكم العقل"; enabled: root.brain-monitor-available && !root.brain-monitor-busy && root.brain-monitor-selected != 0 && root.state == "STOPPED"; clicked => { root.brain-monitor-action("save"); } }
                 Button { text: "تحديث الحالة"; enabled: !root.brain-monitor-busy; clicked => { root.brain-monitor-action("refresh"); } }
             }
+            Text { text: "اختبار Shadow مجمّد — ينسخ إعدادات العقل المستشار الحالية كما هي، ويقارنها على أسعار لاحقة فقط، ولا يرسل أي أمر إلى MT5"; color: #b8bbc3; wrap: word-wrap; }
+            HorizontalBox {
+                Button { text: "جمّد نسخة تجريبية"; enabled: root.frozen-trial-available && !root.brain-monitor-busy && root.brain-monitor-selected > 0 && root.brain-monitor-selected != 16 && root.state == "STOPPED"; clicked => { root.brain-monitor-action("freeze"); } }
+                Button { text: "إنهاء التجربة المجمّدة"; enabled: root.frozen-trial-available && !root.brain-monitor-busy && root.brain-monitor-selected > 0 && root.brain-monitor-selected != 16 && root.state == "STOPPED"; clicked => { root.brain-monitor-action("stop_frozen"); } }
+            }
             Text { text: root.brain-monitor-message; color: #d0d3da; wrap: word-wrap; }
             Text { text: root.brain-monitor-detail; color: #e3e5e9; wrap: word-wrap; }
             Text { text: "كل العقول • الوضع الحالي"; color: #f6f6f7; font-size: 20px; }
