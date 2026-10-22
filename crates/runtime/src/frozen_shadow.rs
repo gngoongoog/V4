@@ -183,6 +183,7 @@ mod tests{
     fn db()->Connection{
         let db=Connection::open_in_memory().unwrap();
         init(&db).unwrap();
+        crate::matched_forward::init(&db).unwrap();
         crate::shadow_paper::init(&db).unwrap();
         db
     }
