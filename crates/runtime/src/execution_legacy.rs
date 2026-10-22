@@ -52,6 +52,11 @@ pub struct Service {
 fn ctx(t: &Telemetry) -> String {
     serde_json::to_string(&(&t.server, t.login, &t.symbol, &t.currency)).unwrap()
 }
+// Account identity deliberately excludes symbol: the recovery milestone
+// must stay locked across XAUUSD and every other instrument after restart.
+fn micro_account_key(t: &Telemetry) -> String {
+    serde_json::to_string(&(&t.server, t.login, &t.currency)).unwrap()
+}
 fn json_rows(db: &Connection, sql: &str, key: &str) -> Result<Vec<Value>> {
     let mut st = db.prepare(sql)?;
     let rows = st
@@ -84,6 +89,7 @@ impl Service {
         crate::brain_control::init(db)?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS execution_settings(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS execution_equity(context TEXT PRIMARY KEY,peak REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS micro_real_recovered(account_key TEXT PRIMARY KEY,reached_ms INTEGER NOT NULL,reached_equity REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS brain_configs(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS broker_commands(id TEXT PRIMARY KEY,context TEXT NOT NULL,brain TEXT NOT NULL,kind TEXT NOT NULL,created_ms INTEGER NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS broker_commands_context ON broker_commands(context,brain,created_ms);
@@ -133,6 +139,17 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             active_mode: None,
             last_paper_sample_ms: 0,
         })
+    }
+    fn micro_real_active(&self, db: &Connection, t: &Telemetry, c: &Config) -> Result<bool> {
+        if !c.risk.micro_real_temporary || self.settings.target != "live"
+            || t.account_trade_mode != Some(2) || !t.equity.is_finite()
+            || t.equity <= 0. || t.equity >= c.risk.micro_real_recovery_equity
+        { return Ok(false); }
+        let locked: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM micro_real_recovered WHERE account_key=?1)",
+            [micro_account_key(t)], |row| row.get(0)
+        )?;
+        Ok(!locked)
     }
     fn matches(&self, t: &Telemetry) -> bool {
         t.connected
@@ -211,7 +228,10 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             // Mandatory for every new entry (Demo and REAL). The broker uses
             // order_calc_profit at the EXACT final stop and account equity to
             // cap the requested volume without ever increasing it.
-            p["risk_percent"] = json!(c.risk.risk_percent);
+            let micro_real = self.micro_real_active(db, t, c)?;
+            p["risk_percent"] = json!(if micro_real { c.risk.micro_real_cap_percent } else { c.risk.risk_percent });
+            p["micro_real_temporary"] = json!(micro_real);
+            p["micro_real_recovery_equity"] = json!(c.risk.micro_real_recovery_equity);
             p["micro_demo_risk_opt_in"] = json!(c.risk.micro_demo_risk_opt_in);
             p["slippage_ticks"] = json!(c.risk.slippage_ticks);
             p["learning"] = json!({"trading_mode":c.trading.mode,"timeframe":b.timeframe,"report_id":b.report_id,
@@ -239,6 +259,16 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             return Ok(());
         }
         let key = ctx(t);
+        if c.risk.micro_real_temporary && self.settings.target == "live"
+            && t.account_trade_mode == Some(2)
+            && t.equity.is_finite() && t.equity >= c.risk.micro_real_recovery_equity
+        {
+            // Durable one-way latch: changing symbol or falling equity does not
+            // reopen relaxed REAL risk. Close/repair orders remain unaffected.
+            db.execute("INSERT OR IGNORE INTO micro_real_recovered VALUES(?1,?2,?3)",
+                params![micro_account_key(t),now,t.equity])?;
+        }
+        let micro_real = self.micro_real_active(db, t, c)?;
         db.execute("INSERT INTO execution_equity VALUES(?1,?2) ON CONFLICT(context) DO UPDATE SET peak=MAX(peak,excluded.peak)",params![key,t.equity])?;
         let peak:f64=db.query_row("SELECT peak FROM execution_equity WHERE context=?1",[&key],|r|r.get(0))?;
         // A fill acknowledgement is not a reconciled position snapshot. Keep the
@@ -406,7 +436,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     * t.tick_value_loss.unwrap_or(0.)
                     * b.lots
                     + braintrade_domain::commission::round_trip_charge(c.risk.commission_per_lot,b.lots).map_err(anyhow::Error::msg)?;
-                if loss > t.equity * c.risk.risk_percent / 100. {
+                let active_risk_percent = if micro_real {c.risk.micro_real_cap_percent} else {c.risk.risk_percent};
+                if loss > t.equity * active_risk_percent / 100. {
                     gates.push("ميزانية المخاطرة الاختيارية");
                 }
                 if t.today_net
