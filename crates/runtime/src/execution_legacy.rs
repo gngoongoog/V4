@@ -765,6 +765,41 @@ mod execution_persistence_tests {
     }
 
     #[test]
+    fn real_micro_risk_is_consented_latched_by_broker_account_and_restored() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let mut t=demo();
+        t.account_trade_mode=Some(2);t.demo=false;t.equity=50.;t.balance=50.;
+        svc.settings.target="live".into();
+        svc.settings.login=t.login;
+        svc.settings.server=t.server.clone();
+        svc.settings.currency=t.currency.clone();
+        let mut c=Config::default();
+        c.risk.micro_real_temporary=true;
+        c.risk.micro_real_cap_percent=10.;
+        c.risk.micro_real_recovery_equity=500.;
+        assert!(svc.micro_real_active(&db,&t,&c).unwrap());
+        let b=svc.brains.iter().find(|b|b.id=="system").unwrap();
+        let signal=Signal{brain:"system".into(),side:1,key:"real-micro".into(),
+            bar_time:12345,stop_distance:1.,target_distance:2.,hold_ms:60_000,
+            reason:"micro mode".into(),ready:true,coordination:None};
+        let first=svc.queue(&db,&t,b,"open",Some(&signal),0,12345,Some(&c)).unwrap();
+        assert_eq!(first["risk_percent"],10.);
+        assert_eq!(first["micro_real_temporary"],true);
+        t.equity=500.;
+        assert!(!svc.micro_real_active(&db,&t,&c).unwrap());
+        t.equity=25.;
+        assert!(!svc.micro_real_active(&db,&t,&c).unwrap());
+        t.symbol="EURUSD".into();
+        assert!(!svc.micro_real_active(&db,&t,&c).unwrap());
+        let normal=svc.queue(&db,&t,b,"open",Some(&signal),0,12346,Some(&c)).unwrap();
+        assert_eq!(normal["risk_percent"],0.25);
+        assert_eq!(normal["micro_real_temporary"],false);
+        let restarted=Service::new(&db).unwrap();
+        assert!(!restarted.micro_real_active(&db,&t,&c).unwrap());
+    }
+
+    #[test]
     fn every_new_core_entry_records_the_exact_risk_budget_and_full_roundtrip_fee() {
         let db=Connection::open_in_memory().unwrap();
         let service=Service::new(&db).unwrap();
