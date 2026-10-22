@@ -67,6 +67,16 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
     ));
     if b["config"]["id"]=="system" {
         if v["trading_mode"]=="sniper" {
+            let linked=&b["sniper_deal_link"];
+            detail.push_str(&format!(
+                "\n\nمطابقة رد القناص مع سجل تنفيذ MT5 المتزامن (قراءة فقط):\nآخر {} أوامر | ربط مضبوط برقم Deal {} | بانتظار مزامنة الوسيط {} | رد بدون رقم Deal {} | تعارض {} | سجل غير مكتمل {}\nالربط برقم Deal يؤكد وجود صفقة دخول بهذا الرقم في السجل المحلي المتزامن، ولا يؤكد اكتمال تعبئة حجم الأمر أو مدة التنفيذ؛ أوقات الكمبيوتر والوسيط مختلفة ولا تُطرح للحصول على زمن Fill.",
+                linked["sampled_commands"],
+                linked["exact_synced_entry_deal_ticket_links"],
+                linked["awaiting_synced_deal_history"],
+                linked["no_ack_deal_ticket"],
+                linked["contradictory_deal_history"],
+                linked["unsupported_or_incomplete_deals"]
+            ));
             let a=&b["sniper_execution_latency"];
             let measurements=&a["metrics"];
             detail.push_str(&format!(
