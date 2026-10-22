@@ -124,17 +124,42 @@ class NativeUiContract(unittest.TestCase):
             self.assertIn(f'root.page == {index} ?',self.dashboard,
                           f"Missing per-page live breadcrumb for page {index}")
 
+    def test_global_page_refresh_is_only_wired_to_real_supported_handlers(self):
+        for page, callback in (
+            (2, 'root.action("events")'),
+            (6, 'root.risk-monitor-refresh()'),
+            (7, 'root.backtest-action("refresh")'),
+            (8, 'root.news-action("refresh")'),
+            (9, 'root.evaluation-action("refresh")'),
+            (11, 'root.learning-action("refresh")'),
+            (13, 'root.backup-action("refresh")'),
+            (14, 'root.studio-action("config")'),
+            (17, 'root.execution-action("refresh")'),
+            (18, 'root.correlation-action("refresh")'),
+            (20, 'root.trade-journal-action("refresh")'),
+            (21, 'root.brain-monitor-action("refresh")'),
+        ):
+            self.assertIn(f"root.page == {page}", self.dashboard)
+            self.assertIn(callback, self.dashboard)
+        self.assertIn('text: "↻ تحديث الصفحة"', self.dashboard)
+        self.assertIn("!root.news-refreshing", self.dashboard)
+        self.assertIn("!root.brain-monitor-busy", self.dashboard)
+        self.assertIn('root.page == 15 || root.page == 16', self.dashboard)
+        self.assertIn("root.save-appearance(root.theme-choice,root.compact-sidebar,root.expanded-workspaces)", self.dashboard)
+
     def test_entire_22_page_windows_dashboard_supports_saved_appearance(self):
         main = (RUST / "main.rs").read_text(encoding="utf-8")
         render = (RUST / "render.rs").read_text(encoding="utf-8")
         correlation = CORRELATION.read_text(encoding="utf-8")
-        for token in ("callback save-appearance(int, bool)", "root.save-appearance(",
+        for token in ("callback save-appearance(int, bool, bool)", "root.save-appearance(",
                       "changed theme-choice =>", "root.compact-sidebar"):
             self.assertIn(token, self.dashboard)
         self.assertIn("ui.on_save_appearance", main)
         self.assertIn('data_dir().join("ui-appearance.json")', main)
         self.assertIn("ui.set_theme_choice(initial_theme)", main)
         self.assertIn("ui.set_compact_sidebar(initial_compact)", main)
+        self.assertIn("ui.set_expanded_workspaces(initial_expanded)", main)
+        self.assertIn('"expanded_workspaces":expanded', main)
         self.assertIn("theme-choice: root.theme-choice", self.dashboard)
         self.assertIn("in property <int> theme-choice: 0;", correlation)
         for marker in ('[(0,"dark"),(1,"white"),(2,"smoke")]', "for page in 0..22",
