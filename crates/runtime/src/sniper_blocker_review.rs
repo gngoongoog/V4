@@ -42,6 +42,7 @@ fn gate_code(s:&str)->&'static str {
 }
 fn label(k:&str)->&'static str{
     match k {
+      "other_unready_reason"=>"سبب عدم جاهزية غير مصنف",
       "stale_quote"=>"سعر القناص قديم",
       "missing_contract_data"=>"بيانات السعر أو العقد غير مكتملة",
       "initial_tick_warmup"=>"يحتاج ثلاث أسعار متتابعة",
@@ -186,7 +187,7 @@ mod tests {
     }
     #[test]
     fn scoped_and_corrupt_or_contradictory_samples_excluded(){
-        let d=db();let now=90_000_000;
+        let d=db();let now=190_000_000;
         add(&d,"a",now-1000,true,true,vec![],"");
         add(&d,"b",now-2000,true,true,vec![],"");
         add(&d,"a",now-30*60*60*1000,true,true,vec![],"");
