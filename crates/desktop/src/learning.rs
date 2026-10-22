@@ -11,6 +11,7 @@ fn summary(value: &Value) -> String {
     let inference=&value["read_only_inference"];
     let scoring=&value["prediction_scoring"];
     let performance=&value["challenger_performance_review"];
+    let forward=&value["frozen_forward_audit"];
     let _=writeln!(out,"\nأهلية الدليل الزمني: {}\n{}\nتوقعات للمراقبة: {} | نتائج مقاسة: {} | تنتظر نضج الهدف: {}\nجاهزية التوقع البحثي: {}",
         review["eligible_for_manual_review"],review["reason"].as_str().unwrap_or("راجع تفاصيل الدليل قبل تسجيل المراجعة"),
         inference["predictions"],scoring["scored"],scoring["pending"],inference["read_only_gate_ready"]);
