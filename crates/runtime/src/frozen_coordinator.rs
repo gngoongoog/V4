@@ -93,7 +93,7 @@ pub fn observe(db:&Connection,t:&Telemetry,c:&Config,adaptive:&Signal,
     let bar=last.candle.time;
     // Exactly one future COMPLETED one-minute bar, no historical backfill.
     let Some(closed)=bar.checked_add(60)else{return Ok(())};
-    if closed.saturating_mul(1000)<=created || closed>now/1000
+    if bar.saturating_mul(1000)<=created || closed>now/1000
         ||(now/1000).saturating_sub(closed)>80{return Ok(())}
     let recorded:bool=db.query_row(
         "SELECT EXISTS(SELECT 1 FROM frozen_coordinator_decisions
