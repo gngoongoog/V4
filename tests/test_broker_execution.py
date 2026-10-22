@@ -12,8 +12,9 @@ class Broker:
     TRADE_ACTION_DEAL=1; ORDER_TYPE_BUY=0; ORDER_TYPE_SELL=1; POSITION_TYPE_BUY=0
     ORDER_TIME_GTC=0; ORDER_FILLING_FOK=0; ORDER_FILLING_IOC=1; ORDER_FILLING_RETURN=2
     ACCOUNT_MARGIN_MODE_RETAIL_HEDGING=2; SYMBOL_TRADE_EXECUTION_MARKET=2
+    DEAL_TYPE_BUY=0; DEAL_TYPE_SELL=1
     def __init__(self):
-        self.account=N(equity=10000.,margin_free=10000.,login=17,server='Demo',currency='USD',trade_mode=0,margin_mode=2,trade_allowed=True,trade_expert=True)
+        self.account=N(balance=10000.,equity=10000.,margin_free=10000.,login=17,server='Demo',currency='USD',trade_mode=0,margin_mode=2,trade_allowed=True,trade_expert=True)
         self.terminal=N(connected=True,trade_allowed=True,tradeapi_disabled=False)
         self.info=N(point=.01,trade_tick_size=.01,volume_min=.01,volume_step=.01,volume_max=100.,filling_mode=3,trade_exemode=2,trade_stops_level=5,trade_tick_value_loss=1.0)
         self.tick=N(bid=2000.,ask=2000.10,time_msc=clock_ms())
@@ -183,6 +184,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(len(self.mt.sends),1)
     def test_real_micro_temporary_risk_until_recovery_is_durable(self):
         self.mt.account.trade_mode=2
+        self.mt.account.balance=50.
         self.mt.account.equity=50.
         self.mt.account.margin_free=50.
         self.cmd.update(target='live',id='real-micro-without-switch',lots=.01,
@@ -200,12 +202,14 @@ class ExecutionTests(unittest.TestCase):
         self.assertAlmostEqual(permitted['risk_sizing']['risk_budget'],5.)
         self.assertEqual(len(self.mt.sends),1)
 
+        self.mt.account.balance=500.
         self.mt.account.equity=500.
         self.mt.account.margin_free=500.
         self.cmd['id']='real-micro-hit-milestone'
         reached=self.send()
         self.assertEqual(reached['state'],'rejected',reached)
         self.assertIn('recovery milestone',reached['reason'])
+        self.mt.account.balance=50.
         self.mt.account.equity=50.
         self.mt.account.margin_free=50.
         self.cmd['id']='real-micro-fell-below'
@@ -222,6 +226,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_real_micro_recovery_during_validation_cancels_before_send(self):
         self.mt.account.trade_mode=2
+        self.mt.account.balance=50.
         self.mt.account.equity=50.
         self.mt.account.margin_free=50.
         self.cmd.update(target='live',id='real-micro-equity-jump',lots=.01,
@@ -239,6 +244,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_real_margin_preflight_is_mandatory_in_fast_path(self):
         self.mt.account.trade_mode=2
+        self.mt.account.balance=50.
         self.mt.account.equity=50.
         self.mt.account.margin_free=5.
         self.cmd.update(target='live',id='micro-fast-margin',lots=.01,
@@ -260,6 +266,69 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(cancelled['state'],'cancelled',cancelled)
         self.assertIn('free margin dropped',cancelled['reason'])
         self.assertEqual(self.mt.sends,[])
+
+    def test_daily_breaker_real_locked_across_symbols_and_demo_switch_is_independent(self):
+        self.mt.account.trade_mode=2
+        self.mt.account.balance=50.
+        self.mt.account.equity=50.
+        self.mt.account.margin_free=50.
+        self.mt.deals=[N(type=self.mt.DEAL_TYPE_SELL,profit=-3.,commission=0.,swap=0.,fee=0.)]
+        self.cmd.update(target='live',id='daily-loss-reached',lots=.01,
+                        risk_percent=10.,micro_real_temporary=True,
+                        micro_real_recovery_equity=500.,
+                        commission_per_lot=7.,slippage_ticks=2.,
+                        daily_breaker_enabled=True,daily_breaker_limit_percent=2.)
+        self.cmd['signal']['stop_distance']=3.
+        out=self.send()
+        self.assertEqual(out['state'],'rejected',out)
+        self.assertIn('Daily breaker',out['reason'])
+        self.assertEqual(self.mt.sends,[])
+        self.mt.deals=[]
+        self.cmd['id']='daily-loss-latched'
+        latched=self.send()
+        self.assertEqual(latched['state'],'rejected',latched)
+        self.assertIn('Daily breaker',latched['reason'])
+        # Explicitly OFF overrides only this gate; preserved lock returns ON.
+        self.cmd.update(id='daily-loss-disabled',daily_breaker_enabled=False)
+        allowed=self.send()
+        self.assertEqual(allowed['state'],'filled',allowed)
+        self.assertEqual(len(self.mt.sends),1)
+        self.ex.close();self.ex=BrokerExecutor(self.path)
+        self.cmd.update(id='daily-loss-reenabled',daily_breaker_enabled=True,symbol='EURUSD')
+        out=self.send()
+        self.assertEqual(out['state'],'rejected',out)
+        self.assertIn('Daily breaker',out['reason'])
+        self.assertEqual(len(self.mt.sends),1)
+
+        # Demo disabled by default; loss-history outages do not block practice.
+        self.mt.account.trade_mode=0
+        self.cmd.update(id='daily-demo-open',target='demo',symbol='XAUUSD',
+                        risk_percent=2.,micro_real_temporary=False,
+                        daily_breaker_enabled=False)
+        self.mt.history_deals_get=lambda *a:None
+        self.mt.account.equity=50.
+        self.mt.account.balance=50.
+        allowed=self.send()
+        self.assertEqual(allowed['state'],'filled',allowed)
+        self.assertEqual(len(self.mt.sends),2)
+        self.cmd.update(id='daily-demo-enforced',daily_breaker_enabled=True)
+        refused=self.send()
+        self.assertEqual(refused['state'],'rejected',refused)
+        self.assertIn('history/positions unavailable',refused['reason'])
+        self.assertEqual(len(self.mt.sends),2)
+
+    def test_daily_breaker_final_equity_drop_blocks_after_journal(self):
+        self.mt.account.trade_mode=2
+        self.mt.account.balance=10000.
+        self.mt.account.equity=10000.
+        self.cmd.update(target='live',id='daily-equity-drops',risk_percent=.25,
+                        commission_per_lot=7.,slippage_ticks=2.,
+                        daily_breaker_enabled=True,daily_breaker_limit_percent=2.)
+        self.mt.on_account=lambda n: setattr(self.mt.account,'equity',9500.) if n>=3 else None
+        out=self.send()
+        self.assertEqual(out['state'],'cancelled',out)
+        self.assertIn('Daily breaker',out['reason'])
+        self.assertEqual(len(self.mt.sends),0)
 
     def test_risk_sizing_zero_commission_and_unavailable_broker_profit_fail_closed(self):
         self.mt.account.equity=1000.
