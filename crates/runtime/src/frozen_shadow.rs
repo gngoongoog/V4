@@ -224,6 +224,9 @@ mod tests{
         let adaptive=Signal{brain:"trend".into(),side:0,key:String::new(),
             bar_time:0,stop_distance:0.,target_distance:0.,hold_ms:0,
             reason:"idle".into(),ready:false,coordination:None};
+        observe(&db,"A",TradingMode::Scalping,"trend",&adaptive,&t,2000,&BTreeMap::new()).unwrap();
+        assert_eq!(report(&db,"A",TradingMode::Expert,"trend").unwrap()["paper_position_open"],true,
+            "a different mode cannot inspect or settle this trial");
         observe(&db,"A",TradingMode::Expert,"trend",&adaptive,&t,2000,&BTreeMap::new()).unwrap();
         let summary=report(&db,"A",TradingMode::Expert,"trend").unwrap();
         assert_eq!(summary["paper_trades_closed"],1);
