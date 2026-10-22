@@ -1019,7 +1019,7 @@ export component Dashboard inherits Window {
                         Text {text:root.online?"●  MT5 متصل":"○  MT5 غير متصل";color:root.online?#2bddae:#eda17a;font-size:11px;font-weight:700;vertical-alignment:center;}
                     }
                 }
-                HorizontalLayout {spacing:8px;
+                HorizontalLayout {visible:root.width >= 1280px;spacing:8px;
                     DeskMetric {glyph:"◈";title:"EQUITY / حقوق الملكية";value:root.equity;
                         footer:root.online?"MT5 ACCOUNT":"NO FRESH DATA";theme-choice:root.theme-choice;accent:#24d3ae;}
                     DeskMetric {glyph:"↗";title:"DAILY NET / صافي اليوم";value:root.today;
@@ -1032,6 +1032,26 @@ export component Dashboard inherits Window {
                         footer:root.online?"OPEN MT5 POSITIONS":"UNKNOWN";theme-choice:root.theme-choice;accent:#e88e77;}
                     DeskMetric {glyph:"◷";title:"QUOTE AGE / عمر السعر";value:root.quote-age-display;
                         footer:root.online?"MT5 TICK FRESHNESS":"NO QUOTE";theme-choice:root.theme-choice;accent:#71c4ee;}
+                }
+                // At laptop widths, reflow the identical six real metrics
+                // to two rows instead of compressing text into illegibility.
+                VerticalLayout {visible:root.width < 1280px;spacing:7px;
+                    HorizontalLayout {spacing:7px;
+                    DeskMetric {glyph:"◈";title:"EQUITY / حقوق الملكية";value:root.equity;
+                        footer:root.online?"MT5 ACCOUNT":"NO FRESH DATA";theme-choice:root.theme-choice;accent:#24d3ae;}
+                    DeskMetric {glyph:"↗";title:"DAILY NET / صافي اليوم";value:root.today;
+                        footer:root.online?"BROKER DAY P&L":"WAITING FOR MT5";theme-choice:root.theme-choice;accent:#20c89d;}
+                    DeskMetric {glyph:"≋";title:"BALANCE / الرصيد";value:root.balance;
+                        footer:root.online?"BROKER BALANCE":"DISCONNECTED";theme-choice:root.theme-choice;accent:#4aa4ee;}
+                    }
+                    HorizontalLayout {spacing:7px;
+                    DeskMetric {glyph:"▤";title:"FREE MARGIN / الهامش";value:root.free-margin;
+                        footer:root.online?"AVAILABLE MARGIN":"UNAVAILABLE";theme-choice:root.theme-choice;accent:#e5b454;}
+                    DeskMetric {glyph:"▣";title:"ACTIVE POSITIONS";value:root.active-positions;
+                        footer:root.online?"OPEN MT5 POSITIONS":"UNKNOWN";theme-choice:root.theme-choice;accent:#e88e77;}
+                    DeskMetric {glyph:"◷";title:"QUOTE AGE / عمر السعر";value:root.quote-age-display;
+                        footer:root.online?"MT5 TICK FRESHNESS":"NO QUOTE";theme-choice:root.theme-choice;accent:#71c4ee;}
+                    }
                 }
                 HorizontalLayout {spacing: 11px; alignment: start;
                     Rectangle {
