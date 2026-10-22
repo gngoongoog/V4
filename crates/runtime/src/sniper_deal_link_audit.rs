@@ -99,9 +99,10 @@ pub fn audit(db:&Connection,context:&str)->Result<Value>{
             let mut q=db.prepare(
                 "SELECT payload FROM broker_deals WHERE context=?1 AND ticket=?2 LIMIT 2"
             )?;
-            q.query_map(params![context,deal_id],|r|r.get::<_,String>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?
-                .into_iter().map(|raw|serde_json::from_str(&raw).unwrap_or(Value::Null))
+            let raw_rows=q.query_map(params![context,deal_id],|r|r.get::<_,String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            raw_rows.into_iter()
+                .map(|raw|serde_json::from_str(&raw).unwrap_or(Value::Null))
                 .collect::<Vec<Value>>()
         }else{Vec::new()};
         let (quality,note)=classify(&value,&history);
