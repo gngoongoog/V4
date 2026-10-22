@@ -459,13 +459,15 @@ impl Service {
         }
         // Paired coordinator Paper trades observe the same quote but NEVER
         // call the broker. Their errors are isolated from order management.
-        if let Err(error)=crate::coordinator_paper::observe(
+        if self.inner.matches_bound_telemetry(telemetry) {
+          if let Err(error)=crate::coordinator_paper::observe(
             db,telemetry,config,now){
             let _=db.execute(
                 "INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,?2,?3)",
                 params![now,"coordinator_paper_observation_error",
                     json!({"context":context(telemetry),
                         "error":error.to_string().chars().take(240).collect::<String>()}).to_string()]);
+          }
         }
         self.student.capture_entries(self.inner.take_entries(), now);
         if run {crate::student_learning::log_opportunities(db,telemetry,&self.inner.learning_decisions(),now)?;}
