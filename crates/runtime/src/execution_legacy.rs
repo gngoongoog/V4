@@ -85,6 +85,9 @@ impl Service {
         self.signals.clear();
     }
 
+    pub fn last_system_signal(&self)->Option<Signal>{
+        serde_json::from_value(self.signals.get("system")?.get("signal")?.clone()).ok()
+    }
     pub fn learning_decisions(&self)->Vec<(String,Value)> {
         self.brains.iter().filter(|b|b.enabled).filter_map(|b|self.signals.get(&b.id).map(|v|(b.id.clone(),v.clone()))).collect()
     }
