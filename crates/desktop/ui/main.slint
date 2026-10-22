@@ -27,7 +27,7 @@ export component Dashboard inherits Window {
     in-out property <bool> compact-sidebar: false;
     in-out property <bool> expanded-workspaces: false;
     callback save-appearance(int, bool);
-    changed theme-choice => { Palette.color-scheme = root.theme-choice == 1 ? ColorScheme.light : ColorScheme.dark; }
+    changed theme-choice => { Palette.color-scheme = ColorScheme.dark; }
     in property <string> account-mode-label: "NOT CONNECTED";
     in property <string> free-margin: "—";
     in property <string> active-positions: "—";
@@ -898,10 +898,12 @@ export component Dashboard inherits Window {
                     Rectangle {horizontal-stretch:1;background:transparent;}
                     Text { text: root.online ? "●  بيانات MT5 الحالية" : "○  لا توجد بيانات وسيط حديثة"; color: root.online ? #16bea1 : #dc9771; font-size:12px; vertical-alignment:center; }
                 }
-                HorizontalLayout {spacing: 9px;
-                    Card {theme-choice:root.theme-choice;label:"EQUITY / حقوق الحساب"; value:root.equity;}
-                    Card {theme-choice:root.theme-choice;label:"BALANCE / الرصيد"; value:root.balance;}
+                HorizontalLayout {spacing:9px;
+                    Card {theme-choice:root.theme-choice;label:"EQUITY / حقوق الحساب";value:root.equity;}
+                    Card {theme-choice:root.theme-choice;label:"BALANCE / الرصيد";value:root.balance;}
                     Card {theme-choice:root.theme-choice;label:"DAILY NET / صافي اليوم";value:root.today;}
+                }
+                HorizontalLayout {spacing:9px;
                     Card {theme-choice:root.theme-choice;label:"FREE MARGIN / الهامش الحر";value:root.free-margin;}
                     Card {theme-choice:root.theme-choice;label:"ACTIVE POSITIONS / المراكز";value:root.active-positions;}
                     Card {theme-choice:root.theme-choice;label:"QUOTE AGE / عمر السعر";value:root.quote-age-display;}
