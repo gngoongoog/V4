@@ -880,6 +880,29 @@ mod tests {
     }
 
     #[test]
+    fn broker_deal_costs_must_be_explicit_finite_and_complete_before_learning(){
+        let good=json!({"entry":1,"time_msc":1710000000100_u64,
+            "volume":0.01,"profit":1.50,"commission":-0.07,
+            "swap":0.0,"fee":0.0});
+        assert_eq!(audited_demo_deal(&good),Some((1.5,-0.07,0.,0.,0.01,1710000000100,1)));
+        for key in ["profit","commission","swap","fee","volume","entry","time_msc"]{
+            let mut missing=good.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            assert!(audited_demo_deal(&missing).is_none(),"missing {key} must not count as zero");
+        }
+        for bad in [json!(null),json!("0"),json!(f64::INFINITY),
+            json!(1e200)]{
+            let mut corrupted=good.clone();
+            corrupted["commission"]=bad;
+            assert!(audited_demo_deal(&corrupted).is_none());
+        }
+        for entry in [2,3,9]{
+            let mut ambiguous=good.clone();
+            ambiguous["entry"]=json!(entry);
+            assert!(audited_demo_deal(&ambiguous).is_none(),"no netting reversal or close-by label");
+        }
+    }
+    #[test]
     fn solo_closed_costs_partial_history_restart_and_live_isolation() {
         let db=Connection::open_in_memory().unwrap();let _=Learner::new(&db).unwrap();
         db.execute_batch("CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT,brain TEXT,kind TEXT,created_ms INTEGER,state TEXT,payload TEXT,result TEXT);
@@ -895,6 +918,12 @@ mod tests {
         insert(1,0,0.1,0.,-0.35);insert(2,1,0.04,0.2,-0.14);
         sync_demo_broker_evidence(&db,&t).unwrap();assert!(broker_review(&db,&key).unwrap().is_empty());
         insert(3,1,0.06,0.3,-0.21);
+        // A missing last-deal fee must not be silently treated as zero,
+        // even when all entered and exited lots reconcile.
+        db.execute("UPDATE broker_deals SET payload=json_remove(payload,'$.fee') WHERE ticket=3",[]).unwrap();
+        sync_demo_broker_evidence(&db,&t).unwrap();
+        assert!(broker_review(&db,&key).unwrap().is_empty());
+        db.execute("UPDATE broker_deals SET payload=json_set(payload,'$.fee',0.0) WHERE ticket=3",[]).unwrap();
         let mut live=t.clone();live.demo=false;live.account_trade_mode=Some(2);
         sync_demo_broker_evidence(&db,&live).unwrap();assert!(broker_review(&db,&key).unwrap().is_empty());
         sync_demo_broker_evidence(&db,&t).unwrap();
