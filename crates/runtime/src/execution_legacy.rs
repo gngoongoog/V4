@@ -435,7 +435,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 if b.id!="system"{
                     // Shadow failures must NEVER abort the actual broker execution
                     // coordinator or prevent closing positions. Record for audit.
-                    if let Err(error)=crate::frozen_shadow::observe(db,&key,&b.id,&signal,t,now,&available){
+                    if let Err(error)=crate::frozen_shadow::observe(db,&key,c.trading.mode,&b.id,&signal,t,now,&available){
                         let _=db.execute(
                             "INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,?2,?3)",
                             params![now,"frozen_shadow_observe_error",
