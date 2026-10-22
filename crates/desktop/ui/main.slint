@@ -116,6 +116,7 @@ export component Dashboard inherits Window {
     in-out property <string> cost-fraction: "0.45";
     in-out property <string> preview-lots: "0.1";
     in property <bool> studio-busy: false;
+    in property <bool> studio-cancel-busy: false;
     in property <string> studio-message: "";
     in property <string> cost-detail: "العمولة الافتراضية: 0.10 لوت = 0.70 و0.01 لوت = 0.07 من عملة الحساب. اربط MT5 واضغط «احسب» لعرض السبريد والتعادل من الأسعار الحقيقية.";
     in property <string> studio-summary: "بانتظار تحميل الفريمات";
@@ -318,15 +319,15 @@ export component Dashboard inherits Window {
                     Text {text: root.account-mode-label; color: root.online ? (root.account-mode-label == "REAL" ? #f1ab73 : #1cc8a9) : #a4afbc; font-weight:700;}
                 }
                 Rectangle {horizontal-stretch: 1; background: transparent;}
-                VerticalLayout {spacing:3px;
+                VerticalLayout {spacing:3px; visible: root.width >= 1100px;
                     Text {text: "EQUITY"; color: root.theme-choice == 1 ? #65758a : #92a9bd; font-size:10px;}
                     Text {text: root.equity; color: root.theme-choice == 1 ? #14273c : #f2f7fb; font-weight:700;}
                 }
-                VerticalLayout {spacing:3px;
+                VerticalLayout {spacing:3px; visible: root.width >= 1250px;
                     Text {text: "BALANCE"; color: root.theme-choice == 1 ? #65758a : #92a9bd; font-size:10px;}
                     Text {text: root.balance; color: root.theme-choice == 1 ? #14273c : #f2f7fb; font-weight:700;}
                 }
-                VerticalLayout {spacing:3px;
+                VerticalLayout {spacing:3px; visible: root.width >= 1400px;
                     Text {text: "DAILY NET"; color: root.theme-choice == 1 ? #65758a : #92a9bd; font-size:10px;}
                     Text {text: root.today; color: root.theme-choice == 1 ? #187b69 : #3ce3b8; font-weight:700;}
                 }
@@ -343,18 +344,18 @@ export component Dashboard inherits Window {
         }
         Rectangle {
             min-height: 40px;
-            background: root.execution-active ? #303239 : #22242a;
+            background: root.theme-choice == 1 ? (root.execution-active ? #dff5ee : #e9eff6) : root.execution-active ? #303239 : #22242a;
             border-radius: 11px;
             border-width: 1px; border-color: root.theme-choice == 1 ? #e3e9f0 : #3b3d45;
             HorizontalLayout { padding-left: 15px; padding-right: 15px; spacing: 10px;
-                Rectangle { width: 7px; height: 7px; border-radius: 4px; background: root.execution-active ? #edf0f4 : #868a94; }
+                Rectangle { width: 7px; height: 7px; border-radius: 4px; background: root.execution-active ? (root.theme-choice == 1 ? #168e78 : #edf0f4) : (root.theme-choice == 1 ? #77879b : #868a94); }
                 Text {
                     text: root.execution-active ? "تنفيذ MT5 مفعّل — أوامر الوسيط تتبع START / STOP"
                                                 : "وضع المراقبة — اربط حساب Demo وراجع الإعدادات قبل تشغيل التنفيذ";
                     color: root.theme-choice == 1 ? #28384b : #e0e1e4; vertical-alignment: center; wrap: word-wrap;
                 }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
-                Text { text: root.online ? "CONNECTED" : "OFFLINE"; color: root.theme-choice == 1 ? #62758b : #aeb1ba; font-size: 11px; vertical-alignment: center; }
+                Text { text: root.online ? "CONNECTED" : "OFFLINE"; color: root.theme-choice == 1 ? #62758b : #aeb1ba; font-size: 11px; vertical-alignment: center; visible: root.width >= 1100px; }
             }
         }
         HorizontalLayout {
@@ -883,7 +884,7 @@ export component Dashboard inherits Window {
             HorizontalBox {
                 Button { text: "توليد وتقييم"; enabled: !root.studio-busy; clicked => { root.studio-action("run"); } }
                 Button { text: "تعلم تلقائي"; enabled: !root.studio-busy; clicked => { root.studio-action("auto_on"); } }
-                Button { text: "إيقاف وإلغاء"; enabled: !root.studio-busy; clicked => { root.studio-action("cancel"); } }
+                Button { text: root.studio-cancel-busy ? "جارٍ إلغاء المختبر..." : "إيقاف وإلغاء"; enabled: !root.studio-cancel-busy; clicked => { root.studio-action("cancel"); } }
             }
             Text { text: "التعلم التلقائي ينتظر اختباراً نهائياً جديداً. يدعم فريمات MT5 الـ21 ولا يعوض التاريخ المفقود ببيانات مصطنعة."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             Text { text: root.studio-message; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
