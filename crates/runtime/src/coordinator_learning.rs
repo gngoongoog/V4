@@ -150,7 +150,7 @@ fn valid_cached_broker_score(p:&Value, closed_ms:u64)->Option<(f64,f64)> {
     let net=monetary("net")?;
     let volume=monetary("closed_volume").filter(|v|*v>0.&&*v<=10000.)?;
     let net_per_lot=monetary("net_per_lot")?;
-    let reward=monetary("reward").filter(|v|(-1...=1.).contains(v))?;
+    let reward=monetary("reward").filter(|v|(-1.0..=1.0).contains(v))?;
     let sum=gross+commission+swap+fee;
     if !sum.is_finite()
         ||(sum-net).abs()>1e-6_f64.max(net.abs()*1e-8)
