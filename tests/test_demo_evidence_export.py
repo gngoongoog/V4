@@ -120,6 +120,27 @@ class DemoReadTests(unittest.TestCase):
                 with self.assertRaises(exporter.DemoEvidenceError):
                     exporter.validate_mapping(bad)
 
+    def test_missing_or_nonpositive_broker_login_rejected_before_history_read(self):
+        for invalid in (None, 0, -5, True, "77"):
+            with self.subTest(login=invalid):
+                broker=FakeDemo()
+                broker.a.login=invalid
+                with self.assertRaises(exporter.DemoEvidenceError):
+                    self.capture(broker)
+                self.assertEqual(broker.history_calls,[])
+
+    def test_missing_server_currency_and_symbol_identity_rejected(self):
+        for field in ("server", "currency"):
+            broker=FakeDemo()
+            setattr(broker.a,field,None)
+            with self.assertRaises(exporter.DemoEvidenceError):
+                self.capture(broker)
+            self.assertEqual(broker.history_calls,[])
+        with self.assertRaises(exporter.DemoEvidenceError):
+            exporter.identity(None,"Symbol")
+        with self.assertRaises(exporter.DemoEvidenceError):
+            exporter.identity(False,"Symbol")
+
     def test_other_symbol_history_is_not_silently_mislabeled_as_gold(self):
         broker=FakeDemo()
         other=deal(3)
