@@ -5,6 +5,10 @@ mod regime;
 pub use regime::{MetaBrainV2, RegimeBrain, TrendBrain, TrendFrame};
 
 fn micro_demo_opt_in_is_false(value: &bool) -> bool { !*value }
+fn default_micro_recovery() -> f64 { 500.0 }
+fn default_micro_cap() -> f64 { 10.0 }
+fn micro_real_restore_is_default(value: &f64) -> bool { *value == 500.0 }
+fn micro_real_cap_is_default(value: &f64) -> bool { *value == 10.0 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -15,6 +19,14 @@ pub struct RiskConfig {
     /// The broker adapter rejects this elevated budget on REAL accounts.
     #[serde(default, skip_serializing_if = "micro_demo_opt_in_is_false")]
     pub micro_demo_risk_opt_in: bool,
+    /// Temporary real-account MICRO mode requires explicit consent and only
+    /// works before the broker equity recovery milestone. Not a risk-off switch.
+    #[serde(default, skip_serializing_if = "micro_demo_opt_in_is_false")]
+    pub micro_real_temporary: bool,
+    #[serde(default = "default_micro_recovery", skip_serializing_if = "micro_real_restore_is_default")]
+    pub micro_real_recovery_equity: f64,
+    #[serde(default = "default_micro_cap", skip_serializing_if = "micro_real_cap_is_default")]
+    pub micro_real_cap_percent: f64,
     pub daily_loss_percent: f64,
     pub max_drawdown_percent: f64,
     pub max_spread_atr: f64,
@@ -27,6 +39,9 @@ impl Default for RiskConfig {
         Self {
             risk_percent: 0.25,
             micro_demo_risk_opt_in: false,
+            micro_real_temporary: false,
+            micro_real_recovery_equity: default_micro_recovery(),
+            micro_real_cap_percent: default_micro_cap(),
             daily_loss_percent: 2.0,
             max_drawdown_percent: 5.0,
             max_spread_atr: 0.25,
@@ -41,6 +56,8 @@ impl RiskConfig {
         let ranges = [
             (self.risk_percent, 0.01, if self.micro_demo_risk_opt_in { 5.0 } else { 2.0 }),
             (self.daily_loss_percent, 0.1, 10.0),
+            (self.micro_real_recovery_equity, 50.0, 1_000_000.0),
+            (self.micro_real_cap_percent, 0.01, 20.0),
             (self.max_drawdown_percent, 0.1, 30.0),
             (self.max_spread_atr, 0.01, 1.0),
             (self.max_lots, 0.001, 100.0),
@@ -548,11 +565,30 @@ pub mod tests {
         assert_eq!(decoded.risk_percent, 5.0);
     }
     #[test]
+    fn micro_real_mode_is_opt_in_and_bounded_with_backward_compatible_json() {
+        let mut r = RiskConfig::default();
+        let json=serde_json::to_value(&r).unwrap();
+        assert!(json.get("micro_real_temporary").is_none());
+        assert!(json.get("micro_real_recovery_equity").is_none());
+        assert!(json.get("micro_real_cap_percent").is_none());
+        r.micro_real_temporary=true;
+        r.micro_real_cap_percent=21.;
+        assert!(r.validate().is_err());
+        r.micro_real_cap_percent=10.;
+        r.micro_real_recovery_equity=500.;
+        assert!(r.validate().is_ok());
+        let decoded: RiskConfig=serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert!(decoded.micro_real_temporary);
+        assert_eq!(decoded.micro_real_recovery_equity,500.);
+    }
+    #[test]
     fn old_config_gets_risk_defaults() {
         let old = r#"{"schema":1,"mt5_path":"","symbol":"XAUUSD","telegram_user_id":"","telegram_chat_id":"","telegram_enabled":false}"#;
         let config: crate::Config = serde_json::from_str(old).unwrap();
         assert_eq!(config.risk.risk_percent, 0.25);
         assert!(!config.risk.micro_demo_risk_opt_in);
+        assert!(!config.risk.micro_real_temporary);
+        assert_eq!(config.risk.micro_real_recovery_equity,500.);
         assert!(config.validate().is_ok());
         assert!(!serde_json::to_value(&config.risk).unwrap().as_object().unwrap()
             .contains_key("micro_demo_risk_opt_in"),
