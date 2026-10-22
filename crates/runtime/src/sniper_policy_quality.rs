@@ -193,7 +193,7 @@ mod tests {
         assert_eq!(s["distinct_policy_regime_definition_groups"],4);
         assert_eq!(s["groups"][0]["all"]["samples"],35);
         assert_eq!(s["groups"][0]["all"]["net_booked"],70.);
-        assert_eq!(s["groups"][0]["all"]["estimated_cost_drag"],-24.5);
+        assert!((s["groups"][0]["all"]["estimated_cost_drag"].as_f64().unwrap()+24.5).abs()<1e-8);
         assert_eq!(s["groups"][0]["all"]["win_rate"],1.);
         assert_eq!(s["groups"][0]["all"]["profit_factor"],Value::Null);
         assert_eq!(s["promotion_authorized"],false);
