@@ -486,11 +486,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 if loss > t.equity * active_risk_percent / 100. {
                     gates.push("ميزانية المخاطرة الاختيارية");
                 }
-                if t.today_net
-                    .is_none_or(|v| v < -t.balance * c.risk.daily_loss_percent / 100.)
-                {
-                    gates.push("حد الخسارة اليومي الاختياري أو نتيجته غير متاحة");
-                }
+                // Daily loss now has one explicit account-wide ON/OFF switch
+                // outside optional per-brain limits. Do not double-gate Demo.
                 // The configurable ratio is spread / ATR, not spread / stop.
                 // Sniper uses a fixed-point stop, so dividing that stop by the
                 // brain's stop_atr fabricated ATR and rejected valid setups.
