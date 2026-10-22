@@ -67,6 +67,36 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
     ));
     if b["config"]["id"]=="system" {
         if v["trading_mode"]=="sniper" {
+            let quality=&b["sniper_policy_quality"];
+            detail.push_str(&format!(
+                "\n\nتقييم أساليب القناص من صفقات MT5 Demo المغلقة فقط:\nمراكز مكتملة {} | مرفوضة/غير منسوبة {} | مكررة {} | مجموعات بحسب الأسلوب وحالة السوق وإصدار السياسة {}\nالنتائج وصفية للمراقبة فقط؛ آخر الصفقات ليست اختباراً مستقلاً، ولا يوجد اعتماد تلقائي لأسلوب جديد.",
+                quality["closed_demo_positions"],
+                quality["invalid_or_unattributed_samples"],
+                quality["duplicate_position_samples"],
+                quality["distinct_policy_regime_definition_groups"]
+            ));
+            for group in quality["groups"].as_array().into_iter().flatten().take(8) {
+                let mode=match group["policy"].as_str(){
+                    Some("impulse")=>"اندفاع",Some("rebound")=>"ارتداد",_=>"غير محدد"
+                };
+                let q=&group["all"];
+                let recent=&group["recent"];
+                detail.push_str(&format!(
+                    "\n{} | سوق {} | إصدار {} | صفقات {} | ربح صافي {} | معدل فوز بعد التكلفة {} | صافي/لوت {} | عامل الربح {} | آخر {} صفقة صافي/لوت {} | حالة {}",
+                    mode,
+                    group["regime"].as_str().unwrap_or("—"),
+                    group["definition"].as_str().unwrap_or("—"),
+                    q["samples"],
+                    maybe_number(&q["net_booked"]),
+                    q["win_rate"].as_f64().map(|x|format!("{:.1}%",100.*x)).unwrap_or_else(||"—".into()),
+                    maybe_number(&q["mean_net_per_lot"]),
+                    maybe_number(&q["profit_factor"]),
+                    recent["samples"],
+                    maybe_number(&recent["mean_net_per_lot"]),
+                    group["status"].as_str().unwrap_or("غير متاح")
+                ));
+            }
+            detail.push_str("\nكل الأرقام تشمل عمولات ورسوم وسواب الوسيط المسجلة؛ وجود نتيجة جيدة لا يثبت ربحية مستقبلية أو يسمح بتشغيل REAL تلقائياً.");
             let linked=&b["sniper_deal_link"];
             detail.push_str(&format!(
                 "\n\nمطابقة رد القناص مع سجل تنفيذ MT5 المتزامن (قراءة فقط):\nآخر {} أوامر | ربط مضبوط برقم Deal {} | بانتظار مزامنة الوسيط {} | رد بدون رقم Deal {} | تعارض {} | سجل غير مكتمل {}\nالربط برقم Deal يؤكد وجود صفقة دخول بهذا الرقم في السجل المحلي المتزامن، ولا يؤكد اكتمال تعبئة حجم الأمر أو مدة التنفيذ؛ أوقات الكمبيوتر والوسيط مختلفة ولا تُطرح للحصول على زمن Fill.",
