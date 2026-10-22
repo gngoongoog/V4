@@ -6,6 +6,7 @@ mod brain_control;
 mod trade_journal;
 mod shadow_paper;
 mod frozen_shadow;
+mod matched_forward;
 mod student_learning;
 mod studio;
 mod backtest;
