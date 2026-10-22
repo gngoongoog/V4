@@ -91,6 +91,14 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("market.valid()",main)
         self.assertIn("captured_ms <= 120_000",main) if "captured_ms <= 120_000" in main else self.assertIn("now_ms.saturating_sub(market.captured_ms) <= 120_000",main)
 
+    def test_original_reference_has_full_size_three_palette_screenshots(self):
+        renderer=(RUST / "render.rs").read_text(encoding="utf-8")
+        checker=(ROOT / "scripts/check_native_ui_visuals.py").read_text(encoding="utf-8")
+        self.assertIn("reference-command-center-{name}.ppm",renderer)
+        self.assertIn("reference-command-center-{palette}.ppm",checker)
+        self.assertIn("1540, 920",checker)
+        self.assertIn("Synthetic",renderer) if "Synthetic" in renderer else self.assertIn("synthetic",renderer)
+
     def test_render_only_example_market_chart_is_never_live_trading_data(self):
         runtime=(RUST / "main.rs").read_text(encoding="utf-8")
         render=(RUST / "render.rs").read_text(encoding="utf-8")
