@@ -26,7 +26,7 @@ export component Dashboard inherits Window {
     in-out property <int> theme-choice: 0;
     in-out property <bool> compact-sidebar: false;
     in-out property <bool> expanded-workspaces: false;
-    callback save-appearance(int, bool);
+    callback save-appearance(int, bool, bool);
     changed theme-choice => { Palette.color-scheme = ColorScheme.dark; }
     in property <string> account-mode-label: "NOT CONNECTED";
     in property <string> free-margin: "—";
@@ -279,7 +279,7 @@ export component Dashboard inherits Window {
                         Text { text: root.compact-sidebar ? "V4" : "Institutional Trading Terminal"; color: root.theme-choice == 1 ? #56708c : #6eddd4; font-size: 10px; }
                     }
                 }
-                Button {text:root.compact-sidebar?"☰":"☰  طي القائمة";clicked=>{root.compact-sidebar=!root.compact-sidebar;root.save-appearance(root.theme-choice,root.compact-sidebar);}}
+                Button {text:root.compact-sidebar?"☰":"☰  طي القائمة";clicked=>{root.compact-sidebar=!root.compact-sidebar;root.save-appearance(root.theme-choice,root.compact-sidebar,root.expanded-workspaces);}}
                 Rectangle {height:1px; background:root.theme-choice == 1 ? #e2e8f0 : #304052;}
                 Button { text: root.compact-sidebar ? "⌂" : "⌂   نظرة عامة"; clicked => {root.nav-section=0;root.page=0;} }
                 Button { text: root.compact-sidebar ? "↗" : "↗   مركز التداول"; clicked => {root.nav-section=1;root.page=14;root.studio-action("config");} }
@@ -334,9 +334,9 @@ export component Dashboard inherits Window {
                 VerticalLayout {spacing:3px;
                     Text {text: "APPEARANCE"; color: root.theme-choice == 1 ? #65758a : #92a9bd; font-size:10px;}
                     HorizontalLayout {spacing:4px;
-                        Button { text:"داكن"; clicked => {root.theme-choice=0; root.save-appearance(root.theme-choice,root.compact-sidebar);} }
-                        Button { text:"أبيض"; clicked => {root.theme-choice=1; root.save-appearance(root.theme-choice,root.compact-sidebar);} }
-                        Button { text:"رمادي"; clicked => {root.theme-choice=2; root.save-appearance(root.theme-choice,root.compact-sidebar);} }
+                        Button { text:"داكن"; clicked => {root.theme-choice=0; root.save-appearance(root.theme-choice,root.compact-sidebar,root.expanded-workspaces);} }
+                        Button { text:"أبيض"; clicked => {root.theme-choice=1; root.save-appearance(root.theme-choice,root.compact-sidebar,root.expanded-workspaces);} }
+                        Button { text:"رمادي"; clicked => {root.theme-choice=2; root.save-appearance(root.theme-choice,root.compact-sidebar,root.expanded-workspaces);} }
                     }
                 }
             }
@@ -362,7 +362,7 @@ export component Dashboard inherits Window {
             Button { text: "بدء النظام  START"; enabled: !root.busy && root.state == "STOPPED"; clicked => { root.action("start"); } }
             Button { text: "إيقاف  STOP"; enabled: !root.busy && root.state != "STOPPED"; clicked => { root.action("stop"); } }
             Button { text: "إعادة اتصال MT5"; enabled: !root.busy; clicked => { root.action("reconnect"); } }
-            Button { text: root.expanded-workspaces ? "−  إخفاء الأقسام" : "+  جميع الصفحات"; clicked => {root.expanded-workspaces = !root.expanded-workspaces;} }
+            Button { text: root.expanded-workspaces ? "−  إخفاء الأقسام" : "+  جميع الصفحات"; clicked => {root.expanded-workspaces = !root.expanded-workspaces;root.save-appearance(root.theme-choice,root.compact-sidebar,root.expanded-workspaces);} }
             Rectangle { horizontal-stretch: 1; background: transparent; }
             Text { text: root.decision; color: root.theme-choice == 1 ? #28384b : #d9dbe0; vertical-alignment: center; font-weight: 600; }
         }
@@ -465,6 +465,35 @@ export component Dashboard inherits Window {
                 color: root.theme-choice == 1 ? #17283d : #f0f0f2; font-weight: 700; font-size: 15px;
             }
             Rectangle { horizontal-stretch: 1; background: transparent; }
+            // Only pages with real existing Core-backed refresh handlers are enabled.
+            Button {
+                text: "↻ تحديث الصفحة";
+                enabled: !root.busy && !root.studio-busy && !root.exec-busy
+                    && !root.trade-journal-busy && !root.brain-monitor-busy
+                    && !root.risk-monitor-busy && !root.bt-busy && !root.ev-busy
+                    && !root.learning-busy && !root.backup-busy && !root.corr-busy
+                    && !root.news-refreshing && (
+                    root.page == 2 || root.page == 6 || root.page == 7
+                    || root.page == 8 || root.page == 9 || root.page == 11
+                    || root.page == 13 || root.page == 14 || root.page == 15
+                    || root.page == 16 || root.page == 17 || root.page == 18
+                    || root.page == 20 || root.page == 21);
+                clicked => {
+                    if (root.page == 2) {root.action("events");}
+                    if (root.page == 6) {root.risk-monitor-refresh();}
+                    if (root.page == 7) {root.backtest-action("refresh");}
+                    if (root.page == 8) {root.news-action("refresh");}
+                    if (root.page == 9) {root.evaluation-action("refresh");}
+                    if (root.page == 11) {root.learning-action("refresh");}
+                    if (root.page == 13) {root.backup-action("refresh");}
+                    if (root.page == 14) {root.studio-action("config");}
+                    if (root.page == 15 || root.page == 16) {root.studio-action("refresh");}
+                    if (root.page == 17) {root.execution-action("refresh");}
+                    if (root.page == 18) {root.correlation-action("refresh");}
+                    if (root.page == 20) {root.trade-journal-action("refresh");}
+                    if (root.page == 21) {root.brain-monitor-action("refresh");}
+                }
+            }
             ComboBox {
                 model: ["نظرة عامة","MT5 وTelegram","سجلات النظام","حول النظام",
                     "التحليل والعقول","المحاكاة","إدارة المخاطر","الاختبارات التاريخية",
