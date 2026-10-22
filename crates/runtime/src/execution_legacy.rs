@@ -177,7 +177,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         if t.report_day!=day { return Ok(true); }
         let locked:bool=db.query_row(
             "SELECT EXISTS(SELECT 1 FROM daily_loss_locks WHERE account_key=?1 AND report_day=?2)",
-            params![micro_account_key(t),day],|r|r.get(0)
+            params![daily_account_key(t),day],|r|r.get(0)
         )?;
         if locked { return Ok(true); }
         let Some(net)=t.today_net else { return Ok(true); };
