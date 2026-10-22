@@ -101,7 +101,7 @@ pub fn audit(db:&Connection)->Result<Value>{
     let mut identities=BTreeSet::new();
     for raw in raws.into_iter().rev(){
         let record:Value=serde_json::from_str(&raw)?;
-        let check=||->std::result::Result<(String,Option<(bool,f64,f64)>),&'static str>{
+        let mut check=||->std::result::Result<(String,Option<(bool,f64,f64)>),&'static str>{
             let context=record["context"].as_str().ok_or("missing_context")?;
             if !contexts.contains(context){return Err("unknown_training_context")}
             if record["dataset"]!=dataset||record["review_id"]!=review_id||record["target"]!=target{
