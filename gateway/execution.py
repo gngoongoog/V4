@@ -255,7 +255,7 @@ class BrokerExecutor:
         now=datetime.now(timezone.utc)
         local=now.astimezone(timezone(timedelta(hours=3)))
         day=local.date().isoformat()
-        key=json.dumps(account_identity(account),ensure_ascii=False,separators=(',',':'))
+        key=json.dumps((*account_identity(account),int(account.trade_mode)),ensure_ascii=False,separators=(',',':'))
         if self.db.execute('SELECT 1 FROM daily_loss_locks WHERE account_key=? AND report_day=?',(key,day)).fetchone():
             return True
         day_begin=local.replace(hour=0,minute=0,second=0,microsecond=0).astimezone(timezone.utc)
