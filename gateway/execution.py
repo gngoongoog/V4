@@ -451,6 +451,22 @@ class BrokerExecutor:
                         result['sizing']['post_risk_round_trip_commission']=round_trip_commission(
                             float(cmd.get('commission_per_lot',0)),lots)
 
+            # REAL margin is checked even on Sniper's no-order_check fast path.
+            # No hidden leverage assumption: ask MT5 for this exact contract.
+            if not closing and cmd['target']=='live':
+                try:
+                    margin=mt5.order_calc_margin(request['type'],symbol,request['volume'],price)
+                except Exception as exc:
+                    raise ValueError('REAL margin preflight: broker calculator failed') from exc
+                free=float(getattr(a,'margin_free',float('nan')))
+                if margin is None or not math.isfinite(float(margin)) or float(margin)<0 or not math.isfinite(free) or free<0:
+                    raise ValueError('REAL margin preflight: broker margin or free margin unavailable')
+                full_fee=round_trip_commission(float(cmd.get('commission_per_lot',float('nan'))),request['volume'])
+                needed=float(margin)+full_fee
+                if needed>free+1e-8:
+                    raise ValueError(f'REAL margin preflight: needs {needed:.4f} {a.currency} incl. estimated fee, only {free:.4f} free')
+                result['real_margin_check']=dict(estimated_margin=float(margin),free_margin=free,
+                                                  full_roundtrip_fee=full_fee,required=needed)
             # Sniper removes one broker round trip. All equivalent local validations
             # above stay mandatory; the broker can still reject the final order_send.
             if fast_path:
@@ -506,6 +522,14 @@ class BrokerExecutor:
                 result.update(state='cancelled',reason='Account changed or intent expired after durable journal; order not sent')
                 result['total_ms']=(time.perf_counter()-started)*1000
                 return self._save(cmd,result)
+            if not closing and 'real_margin_check' in result:
+                current_free=float(getattr(final_account,'margin_free',float('nan')))
+                if (not math.isfinite(current_free)
+                        or current_free+1e-8<result['real_margin_check']['required']):
+                    result.update(state='cancelled',
+                        reason='REAL free margin dropped below broker preflight requirement before send')
+                    result['total_ms']=(time.perf_counter()-started)*1000
+                    return self._save(cmd,result)
             if not closing and 'risk_sizing' in result:
                 # Re-check the irrevocable REAL recovery milestone immediately
                 # before send, even if it was crossed after initial sizing.
