@@ -264,6 +264,8 @@ fn run_ui() -> anyhow::Result<()> {
                     ui.set_micro_real_recovery_equity(c.risk.micro_real_recovery_equity.to_string().into());
                     ui.set_micro_real_cap_percent(c.risk.micro_real_cap_percent.to_string().into());
                     ui.set_daily_limit(c.risk.daily_loss_percent.to_string().into());
+                    ui.set_daily_breaker_demo_enabled(c.risk.daily_breaker_demo_enabled);
+                    ui.set_daily_breaker_real_enabled(c.risk.daily_breaker_real_enabled);
                     ui.set_drawdown_limit(c.risk.max_drawdown_percent.to_string().into());
                     ui.set_spread_limit(c.risk.max_spread_atr.to_string().into());
                     ui.set_max_lots(c.risk.max_lots.to_string().into());
