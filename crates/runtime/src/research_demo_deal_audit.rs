@@ -102,10 +102,10 @@ pub fn audit(body:&[u8])->Result<Value>{
     for deal in &ev.deals {
         ensure!(deal.ticket>0 && deal.position_id>0 && deal.time_msc>0
             && deal.time_msc<=ev.captured_ms
-            && deal.volume.is_finite() && deal.volume>0.
-            && deal.price.is_finite() && deal.price>0.
+            && deal.volume.is_finite() && deal.volume>0. && deal.volume<=10_000.
+            && deal.price.is_finite() && deal.price>0. && deal.price<=1e12
             && [deal.profit,deal.commission,deal.swap,deal.fee]
-                .iter().all(|x|x.is_finite()),
+                .iter().all(|x|x.is_finite() && x.abs()<=1e12),
             "Malformed or future-dated MT5 Demo deal evidence");
         ensure!(seen.insert(deal.ticket),"Duplicate MT5 deal ticket in evidence");
         let Some(intent)=deal.intent_id.as_deref() else {
@@ -132,6 +132,9 @@ pub fn audit(body:&[u8])->Result<Value>{
         let net=deal.profit+deal.commission+deal.swap+deal.fee;
         row.net+=net;
         total_net+=net;
+        ensure!(row.entered.is_finite() && row.exited.is_finite()
+            && row.net.is_finite() && total_net.is_finite(),
+            "Broker evidence aggregate exceeds supported numerical range");
         count+=1;
     }
     let mut discrepancies=0usize;
@@ -284,4 +287,17 @@ mod tests {
         assert_eq!(v["status"],"discrepancy");
         assert_eq!(v["deals_linked_to_unknown_orders"],1);
     }
+    #[test]
+    fn overfilled_supplied_broker_evidence_is_never_treated_as_volume_parity(){
+        let v=run(request(json!([deal(1,"in",0.05),deal(2,"out",0.04)]),true)).unwrap();
+        assert_eq!(v["status"],"discrepancy");
+        assert_eq!(v["orders"][0]["state"],"volume_discrepancy");
+    }
+    #[test]
+    fn invalid_huge_evidence_lots_are_rejected_before_aggregation(){
+        let mut large=deal(1,"in",0.04);
+        large["volume"]=json!(1e20);
+        assert!(run(request(json!([large]),true)).is_err());
+    }
+
 }
