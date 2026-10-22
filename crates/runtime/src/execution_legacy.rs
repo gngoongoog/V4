@@ -90,6 +90,7 @@ impl Service {
         db.execute_batch("CREATE TABLE IF NOT EXISTS execution_settings(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS execution_equity(context TEXT PRIMARY KEY,peak REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS micro_real_recovered(account_key TEXT PRIMARY KEY,reached_ms INTEGER NOT NULL,reached_equity REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS daily_loss_locks(account_key TEXT NOT NULL,report_day TEXT NOT NULL, reached_ms INTEGER NOT NULL,loss_amount REAL NOT NULL, PRIMARY KEY(account_key,report_day));
 CREATE TABLE IF NOT EXISTS brain_configs(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS broker_commands(id TEXT PRIMARY KEY,context TEXT NOT NULL,brain TEXT NOT NULL,kind TEXT NOT NULL,created_ms INTEGER NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS broker_commands_context ON broker_commands(context,brain,created_ms);
@@ -156,6 +157,46 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             [micro_account_key(t)], |row| row.get(0)
         )?;
         Ok(!locked)
+    }
+    fn daily_breaker_blocked(
+        &self, db: &Connection, t: &Telemetry, now: u64, enabled: bool, limit: f64
+    ) -> Result<bool> {
+        if !enabled { return Ok(false); }
+        if !limit.is_finite() || !(0.1..=10.).contains(&limit) {
+            return Ok(true);
+        }
+        let stamp=chrono::DateTime::<chrono::Utc>::from_timestamp_millis(now as i64);
+        let Some(stamp)=stamp else { return Ok(true); };
+        let baghdad=chrono::FixedOffset::east_opt(3*3600).unwrap();
+        let day=stamp.with_timezone(&baghdad).format("%Y-%m-%d").to_string();
+        // Never trust yesterday's successful snapshot for today's entry.
+        if t.report_day!=day { return Ok(true); }
+        let locked:bool=db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM daily_loss_locks WHERE account_key=?1 AND report_day=?2)",
+            params![micro_account_key(t),day],|r|r.get(0)
+        )?;
+        if locked { return Ok(true); }
+        let Some(net)=t.today_net else { return Ok(true); };
+        // MT5 account-wide balance/equity includes all positions; subtract
+        // today's settled trading PnL to estimate a pre-day trading baseline.
+        // Any unknown/invalid broker evidence blocks, never fabricates PnL.
+        let baseline=t.balance-net;
+        if !net.is_finite() || !baseline.is_finite() || baseline<=0.
+            || !t.equity.is_finite() || t.equity<=0. { return Ok(true); }
+        let loss=baseline-t.equity;
+        if loss>=baseline*limit/100. {
+            db.execute("INSERT OR IGNORE INTO daily_loss_locks VALUES(?1,?2,?3,?4)",
+                params![micro_account_key(t),day,now,loss])?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+    fn breaker_enabled(&self, c:&Config) -> bool {
+        match self.settings.target.as_str() {
+            "live" => c.risk.daily_breaker_real_enabled,
+            "demo" => c.risk.daily_breaker_demo_enabled,
+            _ => true,
+        }
     }
     fn matches(&self, t: &Telemetry) -> bool {
         t.connected
@@ -231,6 +272,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             p["trading_mode"] = json!(c.trading.mode);
             p["demo_flexible"] = json!(c.trading.demo_flexible && t.demo && t.account_trade_mode==Some(0));
             p["commission_per_lot"] = json!(c.risk.commission_per_lot);
+            p["daily_breaker_enabled"] = json!(self.breaker_enabled(c));
+            p["daily_breaker_limit_percent"] = json!(c.risk.daily_loss_percent);
             // Mandatory for every new entry (Demo and REAL). The broker uses
             // order_calc_profit at the EXACT final stop and account equity to
             // cap the requested volume without ever increasing it.
@@ -267,6 +310,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         let key = ctx(t);
         // Checking eligibility also durably records the milestone once it is reached.
         let micro_real = self.micro_real_active(db, t, c)?;
+        let daily_breaker_blocked=self.daily_breaker_blocked(
+            db,t,now,self.breaker_enabled(c),c.risk.daily_loss_percent)?;
         db.execute("INSERT INTO execution_equity VALUES(?1,?2) ON CONFLICT(context) DO UPDATE SET peak=MAX(peak,excluded.peak)",params![key,t.equity])?;
         let peak:f64=db.query_row("SELECT peak FROM execution_equity WHERE context=?1",[&key],|r|r.get(0))?;
         // A fill acknowledgement is not a reconciled position snapshot. Keep the
@@ -388,6 +433,9 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
 
             if !run {
                 gates.push("النظام متوقف");
+            }
+            if daily_breaker_blocked {
+                gates.push("قاطع الخسارة اليومي للحساب: الحد بلغ أو بيانات اليوم غير موثوقة");
             }
             // Elevated risk is deliberately Demo-only. Reject in Core before
             // queueing to avoid a stream of guaranteed broker rejections on REAL.
@@ -646,8 +694,13 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 if let Some(cmd) = &command {
                     let id = cmd["id"].as_str().unwrap();
                     if cmd["state"] == "queued" {
+                        let breaker_ok=cmd["kind"] == "close"
+                            || !self.daily_breaker_blocked(
+                                db,t,now,
+                                cmd["daily_breaker_enabled"].as_bool().unwrap_or(self.settings.target=="live"),
+                                cmd["daily_breaker_limit_percent"].as_f64().unwrap_or(2.))?;
                         let allowed = cmd["kind"] == "close"
-                            || (self.enabled(status)
+                            || (breaker_ok && self.enabled(status)
                                 && self.broker_entry_allowed(cmd));
                         if allowed {
                             db.execute("UPDATE broker_commands SET state='dispatched' WHERE id=?1 AND state='queued'",[id])?;
@@ -670,7 +723,13 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )?;
                 let cmd: Value = serde_json::from_str(&raw)?;
+                let breaker_ok=if cmd["kind"]=="close" {true} else if let Some(t)=t {
+                    !self.daily_breaker_blocked(db,t,now,
+                        cmd["daily_breaker_enabled"].as_bool().unwrap_or(self.settings.target=="live"),
+                        cmd["daily_breaker_limit_percent"].as_f64().unwrap_or(2.))?
+                } else { false };
                 let ok = state == "dispatched"
+                    && breaker_ok
                     && t.is_some_and(|t| self.matches(t) && ctx(t) == cmd["context"])
                     && now <= cmd["expires_ms"].as_u64().unwrap_or(0)
                     && (cmd["kind"] == "close"
