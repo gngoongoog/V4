@@ -65,6 +65,20 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
         q["recent"]["win_rate"].as_f64().map(|v|format!("{:.1}%",v*100.)).unwrap_or_else(||"—".into()),
         maybe_number(&q["all"]["net_booked"]),maybe_number(&q["all"]["cost_drag"]),q["all"]["gross_positive_but_net_nonpositive"]
     ));
+    let frozen=&b["frozen_trial"];
+    let stage=match frozen["status"].as_str().unwrap_or("") {
+        "active"=>"نشطة — نسخة الإعدادات لا تتعلم وتتداول Paper فقط",
+        "stopped"=>"منتهية — السجل محفوظ",
+        "not_started"=>"لا توجد تجربة بعد",
+        _=>"التجربة غير متاحة دون حساب Demo مربوط"
+    };
+    detail.push_str(&format!(
+        "\n\nنسخة Shadow مجمّدة: {}\nالشموع المستقبلية المقارنة {} | إشارتان جاهزتان {} | اتجاه متوافق {}\nصفقات ورقية منتهية {} | رابحة {} | صافي افتراضي بعد تكاليف مفترضة {}\n{}",
+        stage,frozen["paired_bars"],frozen["both_ready"],frozen["side_agreements"],
+        frozen["paper_trades_closed"],frozen["paper_wins"],
+        maybe_number(&frozen["paper_net_after_assumed_costs"]),
+        "هذه نسخة سياسة مستشار ثابتة على Demo فقط، لا تتلقى تحديثاً بعد التجميد ولا تدخل أوامر MT5؛ نتائجها ليست أرباحاً حقيقية ولا اختباراً للقناص أو النظام الرئيسي."
+    ));
     ui.set_brain_monitor_detail(detail.into());
 }
 pub fn setup(ui:&Dashboard)->slint::Timer {
