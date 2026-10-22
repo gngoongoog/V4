@@ -166,7 +166,35 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
     let (tx, rx) = mpsc::channel::<(String, Value, String)>();
     let sender = tx.clone();
     let weak = ui.as_weak();
-    ui.on_studio_action(move|action|{if let Some(ui)=weak.upgrade(){if ui.get_studio_busy(){return;}let action=action.to_string();let tf=selected_tf(&ui);let basis=if ui.get_commission_basis()==1{"per_side"}else{"round_trip"};let body=(||->anyhow::Result<Value>{Ok(match action.as_str(){"save"=>{let trading=TradingConfig{sniper_style:match ui.get_sniper_style(){1=>braintrade_domain::trading::SniperStyle::Impulse,2=>braintrade_domain::trading::SniperStyle::Rebound,3=>braintrade_domain::trading::SniperStyle::Confirmed,_=>braintrade_domain::trading::SniperStyle::Auto},sniper_brain:if ui.get_sniper_brain()==1{SniperBrain::Learner}else{SniperBrain::Classic},
+    ui.on_studio_action(move|action|{
+        if let Some(ui)=weak.upgrade(){
+            let action=action.to_string();
+            // Cancellation must remain reachable while a long studio request is busy.
+            // Use a separate worker rather than queueing behind the running request.
+            if action=="cancel" {
+                if ui.get_studio_cancel_busy(){return;}
+                ui.set_studio_cancel_busy(true);
+                let ui_weak=ui.as_weak();
+                std::thread::spawn(move || {
+                    let result=(||->anyhow::Result<Value>{
+                        Client::new(&data_dir())?.post("/v1/studio/cancel",json!({}))
+                    })();
+                    let _=ui_weak.upgrade_in_event_loop(move |ui|{
+                        ui.set_studio_cancel_busy(false);
+                        match result {
+                            Ok(v) if v["cancelled"]==true => ui.set_studio_message(
+                                "تم إرسال طلب إيقاف المختبر وتعطيل التعلم التلقائي.".into()),
+                            Ok(_) => ui.set_studio_message(
+                                "ردّ المختبر لا يؤكد الإلغاء؛ راجع حالته قبل إعادة التشغيل.".into()),
+                            Err(e) => ui.set_studio_message(
+                                format!("تعذر إلغاء المختبر: {e}").into()),
+                        }
+                    });
+                });
+                return;
+            }
+            if ui.get_studio_busy() || ui.get_studio_cancel_busy(){return;}
+            let tf=selected_tf(&ui);let basis=if ui.get_commission_basis()==1{"per_side"}else{"round_trip"};let body=(||->anyhow::Result<Value>{Ok(match action.as_str(){"save"=>{let trading=TradingConfig{sniper_style:match ui.get_sniper_style(){1=>braintrade_domain::trading::SniperStyle::Impulse,2=>braintrade_domain::trading::SniperStyle::Rebound,3=>braintrade_domain::trading::SniperStyle::Confirmed,_=>braintrade_domain::trading::SniperStyle::Auto},sniper_brain:if ui.get_sniper_brain()==1{SniperBrain::Learner}else{SniperBrain::Classic},
 sniper_target_mode:if ui.get_sniper_target_mode()==1{SniperTargetMode::Adaptive}else{SniperTargetMode::Fixed},
 sniper_min_target_pips:number(ui.get_sniper_min_target_pips())?,
 sniper_max_target_pips:number(ui.get_sniper_max_target_pips())?,demo_flexible:ui.get_demo_flexible(),adaptive_exits:ui.get_adaptive_exits(),mode:match ui.get_trade_mode(){0=>TradingMode::Scalping,1=>TradingMode::Swing,3=>TradingMode::Sniper,_=>TradingMode::Expert},sniper_target_points:number(ui.get_sniper_target())?*number(ui.get_pip_points())?,sniper_stop_points:number(ui.get_sniper_stop())?,sniper_cooldown_seconds:ui.get_sniper_cooldown().trim().parse()?,sniper_max_hold_seconds:ui.get_sniper_hold().trim().parse()?,pip_points:number(ui.get_pip_points())?,sniper_pip_price:number(ui.get_sniper_pip_price())?,max_cost_fraction:number(ui.get_cost_fraction())?};trading.validate().map_err(anyhow::Error::msg)?;json!({"trading":trading,"commission_per_lot":number(ui.get_commission_lot())?,"commission_basis":basis,"slippage_ticks":number(ui.get_slippage_ticks())?})},"cost"=>json!({"lots":number(ui.get_preview_lots())?,"commission_per_lot":number(ui.get_commission_lot())?,"commission_basis":basis,"pip_points":number(ui.get_pip_points())?,"sniper_pip_price":number(ui.get_sniper_pip_price())?,"slippage_ticks":number(ui.get_slippage_ticks())?}),"report"=>{use slint::Model;json!({"id":ui.get_studio_ids().row_data(ui.get_studio_report_index().max(0)as usize).unwrap_or_default().to_string()})},"auto_on"=>json!({"enabled":true}),_=>json!({"timeframe":tf})})})();match body{Ok(body)=>{ui.set_studio_busy(true);let _=sender.send((action,body,tf));},Err(e)=>ui.set_studio_message(format!("تحقق من الأرقام: {e}").into())}}});

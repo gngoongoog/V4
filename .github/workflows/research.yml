@@ -34,6 +34,8 @@ jobs:
           cargo check -p braintrade-desktop --locked 2>&1 | tee test-output/desktop-check.log
       - name: Render all native desktop pages headlessly
         run: cargo run -p braintrade-desktop --locked -- --render-check
+      - name: Verify screenshots for missing pages, damaged images and palette changes
+        run: python3 scripts/check_native_ui_visuals.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -81,6 +83,8 @@ jobs:
           cargo check -p braintrade-desktop --locked 2>&1 | tee test-output/desktop-check.log
       - name: Render all native desktop pages headlessly
         run: cargo run -p braintrade-desktop --locked -- --render-check
+      - name: Verify screenshots for missing pages, damaged images and palette changes
+        run: python3 scripts/check_native_ui_visuals.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
