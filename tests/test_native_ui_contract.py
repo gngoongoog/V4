@@ -30,6 +30,54 @@ class NativeUiContract(unittest.TestCase):
         for section in range(5):
             self.assertRegex(self.dashboard, rf"root\.nav-section\s*==\s*{section}")
 
+    def test_all_native_form_controls_have_real_two_way_bindings(self):
+        # Beyond clickable buttons: verify each input persists into a property
+        # or invokes a selection callback. This is source wiring, not a
+        # replacement for interacting with native widgets on Windows.
+        def controls(source, kind):
+            pattern=re.compile(r"\\b"+kind+r"\\s*\\{")
+            for match in pattern.finditer(source):
+                start=source.index("{",match.start())
+                depth=0
+                quoted=False
+                escaped=False
+                for offset in range(start,len(source)):
+                    ch=source[offset]
+                    if quoted:
+                        if escaped:
+                            escaped=False
+                        elif ch=="\\\\":
+                            escaped=True
+                        elif ch=='"':
+                            quoted=False
+                    elif ch=='"':
+                        quoted=True
+                    elif ch=="{":
+                        depth+=1
+                    elif ch=="}":
+                        depth-=1
+                        if depth==0:
+                            yield source[match.start():offset+1]
+                            break
+                else:
+                    self.fail(f"Unclosed Slint {kind} control")
+        all_sources=(self.dashboard,CORRELATION.read_text(encoding="utf-8"))
+        total={"Button":0,"ComboBox":0,"LineEdit":0,"CheckBox":0}
+        for code in all_sources:
+            for kind in total:
+                for element in controls(code,kind):
+                    total[kind]+=1
+                    if kind=="Button":
+                        self.assertRegex(element,r"\\bclicked\\s*=>")
+                    elif kind=="ComboBox":
+                        self.assertRegex(element,r"(current-index\\s*<=>|selected\\s*(?:\\([^)]*\\))?\\s*=>)")
+                    elif kind=="LineEdit":
+                        self.assertRegex(element,r"\\btext\\s*<=>")
+                    else:
+                        self.assertRegex(element,r"\\bchecked\\s*<=>")
+        # Catch missing fields silently disappearing from nested layouts.
+        self.assertEqual(total,{"Button":130,"ComboBox":29,"LineEdit":49,"CheckBox":12})
+
     def test_no_button_is_rendered_without_a_click_handler(self):
         for path in (SLINT, CORRELATION):
             src = path.read_text(encoding="utf-8")
