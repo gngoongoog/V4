@@ -156,7 +156,7 @@ pub fn render() -> anyhow::Result<()> {
             // Render every combination; retain screenshots for comprehensive
             // dark regression and representative palette accessibility checks.
             if theme == 0 || [0,6,14,17,18,19,21].contains(&page) {
-                let path = output.join(format!("dashboard-page-{page}{suffix}-{name}.ppm"));
+                let path = output.join(if theme == 0 {format!("dashboard-page-{page}{suffix}.ppm")} else {format!("dashboard-page-{page}{suffix}-{name}.ppm")});
                 let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
                 write!(file, "P6\n{width} {height}\n255\n")?;
                 for pixel in pixels {
