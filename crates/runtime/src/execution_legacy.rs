@@ -212,6 +212,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             // order_calc_profit at the EXACT final stop and account equity to
             // cap the requested volume without ever increasing it.
             p["risk_percent"] = json!(c.risk.risk_percent);
+            p["micro_demo_risk_opt_in"] = json!(c.risk.micro_demo_risk_opt_in);
             p["slippage_ticks"] = json!(c.risk.slippage_ticks);
             p["learning"] = json!({"trading_mode":c.trading.mode,"timeframe":b.timeframe,"report_id":b.report_id,
                 "tick_size":t.tick_size,"tick_value_loss":t.tick_value_loss,"tick_value_profit":t.tick_value_profit,
