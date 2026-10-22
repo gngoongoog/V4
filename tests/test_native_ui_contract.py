@@ -124,6 +124,18 @@ class NativeUiContract(unittest.TestCase):
             self.assertIn(f'root.page == {index} ?',self.dashboard,
                           f"Missing per-page live breadcrumb for page {index}")
 
+    def test_standalone_app_uses_smoke_as_default_without_overwriting_saved_theme(self):
+        main=(RUST / "main.rs").read_text(encoding="utf-8")
+        self.assertIn("else{return (2,false,false)}",main)
+        self.assertIn(".unwrap_or((2,false,false))",main)
+        self.assertIn("ui.set_theme_choice(initial_theme)",main)
+
+    def test_active_sidebar_highlights_current_workspace(self):
+        for page, title in ((0,"نظرة عامة"),(14,"مركز التداول"),(21,"العقول"),
+                            (6,"إدارة المخاطر"),(17,"التنفيذ MT5"),
+                            (20,"سجل الصفقات"),(19,"تقدّم التعلّم")):
+            self.assertIn(f'(root.page == {page} ? "●   {title}"',self.dashboard)
+
     def test_visual_qa_is_enforced_in_research_and_windows_package(self):
         research=(ROOT / ".github/workflows/research.yml").read_text(encoding="utf-8")
         windows=(ROOT / "scripts/build-windows.ps1").read_text(encoding="utf-8")
