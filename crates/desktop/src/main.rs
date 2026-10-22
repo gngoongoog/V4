@@ -212,6 +212,8 @@ fn run_ui() -> anyhow::Result<()> {
                         micro_real_recovery_equity: v[7],
                         micro_real_cap_percent: v[8],
                         daily_loss_percent: v[1],
+                        daily_breaker_demo_enabled: ui.get_daily_breaker_demo_enabled(),
+                        daily_breaker_real_enabled: ui.get_daily_breaker_real_enabled(),
                         max_drawdown_percent: v[2],
                         max_spread_atr: v[3],
                         max_lots: v[4],
