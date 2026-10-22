@@ -263,7 +263,7 @@ mod tests{
             &signal(1,bar+60),&quote(at,100.,100.2),&c,at).unwrap();
         let mut stale=quote(at,100.,100.2);stale.tick_age_ms=Some(5000);
         observe(&db,"r1",1_000_000_000,true,&signal(1,bar),
-            &signal(1,bar),&stale,at).unwrap();
+            &signal(1,bar),&stale,&c,at).unwrap();
         assert_eq!(summary(&db,"r1").unwrap()["pending"],0);
     }
 }
