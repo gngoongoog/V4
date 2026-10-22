@@ -65,6 +65,16 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
         q["recent"]["win_rate"].as_f64().map(|v|format!("{:.1}%",v*100.)).unwrap_or_else(||"—".into()),
         maybe_number(&q["all"]["net_booked"]),maybe_number(&q["all"]["cost_drag"]),q["all"]["gross_positive_but_net_nonpositive"]
     ));
+    if b["config"]["id"]=="system" {
+        let twin=&b["frozen_coordinator"];
+        detail.push_str(&format!(
+            "\n\nمنسّق Expert المجمّد — رصد سياسة فقط:\nالحالة {} | شموع مستقبلية مقارنة {} | جاهزية مشتركة {}\nاتجاه متفق {} | اتجاه مختلف {} | مجمّد فقط {} | متعلّم فقط {}\nهذه نسخة ثابتة لإعدادات المنسق وأصوات وأوزان المستشارين وملفات الخروج. لا تعيد تشغيل بوابات الأوامر والهامش والتنفيذ ولا تقيس الربحية.",
+            twin["status"].as_str().unwrap_or("غير متاح"),
+            twin["bars_compared"],twin["both_actionable"],
+            twin["same_direction"],twin["different_direction"],
+            twin["frozen_only_ready"],twin["adaptive_only_ready"]
+        ));
+    }
     let frozen=&b["frozen_trial"];
     let stage=match frozen["status"].as_str().unwrap_or("") {
         "active"=>"نشطة — نسخة الإعدادات لا تتعلم وتتداول Paper فقط",
@@ -113,7 +123,10 @@ pub fn setup(ui:&Dashboard)->slint::Timer {
         let index=ui.get_brain_monitor_selected().max(0) as usize;
         let v=current.lock().unwrap();
         if a=="select" {paint(&ui,&v,index,true);return}
-        let body=if a=="freeze"||a=="stop_frozen" {
+        let body=if a=="freeze_coordinator"||a=="stop_coordinator" {
+            json!({"action":if a=="freeze_coordinator"{"freeze"}else{"stop"},
+                "context":v["context"],"mode":v["trading_mode"]})
+        }else if a=="freeze"||a=="stop_frozen" {
             json!({"action":if a=="freeze"{"freeze"}else{"stop"},
                 "context":v["context"],"brain":BRAINS.get(index).map(|b|b.0).unwrap_or("system"),
                 "mode":v["trading_mode"]})
@@ -135,6 +148,9 @@ pub fn setup(ui:&Dashboard)->slint::Timer {
         let result=(||->anyhow::Result<Value>{let c=Client::new(&data_dir())?;
             if action=="save"{c.post("/v1/execution/brain-control",body)?;}
             else if action=="freeze"||action=="stop_frozen"{c.post("/v1/execution/frozen-shadow",body)?;}
+            else if action=="freeze_coordinator"||action=="stop_coordinator"{
+                c.post("/v1/execution/frozen-coordinator",body)?;
+            }
             c.get("/v1/execution/brains")})();
         let cache=cache.clone();
         let _=weak.upgrade_in_event_loop(move |ui|{
@@ -145,6 +161,8 @@ pub fn setup(ui:&Dashboard)->slint::Timer {
                 if action=="save"{ui.set_brain_monitor_message("حُفظت المشاركة والتدريب لهذا الحساب والرمز والوضع فقط".into());}
                 if action=="freeze"{ui.set_brain_monitor_message("أنشئت نسخة مستشار Shadow ثابتة؛ ستُقاس على شموع جديدة دون إرسال أوامر MT5".into());}
                 if action=="stop_frozen"{ui.set_brain_monitor_message("أُنهِي استقبال دخول Shadow جديد؛ الصفقة الافتراضية المفتوحة ستُسوى عند وصول سعر لاحق".into());}
+                if action=="freeze_coordinator"{ui.set_brain_monitor_message("تم تجميد سياسة منسّق Expert على Demo؛ ستُقارن قرارات مستقبلية دون أي أوامر جديدة".into());}
+                if action=="stop_coordinator"{ui.set_brain_monitor_message("أُوقِف رصد سياسة منسّق Expert؛ السجل السابق باقٍ للمراجعة".into());}
             },Err(e)=>ui.set_brain_monitor_message(format!("تعذر التحديث: {e}").into())}
         });
     });timer
