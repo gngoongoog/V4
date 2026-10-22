@@ -16,6 +16,7 @@ mod learning_performance_review;
 mod learning_review;
 mod learning_scoring;
 mod learning_quality;
+mod learning_forward_audit;
 mod trading_settings;
 pub mod news;
 mod research;
