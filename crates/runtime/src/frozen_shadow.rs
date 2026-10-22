@@ -81,7 +81,9 @@ pub fn observe(db:&Connection,context:&str,mode:TradingMode,source_brain:&str,ad
            AND (active=1 OR EXISTS(
              SELECT 1 FROM paper_brain_positions p
              WHERE p.context=frozen_shadow_runs.context
-               AND p.brain='frozen_'||frozen_shadow_runs.id))
+               AND p.brain='frozen_'||frozen_shadow_runs.id)
+           OR EXISTS(SELECT 1 FROM frozen_shadow_markouts m
+               WHERE m.run_id=frozen_shadow_runs.id AND m.state='pending'))
          ORDER BY created_ms,id")?;
     let rows=stmt.query_map(params![context,mode,source_brain],|r|
         Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,
@@ -112,6 +114,11 @@ pub fn observe(db:&Connection,context:&str,mode:TradingMode,source_brain:&str,ad
         // Price-sampled independent paper trades use *frozen* round-trip
         // commission, slippage, volumes, stop and target. Never own MT5 magic.
         crate::shadow_paper::observe(db,context,&virtual_brain,&virtual_signal,t,&c,now)?;
+        // Same-entry-time A/B directional markout: fixed five-minute horizon
+        // and identical prices, lot and assumed execution costs for both arms.
+        // Retired trials only settle already opened markouts; never add one.
+        crate::matched_forward::observe(
+            db,&id,created,post_freeze,&signal,adaptive,t,&c,now)?;
         if post_freeze {
             db.execute(
                 "INSERT OR IGNORE INTO frozen_shadow_signal_pairs
@@ -162,7 +169,9 @@ pub fn report(db:&Connection,context:&str,mode:TradingMode,brain:&str)->Result<V
         "frozen_snapshot_immutable":true,"freeze_at_user_request":true,
         "paired_bars":bars,"both_ready":both_ready,"side_agreements":agreements,
         "paper_trades_closed":closed,"paper_wins":wins,"paper_net_after_assumed_costs":net,
-        "paper_position_open":open,"execution_permission":false,
+        "paper_position_open":open,
+        "matched_five_minute":crate::matched_forward::summary(db,&id)?,
+        "execution_permission":false,
         "adaptive_reference":"Live signal on same observed bar; descriptive comparison only",
         "provenance":"Forward quote-sampled shadow; no actual broker fills",
         "limitations":"Not an independent live PnL comparison or whole-coordinator freeze. Missing tick paths and overnight funding may differ from MT5. No statistical conclusion until enough disjoint future trades.",
