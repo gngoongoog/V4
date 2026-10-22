@@ -51,6 +51,10 @@ def validate_mapping(mapping):
     for position_id, intent_id in mapping.items():
         if not isinstance(position_id, str) or not position_id.isdecimal() or int(position_id) <= 0:
             raise DemoEvidenceError("Intent mapping keys must be positive MT5 position IDs")
+        if not isinstance(intent_id, str):
+            raise DemoEvidenceError("Synthetic intent ID must be a string")
+        if int(position_id) in result:
+            raise DemoEvidenceError("Duplicate normalized position ID in intent mapping")
         result[int(position_id)] = identity(intent_id, "Synthetic intent ID")
     return result
 
