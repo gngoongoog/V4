@@ -815,41 +815,146 @@ export component Dashboard inherits Window {
             Text { text: "أوقف النظام أولاً للاستعادة. افتح BrainTrade.exe بعد الإغلاق، ثم راجع نتيجة الاستعادة أدناه. النسخ القديمة غير المتوافقة تظهر مع سبب الرفض."; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; }
             Text { text: root.backup-detail; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
         } }
-        if root.page == 0: ScrollView { VerticalBox {
-            spacing: 14px;
-            Rectangle { background: root.theme-choice == 1 ? #edf4fa : #24262c; border-radius: 12px; min-height: 73px;
-                HorizontalLayout { padding: 12px; spacing: 10px;
-                    VerticalLayout { spacing: 4px;
-                        Text { text: "مرحباً بك في مركز التداول"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 17px; font-weight: 700; }
-                        Text { text: root.account; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; font-size: 13px; wrap: word-wrap; }
+        if root.page == 0: ScrollView {
+            VerticalBox { spacing: 14px;
+                HorizontalLayout {
+                    Text { text: "نظرة عامة  /  INSTITUTIONAL COMMAND CENTER"; color: root.theme-choice == 1 ? #14283e : #eff7ff; font-size: 19px; font-weight: 700; }
+                    Rectangle {horizontal-stretch:1;background:transparent;}
+                    Text { text: root.online ? "●  بيانات MT5 الحالية" : "○  لا توجد بيانات وسيط حديثة"; color: root.online ? #16bea1 : #dc9771; font-size:12px; vertical-alignment:center; }
+                }
+                HorizontalLayout {spacing: 9px;
+                    Card {theme-choice:root.theme-choice;label:"EQUITY / حقوق الحساب"; value:root.equity;}
+                    Card {theme-choice:root.theme-choice;label:"BALANCE / الرصيد"; value:root.balance;}
+                    Card {theme-choice:root.theme-choice;label:"DAILY NET / صافي اليوم";value:root.today;}
+                    Card {theme-choice:root.theme-choice;label:"FREE MARGIN / الهامش الحر";value:root.free-margin;}
+                    Card {theme-choice:root.theme-choice;label:"ACTIVE POSITIONS / المراكز";value:root.active-positions;}
+                    Card {theme-choice:root.theme-choice;label:"QUOTE AGE / عمر السعر";value:root.quote-age-display;}
+                }
+                HorizontalLayout {spacing: 11px; alignment: start;
+                    Rectangle {
+                        horizontal-stretch: 3;
+                        min-height: 380px;
+                        background: root.theme-choice == 1 ? #ffffff : root.theme-choice == 2 ? #292e35 : #162231;
+                        border-radius: 13px; border-width: 1px;
+                        border-color: root.theme-choice == 1 ? #dfe6ef : #2c4053;
+                        VerticalLayout {padding: 14px;spacing:10px;
+                            HorizontalLayout {
+                                Text {text: root.symbol + "  /  MARKET DATA";color:root.theme-choice==1?#132741:#f4f9ff;font-size:17px;font-weight:700;}
+                                Rectangle {horizontal-stretch:1;background:transparent;}
+                                Button {text:"M1";clicked=>{root.chart-frame=0;}}
+                                Button {text:"M5";clicked=>{root.chart-frame=1;}}
+                                Button {text:"M15";clicked=>{root.chart-frame=2;}}
+                            }
+                            HorizontalLayout {spacing:10px;
+                                Text {text:"Bid " + root.bid-display;color:root.theme-choice==1?#0d9278:#2be4b8;font-size:13px;}
+                                Text {text:"Ask " + root.ask-display;color:root.theme-choice==1?#1d6bb5:#92cbff;font-size:13px;}
+                                Text {text:"Spread " + root.spread-display;color:root.theme-choice==1?#556b81:#acbbca;font-size:12px;}
+                                Rectangle {horizontal-stretch:1;background:transparent;}
+                                Text {text:root.chart-frame==0?"M1":root.chart-frame==1?"M5":"M15";color:root.theme-choice==1?#556b81:#acbbca;font-size:12px;}
+                            }
+                            Rectangle {
+                                height: 276px; clip: true;
+                                background: root.theme-choice == 1 ? #f8fbfe : root.theme-choice == 2 ? #252b34 : #0e1b29;
+                                border-radius: 9px;
+                                Rectangle {x:0px;y:69px;width:parent.width;height:1px;background:root.theme-choice==1?#e7eff6:#293b4a;}
+                                Rectangle {x:0px;y:138px;width:parent.width;height:1px;background:root.theme-choice==1?#e7eff6:#293b4a;}
+                                Rectangle {x:0px;y:207px;width:parent.width;height:1px;background:root.theme-choice==1?#e7eff6:#293b4a;}
+                                for bar in root.chart-bars: Rectangle {
+                                    x: 12px + bar.x * (parent.width - 24px);
+                                    y: 8px + bar.high-y * (parent.height - 16px);
+                                    width: 2px;
+                                    height: (bar.low-y - bar.high-y) * (parent.height - 16px);
+                                    background: bar.up ? #17c8a6 : #ee6677;
+                                }
+                                for bar in root.chart-bars: Rectangle {
+                                    x: 10px + bar.x * (parent.width - 24px);
+                                    y: 8px + bar.body-top * (parent.height - 16px);
+                                    width: root.chart-bars.length > 0 ? (parent.width - 24px) / root.chart-bars.length * 0.65 : 5px;
+                                    height: (bar.body-bottom - bar.body-top) * (parent.height - 16px) + 2px;
+                                    background: bar.up ? #16caaa : #ee6174;
+                                    border-radius: 1px;
+                                }
+                                if root.chart-bars.length == 0: Text {
+                                    text: "بانتظار شموع MT5 مكتملة وحديثة لهذا الرمز — لا نعرض شارتاً افتراضياً";
+                                    color: root.theme-choice == 1 ? #61758b : #a8b6c6;
+                                    horizontal-alignment: center; vertical-alignment:center;wrap:word-wrap;
+                                    width:parent.width-36px;height:parent.height;
+                                    x:18px;
+                                }
+                            }
+                            Text {text:"الشموع التاريخية من بيانات MT5 المتصلة فقط، ولا تعني إشارات شراء/بيع أو أرباحاً مؤكدة.";color:root.theme-choice==1?#687b90:#899fb4;font-size:11px;wrap:word-wrap;}
+                        }
                     }
-                    Rectangle { horizontal-stretch: 1; background: transparent; }
-                    Button { text: "1  ربط MT5"; clicked => { root.nav-section = 4; root.page = 1; } }
-                    Button { text: "2  تجهيز التداول"; clicked => { root.nav-section = 1; root.page = 14; root.studio-action("config"); } }
-                    Button { text: "3  متابعة التنفيذ"; clicked => { root.nav-section = 1; root.page = 17; root.execution-action("refresh"); } }
+                    Rectangle {
+                        width: 315px; min-height:380px;
+                        background: root.theme-choice==1?#ffffff:root.theme-choice==2?#292e35:#162231;
+                        border-radius:13px;border-width:1px;border-color:root.theme-choice==1?#dfe6ef:#2c4053;
+                        VerticalLayout {padding:13px;spacing:10px;
+                            Text {text:"التحكم بالتداول";color:root.theme-choice==1?#14283e:#f0f8ff;font-size:17px;font-weight:700;}
+                            HorizontalLayout {spacing:6px;
+                                Button {text:"▶  START";enabled:!root.busy&&root.state=="STOPPED";clicked=>{root.action("start");}}
+                                Button {text:"■  STOP";enabled:!root.busy&&root.state!="STOPPED";clicked=>{root.action("stop");}}
+                            }
+                            Button {text:"↻  إعادة اتصال MT5";enabled:!root.busy;clicked=>{root.action("reconnect");}}
+                            Text {text:root.online?"حساب "+root.account-mode-label+" متصل":"غير متصل — لا يمكن تأكيد حالة التداول";
+                                  color:root.online?#1bcbaa:#e6a074;font-size:12px;wrap:word-wrap;}
+                            Rectangle {height:1px;background:root.theme-choice==1?#e1e8ef:#354756;}
+                            Text {text:"أوضاع التداول / التنفيذ";color:root.theme-choice==1?#21374d:#dfedfa;font-weight:700;}
+                            HorizontalLayout {spacing:5px;
+                                Button {text:"Scalping";clicked=>{root.nav-section=1;root.page=14;root.studio-action("config");}}
+                                Button {text:"Sniper";clicked=>{root.nav-section=1;root.page=14;root.studio-action("config");}}
+                            }
+                            HorizontalLayout {spacing:5px;
+                                Button {text:"Demo / Real";clicked=>{root.nav-section=1;root.page=17;root.execution-action("refresh");}}
+                                Button {text:"Risk";clicked=>{root.nav-section=1;root.page=6;root.risk-monitor-refresh();}}
+                            }
+                            Text {text:"تغيير وضع التداول أو الحساب يتم من صفحات الإعدادات، مع الحفظ والتأكيد المطلوب. هذه الاختصارات لا تحول الحساب تلقائياً.";color:root.theme-choice==1?#687b90:#9aadbf;font-size:11px;wrap:word-wrap;}
+                            Rectangle {height:1px;background:root.theme-choice==1?#e1e8ef:#354756;}
+                            Text {text:"حالة العقل الرئيسي";color:root.theme-choice==1?#21374d:#dfedfa;font-weight:700;}
+                            Text {text:"السوق: "+root.regime; color:root.theme-choice==1?#485e73:#b0c3d4;wrap:word-wrap;}
+                            Text {text:"القرار: "+root.decision; color:root.theme-choice==1?#485e73:#b0c3d4;wrap:word-wrap;}
+                            Button {text:"كل العقول والتعلّم";clicked=>{root.nav-section=2;root.page=21;root.brain-monitor-action("refresh");}}
+                        }
+                    }
+                }
+                HorizontalLayout {spacing:11px;
+                    Rectangle {
+                        horizontal-stretch: 3; min-height: 183px;
+                        background:root.theme-choice==1?#ffffff:root.theme-choice==2?#292e35:#162231;
+                        border-radius:13px;border-width:1px;border-color:root.theme-choice==1?#dfe6ef:#2c4053;
+                        VerticalLayout {padding:13px;spacing:8px;
+                            HorizontalLayout {
+                                Text {text:"المراكز النشطة  /  MT5 POSITIONS";color:root.theme-choice==1?#1a3045:#eef7ff;font-size:15px;font-weight:700;}
+                                Rectangle {horizontal-stretch:1;background:transparent;}
+                                Button {text:"السجل الكامل";clicked=>{root.nav-section=1;root.page=20;root.trade-journal-action("refresh");}}
+                            }
+                            Text {text:root.positions; color:root.theme-choice==1?#3c5063:#c7d4df;wrap:word-wrap;font-size:12px;}
+                        }
+                    }
+                    Rectangle {
+                        width:315px;min-height:183px;
+                        background:root.theme-choice==1?#ffffff:root.theme-choice==2?#292e35:#162231;
+                        border-radius:13px;border-width:1px;border-color:root.theme-choice==1?#dfe6ef:#2c4053;
+                        VerticalLayout {padding:13px;spacing:9px;
+                            Text {text:"حالة البيانات والتعلّم";color:root.theme-choice==1?#1a3045:#eef7ff;font-weight:700;font-size:15px;}
+                            Text {text:root.online?"MT5 متصل • البيانات تخضع للتحقق":"لا بيانات وسـيط موثوقة الآن";color:root.theme-choice==1?#41586d:#c7d4df;wrap:word-wrap;}
+                            Text {text:"نسبة نجاح أو تعلّم: غير محسوبة بدون تعريف وعينة معتمدة";color:root.theme-choice==1?#65798e:#a8bac9;wrap:word-wrap;font-size:12px;}
+                            Button {text:"تقدم التعلم الفعلي";clicked=>{root.nav-section=1;root.page=19;}}
+                            Button {text:"قرارات وموانع القناص";clicked=>{root.nav-section=2;root.page=21;root.brain-monitor-action("refresh");}}
+                        }
+                    }
+                }
+                Rectangle {
+                    background:root.theme-choice==1?#ffffff:root.theme-choice==2?#292e35:#162231;
+                    border-radius:13px;border-width:1px;border-color:root.theme-choice==1?#dfe6ef:#2c4053;
+                    VerticalLayout {padding:13px;spacing:6px;
+                        Text {text:"حالة الوسيط  /  BROKER HEALTH";color:root.theme-choice==1?#1a3045:#eff7ff;font-weight:700;}
+                        Text {text:root.connection;color:root.theme-choice==1?#52677d:#b9c9d6;wrap:word-wrap;}
+                        Text {text:root.diagnostics;color:root.theme-choice==1?#667a8b:#a4b5c3;wrap:word-wrap;font-size:12px;}
+                        Text {text:"Telegram: "+root.telegram-status;color:root.theme-choice==1?#667a8b:#a4b5c3;wrap:word-wrap;font-size:12px;}
+                    }
                 }
             }
-            HorizontalLayout {
-                spacing: 12px;
-                Card { theme-choice: root.theme-choice; label: "BALANCE / الرصيد"; value: root.balance; }
-                Card { theme-choice: root.theme-choice; label: "EQUITY / حقوق الحساب"; value: root.equity; }
-                Card { theme-choice: root.theme-choice; label: "TODAY NET / صافي اليوم"; value: root.today; }
-            }
-            Rectangle {
-                background: root.theme-choice == 1 ? #ffffff : #212329; border-radius: 10px; min-height: 140px;
-                VerticalLayout { padding: 16px; spacing: 10px;
-                    Text { text: "MT5 CONNECTION"; color: root.theme-choice == 1 ? #28384b : #e0e2e5; font-weight: 700; }
-                    Text { text: root.connection; color: root.theme-choice == 1 ? #172235 : #f1f1f2; wrap: word-wrap; }
-                    Text { text: root.diagnostics; color: root.theme-choice == 1 ? #62758b : #a5a8b0; wrap: word-wrap; }
-                    Text { text: "Telegram: " + root.telegram-status; color: root.theme-choice == 1 ? #62758b : #a5a8b0; wrap: word-wrap; }
-                }
-            }
-            Text { text: "OPEN POSITIONS / الصفقات المفتوحة"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; font-weight: 700; }
-            ScrollView {
-                min-height: 140px; vertical-stretch: 1;
-                VerticalBox { alignment: start; Text { text: root.positions; color: root.theme-choice == 1 ? #3b4b60 : #d4d6da; wrap: word-wrap; font-size: 14px; horizontal-alignment: left; } }
-            }
-        }
         }
         if root.page == 1: ScrollView {
             VerticalBox {
