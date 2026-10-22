@@ -25,6 +25,7 @@ export component Dashboard inherits Window {
     background: root.theme-choice == 1 ? #f4f7fb : root.theme-choice == 2 ? #242930 : #0c141e;
     in-out property <int> theme-choice: 0;
     in-out property <bool> compact-sidebar: false;
+    in-out property <bool> expanded-workspaces: false;
     callback save-appearance(int, bool);
     changed theme-choice => { Palette.color-scheme = ColorScheme.dark; }
     in property <string> account-mode-label: "NOT CONNECTED";
@@ -361,6 +362,7 @@ export component Dashboard inherits Window {
             Button { text: "بدء النظام  START"; enabled: !root.busy && root.state == "STOPPED"; clicked => { root.action("start"); } }
             Button { text: "إيقاف  STOP"; enabled: !root.busy && root.state != "STOPPED"; clicked => { root.action("stop"); } }
             Button { text: "إعادة اتصال MT5"; enabled: !root.busy; clicked => { root.action("reconnect"); } }
+            Button { text: root.expanded-workspaces ? "−  إخفاء الأقسام" : "+  جميع الصفحات"; clicked => {root.expanded-workspaces = !root.expanded-workspaces;} }
             Rectangle { horizontal-stretch: 1; background: transparent; }
             Text { text: root.decision; color: root.theme-choice == 1 ? #28384b : #d9dbe0; vertical-alignment: center; font-weight: 600; }
         }
@@ -372,7 +374,8 @@ export component Dashboard inherits Window {
         Rectangle {
             background: root.theme-choice == 1 ? #f8fbfe : #1b1d22; border-radius: 14px;
             border-width: 1px; border-color: root.theme-choice == 1 ? #e3e9f0 : #34363d;
-            height: root.nav-section == 2 ? 123px : 88px;
+            height: root.expanded-workspaces ? (root.nav-section == 2 ? 123px : 88px) : 0px;
+            visible: root.expanded-workspaces;
             VerticalLayout {
                 padding: 8px; spacing: 5px;
                 HorizontalLayout {
@@ -436,20 +439,57 @@ export component Dashboard inherits Window {
         HorizontalLayout {
             spacing: 8px;
             Text {
-                text: root.nav-section == 0 ? "لوحة المتابعة"
-                    : root.nav-section == 1 ? "إدارة التداول والتنفيذ"
-                    : root.nav-section == 2 ? "تحليل ومراقبة السوق"
-                    : root.nav-section == 3 ? "محاكاة وتقييم دون تنفيذ"
-                    : "إعدادات النظام والسجلات";
+                text: root.page == 0 ? "نظرة عامة"
+                    : root.page == 1 ? "MT5 وTelegram"
+                    : root.page == 2 ? "سجلات النظام"
+                    : root.page == 3 ? "حول النظام"
+                    : root.page == 4 ? "التحليل والعقول"
+                    : root.page == 5 ? "المحاكاة"
+                    : root.page == 6 ? "إدارة المخاطر"
+                    : root.page == 7 ? "الاختبارات التاريخية"
+                    : root.page == 8 ? "الأخبار الرسمية"
+                    : root.page == 9 ? "التقييم الزمني"
+                    : root.page == 10 ? "فرص السوق"
+                    : root.page == 11 ? "نماذج التعلم"
+                    : root.page == 12 ? "خريطة السوق"
+                    : root.page == 13 ? "النسخ الاحتياطي"
+                    : root.page == 14 ? "مركز التداول والقناص"
+                    : root.page == 15 ? "مختبر الاستراتيجيات"
+                    : root.page == 16 ? "مراحل وايكوف"
+                    : root.page == 17 ? "التنفيذ والأوامر"
+                    : root.page == 18 ? "تحليل الارتباط"
+                    : root.page == 19 ? "نتائج التعلم"
+                    : root.page == 20 ? "سجل صفقات MT5"
+                    : root.page == 21 ? "غرفة العقول والتحكم"
+                    : "واجهة نظام V4";
                 color: root.theme-choice == 1 ? #17283d : #f0f0f2; font-weight: 700; font-size: 15px;
             }
             Rectangle { horizontal-stretch: 1; background: transparent; }
-            Text {
-                text: root.nav-section == 1 ? "حساب Demo أولاً • حفظ الإعدادات قبل START"
-                    : root.nav-section == 3 ? "البحث لا يرسل أوامر إلى MT5"
-                    : root.nav-section == 2 ? "الإشارات المرصودة ليست ضمان نجاح"
-                    : "إعداداتك وبيانات التعلم محفوظة محلياً";
-                color: root.theme-choice == 1 ? #62758b : #9195a0; font-size: 12px;
+            ComboBox {
+                model: ["نظرة عامة","MT5 وTelegram","سجلات النظام","حول النظام",
+                    "التحليل والعقول","المحاكاة","إدارة المخاطر","الاختبارات التاريخية",
+                    "الأخبار الرسمية","التقييم الزمني","فرص السوق","نماذج التعلم",
+                    "خريطة السوق","النسخ الاحتياطي","مركز التداول والقناص",
+                    "مختبر الاستراتيجيات","مراحل وايكوف","التنفيذ والأوامر",
+                    "تحليل الارتباط","نتائج التعلم","سجل صفقات MT5","غرفة العقول"];
+                current-index <=> root.page;
+                selected(value) => {
+                    root.nav-section = root.page == 0 ? 0
+                        : root.page == 6 || root.page == 14 || root.page == 17 || root.page == 19 || root.page == 20 ? 1
+                        : root.page == 4 || root.page == 8 || root.page == 10 || root.page == 11 || root.page == 12 || root.page == 16 || root.page == 18 || root.page == 21 ? 2
+                        : root.page == 5 || root.page == 7 || root.page == 9 || root.page == 15 ? 3 : 4;
+                    if (root.page == 14 || root.page == 16 || root.page == 15) {root.studio-action(root.page == 14 ? "config" : "refresh");}
+                    if (root.page == 17) {root.execution-action("refresh");}
+                    if (root.page == 20) {root.trade-journal-action("refresh");}
+                    if (root.page == 21) {root.brain-monitor-action("refresh");}
+                    if (root.page == 6) {root.risk-monitor-refresh();}
+                    if (root.page == 7) {root.backtest-action("refresh");}
+                    if (root.page == 9) {root.evaluation-action("refresh");}
+                    if (root.page == 11) {root.learning-action("refresh");}
+                    if (root.page == 13) {root.backup-action("refresh");}
+                    if (root.page == 18) {root.correlation-action("refresh");}
+                    if (root.page == 2) {root.action("events");}
+                }
             }
         }
         if root.page == 18: CorrelationPage {
@@ -498,8 +538,19 @@ export component Dashboard inherits Window {
             Text { text: "MFE / MAE: أفضل وأسوأ حركة مرصودة بعد تأكيد التنفيذ وحتى الإغلاق. المقارنة الافتراضية تستخدم Bid/Ask والعمولة والانزلاق؛ فجوة وصول الرصد فوق ثانيتين تستبعدها، وهدوء السعر وحده لا يستبعدها. السواب غير محسوب فيها. التحسّن السابق لا يضمن ربحاً لاحقاً."; color: root.theme-choice == 1 ? #62758b : #999ca5; wrap: word-wrap; }
         } }
         if root.page == 21: ScrollView { VerticalBox { spacing: 14px;
+            HorizontalLayout {spacing:11px;
+                Card {theme-choice:root.theme-choice;label:"MODE / الوضع الحالي";value:root.trade-mode == 3 ? "SNIPER" : root.trade-mode == 2 ? "EXPERT" : root.trade-mode == 1 ? "SWING" : "SCALPING";}
+                Card {theme-choice:root.theme-choice;label:"BROKER / نوع الحساب";value:root.account-mode-label;}
+                Card {theme-choice:root.theme-choice;label:"BRAIN MONITOR / حالة البيانات";value:root.brain-monitor-busy ? "جارٍ التحديث" : root.brain-monitor-available ? "بيانات متاحة" : "غير متاح";}
+            }
             Text { text: "غرفة العقول • الحالة والتحكم"; color: root.theme-choice == 1 ? #172235 : #f6f6f7; font-size: 24px; font-weight: 700; }
             Text { text: root.brain-monitor-summary; color: root.theme-choice == 1 ? #65778b : #b8bbc3; wrap: word-wrap; }
+            Rectangle {
+                background:root.theme-choice==1?#ffffff:root.theme-choice==2?#30353d:#162432;
+                border-width:1px;border-color:root.theme-choice==1?#e0e6ed:#344556;
+                border-radius:13px;
+                VerticalLayout {padding:14px;spacing:10px;
+                    Text {text:"ضبط العقل المختار • لا تتغير الأذونات قبل الحفظ";color:root.theme-choice==1?#243a52:#e2f2ff;font-weight:700;}
             ComboBox { model: root.brain-monitor-names; current-index <=> root.brain-monitor-selected; enabled: !root.brain-monitor-busy; selected(value) => { root.brain-monitor-action("select"); } }
             Text { text: "المشاركة تؤثر في قرار الخبير أو القناص المتعلّم فقط عند اختياره. سكالبينغ وسوينغ والقناص الكلاسيكي لا تتوقف إشاراتها بسبب اعتراض العقول الأخرى. صفقات Paper تحسب نتائج افتراضية من الأسعار المرصودة فقط، ولا تعلّم تلقائياً أوزان تنفيذ MT5. التعلم المطبق يعتمد على أدلة MT5 Demo المغلقة أو رصد لاحق موسوم بوضوح."; color: root.theme-choice == 1 ? #65778b : #b8bbc3; wrap: word-wrap; }
             CheckBox { text: "السماح بالمشاركة في قرار الوضع الحالي"; checked <=> root.brain-advisor; enabled: root.brain-monitor-available && !root.brain-monitor-busy && root.brain-monitor-selected != 0 && root.state == "STOPPED"; }
@@ -507,6 +558,8 @@ export component Dashboard inherits Window {
             HorizontalBox {
                 Button { text: "حفظ تحكم العقل"; enabled: root.brain-monitor-available && !root.brain-monitor-busy && root.brain-monitor-selected != 0 && root.state == "STOPPED"; clicked => { root.brain-monitor-action("save"); } }
                 Button { text: "تحديث الحالة"; enabled: !root.brain-monitor-busy; clicked => { root.brain-monitor-action("refresh"); } }
+            }
+                }
             }
             Text { text: "اختبار Shadow مجمّد — ينسخ إعدادات العقل المستشار الحالية كما هي، ويقارنها على أسعار لاحقة فقط، ولا يرسل أي أمر إلى MT5"; color: root.theme-choice == 1 ? #65778b : #b8bbc3; wrap: word-wrap; }
             HorizontalBox {
@@ -519,9 +572,22 @@ export component Dashboard inherits Window {
                 Button { text: "إنهاء تدقيق المنسّق"; enabled: root.frozen-trial-available && !root.brain-monitor-busy && root.brain-monitor-selected == 0 && root.state == "STOPPED"; clicked => { root.brain-monitor-action("stop_coordinator"); } }
             }
             Text { text: root.brain-monitor-message; color: root.theme-choice == 1 ? #526477 : #d0d3da; wrap: word-wrap; }
+            Rectangle {
+                background:root.theme-choice==1?#ffffff:root.theme-choice==2?#30353d:#162432;
+                border-radius:13px;border-width:1px;border-color:root.theme-choice==1?#e0e6ed:#344556;
+                VerticalLayout {padding:14px;spacing:10px;
+                    Text {text:"تقرير حالة العقل من Core";color:root.theme-choice==1?#1b3851:#e3f4ff;font-weight:700;font-size:16px;}
             Text { text: root.brain-monitor-detail; color: root.theme-choice == 1 ? #28384b : #e3e5e9; wrap: word-wrap; }
+                }
+            }
             Text { text: "كل العقول • الوضع الحالي"; color: root.theme-choice == 1 ? #172235 : #f6f6f7; font-size: 20px; }
+            Rectangle {
+                background:root.theme-choice==1?#ffffff:root.theme-choice==2?#30353d:#162432;
+                border-radius:13px;border-width:1px;border-color:root.theme-choice==1?#e0e6ed:#344556;
+                VerticalLayout {padding:14px;spacing:8px;
             Text { text: root.brain-monitor-overview; color: root.theme-choice == 1 ? #65778b : #b8bbc3; wrap: word-wrap; }
+                }
+            }
         } }
         if root.page == 20: ScrollView {
             VerticalBox {
@@ -555,6 +621,11 @@ export component Dashboard inherits Window {
             }
         }
         if root.page == 17: ScrollView { VerticalBox { spacing: 10px;
+            HorizontalLayout {spacing:11px;
+                Card {theme-choice:root.theme-choice;label:"EXECUTION / الحالة";value:root.exec-busy?"جارٍ العمل":root.execution-active?"مفعّل":"متوقف / مراقبة";}
+                Card {theme-choice:root.theme-choice;label:"ACCOUNT / نوع الوسيط";value:root.account-mode-label;}
+                Card {theme-choice:root.theme-choice;label:"ORDERS / القرارات";value:root.decision;}
+            }
             Text { text: "تنفيذ MT5  /  إعداد الحساب والعقول"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 22px; font-weight: 700; }
             Text { text: "الخطوة 1 • اختر Demo أو REAL من القائمة. التحويل إلى حساب حقيقي لا يفتح صفقة تلقائياً؛ يلزم ربط صريح ورقم حساب مطابق ثم تأكيد START مرة أخرى."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             Text { text: root.exec-summary; color: root.theme-choice == 1 ? #3b4b60 : #d7dadf; wrap: word-wrap; }
@@ -1020,11 +1091,25 @@ export component Dashboard inherits Window {
             ScrollView { vertical-stretch: 1; VerticalBox { alignment: start; Text { text: root.paper; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; horizontal-alignment: left; font-size: 14px; } } }
         }
         if root.page == 6: ScrollView { VerticalBox {
-            spacing: 10px;
+            spacing: 12px;
+            HorizontalLayout {spacing:11px;
+                Card {theme-choice:root.theme-choice;label:"EQUITY / حقوق الحساب";value:root.equity;}
+                Card {theme-choice:root.theme-choice;label:"ACCOUNT / نوع الحساب";value:root.account-mode-label;}
+                Card {theme-choice:root.theme-choice;label:"EXPOSURE / التنفيذ";value:root.execution-active?"مفعّل":"مراقبة / متوقف";}
+                Card {theme-choice:root.theme-choice;label:"RISK MONITOR / تحديث";value:root.risk-monitor-busy?"جارٍ الفحص":"افتح التقرير أدناه";}
+            }
             Text { text: "المخاطرة — المحاكاة والحدود الاختيارية"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 20px; }
             Text { text: "مراقبة الحساب والقاطع اليومي — بيانات فقط، لا تغيّر حالة التداول"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-weight: 700; }
             Button { text: "تحديث حالة القاطع"; enabled: !root.risk-monitor-busy; clicked => { root.risk-monitor-refresh(); } }
+            Rectangle {
+                background:root.theme-choice==1?#ffffff:root.theme-choice==2?#30353d:#162432;
+                border-width:1px;border-color:root.theme-choice==1?#e0e6ed:#344556;
+                border-radius:13px;
+                VerticalLayout {padding:14px;spacing:9px;
+                    Text {text:"نتيجة الفحص من Core — ليس تصريحاً بفتح صفقة";color:root.theme-choice==1?#263c51:#e1eef8;font-weight:700;}
             Text { text: root.risk-monitor-text; color: root.theme-choice == 1 ? #42586c : #d4d6dc; wrap: word-wrap; }
+                }
+            }
             Text { text: "حساب وقف الخسارة والهامش والعقد على MT5 إلزامي، أمّا قاطع الخسارة اليومية فهو اختياري حسب Demo/REAL. العمولة هنا تقدير؛ سجل التنفيذ يأخذ الرسوم الفعلية من الوسيط."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             HorizontalBox { Text { text: root.micro-demo-risk-opt-in ? "المخاطرة لكل صفقة % (0.01–5 Demo فقط)" : "المخاطرة لكل صفقة % (0.01–2)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; } LineEdit { text <=> root.risk-percent; } }
             CheckBox { text: "موافقة صريحة: مخاطرة أعلى للحساب الصغير على Demo فقط"; checked <=> root.micro-demo-risk-opt-in; enabled: root.state == "STOPPED" && !root.busy; }
