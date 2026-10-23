@@ -186,7 +186,14 @@ async function brokerAction(action){if(state.preview){toast('معاينة الت
   if(loginNeeded&&String(confirm)!==String(s.telemetry?.login)){toast('رقم تأكيد حساب REAL غير مطابق',true);return}
   state.busy=true;updateDashboard();try{await nativeCall('POST',`/v1/${action}`,action==='start'?{confirm_live_login:loginNeeded?String(confirm):''}:{});toast(`تم إرسال ${action==='start'?'START':'STOP'} وتأكيده من Core`);await refresh();}catch(e){toast(e.message,true)}finally{state.busy=false;updateDashboard()}
 }
-function setupEvents(){document.addEventListener('click',e=>{
+function setupEvents(){
+ // Explicit timeframe handlers keep a visible selected state after pointer actions.
+ document.querySelectorAll('[data-tf]').forEach(button=>button.addEventListener('click',event=>{
+   event.stopPropagation();
+   state.tf=button.dataset.tf;
+   document.querySelectorAll('[data-tf]').forEach(x=>x.classList.toggle('selected',x===button));
+   paintQuotes(sample());renderChart();
+ }));document.addEventListener('click',e=>{
   const v=e.target.closest('[data-go]');if(v){showPage(v.dataset.go);return}
   const t=e.target.closest('[data-theme]');if(t){setTheme(t.dataset.theme);toast('تم تغيير الثيم');return}
   const tf=e.target.closest('[data-tf]');if(tf){state.tf=tf.dataset.tf;paintQuotes(sample());renderChart();return}
