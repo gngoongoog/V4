@@ -23,6 +23,14 @@ jobs:
           $new='className="risk-line" key={String(label)}><span>{String(label)}</span>'
           if (-not $s.Contains($old)) { throw 'UI18 source revision mismatch' }
           [System.IO.File]::WriteAllText($f,$s.Replace($old,$new),[System.Text.UTF8Encoding]::new($false))
+          # React production dist was built in its own validated step.
+          # Do not run Tauri's path-dependent frontend build hook a second time.
+          $cfgPath='apps/tauri/tauri.conf.json'
+          $cfg=[System.IO.File]::ReadAllText($cfgPath)
+          $oldHook='"beforeBuildCommand": "cd ../terminal && npm run build"'
+          if (-not $cfg.Contains($oldHook)) { throw 'Tauri build-hook source unexpected' }
+          $cfg=$cfg.Replace($oldHook,'"beforeBuildCommand": ""')
+          [System.IO.File]::WriteAllText($cfgPath,$cfg,[System.Text.UTF8Encoding]::new($false))
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
       - uses: dtolnay/rust-toolchain@stable
