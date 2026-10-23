@@ -425,7 +425,7 @@ class NativeUiContract(unittest.TestCase):
             self.assertIn(f'text:"{mode}"',self.dashboard)
             self.assertIn(palette,self.dashboard)
         self.assertIn("theme-choice: 0",self.dashboard)
-        self.assertIn("changed theme-choice => { Palette.color-scheme = ColorScheme.dark; }",self.dashboard)
+        self.assertIn("changed theme-choice => { Palette.color-scheme = root.theme-choice == 1 ? ColorScheme.light : ColorScheme.dark; }",self.dashboard)
         self.assertIn("root.chart-bars",self.dashboard)
         self.assertIn("بانتظار شموع MT5",self.dashboard)
         self.assertIn("QUOTE AGE / عمر السعر",self.dashboard)
