@@ -1,0 +1,178 @@
+name: UI18 • Windows portable complete runtime
+
+on:
+  push:
+    paths:
+      - '.github/workflows/ui18-portable.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  portable:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore exact V4 source snapshot
+        shell: pwsh
+        run: |
+          tar -xzf ci/ui18-source.tar.gz
+          if ($LASTEXITCODE -ne 0) { throw 'Source snapshot could not be restored' }
+          if (!(Test-Path apps/tauri/src/bridge.rs) -or !(Test-Path crates/runtime/src/lib.rs)) { throw 'Core or Tauri source missing' }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - name: Fetch successful, tested Windows Tauri executable
+        uses: actions/download-artifact@v4
+        with:
+          name: BRAINTRADE-V4-UI18-Windows-x64-Acceptance-Candidate
+          run-id: 39974126485
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: verified-binary
+      - name: Prepare pinned, SHA256-checked MT5 and Python dependencies
+        shell: pwsh
+        run: |
+          python scripts/prepare-tauri-runtime.py
+          if ($LASTEXITCODE -ne 0) { throw 'Windows runtime preparation failed' }
+      - name: Assemble portable release without Setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $stage=Join-Path (Get-Location) 'target/portable/BRAINTRADE-V4-UI18-PORTABLE'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          $candidates=@(Get-ChildItem 'verified-binary' -Filter 'BrainTradeNext.exe' -Recurse -File)
+          if ($candidates.Count -ne 1) { throw "Expected exactly one Windows EXE; found $($candidates.Count)" }
+          $sha=(Get-FileHash $candidates[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sha -ne 'd0bb0b1287068b2c621e3108f72d09971593d775e39a0d23293c32ba91b3db68') { throw "Unexpected executable binary: $sha" }
+          Copy-Item $candidates[0].FullName (Join-Path $stage 'BrainTradeNext.exe')
+          Copy-Item 'apps/tauri/runtime' (Join-Path $stage 'runtime') -Recurse -Force
+          Copy-Item 'apps/tauri/mt5' (Join-Path $stage 'mt5') -Recurse -Force
+          $must=@(
+            'BrainTradeNext.exe',
+            'runtime/python/python.exe',
+            'runtime/python/python313.dll',
+            'runtime/python/python313._pth',
+            'runtime/gateway/mt5_gateway.py',
+            'runtime/gateway/check_runtime.py',
+            'runtime/gateway/execution.py',
+            'runtime/gateway/sniper_native.py',
+            'mt5/Experts/BrainTradeSniperBridge.mq5'
+          )
+          foreach($relative in $must) { if (!(Test-Path (Join-Path $stage $relative) -PathType Leaf)) { throw "Missing portable dependency: $relative" } }
+          $cmd="@echo off"+[Environment]::NewLine+'cd /d "%~dp0"'+[Environment]::NewLine+'start "" "%~dp0BrainTradeNext.exe"'+[Environment]::NewLine
+          [IO.File]::WriteAllText((Join-Path $stage 'START_BRAINTRADE.cmd'),$cmd,[Text.Encoding]::ASCII)
+          $readme=@'
+BRAINTRADE V4 NEXT UI18 — WINDOWS x64 PORTABLE
+نسخة محمولة بدون برنامج تثبيت.
+
+1) فكّ ضغط ملف ZIP كاملاً داخل مجلد محلي عادي.
+2) افتح START_BRAINTRADE.cmd أو BrainTradeNext.exe من داخل المجلد.
+3) لا تنقل ملف EXE وحده؛ يجب بقاء مجلدَي runtime وmt5 بجانبه.
+4) يتطلب Windows 10/11 x64 ومكوّن Microsoft WebView2 الموجود عادة على ويندوز الحديث.
+5) MT5 ليس مضمّناً في الحزمة. ثبّت MetaTrader 5 من وسيطك إن لم يكن مثبتاً، وشغّله بحساب Demo.
+6) ملفات Python/MetaTrader5 Python package وGateway مضمّنة. لا تحتاج تثبيت Python أو Rust.
+7) ملف mt5/Experts/BrainTradeSniperBridge.mq5 هو المصدر؛ الاستخدام الأصلي للقناص قد يحتاج تجميعه وإرفاقه داخل MT5.
+8) لا يبدأ التداول تلقائياً. الإعداد الافتراضي STOPPED. جرّب على Demo أولاً.
+9) زر STOP يوقف الدخول الجديد ولا يعني إغلاق الصفقات المفتوحة.
+10) ملفات الحساب، المفاتيح والأبحاث تحفظ في AppData ضمن حساب ويندوز؛ ليست داخل مجلد البرنامج.
+11) يفترض توفر WebView2. على بعض إصدارات Windows غير المحدّثة قد تحتاج تثبيته بشكل منفصل.
+12) نجاح اختبار التشغيل بدون وسيط لا يثبت جاهزية التداول الحقيقي أو الربحية.
+
+Official source: https://github.com/gngoongoog/V4
+Build source: GitHub Actions successful Windows UI18 run 39974126485
+'@
+          [IO.File]::WriteAllText((Join-Path $stage 'اقرأني_بداية.txt'),$readme,[Text.Encoding]::UTF8)
+          $files=Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Object FullName
+          $manifest=@{}
+          foreach($file in $files) {
+            $relative=$file.FullName.Substring($stage.Length+1).Replace('\','/')
+            $manifest[$relative]=(Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          [IO.File]::WriteAllText((Join-Path $stage 'SHA256SUMS.json'),($manifest | ConvertTo-Json -Depth 2),[Text.Encoding]::UTF8)
+          Write-Host "Portable files: $($files.Count)"
+          Write-Host "Portable stage: $stage"
+      - name: Check embedded Python and broker extension imports
+        shell: pwsh
+        run: |
+          $stage=Join-Path (Get-Location) 'target/portable/BRAINTRADE-V4-UI18-PORTABLE'
+          & "$stage/runtime/python/python.exe" "$stage/runtime/gateway/check_runtime.py"
+          if ($LASTEXITCODE -ne 0) { throw 'Embedded Python, NumPy or MT5 extension cannot be imported' }
+      - name: Smoke-test portable Core in isolated STOPPED mode
+        shell: pwsh
+        run: |
+          $script=@'
+import json, os, pathlib, subprocess, sys, tempfile, time, urllib.request
+from pathlib import Path
+sys.path.insert(0, str(Path.cwd() / "scripts"))
+from check_windows_portable import unseal
+
+exe = (Path.cwd() / "target/portable/BRAINTRADE-V4-UI18-PORTABLE/BrainTradeNext.exe").resolve()
+assert exe.is_file()
+with tempfile.TemporaryDirectory(prefix="bt-ui18-portable-") as home:
+    home=Path(home)
+    env=dict(os.environ, BRAINTRADE_DATA_DIR=str(home), BRAINTRADE_GATEWAY_DISABLED="1")
+    with (home/"core-smoke.log").open("wb") as log:
+        process=subprocess.Popen([str(exe),"--core"],cwd=str(exe.parent),env=env,stdout=log,stderr=subprocess.STDOUT)
+        try:
+            opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            for attempt in range(100):
+                if process.poll() is not None:
+                    raise RuntimeError("Portable Core exited prematurely: "+(home/"core-smoke.log").read_text(errors="replace"))
+                try:
+                    key=unseal(home/"ipc.key")
+                    req=urllib.request.Request("http://127.0.0.1:18741/v1/status",headers={"Authorization":"Bearer "+key})
+                    with opener.open(req,timeout=2) as resp:
+                        status=json.load(resp)
+                    if status.get("state") == "stopped":
+                        break
+                except (OSError, ValueError):
+                    time.sleep(.15)
+            else:
+                raise RuntimeError("Portable Core did not return STOPPED state")
+            assert status["execution_enabled"] is False
+            assert status["requested_run"] is False
+            req=urllib.request.Request("http://127.0.0.1:18741/v1/shutdown",data=b"{}",headers={"Authorization":"Bearer "+key,"Content-Type":"application/json"},method="POST")
+            with opener.open(req,timeout=5) as resp:
+                result=json.load(resp)
+            assert result.get("ok") is True
+            assert process.wait(timeout=20) == 0
+            print("PORTABLE_CORE_STOPPED_STATUS_AND_SAFE_SHUTDOWN_PASSED")
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+'@
+          [IO.File]::WriteAllText((Join-Path $env:RUNNER_TEMP 'portable-core-smoke.py'),$script,[Text.Encoding]::UTF8)
+          python (Join-Path $env:RUNNER_TEMP 'portable-core-smoke.py')
+          if ($LASTEXITCODE -ne 0) { throw 'Portable Core startup/shutdown acceptance failed' }
+      - name: Package archive and verify all files and manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $dir='target/portable'
+          $root=Join-Path (Get-Location) $dir
+          $folder=Join-Path $root 'BRAINTRADE-V4-UI18-PORTABLE'
+          $zip=Join-Path $root 'BRAINTRADE-V4-UI18-PORTABLE-Windows-x64.zip'
+          Compress-Archive -Path $folder -DestinationPath $zip -Force -CompressionLevel Optimal
+          Add-Type -AssemblyName System.IO.Compression
+          $archive=[IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            $files=@($archive.Entries | Where-Object { $_.Name })
+            $original=@(Get-ChildItem -LiteralPath $folder -File -Recurse)
+            if ($files.Count -ne $original.Count) { throw "ZIP file count mismatch: $($files.Count) != $($original.Count)" }
+            foreach($must in @('BrainTradeNext.exe','runtime/python/python.exe','runtime/gateway/mt5_gateway.py','mt5/Experts/BrainTradeSniperBridge.mq5')) {
+              if (-not @($files | Where-Object { $_.FullName.EndsWith("/$must") }).Count) { throw "ZIP is missing $must" }
+            }
+          }
+          finally { $archive.Dispose() }
+          Get-FileHash $zip -Algorithm SHA256 | Format-List
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BRAINTRADE-V4-UI18-PORTABLE-Windows-x64-Verified
+          path: target/portable/BRAINTRADE-V4-UI18-PORTABLE-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
