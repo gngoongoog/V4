@@ -76,7 +76,7 @@ class NativeUiContract(unittest.TestCase):
                     else:
                         self.assertRegex(element,r"\bchecked\s*<=>")
         # Catch missing fields silently disappearing from nested layouts.
-        self.assertEqual(total,{"Button":115,"ComboBox":30,"LineEdit":49,"CheckBox":14})
+        self.assertEqual(total,{"Button":116,"ComboBox":30,"LineEdit":49,"CheckBox":14})
 
     def test_premium_native_dashboard_keeps_real_market_provenance(self):
         main=(RUST / "main.rs").read_text(encoding="utf-8")
