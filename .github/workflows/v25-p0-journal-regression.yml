@@ -1,0 +1,33 @@
+name: V25 P0 Broker Journal Regression
+on:
+  push:
+    branches:
+      - feature/v25-enterprise-validation-20261024
+    paths:
+      - 'gateway/execution.py'
+      - 'tests/test_execution_journal_race.py'
+      - '.github/workflows/v25-p0-journal-regression.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  broker-journal:
+    name: No-double-send contract (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Prove same-intent race never sends twice
+        run: python -m unittest discover -s tests -p test_execution_journal_race.py -v
+      - name: Protect existing broker execution contracts
+        run: python -m unittest discover -s tests -p test_broker_execution.py -v
+      - name: Protect interrupted-order recovery contracts
+        run: python -m unittest discover -s tests -p test_execution_recovery.py -v
