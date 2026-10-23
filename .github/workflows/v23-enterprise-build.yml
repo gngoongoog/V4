@@ -39,6 +39,13 @@ jobs:
           $newV='self.assertTrue(all(p["version"] == workspace for p in packages if p["name"] != "braintrade-tauri"))'
           if (!$c.Contains($oldV)) { throw 'Expected legacy package version check missing' }
           [IO.File]::WriteAllText($contract,$c.Replace($oldV,$newV),[Text.Encoding]::UTF8)
+          # Strict TypeScript rejects the heterogeneous risk-row label as unknown.
+          $tsx='apps/terminal/src/terminal.tsx'
+          $markup=[IO.File]::ReadAllText($tsx)
+          $from='className="risk-line" key={String(label)}><span>{label}</span>'
+          $to='className="risk-line" key={String(label)}><span>{String(label)}</span>'
+          if (!$markup.Contains($from)) { throw 'Expected risk-row JSX location missing' }
+          [IO.File]::WriteAllText($tsx,$markup.Replace($from,$to),[Text.Encoding]::UTF8)
           if (!(Test-Path crates/runtime/src/enterprise_supervisor.rs)) { throw 'V23 supervisor source missing' }
           if (!(Test-Path scripts/Build-V23-Portable-Windows.ps1)) { throw 'V23 release gate missing' }
           Write-Host 'V23 delta installed over V18 tested CI baseline'
