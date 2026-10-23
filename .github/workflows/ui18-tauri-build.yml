@@ -31,6 +31,16 @@ jobs:
           $new='className="risk-line" key={String(label)}><span>{String(label)}</span>'
           if (-not $source.Contains($old)) { throw 'Expected JSX risk-row source not found' }
           [System.IO.File]::WriteAllText($terminalPath,$source.Replace($old,$new),[System.Text.UTF8Encoding]::new($false))
+          # Three V4 core crates retain 0.7.4; the separate Tauri shell is 0.8.x.
+          $contractFile='tests/test_project_contract.py'
+          $contract=[System.IO.File]::ReadAllText($contractFile)
+          $assertOld='self.assertEqual(len(packages), 3)'
+          $assertNew='self.assertEqual(len([p for p in packages if p["name"] != "braintrade-tauri"]), 3)'
+          $versionsOld='self.assertTrue(all(p["version"] == workspace for p in packages))'
+          $versionsNew='self.assertTrue(all(p["version"] == workspace for p in packages if p["name"] != "braintrade-tauri"))'
+          if (-not ($contract.Contains($assertOld) -and $contract.Contains($versionsOld))) { throw 'Expected old package contract missing' }
+          $contract=$contract.Replace($assertOld,$assertNew).Replace($versionsOld,$versionsNew)
+          [System.IO.File]::WriteAllText($contractFile,$contract,[System.Text.UTF8Encoding]::new($false))
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
       - uses: dtolnay/rust-toolchain@stable
