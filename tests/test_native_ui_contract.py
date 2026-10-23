@@ -93,7 +93,7 @@ class NativeUiContract(unittest.TestCase):
 
     def test_full_width_scroll_view_is_explicit_and_chart_console_stretch(self):
         home=self.dashboard.split("if root.page == 0: ScrollView {",1)[1].split("if root.page == 1: ScrollView",1)[0]
-        self.assertIn("content-width: self.width;",home)
+        self.assertIn("viewport-width: self.width;",home)
         self.assertIn("horizontal-stretch: 3;",home)
         self.assertIn("horizontal-stretch: 1; min-width: 305px; max-width: 450px;",home)
         self.assertIn("height: 264px; clip: true;",home)
