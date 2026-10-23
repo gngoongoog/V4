@@ -1056,7 +1056,11 @@ export component Dashboard inherits Window {
             // Explicitly match the visible viewport to prevent a 500px dead area
             // beside the chart on 1366/1600/1920 desktop windows.
             viewport-width: self.width;
-            VerticalBox { spacing: 9px;
+            VerticalBox {
+                // Direct root geometry has no dependency on ScrollView's
+                // measured minimum content width; prevents truncated desk.
+                width: root.width - (root.compact-sidebar ? 70px : 178px) - 24px;
+                spacing: 9px;
                 // Geometry tracks the original user-approved reference:
                 // a narrow command heading, then six information-dense live KPIs.
                 Rectangle {
