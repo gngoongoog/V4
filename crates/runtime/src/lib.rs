@@ -209,18 +209,23 @@ impl Engine{
             let next=trading_settings::priority_handoff(&shared.config,desired)?;
             // Serialize all observable state transitions through the Core event
             // loop; reset strategy caches and leave requested_run unchanged.
-            atomic_write(&self.dir.join("config.json"),
-                &serde_json::to_vec_pretty(&next)?)?;
-            self.execution.set_mode(next.trading.mode);
-            self.event("trading_priority_handoff",json!({
+            let handoff_event=json!({
                 "sniper_active":desired,
                 "active_mode":next.trading.mode,
                 "fallback_mode":next.trading.fallback_mode,
                 "monitoring_preserved":running,
                 "flat_broker_required":running
-            }))?;
+            });
+            // An audit failure must abort before changing the active owner.
+            self.event("trading_priority_handoff_requested",handoff_event.clone())?;
+            atomic_write(&self.dir.join("config.json"),
+                &serde_json::to_vec_pretty(&next)?)?;
+            self.execution.set_mode(next.trading.mode);
             shared.config=next;
             shared.status.analysis=Default::default();
+            // A committed mode must be acknowledged even if the optional
+            // second audit insert fails after durable persistence.
+            let _=self.event("trading_priority_handoff_committed",handoff_event);
             shared.status.message=if desired {
                 "القناص عاد منسقاً رئيسياً؛ البديل يراقب بدون إرسال أوامر."
             } else {
