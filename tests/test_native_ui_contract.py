@@ -109,6 +109,16 @@ class NativeUiContract(unittest.TestCase):
         self.assertNotIn("set_render_fixture(true)",runtime)
         self.assertIn("native_chart_candles",runtime)
 
+    def test_priority_preview_is_fixture_only_and_displays_backup_mode_name(self):
+        render=(RUST/"render.rs").read_text(encoding="utf-8")
+        running=(RUST/"main.rs").read_text(encoding="utf-8")
+        self.assertIn("ui.set_priority_enabled(true)",render)
+        self.assertIn("ui.set_fallback_mode(1)",render)
+        self.assertNotIn("ui.set_priority_enabled(true)",running)
+        self.assertIn("SCALPING",self.dashboard)
+        self.assertIn("SWING",self.dashboard)
+        self.assertIn("EXPERT",self.dashboard)
+
     def test_sniper_priority_routes_have_core_ownership_and_no_phantom_fallback(self):
         domain=(ROOT/"crates/domain/src/trading.rs").read_text(encoding="utf-8")
         core=(ROOT/"crates/runtime/src/lib.rs").read_text(encoding="utf-8")
