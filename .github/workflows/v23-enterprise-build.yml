@@ -1,0 +1,72 @@
+name: V23 • Build and verify native Windows Portable
+on:
+  push:
+    paths:
+      - 'ci/v23-delta.zip'
+      - '.github/workflows/v23-enterprise-build.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  v23-windows-portable:
+    runs-on: windows-latest
+    timeout-minutes: 115
+    env:
+      CARGO_INCREMENTAL: "0"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore V18 baseline and overlay exact V23 changed files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          tar -xzf ci/ui18-source.tar.gz
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to restore CI baseline' }
+          if (!(Test-Path ci/v23-delta.zip)) { throw 'Missing V23 source delta' }
+          $sha=(Get-FileHash ci/v23-delta.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if($sha -ne '4225eb9e593b3380360f87689cfe267eb134843190e18fddde424e47bf31b485') { throw "V23 delta SHA256 mismatch: $sha" }
+          Expand-Archive -Path ci/v23-delta.zip -DestinationPath . -Force
+          if (!(Test-Path crates/runtime/src/enterprise_supervisor.rs)) { throw 'V23 supervisor source missing' }
+          if (!(Test-Path scripts/Build-V23-Portable-Windows.ps1)) { throw 'V23 release gate missing' }
+          Write-Host 'V23 delta installed over V18 tested CI baseline'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          architecture: 'x64'
+      - name: Build entire V23 Rust, React and Gateway portable release
+        shell: pwsh
+        run: |
+          & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Build-V23-Portable-Windows.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'V23 build / tests / portable smoke failed; do not publish' }
+      - name: Verify native V23 artifact, hash manifest and archive contents
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $dir='target/portable/BRAINTRADE-V4-V23-PORTABLE'
+          $archive='target/portable/BRAINTRADE-V4-V23-PORTABLE-Win64.zip'
+          foreach($path in @($archive, "$dir/BrainTradeNext.exe", "$dir/runtime/python/python.exe", "$dir/runtime/gateway/mt5_gateway.py", "$dir/mt5/Experts/BrainTradeSniperBridge.mq5", "$dir/SHA256SUMS.json")) {
+            if(!(Test-Path $path -PathType Leaf)) { throw "V23 portable missing: $path" }
+          }
+          $manifest=Get-Content "$dir/SHA256SUMS.json" -Raw | ConvertFrom-Json
+          $members=@(Get-ChildItem $dir -File -Recurse)
+          foreach($member in $members){
+            if($member.Name -eq 'SHA256SUMS.json') { continue }
+            $relative=$member.FullName.Substring((Resolve-Path $dir).Path.Length+1).Replace('\','/')
+            $expected=$manifest.PSObject.Properties[$relative].Value
+            if(!$expected) { throw "Manifest missing: $relative" }
+            $actual=(Get-FileHash $member.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            if($expected -ne $actual) { throw "Manifest mismatch: $relative" }
+          }
+          Get-FileHash $archive -Algorithm SHA256 | Format-List
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BRAINTRADE-V4-V23-PORTABLE-WINDOWS-CORE-SMOKE
+          path: target/portable/BRAINTRADE-V4-V23-PORTABLE-Win64.zip
+          if-no-files-found: error
+          retention-days: 30
