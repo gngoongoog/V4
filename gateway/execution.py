@@ -546,8 +546,22 @@ class BrokerExecutor:
                 raise ValueError('Account changed or intent expired during validation')
 
             journal_start=time.perf_counter()
-            self.db.execute('INSERT INTO sends(id,request,result,created_ms) VALUES(?,?,NULL,?)',(cmd['id'],json.dumps(dict(cmd,broker_request=request),allow_nan=False),clock_ms()))
-            self.db.commit()
+            try:
+                self.db.execute('INSERT INTO sends(id,request,result,created_ms) VALUES(?,?,NULL,?)',
+                                (cmd['id'],json.dumps(dict(cmd,broker_request=request),allow_nan=False),clock_ms()))
+                self.db.commit()
+            except sqlite3.IntegrityError:
+                # A concurrent worker already committed the same intent.
+                # Reuse its durable state; never cross order_send twice.
+                self.db.rollback()
+                return self.execute(mt5,cmd,authorize)
+            except sqlite3.OperationalError:
+                # A locked/unwritable journal cannot guarantee idempotency.
+                # Fail closed instead of dispatching without persistence.
+                self.db.rollback()
+                result.update(state='unknown',reason='Durable broker journal unavailable; order was not sent')
+                result['total_ms']=(time.perf_counter()-started)*1000
+                return result
             result['journal_ms']=(time.perf_counter()-journal_start)*1000
             result['request']=request
 
