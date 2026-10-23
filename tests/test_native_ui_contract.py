@@ -91,6 +91,15 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("market.valid()",main)
         self.assertIn("captured_ms <= 120_000",main) if "captured_ms <= 120_000" in main else self.assertIn("now_ms.saturating_sub(market.captured_ms) <= 120_000",main)
 
+    def test_native_chart_uses_window_sized_content_without_scrollview_parent_cycle(self):
+        # The fixture in UI-09 left a 40% gap on 1920px screens, and clipped
+        # the right command console at 1024px. Window sizing is authoritative.
+        self.assertIn("width: max(640px,root.width - (root.compact-sidebar ? 70px : 178px) - 45px)", self.dashboard)
+        self.assertIn("if root.width >= 1200px: Rectangle",self.dashboard)
+        self.assertIn('text:"الأوامر / MODE"',self.dashboard)
+        self.assertIn('root.studio-action("config")',self.dashboard)
+        self.assertNotIn("HorizontalLayout {width:parent.width;",self.dashboard)
+
     def test_native_six_resolutions_and_hidden_kpi_layout_removed(self):
         renderer=(RUST/"render.rs").read_text(encoding="utf-8")
         checker=(ROOT/"scripts/check_native_ui_visuals.py").read_text(encoding="utf-8")
