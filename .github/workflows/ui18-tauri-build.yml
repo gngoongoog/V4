@@ -33,12 +33,16 @@ jobs:
         shell: pwsh
         run: |
           python scripts/verify_ui18_source.py
-          npm --prefix apps/terminal install --no-audit --no-fund
-          if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }
-          npm --prefix apps/terminal test
-          if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed' }
-          npm --prefix apps/terminal run build
-          if ($LASTEXITCODE -ne 0) { throw 'React production build failed' }
+          Push-Location apps/terminal
+          try {
+            npm install --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }
+            npm test
+            if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed' }
+            npm run build
+            if ($LASTEXITCODE -ne 0) { throw 'React production build failed' }
+          }
+          finally { Pop-Location }
       - name: Build V4 Core and run tests
         shell: pwsh
         run: |
