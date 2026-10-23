@@ -1055,7 +1055,7 @@ export component Dashboard inherits Window {
             // Slint's default layout-backed content width is its intrinsic MINIMUM.
             // Explicitly match the visible viewport to prevent a 500px dead area
             // beside the chart on 1366/1600/1920 desktop windows.
-            content-width: self.width;
+            viewport-width: self.width;
             VerticalBox { spacing: 9px;
                 // Geometry tracks the original user-approved reference:
                 // a narrow command heading, then six information-dense live KPIs.
