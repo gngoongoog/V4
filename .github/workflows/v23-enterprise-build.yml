@@ -28,6 +28,7 @@ jobs:
           Expand-Archive -Path ci/v23-delta.zip -DestinationPath . -Force
           # Contract was tightened after V20: stale textual checks must match V23's fail-closed predicates.
           Copy-Item ci/v23-verify-ui20.py scripts/verify_ui20_supervisor.py -Force
+          Copy-Item ci/v23-build-tauri.ps1 scripts/Build-Tauri-Windows.ps1 -Force
           # V23 workspace has 3 historical crates plus a separately versioned Tauri wrapper.
           $contract='tests/test_project_contract.py'
           $c=[IO.File]::ReadAllText($contract)
