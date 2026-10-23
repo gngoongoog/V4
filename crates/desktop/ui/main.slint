@@ -97,7 +97,7 @@ component DeskAction inherits Rectangle {
 export component Dashboard inherits Window {
     init => { Palette.color-scheme = ColorScheme.dark; }
     title: "BRAINTRADE V4 — Institutional Windows Terminal";
-    preferred-width: 1540px; preferred-height: 920px; min-width: 960px; min-height: 700px;
+    preferred-width: 1540px; preferred-height: 920px; min-width: 880px; min-height: 680px;
     background: root.theme-choice == 1 ? #f4f7fb : root.theme-choice == 2 ? #242930 : #0c141e;
     in-out property <int> theme-choice: 0;
     in-out property <bool> compact-sidebar: false;
@@ -349,7 +349,7 @@ export component Dashboard inherits Window {
     HorizontalLayout {
         padding: 0px; spacing: 0px;
         Rectangle {
-            width: root.compact-sidebar ? 70px : 178px;
+            width: root.compact-sidebar || root.width < 1140px ? 70px : 178px;
             background: root.theme-choice == 1 ? #ffffff : root.theme-choice == 2 ? #292e35 : #101a26;
             border-width: 1px; border-color: root.theme-choice == 1 ? #e4e9f0 : #263543;
             VerticalLayout {
@@ -358,29 +358,29 @@ export component Dashboard inherits Window {
                     HorizontalLayout { padding: 7px;spacing:10px;
                         Rectangle {width:5px;border-radius:3px;background:#3ad2bc;}
                         VerticalLayout {spacing:4px;
-                            Text { text: root.compact-sidebar ? "BT" : "BRAINTRADE"; color: root.theme-choice == 1 ? #172d3d : #edf7fa; font-size: root.compact-sidebar ? 17px : 20px; font-weight: 800; }
-                            Text { text: root.compact-sidebar ? "V4" : "V4  /  TRADING DESK"; color: root.theme-choice == 1 ? #4b8090 : #83d7cc; font-size: 11px; font-weight: 600; }
+                            Text { text: (root.compact-sidebar || root.width < 1140px) ? "BT" : "BRAINTRADE"; color: root.theme-choice == 1 ? #172d3d : #edf7fa; font-size: (root.compact-sidebar || root.width < 1140px) ? 17px : 20px; font-weight: 800; }
+                            Text { text: (root.compact-sidebar || root.width < 1140px) ? "V4" : "V4  /  TRADING DESK"; color: root.theme-choice == 1 ? #4b8090 : #83d7cc; font-size: 11px; font-weight: 600; }
                         }
                     }
                 }
-                Button {text:root.compact-sidebar?"☰":"☰  طي القائمة";clicked=>{root.compact-sidebar=!root.compact-sidebar;root.save-appearance(root.theme-choice,root.compact-sidebar,root.expanded-workspaces);}}
+                Button {text:(root.compact-sidebar || root.width < 1140px)?"☰":"☰  طي القائمة";clicked=>{root.compact-sidebar=!root.compact-sidebar;root.save-appearance(root.theme-choice,root.compact-sidebar,root.expanded-workspaces);}}
                 Rectangle {height:1px; background:root.theme-choice == 1 ? #e2e8f0 : #304052;}
-                Text {text: root.compact-sidebar ? "•" : "MAIN WORKSPACE"; color: root.theme-choice==1?#74889a:#7e9cab;font-size:10px;horizontal-alignment:center;}
-                DeskNav {label:root.compact-sidebar ? (root.page == 0 ? "●" : "⌂") : (root.page == 0 ? "●   نظرة عامة" : "⌂   نظرة عامة");selected:root.page==0;theme-choice:root.theme-choice;pressed=>{root.nav-section=0;root.page=0;}}
-                DeskNav {label:root.compact-sidebar ? (root.page == 14 ? "●" : "↗") : (root.page == 14 ? "●   مركز التداول" : "↗   مركز التداول");selected:root.page==14;theme-choice:root.theme-choice;pressed=>{root.nav-section=1;root.page=14;root.studio-action("config");}}
-                DeskNav {label:root.compact-sidebar ? "◎" : "◎   وضع القناص";selected:root.page==14;theme-choice:root.theme-choice;pressed=>{root.nav-section=1;root.page=14;root.studio-action("config");}}
-                DeskNav {label:root.compact-sidebar ? (root.page == 21 ? "●" : "✦") : (root.page == 21 ? "●   العقول" : "✦   العقول");selected:root.page==21;theme-choice:root.theme-choice;pressed=>{root.nav-section=2;root.page=21;root.brain-monitor-action("refresh");}}
-                DeskNav {label:root.compact-sidebar ? (root.page == 6 ? "●" : "◇") : (root.page == 6 ? "●   إدارة المخاطر" : "◇   إدارة المخاطر");selected:root.page==6;theme-choice:root.theme-choice;pressed=>{root.nav-section=1;root.page=6;root.risk-monitor-refresh();}}
-                DeskNav {label:root.compact-sidebar ? (root.page == 17 ? "●" : "⇄") : (root.page == 17 ? "●   التنفيذ MT5" : "⇄   التنفيذ MT5");selected:root.page==17;theme-choice:root.theme-choice;pressed=>{root.nav-section=1;root.page=17;root.execution-action("refresh");}}
-                DeskNav {label:root.compact-sidebar ? (root.page == 4 ? "●" : "▤") : (root.page == 4 ? "●   التحليلات" : "▤   التحليلات");selected:root.page==4;theme-choice:root.theme-choice;pressed=>{root.nav-section=2;root.page=4;}}
-                DeskNav {label:root.compact-sidebar ? (root.page == 20 ? "●" : "▣") : (root.page == 20 ? "●   سجل الصفقات" : "▣   سجل الصفقات");selected:root.page==20;theme-choice:root.theme-choice;pressed=>{root.nav-section=1;root.page=20;root.trade-journal-action("refresh");}}
-                DeskNav {label:root.compact-sidebar ? (root.page == 19 ? "●" : "◴") : (root.page == 19 ? "●   تقدّم التعلّم" : "◴   تقدّم التعلّم");selected:root.page==19;theme-choice:root.theme-choice;pressed=>{root.nav-section=1;root.page=19;}}
-                DeskNav {label:root.compact-sidebar ? "✉" : "✉   Telegram";selected:root.page==1;theme-choice:root.theme-choice;pressed=>{root.nav-section=4;root.page=1;}}
-                DeskNav {label:root.compact-sidebar ? (root.page == 2 ? "●" : "≡") : (root.page == 2 ? "●   سجل النظام" : "≡   سجل النظام");selected:root.page==2;theme-choice:root.theme-choice;pressed=>{root.nav-section=4;root.page=2;root.action("events");}}
-                DeskNav {label:root.compact-sidebar ? "⚙" : "⚙   الإعدادات";selected:root.page==1;theme-choice:root.theme-choice;pressed=>{root.nav-section=4;root.page=1;}}
+                Text {text: (root.compact-sidebar || root.width < 1140px) ? "•" : "MAIN WORKSPACE"; color: root.theme-choice==1?#74889a:#7e9cab;font-size:10px;horizontal-alignment:center;}
+                DeskNav {label:(root.compact-sidebar || root.width < 1140px) ? (root.page == 0 ? "●" : "⌂") : (root.page == 0 ? "●   نظرة عامة" : "⌂   نظرة عامة");selected:root.page==0;theme-choice:root.theme-choice;pressed=>{root.nav-section=0;root.page=0;}}
+                DeskNav {label:(root.compact-sidebar || root.width < 1140px) ? (root.page == 14 ? "●" : "↗") : (root.page == 14 ? "●   مركز التداول" : "↗   مركز التداول");selected:root.page==14;theme-choice:root.theme-choice;pressed=>{root.nav-section=1;root.page=14;root.studio-action("config");}}
+                DeskNav {label:(root.compact-sidebar || root.width < 1140px) ? "◎" : "◎   وضع القناص";selected:root.page==14;theme-choice:root.theme-choice;pressed=>{root.nav-section=1;root.page=14;root.studio-action("config");}}
+                DeskNav {label:(root.compact-sidebar || root.width < 1140px) ? (root.page == 21 ? "●" : "✦") : (root.page == 21 ? "●   العقول" : "✦   العقول");selected:root.page==21;theme-choice:root.theme-choice;pressed=>{root.nav-section=2;root.page=21;root.brain-monitor-action("refresh");}}
+                DeskNav {label:(root.compact-sidebar || root.width < 1140px) ? (root.page == 6 ? "●" : "◇") : (root.page == 6 ? "●   إدارة المخاطر" : "◇   إدارة المخاطر");selected:root.page==6;theme-choice:root.theme-choice;pressed=>{root.nav-section=1;root.page=6;root.risk-monitor-refresh();}}
+                DeskNav {label:(root.compact-sidebar || root.width < 1140px) ? (root.page == 17 ? "●" : "⇄") : (root.page == 17 ? "●   التنفيذ MT5" : "⇄   التنفيذ MT5");selected:root.page==17;theme-choice:root.theme-choice;pressed=>{root.nav-section=1;root.page=17;root.execution-action("refresh");}}
+                DeskNav {label:(root.compact-sidebar || root.width < 1140px) ? (root.page == 4 ? "●" : "▤") : (root.page == 4 ? "●   التحليلات" : "▤   التحليلات");selected:root.page==4;theme-choice:root.theme-choice;pressed=>{root.nav-section=2;root.page=4;}}
+                DeskNav {label:(root.compact-sidebar || root.width < 1140px) ? (root.page == 20 ? "●" : "▣") : (root.page == 20 ? "●   سجل الصفقات" : "▣   سجل الصفقات");selected:root.page==20;theme-choice:root.theme-choice;pressed=>{root.nav-section=1;root.page=20;root.trade-journal-action("refresh");}}
+                DeskNav {label:(root.compact-sidebar || root.width < 1140px) ? (root.page == 19 ? "●" : "◴") : (root.page == 19 ? "●   تقدّم التعلّم" : "◴   تقدّم التعلّم");selected:root.page==19;theme-choice:root.theme-choice;pressed=>{root.nav-section=1;root.page=19;}}
+                DeskNav {label:(root.compact-sidebar || root.width < 1140px) ? "✉" : "✉   Telegram";selected:root.page==1;theme-choice:root.theme-choice;pressed=>{root.nav-section=4;root.page=1;}}
+                DeskNav {label:(root.compact-sidebar || root.width < 1140px) ? (root.page == 2 ? "●" : "≡") : (root.page == 2 ? "●   سجل النظام" : "≡   سجل النظام");selected:root.page==2;theme-choice:root.theme-choice;pressed=>{root.nav-section=4;root.page=2;root.action("events");}}
+                DeskNav {label:(root.compact-sidebar || root.width < 1140px) ? "⚙" : "⚙   الإعدادات";selected:root.page==1;theme-choice:root.theme-choice;pressed=>{root.nav-section=4;root.page=1;}}
                 Rectangle { vertical-stretch:1; background:transparent; }
-                Text { text: root.compact-sidebar ? "V4" : "Windows 0.7.4 • Rust / Slint"; color: root.theme-choice == 1 ? #7d8ba1 : #93a8bc; font-size:10px; horizontal-alignment:center; }
-                Text { text: root.online ? (root.compact-sidebar ? "●" : "●  MT5 ONLINE") : (root.compact-sidebar ? "○" : "○  MT5 OFFLINE"); color: root.online ? #18c9a7 : #d99870; font-size:12px; horizontal-alignment:center; }
+                Text { text: (root.compact-sidebar || root.width < 1140px) ? "V4" : "Windows 0.7.4 • Rust / Slint"; color: root.theme-choice == 1 ? #7d8ba1 : #93a8bc; font-size:10px; horizontal-alignment:center; }
+                Text { text: root.online ? ((root.compact-sidebar || root.width < 1140px) ? "●" : "●  MT5 ONLINE") : ((root.compact-sidebar || root.width < 1140px) ? "○" : "○  MT5 OFFLINE"); color: root.online ? #18c9a7 : #d99870; font-size:12px; horizontal-alignment:center; }
             }
         }
         VerticalLayout {
