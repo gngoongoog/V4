@@ -1051,7 +1051,7 @@ export component Dashboard inherits Window {
             Text { text: root.backup-detail; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
         } }
         if root.page == 0: ScrollView {
-            VerticalBox { spacing: 14px;
+            VerticalBox { spacing: 9px;
                 // Geometry tracks the original user-approved reference:
                 // a narrow command heading, then six information-dense live KPIs.
                 Rectangle {
@@ -1067,7 +1067,7 @@ export component Dashboard inherits Window {
                         Text {text:root.online?"●  MT5 متصل":"○  MT5 غير متصل";color:root.online?#2bddae:#eda17a;font-size:11px;font-weight:700;vertical-alignment:center;}
                     }
                 }
-                HorizontalLayout {visible:root.width >= 1280px;spacing:8px;
+                if root.width >= 1280px: HorizontalLayout {spacing:8px;
                     DeskMetric {glyph:"◈";title:"EQUITY / حقوق الملكية";value:root.equity;
                         footer:root.online?"MT5 ACCOUNT":"NO FRESH DATA";theme-choice:root.theme-choice;accent:#24d3ae;}
                     DeskMetric {glyph:"↗";title:"DAILY NET / صافي اليوم";value:root.today;
@@ -1083,7 +1083,7 @@ export component Dashboard inherits Window {
                 }
                 // At laptop widths, reflow the identical six real metrics
                 // to two rows instead of compressing text into illegibility.
-                VerticalLayout {visible:root.width < 1280px;spacing:7px;
+                if root.width < 1280px: VerticalLayout {spacing:7px;
                     HorizontalLayout {spacing:7px;
                     DeskMetric {glyph:"◈";title:"EQUITY / حقوق الملكية";value:root.equity;
                         footer:root.online?"MT5 ACCOUNT":"NO FRESH DATA";theme-choice:root.theme-choice;accent:#24d3ae;}
