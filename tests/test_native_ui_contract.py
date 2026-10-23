@@ -126,7 +126,7 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("self.execution.is_live_target()",core)
         self.assertIn("self.execution.validate_start(&current,body)?",core)
         self.assertIn("self.execution.set_mode(next.trading.mode)",core)
-        self.assertIn("sniper_active:action==\"handoff_resume\"",studio)
+        self.assertIn('"sniper_active":action=="handoff_resume"',studio)
         self.assertIn('"/v1/trading/priority/handoff"',studio)
 
     def test_reference_mockup_navigation_and_actions_are_all_wired(self):
