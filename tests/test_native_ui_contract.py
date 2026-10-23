@@ -91,6 +91,18 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("market.valid()",main)
         self.assertIn("captured_ms <= 120_000",main) if "captured_ms <= 120_000" in main else self.assertIn("now_ms.saturating_sub(market.captured_ms) <= 120_000",main)
 
+    def test_native_six_resolutions_and_hidden_kpi_layout_removed(self):
+        renderer=(RUST/"render.rs").read_text(encoding="utf-8")
+        checker=(ROOT/"scripts/check_native_ui_visuals.py").read_text(encoding="utf-8")
+        self.assertIn("if root.width >= 1280px: HorizontalLayout",self.dashboard)
+        self.assertIn("if root.width < 1280px: VerticalLayout",self.dashboard)
+        self.assertNotIn("HorizontalLayout {visible:root.width >= 1280px",self.dashboard)
+        self.assertNotIn("VerticalLayout {visible:root.width < 1280px",self.dashboard)
+        for w,h in [(1024,768),(1280,800),(1366,768),(1540,920),(1600,900),(1920,1080)]:
+            self.assertIn(str(w),renderer)
+            self.assertIn(str(w),checker) if w!=1540 else self.assertIn("1540, 920",checker)
+        self.assertIn("dashboard-{width}x{height}-{name}.ppm",renderer)
+
     def test_original_reference_has_full_size_three_palette_screenshots(self):
         renderer=(RUST / "render.rs").read_text(encoding="utf-8")
         checker=(ROOT / "scripts/check_native_ui_visuals.py").read_text(encoding="utf-8")
