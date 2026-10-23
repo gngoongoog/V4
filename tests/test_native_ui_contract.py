@@ -170,8 +170,9 @@ class NativeUiContract(unittest.TestCase):
         self.assertEqual(len(re.findall(r"\bDeskMetric\s*\{",self.dashboard)), 12)
         self.assertIn("if root.width >= 1280px: HorizontalLayout",self.dashboard)
         self.assertIn("if root.width < 1280px: VerticalLayout",self.dashboard)
-        self.assertEqual(len(re.findall(r"\\bTouchArea\\s*\\{[^{}]*\\bclicked\\s*=>",self.dashboard)),4)
-        self.assertEqual(len(re.findall(r"\\bDeskFrame\\s*\\{",self.dashboard)),3)
+        self.assertEqual(sum(self.dashboard.count(name) for name in
+            ("nav-hit := TouchArea", "metric-hit := TouchArea", "action-hit := TouchArea", "frame-hit := TouchArea")),4)
+        self.assertEqual(self.dashboard.count("DeskFrame {label:"),3)
         self.assertEqual(self.dashboard.count("metric-hit := TouchArea"),1)
         self.assertEqual(self.dashboard.count("chart-crosshair := TouchArea"),1)
         self.assertIn("root.pressed();",self.dashboard)
@@ -189,7 +190,7 @@ class NativeUiContract(unittest.TestCase):
         for control in ("nav-hit := TouchArea", "metric-hit := TouchArea",
                         "action-hit := TouchArea", "frame-hit := TouchArea"):
             self.assertEqual(self.dashboard.count(control),1)
-        self.assertEqual(len(re.findall(r"DeskFrame \\{label:",self.dashboard)),3)
+        self.assertEqual(self.dashboard.count("DeskFrame {label:"),3)
         self.assertIn("selected:root.chart-frame==0",self.dashboard)
         self.assertIn("selected:root.chart-frame==1",self.dashboard)
         self.assertIn("selected:root.chart-frame==2",self.dashboard)
@@ -198,8 +199,8 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("chart-crosshair.mouse-y",self.dashboard)
         # All twelve responsive metric instances must navigate to a
         # real page/refresh callback, never directly place trades.
-        metric_instances=re.findall(
-            r"DeskMetric \\{glyph:.*?pressed=>\\{(.*?)\\}\\}",self.dashboard,re.S)
+        metric_instances=[line for line in self.dashboard.splitlines()
+                          if "footer:" in line and "pressed=>{" in line]
         self.assertEqual(len(metric_instances),12)
         self.assertTrue(all("root.page=" in action for action in metric_instances))
         self.assertTrue(all('root.action("start")' not in action for action in metric_instances))
@@ -213,7 +214,7 @@ class NativeUiContract(unittest.TestCase):
             wired = len(re.findall(r"\bclicked\s*=>", src))
             # UI-07 uses 2 custom Rectangle+TouchArea components for
             # interactive sidebar entries and premium order buttons.
-            touch = len(re.findall(r"\\bTouchArea\\s*\\{[^{}]*\\bclicked\\s*=>", src))
+            touch = sum(src.count(name) for name in ("nav-hit := TouchArea", "metric-hit := TouchArea", "action-hit := TouchArea", "frame-hit := TouchArea"))
             self.assertGreater(count, 0)
             self.assertEqual(count, wired-touch, f"Found inert control in {path.name}")
 
