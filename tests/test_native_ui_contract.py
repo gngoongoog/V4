@@ -91,6 +91,15 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("market.valid()",main)
         self.assertIn("captured_ms <= 120_000",main) if "captured_ms <= 120_000" in main else self.assertIn("now_ms.saturating_sub(market.captured_ms) <= 120_000",main)
 
+    def test_full_width_scroll_view_is_explicit_and_chart_console_stretch(self):
+        home=self.dashboard.split("if root.page == 0: ScrollView {",1)[1].split("if root.page == 1: ScrollView",1)[0]
+        self.assertIn("viewport-width: self.width;",home)
+        self.assertIn("horizontal-stretch: 3;",home)
+        self.assertIn("horizontal-stretch: 1; min-width: 305px; max-width: 450px;",home)
+        self.assertIn("height: 264px; clip: true;",home)
+        self.assertNotIn("width:parent.width;spacing:",home)
+        self.assertNotIn("height: 304px; clip: true;",home)
+
     def test_native_six_resolutions_and_hidden_kpi_layout_removed(self):
         renderer=(RUST/"render.rs").read_text(encoding="utf-8")
         checker=(ROOT/"scripts/check_native_ui_visuals.py").read_text(encoding="utf-8")

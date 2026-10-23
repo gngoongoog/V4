@@ -1052,7 +1052,15 @@ export component Dashboard inherits Window {
             Text { text: root.backup-detail; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
         } }
         if root.page == 0: ScrollView {
-            VerticalBox { spacing: 9px;
+            // Slint's default layout-backed content width is its intrinsic MINIMUM.
+            // Explicitly match the visible viewport to prevent a 500px dead area
+            // beside the chart on 1366/1600/1920 desktop windows.
+            viewport-width: self.width;
+            VerticalBox {
+                // Direct root geometry has no dependency on ScrollView's
+                // measured minimum content width; prevents truncated desk.
+                width: root.width - (root.compact-sidebar ? 70px : 178px) - 24px;
+                spacing: 9px;
                 // Geometry tracks the original user-approved reference:
                 // a narrow command heading, then six information-dense live KPIs.
                 Rectangle {
@@ -1105,7 +1113,7 @@ export component Dashboard inherits Window {
                 HorizontalLayout {horizontal-stretch:1;spacing: 11px; alignment: start;
                     Rectangle {
                         horizontal-stretch: 3;
-                        min-height: 466px;
+                        min-height: 420px;
                         background: root.theme-choice == 1 ? #ffffff : root.theme-choice == 2 ? #292e35 : #162231;
                         border-radius: 13px; border-width: 1px;
                         border-color: root.theme-choice == 1 ? #dfe6ef : #2c4053;
@@ -1128,7 +1136,7 @@ export component Dashboard inherits Window {
                                 Text {text:root.chart-frame==0?"M1":root.chart-frame==1?"M5":"M15";color:root.theme-choice==1?#556b81:#acbbca;font-size:12px;}
                             }
                             Rectangle {
-                                height: 304px; clip: true;
+                                height: 264px; clip: true;
                                 background: root.theme-choice == 1 ? #f8fbfe : root.theme-choice == 2 ? #252b34 : #0e1b29;
                                 border-radius: 9px;
                                 Rectangle {x:0px;y:76px;width:parent.width;height:1px;background:root.theme-choice==1?#e7eff6:#33434d;}
@@ -1170,7 +1178,7 @@ export component Dashboard inherits Window {
                                 }
                             }
                             Rectangle {
-                                height: 48px;clip:true;border-radius:7px;
+                                height: 38px;clip:true;border-radius:7px;
                                 background:root.theme-choice==1?#f5f9fb:root.theme-choice==2?#222831:#111f2a;
                                 for bar in root.chart-bars: Rectangle {
                                     x:10px+bar.x*(parent.width - 24px);
@@ -1190,10 +1198,10 @@ export component Dashboard inherits Window {
                         }
                     }
                     Rectangle {
-                        width: 316px; min-height:466px;
+                        horizontal-stretch: 1; min-width: 305px; max-width: 450px; min-height: 420px;
                         background: root.theme-choice==1?#ffffff:root.theme-choice==2?#292e35:#162231;
                         border-radius:13px;border-width:1px;border-color:root.theme-choice==1?#dfe6ef:#2c4053;
-                        VerticalLayout {padding:13px;spacing:10px;
+                        VerticalLayout {padding:11px;spacing:7px;
                             HorizontalLayout {spacing:8px;
                                 Rectangle {width:4px;background:#31cdb2;border-radius:2px;}
                                 Text {text:"TRADING OPERATIONS / مركز التشغيل";color:root.theme-choice==1?#14283e:#f0f8ff;font-size:15px;font-weight:800;vertical-alignment:center;}
@@ -1627,7 +1635,7 @@ export component Dashboard inherits Window {
             Text { text: root.learning-detail; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
         } }
         Rectangle { height: 1px; background: root.theme-choice == 1 ? #e3e9f0 : #3b3e45; }
-        Text { text: root.feedback; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; min-height: 36px; }
+        Text { text: root.feedback; color: root.theme-choice == 1 ? #526477 : #c8cbd1; wrap: word-wrap; min-height: root.page == 0 ? 18px : 36px; }
         HorizontalLayout {
             Text { text: "Core يبقى شغالاً عند إغلاق النافذة."; color: root.theme-choice == 1 ? #687b90 : #878b94; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; background: transparent; }
