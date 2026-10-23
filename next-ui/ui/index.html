@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ar" dir="ltr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<title>BRAINTRADE V4 — Institutional Trading System</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body data-theme="dark">
+<div id="app" class="shell">
+  <aside class="sidebar">
+    <div class="brand"><div class="brand-logo">BRAIN<span>TRADE</span> <b>V4</b></div><div class="brand-desc">Institutional Trading System</div></div>
+    <nav id="sidebarNav" aria-label="Primary navigation"></nav>
+    <button class="assistant-tile" id="assistantTile" type="button"><div class="bot-illustration"><div class="bot-ring">◉</div><div class="bot-face">◈</div></div><strong>المساعد الذكي</strong><small>مراقبة التحليلات والعقول</small></button>
+    <div class="sidebar-footer"><strong>BRAIN<span>TRADE</span> V4</strong><small>Desktop Design Edition</small><small>Windows / Rust Core</small></div>
+  </aside>
+  <section class="main">
+    <header class="account-strip">
+      <div class="account-item broker-select"><label>Broker</label><button type="button" class="select-look" data-go="settings"><span class="broker-mark">✦</span><strong id="brokerName">MT5 Offline</strong><span class="chev">⌄</span></button></div>
+      <div class="account-item server-select"><label>Server</label><button type="button" class="select-look" data-go="settings"><strong id="serverName">—</strong><span class="chev">⌄</span></button></div>
+      <div class="account-item account-switch"><label>Account</label><div class="switch-buttons"><button type="button" id="liveBadge" data-go="execution">Live</button><button type="button" id="demoBadge" data-go="execution">Demo</button></div></div>
+      <div class="top-stat"><label>Equity</label><b id="topEquity">—</b></div>
+      <div class="top-stat"><label>Balance</label><b id="topBalance">—</b></div>
+      <div class="top-stat"><label>Margin</label><b id="topMargin">—</b></div>
+      <div class="top-stat"><label>Free Margin</label><b id="topFree">—</b></div>
+      <div class="top-stat daily"><label>Daily P&amp;L</label><b id="topDaily">—</b></div>
+      <div class="top-stat latency"><label>Latency</label><b id="topLatency">—</b></div>
+      <div class="connection-pill"><span class="pulse-dot" id="connectionDot"></span><span id="connectionLabel">غير متصل</span><span class="chev">⌄</span></div>
+    </header>
+    <div id="previewBanner" class="preview-banner" hidden>◈ معاينة التصميم — بيانات ورسوم توضيحية وليست حساب MT5 حقيقي <button type="button" id="leavePreview">إغلاق المعاينة</button></div>
+    <main id="content" class="content">
+      <section id="dashboard" class="dashboard">
+        <div class="kpi-row">
+          <article class="kpi kpi-equity interactive" data-go="execution"><div class="kpi-glyph">▱</div><div class="kpi-copy"><div class="kpi-ar">حقوق الملكية</div><div class="kpi-en">Equity</div><strong id="equityValue">—</strong><div class="kpi-footer teal" id="equityDelta">—</div></div></article>
+          <article class="kpi kpi-profit interactive" data-go="journal"><div class="kpi-glyph">▥</div><div class="kpi-copy"><div class="kpi-ar">الربح / الخسارة اليومي</div><div class="kpi-en">Daily P&amp;L</div><strong id="dailyValue">—</strong><div class="kpi-footer teal" id="dailyPercent">—</div></div><canvas class="sparkline" id="dailySpark"></canvas></article>
+          <article class="kpi kpi-loss interactive" data-go="risk"><div class="kpi-glyph">◢</div><div class="kpi-copy"><div class="kpi-ar">أقصى تراجع</div><div class="kpi-en">Drawdown</div><strong id="drawdownValue">—</strong><div class="loss-meter"><span id="drawdownMeter"></span></div><div class="kpi-footer red" id="drawdownNote">لا توجد بيانات كافية</div></div></article>
+          <article class="kpi kpi-positions interactive" data-go="positions"><div class="kpi-glyph">▣</div><div class="kpi-copy"><div class="kpi-ar">المراكز النشطة</div><div class="kpi-en">Active Positions</div><strong id="activePositions">—</strong><div class="buy-sell"><span id="buyCount">— شراء</span><span id="sellCount">— بيع</span></div><div class="position-meter"><i id="buyMeter"></i><i id="sellMeter"></i></div></div></article>
+          <article class="kpi kpi-win interactive" data-go="journal"><div class="kpi-glyph">◎</div><div class="kpi-copy"><div class="kpi-ar">معدل النجاح</div><div class="kpi-en">Win Rate</div><strong id="winRateValue">—</strong><div class="kpi-footer" id="winRateNote">لا توجد عينة معتمدة</div></div><div class="donut" id="winDonut"></div></article>
+          <article class="kpi kpi-latency interactive" data-go="execution"><div class="kpi-glyph">▂</div><div class="kpi-copy"><div class="kpi-ar">زمن التنفيذ</div><div class="kpi-en">Latency</div><strong id="latencyValue">—</strong><div class="kpi-footer teal" id="latencyNote">غير مقاس</div></div><div class="signal-bars"><i></i><i></i><i></i><i></i><i></i></div></article>
+        </div>
+        <div class="hero-grid">
+          <section class="panel chart-panel">
+            <div class="chart-head"><div class="chart-symbol"><div class="gold-icon">◈</div><div><strong id="chartSymbol">XAUUSD</strong><small>Gold Spot / US Dollar</small></div></div><div class="chart-actions"><div class="timeframes" id="timeframes"><button type="button" data-tf="m1">M1</button><button class="selected" type="button" data-tf="m5">M5</button><button type="button" data-tf="m15">M15</button><button type="button" data-tf="h1">H1</button><button type="button" data-tf="h4">H4</button><button type="button" data-tf="d1">D</button></div><button class="tool-button" type="button" title="Crosshair" id="crosshairToggle">⌖</button><button class="tool-button" type="button" title="Toggle trend lines" id="maToggle">⌁</button><button class="tool-button" type="button" title="Technical analysis" data-go="analysis">╱</button><button class="tool-button wide" type="button" title="Indicators" id="indicatorToggle">⚙ <span>المؤشرات</span> ⌄</button><button class="tool-button" type="button" title="Full chart" id="expandChart">⛶</button></div></div>
+            <div class="ohlc-line" id="ohlc">O — &nbsp; H — &nbsp; L — &nbsp; C — <span>—</span></div>
+            <div class="chart-frame" id="chartFrame"><canvas id="candles"></canvas><div class="chart-empty" id="chartEmpty">بانتظار شموع MT5 الموثوقة<br><small>لا يتم رسم أسعار افتراضية في وضع التداول الحقيقي</small></div><div class="chart-tooltip" id="chartTooltip" hidden></div></div>
+          </section>
+          <section class="panel ops-panel">
+            <div class="ops-tabs" role="tablist"><button class="active" type="button" data-op-tab="trade">التداول المباشر</button><button type="button" data-op-tab="orders">إدارة الأوامر</button><button type="button" data-op-tab="advanced">متداول متقدم</button></div>
+            <div id="opsControls" class="ops-body">
+              <div class="action-row double"><button id="startBtn" class="action-btn start" type="button"><strong>▶</strong><span>بدء التداول<small>Start</small></span></button><button id="stopBtn" class="action-btn stop" type="button"><strong>■</strong><span>إيقاف<small>Stop</small></span></button><button class="action-btn shadow" data-go="shadow" type="button"><strong>◐</strong><span>ظل<small>Shadow</small></span></button></div>
+              <div class="action-row triple"><button type="button" class="pill-btn" data-go="execution">▣ <span>Demo</span></button><button type="button" class="pill-btn green" data-go="execution">◉ <span>Live</span></button><button type="button" class="pill-btn slate" data-go="brains">⚙ <span>التعلّم التلقائي<small>Freeze Learning</small></span></button></div>
+              <div class="action-row quadruple"><button class="mini-btn risk" type="button" data-go="risk">◉ <span>المخاطرة<small id="riskControlState">افتح الإعدادات</small></span></button><button class="mini-btn risk-off" type="button" data-go="risk">⦿ <span>Risk<small>إدارة المخاطر</small></span></button><button class="mini-btn telegram" type="button" data-go="telegram">➤ <span>التلغرام<small>Telegram</small></span></button><button class="mini-btn" type="button" data-go="settings">⚙ <span>الإعدادات<small>Settings</small></span></button></div>
+            </div>
+            <div id="opsSecondary" class="ops-secondary" hidden></div>
+            <div class="panel-title slim"><b>إشارات الذكاء الاصطناعي</b><button type="button" data-go="brains">عرض الكل ›</button></div>
+            <div id="brainsInline" class="brains-inline"></div>
+          </section>
+        </div>
+        <div class="activity-grid">
+          <section class="panel positions-panel"><div class="panel-title"><b>المراكز النشطة</b><div class="microtabs"><button class="chosen" type="button" data-positions="all">الكل (<span id="allPositionsCount">0</span>)</button><button type="button" data-positions="buy">شراء</button><button type="button" data-positions="sell">بيع</button></div></div><div class="table-scroll"><table><thead><tr><th>#</th><th>الرمز</th><th>النوع</th><th>الحجم</th><th>سعر الدخول</th><th>السعر الحالي</th><th>الربح / الخسارة</th><th>الإجراء</th></tr></thead><tbody id="positionsRows"></tbody></table></div></section>
+          <section class="panel trades-panel"><div class="panel-title"><b>أحدث الصفقات المنفذة</b><button data-go="journal" type="button">عرض الكل ›</button></div><div class="table-scroll"><table><thead><tr><th>الساعة</th><th>الرمز</th><th>النوع</th><th>الحجم</th><th>الوقت</th></tr></thead><tbody id="journalRows"></tbody></table></div></section>
+        </div>
+        <div class="bottom-grid">
+          <section class="panel equity-history"><div class="panel-title"><b>أداء الحساب</b><small><i class="dot blue"></i>حقوق الملكية　<i class="dot teal"></i>الرصيد　<i class="dot red-dot"></i>التراجع</small></div><div class="small-chart"><canvas id="equityChart"></canvas><div id="equityEmpty" class="chart-nodata">لا يوجد سجل أداء زمني موثوق</div></div></section>
+          <section class="panel trade-distribution"><div class="panel-title"><b>توزيع الصفقات</b><button type="button" data-go="journal">آخر 30 يوم ⌄</button></div><div class="distribution-body"><div id="tradeDonut" class="large-donut"><strong id="tradeTotal">—</strong><small>صفقة</small></div><div class="dist-legend"><span><i class="dot teal"></i>رابحة <b id="tradeWins">—</b></span><span><i class="dot red-dot"></i>خاسرة <b id="tradeLosses">—</b></span></div></div></section>
+          <section class="panel execution-quality"><div class="panel-title"><b>جودة التنفيذ</b><button type="button" data-go="execution">آخر 30 يوم ⌄</button></div><div class="quality-list" id="qualityList"></div></section>
+          <section class="panel sys-alerts"><div class="panel-title"><b>إشعارات النظام</b><button type="button" data-go="logs">عرض الكل ›</button></div><div class="alerts-list" id="alertsList"></div></section>
+          <section class="panel risk-stats"><div class="panel-title"><b>مقاييس المخاطر</b></div><div class="risk-bars" id="riskBars"></div></section>
+        </div>
+      </section>
+      <section id="subpage" class="subpage" hidden></section>
+    </main>
+    <div class="bottom-status"><span id="statusText">● Windows dashboard — not connected</span><span id="clock"></span><button class="classic" id="classicBtn" type="button">واجهة التحكم الكاملة ↗</button><button type="button" id="previewBtn">معاينة التصميم</button></div>
+  </section>
+  <div class="toast-stack" id="toastStack" role="status" aria-live="polite"></div>
+  <div class="modal-layer" id="modalLayer" hidden><div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal-head"><h2 id="modalTitle"></h2><button id="closeModal" type="button">×</button></div><p id="modalMessage"></p><label id="confirmLabel" hidden>تأكيد رقم حساب MT5 الحقيقي<input id="confirmLogin" inputmode="numeric" autocomplete="off" placeholder="رقم حساب REAL" /></label><div class="modal-actions"><button type="button" id="cancelModal">إلغاء</button><button type="button" class="accept" id="acceptModal">تأكيد</button></div></div></div>
+</div>
+<script src="app.js" defer></script>
+</body></html>
