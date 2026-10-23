@@ -67,6 +67,27 @@ def assert_widescreen_work_area_occupied(path: Path, width: int, height: int) ->
         )
 
 
+def assert_laptop_content_left_anchored(path: Path, width: int, height: int) -> None:
+    """Detect laptop mode where ScrollView centers its content off screen."""
+    with path.open("rb") as file:
+        assert file.readline() == b"P6\n"
+        assert file.readline() == f"{width} {height}\n".encode()
+        assert file.readline() == b"255\n"
+        pixels=file.read()
+    # Laptop 1024px viewport begins at x≈190 after the left rail. The
+    # command banner must appear at x200-280 rather than starting at x≈320.
+    colors=set()
+    for y in range(104,137,5):
+        for x in range(200,281,5):
+            at=(y*width+x)*3
+            colors.add(pixels[at:at+3])
+    if len(colors)<5:
+        raise AssertionError(
+            f"Laptop dashboard is horizontally centered/cropped: "
+            f"{path} has only {len(colors)} colors at the expected left header"
+        )
+
+
 def main() -> None:
     validated = 0
     for size, width, height in SIZES:
@@ -90,6 +111,11 @@ def main() -> None:
             hashes.append(check_ppm(path,width,height))
         if len(set(hashes)) != 3:
             raise AssertionError(f"Broken palette at viewport {width}x{height}")
+        if width == 1024:
+            assert_laptop_content_left_anchored(
+                ROOT/"test-output"/"responsive-preview"/f"dashboard-{width}x{height}-dark.ppm",
+                width,height
+            )
         if width >= 1366:
             assert_widescreen_work_area_occupied(
                 ROOT/"test-output"/"responsive-preview"/f"dashboard-{width}x{height}-dark.ppm",
