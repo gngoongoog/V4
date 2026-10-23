@@ -76,7 +76,7 @@ class NativeUiContract(unittest.TestCase):
                     else:
                         self.assertRegex(element,r"\bchecked\s*<=>")
         # Catch missing fields silently disappearing from nested layouts.
-        self.assertEqual(total,{"Button":115,"ComboBox":30,"LineEdit":49,"CheckBox":14})
+        self.assertEqual(total,{"Button":116,"ComboBox":30,"LineEdit":49,"CheckBox":14})
 
     def test_premium_native_dashboard_keeps_real_market_provenance(self):
         main=(RUST / "main.rs").read_text(encoding="utf-8")
@@ -91,6 +91,17 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("market.valid()",main)
         self.assertIn("captured_ms <= 120_000",main) if "captured_ms <= 120_000" in main else self.assertIn("now_ms.saturating_sub(market.captured_ms) <= 120_000",main)
 
+    def test_native_chart_uses_window_sized_content_without_scrollview_parent_cycle(self):
+        # The fixture in UI-09 left a 40% gap on 1920px screens, and clipped
+        # the right command console at 1024px. Window sizing is authoritative.
+        self.assertIn("width: max(640px,root.width - (root.compact-sidebar ? 70px : 178px) - 45px)", self.dashboard)
+        self.assertIn("if root.width >= 1200px: Rectangle",self.dashboard)
+        self.assertIn("x: 0px;",self.dashboard)
+        self.assertIn("alignment: stretch",self.dashboard)
+        self.assertIn('text:"الأوامر / MODE"',self.dashboard)
+        self.assertIn('root.studio-action("config")',self.dashboard)
+        self.assertEqual(self.dashboard.count("HorizontalLayout {width:parent.width;spacing:"),3)
+
     def test_native_six_resolutions_and_hidden_kpi_layout_removed(self):
         renderer=(RUST/"render.rs").read_text(encoding="utf-8")
         checker=(ROOT/"scripts/check_native_ui_visuals.py").read_text(encoding="utf-8")
@@ -98,8 +109,8 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("if root.width < 1280px: VerticalLayout",self.dashboard)
         self.assertIn("root.compact-sidebar ? 70px : 178px",self.dashboard)
         self.assertIn("min-width: 880px",self.dashboard)
-        self.assertEqual(self.dashboard.count("HorizontalLayout {horizontal-stretch:1;spacing"),3)
-        self.assertNotIn("HorizontalLayout {width:parent.width;",self.dashboard)
+        self.assertEqual(self.dashboard.count("HorizontalLayout {width:parent.width;spacing"),3)
+        self.assertEqual(self.dashboard.count("HorizontalLayout {width:parent.width;spacing:"),3)
         self.assertNotIn("HorizontalLayout {visible:root.width >= 1280px",self.dashboard)
         self.assertNotIn("VerticalLayout {visible:root.width < 1280px",self.dashboard)
         for w,h in [(1024,768),(1280,800),(1366,768),(1540,920),(1600,900),(1920,1080)]:

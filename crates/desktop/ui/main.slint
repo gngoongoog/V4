@@ -1052,7 +1052,15 @@ export component Dashboard inherits Window {
             Text { text: root.backup-detail; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
         } }
         if root.page == 0: ScrollView {
-            VerticalBox { spacing: 9px;
+            // Bind content to the externally sized window, NOT to the
+            // ScrollView parent/content width (which causes layout cycles).
+            // Leave a stable gutter for the scrollbar and outer padding.
+            VerticalBox {
+                // Without explicit x, Slint centers a fixed-width content box
+                // in ScrollView and crops the left edge on small laptops.
+                x: 0px;
+                width: max(640px,root.width - (root.compact-sidebar ? 70px : 178px) - 45px);
+                spacing: 9px;
                 // Geometry tracks the original user-approved reference:
                 // a narrow command heading, then six information-dense live KPIs.
                 Rectangle {
@@ -1102,7 +1110,7 @@ export component Dashboard inherits Window {
                         footer:root.online?"MT5 TICK FRESHNESS":"NO QUOTE";theme-choice:root.theme-choice;accent:#71c4ee;}
                     }
                 }
-                HorizontalLayout {horizontal-stretch:1;spacing: 11px; alignment: start;
+                HorizontalLayout {width:parent.width;spacing: 11px; alignment: stretch;
                     Rectangle {
                         horizontal-stretch: 3;
                         min-height: 466px;
@@ -1116,6 +1124,10 @@ export component Dashboard inherits Window {
                                     Text {text:"OHLC + TICK ACTIVITY FROM MT5";color:root.theme-choice==1?#6b8798:#87aab4;font-size:10px;}
                                 }
                                 Rectangle {horizontal-stretch:1;background:transparent;}
+                                if root.width < 1200px: Button {
+                                    text:"الأوامر / MODE";
+                                    clicked=>{root.nav-section=1;root.page=14;root.studio-action("config");}
+                                }
                                 Button {text:"M1";clicked=>{root.chart-frame=0;}}
                                 Button {text:"M5";clicked=>{root.chart-frame=1;}}
                                 Button {text:"M15";clicked=>{root.chart-frame=2;}}
@@ -1189,7 +1201,7 @@ export component Dashboard inherits Window {
                             Text {text:"حجم النشاط هو Tick Volume من MT5 وليس حجم تداول بورصة مركزية. لا تُعرض شموع أو أحجام وهمية.";color:root.theme-choice==1?#687b90:#899fb4;font-size:11px;wrap:word-wrap;}
                         }
                     }
-                    Rectangle {
+                    if root.width >= 1200px: Rectangle {
                         width: 316px; min-height:466px;
                         background: root.theme-choice==1?#ffffff:root.theme-choice==2?#292e35:#162231;
                         border-radius:13px;border-width:1px;border-color:root.theme-choice==1?#dfe6ef:#2c4053;
@@ -1275,7 +1287,7 @@ export component Dashboard inherits Window {
                 }
                 // Lower reference-matched trading workspace: three independent
                 // data feeds, followed by risk, learning and broker health.
-                HorizontalLayout {horizontal-stretch:1;spacing:9px;alignment:start;
+                HorizontalLayout {width:parent.width;spacing:9px;alignment:stretch;
                     Rectangle {
                         horizontal-stretch: 3;min-height:176px;
                         background:root.theme-choice==1?#ffffff:root.theme-choice==2?#2a313b:#111f2d;
@@ -1335,7 +1347,7 @@ export component Dashboard inherits Window {
                         }
                     }
                 }
-                HorizontalLayout {horizontal-stretch:1;spacing:9px;alignment:start;
+                HorizontalLayout {width:parent.width;spacing:9px;alignment:stretch;
                     Rectangle {
                         horizontal-stretch: 3;min-height:124px;
                         background:root.theme-choice==1?#ffffff:root.theme-choice==2?#28313a:#111e2c;

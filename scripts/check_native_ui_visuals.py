@@ -43,6 +43,51 @@ def check_ppm(path: Path, width: int, height: int) -> str:
     return hashlib.sha256(pixels).hexdigest()
 
 
+def assert_widescreen_work_area_occupied(path: Path, width: int, height: int) -> None:
+    """Catch the huge right-side blank panel visible in real UI-09 1920px shots.
+
+    A correctly sized chart or native trading console has diverse pixel colors
+    in the central-right viewport, unlike the single-color blank background.
+    This is a geometric smoke check, not OCR or a proof of pixel-perfect match.
+    """
+    with path.open("rb") as file:
+        assert file.readline() == b"P6\n"
+        assert file.readline() == f"{width} {height}\n".encode()
+        assert file.readline() == b"255\n"
+        pixels = file.read()
+    colors = set()
+    for y in range(int(height * .33), int(height * .66), 7):
+        for x in range(int(width * .67), int(width * .92), 7):
+            i = (y * width + x) * 3
+            colors.add(pixels[i:i + 3])
+    if len(colors) < 16:
+        raise AssertionError(
+            f"Widescreen dashboard still leaves right work area blank: "
+            f"{path}, {len(colors)} colors in 67-92% viewport"
+        )
+
+
+def assert_laptop_content_left_anchored(path: Path, width: int, height: int) -> None:
+    """Detect laptop mode where ScrollView centers its content off screen."""
+    with path.open("rb") as file:
+        assert file.readline() == b"P6\n"
+        assert file.readline() == f"{width} {height}\n".encode()
+        assert file.readline() == b"255\n"
+        pixels=file.read()
+    # Laptop 1024px viewport begins at x≈190 after the left rail. The
+    # command banner must appear at x200-280 rather than starting at x≈320.
+    colors=set()
+    for y in range(104,137,5):
+        for x in range(200,281,5):
+            at=(y*width+x)*3
+            colors.add(pixels[at:at+3])
+    if len(colors)<5:
+        raise AssertionError(
+            f"Laptop dashboard is horizontally centered/cropped: "
+            f"{path} has only {len(colors)} colors at the expected left header"
+        )
+
+
 def main() -> None:
     validated = 0
     for size, width, height in SIZES:
@@ -66,6 +111,16 @@ def main() -> None:
             hashes.append(check_ppm(path,width,height))
         if len(set(hashes)) != 3:
             raise AssertionError(f"Broken palette at viewport {width}x{height}")
+        if width == 1024:
+            assert_laptop_content_left_anchored(
+                ROOT/"test-output"/"responsive-preview"/f"dashboard-{width}x{height}-dark.ppm",
+                width,height
+            )
+        if width >= 1366:
+            assert_widescreen_work_area_occupied(
+                ROOT/"test-output"/"responsive-preview"/f"dashboard-{width}x{height}-dark.ppm",
+                width,height
+            )
     if validated != 72:
         raise AssertionError(f"Expected 72 saved renders, checked {validated}")
     print(f"Native Slint render QA OK: {validated} RGB screenshots; "
