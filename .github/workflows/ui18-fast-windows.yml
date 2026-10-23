@@ -1,0 +1,82 @@
+name: UI18 • Fast Tauri Windows NSIS production build
+on:
+  push:
+    paths: ['.github/workflows/ui18-fast-windows.yml', 'ci/ui18-source.tar.gz']
+  pull_request:
+    paths: ['.github/workflows/ui18-fast-windows.yml', 'ci/ui18-source.tar.gz']
+  workflow_dispatch:
+permissions: { contents: read }
+jobs:
+  native-installer:
+    runs-on: windows-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore V4 UI18 checked source
+        shell: pwsh
+        run: |
+          tar -xzf ci/ui18-source.tar.gz
+          if ($LASTEXITCODE -ne 0) { throw 'Source archive extraction failed' }
+          $f='apps/terminal/src/terminal.tsx'
+          $s=[System.IO.File]::ReadAllText($f)
+          $old='className="risk-line" key={String(label)}><span>{label}</span>'
+          $new='className="risk-line" key={String(label)}><span>{String(label)}</span>'
+          if (-not $s.Contains($old)) { throw 'UI18 source revision mismatch' }
+          [System.IO.File]::WriteAllText($f,$s.Replace($old,$new),[System.Text.UTF8Encoding]::new($false))
+          # React production dist was built in its own validated step.
+          # Do not run Tauri's path-dependent frontend build hook a second time.
+          $cfgPath='apps/tauri/tauri.conf.json'
+          $cfg=[System.IO.File]::ReadAllText($cfgPath)
+          $oldHook='"beforeBuildCommand": "cd ../terminal && npm run build"'
+          if (-not $cfg.Contains($oldHook)) { throw 'Tauri build-hook source unexpected' }
+          $cfg=$cfg.Replace($oldHook,'"beforeBuildCommand": ""')
+          [System.IO.File]::WriteAllText($cfgPath,$cfg,[System.Text.UTF8Encoding]::new($false))
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13',architecture: x64}
+      - name: Validate React native renderer and safety contracts
+        shell: pwsh
+        run: |
+          python scripts/verify_ui18_source.py
+          if ($LASTEXITCODE -ne 0) { throw 'Operational gates failed' }
+          Push-Location apps/terminal
+          try {
+            npm install --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) { throw 'Frontend npm install failed' }
+            npm test
+            if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed' }
+            npm run build
+            if ($LASTEXITCODE -ne 0) { throw 'React compile failed' }
+          }
+          finally { Pop-Location }
+      - name: Prepare pinned SHA256 verified embedded MT5 runtime
+        shell: pwsh
+        run: |
+          python scripts/prepare-tauri-runtime.py
+          if ($LASTEXITCODE -ne 0) { throw 'Python/MT5 embedded runtime invalid' }
+      - name: Build Windows x64 Tauri NSIS with official prebuilt CLI
+        shell: pwsh
+        working-directory: apps/tauri
+        run: |
+          npx --yes @tauri-apps/cli@2 build --bundles nsis
+          if ($LASTEXITCODE -ne 0) { throw 'Tauri native Windows build failed' }
+      - name: Verify deliverables
+        shell: pwsh
+        run: |
+          if (-not (Test-Path target/release/BrainTradeNext.exe)) { throw 'Windows EXE missing' }
+          $setups=@(Get-ChildItem target/release/bundle/nsis -Filter '*-setup.exe' -ErrorAction SilentlyContinue)
+          if ($setups.Count -eq 0) { throw 'Windows NSIS installer missing' }
+          Get-FileHash target/release/BrainTradeNext.exe -Algorithm SHA256
+          $setups | ForEach-Object { Get-FileHash $_.FullName -Algorithm SHA256 }
+          'Windows-build smoke checks only. Broker MT5 Demo acceptance remains mandatory.' | Out-File -Encoding utf8 target/release/BUILD-SCOPE.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BRAINTRADE-V4-UI18-Tauri-Windows-x64
+          path: |
+            target/release/BrainTradeNext.exe
+            target/release/bundle/nsis/*-setup.exe
+            target/release/BUILD-SCOPE.txt
+          if-no-files-found: error
+          retention-days: 30

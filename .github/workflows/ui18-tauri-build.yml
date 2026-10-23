@@ -1,0 +1,114 @@
+name: UI18 • Native Tauri Windows executable and tests
+on:
+  push:
+    paths:
+      - 'ci/ui18-source.tar.gz'
+      - '.github/workflows/ui18-tauri-build.yml'
+  pull_request:
+    paths:
+      - 'ci/ui18-source.tar.gz'
+      - '.github/workflows/ui18-tauri-build.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-ui18:
+    runs-on: windows-latest
+    timeout-minutes: 115
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore self-contained UI18 source snapshot
+        shell: pwsh
+        run: |
+          tar -xzf ci/ui18-source.tar.gz
+          if ($LASTEXITCODE -ne 0) { throw 'Invalid or incomplete source archive' }
+          if (-not (Test-Path apps/tauri/src/bridge.rs)) { throw 'Tauri bridge missing' }
+          if (-not (Test-Path crates/runtime/src/lib.rs)) { throw 'V4 core missing' }
+          # The React build runs explicitly in the next step. Tauri hooks
+          # do not inherit apps/tauri as cwd reliably on Windows runners.
+          # Disable the incorrect relative cd command from the source snapshot.
+          $tauriConfig='apps/tauri/tauri.conf.json'
+          $tauriText=[System.IO.File]::ReadAllText($tauriConfig)
+          $oldHook='"beforeBuildCommand": "cd ../terminal && npm run build"'
+          if (-not $tauriText.Contains($oldHook)) { throw 'Expected Tauri build hook missing' }
+          $tauriText=$tauriText.Replace($oldHook,'"beforeBuildCommand": ""')
+          [System.IO.File]::WriteAllText($tauriConfig,$tauriText,[System.Text.UTF8Encoding]::new($false))
+          # Strict JSX typing: the heterogeneous risk tuple infers unknown.
+          $terminalPath='apps/terminal/src/terminal.tsx'
+          $source=[System.IO.File]::ReadAllText($terminalPath)
+          $old='className="risk-line" key={String(label)}><span>{label}</span>'
+          $new='className="risk-line" key={String(label)}><span>{String(label)}</span>'
+          if (-not $source.Contains($old)) { throw 'Expected JSX risk-row source not found' }
+          [System.IO.File]::WriteAllText($terminalPath,$source.Replace($old,$new),[System.Text.UTF8Encoding]::new($false))
+          # Three V4 core crates retain 0.7.4; the separate Tauri shell is 0.8.x.
+          $contractFile='tests/test_project_contract.py'
+          $contract=[System.IO.File]::ReadAllText($contractFile)
+          $assertOld='self.assertEqual(len(packages), 3)'
+          $assertNew='self.assertEqual(len([p for p in packages if p["name"] != "braintrade-tauri"]), 3)'
+          $versionsOld='self.assertTrue(all(p["version"] == workspace for p in packages))'
+          $versionsNew='self.assertTrue(all(p["version"] == workspace for p in packages if p["name"] != "braintrade-tauri"))'
+          if (-not ($contract.Contains($assertOld) -and $contract.Contains($versionsOld))) { throw 'Expected old package contract missing' }
+          $contract=$contract.Replace($assertOld,$assertNew).Replace($versionsOld,$versionsNew)
+          [System.IO.File]::WriteAllText($contractFile,$contract,[System.Text.UTF8Encoding]::new($false))
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.13', architecture: 'x64' }
+      - name: Frontend and source tests
+        shell: pwsh
+        run: |
+          python scripts/verify_ui18_source.py
+          Push-Location apps/terminal
+          try {
+            npm install --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }
+            npm test
+            if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed' }
+            npm run build
+            if ($LASTEXITCODE -ne 0) { throw 'React production build failed' }
+            if (-not (Test-Path dist/index.html)) { throw 'Frontend build missing index.html' }
+          }
+          finally { Pop-Location }
+      - name: Build V4 Core and run tests
+        shell: pwsh
+        run: |
+          cargo test -p braintrade-domain -p braintrade-runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Rust core tests failed' }
+          cargo build -p braintrade-runtime --bin braintrade-core
+          if ($LASTEXITCODE -ne 0) { throw 'Rust core build failed' }
+          $env:PYTHONDONTWRITEBYTECODE='1'
+          python -m unittest discover -s tests -q
+          if ($LASTEXITCODE -ne 0) { throw 'Python integration tests failed' }
+      - name: Prepare verified Windows MT5 runtime
+        shell: pwsh
+        run: |
+          python scripts/prepare-tauri-runtime.py
+          if ($LASTEXITCODE -ne 0) { throw 'Embedded Python or MT5 assets invalid' }
+      - name: Install Tauri CLI v2
+        shell: pwsh
+        run: npm install --global @tauri-apps/cli@2 --no-audit --no-fund
+      - name: Build native Windows EXE and NSIS installer
+        working-directory: apps/tauri
+        shell: pwsh
+        run: |
+          tauri build --bundles nsis
+          if ($LASTEXITCODE -ne 0) { throw 'Tauri installer build failed' }
+      - name: Verify Windows binaries, installer, and immutable SHA256
+        shell: pwsh
+        run: |
+          if (-not (Test-Path target/release/BrainTradeNext.exe)) { throw 'Native Windows EXE missing' }
+          $setups=@(Get-ChildItem target/release/bundle/nsis -Filter '*-setup.exe' -ErrorAction SilentlyContinue)
+          if ($setups.Count -lt 1) { throw 'NSIS installer missing' }
+          $files=@('target/release/BrainTradeNext.exe')+@($setups | ForEach-Object { $_.FullName })
+          $files | ForEach-Object { Get-FileHash $_ -Algorithm SHA256 | Format-List }
+          'Automated Windows build and static checks passed. Real broker Demo acceptance is still required.' | Out-File -Encoding utf8 target/release/BUILD-SCOPE.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BRAINTRADE-V4-UI18-Windows-x64-Acceptance-Candidate
+          path: |
+            target/release/BrainTradeNext.exe
+            target/release/bundle/nsis/*-setup.exe
+            target/release/BUILD-SCOPE.txt
+          if-no-files-found: error
+          retention-days: 30
