@@ -169,6 +169,7 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
         .collect();
     ui.set_studio_frames(std::rc::Rc::new(slint::VecModel::from(names)).into());
     let (tx, rx) = mpsc::channel::<(String, Value, String)>();
+    let initial_tx = tx.clone();
     let sender = tx.clone();
     let weak = ui.as_weak();
     ui.on_studio_action(move|action|{
@@ -227,6 +228,12 @@ sniper_max_target_pips:number(ui.get_sniper_max_target_pips())?,demo_flexible:ui
                 if (15..=16).contains(&ui.get_page()) && !ui.get_studio_busy() {
                     ui.set_studio_busy(true);
                     let _ = tx.send(("poll".into(), json!({}), selected_tf(&ui)));
+                } else if ui.get_page()==0 && !ui.get_studio_busy() {
+                    // The command center must reflect the *saved* primary/backup
+                    // owner, including handoffs initiated by external API tools.
+                    // Never clobber unsaved edits on the Trading Settings page.
+                    ui.set_studio_busy(true);
+                    let _=tx.send(("config".into(),json!({}),"ALL".into()));
                 }
             }
         },
@@ -337,5 +344,8 @@ sniper_max_target_pips:number(ui.get_sniper_max_target_pips())?,demo_flexible:ui
             });
         }
     });
+    // Load persisted modes once at launch; never show MANUAL when Sniper
+    // priority was previously saved before the user visits Settings.
+    let _=initial_tx.send(("config".into(),json!({}),"ALL".into()));
     timer
 }
