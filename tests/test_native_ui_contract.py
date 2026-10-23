@@ -109,7 +109,7 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("if root.width < 1280px: VerticalLayout",self.dashboard)
         self.assertIn("root.compact-sidebar ? 70px : 178px",self.dashboard)
         self.assertIn("min-width: 880px",self.dashboard)
-        self.assertEqual(self.dashboard.count("HorizontalLayout {horizontal-stretch:1;spacing"),3)
+        self.assertEqual(self.dashboard.count("HorizontalLayout {width:parent.width;spacing"),3)
         self.assertEqual(self.dashboard.count("HorizontalLayout {width:parent.width;spacing:"),3)
         self.assertNotIn("HorizontalLayout {visible:root.width >= 1280px",self.dashboard)
         self.assertNotIn("VerticalLayout {visible:root.width < 1280px",self.dashboard)
