@@ -11,6 +11,14 @@ pub fn view(c: &Config, s: &Status) -> Value {
     let profile = t.and_then(|t| c.commission_profile(t));
     json!({
         "config": c,
+        "priority": {
+            "enabled":c.trading.priority_enabled,
+            "sniper_active":c.trading.sniper_active,
+            "fallback_mode":c.trading.fallback_mode,
+            "active_mode":c.trading.mode,
+            "one_entry_coordinator":true,
+            "handoff_restriction":"Flat MT5 account, no pending broker intents, fresh bound account, LIVE login reconfirmation."
+        },
         "commission_editor": {
             "account": t.map(Account::from_telemetry),
             "saved": profile.is_some(),
@@ -22,6 +30,19 @@ pub fn view(c: &Config, s: &Status) -> Value {
                 .unwrap_or(c.risk.commission_per_lot)
         }
     })
+}
+
+/// Change which already configured coordinator owns NEW entries, never both.
+/// The HTTP route checks open broker positions, unresolved intents, account
+/// freshness and active Live consent before committing this validated change.
+pub fn priority_handoff(c:&Config, sniper_active:bool)->Result<Config> {
+    anyhow::ensure!(c.trading.priority_enabled,"فعّل أولوية القناص واحفظها أولاً");
+    anyhow::ensure!(c.trading.sniper_active != sniper_active,"هذا الوضع مفعّل بالفعل");
+    let mut candidate=c.clone();
+    candidate.trading.sniper_active=sniper_active;
+    candidate.trading.select_priority_owner();
+    candidate.validate().map_err(anyhow::Error::msg)?;
+    Ok(candidate)
 }
 
 #[derive(Deserialize)]
@@ -93,6 +114,22 @@ mod tests {
             ..Default::default()
         });
         s
+    }
+
+    #[test]
+    fn priority_handoff_is_atomic_and_has_exactly_one_owner() {
+        let mut c=Config::default();
+        assert!(priority_handoff(&c,false).is_err(),"legacy manual mode never switches");
+        c.trading.priority_enabled=true;
+        c.trading.fallback_mode=braintrade_domain::trading::TradingMode::Swing;
+        c.trading.select_priority_owner();
+        let swapped=priority_handoff(&c,false).unwrap();
+        assert_eq!(swapped.trading.mode,braintrade_domain::trading::TradingMode::Swing);
+        assert_eq!(c.trading.mode,braintrade_domain::trading::TradingMode::Sniper);
+        assert!(priority_handoff(&swapped,false).is_err());
+        let restored=priority_handoff(&swapped,true).unwrap();
+        assert_eq!(restored.trading.mode,braintrade_domain::trading::TradingMode::Sniper);
+        assert_eq!(restored.trading.fallback_mode,braintrade_domain::trading::TradingMode::Swing);
     }
 
     #[test]
