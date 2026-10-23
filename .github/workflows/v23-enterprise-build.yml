@@ -1,8 +1,9 @@
-name: V23 • Build and verify native Windows Portable
+name: V24 • Build and verify native Windows Portable
 on:
   push:
     paths:
       - 'ci/v23-delta.zip'
+      - 'ci/v24-shortmode-m15-hotfix.py'
       - '.github/workflows/v23-enterprise-build.yml'
   workflow_dispatch:
 permissions:
@@ -70,16 +71,39 @@ jobs:
         run: |
           python ci/v23-rust-compiler-hotfix.py
           if ($LASTEXITCODE -ne 0) { throw 'V23 Rust compiler hotfix gate failed' }
+          python ci/v24-shortmode-m15-hotfix.py
+          if ($LASTEXITCODE -ne 0) { throw 'V24 mode-scoped market validation patch failed' }
           & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Build-V23-Portable-Windows.ps1
           if ($LASTEXITCODE -ne 0) { throw 'V23 build / tests / portable smoke failed; do not publish' }
-      - name: Verify native V23 artifact, hash manifest and archive contents
+      - name: Promote tested V23 build outputs to V24 hotfix portable and verify archive
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
-          $dir='target/portable/BRAINTRADE-V4-V23-PORTABLE'
-          $archive='target/portable/BRAINTRADE-V4-V23-PORTABLE-Win64.zip'
+          $oldDir='target/portable/BRAINTRADE-V4-V23-PORTABLE'
+          $dir='target/portable/BRAINTRADE-V4-V24-PORTABLE'
+          $archive='target/portable/BRAINTRADE-V4-V24-PORTABLE-Win64.zip'
+          if (!(Test-Path "$oldDir/BrainTradeNext.exe")) { throw 'New V24 binary was not built' }
+          Move-Item -LiteralPath $oldDir -Destination $dir
+          $releaseNotes=@(
+            'BRAINTRADE V4 ENTERPRISE V24 — MODE-SCOPED MARKET HISTORY HOTFIX',
+            'M15 history issues alone may no longer veto healthy M1/M5 short-mode analysis.',
+            'M1/M5 errors, invalid OHLC, old bars and broker risk guards still block new entries.',
+            'Expert still requires healthy M15.',
+            'Rust and React compiled on Windows; simulated STOPPED core and gateway imports tested.',
+            'NOT certified for MT5 Demo order-send acceptance or REAL trading.',
+            'Keep runtime and mt5 folders with the executable. Do not move the EXE alone.'
+          )
+          [IO.File]::WriteAllLines((Join-Path $dir 'V24_RELEASE_NOTES.txt'),$releaseNotes,[Text.Encoding]::UTF8)
+          $checks=@{}
+          $basePath=(Resolve-Path $dir).Path
+          Get-ChildItem $dir -File -Recurse | Where-Object {$_.Name -ne 'SHA256SUMS.json'} | ForEach-Object {
+            $relative=$_.FullName.Substring($basePath.Length+1).Replace('\','/')
+            $checks[$relative]=(Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          [IO.File]::WriteAllText((Join-Path $dir 'SHA256SUMS.json'),($checks|ConvertTo-Json -Depth 2),[Text.Encoding]::UTF8)
+          Compress-Archive -Path $dir -DestinationPath $archive -CompressionLevel Optimal -Force
           foreach($path in @($archive, "$dir/BrainTradeNext.exe", "$dir/runtime/python/python.exe", "$dir/runtime/gateway/mt5_gateway.py", "$dir/mt5/Experts/BrainTradeSniperBridge.mq5", "$dir/SHA256SUMS.json")) {
-            if(!(Test-Path $path -PathType Leaf)) { throw "V23 portable missing: $path" }
+            if(!(Test-Path $path -PathType Leaf)) { throw "V24 portable missing: $path" }
           }
           $manifest=Get-Content "$dir/SHA256SUMS.json" -Raw | ConvertFrom-Json
           $members=@(Get-ChildItem $dir -File -Recurse)
@@ -91,10 +115,11 @@ jobs:
             $actual=(Get-FileHash $member.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             if($expected -ne $actual) { throw "Manifest mismatch: $relative" }
           }
+          if ($manifest.PSObject.Properties.Count -lt 100) { throw 'V24 manifest unexpectedly incomplete' }
           Get-FileHash $archive -Algorithm SHA256 | Format-List
       - uses: actions/upload-artifact@v4
         with:
-          name: BRAINTRADE-V4-V23-PORTABLE-WINDOWS-CORE-SMOKE
-          path: target/portable/BRAINTRADE-V4-V23-PORTABLE-Win64.zip
+          name: BRAINTRADE-V4-V24-PORTABLE-WINDOWS-CORE-SMOKE
+          path: target/portable/BRAINTRADE-V4-V24-PORTABLE-Win64.zip
           if-no-files-found: error
           retention-days: 30
