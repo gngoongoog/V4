@@ -1208,7 +1208,12 @@ export component Dashboard inherits Window {
                                 }
                             }
                             Text {text:root.priority-enabled?
-                                    (root.sniper-active?"● SNIPER PRIMARY  ·  backup standby":"● BACKUP ACTIVE  ·  Sniper paused"):
+                                    (root.sniper-active?
+                                        "● SNIPER PRIMARY  ·  "+
+                                        (root.fallback-mode==0?"Scalping":root.fallback-mode==1?"Swing":"Expert")+
+                                        " STANDBY":
+                                        "● "+(root.fallback-mode==0?"SCALPING":root.fallback-mode==1?"SWING":"EXPERT")+
+                                        " ACTIVE  ·  Sniper paused"):
                                     "MANUAL MODE  ·  "+(root.trade-mode==3?"Sniper":root.trade-mode==2?"Expert":root.trade-mode==1?"Swing":"Scalping");
                                 color:root.priority-enabled?#44dbb5:#9cb3c4;font-weight:700;font-size:11px;}
                             HorizontalLayout {spacing:7px;
