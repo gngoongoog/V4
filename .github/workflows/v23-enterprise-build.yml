@@ -26,6 +26,11 @@ jobs:
           $sha=(Get-FileHash ci/v23-delta.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if($sha -ne '4225eb9e593b3380360f87689cfe267eb134843190e18fddde424e47bf31b485') { throw "V23 delta SHA256 mismatch: $sha" }
           Expand-Archive -Path ci/v23-delta.zip -DestinationPath . -Force
+          # The one-time ZIP is an upload transport, not project content.
+          # Remove it from Git's checkout index after extraction so the no-artifacts contract stays strict.
+          & git rm -q --cached ci/v23-delta.zip
+          if ($LASTEXITCODE -ne 0) { throw 'Could not remove transport ZIP from CI index' }
+          Remove-Item ci/v23-delta.zip -Force
           # Contract was tightened after V20: stale textual checks must match V23's fail-closed predicates.
           Copy-Item ci/v23-verify-ui20.py scripts/verify_ui20_supervisor.py -Force
           Copy-Item ci/v23-build-tauri.ps1 scripts/Build-Tauri-Windows.ps1 -Force
