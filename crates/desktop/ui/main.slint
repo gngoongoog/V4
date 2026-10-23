@@ -426,7 +426,7 @@ export component Dashboard inherits Window {
                 }
             }
         }
-        Rectangle {
+        if root.page != 0: Rectangle {
             min-height: 36px;
             background: root.theme-choice == 1 ? (root.execution-active ? #dff5ee : #e9eff6) : root.execution-active ? #303239 : #22242a;
             border-radius: 11px;
@@ -442,7 +442,7 @@ export component Dashboard inherits Window {
                 Text { text: root.online ? "CONNECTED" : "OFFLINE"; color: root.theme-choice == 1 ? #62758b : #aeb1ba; font-size: 11px; vertical-alignment: center; visible: root.width >= 1100px; }
             }
         }
-        HorizontalLayout {
+        if root.page != 0: HorizontalLayout {
             spacing: 9px;
             Button { text: "بدء النظام  START"; enabled: !root.busy && root.state == "STOPPED"; clicked => { root.action("start"); } }
             Button { text: "إيقاف  STOP"; enabled: !root.busy && root.state != "STOPPED"; clicked => { root.action("stop"); } }
@@ -520,8 +520,9 @@ export component Dashboard inherits Window {
                 }
             }
         }
-        // Page context explains whether a screen controls the broker or only research.
-        HorizontalLayout {
+        // The main trading command desk already contains these controls.
+        // Show generic toolbars only on secondary pages to avoid double chrome.
+        if root.page != 0: HorizontalLayout {
             spacing: 8px;
             Text {
                 text: root.page == 0 ? "نظرة عامة"
@@ -1101,7 +1102,7 @@ export component Dashboard inherits Window {
                         footer:root.online?"MT5 TICK FRESHNESS":"NO QUOTE";theme-choice:root.theme-choice;accent:#71c4ee;}
                     }
                 }
-                HorizontalLayout {spacing: 11px; alignment: start;
+                HorizontalLayout {width:parent.width;spacing: 11px; alignment: start;
                     Rectangle {
                         horizontal-stretch: 3;
                         min-height: 466px;
@@ -1274,7 +1275,7 @@ export component Dashboard inherits Window {
                 }
                 // Lower reference-matched trading workspace: three independent
                 // data feeds, followed by risk, learning and broker health.
-                HorizontalLayout {spacing:9px;alignment:start;
+                HorizontalLayout {width:parent.width;spacing:9px;alignment:start;
                     Rectangle {
                         horizontal-stretch: 3;min-height:176px;
                         background:root.theme-choice==1?#ffffff:root.theme-choice==2?#2a313b:#111f2d;
@@ -1334,7 +1335,7 @@ export component Dashboard inherits Window {
                         }
                     }
                 }
-                HorizontalLayout {spacing:9px;alignment:start;
+                HorizontalLayout {width:parent.width;spacing:9px;alignment:start;
                     Rectangle {
                         horizontal-stretch: 3;min-height:124px;
                         background:root.theme-choice==1?#ffffff:root.theme-choice==2?#28313a:#111e2c;
