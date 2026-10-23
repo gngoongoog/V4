@@ -96,8 +96,10 @@ class NativeUiContract(unittest.TestCase):
         checker=(ROOT/"scripts/check_native_ui_visuals.py").read_text(encoding="utf-8")
         self.assertIn("if root.width >= 1280px: HorizontalLayout",self.dashboard)
         self.assertIn("if root.width < 1280px: VerticalLayout",self.dashboard)
-        self.assertIn("root.width < 1140px ? 70px : 178px",self.dashboard)
+        self.assertIn("root.compact-sidebar ? 70px : 178px",self.dashboard)
         self.assertIn("min-width: 880px",self.dashboard)
+        self.assertEqual(self.dashboard.count("HorizontalLayout {horizontal-stretch:1;spacing"),3)
+        self.assertNotIn("HorizontalLayout {width:parent.width;",self.dashboard)
         self.assertNotIn("HorizontalLayout {visible:root.width >= 1280px",self.dashboard)
         self.assertNotIn("VerticalLayout {visible:root.width < 1280px",self.dashboard)
         for w,h in [(1024,768),(1280,800),(1366,768),(1540,920),(1600,900),(1920,1080)]:
