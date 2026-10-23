@@ -1,0 +1,83 @@
+name: UI18 • Native Tauri Windows executable and tests
+on:
+  push:
+    paths:
+      - 'ci/ui18-source.tar.gz'
+      - '.github/workflows/ui18-tauri-build.yml'
+  pull_request:
+    paths:
+      - 'ci/ui18-source.tar.gz'
+      - '.github/workflows/ui18-tauri-build.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-ui18:
+    runs-on: windows-latest
+    timeout-minutes: 115
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore self-contained UI18 source snapshot
+        shell: pwsh
+        run: |
+          tar -xzf ci/ui18-source.tar.gz
+          if ($LASTEXITCODE -ne 0) { throw 'Invalid or incomplete source archive' }
+          if (-not (Test-Path apps/tauri/src/bridge.rs)) { throw 'Tauri bridge missing' }
+          if (-not (Test-Path crates/runtime/src/lib.rs)) { throw 'V4 core missing' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.13', architecture: 'x64' }
+      - name: Frontend and source tests
+        shell: pwsh
+        run: |
+          python scripts/verify_ui18_source.py
+          npm --prefix apps/terminal install --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }
+          npm --prefix apps/terminal test
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed' }
+          npm --prefix apps/terminal run build
+          if ($LASTEXITCODE -ne 0) { throw 'React production build failed' }
+      - name: Build V4 Core and run tests
+        shell: pwsh
+        run: |
+          cargo test -p braintrade-domain -p braintrade-runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Rust core tests failed' }
+          cargo build -p braintrade-runtime --bin braintrade-core
+          if ($LASTEXITCODE -ne 0) { throw 'Rust core build failed' }
+          $env:PYTHONDONTWRITEBYTECODE='1'
+          python -m unittest discover -s tests -q
+          if ($LASTEXITCODE -ne 0) { throw 'Python integration tests failed' }
+      - name: Prepare verified Windows MT5 runtime
+        shell: pwsh
+        run: |
+          python scripts/prepare-tauri-runtime.py
+          if ($LASTEXITCODE -ne 0) { throw 'Embedded Python or MT5 assets invalid' }
+      - name: Install Tauri CLI v2
+        shell: pwsh
+        run: cargo install tauri-cli --version '^2' --locked
+      - name: Build native Windows EXE and NSIS installer
+        working-directory: apps/tauri
+        shell: pwsh
+        run: |
+          cargo tauri build --bundles nsis
+          if ($LASTEXITCODE -ne 0) { throw 'Tauri installer build failed' }
+      - name: Verify Windows binaries, installer, and immutable SHA256
+        shell: pwsh
+        run: |
+          if (-not (Test-Path target/release/BrainTradeNext.exe)) { throw 'Native Windows EXE missing' }
+          $setups=@(Get-ChildItem target/release/bundle/nsis -Filter '*-setup.exe' -ErrorAction SilentlyContinue)
+          if ($setups.Count -lt 1) { throw 'NSIS installer missing' }
+          $files=@('target/release/BrainTradeNext.exe')+@($setups | ForEach-Object { $_.FullName })
+          $files | ForEach-Object { Get-FileHash $_ -Algorithm SHA256 | Format-List }
+          'Automated Windows build and static checks passed. Real broker Demo acceptance is still required.' | Out-File -Encoding utf8 target/release/BUILD-SCOPE.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BRAINTRADE-V4-UI18-Windows-x64-Acceptance-Candidate
+          path: |
+            target/release/BrainTradeNext.exe
+            target/release/bundle/nsis/*-setup.exe
+            target/release/BUILD-SCOPE.txt
+          if-no-files-found: error
+          retention-days: 30
