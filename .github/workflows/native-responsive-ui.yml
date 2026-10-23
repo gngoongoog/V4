@@ -1,0 +1,44 @@
+name: Native Windows UI responsive image acceptance
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "crates/desktop/**"
+      - "scripts/check_native_ui_visuals.py"
+      - "tests/test_native_ui_contract.py"
+      - ".github/workflows/native-responsive-ui.yml"
+
+concurrency:
+  group: native-responsive-ui-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-slint-renders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Native UI event and input wiring tests
+        run: python3 -m unittest discover -s tests -p test_native_ui_contract.py -v
+      - name: Install native Slint font renderer requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev
+      - name: Compile and render the actual 22-page Rust/Slint Windows UI
+        run: cargo run -p braintrade-desktop --locked -- --render-check
+      - name: Verify screenshot integrity for all responsive sizes and palettes
+        run: python3 scripts/check_native_ui_visuals.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: actual-native-ui-six-viewport-renders
+          path: |
+            test-output/native-ui/
+            test-output/reference-preview/
+            test-output/responsive-preview/
+          retention-days: 14
