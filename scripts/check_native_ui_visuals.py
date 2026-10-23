@@ -12,6 +12,7 @@ IMAGES = ROOT / "test-output" / "native-ui"
 SIZES = (("", 1120, 820), ("-small", 880, 700))
 PALETTES = ("dark", "white", "smoke")
 SELECTED = {0, 6, 14, 17, 18, 19, 21}
+RESPONSIVE = ((1024,768),(1280,800),(1366,768),(1600,900),(1920,1080))
 
 
 def image_path(page: int, size: str, palette: str) -> Path:
@@ -58,6 +59,13 @@ def main() -> None:
     for palette in PALETTES:
         check_ppm(ROOT / "test-output" / "reference-preview" /
                   f"reference-command-center-{palette}.ppm", 1540, 920)
+    for width,height in RESPONSIVE:
+        hashes=[]
+        for palette in PALETTES:
+            path=ROOT/"test-output"/"responsive-preview"/f"dashboard-{width}x{height}-{palette}.ppm"
+            hashes.append(check_ppm(path,width,height))
+        if len(set(hashes)) != 3:
+            raise AssertionError(f"Broken palette at viewport {width}x{height}")
     if validated != 72:
         raise AssertionError(f"Expected 72 saved renders, checked {validated}")
     print(f"Native Slint render QA OK: {validated} RGB screenshots; "

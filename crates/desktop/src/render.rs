@@ -215,6 +215,30 @@ pub fn render() -> anyhow::Result<()> {
         for pixel in pixels {writer.write_all(&[pixel.r,pixel.g,pixel.b])?;}
         writer.flush()?;
     }
+    // More native real pixels for laptop and desktop breakpoints; no image
+    // resizing, CSS mockups, or sample values from a real broker are involved.
+    // All viewports use the same interactive Dashboard component and theme.
+    let responsive_dir=std::path::Path::new("test-output").join("responsive-preview");
+    std::fs::create_dir_all(&responsive_dir)?;
+    for (width,height) in [(1024,768),(1280,800),(1366,768),(1600,900),(1920,1080)] {
+        window.set_size(slint::PhysicalSize::new(width,height));
+        for (theme,name) in [(0,"dark"),(1,"white"),(2,"smoke")] {
+            ui.set_theme_choice(theme);
+            ui.set_page(0);
+            slint::platform::update_timers_and_animations();
+            ui.window().request_redraw();
+            let mut pixels=vec![Rgb8Pixel::default();(width*height) as usize];
+            window.draw_if_needed(|renderer|{
+                renderer.render(&mut pixels,width as usize);
+            });
+            let file=responsive_dir.join(format!(
+                "dashboard-{width}x{height}-{name}.ppm"));
+            let mut writer=std::io::BufWriter::new(std::fs::File::create(file)?);
+            write!(writer,"P6\n{width} {height}\n255\n")?;
+            for pixel in pixels {writer.write_all(&[pixel.r,pixel.g,pixel.b])?;}
+            writer.flush()?;
+        }
+    }
     ui.hide()?;
     Ok(())
 }

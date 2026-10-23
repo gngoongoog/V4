@@ -97,7 +97,7 @@ component DeskAction inherits Rectangle {
 export component Dashboard inherits Window {
     init => { Palette.color-scheme = ColorScheme.dark; }
     title: "BRAINTRADE V4 — Institutional Windows Terminal";
-    preferred-width: 1540px; preferred-height: 920px; min-width: 960px; min-height: 700px;
+    preferred-width: 1540px; preferred-height: 920px; min-width: 880px; min-height: 680px;
     background: root.theme-choice == 1 ? #f4f7fb : root.theme-choice == 2 ? #242930 : #0c141e;
     in-out property <int> theme-choice: 0;
     in-out property <bool> compact-sidebar: false;
@@ -426,7 +426,7 @@ export component Dashboard inherits Window {
                 }
             }
         }
-        Rectangle {
+        if root.page != 0: Rectangle {
             min-height: 36px;
             background: root.theme-choice == 1 ? (root.execution-active ? #dff5ee : #e9eff6) : root.execution-active ? #303239 : #22242a;
             border-radius: 11px;
@@ -442,7 +442,7 @@ export component Dashboard inherits Window {
                 Text { text: root.online ? "CONNECTED" : "OFFLINE"; color: root.theme-choice == 1 ? #62758b : #aeb1ba; font-size: 11px; vertical-alignment: center; visible: root.width >= 1100px; }
             }
         }
-        HorizontalLayout {
+        if root.page != 0: HorizontalLayout {
             spacing: 9px;
             Button { text: "بدء النظام  START"; enabled: !root.busy && root.state == "STOPPED"; clicked => { root.action("start"); } }
             Button { text: "إيقاف  STOP"; enabled: !root.busy && root.state != "STOPPED"; clicked => { root.action("stop"); } }
@@ -520,8 +520,9 @@ export component Dashboard inherits Window {
                 }
             }
         }
-        // Page context explains whether a screen controls the broker or only research.
-        HorizontalLayout {
+        // The main trading command desk already contains these controls.
+        // Show generic toolbars only on secondary pages to avoid double chrome.
+        if root.page != 0: HorizontalLayout {
             spacing: 8px;
             Text {
                 text: root.page == 0 ? "نظرة عامة"
@@ -1051,7 +1052,7 @@ export component Dashboard inherits Window {
             Text { text: root.backup-detail; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; horizontal-alignment: left; }
         } }
         if root.page == 0: ScrollView {
-            VerticalBox { spacing: 14px;
+            VerticalBox { spacing: 9px;
                 // Geometry tracks the original user-approved reference:
                 // a narrow command heading, then six information-dense live KPIs.
                 Rectangle {
@@ -1067,7 +1068,7 @@ export component Dashboard inherits Window {
                         Text {text:root.online?"●  MT5 متصل":"○  MT5 غير متصل";color:root.online?#2bddae:#eda17a;font-size:11px;font-weight:700;vertical-alignment:center;}
                     }
                 }
-                HorizontalLayout {visible:root.width >= 1280px;spacing:8px;
+                if root.width >= 1280px: HorizontalLayout {spacing:8px;
                     DeskMetric {glyph:"◈";title:"EQUITY / حقوق الملكية";value:root.equity;
                         footer:root.online?"MT5 ACCOUNT":"NO FRESH DATA";theme-choice:root.theme-choice;accent:#24d3ae;}
                     DeskMetric {glyph:"↗";title:"DAILY NET / صافي اليوم";value:root.today;
@@ -1083,7 +1084,7 @@ export component Dashboard inherits Window {
                 }
                 // At laptop widths, reflow the identical six real metrics
                 // to two rows instead of compressing text into illegibility.
-                VerticalLayout {visible:root.width < 1280px;spacing:7px;
+                if root.width < 1280px: VerticalLayout {spacing:7px;
                     HorizontalLayout {spacing:7px;
                     DeskMetric {glyph:"◈";title:"EQUITY / حقوق الملكية";value:root.equity;
                         footer:root.online?"MT5 ACCOUNT":"NO FRESH DATA";theme-choice:root.theme-choice;accent:#24d3ae;}
@@ -1101,7 +1102,7 @@ export component Dashboard inherits Window {
                         footer:root.online?"MT5 TICK FRESHNESS":"NO QUOTE";theme-choice:root.theme-choice;accent:#71c4ee;}
                     }
                 }
-                HorizontalLayout {spacing: 11px; alignment: start;
+                HorizontalLayout {horizontal-stretch:1;spacing: 11px; alignment: start;
                     Rectangle {
                         horizontal-stretch: 3;
                         min-height: 466px;
@@ -1274,7 +1275,7 @@ export component Dashboard inherits Window {
                 }
                 // Lower reference-matched trading workspace: three independent
                 // data feeds, followed by risk, learning and broker health.
-                HorizontalLayout {spacing:9px;alignment:start;
+                HorizontalLayout {horizontal-stretch:1;spacing:9px;alignment:start;
                     Rectangle {
                         horizontal-stretch: 3;min-height:176px;
                         background:root.theme-choice==1?#ffffff:root.theme-choice==2?#2a313b:#111f2d;
@@ -1334,7 +1335,7 @@ export component Dashboard inherits Window {
                         }
                     }
                 }
-                HorizontalLayout {spacing:9px;alignment:start;
+                HorizontalLayout {horizontal-stretch:1;spacing:9px;alignment:start;
                     Rectangle {
                         horizontal-stretch: 3;min-height:124px;
                         background:root.theme-choice==1?#ffffff:root.theme-choice==2?#28313a:#111e2c;
