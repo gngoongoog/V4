@@ -1221,6 +1221,11 @@ export component Dashboard inherits Window {
                                       root.state!="STOPPED" && !root.studio-busy;
                                     pressed=>{root.studio-action("handoff_resume");}}
                             }
+                            if root.priority-enabled && root.studio-message != "": Text {
+                                text:root.studio-message;
+                                color:root.theme-choice==1?#426c80:#9cdbd5;
+                                font-size:10px;wrap:word-wrap;max-height:44px;
+                            }
                             HorizontalLayout {spacing:7px;
                                 DeskAction {label:"▶  START";fill-color:#23d5a9;
                                     enabled:!root.busy && root.online && root.state=="STOPPED";
