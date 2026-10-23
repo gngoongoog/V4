@@ -5,3 +5,31 @@
 .preview-banner{position:fixed;left:211px;right:0;bottom:26px;height:27px;z-index:7;opacity:.97;pointer-events:auto}
 @media(max-width:1390px){.preview-banner{left:180px}}
 @media(max-height:780px){.account-strip{height:62px;flex-basis:62px}}
+
+/* UI-13 approved-reference grid: right command/brains panel spans chart and
+   positions rows, while positions and recent trades stay under the chart. */
+.dashboard{
+ display:grid;
+ grid-template-columns:minmax(0,1.47fr) minmax(0,.98fr) minmax(395px,1.36fr);
+ grid-template-rows:auto auto auto auto;
+ gap:10px;
+}
+.dashboard .kpi-row{grid-column:1/-1;grid-row:1;margin:0}
+.dashboard .hero-grid,.dashboard .activity-grid{display:contents}
+.dashboard .hero-grid .chart-panel{grid-column:1/3;grid-row:2;height:321px}
+.dashboard .hero-grid .ops-panel{grid-column:3;grid-row:2/4;height:521px}
+.dashboard .activity-grid .positions-panel{grid-column:1;grid-row:3;height:190px}
+.dashboard .activity-grid .trades-panel{grid-column:2;grid-row:3;height:190px}
+.dashboard .bottom-grid{grid-column:1/-1;grid-row:4;margin:0}
+.account-strip{height:79px;flex-basis:79px}
+@media(min-width:1800px){
+ .dashboard .hero-grid .chart-panel{height:355px}
+ .dashboard .hero-grid .ops-panel{height:560px}
+ .dashboard .activity-grid .positions-panel,.dashboard .activity-grid .trades-panel{height:195px}
+}
+@media(max-height:780px){
+ .dashboard .hero-grid .chart-panel{height:301px}
+ .dashboard .hero-grid .ops-panel{height:482px}
+ .dashboard .activity-grid .positions-panel,.dashboard .activity-grid .trades-panel{height:171px}
+ .account-strip{height:67px;flex-basis:67px}
+}
