@@ -26,6 +26,8 @@ jobs:
           $sha=(Get-FileHash ci/v23-delta.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if($sha -ne '4225eb9e593b3380360f87689cfe267eb134843190e18fddde424e47bf31b485') { throw "V23 delta SHA256 mismatch: $sha" }
           Expand-Archive -Path ci/v23-delta.zip -DestinationPath . -Force
+          # Contract was tightened after V20: stale textual checks must match V23's fail-closed predicates.
+          Copy-Item ci/v23-verify-ui20.py scripts/verify_ui20_supervisor.py -Force
           if (!(Test-Path crates/runtime/src/enterprise_supervisor.rs)) { throw 'V23 supervisor source missing' }
           if (!(Test-Path scripts/Build-V23-Portable-Windows.ps1)) { throw 'V23 release gate missing' }
           Write-Host 'V23 delta installed over V18 tested CI baseline'
