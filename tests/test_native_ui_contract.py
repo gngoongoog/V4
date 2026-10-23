@@ -193,6 +193,7 @@ class NativeUiContract(unittest.TestCase):
     def test_ui12_hover_keyboard_safe_navigation_and_chart_provenance(self):
         # Static interaction contract; real mouse QA still requires Windows.
         self.assertIn("animate background, border-color",self.dashboard)
+        self.assertIn("Palette.color-scheme = root.theme-choice == 1 ? ColorScheme.light : ColorScheme.dark;",self.dashboard)
         for control in ("nav-hit := TouchArea", "metric-hit := TouchArea",
                         "action-hit := TouchArea", "frame-hit := TouchArea"):
             self.assertEqual(self.dashboard.count(control),1)
