@@ -1110,7 +1110,7 @@ export component Dashboard inherits Window {
                         footer:root.online?"MT5 TICK FRESHNESS":"NO QUOTE";theme-choice:root.theme-choice;accent:#71c4ee;}
                     }
                 }
-                HorizontalLayout {horizontal-stretch:1;spacing: 11px; alignment: start;
+                HorizontalLayout {width: root.width - (root.compact-sidebar ? 70px : 178px) - 24px;spacing: 11px; alignment: start;
                     Rectangle {
                         horizontal-stretch: 3;
                         min-height: 420px;
@@ -1283,7 +1283,7 @@ export component Dashboard inherits Window {
                 }
                 // Lower reference-matched trading workspace: three independent
                 // data feeds, followed by risk, learning and broker health.
-                HorizontalLayout {horizontal-stretch:1;spacing:9px;alignment:start;
+                HorizontalLayout {width: root.width - (root.compact-sidebar ? 70px : 178px) - 24px;spacing:9px;alignment:start;
                     Rectangle {
                         horizontal-stretch: 3;min-height:176px;
                         background:root.theme-choice==1?#ffffff:root.theme-choice==2?#2a313b:#111f2d;
@@ -1343,7 +1343,7 @@ export component Dashboard inherits Window {
                         }
                     }
                 }
-                HorizontalLayout {horizontal-stretch:1;spacing:9px;alignment:start;
+                HorizontalLayout {width: root.width - (root.compact-sidebar ? 70px : 178px) - 24px;spacing:9px;alignment:start;
                     Rectangle {
                         horizontal-stretch: 3;min-height:124px;
                         background:root.theme-choice==1?#ffffff:root.theme-choice==2?#28313a:#111e2c;
