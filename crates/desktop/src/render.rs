@@ -21,6 +21,12 @@ pub fn render() -> anyhow::Result<()> {
     // Synthetic render-only candles demonstrate layout fidelity in CI.
     // This function is never executed during the real dashboard loop.
     ui.set_render_fixture(true);
+    // Deliberately show the priority console on CI screenshots while the
+    // Core remains disconnected: visuals only, never a broker connection.
+    ui.set_priority_enabled(true);
+    ui.set_sniper_active(true);
+    ui.set_fallback_mode(1); // Swing is the preview standby.
+    ui.set_trade_mode(3);
     let visual_bars: Vec<ChartCandle> = (0..66).map(|i| {
         let t = i as f32;
         let wave = (t * 0.22).sin() * 0.13 + (t * 0.07).sin() * 0.08;

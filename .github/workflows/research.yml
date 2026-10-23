@@ -63,6 +63,7 @@ jobs:
       - run: python3 scripts/check_backup_restore.py
       - run: python3 scripts/check_studio.py
       - run: python3 scripts/check_execution.py
+      - run: python3 scripts/check_priority_handoff.py
       - run: python3 scripts/check_flexible_demo.py
       - run: python3 scripts/check_sniper_learner.py
       - name: Install browser test dependency

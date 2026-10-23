@@ -165,6 +165,9 @@ export component Dashboard inherits Window {
     in property <string> student-journal;
     in property <string> student-timing;
     in-out property <int> trade-mode: 2;
+    in-out property <bool> priority-enabled: false;
+    in-out property <bool> sniper-active: true;
+    in-out property <int> fallback-mode: 2;
     in-out property <int> sniper-brain: 0;
     in-out property <int> sniper-style: 0;
     in property <[string]> brain-monitor-names;
@@ -813,7 +816,52 @@ export component Dashboard inherits Window {
                         padding: 16px; spacing: 12px;
                         Text { text: "1  •  وضع التداول"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 16px; font-weight: 700; }
                         Text { text: "اختر الوضع الذي يحدد طريقة الدخول والخروج"; color: root.theme-choice == 1 ? #61768b : #bfc2ca; }
-                        ComboBox { model: ["Scalping / سكالبنك", "Swing / سوينك", "Expert / الخبير المتعلم", "Sniper / القناص"]; current-index <=> root.trade-mode; enabled: root.state == "STOPPED"; }
+                        Rectangle {
+                            background:root.theme-choice==1?#ecf5f8:root.theme-choice==2?#223443:#102b39;
+                            border-radius:11px;border-width:1px;border-color:root.theme-choice==1?#cddce9:#24647a;
+                            VerticalLayout {padding:12px;spacing:8px;
+                                Text {text:"✦  SNIPER PRIORITY  /  القناص رئيسي والبديل احتياطي";font-size:16px;
+                                    font-weight:800;color:root.theme-choice==1?#173f57:#d6f5ee;}
+                                CheckBox {
+                                    text:"تفعيل أولوية القناص والبديل (وضع واحد ينفّذ فقط)";
+                                    checked<=>root.priority-enabled;enabled:root.state=="STOPPED";
+                                }
+                                HorizontalLayout {spacing:10px;
+                                    VerticalLayout {horizontal-stretch:1;spacing:5px;
+                                        Text {text:"البديل عند إيقاف القناص";color:root.theme-choice==1?#375972:#b3d1df;}
+                                        ComboBox {model:["Scalping / سكالبينغ","Swing / سوينغ","Expert / الخبير"];current-index<=>root.fallback-mode;
+                                            enabled:root.priority-enabled && root.state=="STOPPED";}
+                                    }
+                                    VerticalLayout {horizontal-stretch:1;spacing:5px;
+                                        Text {text:"حالة القناص الرئيسي";color:root.theme-choice==1?#375972:#b3d1df;}
+                                        CheckBox {text:"القناص فعّال (أولوية أولى)";checked<=>root.sniper-active;
+                                            enabled:root.priority-enabled && root.state=="STOPPED";}
+                                    }
+                                }
+                                Text {
+                                    text:!root.priority-enabled?"إدارة يدوية: وضع التنفيذ من القائمة أدناه":
+                                        root.sniper-active?"القناص ينفّذ وحده • البديل محفوظ لكنه غير منفذ":
+                                        "القناص متوقف • المنسّق الاحتياطي هو "+
+                                        (root.fallback-mode==0?"Scalping":root.fallback-mode==1?"Swing":"Expert");
+                                    color:root.theme-choice==1?#266b77:#6fe0c9;font-size:12px;
+                                }
+                                HorizontalLayout {spacing:7px;
+                                    DeskAction {label:"⏸ إيقاف القناص ← البديل";fill-color:#bd8746;primary:false;
+                                        enabled:root.priority-enabled && root.sniper-active &&
+                                          root.state!="STOPPED" && root.online && !root.studio-busy;
+                                        pressed=>{root.studio-action("handoff_pause");}}
+                                    DeskAction {label:"▶ إعادة القناص";fill-color:#167f9c;primary:false;
+                                        enabled:root.priority-enabled && !root.sniper-active &&
+                                          root.state!="STOPPED" && root.online && !root.studio-busy;
+                                        pressed=>{root.studio-action("handoff_resume");}}
+                                }
+                                Text {text:"خلال التشغيل: التحويل مسموح فقط إذا حساب MT5 مطابق وحديث، لا توجد مراكز مفتوحة أو أوامر معلّقة؛ حساب REAL يحتاج إدخال رقم الحساب في خانة تأكيد START. لا يوجد تشغيل متزامن أو تحويل تلقائي لمجرد غياب إشارة.";
+                                    color:root.theme-choice==1?#66798a:#aec4d0;font-size:11px;wrap:word-wrap;}
+                            }
+                        }
+                        Text {text:"الوضع اليدوي (يُعطّل عند تفعيل منسق الأولوية)";color:root.theme-choice==1?#50677a:#b0b9c7;}
+                        ComboBox { model: ["Scalping / سكالبنك", "Swing / سوينك", "Expert / الخبير المتعلم", "Sniper / القناص"];
+                            current-index <=> root.trade-mode; enabled: root.state == "STOPPED" && !root.priority-enabled; }
                         Text {
                             text: root.trade-mode == 0 ? "M1 + M5؛ وقف 1.2 ATR وهدف 1.4R، أقصى احتفاظ 15 دقيقة."
                                 : root.trade-mode == 1 ? "H1 + H4 + D1؛ وقف 2 ATR وهدف 2.5R، أقصى احتفاظ 3 أيام. السواب غير محسوب."
@@ -1158,6 +1206,30 @@ export component Dashboard inherits Window {
                                     Button {text:"إدارة الأوامر";clicked=>{root.nav-section=1;root.page=20;root.trade-journal-action("refresh");}}
                                     Button {text:"أدوات المخاطر";clicked=>{root.nav-section=1;root.page=6;root.risk-monitor-refresh();}}
                                 }
+                            }
+                            Text {text:root.priority-enabled?
+                                    (root.sniper-active?
+                                        "● SNIPER PRIMARY  ·  "+
+                                        (root.fallback-mode==0?"Scalping":root.fallback-mode==1?"Swing":"Expert")+
+                                        " STANDBY":
+                                        "● "+(root.fallback-mode==0?"SCALPING":root.fallback-mode==1?"SWING":"EXPERT")+
+                                        " ACTIVE  ·  Sniper paused"):
+                                    "MANUAL MODE  ·  "+(root.trade-mode==3?"Sniper":root.trade-mode==2?"Expert":root.trade-mode==1?"Swing":"Scalping");
+                                color:root.priority-enabled?#44dbb5:#9cb3c4;font-weight:700;font-size:11px;}
+                            HorizontalLayout {spacing:7px;
+                                DeskAction {label:"⏸ Sniper → Backup";fill-color:#a77d42;primary:false;
+                                    enabled:root.priority-enabled && root.sniper-active && root.online &&
+                                      root.state!="STOPPED" && !root.studio-busy;
+                                    pressed=>{root.studio-action("handoff_pause");}}
+                                DeskAction {label:"↻ Restore Sniper";fill-color:#207e9c;primary:false;
+                                    enabled:root.priority-enabled && !root.sniper-active && root.online &&
+                                      root.state!="STOPPED" && !root.studio-busy;
+                                    pressed=>{root.studio-action("handoff_resume");}}
+                            }
+                            if root.priority-enabled && root.studio-message != "": Text {
+                                text:root.studio-message;
+                                color:root.theme-choice==1?#426c80:#9cdbd5;
+                                font-size:10px;wrap:word-wrap;max-height:44px;
                             }
                             HorizontalLayout {spacing:7px;
                                 DeskAction {label:"▶  START";fill-color:#23d5a9;

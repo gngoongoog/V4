@@ -32,6 +32,12 @@ impl SniperStyle {
 #[serde(default, deny_unknown_fields)]
 pub struct TradingConfig {
     pub mode: TradingMode,
+    /// Opt-in priority router. Legacy saved accounts remain manual by default.
+    pub priority_enabled: bool,
+    /// Only Sniper OR the selected fallback is allowed to own new entries.
+    pub sniper_active: bool,
+    /// Secondary entry coordinator when the operator pauses the Sniper.
+    pub fallback_mode: TradingMode,
     pub sniper_brain: SniperBrain,
     pub sniper_style: SniperStyle,
     pub sniper_target_mode: SniperTargetMode,
@@ -55,6 +61,9 @@ impl Default for TradingConfig {
     fn default() -> Self {
         Self {
             mode: TradingMode::Expert,
+            priority_enabled: false,
+            sniper_active: true,
+            fallback_mode: TradingMode::Expert,
             sniper_brain: SniperBrain::Classic,
             sniper_style: SniperStyle::Auto,
             sniper_target_mode: SniperTargetMode::Fixed,
@@ -73,7 +82,21 @@ impl Default for TradingConfig {
     }
 }
 impl TradingConfig {
+    pub fn priority_mode(&self) -> TradingMode {
+        if !self.priority_enabled { self.mode }
+        else if self.sniper_active { TradingMode::Sniper }
+        else { self.fallback_mode }
+    }
+    pub fn select_priority_owner(&mut self) {
+        if self.priority_enabled {self.mode=self.priority_mode();}
+    }
     pub fn validate(&self) -> Result<(), String> {
+        if self.fallback_mode == TradingMode::Sniper {
+            return Err("Secondary mode must be Scalping, Swing or Expert; never Sniper".into());
+        }
+        if self.priority_enabled && self.mode != self.priority_mode() {
+            return Err("Trading priority has conflicting execution owners".into());
+        }
         for (name, v, min, max) in [
             ("Target points", self.sniper_target_points, 1., 100_000.),
             ("Stop points", self.sniper_stop_points, 1., 100_000.),
@@ -368,6 +391,37 @@ pub fn select(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn priority_router_maintains_one_execution_owner_and_preserves_legacy() {
+        let legacy: TradingConfig=serde_json::from_str(r#"{"mode":"expert"}"#).unwrap();
+        assert!(!legacy.priority_enabled);
+        assert_eq!(legacy.priority_mode(),TradingMode::Expert);
+        let mut cfg=TradingConfig::default();
+        cfg.priority_enabled=true;
+        cfg.fallback_mode=TradingMode::Swing;
+        cfg.select_priority_owner();
+        assert_eq!(cfg.mode,TradingMode::Sniper);
+        cfg.validate().unwrap();
+        cfg.sniper_active=false;
+        assert!(cfg.validate().is_err(),"stale Sniper owner must not be accepted");
+        cfg.select_priority_owner();
+        assert_eq!(cfg.mode,TradingMode::Swing);
+        cfg.validate().unwrap();
+        for mode in [TradingMode::Expert,TradingMode::Scalping,TradingMode::Swing] {
+            cfg.fallback_mode=mode; cfg.select_priority_owner();
+            assert_eq!(cfg.mode,mode); cfg.validate().unwrap();
+        }
+        cfg.fallback_mode=TradingMode::Sniper;
+        assert!(cfg.validate().is_err(),"fallback cannot become the primary owner");
+        cfg.fallback_mode=TradingMode::Expert;
+        cfg.sniper_active=true;
+        cfg.select_priority_owner();
+        assert_eq!(cfg.mode,TradingMode::Sniper);
+        let reloaded:TradingConfig=serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        reloaded.validate().unwrap();
+        assert_eq!(reloaded.mode,TradingMode::Sniper);
+    }
+
     use super::*;
     #[test]
     fn sniper_reacts_to_live_quote_without_a_new_bar() {

@@ -76,7 +76,7 @@ class NativeUiContract(unittest.TestCase):
                     else:
                         self.assertRegex(element,r"\bchecked\s*<=>")
         # Catch missing fields silently disappearing from nested layouts.
-        self.assertEqual(total,{"Button":115,"ComboBox":29,"LineEdit":49,"CheckBox":12})
+        self.assertEqual(total,{"Button":115,"ComboBox":30,"LineEdit":49,"CheckBox":14})
 
     def test_premium_native_dashboard_keeps_real_market_provenance(self):
         main=(RUST / "main.rs").read_text(encoding="utf-8")
@@ -109,9 +109,39 @@ class NativeUiContract(unittest.TestCase):
         self.assertNotIn("set_render_fixture(true)",runtime)
         self.assertIn("native_chart_candles",runtime)
 
+    def test_priority_preview_is_fixture_only_and_displays_backup_mode_name(self):
+        render=(RUST/"render.rs").read_text(encoding="utf-8")
+        running=(RUST/"main.rs").read_text(encoding="utf-8")
+        self.assertIn("ui.set_priority_enabled(true)",render)
+        self.assertIn("ui.set_fallback_mode(1)",render)
+        self.assertNotIn("ui.set_priority_enabled(true)",running)
+        self.assertIn("SCALPING",self.dashboard)
+        self.assertIn("SWING",self.dashboard)
+        self.assertIn("EXPERT",self.dashboard)
+
+    def test_sniper_priority_routes_have_core_ownership_and_no_phantom_fallback(self):
+        domain=(ROOT/"crates/domain/src/trading.rs").read_text(encoding="utf-8")
+        core=(ROOT/"crates/runtime/src/lib.rs").read_text(encoding="utf-8")
+        studio=(RUST/"studio.rs").read_text(encoding="utf-8")
+        for key in ("priority-enabled", "sniper-active", "fallback-mode"):
+            self.assertIn(key,self.dashboard)
+        self.assertIn('root.studio-action("handoff_pause")',self.dashboard)
+        self.assertIn('root.studio-action("handoff_resume")',self.dashboard)
+        self.assertIn("one_entry_coordinator", (ROOT/"crates/runtime/src/trading_settings.rs").read_text(encoding="utf-8"))
+        self.assertIn("pub fn priority_mode(&self)",domain)
+        self.assertIn("Trading priority has conflicting execution owners",domain)
+        self.assertIn('path=="/v1/trading/priority/handoff"',core)
+        self.assertIn("telemetry.positions.is_empty()",core)
+        self.assertIn("self.execution.pending(&self.db)?",core)
+        self.assertIn("self.execution.is_live_target()",core)
+        self.assertIn("self.execution.validate_start(&current,body)?",core)
+        self.assertIn("self.execution.set_mode(next.trading.mode)",core)
+        self.assertIn('"sniper_active":action=="handoff_resume"',studio)
+        self.assertIn('"/v1/trading/priority/handoff"',studio)
+
     def test_reference_mockup_navigation_and_actions_are_all_wired(self):
         self.assertEqual(len(re.findall(r"\bDeskNav\s*\{",self.dashboard)), 12)
-        self.assertEqual(len(re.findall(r"\bDeskAction\s*\{",self.dashboard)), 6)
+        self.assertEqual(len(re.findall(r"\bDeskAction\s*\{",self.dashboard)), 10)
         self.assertEqual(len(re.findall(r"\bDeskMetric\s*\{",self.dashboard)), 12)
         self.assertIn("visible:root.width >= 1280px",self.dashboard)
         self.assertIn("visible:root.width < 1280px",self.dashboard)

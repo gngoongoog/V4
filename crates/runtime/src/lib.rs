@@ -173,6 +173,66 @@ impl Engine{
         }
 
         if path=="/v1/studio"||path.starts_with("/v1/studio/")||path.starts_with("/v1/gateway/research/") {let(c,s)={let mut shared=self.shared.lock().unwrap();shared.status.refresh(now_ms());(shared.config.clone(),shared.status.clone())};let c=s.telemetry.as_ref().map(|t|c.for_account(t)).unwrap_or(c);return self.studio.route(method,path,body,&self.db,&c,&s,now_ms());}
+        // Explicit single-owner priority handoff. The Sniper pause button
+        // activates the preselected backup without restarting an armed Demo/Live
+        // session, but ONLY when the broker is flat and reconciliation is clear.
+        // Never silently hand over during an open/unknown MT5 order.
+        if path=="/v1/trading/priority/handoff" && method=="POST" {
+            let request:Value=serde_json::from_slice(body)?;
+            let desired=request["sniper_active"].as_bool()
+                .context("sniper_active must be an explicit boolean")?;
+            let mut shared=self.shared.lock().unwrap();
+            shared.status.refresh(now_ms());
+            let running=shared.status.requested_run;
+            let current=shared.status.clone();
+            anyhow::ensure!(!self.execution.pending(&self.db)?,
+                "تعذر التبديل: توجد أوامر معلّقة لم تُسوَّ مع الوسيط");
+            if running {
+                anyhow::ensure!(self.execution.enabled(&current),
+                    "تعذر التبديل أثناء التشغيل: حساب MT5 غير متصل أو غير مطابق");
+                let telemetry=current.telemetry.as_ref().context("MT5 telemetry missing")?;
+                anyhow::ensure!(telemetry.positions.is_empty(),
+                    "لا يمكن التبديل قبل تسوية وإغلاق جميع مراكز الحساب المفتوحة");
+                anyhow::ensure!(telemetry.pending_orders==0,
+                    "لا يمكن التحويل: توجد أوامر معلّقة في MT5");
+                let now=now_ms();
+                anyhow::ensure!(
+                    telemetry.tick_age_ms.is_some_and(|v|v <= 3000)
+                        && telemetry.quote_time_ms.is_some_and(|v|
+                            v <= now.saturating_add(2000)
+                            && now.saturating_sub(v) <= 3000),
+                    "سعر MT5 قديم أو بلا وقت موثوق؛ لا نُحوّل التنفيذ بين العقول");
+                if self.execution.is_live_target() {
+                    self.execution.validate_start(&current,body)?;
+                }
+            }
+            let next=trading_settings::priority_handoff(&shared.config,desired)?;
+            // Serialize all observable state transitions through the Core event
+            // loop; reset strategy caches and leave requested_run unchanged.
+            let handoff_event=json!({
+                "sniper_active":desired,
+                "active_mode":next.trading.mode,
+                "fallback_mode":next.trading.fallback_mode,
+                "monitoring_preserved":running,
+                "flat_broker_required":running
+            });
+            // An audit failure must abort before changing the active owner.
+            self.event("trading_priority_handoff_requested",handoff_event.clone())?;
+            atomic_write(&self.dir.join("config.json"),
+                &serde_json::to_vec_pretty(&next)?)?;
+            self.execution.set_mode(next.trading.mode);
+            shared.config=next;
+            shared.status.analysis=Default::default();
+            // A committed mode must be acknowledged even if the optional
+            // second audit insert fails after durable persistence.
+            let _=self.event("trading_priority_handoff_committed",handoff_event);
+            shared.status.message=if desired {
+                "القناص عاد منسقاً رئيسياً؛ البديل يراقب بدون إرسال أوامر."
+            } else {
+                "تم إيقاف القناص وتحويل التنفيذ للبديل المختار فقط."
+            }.into();
+            return Ok(trading_settings::view(&shared.config,&shared.status));
+        }
         if path=="/v1/trading/settings" {
             let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());
             if method=="GET" {return Ok(trading_settings::view(&s.config,&s.status));}

@@ -20,6 +20,11 @@ fn selected_tf(ui: &Dashboard) -> String {
     }
 }
 fn load(ui: &Dashboard, c: &Config) {
+    ui.set_priority_enabled(c.trading.priority_enabled);
+    ui.set_sniper_active(c.trading.sniper_active);
+    ui.set_fallback_mode(match c.trading.fallback_mode {
+        TradingMode::Scalping=>0,TradingMode::Swing=>1,_=>2,
+    });
     ui.set_trade_mode(match c.trading.mode {
         TradingMode::Scalping => 0,
         TradingMode::Swing => 1,
@@ -164,6 +169,7 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
         .collect();
     ui.set_studio_frames(std::rc::Rc::new(slint::VecModel::from(names)).into());
     let (tx, rx) = mpsc::channel::<(String, Value, String)>();
+    let initial_tx = tx.clone();
     let sender = tx.clone();
     let weak = ui.as_weak();
     ui.on_studio_action(move|action|{
@@ -194,10 +200,24 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
                 return;
             }
             if ui.get_studio_busy() || ui.get_studio_cancel_busy(){return;}
-            let tf=selected_tf(&ui);let basis=if ui.get_commission_basis()==1{"per_side"}else{"round_trip"};let body=(||->anyhow::Result<Value>{Ok(match action.as_str(){"save"=>{let trading=TradingConfig{sniper_style:match ui.get_sniper_style(){1=>braintrade_domain::trading::SniperStyle::Impulse,2=>braintrade_domain::trading::SniperStyle::Rebound,3=>braintrade_domain::trading::SniperStyle::Confirmed,_=>braintrade_domain::trading::SniperStyle::Auto},sniper_brain:if ui.get_sniper_brain()==1{SniperBrain::Learner}else{SniperBrain::Classic},
+            let tf=selected_tf(&ui);let basis=if ui.get_commission_basis()==1{"per_side"}else{"round_trip"};let body=(||->anyhow::Result<Value>{Ok(match action.as_str(){"save"=>{let fallback_mode=match ui.get_fallback_mode(){0=>TradingMode::Scalping,1=>TradingMode::Swing,_=>TradingMode::Expert};
+                let priority_enabled=ui.get_priority_enabled();
+                let sniper_active=ui.get_sniper_active();
+                let selected_mode=if priority_enabled {
+                    if sniper_active {TradingMode::Sniper}else{fallback_mode}
+                }else{match ui.get_trade_mode(){
+                    0=>TradingMode::Scalping,1=>TradingMode::Swing,
+                    3=>TradingMode::Sniper,_=>TradingMode::Expert
+                }};
+                let trading=TradingConfig{priority_enabled,sniper_active,fallback_mode,sniper_style:match ui.get_sniper_style(){1=>braintrade_domain::trading::SniperStyle::Impulse,2=>braintrade_domain::trading::SniperStyle::Rebound,3=>braintrade_domain::trading::SniperStyle::Confirmed,_=>braintrade_domain::trading::SniperStyle::Auto},sniper_brain:if ui.get_sniper_brain()==1{SniperBrain::Learner}else{SniperBrain::Classic},
 sniper_target_mode:if ui.get_sniper_target_mode()==1{SniperTargetMode::Adaptive}else{SniperTargetMode::Fixed},
 sniper_min_target_pips:number(ui.get_sniper_min_target_pips())?,
-sniper_max_target_pips:number(ui.get_sniper_max_target_pips())?,demo_flexible:ui.get_demo_flexible(),adaptive_exits:ui.get_adaptive_exits(),mode:match ui.get_trade_mode(){0=>TradingMode::Scalping,1=>TradingMode::Swing,3=>TradingMode::Sniper,_=>TradingMode::Expert},sniper_target_points:number(ui.get_sniper_target())?*number(ui.get_pip_points())?,sniper_stop_points:number(ui.get_sniper_stop())?,sniper_cooldown_seconds:ui.get_sniper_cooldown().trim().parse()?,sniper_max_hold_seconds:ui.get_sniper_hold().trim().parse()?,pip_points:number(ui.get_pip_points())?,sniper_pip_price:number(ui.get_sniper_pip_price())?,max_cost_fraction:number(ui.get_cost_fraction())?};trading.validate().map_err(anyhow::Error::msg)?;json!({"trading":trading,"commission_per_lot":number(ui.get_commission_lot())?,"commission_basis":basis,"slippage_ticks":number(ui.get_slippage_ticks())?})},"cost"=>json!({"lots":number(ui.get_preview_lots())?,"commission_per_lot":number(ui.get_commission_lot())?,"commission_basis":basis,"pip_points":number(ui.get_pip_points())?,"sniper_pip_price":number(ui.get_sniper_pip_price())?,"slippage_ticks":number(ui.get_slippage_ticks())?}),"report"=>{use slint::Model;json!({"id":ui.get_studio_ids().row_data(ui.get_studio_report_index().max(0)as usize).unwrap_or_default().to_string()})},"auto_on"=>json!({"enabled":true}),_=>json!({"timeframe":tf})})})();match body{Ok(body)=>{ui.set_studio_busy(true);let _=sender.send((action,body,tf));},Err(e)=>ui.set_studio_message(format!("تحقق من الأرقام: {e}").into())}}});
+sniper_max_target_pips:number(ui.get_sniper_max_target_pips())?,demo_flexible:ui.get_demo_flexible(),adaptive_exits:ui.get_adaptive_exits(),mode:selected_mode,sniper_target_points:number(ui.get_sniper_target())?*number(ui.get_pip_points())?,sniper_stop_points:number(ui.get_sniper_stop())?,sniper_cooldown_seconds:ui.get_sniper_cooldown().trim().parse()?,sniper_max_hold_seconds:ui.get_sniper_hold().trim().parse()?,pip_points:number(ui.get_pip_points())?,sniper_pip_price:number(ui.get_sniper_pip_price())?,max_cost_fraction:number(ui.get_cost_fraction())?};trading.validate().map_err(anyhow::Error::msg)?;json!({"trading":trading,"commission_per_lot":number(ui.get_commission_lot())?,"commission_basis":basis,"slippage_ticks":number(ui.get_slippage_ticks())?})},
+            "handoff_pause"|"handoff_resume"=>json!({
+                "sniper_active":action=="handoff_resume",
+                "confirm_live_login":ui.get_live_start_login().to_string()
+            }),
+            "cost"=>json!({"lots":number(ui.get_preview_lots())?,"commission_per_lot":number(ui.get_commission_lot())?,"commission_basis":basis,"pip_points":number(ui.get_pip_points())?,"sniper_pip_price":number(ui.get_sniper_pip_price())?,"slippage_ticks":number(ui.get_slippage_ticks())?}),"report"=>{use slint::Model;json!({"id":ui.get_studio_ids().row_data(ui.get_studio_report_index().max(0)as usize).unwrap_or_default().to_string()})},"auto_on"=>json!({"enabled":true}),_=>json!({"timeframe":tf})})})();match body{Ok(body)=>{ui.set_studio_busy(true);let _=sender.send((action,body,tf));},Err(e)=>ui.set_studio_message(format!("تحقق من الأرقام: {e}").into())}}});
     let timer = slint::Timer::default();
     let weak = ui.as_weak();
     timer.start(
@@ -208,6 +228,12 @@ sniper_max_target_pips:number(ui.get_sniper_max_target_pips())?,demo_flexible:ui
                 if (15..=16).contains(&ui.get_page()) && !ui.get_studio_busy() {
                     ui.set_studio_busy(true);
                     let _ = tx.send(("poll".into(), json!({}), selected_tf(&ui)));
+                } else if ui.get_page()==0 && !ui.get_studio_busy() {
+                    // The command center must reflect the *saved* primary/backup
+                    // owner, including handoffs initiated by external API tools.
+                    // Never clobber unsaved edits on the Trading Settings page.
+                    ui.set_studio_busy(true);
+                    let _=tx.send(("config".into(),json!({}),"ALL".into()));
                 }
             }
         },
@@ -220,6 +246,8 @@ sniper_max_target_pips:number(ui.get_sniper_max_target_pips())?,demo_flexible:ui
                 match action.as_str() {
                     "config" => c.get("/v1/trading/settings"),
                     "save" => c.post("/v1/trading/settings", body),
+                    "handoff_pause"|"handoff_resume" =>
+                        c.post("/v1/trading/priority/handoff", body),
                     "cost" => c.post("/v1/trading/preview", body),
                     "report" => c.post("/v1/studio/report", body),
                     "run" => c.post("/v1/studio/run", body),
@@ -233,6 +261,17 @@ sniper_max_target_pips:number(ui.get_sniper_max_target_pips())?,demo_flexible:ui
                 match result {
                     Err(e)=>ui.set_studio_message(format!("تعذر الطلب: {e}").into()),
                     Ok(v)=>match action.as_str(){
+                        "handoff_pause"|"handoff_resume"=>{
+                            if let Ok(c)=serde_json::from_value::<Config>(v["config"].clone()){
+                                load(&ui,&c);
+                                ui.set_studio_message(format!(
+                                    "تبديل منسّق التنفيذ مؤكّد: {:?}. القناص {}؛ وضع واحد يملك إرسال أوامر MT5.",
+                                    c.trading.mode,if c.trading.sniper_active{"فعّال"}else{"متوقف"}
+                                ).into());
+                            }else{
+                                ui.set_studio_message("ردّ التحويل لا يحتوي إعداداً مؤكداً؛ حدّث الصفحة.".into());
+                            }
+                        },
                         "config"|"save"=>{
                             if let Ok(c)=serde_json::from_value::<Config>(v["config"].clone()){load(&ui,&c);}
                             if let Some(amount)=v["commission_editor"]["amount"].as_f64(){ui.set_commission_lot(amount.to_string().into());}
@@ -305,5 +344,8 @@ sniper_max_target_pips:number(ui.get_sniper_max_target_pips())?,demo_flexible:ui
             });
         }
     });
+    // Load persisted modes once at launch; never show MANUAL when Sniper
+    // priority was previously saved before the user visits Settings.
+    let _=initial_tx.send(("config".into(),json!({}),"ALL".into()));
     timer
 }
