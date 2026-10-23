@@ -51,9 +51,9 @@ def assert_widescreen_work_area_occupied(path: Path, width: int, height: int) ->
     This is a geometric smoke check, not OCR or a proof of pixel-perfect match.
     """
     with path.open("rb") as file:
-        assert file.readline() == b"P6\\n"
-        assert file.readline() == f"{width} {height}\\n".encode()
-        assert file.readline() == b"255\\n"
+        assert file.readline() == b"P6\n"
+        assert file.readline() == f"{width} {height}\n".encode()
+        assert file.readline() == b"255\n"
         pixels = file.read()
     colors = set()
     for y in range(int(height * .33), int(height * .66), 7):
