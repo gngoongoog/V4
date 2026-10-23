@@ -158,7 +158,7 @@ class NativeUiContract(unittest.TestCase):
         self.assertEqual(len(re.findall(r"\bDeskAction\s*\{",self.dashboard)), 10)
         self.assertEqual(len(re.findall(r"\bDeskMetric\s*\{",self.dashboard)), 12)
         self.assertIn("if root.width >= 1280px: HorizontalLayout",self.dashboard)
-        self.assertIn("visible:root.width < 1280px",self.dashboard)
+        self.assertIn("if root.width < 1280px: VerticalLayout",self.dashboard)
         self.assertEqual(len(re.findall(r"\bTouchArea\s*\{\s*clicked\s*=>",self.dashboard)),2)
         self.assertIn("root.pressed();",self.dashboard)
         self.assertIn("root.trade-journal-rows[0]",self.dashboard)
