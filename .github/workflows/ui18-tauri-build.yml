@@ -24,6 +24,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Invalid or incomplete source archive' }
           if (-not (Test-Path apps/tauri/src/bridge.rs)) { throw 'Tauri bridge missing' }
           if (-not (Test-Path crates/runtime/src/lib.rs)) { throw 'V4 core missing' }
+          # The React build runs explicitly in the next step. Tauri hooks
+          # do not inherit apps/tauri as cwd reliably on Windows runners.
+          # Disable the incorrect relative cd command from the source snapshot.
+          $tauriConfig='apps/tauri/tauri.conf.json'
+          $tauriText=[System.IO.File]::ReadAllText($tauriConfig)
+          $oldHook='"beforeBuildCommand": "cd ../terminal && npm run build"'
+          if (-not $tauriText.Contains($oldHook)) { throw 'Expected Tauri build hook missing' }
+          $tauriText=$tauriText.Replace($oldHook,'"beforeBuildCommand": ""')
+          [System.IO.File]::WriteAllText($tauriConfig,$tauriText,[System.Text.UTF8Encoding]::new($false))
           # Strict JSX typing: the heterogeneous risk tuple infers unknown.
           $terminalPath='apps/terminal/src/terminal.tsx'
           $source=[System.IO.File]::ReadAllText($terminalPath)
@@ -58,6 +67,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed' }
             npm run build
             if ($LASTEXITCODE -ne 0) { throw 'React production build failed' }
+            if (-not (Test-Path dist/index.html)) { throw 'Frontend build missing index.html' }
           }
           finally { Pop-Location }
       - name: Build V4 Core and run tests
@@ -77,12 +87,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Embedded Python or MT5 assets invalid' }
       - name: Install Tauri CLI v2
         shell: pwsh
-        run: cargo install tauri-cli --version '^2' --locked
+        run: npm install --global @tauri-apps/cli@2 --no-audit --no-fund
       - name: Build native Windows EXE and NSIS installer
         working-directory: apps/tauri
         shell: pwsh
         run: |
-          cargo tauri build --bundles nsis
+          tauri build --bundles nsis
           if ($LASTEXITCODE -ne 0) { throw 'Tauri installer build failed' }
       - name: Verify Windows binaries, installer, and immutable SHA256
         shell: pwsh
