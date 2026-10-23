@@ -76,7 +76,7 @@ class NativeUiContract(unittest.TestCase):
                     else:
                         self.assertRegex(element,r"\bchecked\s*<=>")
         # Catch missing fields silently disappearing from nested layouts.
-        self.assertEqual(total,{"Button":115,"ComboBox":30,"LineEdit":49,"CheckBox":14})
+        self.assertEqual(total,{"Button":112,"ComboBox":30,"LineEdit":49,"CheckBox":14})
 
     def test_premium_native_dashboard_keeps_real_market_provenance(self):
         main=(RUST / "main.rs").read_text(encoding="utf-8")
@@ -94,6 +94,12 @@ class NativeUiContract(unittest.TestCase):
     def test_full_width_scroll_view_is_explicit_and_chart_console_stretch(self):
         home=self.dashboard.split("if root.page == 0: ScrollView {",1)[1].split("if root.page == 1: ScrollView",1)[0]
         self.assertIn("viewport-width: self.width;",home)
+        # Alignment.start keeps the row itself wide but packs chart/panels
+        # into their intrinsic widths, recreating 400px of dead space.
+        desk_row="HorizontalLayout {width: root.width - (root.compact-sidebar ? 70px : 178px) - 24px;"
+        self.assertEqual(home.count(desk_row),3)
+        self.assertNotIn(desk_row + "spacing:9px;alignment:start;",home)
+        self.assertNotIn(desk_row + "spacing: 11px; alignment: start;",home)
         self.assertIn("horizontal-stretch: 3;",home)
         self.assertIn("horizontal-stretch: 1; min-width: 305px; max-width: 450px;",home)
         self.assertIn("height: 264px; clip: true;",home)
@@ -170,7 +176,11 @@ class NativeUiContract(unittest.TestCase):
         self.assertEqual(len(re.findall(r"\bDeskMetric\s*\{",self.dashboard)), 12)
         self.assertIn("if root.width >= 1280px: HorizontalLayout",self.dashboard)
         self.assertIn("if root.width < 1280px: VerticalLayout",self.dashboard)
-        self.assertEqual(len(re.findall(r"\bTouchArea\s*\{\s*clicked\s*=>",self.dashboard)),2)
+        self.assertEqual(sum(self.dashboard.count(name) for name in
+            ("nav-hit := TouchArea", "metric-hit := TouchArea", "action-hit := TouchArea", "frame-hit := TouchArea")),4)
+        self.assertEqual(self.dashboard.count("DeskFrame {label:"),3)
+        self.assertEqual(self.dashboard.count("metric-hit := TouchArea"),1)
+        self.assertEqual(self.dashboard.count("chart-crosshair := TouchArea"),1)
         self.assertIn("root.pressed();",self.dashboard)
         self.assertIn("root.trade-journal-rows[0]",self.dashboard)
         self.assertIn("root.brain-monitor-overview",self.dashboard)
@@ -178,6 +188,28 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("root.online && root.state==\"STOPPED\"",self.dashboard)
         self.assertIn('root.action("start")',self.dashboard)
         self.assertIn('root.action("stop")',self.dashboard)
+
+
+    def test_ui12_hover_keyboard_safe_navigation_and_chart_provenance(self):
+        # Static interaction contract; real mouse QA still requires Windows.
+        self.assertIn("animate background, border-color",self.dashboard)
+        for control in ("nav-hit := TouchArea", "metric-hit := TouchArea",
+                        "action-hit := TouchArea", "frame-hit := TouchArea"):
+            self.assertEqual(self.dashboard.count(control),1)
+        self.assertEqual(self.dashboard.count("DeskFrame {label:"),3)
+        self.assertIn("selected:root.chart-frame==0",self.dashboard)
+        self.assertIn("selected:root.chart-frame==1",self.dashboard)
+        self.assertIn("selected:root.chart-frame==2",self.dashboard)
+        self.assertIn("enabled: root.chart-bars.length > 0;",self.dashboard)
+        self.assertIn("chart-crosshair.mouse-x",self.dashboard)
+        self.assertIn("chart-crosshair.mouse-y",self.dashboard)
+        # All twelve responsive metric instances must navigate to a
+        # real page/refresh callback, never directly place trades.
+        metric_instances=[line for line in self.dashboard.splitlines()
+                          if "footer:" in line and "pressed=>{" in line]
+        self.assertEqual(len(metric_instances),12)
+        self.assertTrue(all("root.page=" in action for action in metric_instances))
+        self.assertTrue(all('root.action("start")' not in action for action in metric_instances))
 
     def test_no_button_is_rendered_without_a_click_handler(self):
         for path in (SLINT, CORRELATION):
@@ -188,7 +220,7 @@ class NativeUiContract(unittest.TestCase):
             wired = len(re.findall(r"\bclicked\s*=>", src))
             # UI-07 uses 2 custom Rectangle+TouchArea components for
             # interactive sidebar entries and premium order buttons.
-            touch = len(re.findall(r"\bTouchArea\s*\{\s*clicked\s*=>", src))
+            touch = sum(src.count(name) for name in ("nav-hit := TouchArea", "metric-hit := TouchArea", "action-hit := TouchArea", "frame-hit := TouchArea"))
             self.assertGreater(count, 0)
             self.assertEqual(count, wired-touch, f"Found inert control in {path.name}")
 

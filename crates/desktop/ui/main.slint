@@ -32,18 +32,20 @@ component DeskNav inherits Rectangle {
     height: 36px;
     border-radius: 7px;
     border-width: 1px;
-    border-color: root.selected ? (theme-choice==1?#b4dcf4:#2d7590) : #00000000;
-    background:root.selected ? (theme-choice==1?#e3f3ff:#123d59) : #00000000;
+    border-color: root.selected ? (theme-choice==1?#b4dcf4:#2d7590) : nav-hit.has-hover ? (theme-choice==1?#b8d7e6:#426a7a) : #00000000;
+    background: root.selected ? (theme-choice==1?#e3f3ff:#123d59) : nav-hit.pressed ? (theme-choice==1?#d4eaf5:#284b60) : nav-hit.has-hover ? (theme-choice==1?#edf5fa:#253b4c) : #00000000;
+    animate background, border-color {duration: 155ms; easing: ease-out;}
     HorizontalLayout {spacing:6px;padding-left:5px;padding-right:4px;
-        Rectangle {width:3px;background:root.selected?#3dc8f5:#00000000;border-radius:2px;}
+        Rectangle {width:3px;background:root.selected?#3dc8f5:nav-hit.has-hover?#469dbc:#00000000;animate background {duration:150ms;}border-radius:2px;}
         Text {
             text:root.label;
-            color:root.selected?(theme-choice==1?#1267a4:#ecfaff):(theme-choice==1?#36546a:#b9cbd4);
+            color:root.selected?(theme-choice==1?#1267a4:#ecfaff):nav-hit.has-hover?(theme-choice==1?#175b77:#ffffff):(theme-choice==1?#36546a:#b9cbd4);
+            animate color {duration:130ms;}
             font-size:12px;font-weight:root.selected?700:500;
             vertical-alignment:center;overflow:elide;
         }
     }
-    TouchArea {clicked=>{root.pressed();}}
+    nav-hit := TouchArea {mouse-cursor:pointer;clicked=>{root.pressed();}}
 }
 // Dashboard-only dense metric cards: values and supporting captions come from
 // Core-backed properties, never render fixtures or guessed profitability rates.
@@ -54,11 +56,13 @@ component DeskMetric inherits Rectangle {
     in property <string> footer;
     in property <color> accent: #2ad1b5;
     in property <int> theme-choice: 2;
+    callback pressed();
     min-height: 106px;
-    background: theme-choice == 1 ? #ffffff : theme-choice == 2 ? #282f39 : #101d2b;
+    background: metric-hit.has-hover ? (theme-choice==1?#f0f9fb:theme-choice==2?#35404b:#1a3443) : (theme-choice==1?#ffffff:theme-choice==2?#282f39:#101d2b);
     border-radius: 11px;
     border-width: 1px;
-    border-color: theme-choice == 1 ? #dce6ec : theme-choice == 2 ? #414c5a : #23404e;
+    border-color: metric-hit.has-hover ? root.accent : (theme-choice==1?#dce6ec:theme-choice==2?#414c5a:#23404e);
+    animate background, border-color {duration:180ms;easing:ease-out;}
     VerticalLayout {
         padding: 10px; spacing: 5px;
         HorizontalLayout {spacing: 7px;
@@ -68,10 +72,13 @@ component DeskMetric inherits Rectangle {
                 Text {text:root.glyph;color:#10212a;horizontal-alignment:center;vertical-alignment:center;font-weight:800;font-size:15px;}
             }
             Text {text:root.title;color:theme-choice==1?#536b7a:#b6c9d1;font-size:11px;wrap:word-wrap;vertical-alignment:center;}
+            Rectangle {horizontal-stretch:1;background:transparent;}
+            if metric-hit.has-hover: Text {text:"↗";color:root.accent;font-size:13px;font-weight:700;vertical-alignment:center;}
         }
         Text {text:root.value;color:theme-choice==1?#172839:#f6fbfc;font-size:22px;font-weight:800;max-height:27px;overflow:elide;}
         Text {text:root.footer;color:root.accent;font-size:10px;overflow:elide;}
     }
+    metric-hit := TouchArea {mouse-cursor:pointer;clicked=>{root.pressed();}}
 }
 
 // Styled native Windows action, not a decorative fake. Every invocation below
@@ -84,16 +91,34 @@ component DeskAction inherits Rectangle {
     callback pressed();
     height: 37px;
     border-radius: 8px; border-width: 1px;
-    border-color: root.enabled ? root.fill-color : #46515f;
-    background: root.enabled ? root.fill-color : #343b47;
+    border-color: root.enabled ? (action-hit.has-hover ? root.fill-color.brighter(20%) : root.fill-color) : #46515f;
+    background: root.enabled ? (action-hit.pressed ? root.fill-color.darker(20%) : action-hit.has-hover ? root.fill-color.brighter(12%) : root.fill-color) : #343b47;
+    animate background, border-color {duration:135ms;easing:ease-out;}
     Text {
         text:root.label;
         color:root.enabled ? (root.primary ? #091e23 : #f6fbff) : #a9b0bc;
         font-size:12px;font-weight:700;
         horizontal-alignment:center; vertical-alignment:center;
     }
-    TouchArea {clicked => {if (root.enabled) {root.pressed();}}}
+    action-hit := TouchArea {enabled:root.enabled;mouse-cursor:root.enabled?pointer:not-allowed;clicked=>{root.pressed();}}
 }
+
+component DeskFrame inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    in property <int> theme-choice: 2;
+    callback pressed();
+    width: 43px; height: 29px;
+    border-radius: 7px; border-width: 1px;
+    border-color: root.selected ? #2cd4b1 : frame-hit.has-hover ? #527889 : (theme-choice==1?#dce5eb:#344c5b);
+    background: root.selected ? (theme-choice==1?#d9f6ee:#1c685f) : frame-hit.pressed ? (theme-choice==1?#d2e8ed:#315262) : frame-hit.has-hover ? (theme-choice==1?#edf4f8:#334452) : (theme-choice==1?#ffffff:#1c2b38);
+    animate background, border-color {duration:150ms;easing:ease-out;}
+    Text {text:root.label;horizontal-alignment:center;vertical-alignment:center;
+          color:root.selected?(theme-choice==1?#146752:#ccfff0):(theme-choice==1?#466276:#b2c7d6);
+          font-size:12px;font-weight:root.selected?800:600;}
+    frame-hit := TouchArea {mouse-cursor:pointer;clicked=>{root.pressed();}}
+}
+
 export component Dashboard inherits Window {
     init => { Palette.color-scheme = ColorScheme.dark; }
     title: "BRAINTRADE V4 — Institutional Windows Terminal";
@@ -1078,39 +1103,39 @@ export component Dashboard inherits Window {
                 }
                 if root.width >= 1280px: HorizontalLayout {spacing:8px;
                     DeskMetric {glyph:"◈";title:"EQUITY / حقوق الملكية";value:root.equity;
-                        footer:root.online?"MT5 ACCOUNT":"NO FRESH DATA";theme-choice:root.theme-choice;accent:#24d3ae;}
+                        footer:root.online?"MT5 ACCOUNT":"NO FRESH DATA";theme-choice:root.theme-choice;accent:#24d3ae;pressed=>{root.nav-section=1;root.page=17;root.execution-action("refresh");}}
                     DeskMetric {glyph:"↗";title:"DAILY NET / صافي اليوم";value:root.today;
-                        footer:root.online?"BROKER DAY P&L":"WAITING FOR MT5";theme-choice:root.theme-choice;accent:#20c89d;}
+                        footer:root.online?"BROKER DAY P&L":"WAITING FOR MT5";theme-choice:root.theme-choice;accent:#20c89d;pressed=>{root.nav-section=1;root.page=20;root.trade-journal-action("refresh");}}
                     DeskMetric {glyph:"≋";title:"BALANCE / الرصيد";value:root.balance;
-                        footer:root.online?"BROKER BALANCE":"DISCONNECTED";theme-choice:root.theme-choice;accent:#4aa4ee;}
+                        footer:root.online?"BROKER BALANCE":"DISCONNECTED";theme-choice:root.theme-choice;accent:#4aa4ee;pressed=>{root.nav-section=1;root.page=17;root.execution-action("refresh");}}
                     DeskMetric {glyph:"▤";title:"FREE MARGIN / الهامش";value:root.free-margin;
-                        footer:root.online?"AVAILABLE MARGIN":"UNAVAILABLE";theme-choice:root.theme-choice;accent:#e5b454;}
+                        footer:root.online?"AVAILABLE MARGIN":"UNAVAILABLE";theme-choice:root.theme-choice;accent:#e5b454;pressed=>{root.nav-section=1;root.page=6;root.risk-monitor-refresh();}}
                     DeskMetric {glyph:"▣";title:"ACTIVE POSITIONS";value:root.active-positions;
-                        footer:root.online?"OPEN MT5 POSITIONS":"UNKNOWN";theme-choice:root.theme-choice;accent:#e88e77;}
+                        footer:root.online?"OPEN MT5 POSITIONS":"UNKNOWN";theme-choice:root.theme-choice;accent:#e88e77;pressed=>{root.nav-section=1;root.page=20;root.trade-journal-action("refresh");}}
                     DeskMetric {glyph:"◷";title:"QUOTE AGE / عمر السعر";value:root.quote-age-display;
-                        footer:root.online?"MT5 TICK FRESHNESS":"NO QUOTE";theme-choice:root.theme-choice;accent:#71c4ee;}
+                        footer:root.online?"MT5 TICK FRESHNESS":"NO QUOTE";theme-choice:root.theme-choice;accent:#71c4ee;pressed=>{root.nav-section=1;root.page=17;root.execution-action("refresh");}}
                 }
                 // At laptop widths, reflow the identical six real metrics
                 // to two rows instead of compressing text into illegibility.
                 if root.width < 1280px: VerticalLayout {spacing:7px;
                     HorizontalLayout {spacing:7px;
                     DeskMetric {glyph:"◈";title:"EQUITY / حقوق الملكية";value:root.equity;
-                        footer:root.online?"MT5 ACCOUNT":"NO FRESH DATA";theme-choice:root.theme-choice;accent:#24d3ae;}
+                        footer:root.online?"MT5 ACCOUNT":"NO FRESH DATA";theme-choice:root.theme-choice;accent:#24d3ae;pressed=>{root.nav-section=1;root.page=17;root.execution-action("refresh");}}
                     DeskMetric {glyph:"↗";title:"DAILY NET / صافي اليوم";value:root.today;
-                        footer:root.online?"BROKER DAY P&L":"WAITING FOR MT5";theme-choice:root.theme-choice;accent:#20c89d;}
+                        footer:root.online?"BROKER DAY P&L":"WAITING FOR MT5";theme-choice:root.theme-choice;accent:#20c89d;pressed=>{root.nav-section=1;root.page=20;root.trade-journal-action("refresh");}}
                     DeskMetric {glyph:"≋";title:"BALANCE / الرصيد";value:root.balance;
-                        footer:root.online?"BROKER BALANCE":"DISCONNECTED";theme-choice:root.theme-choice;accent:#4aa4ee;}
+                        footer:root.online?"BROKER BALANCE":"DISCONNECTED";theme-choice:root.theme-choice;accent:#4aa4ee;pressed=>{root.nav-section=1;root.page=17;root.execution-action("refresh");}}
                     }
                     HorizontalLayout {spacing:7px;
                     DeskMetric {glyph:"▤";title:"FREE MARGIN / الهامش";value:root.free-margin;
-                        footer:root.online?"AVAILABLE MARGIN":"UNAVAILABLE";theme-choice:root.theme-choice;accent:#e5b454;}
+                        footer:root.online?"AVAILABLE MARGIN":"UNAVAILABLE";theme-choice:root.theme-choice;accent:#e5b454;pressed=>{root.nav-section=1;root.page=6;root.risk-monitor-refresh();}}
                     DeskMetric {glyph:"▣";title:"ACTIVE POSITIONS";value:root.active-positions;
-                        footer:root.online?"OPEN MT5 POSITIONS":"UNKNOWN";theme-choice:root.theme-choice;accent:#e88e77;}
+                        footer:root.online?"OPEN MT5 POSITIONS":"UNKNOWN";theme-choice:root.theme-choice;accent:#e88e77;pressed=>{root.nav-section=1;root.page=20;root.trade-journal-action("refresh");}}
                     DeskMetric {glyph:"◷";title:"QUOTE AGE / عمر السعر";value:root.quote-age-display;
-                        footer:root.online?"MT5 TICK FRESHNESS":"NO QUOTE";theme-choice:root.theme-choice;accent:#71c4ee;}
+                        footer:root.online?"MT5 TICK FRESHNESS":"NO QUOTE";theme-choice:root.theme-choice;accent:#71c4ee;pressed=>{root.nav-section=1;root.page=17;root.execution-action("refresh");}}
                     }
                 }
-                HorizontalLayout {width: root.width - (root.compact-sidebar ? 70px : 178px) - 24px;spacing: 11px; alignment: start;
+                HorizontalLayout {width: root.width - (root.compact-sidebar ? 70px : 178px) - 24px;spacing: 11px;
                     Rectangle {
                         horizontal-stretch: 3;
                         min-height: 420px;
@@ -1124,9 +1149,9 @@ export component Dashboard inherits Window {
                                     Text {text:"OHLC + TICK ACTIVITY FROM MT5";color:root.theme-choice==1?#6b8798:#87aab4;font-size:10px;}
                                 }
                                 Rectangle {horizontal-stretch:1;background:transparent;}
-                                Button {text:"M1";clicked=>{root.chart-frame=0;}}
-                                Button {text:"M5";clicked=>{root.chart-frame=1;}}
-                                Button {text:"M15";clicked=>{root.chart-frame=2;}}
+                                DeskFrame {label:"M1";selected:root.chart-frame==0;theme-choice:root.theme-choice;pressed=>{root.chart-frame=0;}}
+                                DeskFrame {label:"M5";selected:root.chart-frame==1;theme-choice:root.theme-choice;pressed=>{root.chart-frame=1;}}
+                                DeskFrame {label:"M15";selected:root.chart-frame==2;theme-choice:root.theme-choice;pressed=>{root.chart-frame=2;}}
                             }
                             HorizontalLayout {spacing:10px;
                                 Text {text:"Bid " + root.bid-display;color:root.theme-choice==1?#0d9278:#2be4b8;font-size:13px;}
@@ -1175,6 +1200,25 @@ export component Dashboard inherits Window {
                                     horizontal-alignment: center; vertical-alignment:center;wrap:word-wrap;
                                     width:parent.width - 36px;height:parent.height;
                                     x:18px;
+                                }
+                                // Mouse-only inspection guides: positions do not imply trade signals or invented prices.
+                                chart-crosshair := TouchArea {
+                                    enabled: root.chart-bars.length > 0;
+                                    mouse-cursor: crosshair;
+                                }
+                                if chart-crosshair.has-hover && root.chart-bars.length > 0: Rectangle {
+                                    x:chart-crosshair.mouse-x;y:0px;width:1px;height:parent.height;
+                                    background:#80c9d477;
+                                }
+                                if chart-crosshair.has-hover && root.chart-bars.length > 0: Rectangle {
+                                    x:0px;y:chart-crosshair.mouse-y;width:parent.width;height:1px;
+                                    background:#80c9d477;
+                                }
+                                if chart-crosshair.has-hover && root.chart-bars.length > 0: Rectangle {
+                                    x:9px;y:8px;width:142px;height:22px;background:#1c3545e9;border-radius:5px;
+                                    Text {text:root.chart-frame==0?"MT5 / M1 INSPECT":root.chart-frame==1?"MT5 / M5 INSPECT":"MT5 / M15 INSPECT";
+                                          color:#c4f6ef;font-size:10px;font-weight:700;
+                                          horizontal-alignment:center;vertical-alignment:center;}
                                 }
                             }
                             Rectangle {
@@ -1283,7 +1327,7 @@ export component Dashboard inherits Window {
                 }
                 // Lower reference-matched trading workspace: three independent
                 // data feeds, followed by risk, learning and broker health.
-                HorizontalLayout {width: root.width - (root.compact-sidebar ? 70px : 178px) - 24px;spacing:9px;alignment:start;
+                HorizontalLayout {width: root.width - (root.compact-sidebar ? 70px : 178px) - 24px;spacing:9px;
                     Rectangle {
                         horizontal-stretch: 3;min-height:176px;
                         background:root.theme-choice==1?#ffffff:root.theme-choice==2?#2a313b:#111f2d;
@@ -1343,7 +1387,7 @@ export component Dashboard inherits Window {
                         }
                     }
                 }
-                HorizontalLayout {width: root.width - (root.compact-sidebar ? 70px : 178px) - 24px;spacing:9px;alignment:start;
+                HorizontalLayout {width: root.width - (root.compact-sidebar ? 70px : 178px) - 24px;spacing:9px;
                     Rectangle {
                         horizontal-stretch: 3;min-height:124px;
                         background:root.theme-choice==1?#ffffff:root.theme-choice==2?#28313a:#111e2c;
