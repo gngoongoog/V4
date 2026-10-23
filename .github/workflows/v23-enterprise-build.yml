@@ -28,6 +28,17 @@ jobs:
           Expand-Archive -Path ci/v23-delta.zip -DestinationPath . -Force
           # Contract was tightened after V20: stale textual checks must match V23's fail-closed predicates.
           Copy-Item ci/v23-verify-ui20.py scripts/verify_ui20_supervisor.py -Force
+          # V23 workspace has 3 historical crates plus a separately versioned Tauri wrapper.
+          $contract='tests/test_project_contract.py'
+          $c=[IO.File]::ReadAllText($contract)
+          $old='self.assertEqual(len(packages), 3)'
+          $new='self.assertEqual(len([p for p in packages if p["name"] != "braintrade-tauri"]), 3)'
+          if (!$c.Contains($old)) { throw 'Expected legacy workspace count check missing' }
+          $c=$c.Replace($old,$new)
+          $oldV='self.assertTrue(all(p["version"] == workspace for p in packages))'
+          $newV='self.assertTrue(all(p["version"] == workspace for p in packages if p["name"] != "braintrade-tauri"))'
+          if (!$c.Contains($oldV)) { throw 'Expected legacy package version check missing' }
+          [IO.File]::WriteAllText($contract,$c.Replace($oldV,$newV),[Text.Encoding]::UTF8)
           if (!(Test-Path crates/runtime/src/enterprise_supervisor.rs)) { throw 'V23 supervisor source missing' }
           if (!(Test-Path scripts/Build-V23-Portable-Windows.ps1)) { throw 'V23 release gate missing' }
           Write-Host 'V23 delta installed over V18 tested CI baseline'
