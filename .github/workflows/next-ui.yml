@@ -1,0 +1,58 @@
+name: BRAINTRADE NEXT WebView2 desktop prototype
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'next-ui/**'
+      - '.github/workflows/next-ui.yml'
+  push:
+    branches: [development]
+    paths:
+      - 'next-ui/**'
+jobs:
+  webview-windows:
+    runs-on: windows-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Validate browser source syntax
+        run: node --check next-ui/ui/app.js
+      - name: Validate no fake live KPI or unsafe Core mutation
+        run: python -m unittest discover -s next-ui/tests -p test_reference_ui.py -v
+      - name: Build genuine native Windows WebView2 executable
+        run: dotnet publish next-ui/WindowsShell/BrainTrade.Next.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o next-ui/publish
+      - name: Bundle HTML/CSS/JS (Rust Core is packaged by original V4 workflow)
+        shell: pwsh
+        run: Copy-Item next-ui/ui next-ui/publish/ui -Recurse -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BrainTrade-NEXT-Windows-x64-UI-Shell
+          path: next-ui/publish/
+          retention-days: 14
+  reference-visual:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m unittest discover -s next-ui/tests -p test_reference_ui.py -v
+      - run: npm --version && node --check next-ui/ui/app.js
+      - run: python -m pip install playwright==1.55.0
+      - run: python -m playwright install --with-deps chromium
+      - name: Run genuine browser visual and interaction acceptance
+        shell: bash
+        run: |
+          python -m http.server 8765 --bind 127.0.0.1 --directory next-ui/ui > /tmp/next-ui-server.log 2>&1 &
+          sleep 2
+          python next-ui/tests/visual.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: BrainTrade-NEXT-Actual-Browser-Screenshots
+          path: next-ui/screenshots/
+          retention-days: 14
