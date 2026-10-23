@@ -115,7 +115,7 @@ jobs:
             $actual=(Get-FileHash $member.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             if($expected -ne $actual) { throw "Manifest mismatch: $relative" }
           }
-          if ($manifest.PSObject.Properties.Count -lt 100) { throw 'V24 manifest unexpectedly incomplete' }
+          if ($members.Count -lt 100) { throw 'V24 archive unexpectedly contains too few files' }
           Get-FileHash $archive -Algorithm SHA256 | Format-List
       - uses: actions/upload-artifact@v4
         with:
