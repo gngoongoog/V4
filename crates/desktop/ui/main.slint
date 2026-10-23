@@ -128,7 +128,7 @@ export component Dashboard inherits Window {
     in-out property <bool> compact-sidebar: false;
     in-out property <bool> expanded-workspaces: false;
     callback save-appearance(int, bool, bool);
-    changed theme-choice => { Palette.color-scheme = ColorScheme.dark; }
+    changed theme-choice => { Palette.color-scheme = root.theme-choice == 1 ? ColorScheme.light : ColorScheme.dark; }
     in property <string> account-mode-label: "NOT CONNECTED";
     in property <string> free-margin: "—";
     in property <string> active-positions: "—";
