@@ -63,6 +63,8 @@ jobs:
       - name: Build entire V23 Rust, React and Gateway portable release
         shell: pwsh
         run: |
+          python ci/v23-rust-compiler-hotfix.py
+          if ($LASTEXITCODE -ne 0) { throw 'V23 Rust compiler hotfix gate failed' }
           & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Build-V23-Portable-Windows.ps1
           if ($LASTEXITCODE -ne 0) { throw 'V23 build / tests / portable smoke failed; do not publish' }
       - name: Verify native V23 artifact, hash manifest and archive contents
