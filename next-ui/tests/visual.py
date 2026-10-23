@@ -19,8 +19,8 @@ with sync_playwright() as playwright:
         assert page.locator('#candles').evaluate('(c)=>c.width>400 && c.height>100')
         assert page.locator('#startBtn').is_disabled(), 'Preview must NEVER send broker trades'
         assert page.locator('#equityValue').inner_text()!="—", 'Preview must show labelled sample data'
-        assert len(page.locator('.kpi'))==6
-        assert len(page.locator('.panel'))==9
+        assert page.locator('.kpi').count()==6
+        assert page.locator('.panel').count()==9
         assert not errors,errors
         page.screenshot(path=str(OUT/f'dashboard-{width}x{height}-dark.png'),full_page=False)
         page.locator('[data-tf="m15"]').click()
