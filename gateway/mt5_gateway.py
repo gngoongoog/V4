@@ -255,7 +255,8 @@ def sniper_enabled(config: dict) -> bool:
     return str(trading.get('mode', '')).strip().lower() == 'sniper'
 
 
-def pulse_payload(snapshot: dict) -> dict:
+def pulse_payload(snapshot: dict, *, quote_source: str | None = None,
+                  native_dropped_total: int | None = None) -> dict:
     """Minimal quote-only payload; reconciled account state stays cached in Core."""
     payload = {key:snapshot.get(key) for key in (
         'login','server','currency','symbol','bid','ask','quote_time_ms','tick_age_ms'
@@ -263,6 +264,16 @@ def pulse_payload(snapshot: dict) -> dict:
     # Event ordering and broker time are different clocks during a dense burst.
     if snapshot.get('source_quote_time_ms') is not None:
         payload['source_quote_time_ms'] = snapshot['source_quote_time_ms']
+    # Only the local Gateway supplies this provenance. These are statistics
+    # about accepted pulses, NOT about the entire broker/exchange tick stream.
+    if quote_source is not None:
+        if quote_source not in ('native', 'poll'):
+            raise ValueError("Unrecognized Sniper quote provenance")
+        payload['quote_source'] = quote_source
+    if native_dropped_total is not None:
+        if type(native_dropped_total) is not int or native_dropped_total < 0:
+            raise ValueError("Native mailbox overflow counter must be nonnegative integer")
+        payload['native_dropped_total'] = native_dropped_total
     return payload
 
 
@@ -561,7 +572,9 @@ def main():
                                     continue
                                 latest_snapshot=native_snapshot
                                 try:
-                                    work=api('/v1/execution/pulse',pulse_payload(latest_snapshot),method='PUT')
+                                    work=api('/v1/execution/pulse',pulse_payload(latest_snapshot,
+                                        quote_source='native',
+                                        native_dropped_total=native.mailbox.dropped),method='PUT')
                                     normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api,work=work)))
                                     command_polled=True
                                     core_failures=0
@@ -605,7 +618,9 @@ def main():
                                     continue
                                 latest_snapshot=fast_snapshot
                                 try:
-                                    work=api('/v1/execution/pulse',pulse_payload(latest_snapshot),method='PUT')
+                                    work=api('/v1/execution/pulse',pulse_payload(latest_snapshot,
+                                        quote_source='poll',
+                                        native_dropped_total=native.mailbox.dropped),method='PUT')
                                     normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api,work=work)))
                                     command_polled=True
                                     core_failures=0
