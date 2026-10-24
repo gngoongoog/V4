@@ -15,6 +15,7 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
 }){
  const t=status?.telemetry,view=obj(report);
  const forward=obj(view.forward_direction_audit);
+ const training=obj(view.training_checkpoint);
  const eligible=!preview&&eligibleFrozenSniper(status,page);
  const expected=t?JSON.stringify([t.server,t.login,t.symbol,t.currency]):'';
  const statusValue=view.status;
@@ -24,6 +25,12 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
     &&view.paper_pnl===null&&view.broker_pnl===null
     &&(statusValue==='active'||statusValue==='stopped');
  const active=scoped&&statusValue==='active';
+ const trainingVerified=scoped&&training.schema==='p1k5c-sniper-learner-training-cutoff-v1'
+   &&training.status==='captured'&&training.source==='deduplicated_complete_mt5_demo_broker_samples'
+   &&training.independent_oos===false&&training.broker_pnl===null
+   &&typeof training.cutoff_ms==='number'
+   &&training.broker_training_samples===training.cached_policy_samples
+   &&training.broker_target_samples===training.cached_target_samples;
  const forwardScoped=scoped&&forward.schema==='p1k5b-forward-direction-v1'
    &&forward.independent_oos===false&&forward.broker_fills_observed===false
    &&forward.net_pnl===null&&forward.profitability_validated===false;
@@ -54,6 +61,19 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
    <div>فقد طابور Native مستبعد <strong>{count(view.excluded_native_queue_counter_change)}</strong></div>
    <div>لقطات MT5 خارج Pulse (استبعاد) <strong>{count(view.unpaired_reconciled_quote_changes)}</strong></div>
    <div>تغيّر سعر بنفس ملي ثانية الوسيط (مستبعد) <strong>{count(view.unpaired_same_clock_price_changes)}</strong></div>
+  </div>}
+  {trainingVerified&&<div className="feature-zone" aria-label="Sniper frozen training ledger checkpoint">
+   <h4>توثيق نقطة تجميد بيانات Learner — P1-K5C</h4>
+   <div className="operator-grid">
+    <div>عينات Demo المكتملة الداخلة في التدريب <strong>{count(training.broker_training_samples)}</strong></div>
+    <div>عينات تدريب أهداف pip <strong>{count(training.broker_target_samples)}</strong></div>
+    <div>آخر إغلاق MT5 مستخدم (ms) <strong>{count(training.latest_training_closed_ms)}</strong></div>
+    <div>وقت قطع التدريب والتجميد (ms) <strong>{count(training.cutoff_ms)}</strong></div>
+    <div>صفوف الدفتر التي فُحصت <strong>{count(training.ledger_rows_scanned)}</strong></div>
+   </div>
+   <p className="safe-note">المحرك طابق عدد العينات المستخدمة في الأوزان مع سجل إغلاقات
+   MT5 Demo وقت التجميد؛ هذه بصمة زمنية للبحث وليست توثيقاً مستقلاً OOS
+   ولا ربحية متوقعة أو صفقات فعلية من التجربة.</p>
   </div>}
   {forwardScoped&&<div className="feature-zone" aria-label="Frozen Sniper direction-only future observations">
    <h4>تدقيق اتجاه Learner المجمد — أفق 5 ثوانٍ P1-K5B</h4>
