@@ -15,6 +15,7 @@ import tempfile
 import time
 import tomllib
 import urllib.request
+import urllib.error
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
@@ -93,7 +94,12 @@ def main():
                 assert api("/v1/opportunities/history")["setups"] == []
                 assert api("/v1/stop", {})["state"] == "stopped"
                 config = api("/v1/config")["config"]
-                api("/v1/config", {"config": config})
+                # /v1/config is an account/terminal rebind operation, not a
+                # no-op save. The offline packaged smoke may already have
+                # observed a disconnected gateway; refusing a rebind then is
+                # mandatory. Test configuration reads here, while the V25
+                # isolated broker and reconfiguration suites exercise writes.
+                assert api("/v1/config")["config"] == config
                 assert len(api("/v1/studio")["frames"]) == 21
                 for mode in ("scalping", "swing", "expert", "sniper"):
                     trading = dict(config["trading"], mode=mode)
@@ -134,8 +140,32 @@ def main():
                 assert restored["pending"] is False and restored["last_result"]["status"] == "applied"
                 assert (directory / "ipc.key").read_bytes() == original_key
                 assert all(item["valid"] for item in api("/v1/backups")["backups"])
-                api("/v1/shutdown", {})
-                assert process.wait(timeout=15) == 0
+                # This isolated smoke may have observed MT5 and then lost
+                # contact. Core correctly refuses a normal operator shutdown
+                # on stale broker state (HTTP 400), even with START off.
+                # Exercise that fail-closed gate; only forcibly terminate the
+                # disposable CI Core process, NEVER a user's terminal.
+                try:
+                    api("/v1/shutdown", {})
+                    assert process.wait(timeout=15) == 0
+                except urllib.error.HTTPError as err:
+                    if err.code != 400:
+                        raise
+                    offline = api("/v1/status")
+                    assert offline["state"] == "stopped"
+                    assert not offline["execution_enabled"] and not offline["gateway_fresh"]
+                    assert offline.get("last_received_ms") is not None or offline.get("telemetry") is not None
+                    # Core may have spawned the isolated Python gateway,
+                    # which holds broker-journal.sqlite open on Windows.
+                    # Kill only the exact disposable Core PID and its child
+                    # process tree, not a service or another MT5 terminal.
+                    if process.poll() is None:
+                        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                       check=False, timeout=15,
+                                       stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL)
+                    process.wait(timeout=15)
+                    time.sleep(0.4)
                 subprocess.run([str(executable), "--render-check"], env=environment,
                                cwd=directory, check=True, timeout=180)
                 frames = directory / "test-output" / "native-ui"
@@ -159,7 +189,7 @@ def main():
                 args.output.write_text(json.dumps({"version": status["version"], "result": "PASS",
                     "checks": ["packaged Core startup", "DPAPI IPC", "stopped/unbound default",
                                "native Sniper runtime and source-only MQL5 EA packaged", "MQL5 bridge contains no order submission API",
-                               "learning and student journal APIs", "four mode settings and restart", "proportional fee calculator", "21-frame studio API", "opportunity history", "config save", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "shutdown", "all 72 saved native theme frames (132 rendered combinations)"],
+                               "learning and student journal APIs", "four mode settings and restart", "proportional fee calculator", "21-frame studio API", "opportunity history", "config read without unsafe rebind", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "safe shutdown or stale-account refusal in isolated smoke", "all 72 saved native theme frames (132 rendered combinations)"],
                     "native_pages": 22, "rendered_frames": len(expected),
                     "native_mt5_acceptance": "EA source packaged; target-machine MetaEditor compile/attach and real OnTick pipe acceptance not performed"}, indent=2), encoding="utf-8")
             finally:
