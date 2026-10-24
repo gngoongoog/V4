@@ -23,3 +23,6 @@ export async function subscribe(onChange:(update:StreamEvent)=>void):Promise<voi
 }
 
 export async function saveSupervisor(settings:Record<string,unknown>):Promise<unknown>{return invoke('update_supervisor',{settings})}
+export async function frozenCoordinatorAction(action:'freeze'|'stop',context:string):Promise<unknown>{
+ return invoke('frozen_coordinator_action',{action,context});
+}
