@@ -19,6 +19,7 @@ mod sniper_forward_holdout;
 mod sniper_preregister;
 mod sniper_forward_costs;
 mod sniper_demo_booked_audit;
+mod sniper_demo_recovery_audit;
 mod sniper_research_artifact;
 mod sniper_blocker_review;
 mod sniper_demo_lineage;
