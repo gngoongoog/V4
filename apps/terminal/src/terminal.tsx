@@ -374,7 +374,7 @@ export default function Terminal(){
       <section className="panel subpage-primary"><div className="panel-title"><b>{pageMeta.title} — بيانات وتشغيل</b><button onClick={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}} disabled={!pageMeta.route||preview}>تحديث ↻</button></div>
         {page==='risk'?<div className="feature-zone">
           <MicroCapitalOperations status={!preview&&feed.broker?status:null} risk={config?unwrap(config.risk):null}
-             portfolio={unwrap(portfolioReport).portfolio} armed={status?.requested_run===true}
+             monitor={riskSnapshot} portfolio={unwrap(portfolioReport).portfolio} armed={status?.requested_run===true}
              disabled={busy||preview} onSavePortfolio={runSavePortfolio}/>
           <RiskEditor config={config?unwrap(config.risk):null} apply={saveRiskForm} loading={busy} armed={status?.requested_run===true}/>
           <DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/risk/monitor')}/>
