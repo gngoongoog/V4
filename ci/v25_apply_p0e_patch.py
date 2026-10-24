@@ -93,7 +93,7 @@ def main():
                 raise SystemExit('P0-E MT5 session postcondition failed')
     for path,content in staged.items():
         path.write_text(content,encoding='utf-8')
-        print(f'P0-E verified minimal {path}: {len(hunks[str(path)])} hunks')
+        print(f'P0-E verified minimal {path}: {len(hunks[path.as_posix()])} hunks')
 
 
 if __name__=='__main__':
