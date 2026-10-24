@@ -522,6 +522,9 @@ impl Service {
         // Detect that before the adaptive Sniper consumes this snapshot,
         // and invalidate comparability until a new all-future warmup.
         self.sniper_frozen_tick.reconcile(telemetry,config);
+        // A slower full broker reconciliation flushes bounded research-only
+        // events; no SQLite write or failure propagation on Fast Pulse Tick.
+        self.sniper_frozen_tick.flush_research_events(db,telemetry);
         self.inner
             .observe(db, telemetry, config, entries_allowed, frames, now)?;
         // Separate read-only Classic forward cohort uses full M1 snapshots.
@@ -802,7 +805,7 @@ impl Service {
                             &self.inner.sniper,checkpoint,now)
                     }
                 },
-                "stop"=>self.sniper_frozen_tick.stop(t),
+                "stop"=>self.sniper_frozen_tick.stop_with_research_flush(db,t),
                 _=>anyhow::bail!("Unknown Sniper frozen study action")
             }
         }
