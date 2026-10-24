@@ -1199,4 +1199,81 @@ mod tests {
         assert_eq!(state(&db, "a"), "unknown");
         assert_eq!(state(&db, "b"), "cancelled");
     }
+    #[test]
+    fn p0c_final_authorization_blocks_unresolved_and_three_rejects_but_allows_close() {
+        let db=setup();
+        let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();
+        t.demo=false;t.account_trade_mode=Some(2);
+        t.trade_allowed=true;t.trade_expert=true;
+        service.inner.settings.target="live".into();
+        service.inner.settings.login=t.login;
+        service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();
+        service.inner.set_mode(braintrade_domain::trading::TradingMode::Sniper);
+        let status=Status{requested_run:true,gateway_fresh:true,
+            telemetry:Some(t.clone()),..Default::default()};
+        let key=context(&t);
+        let insert=|id:&str,kind:&str,state:&str,created:u64,result:&str|{
+            let payload=json!({"id":id,"kind":kind,"brain":"system",
+                "trading_mode":"sniper","context":key,
+                "revision":service.inner.settings.revision,
+                "created_ms":created,"expires_ms":1_000_000_u64});
+            db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload,result)
+                VALUES(?1,?2,'system',?3,?4,?5,?6,?7)",
+                params![id,key,kind,created,state,payload.to_string(),result]).unwrap();
+        };
+        insert("p0c-entry","open","dispatched",100,"{}");
+        let authorize=|svc:&mut Service,id:&str,now:u64|->Value{
+            svc.route("POST","/v1/execution/authorize",
+                json!({"id":id}).to_string().as_bytes(),&db,&status,now).unwrap()
+        };
+        assert_eq!(authorize(&mut service,"p0c-entry",200)["authorized"],true);
+        insert("p0c-unknown","open","unknown",101,r#"{"reason":"send interrupted"}"#);
+        assert_eq!(authorize(&mut service,"p0c-entry",202)["authorized"],false);
+        // Quality circuit must never gate owned-position close/reconciliation.
+        insert("p0c-close","close","dispatched",102,"{}");
+        assert_eq!(authorize(&mut service,"p0c-close",202)["authorized"],true);
+        db.execute("UPDATE broker_commands SET state='observed' WHERE id='p0c-unknown'",[]).unwrap();
+        assert_eq!(authorize(&mut service,"p0c-entry",203)["authorized"],true);
+        for n in 0..3 {
+            insert(&format!("p0c-reject-{n}"),"open","rejected",300+n,
+                r#"{"retcode":10019,"reason":"broker margin"}"#);
+        }
+        assert_eq!(authorize(&mut service,"p0c-entry",400)["authorized"],false);
+        assert_eq!(authorize(&mut service,"p0c-close",401)["authorized"],true);
+        let quality=service.route("GET","/v1/execution/quality",&[],&db,&status,402).unwrap();
+        assert_eq!(quality["entry_circuit"]["state"],"blocked");
+        assert_eq!(quality["entry_circuit"]["recent_broker_rejections"],3);
+        assert_eq!(quality["entry_circuit"]["never_blocks_close_or_reconcile"],true);
+        // Failed final authorization never changes durable intent to another state.
+        assert_eq!(state(&db,"p0c-entry"),"dispatched");
+    }
+
+    #[test]
+    fn p0c_fast_cache_is_account_bound_and_missing_data_never_authorizes_real() {
+        let db=setup();
+        let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();
+        t.demo=false;t.account_trade_mode=Some(2);
+        service.inner.settings.target="live".into();
+        service.inner.settings.login=t.login;
+        service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();
+        assert!(!service.quality_circuit.entry_allowed(&t,true));
+        service.refresh_quality_circuit(&db,&t,100);
+        assert!(service.quality_circuit.entry_allowed(&t,true));
+        let mut next=t.clone();next.symbol="EURUSD".into();
+        assert!(!service.quality_circuit.entry_allowed(&next,true));
+        queue(&db,&t,"p0c-pending","system",0.01,1.,101);
+        db.execute("UPDATE broker_commands SET state='unknown' WHERE id='p0c-pending'",[]).unwrap();
+        service.refresh_quality_circuit(&db,&t,102);
+        assert!(!service.quality_circuit.entry_allowed(&t,true));
+        let prior=service.quality_circuit.clone();
+        assert_eq!(prior.reason,"unresolved_broker_submission");
+        assert!(!prior.entry_allowed(&t,true));
+        // Demo is optional/advisory but does not bypass mandatory Gateway/broker rules.
+        assert!(prior.entry_allowed(&t,false));
+    }
+
 }
