@@ -1,0 +1,99 @@
+"""No live orders. Simulated broker history recovery guards for the P0-B gate."""
+from __future__ import annotations
+from pathlib import Path
+from types import SimpleNamespace as N
+import tempfile
+import sys
+import json
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'gateway'))
+sys.path.insert(0, str(ROOT / 'tests'))
+from execution import BrokerExecutor
+from test_broker_execution import Broker, command
+
+
+class BrokerReconciliationStrictTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / 'broker-journal.sqlite'
+        self.exe = BrokerExecutor(self.path)
+        self.broker = Broker()
+        self.cmd = command()
+        self.broker.raise_send = True
+        first = self.exe.execute(self.broker, self.cmd, lambda _: True)
+        self.assertEqual(first['state'], 'unknown', first)
+        self.assertEqual(len(self.broker.sends), 1)
+        self.broker.raise_send = False
+
+    def tearDown(self):
+        self.exe.close()
+        self.tmp.cleanup()
+
+    def deal(self, ticket, volume, *, order=0, **kw):
+        return N(ticket=ticket, magic=self.cmd['magic'], symbol=self.cmd['symbol'],
+                 comment='BT:' + self.cmd['id'][:20], volume=volume,
+                 order=order, price=2000.0, position_id=700, time_msc=1000 + ticket, **kw)
+
+    def result(self):
+        out = self.exe.execute(self.broker, self.cmd, lambda _: True)
+        self.assertEqual(len(self.broker.sends), 1, 'No broker resend during reconciliation')
+        return out
+
+    def test_mode_switch_blocks_recovery_even_with_same_login_tuple(self):
+        self.broker.deals = [self.deal(899, .1)]
+        self.broker.account.trade_mode = 2  # Same ID tuple, wrong Demo/REAL mode.
+        result = self.result()
+        self.assertEqual(result['state'], 'unknown', result)
+        self.assertNotIn('recovered_from_history', result)
+
+    def test_late_remaining_fill_upgrades_a_previous_partial(self):
+        self.broker.deals = [self.deal(801, .04)]
+        first = self.result()
+        self.assertEqual(first['state'], 'partial', first)
+        self.broker.deals = [self.deal(801, .04), self.deal(802, .06)]
+        second = self.result()
+        self.assertEqual(second['state'], 'filled', second)
+        self.assertEqual(second['deals'], [801, 802])
+        self.assertAlmostEqual(second['volume'], .1)
+        self.assertEqual(self.result(), second)
+
+    def test_excess_history_fill_is_never_booked_as_valid_exact_volume(self):
+        self.broker.deals = [self.deal(803, .12)]
+        result = self.result()
+        self.assertEqual(result['state'], 'unknown', result)
+        self.assertNotIn('recovered_from_history', result)
+        self.assertIn('exceeds', result['reason'])
+
+    def test_duplicate_broker_deal_tickets_cannot_be_counted_twice(self):
+        self.broker.deals = [self.deal(804, .04), self.deal(804, .04)]
+        result = self.result()
+        self.assertEqual(result['state'], 'unknown', result)
+        self.assertNotIn('recovered_from_history', result)
+        self.assertIn('Duplicate', result['reason'])
+
+    def test_invalid_history_volume_fails_closed(self):
+        for amount in (float('nan'), -0.01, 0.0):
+            with self.subTest(volume=amount):
+                self.broker.deals = [self.deal(805, amount)]
+                result = self.result()
+                self.assertEqual(result['state'], 'unknown', result)
+                self.assertNotIn('recovered_from_history', result)
+
+    def test_recovered_partial_must_not_upgrade_on_wrong_order_ticket(self):
+        self.broker.deals = [self.deal(806, .04)]
+        first = self.result()
+        self.assertEqual(first['state'], 'partial')
+        self.broker.deals = [self.deal(806, .04), self.deal(807, .06, order=9999)]
+        recorded = dict(first, order=42)
+        self.exe.db.execute('UPDATE sends SET result=? WHERE id=?',
+                            (json.dumps(recorded), self.cmd['id']))
+        self.exe.db.commit()
+        result = self.result()
+        self.assertEqual(result['state'], 'partial', result)
+        self.assertAlmostEqual(result['volume'], .04)
+
+
+if __name__ == '__main__':
+    unittest.main()
