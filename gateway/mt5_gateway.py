@@ -322,6 +322,27 @@ def refresh_fast_tick(snapshot: dict, mt5, symbol: str, now_ms: int | None = Non
     return updated,changed,signature
 
 
+def broker_snapshot_identity_is_current(mt5, snapshot: dict) -> bool:
+    """Prevent hot pulses from using a cached identity after an MT5 account switch.
+
+    This is a fast-path admission check only when new quotes actually arrive;
+    Core and the durable BrokerExecutor still own final authorization.
+    """
+    if not snapshot or snapshot.get("connected") is not True:
+        return False
+    try:
+        a = mt5.account_info()
+        terminal = mt5.terminal_info()
+        return (a is not None and terminal is not None
+                and getattr(terminal, "connected", False) is True
+                and getattr(a, "login", None) == snapshot.get("login")
+                and getattr(a, "server", None) == snapshot.get("server")
+                and getattr(a, "currency", None) == snapshot.get("currency")
+                and getattr(a, "trade_mode", None) == snapshot.get("account_trade_mode"))
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+
 def apply_native_tick(snapshot: dict, packet: dict, now_ms: int | None = None):
     """Overlay one authenticated native quote event without touching reconciled state."""
     if not snapshot or not snapshot.get('connected'):
@@ -512,6 +533,13 @@ def main():
                         # and any command is returned in that same localhost response.
                         if sniper and latest_snapshot and latest_snapshot.get('connected'):
                             packets=native.drain(int(latest_snapshot.get('login') or 0),symbol,NATIVE_BATCH_MAX)
+                            if packets and not broker_snapshot_identity_is_current(mt5,latest_snapshot):
+                                # Cached Core snapshot is now another MT5 session.
+                                # Clear buffered native evidence without sending
+                                # even one old-context pulse.
+                                native.close()
+                                next_full_snapshot=0.0
+                                packets=[]
                             for packet in packets:
                                 native_snapshot,changed,_=apply_native_tick(latest_snapshot,packet)
                                 if not changed:
@@ -554,6 +582,12 @@ def main():
                             # now uses the same execution-only pulse as the native source.
                             fast_snapshot,changed,_=refresh_fast_tick(latest_snapshot,mt5,symbol)
                             if changed:
+                                if not broker_snapshot_identity_is_current(mt5,latest_snapshot):
+                                    # Poll fallback can also see a new account
+                                    # before the 250 ms reconciled snapshot.
+                                    native.close()
+                                    next_full_snapshot=0.0
+                                    continue
                                 latest_snapshot=fast_snapshot
                                 try:
                                     work=api('/v1/execution/pulse',pulse_payload(latest_snapshot),method='PUT')
