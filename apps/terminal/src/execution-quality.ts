@@ -8,13 +8,14 @@ export type QualityObservation={
  ready:boolean; reason:string;
  sampleSize:number|null;rejects:number|null;unknown:number|null;unresolved:number|null;
  categoryCounts:Record<string,number>;
+ circuit:{state:string;policy:string;reason:string;unknown:number;rejections:number}|null;
  queueP95:number|null;sendP95:number|null;totalP95:number|null;
  rows:Array<{brain:string;kind:string;state:string;createdMs:number;
    category:string;retcode:number|null}>;
 };
 const none=(reason:string):QualityObservation=>({
  ready:false,reason,sampleSize:null,rejects:null,unknown:null,unresolved:null,
- categoryCounts:{},queueP95:null,sendP95:null,totalP95:null,rows:[]
+ categoryCounts:{},circuit:null,queueP95:null,sendP95:null,totalP95:null,rows:[]
 });
 const obj=(v:unknown):Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
 const positiveInt=(v:unknown):v is number=>typeof v==='number'&&Number.isSafeInteger(v)&&v>0;
@@ -61,11 +62,25 @@ export function qualityObservation(status:QualityStatus|null,source:unknown,nowM
   rows.push({brain:r.brain.slice(0,48),kind:r.kind.slice(0,12),state:r.state,
    createdMs:r.created_ms,category:r.category,retcode:typeof r.retcode==='number'?r.retcode:null});
  }
+ const rawCircuit=obj(q.entry_circuit);
+ const circuit=rawCircuit.schema==='p0c-core-quality-v1'&&rawCircuit.read_only===true&&
+   ['ready','blocked','demo_advisory','unavailable'].includes(String(rawCircuit.state))&&
+   ['required_real','advisory_demo'].includes(String(rawCircuit.policy))&&
+   typeof rawCircuit.reason==='string'&&/^[a-z_]{1,80}$/.test(rawCircuit.reason)&&
+   typeof rawCircuit.entry_allowed==='boolean'&&
+   nonNegativeInt(rawCircuit.unknown_open_intents)&&
+   nonNegativeInt(rawCircuit.recent_broker_rejections)&&
+   rawCircuit.observed_ms===q.observed_ms&&
+   rawCircuit.never_blocks_close_or_reconcile===true&&
+   (t.demo?rawCircuit.policy==='advisory_demo':rawCircuit.policy==='required_real')?
+    {state:String(rawCircuit.state),policy:String(rawCircuit.policy),
+     reason:String(rawCircuit.reason),unknown:Number(rawCircuit.unknown_open_intents),
+     rejections:Number(rawCircuit.recent_broker_rejections)}:null;
  const qMetric=(key:string)=>{const m=obj(q[key]);return nonNegativeInt(m.samples)&&m.samples>0?
   measured(m.p95_ms):null};
  return {ready:true,reason:'قراءة من سجل أوامر Core، وليس تاريخ أرباح أو تعبئات مضمونة',
    sampleSize:q.sample_size,rejects:q.rejected_count,unknown:q.unknown_count,
-   unresolved:q.unresolved_count,categoryCounts:categories,
+   unresolved:q.unresolved_count,categoryCounts:categories,circuit,
    queueP95:qMetric('queue_to_send'),sendP95:qMetric('send'),totalP95:qMetric('total'),
    rows};
 }
