@@ -24,7 +24,13 @@ fn setup(db:&Connection)->Result<()>{
           payload TEXT NOT NULL,
           sha256 TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS sniper_freeze_artifacts_account_time
-          ON sniper_freeze_research_artifacts(account_context,cutoff_ms DESC,id DESC);")?;
+          ON sniper_freeze_research_artifacts(account_context,cutoff_ms DESC,id DESC);
+         CREATE TRIGGER IF NOT EXISTS sniper_artifact_no_update
+          BEFORE UPDATE ON sniper_freeze_research_artifacts
+          BEGIN SELECT RAISE(ABORT,'Frozen research artifacts cannot be updated'); END;
+         CREATE TRIGGER IF NOT EXISTS sniper_artifact_no_delete
+          BEFORE DELETE ON sniper_freeze_research_artifacts
+          BEGIN SELECT RAISE(ABORT,'Frozen research artifacts cannot be deleted'); END;")?;
     Ok(())
 }
 /// Source-only artifact, NOT a complete tick tape or the strategy's broker
@@ -172,9 +178,19 @@ mod tests{
         assert_eq!(good["broker_pnl"],Value::Null);
         assert_eq!(good["independent_oos"],false);
         assert_eq!(recent(&db,&context(&t)).unwrap()["artifacts"][0]["id"],seal.id);
+        // Application-level append-only guard prevents accidental edits.
+        assert!(db.execute(
+            "UPDATE sniper_freeze_research_artifacts SET sha256='bad' WHERE id=?1",
+            [&seal.id]).is_err());
+        assert!(db.execute(
+            "DELETE FROM sniper_freeze_research_artifacts WHERE id=?1",
+            [&seal.id]).is_err());
         let mut foreign=t.clone();foreign.login=99;
         assert!(verify(&db,&context(&foreign),&seal.id,None).is_err());
         assert!(recent(&db,&context(&foreign)).unwrap()["artifacts"].as_array().unwrap().is_empty());
+        // A privileged editor can DROP triggers; checksum still detects
+        // corruption if it doesn't also intentionally replace every hash.
+        db.execute_batch("DROP TRIGGER sniper_artifact_no_update;").unwrap();
         db.execute("UPDATE sniper_freeze_research_artifacts SET payload=payload||' ' WHERE id=?1",
             [&seal.id]).unwrap();
         assert!(verify(&db,&context(&t),&seal.id,None).is_err());
