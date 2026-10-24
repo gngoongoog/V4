@@ -5,6 +5,7 @@ export async function coreStatus():Promise<Status>{return invoke<Status>('get_st
 export async function readPanel(route:string):Promise<unknown>{return invoke('read_panel',{route})}
 export async function control(action:'start'|'stop'|'reconnect',confirmLiveLogin?:string):Promise<unknown>{return invoke('execute_control',{action,confirmLiveLogin:confirmLiveLogin??null})}
 export async function saveRisk(risk:Record<string,unknown>):Promise<unknown>{return invoke('update_risk',{risk})}
+export async function savePortfolio(settings:Record<string,unknown>):Promise<unknown>{return invoke('update_portfolio',{settings})}
 export async function saveSettings(config:Record<string,unknown>,telegramToken='',clearTelegramToken=false):Promise<unknown>{return invoke('update_settings',{config,telegramToken,clearTelegramToken})}
 export async function saveTrading(settings:Record<string,unknown>):Promise<unknown>{return invoke('update_trading_settings',{settings})}
 export async function handoff(sniperActive:boolean):Promise<unknown>{return invoke('priority_handoff',{sniperActive})}
