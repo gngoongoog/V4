@@ -216,4 +216,28 @@ mod p0j_learning_context_tests {
         }
         std::fs::remove_file(filename).unwrap();
     }
+
+    #[test]
+    fn training_export_skips_untagged_legacy_rows_and_preserves_them_in_db() {
+        let db=Connection::open_in_memory().unwrap();
+        let service=Service::new(&db).unwrap();
+        let demo=context(&broker(true,Some(0))).unwrap();
+        let real=context(&broker(false,Some(2))).unwrap();
+        let legacy=serde_json::to_string(&("Broker-Same",17,"XAUUSD","USD")).unwrap();
+        for (index,ctx) in [&demo,&real,&legacy].into_iter().enumerate() {
+            db.execute("INSERT INTO learning_snapshots(id,context,bar_time,captured_ms,feature_schema,reference_close,atr,features) VALUES(?1,?2,600,700,?3,2500,1,'{}')",
+                params![index as i64+1,ctx,FEATURE_SCHEMA]).unwrap();
+            db.execute("INSERT INTO learning_labels(snapshot_id,matured_ms,label_schema,label) VALUES(?1,1000,?2,'{}')",
+                params![index as i64+1,LABEL_SCHEMA]).unwrap();
+        }
+        let dir=std::env::temp_dir().join(format!("braintrade-learning-export-{}",uuid::Uuid::new_v4()));
+        let exported=service.export(&db,&dir,2000).unwrap();
+        assert_eq!(exported["rows"],2);
+        assert_eq!(exported["excluded_legacy_or_unverified_rows"],1);
+        let dataset=std::fs::read_to_string(dir.join("exports/learning-dataset-2000/dataset.jsonl")).unwrap();
+        assert_eq!(dataset.lines().count(),2);
+        assert!(!dataset.contains(&legacy));
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM learning_snapshots",[],|r|r.get::<_,i64>(0)).unwrap(),3);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
