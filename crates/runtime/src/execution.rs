@@ -522,6 +522,9 @@ impl Service {
         // Detect that before the adaptive Sniper consumes this snapshot,
         // and invalidate comparability until a new all-future warmup.
         self.sniper_frozen_tick.reconcile(telemetry,config);
+        // A slower full broker reconciliation flushes bounded research-only
+        // events; no SQLite write or failure propagation on Fast Pulse Tick.
+        self.sniper_frozen_tick.flush_research_events(db,telemetry);
         self.inner
             .observe(db, telemetry, config, entries_allowed, frames, now)?;
         // Separate read-only Classic forward cohort uses full M1 snapshots.
@@ -758,10 +761,34 @@ impl Service {
                     let account=crate::coordinator_learning::context(t);
                     view["research_artifact_history"]=
                         crate::sniper_research_artifact::recent(db,&account)?;
+                    // Also expose one archived journal when the Core restarts
+                    // and the in-memory trial no longer exists. Never infer
+                    // missing future ticks from an older persisted sample.
+                    let latest=view["research_artifact_history"]["artifacts"]
+                        .as_array().and_then(|items|items.first());
+                    if let Some(item)=latest.filter(|item|item["integrity"]=="verified") {
+                        if let (Some(id),Some(hash))=(item["id"].as_str(),item["sha256"].as_str()){
+                            view["last_archived_forward_journal"]=
+                                match crate::sniper_forward_journal::report(db,&account,id,hash){
+                                    Ok(report)=>report,
+                                    Err(_)=>json!({"integrity":"warning",
+                                        "historical_oos":false,"broker_pnl":null})
+                                };
+                        }
+                    }
                     if let Some(id)=view["research_artifact_id"].as_str().map(str::to_owned) {
-                        let expected=view["research_artifact_sha256"].as_str();
-                        match crate::sniper_research_artifact::verify(db,&account,&id,expected){
-                            Ok(verified)=>view["research_artifact"]=verified,
+                        let expected=view["research_artifact_sha256"].as_str().map(str::to_owned);
+                        match crate::sniper_research_artifact::verify(db,&account,&id,expected.as_deref()){
+                            Ok(verified)=>{
+                                view["research_artifact"]=verified;
+                                view["prospective_event_journal"]=
+                                    match crate::sniper_forward_journal::report(db,&account,
+                                        &id,expected.as_deref().unwrap_or("")){
+                                        Ok(report)=>report,
+                                        Err(_)=>json!({"integrity":"warning",
+                                            "historical_oos":false,"broker_pnl":null})
+                                    };
+                            },
                             Err(_)=>{
                                 // Never present tampered research samples as verified.
                                 view["status"]=json!("integrity_failure");
@@ -802,7 +829,7 @@ impl Service {
                             &self.inner.sniper,checkpoint,now)
                     }
                 },
-                "stop"=>self.sniper_frozen_tick.stop(t),
+                "stop"=>self.sniper_frozen_tick.stop_with_research_flush(db,t),
                 _=>anyhow::bail!("Unknown Sniper frozen study action")
             }
         }
