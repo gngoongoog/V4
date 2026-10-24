@@ -13,9 +13,13 @@ tracked = subprocess.check_output(
 )
 
 def segment(doc, start, end):
-    if doc.count(start) != 1 or doc.count(end) != 1:
-        raise SystemExit("V25 Core patch segment markers unexpected; fail closed")
-    return doc[doc.index(start):doc.index(end)]
+    if doc.count(start) != 1:
+        raise SystemExit("V25 Core patch start marker unexpected; fail closed")
+    beginning = doc.index(start)
+    ending = doc.find(end, beginning + len(start))
+    if ending < 0:
+        raise SystemExit("V25 Core patch end marker missing after start")
+    return doc[beginning:ending]
 
 helper = segment(tracked,
     "/// Only monotonic, broker-history-proven split fills",
