@@ -143,6 +143,19 @@ impl Service{
     }
     pub fn status(&self,db:&Connection)->Result<Value>{
         let snapshots=db.query_row("SELECT COUNT(*) FROM learning_snapshots",[],|r|r.get::<_,i64>(0))?;let labels=db.query_row("SELECT COUNT(*) FROM learning_labels",[],|r|r.get::<_,i64>(0))?;let models=db.query_row("SELECT COUNT(*) FROM learning_models",[],|r|r.get::<_,i64>(0))?;
+        // Distinguish retained historical rows with unknown broker mode from
+        // verified-mode snapshots; do not inflate live learning confidence.
+        let (mode_verified_snapshots,legacy_unverified_snapshots)={
+            let mut st=db.prepare("SELECT context,COUNT(*) FROM learning_snapshots GROUP BY context")?;
+            let mut rows=st.query([])?;
+            let (mut valid,mut legacy)=(0i64,0i64);
+            while let Some(row)=rows.next()? {
+                let raw:String=row.get(0)?;
+                let count:i64=row.get(1)?;
+                if verified_study_context(&raw){valid+=count;}else{legacy+=count;}
+            }
+            (valid,legacy)
+        };
         let latest:Option<(u64,u64,String)>=db.query_row("SELECT bar_time,captured_ms,feature_schema FROM learning_snapshots ORDER BY id DESC LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
         let champion:Option<String>=db.query_row("SELECT model_id FROM learning_slots WHERE slot='champion'",[],|r|r.get::<_,Option<String>>(0)).optional()?.flatten();let challenger:Option<String>=db.query_row("SELECT model_id FROM learning_slots WHERE slot='challenger'",[],|r|r.get::<_,Option<String>>(0)).optional()?.flatten();
         let recent={
@@ -150,7 +163,7 @@ impl Service{
             let rows=s.query_map([],|r|{let metrics:String=r.get(5)?;Ok(json!({"model_id":r.get::<_,String>(0)?,"created_ms":r.get::<_,u64>(1)?,"family":r.get::<_,String>(2)?,"dataset_identity":r.get::<_,String>(3)?,"status":r.get::<_,String>(4)?,"metrics":serde_json::from_str::<Value>(&metrics).unwrap_or(Value::Null)}))})?.collect::<std::result::Result<Vec<_>,_>>()?;
             rows
         };
-        Ok(json!({"version":"learning-foundation-v1","feature_schema":FEATURE_SCHEMA,"label_schema":LABEL_SCHEMA,"snapshots":snapshots,"matured_labels":labels,"pending_labels":snapshots-labels,"models":models,"champion":champion,"challenger":challenger,"recent_models":recent,"latest":latest.map(|(bar_time,captured_ms,schema)|json!({"bar_time":bar_time,"captured_ms":captured_ms,"schema":schema})),"last_error":self.last_error,"training_enabled":false,"prediction_enabled":false,"champion_promotion_enabled":false,"live_self_modification":false,"note":"Registry accepts validated unreviewed challengers only. No model can influence Shadow."}))
+        Ok(json!({"version":"learning-foundation-v1","feature_schema":FEATURE_SCHEMA,"label_schema":LABEL_SCHEMA,"snapshots":snapshots,"mode_verified_snapshots":mode_verified_snapshots,"legacy_unverified_snapshots":legacy_unverified_snapshots,"matured_labels":labels,"pending_labels":snapshots-labels,"models":models,"champion":champion,"challenger":challenger,"recent_models":recent,"latest":latest.map(|(bar_time,captured_ms,schema)|json!({"bar_time":bar_time,"captured_ms":captured_ms,"schema":schema})),"last_error":self.last_error,"training_enabled":false,"prediction_enabled":false,"champion_promotion_enabled":false,"live_self_modification":false,"note":"Registry accepts validated unreviewed challengers only. No model can influence Shadow."}))
     }
     pub fn export(&self,db:&Connection,dir:&Path,now:u64)->Result<Value>{
         let name=format!("learning-dataset-{now}");let staging=dir.join("exports").join(format!(".{name}.tmp"));let destination=dir.join("exports").join(&name);if staging.exists()||destination.exists(){bail!("Learning export path already exists");}fs::create_dir_all(&staging)?;let mut output=fs::File::create(staging.join("dataset.jsonl"))?;
@@ -231,6 +244,10 @@ mod p0j_learning_context_tests {
                 params![index as i64+1,LABEL_SCHEMA]).unwrap();
         }
         let dir=std::env::temp_dir().join(format!("braintrade-learning-export-{}",uuid::Uuid::new_v4()));
+        let status=service.status(&db).unwrap();
+        assert_eq!(status["snapshots"],3);
+        assert_eq!(status["mode_verified_snapshots"],2);
+        assert_eq!(status["legacy_unverified_snapshots"],1);
         let exported=service.export(&db,&dir,2000).unwrap();
         assert_eq!(exported["rows"],2);
         assert_eq!(exported["excluded_legacy_or_unverified_rows"],1);
