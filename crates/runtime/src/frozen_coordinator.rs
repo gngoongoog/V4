@@ -123,9 +123,12 @@ pub fn observe(db:&Connection,t:&Telemetry,c:&Config,adaptive:&Signal,
     ensure!(snap["policy"]==policy(c.trading.mode),
         "frozen coordinator policy mismatch");
     let cfg:Config=serde_json::from_value(snap["config"].clone())?;
+    // Existing Expert V24/P1-I snapshots did not persist the redundant
+    // mode field; their immutable configuration already binds the mode.
+    let snapshot_mode_matches=snap["mode"]==mode_key(c.trading.mode)
+        ||(c.trading.mode==TradingMode::Expert && snap["mode"].is_null());
     ensure!(cfg.symbol==t.symbol&&cfg.trading.mode==c.trading.mode
-        &&snap["mode"]==mode_key(c.trading.mode),
-        "frozen policy context drift");
+        &&snapshot_mode_matches,"frozen policy context drift");
     let mut primary=None;
     let mut votes=Vec::new();
     for m in snap["members"].as_array().into_iter().flatten(){
@@ -226,7 +229,7 @@ mod tests{
         let started=freeze(&db,&t,&c,&brains,&BTreeMap::new(),
             &BTreeMap::new(),&BTreeMap::new(),123456).unwrap();
         let id=started["run_id"].as_str().unwrap();
-        assert_eq!(report(&db,&context(&t)).unwrap()["status"],"active");
+        assert_eq!(report(&db,&context(&t),TradingMode::Expert).unwrap()["status"],"active");
         assert!(freeze(&db,&t,&c,&brains,&BTreeMap::new(),
             &BTreeMap::new(),&BTreeMap::new(),123457).is_err());
         let raw:String=db.query_row("SELECT snapshot FROM frozen_coordinator_runs WHERE id=?1",
@@ -235,9 +238,9 @@ mod tests{
         assert_eq!(saved["policy"],POLICY);
         assert_eq!(saved["config"]["symbol"],"XAUUSD");
         let mut other=t.clone();other.login=456;
-        assert_eq!(report(&db,&context(&other)).unwrap()["status"],"not_started");
-        stop(&db,&context(&t)).unwrap();
-        assert_eq!(report(&db,&context(&t)).unwrap()["status"],"stopped");
+        assert_eq!(report(&db,&context(&other),TradingMode::Expert).unwrap()["status"],"not_started");
+        stop(&db,&context(&t),TradingMode::Expert).unwrap();
+        assert_eq!(report(&db,&context(&t),TradingMode::Expert).unwrap()["status"],"stopped");
         let frozen:String=db.query_row("SELECT snapshot FROM frozen_coordinator_runs WHERE id=?1",
             [id],|r|r.get(0)).unwrap();
         assert_eq!(raw,frozen);
@@ -274,17 +277,83 @@ mod tests{
         t.quote_time_ms=Some(241_000);
         observe(&db,&t,&c,&adaptive,&sample(180),241_000).unwrap();
         observe(&db,&t,&c,&adaptive,&sample(180),242_000).unwrap();
-        let status=report(&db,&context(&t)).unwrap();
+        let status=report(&db,&context(&t),TradingMode::Expert).unwrap();
         assert_eq!(status["bars_compared"],1);
         assert_eq!(status["adaptive_only_ready"],1);
         assert_eq!(status["no_broker_orders"],true);
         // Historical replay too late after close cannot create fabricated new rows.
         t.quote_time_ms=Some(999_000);
         observe(&db,&t,&c,&adaptive,&sample(240),999_000).unwrap();
-        assert_eq!(report(&db,&context(&t)).unwrap()["bars_compared"],1);
+        assert_eq!(report(&db,&context(&t),TradingMode::Expert).unwrap()["bars_compared"],1);
     }
     #[test]
-    fn real_or_non_expert_cannot_start_policy_trial(){
+    fn two_non_sniper_modes_have_independent_future_decisions_and_stop_scope(){
+        use braintrade_domain::Candle;
+        let db=fixture();
+        let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            login:321,server:"Demo".into(),symbol:"XAUUSD".into(),
+            currency:"USD".into(),tick_age_ms:Some(0),..Default::default()};
+        let brains=vec![BrainConfig{id:"system".into(),..Default::default()}];
+        let mut scalp=Config::default();scalp.trading.mode=TradingMode::Scalping;
+        let mut swing=scalp.clone();swing.trading.mode=TradingMode::Swing;
+        let sr=freeze(&db,&t,&scalp,&brains,&BTreeMap::new(),
+            &BTreeMap::new(),&BTreeMap::new(),123_000).unwrap();
+        let wr=freeze(&db,&t,&swing,&brains,&BTreeMap::new(),
+            &BTreeMap::new(),&BTreeMap::new(),123_000).unwrap();
+        assert_ne!(sr["run_id"],wr["run_id"]);
+        assert_eq!(sr["mode"],"scalping");
+        assert_eq!(wr["mode"],"swing");
+        assert_eq!(report(&db,&context(&t),TradingMode::Scalping).unwrap()["status"],"active");
+        assert_eq!(report(&db,&context(&t),TradingMode::Swing).unwrap()["status"],"active");
+        let frames=BTreeMap::from([("M1".into(),vec![FrameBar{
+            candle:Candle{time:180,open:100.,high:101.,low:99.,close:100.5,
+                tick_volume:200},spread_points:20,real_volume:0
+        }])]);
+        let actual=Signal{brain:"system".into(),side:1,key:"next:180".into(),
+            bar_time:180,stop_distance:1.,target_distance:2.,hold_ms:60_000,
+            reason:"synthetic actual signal".into(),ready:true,coordination:None};
+        // At 241s bar 180 is completed. Only the selected mode records.
+        observe(&db,&t,&scalp,&actual,&frames,241_000).unwrap();
+        assert_eq!(report(&db,&context(&t),TradingMode::Scalping).unwrap()["bars_compared"],1);
+        assert_eq!(report(&db,&context(&t),TradingMode::Swing).unwrap()["bars_compared"],0);
+        // Replay same M1 is idempotent.
+        observe(&db,&t,&scalp,&actual,&frames,242_000).unwrap();
+        assert_eq!(report(&db,&context(&t),TradingMode::Scalping).unwrap()["bars_compared"],1);
+        observe(&db,&t,&swing,&actual,&frames,241_000).unwrap();
+        let w=report(&db,&context(&t),TradingMode::Swing).unwrap();
+        assert_eq!(w["bars_compared"],1);
+        assert_eq!(w["paired_quote_paper"],Value::Null);
+        assert_eq!(w["broker_permission"],Value::Null);
+        assert_eq!(w["no_broker_orders"],true);
+        assert_eq!(w["sniper_tick_coverage"],false);
+        assert_eq!(w["independent_oos"],false);
+        // Stopping scalp does not stop swing or rewrite either snapshot.
+        stop(&db,&context(&t),TradingMode::Scalping).unwrap();
+        assert_eq!(report(&db,&context(&t),TradingMode::Scalping).unwrap()["status"],"stopped");
+        assert_eq!(report(&db,&context(&t),TradingMode::Swing).unwrap()["status"],"active");
+        // Sniper must NOT use an M1-close trial or return made-up parity.
+        assert!(report(&db,&context(&t),TradingMode::Sniper).is_err());
+        let mut sniper=scalp.clone();sniper.trading.mode=TradingMode::Sniper;
+        assert!(freeze(&db,&t,&sniper,&brains,&BTreeMap::new(),
+            &BTreeMap::new(),&BTreeMap::new(),243_000).is_err());
+    }
+    #[test]
+    fn different_demo_account_has_no_forward_trial_or_inherited_counts(){
+        let db=fixture();
+        let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            tick_age_ms:Some(0),server:"Demo".into(),login:17,
+            symbol:"XAUUSD".into(),currency:"USD".into(),..Default::default()};
+        let mut c=Config::default();c.trading.mode=TradingMode::Swing;
+        let brains=vec![BrainConfig{id:"system".into(),..Default::default()}];
+        freeze(&db,&t,&c,&brains,&BTreeMap::new(),
+            &BTreeMap::new(),&BTreeMap::new(),123_000).unwrap();
+        let mut different=t.clone();different.login=18;
+        assert_eq!(report(&db,&context(&different),TradingMode::Swing).unwrap()["status"],"not_started");
+        different=t.clone();different.symbol="EURUSD";
+        assert_eq!(report(&db,&context(&different),TradingMode::Swing).unwrap()["status"],"not_started");
+    }
+    #[test]
+    fn real_or_sniper_cannot_start_m1_frozen_policy_trial(){
         let db=fixture();
         let mut t=Telemetry{connected:true,demo:false,account_trade_mode:Some(2),
             tick_age_ms:Some(0),symbol:"XAUUSD".into(),..Default::default()};
