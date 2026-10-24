@@ -41,10 +41,96 @@ pub fn refresh(engine: &mut Engine, db: &Connection, t: &Telemetry, now: u64) ->
     Ok(())
 }
 
+/// Research-only, one-time broker-ledger provenance at STOP/freeze.
+/// Mirrors refresh() replay rules, and rejects stale in-memory model counts.
+pub fn frozen_training_checkpoint(db:&Connection,t:&Telemetry,model:&Engine,now:u64)->Result<Value>{
+    anyhow::ensure!(t.connected&&t.demo&&t.account_trade_mode==Some(0)&&t.login>0
+        &&!t.server.is_empty()&&!t.symbol.is_empty(),"Bound MT5 Demo required");
+    let context=crate::coordinator_learning::context(t);
+    let mut query=db.prepare(
+        "SELECT closed_ms,payload FROM coordinator_broker_samples
+         WHERE context=?1 AND brain='sniper_learner'
+         ORDER BY closed_ms DESC,position_id DESC LIMIT 2000")?;
+    let rows=query.query_map([&context],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut count=0u64;
+    let mut targets=0u64;
+    let mut latest=0u64;
+    let mut earliest:Option<u64>=None;
+    let scanned=rows.len();
+    for (closed,raw) in rows {
+        anyhow::ensure!(closed<=now,"Future-dated broker close cannot enter training cutoff");
+        if closed==0||now.saturating_sub(closed)>30*24*60*60*1000{continue}
+        let p:Value=serde_json::from_str(&raw)?;
+        let s=&p["selection"];
+        if p["evidence_source"]!="mt5_demo_broker"||p["trading_mode"]!="sniper"
+            ||s["brain"]!=ID||s["policy"]!="sniper-ticks-v1"
+            ||!POLICIES.iter().any(|item|s["sniper_policy"]==*item)
+            ||s["sniper_definition"].as_str().is_none()
+            ||s["sniper_regime"].as_str().is_none()
+            ||!p["reward"].as_f64().is_some_and(f64::is_finite)
+            ||!p["net"].as_f64().is_some_and(f64::is_finite) {continue}
+        count+=1;
+        latest=latest.max(closed);
+        earliest=Some(earliest.map_or(closed,|v|v.min(closed)));
+        if s["sniper_target_mode"]=="adaptive"&&p["sniper_tp_preserved"]==true
+            &&s["sniper_target_arm"].as_u64().is_some_and(|n|(n as usize)<TARGET_ARMS)
+            &&s["sniper_target_pips"].as_f64().is_some_and(|p|p.is_finite()&&p>0.) {
+            targets+=1;
+        }
+    }
+    let model_count:u64=model.models.values().flat_map(|a|a.iter()).map(|p|p.samples).sum();
+    let model_targets:u64=model.target_models.values().flat_map(|a|a.iter()).map(|p|p.samples).sum();
+    anyhow::ensure!(model_count==count&&model_targets==targets,
+        "Model scores and broker training ledger differ; refresh before freeze");
+    Ok(serde_json::json!({
+        "schema":"p1k5c-sniper-learner-training-cutoff-v1",
+        "status":"captured","account_context":context,"cutoff_ms":now,
+        "source":"deduplicated_complete_mt5_demo_broker_samples",
+        "replay_limit":2000,"replay_window_days":30,
+        "ledger_rows_scanned":scanned,"broker_training_samples":count,
+        "broker_target_samples":targets,
+        "cached_policy_samples":model_count,"cached_target_samples":model_targets,
+        "latest_training_closed_ms":if count>0{Some(latest)}else{None},
+        "earliest_training_closed_ms":earliest,
+        "model_scores_frozen":true,"independent_oos":false,
+        "broker_pnl":Value::Null,
+        "note":"Ledger replay counts cross-checked at freeze, not a cryptographic model fingerprint, broker execution, or independent OOS certification."
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test] fn frozen_training_cutoff_rejects_unrefreshed_or_future_dated_ledger(){
+        let db=Connection::open_in_memory().unwrap();
+        crate::coordinator_learning::Learner::new(&db).unwrap();
+        let mut t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            login:17,server:"Demo".into(),symbol:"XAUUSD".into(),..Default::default()};
+        let ctx=crate::coordinator_learning::context(&t);
+        let record=json!({"evidence_source":"mt5_demo_broker","trading_mode":"sniper",
+            "net":2.,"reward":0.4,"selection":{"brain":ID,"policy":"sniper-ticks-v1",
+            "sniper_policy":"impulse","sniper_definition":"A","sniper_regime":"B"}});
+        db.execute("INSERT INTO coordinator_broker_samples VALUES('first',1,?1,'sniper_learner',1000,?2)",
+            rusqlite::params![ctx,record.to_string()]).unwrap();
+        let mut engine=Engine::default();
+        assert!(frozen_training_checkpoint(&db,&t,&engine,5000).is_err());
+        refresh(&mut engine,&db,&t,5000).unwrap();
+        let checkpoint=frozen_training_checkpoint(&db,&t,&engine,5000).unwrap();
+        assert_eq!(checkpoint["status"],"captured");
+        assert_eq!(checkpoint["broker_training_samples"],1);
+        assert_eq!(checkpoint["cached_policy_samples"],1);
+        assert_eq!(checkpoint["latest_training_closed_ms"],1000);
+        assert_eq!(checkpoint["independent_oos"],false);
+        assert!(checkpoint["broker_pnl"].is_null());
+        t.demo=false;t.account_trade_mode=Some(2);
+        assert!(frozen_training_checkpoint(&db,&t,&engine,5000).is_err());
+        t.demo=true;t.account_trade_mode=Some(0);
+        db.execute("INSERT INTO coordinator_broker_samples VALUES('future',2,?1,'sniper_learner',9000,?2)",
+            rusqlite::params![ctx,record.to_string()]).unwrap();
+        assert!(frozen_training_checkpoint(&db,&t,&engine,5000).is_err());
+    }
     #[test] fn restart_deduplication_context_definition_and_evidence_isolation() {
         let db=Connection::open_in_memory().unwrap();
         crate::coordinator_learning::Learner::new(&db).unwrap();
