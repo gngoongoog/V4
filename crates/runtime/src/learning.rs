@@ -188,7 +188,12 @@ impl Service{
         Ok(json!({"version":"learning-foundation-v1","feature_schema":FEATURE_SCHEMA,"label_schema":LABEL_SCHEMA,"snapshots":snapshots,"mode_verified_snapshots":mode_verified_snapshots,"legacy_unverified_snapshots":legacy_unverified_snapshots,"matured_labels":labels,"pending_labels":snapshots-labels,"models":models,"champion":champion,"challenger":challenger,"recent_models":recent,"latest":latest.map(|(bar_time,captured_ms,schema)|json!({"bar_time":bar_time,"captured_ms":captured_ms,"schema":schema})),"last_error":self.last_error,"training_enabled":false,"prediction_enabled":false,"champion_promotion_enabled":false,"live_self_modification":false,"note":"Registry accepts validated unreviewed challengers only. No model can influence Shadow."}))
     }
     pub fn export(&self,db:&Connection,dir:&Path,now:u64)->Result<Value>{
-        let name=format!("learning-dataset-{now}");let staging=dir.join("exports").join(format!(".{name}.tmp"));let destination=dir.join("exports").join(&name);if staging.exists()||destination.exists(){bail!("Learning export path already exists");}fs::create_dir_all(&staging)?;let mut staging_guard=DatasetExportStaging::new(&staging);let mut output=fs::File::create(staging.join("dataset.jsonl"))?;
+        let name=format!("learning-dataset-{now}");let staging=dir.join("exports").join(format!(".{name}.tmp"));let destination=dir.join("exports").join(&name);if staging.exists()||destination.exists(){bail!("Learning export path already exists");}
+        // Atomically reserve this export's staging name. create_dir_all would
+        // let a concurrent exporter enter and later delete another writer's data.
+        fs::create_dir_all(dir.join("exports"))?;
+        fs::create_dir(&staging)?;
+        let mut staging_guard=DatasetExportStaging::new(&staging);let mut output=fs::File::create(staging.join("dataset.jsonl"))?;
         let mut statement=db.prepare("SELECT s.id,s.context,s.bar_time,s.captured_ms,s.feature_schema,s.features,l.matured_ms,l.label_schema,l.label FROM learning_snapshots s JOIN learning_labels l ON l.snapshot_id=s.id ORDER BY s.context,s.bar_time,s.id")?;let mut rows=statement.query([])?;let mut count=0usize;let mut excluded_legacy=0usize;let mut excluded_schema=0usize;
         while let Some(r)=rows.next()?{let raw_context:String=r.get(1)?;if !verified_study_context(&raw_context){excluded_legacy+=1;continue;}
         // The manifest declares one immutable feature/label schema. Never blend
