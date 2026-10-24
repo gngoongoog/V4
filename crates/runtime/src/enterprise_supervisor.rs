@@ -146,9 +146,7 @@ pub(crate) fn assess(settings: &Settings, t: Option<&Telemetry>, c: &Config,
         if !t.connected || t.login==0 || t.server.is_empty() || t.symbol!=c.symbol {
             guards.push("MT5 account identity / symbol is not verified".into());
         }
-        if !t.tick_age_ms.is_some_and(|age|age<=settings.max_quote_age_ms)
-            || !t.quote_time_ms.is_some_and(|ts|ts>0 && ts<=now.saturating_add(2000)
-                  && now.saturating_sub(ts)<=settings.max_quote_age_ms) {
+        if !t.quote_is_fresh(now, settings.max_quote_age_ms) {
             guards.push("Broker quote missing, undated or stale".into());
         }
         let quote=t.bid.zip(t.ask).filter(|(bid,ask)|bid.is_finite() && ask.is_finite() && *bid>0. && *ask>=*bid);

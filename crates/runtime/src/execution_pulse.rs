@@ -22,6 +22,8 @@ struct Pulse {
     bid: f64,
     ask: f64,
     quote_time_ms: u64,
+    #[serde(default)]
+    source_quote_time_ms: Option<u64>,
     tick_age_ms: u64,
 }
 
@@ -64,14 +66,20 @@ impl FastContext {
         );
         anyhow::ensure!(pulse.quote_time_ms > 0, "Sniper pulse timestamp is required");
         anyhow::ensure!(pulse.tick_age_ms <= 1000, "Sniper pulse quote is stale");
+        anyhow::ensure!(self.telemetry.source_quote_time_ms.is_none()
+            || pulse.source_quote_time_ms.is_some(),
+            "Sniper pulse lost broker timestamp provenance");
+        let source_ms = pulse.source_quote_time_ms.unwrap_or(pulse.quote_time_ms);
+        anyhow::ensure!(source_ms > 0 && source_ms <= pulse.quote_time_ms,
+            "Invalid Sniper broker timestamp");
         // The gateway's reported age is not sufficient: a cached tick can
         // claim age 3ms while its exchange timestamp is minutes old.
         anyhow::ensure!(
-            now.saturating_sub(pulse.quote_time_ms) <= 1500,
+            now.saturating_sub(source_ms) <= 1500,
             "Sniper pulse exchange timestamp is stale"
         );
         anyhow::ensure!(
-            pulse.quote_time_ms <= now.saturating_add(2000),
+            source_ms <= now.saturating_add(2000),
             "Sniper pulse timestamp is in the future"
         );
         anyhow::ensure!(
@@ -81,10 +89,15 @@ impl FastContext {
             "Duplicate or out-of-order Sniper pulse"
         );
 
+        anyhow::ensure!(self.telemetry.broker_quote_time_ms()
+            .is_none_or(|previous| source_ms >= previous),
+            "Out-of-order Sniper broker quote");
+
         let mut next = self.clone();
         next.telemetry.bid = Some(pulse.bid);
         next.telemetry.ask = Some(pulse.ask);
         next.telemetry.quote_time_ms = Some(pulse.quote_time_ms);
+        next.telemetry.source_quote_time_ms = pulse.source_quote_time_ms;
         next.telemetry.tick_age_ms = Some(pulse.tick_age_ms);
         Ok(next)
     }
@@ -128,6 +141,41 @@ mod tests {
         assert_eq!(next.telemetry.quote_time_ms, Some(1001));
         assert_eq!(next.telemetry.login, base.telemetry.login);
         assert!(Arc::ptr_eq(&next.frames, &base.frames));
+    }
+
+    #[test]
+    fn dense_events_use_broker_time_for_freshness_and_event_time_for_dedup() {
+        let mut base = context();
+        base.telemetry.source_quote_time_ms = Some(1000);
+        let mut packet: serde_json::Value = serde_json::from_slice(&pulse()).unwrap();
+        packet["source_quote_time_ms"] = serde_json::json!(1000);
+        packet["quote_time_ms"] = serde_json::json!(5000);
+        let first = base.apply(&serde_json::to_vec(&packet).unwrap(), 1004).unwrap();
+        assert_eq!(first.telemetry.broker_quote_time_ms(), Some(1000));
+        assert_eq!(first.telemetry.quote_time_ms, Some(5000));
+        assert!(first.telemetry.quote_is_fresh(1004, 1000));
+        assert!(first.apply(&serde_json::to_vec(&packet).unwrap(), 1004).is_err());
+        packet["quote_time_ms"] = serde_json::json!(5001);
+        packet["bid"] = serde_json::json!(2500.2);
+        let second = first.apply(&serde_json::to_vec(&packet).unwrap(), 1004).unwrap();
+        assert_eq!(second.telemetry.bid, Some(2500.2));
+        packet["quote_time_ms"] = serde_json::json!(5002);
+        assert!(second.apply(&serde_json::to_vec(&packet).unwrap(), 3000).is_err());
+        packet["source_quote_time_ms"] = serde_json::json!(999);
+        assert!(second.apply(&serde_json::to_vec(&packet).unwrap(), 1004).is_err());
+        packet.as_object_mut().unwrap().remove("source_quote_time_ms");
+        assert!(second.apply(&serde_json::to_vec(&packet).unwrap(), 1004).is_err());
+    }
+
+    #[test]
+    fn rejects_malformed_or_future_source_time() {
+        let base = context();
+        for source in [0_u64, 5000, u64::MAX] {
+            let mut packet: serde_json::Value = serde_json::from_slice(&pulse()).unwrap();
+            packet["source_quote_time_ms"] = serde_json::json!(source);
+            assert!(base.apply(&serde_json::to_vec(&packet).unwrap(), 1004).is_err());
+        }
+        assert_eq!(base.telemetry.quote_time_ms, Some(1000));
     }
 
     #[test]

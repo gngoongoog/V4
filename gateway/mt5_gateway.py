@@ -257,9 +257,13 @@ def sniper_enabled(config: dict) -> bool:
 
 def pulse_payload(snapshot: dict) -> dict:
     """Minimal quote-only payload; reconciled account state stays cached in Core."""
-    return {key:snapshot.get(key) for key in (
+    payload = {key:snapshot.get(key) for key in (
         'login','server','currency','symbol','bid','ask','quote_time_ms','tick_age_ms'
     )}
+    # Event ordering and broker time are different clocks during a dense burst.
+    if snapshot.get('source_quote_time_ms') is not None:
+        payload['source_quote_time_ms'] = snapshot['source_quote_time_ms']
+    return payload
 
 
 def quote_signature(snapshot: dict):
@@ -273,8 +277,8 @@ def advance_quote_clock(previous: dict | None, current: dict):
     MT5 can report multiple quote changes with the same millisecond. Rust/Core's
     existing Sniper contract keys decisions by quote_time_ms, so we preserve the
     real broker millisecond separately and advance only the event clock by one
-    when necessary. This avoids a schema change while keeping freshness based on
-    the real source timestamp in tick_age_ms.
+    when necessary. Core receives both clocks; freshness must use source time,
+    while idempotency continues to use the strictly increasing event clock.
     """
     source_ms=current.get('source_quote_time_ms',current.get('quote_time_ms'))
     if source_ms is None:
@@ -291,6 +295,17 @@ def advance_quote_clock(previous: dict | None, current: dict):
         if account_changed:
             current['native_event_id']=None
         return current, True
+    previous_source=previous.get('source_quote_time_ms',previous.get('quote_time_ms'))
+    if previous_source is not None and int(source_ms) < int(previous_source):
+        # Preserve NEW reconciliation fields, without replaying an old Poll/EA
+        # price as a new event. Conservative age never freshens a cached quote.
+        for field in ('bid','ask','quote_time_ms','source_quote_time_ms','native_event_id'):
+            if field in previous:
+                current[field]=previous[field]
+        current['source_quote_time_ms']=int(previous_source)
+        current['tick_age_ms']=max(int(previous.get('tick_age_ms') or 0),
+                                   int(current.get('tick_age_ms') or 0))
+        return current, False
     changed=quote_signature(previous)!=quote_signature(current)
     previous_clock=int(previous.get('quote_time_ms') or 0)
     if changed:

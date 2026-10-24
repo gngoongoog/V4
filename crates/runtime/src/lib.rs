@@ -250,10 +250,7 @@ impl Engine{
                     "لا يمكن التحويل: توجد أوامر معلّقة في MT5");
                 let now=now_ms();
                 anyhow::ensure!(
-                    telemetry.tick_age_ms.is_some_and(|v|v <= 3000)
-                        && telemetry.quote_time_ms.is_some_and(|v|
-                            v <= now.saturating_add(2000)
-                            && now.saturating_sub(v) <= 3000),
+                    telemetry.quote_is_fresh(now, 3000),
                     "سعر MT5 قديم أو بلا وقت موثوق؛ لا نُحوّل التنفيذ بين العقول");
                 if self.execution.is_live_target() {
                     self.execution.validate_start(&current,body)?;

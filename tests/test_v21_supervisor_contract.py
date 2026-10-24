@@ -12,7 +12,9 @@ class V21SupervisorContract(unittest.TestCase):
   self.assertIn('const blocked=enforced && evidenceProblem;',ui)
  def test_no_pulse_claimed_fresh_only_from_reported_age(self):
   s=(ROOT/'crates/runtime/src/execution_pulse.rs').read_text(encoding='utf-8')
-  self.assertIn('now.saturating_sub(pulse.quote_time_ms) <= 1500',s)
+  self.assertIn('now.saturating_sub(source_ms) <= 1500',s)
+  self.assertIn('pulse.source_quote_time_ms.unwrap_or(pulse.quote_time_ms)',s)
+  self.assertIn('fn dense_events_use_broker_time_for_freshness_and_event_time_for_dedup()',s)
  def test_rust_regressions_cover_stale_and_corrupt_bars(self):
   s=(ROOT/'crates/runtime/src/enterprise_supervisor.rs').read_text(encoding='utf-8')
   self.assertIn('fn fresh_snapshot_with_old_candles_must_not_authorize_new_entries()',s)

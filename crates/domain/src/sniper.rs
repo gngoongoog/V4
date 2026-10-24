@@ -82,7 +82,7 @@ impl Engine {
         if !selected(c) { self.reset_quotes(); return s; }
         let def = definition(t, c);
         if self.definition != def { self.reset_quotes(); self.definition = def.clone(); }
-        let Some(ts) = t.quote_time_ms.filter(|ts| *ts <= now + 2000 && now.saturating_sub(*ts) <= 1000) else {
+        let Some(ts) = t.quote_time_ms.filter(|_| t.quote_is_fresh(now, 1000)) else {
             self.reset_quotes(); s.reason = "القناص: ينتظر سعراً حديثاً".into(); return s;
         };
         let cost = match trading::costs(t, c, 1., now) {
@@ -305,6 +305,25 @@ mod tests {
         for _ in 0..10 {assert!(!feed(&mut e,&mut t,&c,10000,2000.).ready);}
         feed(&mut e,&mut t,&c,10010,2000.1);assert!(feed(&mut e,&mut t,&c,10020,2000.2).ready);
         e.set_models("new account".into(),Models::new());assert!(!feed(&mut e,&mut t,&c,10030,2000.3).ready);
+    }
+    #[test]
+    fn broker_time_controls_freshness_while_dense_event_keys_remain_distinct() {
+        let (mut t,c)=fixture();let mut e=Engine::default();
+        t.source_quote_time_ms=Some(10000);
+        let mut keys=Vec::new();
+        for i in 0..4 {
+            t.bid=Some(2000.+i as f64*0.04);t.ask=Some(t.bid.unwrap()+0.01);
+            t.quote_time_ms=Some(15000+i);
+            let s=e.evaluate(&t,&c,10004);
+            assert_eq!(s.ready,i>=2,"{}",s.reason);
+            keys.push(s.key);
+        }
+        assert_ne!(keys[2],keys[3],"distinct event intents must not collide");
+        t.quote_time_ms=Some(15004);
+        assert!(!e.evaluate(&t,&c,11001).ready);
+        t.source_quote_time_ms=Some(11001);
+        t.quote_time_ms=Some(15005);
+        assert!(!e.evaluate(&t,&c,11001).ready,"stale data clears quote history");
     }
     #[test] fn losses_reduce_preference_and_nonloss_clears_streak() {
         let mut p=Policy::default();for _ in 0..10 {p.learn(-0.5,-2.);}

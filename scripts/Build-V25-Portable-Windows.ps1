@@ -36,6 +36,7 @@ try {
     '--output','test-output/v25/native-ea-package.json')
   Run (Join-Path $portable 'runtime/python/python.exe') @((Join-Path $portable 'runtime/gateway/check_runtime.py'))
   Run python @('scripts/smoke_portable_core.py',$exe)
+  Run python @('scripts/check_sniper_quote_clock.py','--exe',$exe)
   # Relocation and spaces must not make Core resolve Gateway relative to cwd.
   $moved=Join-Path $root 'target/portable/Relocated V25 Space'
   if(Test-Path $moved){Remove-Item $moved -Recurse -Force}

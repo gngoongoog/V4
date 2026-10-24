@@ -158,6 +158,9 @@ pub struct Telemetry {
     pub tick_age_ms: Option<u64>,
     #[serde(default)]
     pub quote_time_ms: Option<u64>,
+    /// Real MT5 time_msc; quote_time_ms remains the logical event ordering key.
+    #[serde(default)]
+    pub source_quote_time_ms: Option<u64>,
     pub symbol: String,
     pub volume_min: Option<f64>,
     pub volume_step: Option<f64>,
@@ -177,8 +180,24 @@ pub struct Telemetry {
     pub point: Option<f64>,
 }
 impl Telemetry {
+    pub fn broker_quote_time_ms(&self) -> Option<u64> {
+        let event = self.quote_time_ms.filter(|v| *v > 0)?;
+        match self.source_quote_time_ms {
+            Some(source) if source > 0 && source <= event => Some(source),
+            Some(_) => None,
+            None => Some(event), // Legacy snapshots lack verified source time.
+        }
+    }
+
+    pub fn quote_is_fresh(&self, now: u64, maximum_age_ms: u64) -> bool {
+        self.tick_age_ms.is_some_and(|v| v <= maximum_age_ms)
+            && self.broker_quote_time_ms().is_some_and(|v|
+                v <= now.saturating_add(2000) && now.saturating_sub(v) <= maximum_age_ms)
+    }
+
     pub fn validate(&self) -> bool {
         [self.balance, self.equity].iter().all(|v| v.is_finite())
+            && (self.source_quote_time_ms.is_none() || self.broker_quote_time_ms().is_some())
             && [
                 self.bid,
                 self.ask,

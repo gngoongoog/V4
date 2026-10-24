@@ -175,8 +175,9 @@ pub fn costs(t: &Telemetry, c: &Config, lots: f64, now: u64) -> Result<CostPrevi
         return Err("Lots must be positive and at most 100".into());
     }
     if !t.connected
+        || (t.source_quote_time_ms.is_some() && t.broker_quote_time_ms().is_none())
         || t.tick_age_ms.is_none_or(|v| v > 3000)
-        || t.quote_time_ms
+        || t.broker_quote_time_ms()
             .is_some_and(|v| v > now + 2000 || now.saturating_sub(v) > 3000)
     {
         return Err("Current MT5 quote required".into());
@@ -390,7 +391,7 @@ pub fn select(
     }
     if c.trading.mode == TradingMode::Sniper
         && (t.tick_age_ms.is_none_or(|v| v > 1000)
-            || t.quote_time_ms
+            || t.broker_quote_time_ms()
                 .is_none_or(|v| v > now + 2000 || now.saturating_sub(v) > 1000))
     {
         a.gates

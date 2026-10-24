@@ -57,6 +57,7 @@ jobs:
           python3 scripts/check_priority_handoff.py
           python3 scripts/check_flexible_demo.py
           python3 scripts/check_sniper_learner.py
+          python3 scripts/check_sniper_quote_clock.py
       - run: git diff --exit-code -- Cargo.lock apps/terminal/package-lock.json
   windows:
     runs-on: windows-latest

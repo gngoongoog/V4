@@ -144,9 +144,7 @@ pub fn evaluate(
     let mut s = empty(b, "بانتظار بيانات مكتملة وحديثة");
     if !t.connected
         || t.symbol != c.symbol
-        || t.tick_age_ms.is_none_or(|v| v > 3000)
-        || t.quote_time_ms
-            .is_none_or(|v| v > now + 2000 || now.saturating_sub(v) > 3000)
+        || !t.quote_is_fresh(now, 3000)
     {
         return s;
     }
