@@ -823,7 +823,7 @@ impl Service {
             )?;
             // No SQLite writes on Sniper hot path; this is bounded in-memory
             // accepted-pulse observation only. A failed Core pulse is not counted.
-            self.sniper_tick_audit.observe(&next.telemetry,body,now);
+            self.sniper_tick_audit.observe(pulse_status.telemetry.as_ref().unwrap(),body,now);
             work["pulse_fast_path"] = json!(true);
             work["pulse_to_work_us"] = json!(started.elapsed().as_micros() as u64);
             return Ok(work);
