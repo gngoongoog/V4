@@ -304,6 +304,44 @@ mod tests{
         assert_eq!(got["status"],"insufficient_broker_evidence");
         assert!(got["net_demo_account_currency"].is_null());
     }
+    #[test]fn missing_partial_or_changed_original_deal_refuses_sum(){
+        let (db,account,id,hash,cutoff)=fixture();
+        let close=cutoff+20_000;
+        insert(&db,&account,"system-receipts",11,close,payload(&account,11,close));
+        assert_eq!(inspect(&db,&account,&id,&hash).unwrap()["physical_broker_trades"],1);
+        let exit=11*100+2;
+        let raw:String=db.query_row(
+            "SELECT payload FROM broker_deals WHERE context=?1 AND ticket=?2",
+            params![&account,exit],|r|r.get(0)).unwrap();
+        db.execute("DELETE FROM broker_deals WHERE context=?1 AND ticket=?2",
+            params![&account,exit]).unwrap();
+        let partial=inspect(&db,&account,&id,&hash).unwrap();
+        assert_eq!(partial["status"],"insufficient_broker_evidence");
+        assert!(partial["net_demo_account_currency"].is_null());
+        db.execute("INSERT INTO broker_deals VALUES(?1,?2,11,'system',?3)",
+            params![&account,exit,raw]).unwrap();
+        assert_eq!(inspect(&db,&account,&id,&hash).unwrap()["physical_broker_trades"],1);
+        let mut changed:Value=serde_json::from_str(&raw).unwrap();
+        changed["commission"]=json!(-0.99);
+        db.execute("UPDATE broker_deals SET payload=?3 WHERE context=?1 AND ticket=?2",
+            params![&account,exit,changed.to_string()]).unwrap();
+        let corrupted=inspect(&db,&account,&id,&hash).unwrap();
+        assert_eq!(corrupted["status"],"insufficient_broker_evidence");
+        assert_eq!(corrupted["rejection_reasons"][0],
+            "missing_or_inconsistent_original_broker_deals");
+        assert!(corrupted["net_demo_account_currency"].is_null());
+    }
+    #[test]fn raw_open_order_identity_cannot_be_relabelled_as_verified_demo(){
+        let (db,account,id,hash,cutoff)=fixture();
+        insert(&db,&account,"system-1",12,cutoff+30_000,
+            payload(&account,12,cutoff+30_000));
+        let cmd="confirmed-core-open-12";
+        db.execute("UPDATE broker_commands SET result='{\"deal\":123456}'
+                   WHERE context=?1 AND id=?2",params![&account,cmd]).unwrap();
+        let changed=inspect(&db,&account,&id,&hash).unwrap();
+        assert_eq!(changed["status"],"insufficient_broker_evidence");
+        assert!(changed["net_demo_account_currency"].is_null());
+    }
     #[test]fn no_broker_closes_at_training_cutoff_or_wrong_financial_identity(){
         let (db,account,id,hash,cutoff)=fixture();
         insert(&db,&account,"before",9,cutoff,payload(&account,9,cutoff));
