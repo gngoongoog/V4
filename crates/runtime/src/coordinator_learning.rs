@@ -932,6 +932,123 @@ mod tests {
     }
 
 
+
+    #[test]
+    fn p1k5i_demo_partial_fill_disconnect_and_sqlite_restart_are_idempotent() {
+        // This exercises the genuine learner reconciliation path against
+        // synthetic MT5 deal fixtures, not a live MetaTrader terminal.
+        let path=std::env::temp_dir().join(
+            format!("bt-demo-replay-{}.sqlite",uuid::Uuid::new_v4()));
+        let config=Config::default();
+        let now=1_800_000_000_000u64;
+        let cutoff=now-120_000;
+        let t=Telemetry {
+            connected:true,demo:true,account_trade_mode:Some(0),
+            server:"Broker-Demo".into(),login:901,symbol:config.symbol.clone(),
+            currency:"USD".into(),tick_size:Some(0.01),
+            tick_value_loss:Some(1.),tick_value_profit:Some(1.),
+            ..Default::default()
+        };
+        let key=context(&t);
+        let (artifact,hash)={
+            let db=Connection::open(&path).unwrap();
+            let mut learner=Learner::new(&db).unwrap();
+            db.execute_batch(
+                "CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT NOT NULL,
+                   brain TEXT NOT NULL,kind TEXT NOT NULL,created_ms INTEGER NOT NULL,
+                   state TEXT NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL);
+                 CREATE TABLE broker_deals(context TEXT NOT NULL,ticket INTEGER NOT NULL,
+                   position_id INTEGER NOT NULL,brain TEXT NOT NULL,payload TEXT NOT NULL,
+                   PRIMARY KEY(context,ticket));"
+            ).unwrap();
+            let mut engine=braintrade_domain::sniper::Engine::default();
+            engine.set_models(key.clone(),Default::default());
+            let checkpoint=json!({"status":"captured","account_context":key,
+                "cutoff_ms":cutoff,"broker_training_samples":0,
+                "cached_policy_samples":0,"broker_target_samples":0,
+                "cached_target_samples":0,"independent_oos":false,
+                "broker_pnl":serde_json::Value::Null});
+            let seal=crate::sniper_research_artifact::persist(
+                &db,&t,&config,&engine,&checkpoint,cutoff).unwrap();
+            let command=json!({"id":"p1k5i-cmd","brain":"system",
+                "signal":{"side":1,"bar_time":10,"stop_distance":0.2,
+                    "target_distance":0.2,"reason":"synthetic broker acceptance",
+                    "coordination":{"trading_mode":"sniper",
+                        "selection":{"brain":"sniper_learner","policy":"sniper-ticks-v1",
+                            "timeframe":"M1","sniper_policy":"impulse",
+                            "sniper_definition":"fixture","sniper_regime":"directional_normal",
+                            "sniper_target_mode":"adaptive","sniper_target_arm":2,
+                            "sniper_target_pips":5.0}}},
+                "learning":{"trading_mode":"sniper","timeframe":"M1",
+                    "report_id":"","tick_size":0.01,"tick_value_loss":1.0,
+                    "tick_value_profit":1.0,"weight_at_entry":1.0}});
+            let result=json!({"deal":9001,"volume":0.1,"price":2000.0,
+                "request":{"price":2000.0,"tp":2000.2,"sl":1999.8}});
+            db.execute("INSERT INTO broker_commands VALUES('p1k5i-cmd',?1,'system','open',?2,
+                'observed',?3,?4)",
+                params![key,now-60_000,command.to_string(),result.to_string()]).unwrap();
+            let insert=|ticket:u64,entry:i64,volume:f64,profit:f64,commission:f64,
+                        swap:f64,fee:f64,stamp:u64|{
+                let v=json!({"ticket":ticket,"position_id":555,"magic":410600,
+                    "entry":entry,"time_msc":stamp,"volume":volume,
+                    "profit":profit,"commission":commission,"swap":swap,
+                    "fee":fee,"brain":"system"});
+                db.execute("INSERT INTO broker_deals VALUES(?1,?2,555,'system',?3)",
+                    params![key,ticket,v.to_string()]).unwrap();
+            };
+            insert(9001,0,0.1,0.,-0.20,0.,0.,now-60_000);
+            insert(9002,1,0.04,0.6,-0.10,0.,0.,now-10_000);
+            learner.observe(&db,&t,&config,&[],&BTreeMap::new(),false,now).unwrap();
+            assert_eq!(db.query_row(
+                "SELECT COUNT(*) FROM coordinator_broker_samples",
+                [],|r|r.get::<_,u64>(0)).unwrap(),0,
+                "A partially closed position cannot become a completed training label");
+            // Even after the final deal is recorded, REAL session feedback is
+            // forbidden to import this Demo-only specialist result.
+            insert(9003,1,0.06,0.9,-0.10,-0.05,-0.05,now-1_000);
+            let mut real=t.clone();real.demo=false;real.account_trade_mode=Some(2);
+            learner.observe(&db,&real,&config,&[],&BTreeMap::new(),false,now).unwrap();
+            assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_broker_samples",
+                [],|r|r.get::<_,u64>(0)).unwrap(),0);
+            (seal.id,seal.sha256)
+        };
+        {
+            // Reopen the actual on-disk SQLite after Core-equivalent restart.
+            let db=Connection::open(&path).unwrap();
+            let mut learner=Learner::new(&db).unwrap();
+            learner.observe(&db,&t,&config,&[],&BTreeMap::new(),false,now).unwrap();
+            let rows:Vec<(String,f64)>=db.prepare(
+                "SELECT brain,json_extract(payload,'$.net') FROM coordinator_broker_samples
+                 WHERE context=?1 ORDER BY brain").unwrap()
+                .query_map([&key],|r|Ok((r.get(0)?,r.get(1)?))).unwrap()
+                .collect::<rusqlite::Result<_>>().unwrap();
+            assert_eq!(rows.len(),2,
+                "A system broker position creates two attribution labels, not two physical trades");
+            assert_eq!(rows[0].0,"sniper_learner");
+            assert!((rows[0].1-1.0).abs()<1e-8);
+            let booked=crate::sniper_demo_booked_audit::inspect(
+                &db,&key,&artifact,&hash).unwrap();
+            assert_eq!(booked["physical_broker_trades"],1);
+            assert_eq!(booked["local_broker_deal_receipts_reconciled"],true);
+            assert!((booked["net_demo_account_currency"].as_f64().unwrap()-1.0).abs()<1e-8);
+            assert_eq!(booked["matched_with_frozen_markouts"],false);
+            learner.observe(&db,&t,&config,&[],&BTreeMap::new(),false,now+1).unwrap();
+            assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_broker_samples",
+                [],|r|r.get::<_,u64>(0)).unwrap(),2);
+        }
+        {
+            let db=Connection::open(&path).unwrap();
+            let mut learner=Learner::new(&db).unwrap();
+            learner.observe(&db,&t,&config,&[],&BTreeMap::new(),false,now+2).unwrap();
+            assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_broker_samples",
+                [],|r|r.get::<_,u64>(0)).unwrap(),2);
+            let mut another=t.clone();another.login+=1;
+            assert!(crate::sniper_demo_booked_audit::inspect(
+                &db,&context(&another),&artifact,&hash).is_err());
+        }
+        let _=std::fs::remove_file(path);
+    }
+
     #[test]
     fn coordinator_owned_sniper_close_trains_the_specialist_from_exact_demo_deals_once() {
         let db = Connection::open_in_memory().unwrap();

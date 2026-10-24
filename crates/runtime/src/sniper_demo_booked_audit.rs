@@ -4,7 +4,7 @@
 //! DO NOT pair them with 5-second research markouts or present one as the
 //! other's net PnL / Win Rate. No orders or SQLite writes here.
 use anyhow::Result;
-use rusqlite::{params,Connection};
+use rusqlite::{params,Connection,OptionalExtension};
 use serde_json::{json,Value};
 use std::collections::BTreeSet;
 
@@ -25,6 +25,87 @@ fn exists(db:&Connection)->Result<bool>{
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='coordinator_broker_samples')",
         [],|r|r.get(0))?)
 }
+/// Re-derive every booked amount from the per-ticket original MT5 Demo
+/// receipts and the observed open command, not merely a JSON aggregate.
+/// Missing history, partial close or corrupt receipt => no financial total.
+/// This does NOT independently attest the gateway's interaction with MT5.
+fn receipts_reconcile(db:&Connection,account:&str,position:u64,sample:&Value)
+    ->Result<bool>{
+    let present:bool=db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='broker_deals')",
+        [],|r|r.get(0))?;
+    if !present{return Ok(false)}
+    let commands:bool=db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='broker_commands')",
+        [],|r|r.get(0))?;
+    if !commands{return Ok(false)}
+    let command_id=sample["open_command_id"].as_str().unwrap_or("");
+    let cmd:Option<(String,String,String)>=db.query_row(
+        "SELECT brain,payload,result FROM broker_commands
+         WHERE context=?1 AND id=?2 AND kind='open'",
+        params![account,command_id],
+        |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))
+    ).optional()?;
+    let Some((brain,cmd,reply))=cmd else{return Ok(false)};
+    let Ok(cmd)=serde_json::from_str::<Value>(&cmd) else{return Ok(false)};
+    let Ok(reply)=serde_json::from_str::<Value>(&reply) else{return Ok(false)};
+    let open_ticket=sample["open_deal"].as_u64().unwrap_or(0);
+    if brain!=sample["trade_owner"].as_str().unwrap_or("")
+       ||reply["deal"].as_u64()!=Some(open_ticket)
+       ||cmd["signal"]["coordination"]["selection"]["brain"]!="sniper_learner"
+       ||cmd["signal"]["coordination"]["selection"]["policy"]!="sniper-ticks-v1"
+       ||cmd["signal"]["side"].as_i64().is_none_or(|side|!matches!(side,-1|1)){
+        return Ok(false)
+    }
+    let mut stmt=db.prepare(
+        "SELECT ticket,payload FROM broker_deals
+         WHERE context=?1 AND position_id=?2 ORDER BY ticket LIMIT 1001")?;
+    let rows=stmt.query_map(params![account,position],
+        |r|Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if rows.len()<2||rows.len()>1000{return Ok(false)}
+    let (mut buy_in,mut closed,mut gross,mut comm,mut swap,mut fee,mut latest)=
+        (0.,0.,0.,0.,0.,0.,0u64);
+    let mut original_open=false;
+    for (ticket,raw) in rows {
+        let Ok(d)=serde_json::from_str::<Value>(&raw)else{return Ok(false)};
+        let float=|key:&str|d[key].as_f64().filter(|v|v.is_finite());
+        let (Some(volume),Some(profit),Some(c),Some(sw),Some(f))=(
+            float("volume"),float("profit"),float("commission"),
+            float("swap"),float("fee"))else{return Ok(false)};
+        if d["ticket"].as_u64()!=Some(ticket)
+            ||d["position_id"].as_u64()!=Some(position)
+            ||volume<=0.||volume>100.{
+            return Ok(false)
+        }
+        match d["entry"].as_i64(){
+            Some(0)=>{buy_in+=volume;if ticket==open_ticket{original_open=true}},
+            Some(1)|Some(3)=>{
+                closed+=volume;
+                let Some(ts)=d["time_msc"].as_u64().filter(|ts|*ts>0)else{return Ok(false)};
+                latest=latest.max(ts);
+            },
+            // Netting reversal/unknown entry creates ambiguous attribution.
+            _=>return Ok(false)
+        }
+        gross+=profit;comm+=c;swap+=sw;fee+=f;
+    }
+    let approx=|a:f64,b:f64|{
+        a.is_finite()&&b.is_finite()
+        &&(a-b).abs()<=1e-6*(1.+a.abs().max(b.abs()))
+    };
+    Ok(original_open&&latest==sample["closed_ms"].as_u64().unwrap_or(0)
+        &&buy_in>0.&&closed>0.
+        &&approx(buy_in,closed)
+        &&approx(closed,sample["closed_volume"].as_f64().unwrap_or(f64::NAN))
+        &&approx(gross,sample["gross"].as_f64().unwrap_or(f64::NAN))
+        &&approx(comm,sample["commission"].as_f64().unwrap_or(f64::NAN))
+        &&approx(swap,sample["swap"].as_f64().unwrap_or(f64::NAN))
+        &&approx(fee,sample["fee"].as_f64().unwrap_or(f64::NAN))
+        &&approx(gross+comm+swap+fee,
+                  sample["net"].as_f64().unwrap_or(f64::NAN)))
+}
+
 /// Account context and cutoff MUST be taken from a verified frozen research
 /// artifact. Frozen research places ZERO orders and therefore must not be
 /// mislabeled as matching these separately executed coordinator trades.
@@ -80,6 +161,11 @@ pub fn inspect(db:&Connection,account:&str,artifact_id:&str,hash:&str)->Result<V
             refused+=1;rejected_reasons.insert("wrong_broker_identity_or_unbalanced_costs");
             continue
         }
+        if !receipts_reconcile(db,account,position_id,&v)?{
+            refused+=1;
+            rejected_reasons.insert("missing_or_inconsistent_original_broker_deals");
+            continue
+        }
         // The physical position can be attributed to another specialist as
         // well as system; count exact Position ID ONCE, never double count.
         if !positions.insert(position_id) {
@@ -115,6 +201,8 @@ pub fn inspect(db:&Connection,account:&str,artifact_id:&str,hash:&str)->Result<V
         "booked_fee_account_currency":fee,
         "net_demo_account_currency":net,
         "booked_costs_reconcile":true,
+        "local_broker_deal_receipts_reconciled":true,
+        "broker_connection_tested_here":false,
         "frozen_study_sent_orders":false,
         "matched_with_frozen_markouts":false,
         "comparison_with_five_second_markout_permitted":false,
@@ -131,6 +219,12 @@ mod tests{
     fn fixture()->(Connection,String,String,String,u64){
         let db=Connection::open_in_memory().unwrap();
         crate::coordinator_learning::Learner::new(&db).unwrap();
+        db.execute_batch(
+            "CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT,brain TEXT,
+               kind TEXT,created_ms INTEGER,state TEXT,payload TEXT,result TEXT);
+             CREATE TABLE broker_deals(context TEXT,ticket INTEGER,position_id INTEGER,
+               brain TEXT,payload TEXT,PRIMARY KEY(context,ticket));"
+        ).unwrap();
         let config=Config::default();
         let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
             login:25,server:"Demo".into(),currency:"USD".into(),
@@ -150,14 +244,37 @@ mod tests{
     fn payload(account:&str,position:u64,closed:u64)->Value{
         json!({"evidence_source":"mt5_demo_broker","context":account,
             "position_id":position,"brain":"sniper_learner","trading_mode":"sniper",
-            "trade_owner":"system","selection":{"brain":"sniper_learner"},
-            "open_command_id":"confirmed-core-open","open_deal":999,
+            "trade_owner":"system","selection":{"brain":"sniper_learner",
+                "policy":"sniper-ticks-v1"},
+            "open_command_id":format!("confirmed-core-open-{position}"),
+            "open_deal":position*100+1,
             "closed_ms":closed,"closed_volume":0.1,
             "gross":1.5,"commission":-0.7,"swap":0.0,"fee":-0.1,
             "net":0.7,"net_per_lot":7.0})
     }
     fn insert(db:&Connection,account:&str,source:&str,position:u64,
               closed:u64,payload:Value){
+        let command_id=payload["open_command_id"].as_str().unwrap();
+        let open_ticket=payload["open_deal"].as_u64().unwrap();
+        let cmd=json!({"id":command_id,"brain":"system","signal":{
+            "side":1,"coordination":{"selection":{
+                "brain":"sniper_learner","policy":"sniper-ticks-v1"}}}});
+        let result=json!({"deal":open_ticket});
+        db.execute(
+            "INSERT OR IGNORE INTO broker_commands VALUES(?1,?2,'system','open',1,
+             'observed',?3,?4)",
+            params![command_id,account,cmd.to_string(),result.to_string()]
+        ).unwrap();
+        for (ticket,entry,volume,profit,commission,fee,stamp) in [
+            (open_ticket,0,0.1,0.,-0.35,0.,closed.saturating_sub(1000)),
+            (open_ticket+1,1,0.1,1.5,-0.35,-0.1,closed)
+        ]{
+            let deal=json!({"ticket":ticket,"position_id":position,
+                "entry":entry,"volume":volume,"profit":profit,
+                "commission":commission,"swap":0.0,"fee":fee,"time_msc":stamp});
+            db.execute("INSERT OR IGNORE INTO broker_deals VALUES(?1,?2,?3,'system',?4)",
+                params![account,ticket,position,deal.to_string()]).unwrap();
+        }
         db.execute("INSERT INTO coordinator_broker_samples
            (source,position_id,context,brain,closed_ms,payload)
            VALUES(?1,?2,?3,'sniper_learner',?4,?5)",
@@ -186,6 +303,44 @@ mod tests{
         let got=inspect(&db,&account,&id,&hash).unwrap();
         assert_eq!(got["status"],"insufficient_broker_evidence");
         assert!(got["net_demo_account_currency"].is_null());
+    }
+    #[test]fn missing_partial_or_changed_original_deal_refuses_sum(){
+        let (db,account,id,hash,cutoff)=fixture();
+        let close=cutoff+20_000;
+        insert(&db,&account,"system-receipts",11,close,payload(&account,11,close));
+        assert_eq!(inspect(&db,&account,&id,&hash).unwrap()["physical_broker_trades"],1);
+        let exit=11*100+2;
+        let raw:String=db.query_row(
+            "SELECT payload FROM broker_deals WHERE context=?1 AND ticket=?2",
+            params![&account,exit],|r|r.get(0)).unwrap();
+        db.execute("DELETE FROM broker_deals WHERE context=?1 AND ticket=?2",
+            params![&account,exit]).unwrap();
+        let partial=inspect(&db,&account,&id,&hash).unwrap();
+        assert_eq!(partial["status"],"insufficient_broker_evidence");
+        assert!(partial["net_demo_account_currency"].is_null());
+        db.execute("INSERT INTO broker_deals VALUES(?1,?2,11,'system',?3)",
+            params![&account,exit,raw]).unwrap();
+        assert_eq!(inspect(&db,&account,&id,&hash).unwrap()["physical_broker_trades"],1);
+        let mut changed:Value=serde_json::from_str(&raw).unwrap();
+        changed["commission"]=json!(-0.99);
+        db.execute("UPDATE broker_deals SET payload=?3 WHERE context=?1 AND ticket=?2",
+            params![&account,exit,changed.to_string()]).unwrap();
+        let corrupted=inspect(&db,&account,&id,&hash).unwrap();
+        assert_eq!(corrupted["status"],"insufficient_broker_evidence");
+        assert_eq!(corrupted["rejection_reasons"][0],
+            "missing_or_inconsistent_original_broker_deals");
+        assert!(corrupted["net_demo_account_currency"].is_null());
+    }
+    #[test]fn raw_open_order_identity_cannot_be_relabelled_as_verified_demo(){
+        let (db,account,id,hash,cutoff)=fixture();
+        insert(&db,&account,"system-1",12,cutoff+30_000,
+            payload(&account,12,cutoff+30_000));
+        let cmd="confirmed-core-open-12";
+        db.execute("UPDATE broker_commands SET result='{\"deal\":123456}'
+                   WHERE context=?1 AND id=?2",params![&account,cmd]).unwrap();
+        let changed=inspect(&db,&account,&id,&hash).unwrap();
+        assert_eq!(changed["status"],"insufficient_broker_evidence");
+        assert!(changed["net_demo_account_currency"].is_null());
     }
     #[test]fn no_broker_closes_at_training_cutoff_or_wrong_financial_identity(){
         let (db,account,id,hash,cutoff)=fixture();

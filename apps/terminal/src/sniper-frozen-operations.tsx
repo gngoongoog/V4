@@ -107,6 +107,8 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
    &&booked.matched_with_frozen_markouts===false
    &&booked.comparison_with_five_second_markout_permitted===false
    &&booked.booked_costs_reconcile===true
+   &&booked.local_broker_deal_receipts_reconciled===true
+   &&booked.broker_connection_tested_here===false
    &&booked.real_account_data===false
    &&booked.strategy_win_rate===null;
  const recoveredBookedVerified=archivedJournalVerified
@@ -115,6 +117,7 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
    &&recoveredBooked.account_context===expected
    &&recoveredBooked.frozen_artifact_id===archive[0].id
    &&recoveredBooked.matched_with_frozen_markouts===false
+   &&recoveredBooked.local_broker_deal_receipts_reconciled===true
    &&recoveredBooked.real_account_data===false;
  const forwardScoped=scoped&&forward.schema==='p1k5b-forward-direction-v1'
    &&forward.independent_oos===false&&forward.broker_fills_observed===false
@@ -215,8 +218,10 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
     <div>صافي سجل الصفقات المنفصلة (عملة Demo) <strong>
      {priceMoney(booked.net_demo_account_currency)}</strong></div>
    </div>
-   <p className="safe-note">بيانات حجز Broker مسجلة محلياً، ولا تعتبر
-    نتيجة النموذج المجمد أو دليلاً مستقلاً على الربحية أو قبول REAL.</p>
+   <p className="safe-note">طابق Core حساب المراكز والمبالغ مع أوامر الفتح
+    وتذاكر Deals الأصلية المخزنة محلياً، حتى مع الإغلاق الجزئي.
+    هذا <strong>تدقيق SQLite لسجلات Demo</strong> وليس اختبار اتصال مباشر بوسيط
+    MT5 أو نتيجة النموذج المجمد أو دليلاً مستقلاً على الربحية أو قبول REAL.</p>
   </div>}
   {recoveredBookedVerified&&!scoped&&
    <p className="safe-note">أمكن استرجاع سجل صفقات Demo منفصل من قاعدة البيانات.
