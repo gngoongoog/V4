@@ -28,6 +28,7 @@ struct Trial{
     frozen:Engine,active:bool,reason:String,
     forward:crate::sniper_forward_direction::ForwardDirectionAudit,
     training_checkpoint:Value,
+    artifact_id:Option<String>,artifact_sha256:Option<String>,
     first_future_ms:Option<u64>,last_event:Option<u64>,
     last_broker:Option<u64>,last_quote:Option<(u64,u64,u64)>,last_origin:String,
     last_dropped:Option<u64>,
@@ -58,6 +59,21 @@ impl Study{
             "Frozen Learner training ledger checkpoint missing, stale or inconsistent");
         self.freeze_impl(t,c,adaptive,checkpoint,now)
     }
+    pub fn freeze_durable(&mut self,db:&rusqlite::Connection,t:&Telemetry,
+        c:&Config,adaptive:&Engine,checkpoint:Value,now:u64)->Result<Value>{
+        let mut result=self.freeze_verified(t,c,adaptive,checkpoint.clone(),now)?;
+        let seal=match crate::sniper_research_artifact::persist(db,t,c,adaptive,&checkpoint,now){
+            Ok(seal)=>seal,
+            Err(error)=>{self.trial=None;return Err(error)}
+        };
+        let trial=self.trial.as_mut().expect("new frozen trial");
+        trial.artifact_id=Some(seal.id.clone());
+        trial.artifact_sha256=Some(seal.sha256.clone());
+        result["research_artifact_id"]=json!(seal.id);
+        result["research_artifact_sha256"]=json!(seal.sha256);
+        result["persistence"]=json!("sqlite_freeze_checkpoint_only");
+        Ok(result)
+    }
     fn freeze_impl(&mut self,t:&Telemetry,c:&Config,adaptive:&Engine,
         checkpoint:Value,now:u64)->Result<Value>{
         ensure!(eligible(t,c,now),
@@ -70,6 +86,7 @@ impl Study{
             context:context(t),started_ms:now,config:c.clone(),frozen,
             active:true,reason:String::new(),forward:Default::default(),
             training_checkpoint:checkpoint,
+            artifact_id:None,artifact_sha256:None,
             first_future_ms:None,last_event:None,last_broker:None,last_quote:None,
             last_origin:String::new(),last_dropped:None,
             accepted:0,comparable:0,exact:0,side_disagreements:0,
@@ -236,6 +253,8 @@ impl Study{
             "minimum_warmup_ms":WARMUP_MS,
             "forward_direction_audit":trial.forward.json(),
             "training_checkpoint":trial.training_checkpoint,
+            "research_artifact_id":trial.artifact_id,
+            "research_artifact_sha256":trial.artifact_sha256,
             "forward_only":true,
             "model_scores_frozen":true,"prior_tick_window_discarded":true,
             "persistence":"memory_only","read_only":true,
