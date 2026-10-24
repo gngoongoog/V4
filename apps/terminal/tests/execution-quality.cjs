@@ -6,7 +6,7 @@ const transpile=p=>ts.transpileModule(fs.readFileSync(path.join(base,p),'utf8'),
 }).outputText;
 const logic={};vm.runInNewContext(transpile('execution-quality.ts'),{exports:logic,JSON,Set,Number,Object});
 const {qualityObservation}=logic;
-const NOW=1_780_000_000_000;
+const NOW=Date.now();
 const t={connected:true,demo:true,account_trade_mode:0,login:12345,server:'Demo-Srv',currency:'USD',symbol:'XAUUSD'};
 const status={gateway_fresh:true,telemetry:t};
 const baseReport={
