@@ -151,6 +151,13 @@ def check(exe=None):
             assert trade['origin']['trading_mode']=='scalping',trade
             assert abs(trade['broker_net_booked']-9.1)<1e-7,trade
             assert 'shadow_paper' in api('/v1/execution')
+            # The close deals are journaled, but the original fill command
+            # is not broker-observed until another verified position snapshot.
+            # Never allow shutdown to strand an unreconciled fill.
+            try:api('/v1/shutdown',{})
+            except urllib.error.HTTPError as e:assert e.code==400
+            else:raise AssertionError('Core shut down before MT5 position reconciliation')
+            publish()  # Confirm the now-flat synthetic Demo portfolio.
             # Restart does not erase the real account journal or activate MT5.
             api('/v1/shutdown',{})
             process.wait(timeout=10)
