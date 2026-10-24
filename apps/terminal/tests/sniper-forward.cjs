@@ -43,3 +43,33 @@ test('P1-K5C requires checked frozen Demo training cutoff without OOS claim',()=
  assert.match(ui,/training\.broker_pnl===null/);
  assert.match(ui,/training\.independent_oos===false/);
 });
+
+test('P1-K5D records frozen score data with verified digest and append-only account archive',()=>{
+ const policy=code('crates/domain/src/sniper.rs');
+ const artifact=code('crates/runtime/src/sniper_research_artifact.rs');
+ const study=code('crates/runtime/src/sniper_frozen_tick.rs');
+ const route=code('crates/runtime/src/execution.rs');
+ const screen=code('apps/terminal/src/sniper-frozen-operations.tsx');
+ assert.match(policy,/pub fn frozen_research_scores\(/);
+ assert.match(artifact,/Sha256::digest/);
+ assert.match(artifact,/CREATE TABLE IF NOT EXISTS sniper_freeze_research_artifacts/);
+ assert.match(artifact,/CREATE TRIGGER IF NOT EXISTS sniper_artifact_no_update/);
+ assert.match(artifact,/CREATE TRIGGER IF NOT EXISTS sniper_artifact_no_delete/);
+ assert.match(artifact,/Research checkpoint SHA-256 mismatch/);
+ assert.match(artifact,/Research checkpoint account mismatch/);
+ assert.match(artifact,/Research checkpoint changed since freeze/);
+ assert.match(artifact,/sha\(&serde_json::to_vec\(scores\)\?\)/);
+ assert.match(artifact,/SELECT id FROM sniper_freeze_research_artifacts/);
+ assert.match(artifact,/forward_labels":Value::Null/);
+ assert.match(artifact,/independent_oos":false/);
+ assert.match(study,/freeze_durable\(/);
+ assert.match(study,/self\.freeze_verified\(/);
+ assert.match(study,/self\.trial=None;return Err\(error\)/);
+ assert.match(study,/research_artifact_id":trial\.artifact_id/);
+ assert.match(route,/sniper_research_artifact::verify\(db,&account,&id,expected\)/);
+ assert.match(route,/sniper_research_artifact::recent\(db,&account\)/);
+ assert.match(screen,/proof\.integrity==='verified'/);
+ assert.match(screen,/archive\.map\(/);
+ assert.match(screen,/statusValue==='integrity_failure'/);
+ assert.match(screen,/SHA-256 VERIFIED/);
+});
