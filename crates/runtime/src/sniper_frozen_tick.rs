@@ -27,7 +27,7 @@ struct Trial{
     context:String,started_ms:u64,config:Config,
     frozen:Engine,active:bool,reason:String,
     first_future_ms:Option<u64>,last_event:Option<u64>,
-    last_broker:Option<u64>,last_origin:String,
+    last_broker:Option<u64>,last_quote:Option<(u64,u64,u64)>,last_origin:String,
     last_dropped:Option<u64>,
     accepted: u64,comparable:u64,
     exact:u64,side_disagreements:u64,readiness_disagreements:u64,
@@ -35,6 +35,7 @@ struct Trial{
     excluded_legacy:u64,excluded_switch:u64,excluded_gap:u64,
     excluded_overflow:u64,excluded_warmup:u64,
     unpaired_reconciled_quote_changes:u64,
+    unpaired_same_clock_price_changes:u64,
 }
 #[derive(Default)]
 pub struct Study{trial:Option<Trial>}
@@ -50,13 +51,14 @@ impl Study{
         self.trial=Some(Trial{
             context:context(t),started_ms:now,config:c.clone(),frozen,
             active:true,reason:String::new(),
-            first_future_ms:None,last_event:None,last_broker:None,
+            first_future_ms:None,last_event:None,last_broker:None,last_quote:None,
             last_origin:String::new(),last_dropped:None,
             accepted:0,comparable:0,exact:0,side_disagreements:0,
             readiness_disagreements:0,target_disagreements:0,
             both_waiting:0,excluded_legacy:0,excluded_switch:0,
             excluded_gap:0,excluded_overflow:0,excluded_warmup:0,
             unpaired_reconciled_quote_changes:0,
+            unpaired_same_clock_price_changes:0,
         });
         Ok(json!({"ok":true,"status":"active","context":context(t),
             "frozen_ms":now,"policy":"p1k3-sniper-learner-forward-tick-v1",
@@ -84,15 +86,28 @@ impl Study{
         }
         if let Some(last)=trial.last_broker {
             let incoming=t.source_quote_time_ms;
-            // Unknown quote provenance on a full snapshot is also a break in
-            // the trace once the trial has started.
-            if incoming.is_none()||incoming.is_some_and(|x|x>last){
+            // Broker timestamps may have only millisecond resolution: a
+            // different Bid/Ask at the SAME broker time is still a new
+            // unpaired observation in the executing engine. Excluding it
+            // prevents a falsely "matched" frozen-versus-live tick pair.
+            let same_clock_price_change=incoming==Some(last)
+                &&trial.last_quote.is_some_and(|(ts,bid,ask)|{
+                    ts==last&&(t.bid.is_some_and(|v|v.to_bits()!=bid)
+                        ||t.ask.is_some_and(|v|v.to_bits()!=ask))
+                });
+            // Unknown quote provenance on a full snapshot also breaks the
+            // trace after the study has started.
+            if incoming.is_none()||incoming.is_some_and(|x|x>last)
+                ||same_clock_price_change{
                 trial.unpaired_reconciled_quote_changes+=1;
+                if same_clock_price_change{trial.unpaired_same_clock_price_changes+=1;}
                 trial.first_future_ms=None;
                 trial.frozen.reset_quotes();
                 trial.last_origin.clear();
                 trial.last_dropped=None;
                 if let Some(tick)=incoming{trial.last_broker=Some(tick)}
+                trial.last_quote=incoming.zip(t.bid).zip(t.ask)
+                    .map(|((ms,bid),ask)|(ms,bid.to_bits(),ask.to_bits()));
             }
         }
     }
@@ -133,6 +148,7 @@ impl Study{
             if overflow{trial.excluded_overflow+=1}
         }
         trial.last_event=Some(event);trial.last_broker=Some(broker);
+        trial.last_quote=t.bid.zip(t.ask).map(|(bid,ask)|(broker,bid.to_bits(),ask.to_bits()));
         trial.last_origin=src.to_owned();trial.last_dropped=drop;
         trial.accepted+=1;
         if bad_source||changed||gap>GAP_MS||overflow {return}
@@ -184,6 +200,7 @@ impl Study{
             "excluded_native_queue_counter_change":trial.excluded_overflow,
             "excluded_early_warmup":trial.excluded_warmup,
             "unpaired_reconciled_quote_changes":trial.unpaired_reconciled_quote_changes,
+            "unpaired_same_clock_price_changes":trial.unpaired_same_clock_price_changes,
             "minimum_warmup_ms":WARMUP_MS,
             "forward_only":true,
             "model_scores_frozen":true,"prior_tick_window_discarded":true,
@@ -300,6 +317,45 @@ mod tests{
         assert_eq!(r["unpaired_reconciled_quote_changes"],1);
         assert_eq!(r["comparable_future_tick_decisions"],0);
         assert_eq!(r["independent_oos"],false);
+    }
+    #[test]
+    fn same_broker_millisecond_with_different_reconciled_price_is_not_paired(){
+        let (mut t,c,e)=fixture(100_000);
+        let mut study=Study::default();
+        let mut adaptive=e.frozen_study_copy();
+        study.freeze(&t,&c,&e,100_000).unwrap();
+        for step in 1..=12u64 {
+            let ts=100_000+step*250;
+            t.source_quote_time_ms=Some(ts);
+            t.quote_time_ms=Some(ts);
+            t.bid=Some(2500.0+step as f64*0.03);
+            t.ask=Some(2500.2+step as f64*0.03);
+            let raw=adaptive.evaluate(&t,&c,ts+1);
+            study.observe(&t,&c,Some(&raw),&meta("native",0),ts+1);
+        }
+        let before=study.report(Some(&t),103_100);
+        assert!(before["comparable_future_tick_decisions"].as_u64().unwrap()>0);
+        // Re-reading the IDENTICAL broker snapshot cannot exclude a tick.
+        study.reconcile(&t,&c);
+        assert_eq!(study.report(Some(&t),103_101)["unpaired_reconciled_quote_changes"],0);
+        // MT5 may report distinct prices with the exact same broker millisecond.
+        // The adaptive engine sees the snapshot; frozen Fast Pulse did not.
+        let mut unpaired=t.clone();
+        unpaired.ask=Some(t.ask.unwrap()+0.02);
+        study.reconcile(&unpaired,&c);
+        let excluded=study.report(Some(&unpaired),103_101);
+        assert_eq!(excluded["unpaired_reconciled_quote_changes"],1);
+        assert_eq!(excluded["unpaired_same_clock_price_changes"],1);
+        let next=103_250;
+        unpaired.source_quote_time_ms=Some(next);
+        unpaired.quote_time_ms=Some(next);
+        let raw=adaptive.evaluate(&unpaired,&c,next+1);
+        study.observe(&unpaired,&c,Some(&raw),&meta("native",0),next+1);
+        let later=study.report(Some(&unpaired),next+1);
+        assert_eq!(later["comparable_future_tick_decisions"],before["comparable_future_tick_decisions"],
+            "unpaired same-ms quote must force forward warmup, not claim agreement");
+        assert!(later["paper_pnl"].is_null());
+        assert_eq!(later["independent_oos"],false);
     }
     #[test]
     fn frozen_study_does_not_inherit_old_account_or_live_quotes(){
