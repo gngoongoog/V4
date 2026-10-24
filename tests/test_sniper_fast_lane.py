@@ -92,6 +92,32 @@ class SniperFastLaneTests(unittest.TestCase):
         self.assertNotIn("market", payload)
         self.assertNotIn("dom", payload)
 
+    def test_quote_origin_native_poll_and_mailbox_overflow_are_explicit_and_bounded(self):
+        snapshot = {
+            "login": 17, "server": "Demo", "currency": "USD",
+            "symbol": "XAUUSD", "bid": 2500.1, "ask": 2500.3,
+            "source_quote_time_ms": 2000, "quote_time_ms": 2001,
+            "tick_age_ms": 1, "positions": [{"ticket": 9}]
+        }
+        for origin in ("native", "poll"):
+            p = gateway.pulse_payload(snapshot, quote_source=origin,
+                native_dropped_total=12)
+            self.assertEqual(p["quote_source"], origin)
+            self.assertEqual(p["native_dropped_total"], 12)
+            self.assertEqual(p["source_quote_time_ms"], 2000)
+            self.assertEqual(p["quote_time_ms"], 2001)
+            self.assertNotIn("positions", p)
+        legacy = gateway.pulse_payload(snapshot)
+        self.assertNotIn("quote_source", legacy)
+        self.assertNotIn("native_dropped_total", legacy)
+        for invalid_source in ("", "paper", "fake-native", "trade"):
+            with self.assertRaises(ValueError):
+                gateway.pulse_payload(snapshot, quote_source=invalid_source)
+        for invalid_counter in (-1, 3.5, True, "14"):
+            with self.assertRaises(ValueError):
+                gateway.pulse_payload(snapshot, quote_source="native",
+                    native_dropped_total=invalid_counter)
+
     def test_only_tick_entries_and_owned_closes_use_fast_dispatch(self):
         tick_open = {"kind": "open", "signal": {"key": "tick:123"}}
         bar_open = {"kind": "open", "signal": {"key": "bar:123"}}
