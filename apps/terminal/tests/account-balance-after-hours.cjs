@@ -20,7 +20,7 @@ assert.match(code,/const account=accountFresh\?t:null;/,'stale market ticks must
 assert.match(code,/\['Balance',money\(account\?\.balance,currency\)\]/);
 assert.match(code,/\['Equity',money\(account\?\.equity,currency\)\]/);
 assert.match(code,/ready=\{!preview&&trustworthy\}/,'the execution binding readiness may not become tickless');
-assert.match(code,/className=\{'pulse-dot '\+\(accountFresh\?'online':' '\)\}/.source? /accountFresh\?'online':' '/ : /accountFresh/);
+assert(code.includes("className={'pulse-dot '+(accountFresh?'online':'')}"),'connection pill must show broker status independently of tick status');
 assert.match(code,/accountFresh\?'MT5 CONNECTED':'MT5 OFFLINE'/);
 assert.match(code,/feed\.broker\?\(feed\.quote\?'ACCOUNT \+ QUOTES FRESH':'ACCOUNT CONNECTED · QUOTES STALE'\)/);
 const disconnected=exported.feedEvidence({...status,gateway_fresh:false},true,now,now);
