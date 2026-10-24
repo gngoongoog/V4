@@ -19,10 +19,11 @@ import {ModeEvidenceOperations} from './mode-evidence-operations';
 import {FrozenCoordinatorOperations,supportedFrozenMode} from './frozen-coordinator-operations';
 import {QuoteClockEvidence} from './quote-clock-evidence';
 import {SniperTickEvidence} from './sniper-tick-evidence';
+import {SniperFrozenOperations,eligibleFrozenSniper} from './sniper-frozen-operations';
 import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position} from './types';
 import {DESIGN_FIXTURE} from './mock';
-import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,backtestAction,saveTrading,saveSupervisor,updateBrainControl,bindExecution,frozenCoordinatorAction} from './bridge';
+import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,backtestAction,saveTrading,saveSupervisor,updateBrainControl,bindExecution,frozenCoordinatorAction,frozenSniperAction} from './bridge';
 import {money,num,signed,up,valid} from './format';
 
 type IconComponent=typeof Home;
@@ -112,7 +113,7 @@ export default function Terminal(){
  const [pageTimeSlot,setPageTimeSlot]=useState<{scope:string;timestamp:number|null}|null>(null);
  const [config,setConfig]=useState<Record<string,unknown>|null>(null);const [riskSnapshot,setRiskSnapshot]=useState<Record<string,unknown>|null>(null);
  const [configScope,setConfigScope]=useState<string|null>(null);const [riskScope,setRiskScope]=useState<string|null>(null);
- const [learning,setLearning]=useState<Record<string,unknown>|null>(null);const [brainReport,setBrainReport]=useState<Record<string,unknown>|null>(null);const [frozenSlot,setFrozenSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [portfolioReport,setPortfolioReport]=useState<Record<string,unknown>|null>(null);const [executionQuality,setExecutionQuality]=useState<Record<string,unknown>|null>(null);const [modeEvidence,setModeEvidence]=useState<Record<string,unknown>|null>(null);const [sniperAuditSlot,setSniperAuditSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [filter,setFilter]=useState<'all'|'buy'|'sell'>('all');const [opsTab,setOpsTab]=useState<'trade'|'orders'|'advanced'>('trade');
+ const [learning,setLearning]=useState<Record<string,unknown>|null>(null);const [brainReport,setBrainReport]=useState<Record<string,unknown>|null>(null);const [frozenSlot,setFrozenSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [portfolioReport,setPortfolioReport]=useState<Record<string,unknown>|null>(null);const [executionQuality,setExecutionQuality]=useState<Record<string,unknown>|null>(null);const [modeEvidence,setModeEvidence]=useState<Record<string,unknown>|null>(null);const [sniperAuditSlot,setSniperAuditSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [sniperFrozenSlot,setSniperFrozenSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [filter,setFilter]=useState<'all'|'buy'|'sell'>('all');const [opsTab,setOpsTab]=useState<'trade'|'orders'|'advanced'>('trade');
  const [clock,setClock]=useState('');const [lastStatusAt,setLastStatusAt]=useState<number|null>(null);const [liveLogin,setLiveLogin]=useState('');const [approval,setApproval]=useState<OperatorApproval|null>(null);
  const [settingsEdit,setSettingsEdit]=useState<Record<string,unknown>|null>(null);
  const [settingsScope,setSettingsScope]=useState<string|null>(null);
@@ -143,6 +144,7 @@ export default function Terminal(){
  // The existing generation fence separately prevents late callbacks writing.
  const pageData=pagePanel?.scope===viewScope?pagePanel.data:null;
  const activeSniperAudit=sniperAuditSlot?.scope===viewScope?sniperAuditSlot.report:null;
+ const activeSniperFrozen=sniperFrozenSlot?.scope===viewScope?sniperFrozenSlot.report:null;
  const activeFrozenCoordinator=frozenSlot?.scope===viewScope?frozenSlot.report:null;
  const pageError=pageErrorSlot?.scope===viewScope?pageErrorSlot.message:'';
  const pageUpdatedAt=pageTimeSlot?.scope===viewScope?pageTimeSlot.timestamp:null;
@@ -255,6 +257,23 @@ export default function Terminal(){
   setExecutionQuality(null);get();
   const timer=setInterval(()=>{if(document.visibilityState==='visible')get()},3000);
   return()=>{active=false;clearInterval(timer)};
+ },[page,preview,contextKey]);
+ useEffect(()=>{
+  if(page!=='sniper'||preview||!hasTauri()){setSniperFrozenSlot(null);return;}
+  let alive=true;
+  const refresh=()=>{
+   const ticket=scopedGeneration.current.beginRead('sniperFrozen');
+   void readPanel('/v1/execution/frozen-sniper').then(v=>{
+    if(alive&&scopedGeneration.current.isCurrent(ticket))
+      setSniperFrozenSlot({scope:viewScope,report:unwrap(v)});
+   }).catch(()=>{
+    if(alive&&scopedGeneration.current.isCurrent(ticket))
+      setSniperFrozenSlot({scope:viewScope,report:null});
+   });
+  };
+  setSniperFrozenSlot(null);refresh();
+  const timer=setInterval(()=>{if(document.visibilityState==='visible')refresh()},5000);
+  return()=>{alive=false;clearInterval(timer)};
  },[page,preview,contextKey]);
  useEffect(()=>{
   if(page!=='sniper'||preview||!hasTauri()){setSniperAuditSlot(null);return;}
@@ -530,6 +549,30 @@ export default function Terminal(){
     setConfig(full);setConfigScope(contextKey);setBrainReport(null);void refreshBrainEvidence();
    }
    sendNotice('تم تأكيد وحفظ وضع المنسق والعمولة من Rust Core');
+  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
+  finally{finishWrite(mutation)}
+ };
+ const runFrozenSniper=async(action:'freeze'|'stop')=>{
+  const t=status?.telemetry;
+  if(preview||!hasTauri()||page!=='sniper'||status?.requested_run
+     ||!eligibleFrozenSniper(status,pageData)||!t?.connected){
+    sendNotice('بحث Sniper Learner يحتاج STOP وMT5 Demo ووضع القناص المتعلم',true);return;
+  }
+  const ctx=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
+  const mutation=beginWrite('sniper-frozen');if(!mutation)return;
+  try{
+    const result=unwrap(await frozenSniperAction(action,ctx));
+    if(!writeFresh(mutation))return;
+    if(result.ok!==true||result.no_broker_orders!==true && action==='freeze'){
+      sendNotice('Core لم يؤكد تنفيذ الأمر البحثي',true);return
+    }
+    const ticket=scopedGeneration.current.beginRead('sniperFrozen');
+    const read=unwrap(await readPanel('/v1/execution/frozen-sniper'));
+    if(!writeFresh(mutation))return;
+    if(scopedGeneration.current.isCurrent(ticket))
+      setSniperFrozenSlot({scope:viewScope,report:read});
+    sendNotice(action==='freeze'?'تم تثبيت نسخة Sniper Learner البحثية في Core':
+      'تم إيقاف المقارنة البحثية مع بقاء تنفيذ التداول دون تغيير');
   }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
   finally{finishWrite(mutation)}
  };
