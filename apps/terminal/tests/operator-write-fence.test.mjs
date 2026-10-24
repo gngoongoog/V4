@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'node:fs';
+import path from 'node:path';
 import {OperatorWriteFence} from '../src/operator-write-fence.ts';
 
 const deferred=()=>{let resolve,reject;const promise=new Promise((ok,bad)=>{resolve=ok;reject=bad});return {promise,resolve,reject}};
@@ -81,8 +83,6 @@ test('tampered ticket and wrong finish cannot release live write',()=>{
 });
 
 test('ui Core mutations are wired to a fence before sending and checking acknowledgements',()=>{
- const fs=require('node:fs');
- const path=require('node:path');
  const ui=fs.readFileSync(path.resolve(import.meta.dirname,'../src/terminal.tsx'),'utf8');
  const blocks=[
   ['risk','saveRisk'],['portfolio','savePortfolio'],['config','saveSettings'],
