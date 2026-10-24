@@ -219,6 +219,12 @@ mod tests{
     fn fixture()->(Connection,String,String,String,u64){
         let db=Connection::open_in_memory().unwrap();
         crate::coordinator_learning::Learner::new(&db).unwrap();
+        db.execute_batch(
+            "CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT,brain TEXT,
+               kind TEXT,created_ms INTEGER,state TEXT,payload TEXT,result TEXT);
+             CREATE TABLE broker_deals(context TEXT,ticket INTEGER,position_id INTEGER,
+               brain TEXT,payload TEXT,PRIMARY KEY(context,ticket));"
+        ).unwrap();
         let config=Config::default();
         let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
             login:25,server:"Demo".into(),currency:"USD".into(),
@@ -238,14 +244,37 @@ mod tests{
     fn payload(account:&str,position:u64,closed:u64)->Value{
         json!({"evidence_source":"mt5_demo_broker","context":account,
             "position_id":position,"brain":"sniper_learner","trading_mode":"sniper",
-            "trade_owner":"system","selection":{"brain":"sniper_learner"},
-            "open_command_id":"confirmed-core-open","open_deal":999,
+            "trade_owner":"system","selection":{"brain":"sniper_learner",
+                "policy":"sniper-ticks-v1"},
+            "open_command_id":format!("confirmed-core-open-{position}"),
+            "open_deal":position*100+1,
             "closed_ms":closed,"closed_volume":0.1,
             "gross":1.5,"commission":-0.7,"swap":0.0,"fee":-0.1,
             "net":0.7,"net_per_lot":7.0})
     }
     fn insert(db:&Connection,account:&str,source:&str,position:u64,
               closed:u64,payload:Value){
+        let command_id=payload["open_command_id"].as_str().unwrap();
+        let open_ticket=payload["open_deal"].as_u64().unwrap();
+        let cmd=json!({"id":command_id,"brain":"system","signal":{
+            "side":1,"coordination":{"selection":{
+                "brain":"sniper_learner","policy":"sniper-ticks-v1"}}}});
+        let result=json!({"deal":open_ticket});
+        db.execute(
+            "INSERT OR IGNORE INTO broker_commands VALUES(?1,?2,'system','open',1,
+             'observed',?3,?4)",
+            params![command_id,account,cmd.to_string(),result.to_string()]
+        ).unwrap();
+        for (ticket,entry,volume,profit,commission,fee,stamp) in [
+            (open_ticket,0,0.1,0.,-0.35,0.,closed.saturating_sub(1000)),
+            (open_ticket+1,1,0.1,1.5,-0.35,-0.1,closed)
+        ]{
+            let deal=json!({"ticket":ticket,"position_id":position,
+                "entry":entry,"volume":volume,"profit":profit,
+                "commission":commission,"swap":0.0,"fee":fee,"time_msc":stamp});
+            db.execute("INSERT OR IGNORE INTO broker_deals VALUES(?1,?2,?3,'system',?4)",
+                params![account,ticket,position,deal.to_string()]).unwrap();
+        }
         db.execute("INSERT INTO coordinator_broker_samples
            (source,position_id,context,brain,closed_ms,payload)
            VALUES(?1,?2,?3,'sniper_learner',?4,?5)",
