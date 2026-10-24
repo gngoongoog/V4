@@ -12,6 +12,7 @@ on:
       - 'ci/v25_p0e_native_reconnect.patch'
       - 'ci/v25_apply_p0e_patch.py'
       - 'ci/v25_p0f_history_guard_overlay.py'
+      - 'ci/v25_p0g_ui_context_overlay.py'
       - 'tests/test_p0f_history_sync_identity.py'
       - 'gateway/sniper_native.py'
       - 'tests/test_p0e_native_lifecycle.py'
@@ -108,6 +109,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'V25 Rust Core partial-fill state progression overlay failed' }
           python ci/v25_p0f_history_guard_overlay.py
           if ($LASTEXITCODE -ne 0) { throw 'V25 P0-F trading mode-scoped broker history source overlay failed' }
+          python ci/v25_p0g_ui_context_overlay.py
+          if ($LASTEXITCODE -ne 0) { throw 'V25 P0-G Tauri UI broker-mode context safety overlay failed' }
+          node apps/terminal/tests/contracts.cjs
+          if ($LASTEXITCODE -ne 0) { throw 'V25 P0-G UI account scope contract failed' }
           python ci/v25_tauri_version_stamp.py
           if ($LASTEXITCODE -ne 0) { throw 'V25 Tauri build identity source stamp failed' }
           python -m unittest discover -s tests -p test_execution_journal_race.py -v
