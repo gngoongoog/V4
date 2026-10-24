@@ -784,6 +784,13 @@ impl Service {
                                     db,&account,id,hash)
                                 .unwrap_or_else(|_|json!({"status":"unverified",
                                     "independent_oos":false,"broker_pnl":null}));
+                            view["last_archived_demo_booked_evidence"]=
+                                crate::sniper_demo_booked_audit::inspect(
+                                    db,&account,id,hash)
+                                .unwrap_or_else(|_|json!({"status":"unverified",
+                                    "independent_oos":false,
+                                    "matched_with_frozen_markouts":false,
+                                    "net_demo_account_currency":null}));
                         }
                     }
                     if let Some(id)=view["research_artifact_id"].as_str().map(str::to_owned) {
@@ -808,6 +815,16 @@ impl Service {
                                         db,&account,&id,expected.as_deref().unwrap_or(""))
                                     .unwrap_or_else(|_|json!({"status":"unverified",
                                         "independent_oos":false,"broker_pnl":null}));
+                                // Actual MT5 Demo booked trades belong to the executing
+                                // coordinator, NOT the zero-order frozen study.
+                                // Never pair hypothetical five-second markouts.
+                                view["demo_booked_execution_audit"]=
+                                    crate::sniper_demo_booked_audit::inspect(
+                                        db,&account,&id,expected.as_deref().unwrap_or(""))
+                                    .unwrap_or_else(|_|json!({"status":"unverified",
+                                        "independent_oos":false,
+                                        "matched_with_frozen_markouts":false,
+                                        "net_demo_account_currency":null}));
                             },
                             Err(_)=>{
                                 // Never present tampered research samples as verified.
