@@ -777,13 +777,13 @@ impl Service {
                         }
                     }
                     if let Some(id)=view["research_artifact_id"].as_str().map(str::to_owned) {
-                        let expected=view["research_artifact_sha256"].as_str();
-                        match crate::sniper_research_artifact::verify(db,&account,&id,expected){
+                        let expected=view["research_artifact_sha256"].as_str().map(str::to_owned);
+                        match crate::sniper_research_artifact::verify(db,&account,&id,expected.as_deref()){
                             Ok(verified)=>{
                                 view["research_artifact"]=verified;
                                 view["prospective_event_journal"]=
                                     match crate::sniper_forward_journal::report(db,&account,
-                                        &id,expected.unwrap_or("")){
+                                        &id,expected.as_deref().unwrap_or("")){
                                         Ok(report)=>report,
                                         Err(_)=>json!({"integrity":"warning",
                                             "historical_oos":false,"broker_pnl":null})
