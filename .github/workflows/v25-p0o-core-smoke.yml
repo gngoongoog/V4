@@ -5,6 +5,7 @@ on:
     paths:
       - 'scripts/smoke_core.py'
       - 'scripts/check_learning.py'
+      - 'crates/runtime/src/learning_review.rs'
       - '.github/workflows/v25-p0o-core-smoke.yml'
   workflow_dispatch:
 permissions:
