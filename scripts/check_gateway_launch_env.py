@@ -37,7 +37,7 @@ def main() -> None:
             "assert (root/'ipc.key').is_file()\n"
             "pathlib.Path(os.environ['GATEWAY_TEST_RESULT']).write_text(json.dumps({"
             "'data_dir_ok':True,'token_present':True,'disable_bytecode':True}))\n"
-            "while True: time.sleep(1)\n",
+            "parent=os.getppid()\n"\n            "while os.getppid()==parent: time.sleep(0.2)\n",
             encoding="utf-8",
         )
         env=dict(os.environ)
