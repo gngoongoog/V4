@@ -298,6 +298,7 @@ pub struct Service {
     student: crate::student_learning::Student,
     sniper_opportunities: crate::sniper_opportunities::Recorder,
     sniper_tick_audit: crate::sniper_tick_audit::Audit,
+    sniper_frozen_tick: crate::sniper_frozen_tick::Study,
     portfolio: PortfolioLimits,
     portfolio_state: Value,
     supervisor: crate::enterprise_supervisor::Settings,
@@ -349,6 +350,7 @@ impl Service {
             student: crate::student_learning::Student::new(db)?,
             sniper_opportunities: crate::sniper_opportunities::Recorder::default(),
             sniper_tick_audit: crate::sniper_tick_audit::Audit::default(),
+            sniper_frozen_tick: crate::sniper_frozen_tick::Study::default(),
             portfolio,
             portfolio_state,
             // Cache policy once; never query/CREATE a SQLite table per Sniper tick.
@@ -388,6 +390,7 @@ impl Service {
         self.inner.set_mode(mode);
         self.fast = None; // Never execute a new selection using a previous cached config.
         self.sniper_tick_audit=crate::sniper_tick_audit::Audit::default();
+        self.sniper_frozen_tick.clear_on_mode_change();
     }
 
     fn save_portfolio(db: &Connection, candidate: &PortfolioLimits) -> Result<()> {
@@ -702,6 +705,37 @@ impl Service {
         status: &Status,
         now: u64,
     ) -> Result<Value> {
+        if path=="/v1/execution/frozen-sniper" {
+            let t=status.telemetry.as_ref().filter(|t|
+                status.gateway_fresh&&self.account_matches(status)
+                &&self.inner.active_mode==Some(braintrade_domain::trading::TradingMode::Sniper)
+                &&t.demo&&t.account_trade_mode==Some(0));
+            if method=="GET" {
+                return Ok(self.sniper_frozen_tick.report(t,now));
+            }
+            anyhow::ensure!(method=="POST","Unsupported frozen Sniper method");
+            anyhow::ensure!(!status.requested_run && !self.pending(db)?,
+                "STOP and reconcile broker intents before freezing Sniper");
+            let t=t.context("Fresh bound MT5 Demo Sniper account required")?;
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request{action:String,context:String}
+            let request:Request=serde_json::from_slice(body)?;
+            anyhow::ensure!(request.context==context(t),
+                "Sniper frozen research account/session drift");
+            match request.action.as_str(){
+                "freeze"=>{
+                    let fast=self.fast.as_ref()
+                        .filter(|f|f.config.trading.mode==braintrade_domain::trading::TradingMode::Sniper
+                            &&f.telemetry.login==t.login &&f.telemetry.server==t.server
+                            &&f.telemetry.symbol==t.symbol&&f.telemetry.currency==t.currency)
+                        .context("Sniper reconciled quote cache not ready")?;
+                    self.sniper_frozen_tick.freeze(t,&fast.config,&self.inner.sniper,now)
+                },
+                "stop"=>self.sniper_frozen_tick.stop(t),
+                _=>anyhow::bail!("Unknown Sniper frozen study action")
+            }
+        }
         if method=="POST" && path=="/v1/execution/brain-control" {
             anyhow::ensure!(!status.requested_run && !self.pending(db)?, "أوقف النظام وانتظر تسوية الأوامر قبل تعديل مشاركة العقول");
             anyhow::ensure!(status.gateway_fresh && self.account_matches(status), "اربط الحساب الحالي وانتظر اتصالاً حديثاً");
@@ -802,6 +836,11 @@ impl Service {
                 next.frames.as_ref(),
                 now,
             )?;
+            // Independent frozen learner observes the actual raw adaptive
+            // Sniper decision on this same accepted quote before later
+            // execution/portfolio gates. Research never creates a broker intent.
+            self.sniper_frozen_tick.observe(&next.telemetry,&next.config,
+                self.inner.last_sniper_raw.as_ref(),body,now);
             self.student.capture_entries(self.inner.take_entries(), now);
             let current = enforce_portfolio(db, &next.telemetry, &next.config, &self.portfolio)?;
             self.portfolio_state = current.json(&self.portfolio, next.telemetry.equity);
