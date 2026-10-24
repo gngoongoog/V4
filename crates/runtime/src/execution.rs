@@ -515,6 +515,10 @@ impl Service {
             }
         } else {false};
         self.sniper_tick_audit.clear_on_identity_change(telemetry);
+        // The reconciled path may deliver quotes the Fast Pulse did not see.
+        // Detect that before the adaptive Sniper consumes this snapshot,
+        // and invalidate comparability until a new all-future warmup.
+        self.sniper_frozen_tick.reconcile(telemetry,config);
         self.inner
             .observe(db, telemetry, config, entries_allowed, frames, now)?;
         // Immutable Demo coordinator policy is a separate prospective study.
