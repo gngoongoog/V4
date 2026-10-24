@@ -235,7 +235,10 @@ impl Study{
         // Unmatched current raw signals may settle a prior pending markout,
         // but must not originate a new unpaired candidate.
         let paired=adaptive.is_some_and(|x|x.key==frozen.key);
-        trial.forward.observe(broker,t.bid,t.ask,t.tick_size,
+        trial.forward.observe_with_cost(broker,t.bid,t.ask,t.tick_size,
+            t.tick_value_loss,t.tick_value_profit,
+            trial.config.risk.commission_per_lot,
+            trial.config.risk.slippage_ticks,
             if paired {Some(&frozen)} else {None});
         let Some(adaptive)=adaptive.filter(|x|x.key==frozen.key)
         else {trial.excluded_legacy+=1;return};
