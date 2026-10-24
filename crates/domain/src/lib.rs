@@ -146,6 +146,8 @@ pub struct Telemetry {
     pub balance: f64,
     pub equity: f64,
     #[serde(default)] pub leverage: Option<u32>,
+    /// Broker-reported used margin only; never synthesize from account equity.
+    #[serde(default)] pub margin: Option<f64>,
     #[serde(default)] pub margin_free: Option<f64>,
     #[serde(default)] pub minimum_lot_margin: Option<f64>,
     pub positions: Vec<Position>,
@@ -209,12 +211,14 @@ impl Telemetry {
                 self.tick_value_loss,
                 self.tick_value_profit,
                 self.point,
+                self.margin,
                 self.margin_free,
                 self.minimum_lot_margin,
             ]
             .iter()
             .flatten()
             .all(|v| v.is_finite())
+            && self.margin.is_none_or(|v| v >= 0.0)
             && self.market.as_ref().is_none_or(MarketData::valid)
             && self.positions.len() <= 10_000
             && self.positions.iter().all(|p| {
@@ -393,6 +397,22 @@ mod tests {
     }
 
     use super::*;
+    #[test]
+    fn p0d3_broker_used_margin_accepts_explicit_zero_and_refuses_negative_or_nan() {
+        let mut t=Telemetry::default();
+        t.margin=Some(0.0);
+        assert!(t.validate());
+        let mut value=serde_json::to_value(&t).unwrap();
+        assert_eq!(value["margin"],0.0);
+        t.margin=Some(-1.0);
+        assert!(!t.validate());
+        t.margin=Some(f64::NAN);
+        assert!(!t.validate());
+        value.as_object_mut().unwrap().remove("margin");
+        let legacy:Telemetry=serde_json::from_value(value).unwrap();
+        assert!(legacy.margin.is_none());
+        assert!(legacy.validate(),"Old snapshots lacking Margin remain readable");
+    }
     #[test]
     fn lifecycle_fails_closed_and_never_enables_execution() {
         let mut s = Status {
