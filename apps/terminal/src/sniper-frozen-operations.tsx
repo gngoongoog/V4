@@ -18,6 +18,8 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
  const training=obj(view.training_checkpoint);
  const proof=obj(view.research_artifact);
  const history=obj(view.research_artifact_history);
+ const journal=obj(view.prospective_event_journal);
+ const lastArchivedJournal=obj(view.last_archived_forward_journal);
  const eligible=!preview&&eligibleFrozenSniper(status,page);
  const expected=t?JSON.stringify([t.server,t.login,t.symbol,t.currency]):'';
  const statusValue=view.status;
@@ -42,6 +44,22 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
    &&typeof training.cutoff_ms==='number'
    &&training.broker_training_samples===training.cached_policy_samples
    &&training.broker_target_samples===training.cached_target_samples;
+ const journalVerified=scoped&&verifiedArtifact
+   &&journal.schema==='p1k5e-forward-research-journal-v1'
+   &&journal.artifact_id===view.research_artifact_id
+   &&journal.integrity==='verified_local'
+   &&journal.complete_trace===false&&journal.historical_oos===false
+   &&journal.broker_pnl===null;
+ const archivedJournalVerified=eligible
+   &&history.schema==='p1k5d-research-artifact-history-v1'
+   &&history.account_context===expected
+   &&archive.length>0&&archive[0].integrity==='verified'
+   &&lastArchivedJournal.schema==='p1k5e-forward-research-journal-v1'
+   &&lastArchivedJournal.artifact_id===archive[0].id
+   &&lastArchivedJournal.integrity==='verified_local'
+   &&lastArchivedJournal.complete_trace===false
+   &&lastArchivedJournal.historical_oos===false
+   &&lastArchivedJournal.broker_pnl===null;
  const forwardScoped=scoped&&forward.schema==='p1k5b-forward-direction-v1'
    &&forward.independent_oos===false&&forward.broker_fills_observed===false
    &&forward.net_pnl===null&&forward.profitability_validated===false;
@@ -97,6 +115,35 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
     </div>)}
    </div>
   </div>}
+  {journalVerified&&<div className="feature-zone" aria-label="Sniper persisted future event journal">
+   <h4>سجل أحداث المستقبل المحفوظ P1-K5E</h4>
+   <div className="operator-grid">
+    <div>أحداث محفوظة <strong>{count(journal.recorded_events)}</strong></div>
+    <div>نتائج الاتجاه المكتملة <strong>{count(journal.resolved_labels)}</strong></div>
+    <div>أحداث مستبعدة بسبب انقطاع البيانات <strong>{count(journal.censored)}</strong></div>
+    <div>أحداث بعد لم تُحفظ <strong>{count(forward.unpersisted_research_events)}</strong></div>
+    <div>أحداث فُقدت من ذاكرة الانتظار <strong>{count(forward.dropped_unpersisted_events)}</strong></div>
+    <div>إخفاقات الحفظ <strong>{count(view.research_event_write_failures)}</strong></div>
+   </div>
+   <p className="safe-note">الصفوف المحفوظة تحمل تسلسلاً وبصمة سلامة؛
+    لا نستنتج منها وجود سجل كامل لجميع Tick أو نتائج OOS مستقلة.
+    آخر أحداث الذاكرة قد تضيع عند تعطل Core قبل التسوية التالية.</p>
+  </div>}
+  {archivedJournalVerified&&!scoped&&<div className="feature-zone"
+    aria-label="Recovered research journal after Core restart">
+   <h4>آخر سجل بحثي محفوظ بعد إعادة تشغيل Core</h4>
+   <div className="operator-grid">
+    <div>أحداث محفوظة <strong>{count(lastArchivedJournal.recorded_events)}</strong></div>
+    <div>نتائج مستقبلية موثّقة محلياً <strong>{count(lastArchivedJournal.resolved_labels)}</strong></div>
+    <div>نتائج مستبعدة <strong>{count(lastArchivedJournal.censored)}</strong></div>
+   </div>
+   <p className="safe-note">هذا استرجاع سجلات SQLite للبحث السابق،
+    وليس تشغيل دراسة جديدة أو تأكيد اكتمال مسار التيكات.</p>
+  </div>}
+  {eligible&&(
+    journal.integrity==='warning'||lastArchivedJournal.integrity==='warning')&&
+   <p role="alert" className="safe-note">تحذير: تعذر التحقق من سلامة
+    سجل الأحداث المستقبلية؛ تم حجب عدد النتائج حتى مراجعة البيانات.</p>}
   {trainingVerified&&<div className="feature-zone" aria-label="Sniper frozen training ledger checkpoint">
    <h4>توثيق نقطة تجميد بيانات Learner — P1-K5C</h4>
    <div className="operator-grid">
