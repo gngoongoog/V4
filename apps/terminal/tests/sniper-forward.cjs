@@ -133,3 +133,38 @@ test('P1-K5F cannot label unverified directional samples as independent OOS/PnL'
  assert.match(ui,/holdout\.status==='descriptive_holdout_only'/);
  assert.match(ui,/اختبار OOS مستقلاً/);
 });
+
+test('P1-K5G fixed prospective protocol is registered at freeze BEFORE broker cost outcomes',()=>{
+ const registered=code('crates/runtime/src/sniper_preregister.rs');
+ const artifacts=code('crates/runtime/src/sniper_research_artifact.rs');
+ const costs=code('crates/runtime/src/sniper_forward_costs.rs');
+ const direction=code('crates/runtime/src/sniper_forward_direction.rs');
+ const study=code('crates/runtime/src/sniper_frozen_tick.rs');
+ const runtime=code('crates/runtime/src/execution.rs');
+ const ui=code('apps/terminal/src/sniper-frozen-operations.tsx');
+ assert.match(registered,/fixed_utc_midnights_pre_observation/);
+ assert.match(registered,/CAL_DAYS:u64=10/);
+ assert.match(registered,/HOLD_DAYS:u64=10/);
+ assert.match(registered,/EMBARGO_MS:u64=1_800_000/);
+ assert.match(registered,/commission_round_trip_per_lot/);
+ assert.match(registered,/slippage_ticks_per_side/);
+ assert.match(artifacts,/sniper_preregister::preregister\(c,now,&t\.currency\)/);
+ assert.match(artifacts,/preregistered_forward_protocol":prereg/);
+ assert.match(artifacts,/sniper_preregister::valid\(protocol,cutoff\)/);
+ assert.match(direction,/observe_with_cost\(/);
+ assert.match(direction,/entry_bid":pending.entry_bid/);
+ assert.match(direction,/exit_bid":bid/);
+ assert.match(direction,/modeled_net_quote_account_currency_per_lot/);
+ assert.match(study,/trial\.forward\.observe_with_cost\(broker/);
+ assert.match(costs,/open_ask_close_bid_buy, open_bid_close_ask_sell/);
+ assert.match(costs,/costs_include_bid_ask_spread_once/);
+ assert.match(costs,/baseline_selection_bias/);
+ assert.match(costs,/independent_oos":false/);
+ assert.match(costs,/broker_pnl":Value::Null/);
+ assert.match(runtime,/preregistered_cost_evidence/);
+ assert.match(runtime,/last_archived_preregistered_costs/);
+ assert.match(ui,/costEvidence\.broker_pnl===null/);
+ assert.match(ui,/costEvidence\.broker_fills_observed===false/);
+ assert.match(ui,/costEvidence\.automatic_promotion===false/);
+ assert.match(ui,/هذا تقدير أسعار وليس أرباح صفقات حقيقية/);
+});
