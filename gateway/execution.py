@@ -273,10 +273,23 @@ class BrokerExecutor:
         for d in deals:
             if d.type not in trading:
                 continue
-            value=sum(float(getattr(d,k,0.0)) for k in ('profit','commission','swap','fee'))
-            if not math.isfinite(value):
+            # No guessed zero commission / swap / fee in REAL risk decisions.
+            # Unknown cost data blocks NEW entries but never position closure.
+            components=[]
+            for k in ('profit','commission','swap','fee'):
+                raw=getattr(d,k,None)
+                if isinstance(raw,bool):
+                    raise ValueError('Daily breaker: invalid broker deal costs')
+                try:
+                    component=float(raw)
+                except (ValueError,TypeError,OverflowError) as exc:
+                    raise ValueError('Daily breaker: invalid broker deal costs') from exc
+                if not math.isfinite(component):
+                    raise ValueError('Daily breaker: invalid broker deal costs')
+                components.append(component)
+            net+=math.fsum(components)
+            if not math.isfinite(net):
                 raise ValueError('Daily breaker: invalid broker deal costs')
-            net+=value
         baseline=balance-net
         if not math.isfinite(baseline) or baseline<=0:
             raise ValueError('Daily breaker: invalid start-of-day trading balance estimate')
