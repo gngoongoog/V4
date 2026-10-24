@@ -13,7 +13,7 @@
 - `Tools\Run-Demo-Acceptance.ps1` — CLI المتقدم للمشغّل القراءة فقط.
 - `DEMO_ACCEPTANCE_AR.md` — هذه التعليمات داخل الحزمة.
 
-شغّل `BrainTrade.exe` أولاً، اربط حساب MT5 الحالي كـDemo، وبعدها افتح `Run-Demo-Acceptance.cmd` بدون أي arguments. ستظهر نافذة فيها:
+شغّل `BrainTradeNext.exe` أولاً، اربط حساب MT5 الحالي كـDemo، وبعدها افتح `Run-Demo-Acceptance.cmd` بدون أي arguments. ستظهر نافذة فيها:
 
 - اختيار `Native` أو `Poll` أو `Auto`.
 - مدة قياس 5 / 15 / 30 / 60 دقيقة.
@@ -46,9 +46,15 @@ Run-Demo-Acceptance.cmd -Source native -WatchSeconds 3600 -MinimumFastSamples 20
 .\Tools\Run-Demo-Acceptance.ps1 -Source native -WatchSeconds 3600 -MinimumFastSamples 200 -Reset -NonInteractive
 ```
 
+## شرط قبول G2 المستقل
+
+نتيجة `TARGET_MET` داخل المركز تعني نجاح **هدف الزمن المحلي للقناص فقط**، ولا تعني أن MT5 نفّذ دورة Send → Broker Fill → Close → Deals بشكل كامل. يظهر حقل `broker_lifecycle_acceptance.status = NOT TESTED` حتى تتوفر أدلة فعلية من Demo على الجهاز. عينة Retcode أو `filled` في Journal لا تغني عن تأكيد Ticket وDeal والعمولة والسواب وإغلاق المركز من سجل الوسيط.
+
+إذا تريد تشارك ملف تشخيص، استخدم زر **Export Share Bundle** من المركز. هذا التصدير يستثني الآن `demo-acceptance-latest.csv` و`demo-acceptance-state.json` لأنهما يحتويان معرّفات أوامر وتعليقات وسيط خام. احتفظ بالنسختين الأصليتين محلياً للتشخيص ولا تنشرهما من دون مراجعة يدوية.
+
 ## قبل الفحص
 
-1. افتح `BrainTrade.exe` واختر `terminal64.exe` الصحيح.
+1. افتح `BrainTradeNext.exe` واختر `terminal64.exe` الصحيح.
 2. تأكد أن MT5 داخل حساب Demo المقصود وأن Algo Trading مسموح.
 3. من BrainTrade اربط الحساب الحالي كـDemo، واضبط الرمز الصحيح والعمولة.
 4. لو تريد قياس القناص، اختر Sniper وشغّل النظام بصورة طبيعية. عدم وجود إشارة صالحة يعني WAIT وهذا طبيعي؛ أداة القياس لا تصنع إشارة وهمية ولا تجبر النظام على التداول.
