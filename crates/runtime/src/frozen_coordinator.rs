@@ -350,7 +350,7 @@ mod tests{
             &BTreeMap::new(),&BTreeMap::new(),123_000).unwrap();
         let mut different=t.clone();different.login=18;
         assert_eq!(report(&db,&context(&different),TradingMode::Swing).unwrap()["status"],"not_started");
-        different=t.clone();different.symbol="EURUSD";
+        different=t.clone();different.symbol="EURUSD".into();
         assert_eq!(report(&db,&context(&different),TradingMode::Swing).unwrap()["status"],"not_started");
     }
     #[test]
