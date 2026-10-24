@@ -18,7 +18,7 @@ import {ExecutionQualityOperations} from './execution-quality-operations';
 import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position} from './types';
 import {DESIGN_FIXTURE} from './mock';
-import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,backtestAction,saveTrading,updateBrainControl,bindExecution} from './bridge';
+import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,backtestAction,saveTrading,saveSupervisor,updateBrainControl,bindExecution} from './bridge';
 import {money,num,signed,up,valid} from './format';
 
 type IconComponent=typeof Home;
@@ -446,6 +446,21 @@ export default function Terminal(){
   }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
   finally{finishWrite(mutation)}
  };
+ const runSaveSupervisor=async(input:Record<string,unknown>):Promise<Record<string,unknown>>=>{
+  if(preview||!hasTauri()||status?.requested_run)throw new Error('تعديل سياسة المنسق يحتاج Core وSTOP');
+  const mutation=beginWrite('supervisor');if(!mutation)throw new Error('طلب تغيير سابق لم يحسم');
+  try{
+   await saveSupervisor(input);
+   if(!writeFresh(mutation))throw new Error('تبدلت جلسة MT5 أثناء حفظ السياسة');
+   const report=unwrap(await readPanel('/v1/enterprise/supervisor'));
+   if(!writeFresh(mutation))throw new Error('تبدلت جلسة MT5 أثناء قراءة سياسة المنسق');
+   if(report.configuration_integrity!=='ok')throw new Error('Core لم يؤكد سلامة سياسة المنسق');
+   return report;
+  }catch(e){
+   if(writeFresh(mutation))sendNotice('لم يتم اعتماد سياسة المنسق: '+String(e),true);
+   throw e;
+  }finally{finishWrite(mutation)}
+ };
  const runSaveTrading=async(input:Record<string,unknown>)=>{
   if(preview||!hasTauri()||status?.requested_run){sendNotice('حفظ الوضع والتكاليف يحتاج STOP وCore الأصلي',true);return}
   const mutation=beginWrite('trading');if(!mutation)return;
@@ -584,7 +599,7 @@ export default function Terminal(){
            <label className="check-label"><input type="checkbox" disabled={!activeSettingsEdit||busy||preview} checked={activeClearTelegram} onChange={e=>{setTelegramDraftScope(contextKey);setClearTelegram(e.target.checked)}}/>حذف رمز Telegram المحفوظ</label>
            <button className="save-button" disabled={busy||preview||!activeSettingsEdit} onClick={()=>void saveGeneral()}>حفظ وإعادة ربط MT5</button>
           </div>:
-        page==='trading'||page==='sniper'?<div className="feature-zone"><div className="live-indicator"><strong>Sniper Priority</strong><span>{display?.analysis?.regime||'UNAVAILABLE'}</span><b>{display?.analysis?.action||'WAIT'}</b></div><p>العقل المنفّذ الوحيد يختاره Core، وأي تبديل أثناء التشغيل يحتاج أوامر MT5 مُسوّاة وعدم وجود مراكز مفتوحة.</p><TradingSettingsOperations source={pageData} key={viewScope} disabled={busy||preview} armed={status?.requested_run===true} apply={runSaveTrading}/><div className="quick-ops"><button disabled={busy||preview} onClick={()=>void runHandoff(true)}>تفعيل أولوية القناص</button><button disabled={busy||preview} onClick={()=>void runHandoff(false)}>تحويل التنفيذ للبديل</button></div><div className="safe-note">هذه الأزرار تستدعي قواعد التحويل الفعلية في Rust؛ لا يوجد تجاوز لفحوصات المحرك.</div><EnterpriseSupervisor preview={preview} key={contextKey} armed={status?.requested_run===true}/><Table rows={rows}/></div>:
+        page==='trading'||page==='sniper'?<div className="feature-zone"><div className="live-indicator"><strong>Sniper Priority</strong><span>{display?.analysis?.regime||'UNAVAILABLE'}</span><b>{display?.analysis?.action||'WAIT'}</b></div><p>العقل المنفّذ الوحيد يختاره Core، وأي تبديل أثناء التشغيل يحتاج أوامر MT5 مُسوّاة وعدم وجود مراكز مفتوحة.</p><TradingSettingsOperations source={pageData} key={viewScope} disabled={busy||preview} armed={status?.requested_run===true} apply={runSaveTrading}/><div className="quick-ops"><button disabled={busy||preview} onClick={()=>void runHandoff(true)}>تفعيل أولوية القناص</button><button disabled={busy||preview} onClick={()=>void runHandoff(false)}>تحويل التنفيذ للبديل</button></div><div className="safe-note">هذه الأزرار تستدعي قواعد التحويل الفعلية في Rust؛ لا يوجد تجاوز لفحوصات المحرك.</div><EnterpriseSupervisor preview={preview} key={contextKey} armed={status?.requested_run===true} onSave={runSaveSupervisor}/><Table rows={rows}/></div>:
         page==='execution'?<div className="feature-zone"><ExecutionBindingOperations source={pageData} key={viewScope} telemetry={status?.telemetry??null} ready={!preview&&trustworthy} armed={status?.requested_run===true} disabled={busy||preview} onBind={runBrokerBind}/>
         <ExecutionQualityOperations status={!preview&&feed.broker?status:null} report={executionQuality} disabled={preview||busy}
           onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('executionQuality');void readPanel('/v1/execution/quality').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setExecutionQuality(unwrap(v))}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setExecutionQuality(null)})}}/>
