@@ -26,6 +26,21 @@ assert.equal(o.unknown,1);
 assert.equal(o.unresolved,2);
 assert.equal(o.sendP95,5);
 assert.equal(o.rows[0].retcode,10019);
+assert.equal(o.circuit,null,'legacy reports must not invent an active Rust circuit');
+const monitored={...baseReport,entry_circuit:{
+ schema:'p0c-core-quality-v1',read_only:true,policy:'advisory_demo',
+ state:'demo_advisory',entry_allowed:true,reason:'within_quality_limits',
+ unknown_open_intents:1,recent_broker_rejections:2,
+ observed_ms:NOW,never_blocks_close_or_reconcile:true
+}};
+const monitoredView=qualityObservation(status,monitored,NOW);
+assert.equal(monitoredView.circuit.state,'demo_advisory');
+assert.equal(monitoredView.circuit.unknown,1);
+assert.equal(monitoredView.circuit.rejections,2);
+const wrongMode={...monitored,entry_circuit:{...monitored.entry_circuit,policy:'required_real'}};
+assert.equal(qualityObservation(status,wrongMode,NOW).circuit,null,'wrong mode cannot attest circuit');
+const fakeClock={...monitored,entry_circuit:{...monitored.entry_circuit,observed_ms:NOW-100000}};
+assert.equal(qualityObservation(status,fakeClock,NOW).circuit,null,'stale circuit subreport not trusted');
 for(const [name,source,state,now] of [
  ['missing report',null,status,NOW],
  ['stale report',baseReport,status,NOW+20_000],
@@ -59,6 +74,9 @@ for(const [label,src,token] of [
  ['bounded exact context',mod,'WHERE context=?1 ORDER BY created_ms DESC,id DESC LIMIT 100'],
  ['backend sanitized',mod,'Broker comments may contain secrets or personal data'],
  ['frontend scoped',terminal,"scopedGeneration.current.beginRead('executionQuality')"],
+ ['Core final gate',core,'core_broker_quality_entry_circuit'],
+ ['Rust normal gate',core,'self.refresh_quality_circuit(db,telemetry,now);'],
+ ['Rust fast gate',core,'self.quality_circuit.entry_allowed(&next.telemetry,self.is_live_target())'],
  ['frontend no preview',terminal,'status={!preview&&feed.broker?status:null}'],
 ])assert(src.includes(token),label+' missed '+token);
 const rendered={};const jsx=(type,props)=>({type,props:props||{}});
