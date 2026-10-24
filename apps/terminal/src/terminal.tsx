@@ -265,7 +265,10 @@ export default function Terminal(){
  const showLatency=preview?28:null; // quote age is NOT execution latency
  const visiblePositions=positions.filter(p=>filter==='all'||(filter==='buy'?up(p.side):!up(p.side)));
  useEffect(()=>{
-  if(approval?.action==='start'&&(!feed.broker||approval.scope!==contextKey||preview)){
+  if(approval&&(approval.scope!==contextKey||preview||
+    (approval.action==='start'&&!feed.broker))){
+   // Revoke STOP and EXIT too; they must never revive if an old account
+   // reappears after a switch or a temporary transport interruption.
    setApproval(null);setLiveLogin('');
   }
  },[approval,contextKey,feed.broker,preview]);
