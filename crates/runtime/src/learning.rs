@@ -167,9 +167,16 @@ impl Service{
     }
     pub fn export(&self,db:&Connection,dir:&Path,now:u64)->Result<Value>{
         let name=format!("learning-dataset-{now}");let staging=dir.join("exports").join(format!(".{name}.tmp"));let destination=dir.join("exports").join(&name);if staging.exists()||destination.exists(){bail!("Learning export path already exists");}fs::create_dir_all(&staging)?;let mut output=fs::File::create(staging.join("dataset.jsonl"))?;
-        let mut statement=db.prepare("SELECT s.id,s.context,s.bar_time,s.captured_ms,s.feature_schema,s.features,l.matured_ms,l.label_schema,l.label FROM learning_snapshots s JOIN learning_labels l ON l.snapshot_id=s.id ORDER BY s.context,s.bar_time,s.id")?;let mut rows=statement.query([])?;let mut count=0usize;let mut excluded_legacy=0usize;
-        while let Some(r)=rows.next()?{let raw_context:String=r.get(1)?;if !verified_study_context(&raw_context){excluded_legacy+=1;continue;}let features:Value=serde_json::from_str(&r.get::<_,String>(5)?)?;let label:Value=serde_json::from_str(&r.get::<_,String>(8)?)?;writeln!(output,"{}",json!({"snapshot_id":r.get::<_,i64>(0)?,"context":raw_context,"bar_time":r.get::<_,u64>(2)?,"captured_ms":r.get::<_,u64>(3)?,"feature_schema":r.get::<_,String>(4)?,"features":features,"matured_ms":r.get::<_,u64>(6)?,"label_schema":r.get::<_,String>(7)?,"label":label}))?;count+=1;}output.sync_all()?;drop(output);
-        fs::write(staging.join("manifest.json"),serde_json::to_vec_pretty(&json!({"version":"learning-foundation-v1","feature_schema":FEATURE_SCHEMA,"label_schema":LABEL_SCHEMA,"rows":count,"excluded_legacy_or_unverified_rows":excluded_legacy,"created_ms":now,"ordering":"context,bar_time,snapshot_id","scope":"matured, broker-mode-verified labels only; legacy unidentified modes excluded; no quote/DOM/news features","trained_model_included":false}))?)?;drop(rows);drop(statement);fs::rename(staging,&destination)?;Ok(json!({"path":destination,"rows":count,"excluded_legacy_or_unverified_rows":excluded_legacy,"note":"Only matured labels with verified broker mode exported. Legacy rows retained in DB but excluded from training export."}))
+        let mut statement=db.prepare("SELECT s.id,s.context,s.bar_time,s.captured_ms,s.feature_schema,s.features,l.matured_ms,l.label_schema,l.label FROM learning_snapshots s JOIN learning_labels l ON l.snapshot_id=s.id ORDER BY s.context,s.bar_time,s.id")?;let mut rows=statement.query([])?;let mut count=0usize;let mut excluded_legacy=0usize;let mut excluded_schema=0usize;
+        while let Some(r)=rows.next()?{let raw_context:String=r.get(1)?;if !verified_study_context(&raw_context){excluded_legacy+=1;continue;}
+        // The manifest declares one immutable feature/label schema. Never blend
+        // historical mismatched schema revisions into a supposedly v1 dataset.
+        if r.get::<_,String>(4)? != FEATURE_SCHEMA || r.get::<_,String>(7)? != LABEL_SCHEMA {
+            excluded_schema+=1;
+            continue;
+        }
+        let features:Value=serde_json::from_str(&r.get::<_,String>(5)?)?;let label:Value=serde_json::from_str(&r.get::<_,String>(8)?)?;writeln!(output,"{}",json!({"snapshot_id":r.get::<_,i64>(0)?,"context":raw_context,"bar_time":r.get::<_,u64>(2)?,"captured_ms":r.get::<_,u64>(3)?,"feature_schema":r.get::<_,String>(4)?,"features":features,"matured_ms":r.get::<_,u64>(6)?,"label_schema":r.get::<_,String>(7)?,"label":label}))?;count+=1;}output.sync_all()?;drop(output);
+        fs::write(staging.join("manifest.json"),serde_json::to_vec_pretty(&json!({"version":"learning-foundation-v1","feature_schema":FEATURE_SCHEMA,"label_schema":LABEL_SCHEMA,"rows":count,"excluded_legacy_or_unverified_rows":excluded_legacy,"excluded_incompatible_schema_rows":excluded_schema,"created_ms":now,"ordering":"context,bar_time,snapshot_id","scope":"matured, broker-mode-verified labels only; legacy unidentified modes excluded; no quote/DOM/news features","trained_model_included":false}))?)?;drop(rows);drop(statement);fs::rename(staging,&destination)?;Ok(json!({"path":destination,"rows":count,"excluded_legacy_or_unverified_rows":excluded_legacy,"excluded_incompatible_schema_rows":excluded_schema,"note":"Only matured labels with verified broker mode and exact schema exported. Legacy rows retained in DB but excluded from training export."}))
     }
 }
 
@@ -228,6 +235,36 @@ mod p0j_learning_context_tests {
             assert_eq!(db.query_row("SELECT COUNT(*) FROM learning_snapshots WHERE context=?1",[&legacy],|r|r.get::<_,i64>(0)).unwrap(),1);
         }
         std::fs::remove_file(filename).unwrap();
+    }
+
+
+    #[test]
+    fn learning_export_quarantines_incompatible_feature_and_label_schema() {
+        let db=Connection::open_in_memory().unwrap();
+        let service=Service::new(&db).unwrap();
+        let context=context(&broker(true,Some(0))).unwrap();
+        for (id,feature,label) in [(1,FEATURE_SCHEMA,LABEL_SCHEMA),
+                                    (2,"gold-m1-feature-v0",LABEL_SCHEMA),
+                                    (3,FEATURE_SCHEMA,"gold-m1-outcome-v0")] {
+            db.execute("INSERT INTO learning_snapshots(id,context,bar_time,captured_ms,feature_schema,reference_close,atr,features) VALUES(?1,?2,?3,?4,?5,2500,1,'{}')",
+                params![id,context,600+id,700+id,feature]).unwrap();
+            db.execute("INSERT INTO learning_labels(snapshot_id,matured_ms,label_schema,label) VALUES(?1,1000,?2,'{}')",
+                params![id,label]).unwrap();
+        }
+        let dir=std::env::temp_dir().join(format!("braintrade-learning-schema-{}",uuid::Uuid::new_v4()));
+        let response=service.export(&db,&dir,2000).unwrap();
+        assert_eq!(response["rows"],1);
+        assert_eq!(response["excluded_incompatible_schema_rows"],2);
+        let dataset=std::fs::read_to_string(dir.join("exports/learning-dataset-2000/dataset.jsonl")).unwrap();
+        assert_eq!(dataset.lines().count(),1);
+        assert!(dataset.contains("gold-m1-feature-v1"));
+        assert!(!dataset.contains("gold-m1-feature-v0"));
+        let manifest:Value=serde_json::from_slice(
+            &std::fs::read(dir.join("exports/learning-dataset-2000/manifest.json")).unwrap()).unwrap();
+        assert_eq!(manifest["rows"],1);
+        assert_eq!(manifest["excluded_incompatible_schema_rows"],2);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM learning_snapshots",[],|r|r.get::<_,i64>(0)).unwrap(),3);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
