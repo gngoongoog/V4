@@ -3,7 +3,7 @@
 use anyhow::Result;
 use braintrade_domain::{Config, Status, Telemetry};
 use chrono::{DateTime, FixedOffset, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 
 fn day_at(now_ms:u64)->Option<String> {
@@ -13,6 +13,48 @@ fn day_at(now_ms:u64)->Option<String> {
 }
 fn key(t:&Telemetry)->String {
     serde_json::to_string(&(&t.server,t.login,&t.currency,t.account_trade_mode)).unwrap()
+}
+// Same JSON account identity as execution_legacy::micro_account_key.
+// Recovery is permanently scoped by server, login, currency, NOT symbol.
+fn micro_key(t:&Telemetry)->String {
+    serde_json::to_string(&(&t.server,t.login,&t.currency)).unwrap()
+}
+fn micro_recovery_state(db:&Connection,t:&Telemetry,c:&Config,now_ms:u64)->Result<Value> {
+    let real=t.account_trade_mode==Some(2) && !t.demo && t.login>0
+        && !t.server.is_empty() && !t.currency.is_empty();
+    let recovery=c.risk.micro_real_recovery_equity;
+    let enabled=c.risk.micro_real_temporary;
+    let cap=c.risk.micro_real_cap_percent;
+    let row:Option<(u64,f64)>=if real {
+        db.query_row(
+            "SELECT reached_ms,reached_equity FROM micro_real_recovered WHERE account_key=?1",
+            [micro_key(t)],|r|Ok((r.get(0)?,r.get(1)?))
+        ).optional()?
+    } else {None};
+    let previously_recovered=row.is_some();
+    let current_milestone_reached=real&&t.equity.is_finite()&&t.equity>=recovery;
+    // Read-only candidate: this cannot authorize an order or set a recovery latch.
+    let candidate=real&&enabled&&!previously_recovered
+        &&!current_milestone_reached&&t.equity.is_finite()&&t.equity>0.;
+    let state=if !real {"unverified_or_demo"}
+        else if previously_recovered {"recovered_latched"}
+        else if current_milestone_reached {"milestone_reached"}
+        else if !enabled {"disabled"}
+        else if candidate {"candidate_only"} else {"unavailable"};
+    Ok(json!({
+        "schema":"p1e-micro-recovery-v1",
+        "read_only":true,
+        "observed_ms":now_ms,
+        "account":{"server":t.server,"login":t.login,"currency":t.currency,"mode":t.account_trade_mode},
+        "state":state,"candidate_only":candidate,
+        "configured":enabled,"cap_percent":cap,"recovery_equity":recovery,
+        "recovered_persisted":previously_recovered,
+        "reached_ms":row.as_ref().map(|r|r.0),
+        "reached_equity":row.as_ref().map(|r|r.1),
+        "current_milestone_reached":current_milestone_reached,
+        "broker_execution_authorized":false,
+        "note":"Read-only monitor: candidate does not authorize a trade; Core, Gateway, broker binding, volume, SL and account-wide breaker are checked separately"
+    }))
 }
 pub fn snapshot(db:&Connection,config:&Config,status:&Status,now_ms:u64)->Result<Value> {
     let demo_on=config.risk.daily_breaker_demo_enabled;
@@ -54,7 +96,9 @@ pub fn snapshot(db:&Connection,config:&Config,status:&Status,now_ms:u64)->Result
         ("ready","القاطع مفعّل ولم يتجاوز الحساب سقف الخسارة المرصود")
     };
     Ok(json!({
-        "state":state,"reason":reason,"day":day,"account":{"login":t.login,"server":t.server,
+        "state":state,"reason":reason,"day":day,"observed_ms":now_ms,
+        "micro_real":micro_recovery_state(db,t,&c,now_ms)?,
+        "account":{"login":t.login,"server":t.server,
             "currency":t.currency,"mode":t.account_trade_mode},
         "demo_enabled":c.risk.daily_breaker_demo_enabled,
         "real_enabled":c.risk.daily_breaker_real_enabled,"enabled":enabled,
@@ -75,7 +119,8 @@ mod tests {
     #[test]
     fn risk_monitor_is_read_only_and_preserves_locked_state_when_disabled() {
         let db=Connection::open_in_memory().unwrap();
-        db.execute_batch("CREATE TABLE daily_loss_locks(account_key TEXT NOT NULL,report_day TEXT NOT NULL,reached_ms INTEGER NOT NULL,loss_amount REAL NOT NULL,PRIMARY KEY(account_key,report_day));").unwrap();
+        db.execute_batch("CREATE TABLE daily_loss_locks(account_key TEXT NOT NULL,report_day TEXT NOT NULL,reached_ms INTEGER NOT NULL,loss_amount REAL NOT NULL,PRIMARY KEY(account_key,report_day));
+         CREATE TABLE micro_real_recovered(account_key TEXT PRIMARY KEY,reached_ms INTEGER NOT NULL,reached_equity REAL NOT NULL);").unwrap();
         let now=1_729_500_000_000u64;
         let day=day_at(now).unwrap();
         let mut t=Telemetry{connected:true,account_trade_mode:Some(0),demo:true,login:17,
@@ -105,7 +150,8 @@ mod tests {
     #[test]
     fn risk_monitor_distinguishes_real_demo_and_current_baghdad_day() {
         let db=Connection::open_in_memory().unwrap();
-        db.execute_batch("CREATE TABLE daily_loss_locks(account_key TEXT NOT NULL,report_day TEXT NOT NULL,reached_ms INTEGER NOT NULL,loss_amount REAL NOT NULL,PRIMARY KEY(account_key,report_day));").unwrap();
+        db.execute_batch("CREATE TABLE daily_loss_locks(account_key TEXT NOT NULL,report_day TEXT NOT NULL,reached_ms INTEGER NOT NULL,loss_amount REAL NOT NULL,PRIMARY KEY(account_key,report_day));
+         CREATE TABLE micro_real_recovered(account_key TEXT PRIMARY KEY,reached_ms INTEGER NOT NULL,reached_equity REAL NOT NULL);").unwrap();
         let now=1_729_500_000_000u64;
         let mut t=Telemetry{connected:true,account_trade_mode:Some(2),demo:false,login:19,
             server:"Broker".into(),currency:"USD".into(),balance:50.,equity:49.5,
@@ -116,4 +162,49 @@ mod tests {
         t.report_day="2020-01-01".into();status.telemetry=Some(t);
         assert_eq!(snapshot(&db,&c,&status,now).unwrap()["state"],"unavailable");
     }
+    #[test]
+    fn p1e_micro_recovery_reports_irreversible_account_latch_across_symbols() {
+        let db=Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE daily_loss_locks(account_key TEXT NOT NULL,report_day TEXT NOT NULL,reached_ms INTEGER NOT NULL,loss_amount REAL NOT NULL,PRIMARY KEY(account_key,report_day));
+            CREATE TABLE micro_real_recovered(account_key TEXT PRIMARY KEY,reached_ms INTEGER NOT NULL,reached_equity REAL NOT NULL);").unwrap();
+        let now=1_729_500_000_000u64;
+        let mut t=Telemetry{connected:true,account_trade_mode:Some(2),demo:false,login:51,
+            server:"RealServer".into(),currency:"USD".into(),symbol:"XAUUSD".into(),
+            equity:50.,balance:50.,today_net:Some(0.),
+            report_day:day_at(now).unwrap(),..Default::default()};
+        let mut config=Config::default();
+        config.risk.micro_real_temporary=true;
+        config.risk.micro_real_recovery_equity=500.;
+        config.risk.micro_real_cap_percent=10.;
+        let mut status=Status{gateway_fresh:true,telemetry:Some(t.clone()),..Default::default()};
+        let report=snapshot(&db,&config,&status,now).unwrap();
+        assert_eq!(report["micro_real"]["state"],"candidate_only");
+        assert_eq!(report["micro_real"]["candidate_only"],true);
+        assert_eq!(report["micro_real"]["broker_execution_authorized"],false);
+        assert_eq!(report["micro_real"]["read_only"],true);
+        assert_eq!(report["micro_real"]["cap_percent"],10.);
+        assert_eq!(report["micro_real"]["account"]["login"],51);
+        // GET never writes to the durable latch; only execution code does.
+        t.equity=500.;status.telemetry=Some(t.clone());
+        assert_eq!(snapshot(&db,&config,&status,now).unwrap()["micro_real"]["state"],"milestone_reached");
+        let count:i64=db.query_row("SELECT COUNT(*) FROM micro_real_recovered",[],|r|r.get(0)).unwrap();
+        assert_eq!(count,0);
+        db.execute("INSERT INTO micro_real_recovered VALUES(?1,?2,?3)",
+            params![micro_key(&t),now,500.]).unwrap();
+        t.equity=50.;t.symbol="EURUSD".into();status.telemetry=Some(t.clone());
+        let latched=snapshot(&db,&config,&status,now).unwrap();
+        assert_eq!(latched["micro_real"]["state"],"recovered_latched");
+        assert_eq!(latched["micro_real"]["candidate_only"],false);
+        assert_eq!(latched["micro_real"]["recovered_persisted"],true);
+        assert_eq!(latched["micro_real"]["reached_equity"],500.);
+        t.login=52;status.telemetry=Some(t.clone());
+        assert_eq!(snapshot(&db,&config,&status,now).unwrap()["micro_real"]["candidate_only"],true);
+        t.account_trade_mode=Some(0);t.demo=true;status.telemetry=Some(t);
+        assert_eq!(snapshot(&db,&config,&status,now).unwrap()["micro_real"]["state"],"unverified_or_demo");
+        assert_eq!(snapshot(&db,&config,&status,now).unwrap()["micro_real"]["candidate_only"],false);
+        status.gateway_fresh=false;
+        assert!(snapshot(&db,&config,&status,now).unwrap().get("micro_real").is_none(),
+            "stale broker account has no current micro recovery attestation");
+    }
+
 }
