@@ -167,6 +167,21 @@ export default function Terminal(){
   return()=>{active=false;clearInterval(t)};
  },[contextKey]);
  useEffect(()=>{
+  if(page!=='risk'||!hasTauri()||preview){setPortfolioReport(null);return;}
+  let active=true;
+  const get=()=>{
+   const ticket=scopedGeneration.current.beginRead('portfolio');
+   void readPanel('/v1/execution').then(v=>{
+    if(active&&scopedGeneration.current.isCurrent(ticket))setPortfolioReport(unwrap(v));
+   }).catch(()=>{
+    if(active&&scopedGeneration.current.isCurrent(ticket))setPortfolioReport(null);
+   });
+  };
+  setPortfolioReport(null);get();
+  const timer=setInterval(()=>{if(document.visibilityState==='visible')get()},12000);
+  return()=>{active=false;clearInterval(timer)};
+ },[page,preview,contextKey]);
+ useEffect(()=>{
   if(page==='dashboard'||!hasTauri()||preview){setPageData(null);setPageUpdatedAt(null);setPageError('');return;}
   const route=findPage(page).route;
   if(!route){setPageData(null);setPageUpdatedAt(null);setPageError('لا يوجد مصدر مرتبط بهذه الصفحة');return;}
@@ -227,6 +242,18 @@ export default function Terminal(){
  const saveRiskForm=async(risk:Record<string,unknown>)=>{
   if(!hasTauri()||preview){sendNotice('الإعدادات لا تُحفظ في وضع المعاينة',true);return}
   setBusy(true);const writeTicket=scopedGeneration.current.beginRead('config');try{await saveRisk(risk);const latest=unwrap(await readPanel('/v1/config'));if(scopedGeneration.current.isCurrent(writeTicket)){scopedGeneration.current.invalidate('risk');setConfig(unwrap(latest.config));setRiskSnapshot(null);}sendNotice('تم حفظ إعدادات المخاطر والتحقق من النسخة المسجلة في Rust Core');}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
+ };
+ const runSavePortfolio=async(input:Record<string,unknown>)=>{
+  if(preview||!hasTauri()||status?.requested_run){sendNotice('حدود المحفظة تحتاج STOP وتطبيق Windows الحقيقي',true);return;}
+  setBusy(true);
+  const ticket=scopedGeneration.current.beginRead('portfolio');
+  try{
+   await savePortfolio(validatePortfolio(input));
+   const updated=unwrap(await readPanel('/v1/execution'));
+   if(scopedGeneration.current.isCurrent(ticket))setPortfolioReport(updated);
+   sendNotice('تم حفظ حدود المحفظة الاختيارية في Rust Core');
+  }catch(e){sendNotice('تعذر حفظ حدود المحفظة: '+String(e),true)}
+  finally{setBusy(false);}
  };
  const saveGeneral=async()=>{
   if(!settingsEdit||preview){sendNotice('وضع المعاينة لا يدعم الحفظ',true);return}
@@ -339,7 +366,13 @@ export default function Terminal(){
       <div className="subpage-stats"><article><small>EQUITY</small><strong>{money(account?.equity,currency)}</strong><span>رأس المال في الحساب</span></article><article><small>DAILY P&L</small><strong className="teal">{signed(account?.today_net,currency)}</strong><span>نتيجة جلسة MT5</span></article><article><small>POSITIONS</small><strong>{account?positions.length:'—'}</strong><span>المراكز المفتوحة</span></article><article><small>ACCOUNT</small><strong>{account?.demo?'DEMO':account?'REAL':'OFFLINE'}</strong><span>حالة الاتصال بالوسيط</span></article></div>
       <div className="subpage-layout">
       <section className="panel subpage-primary"><div className="panel-title"><b>{pageMeta.title} — بيانات وتشغيل</b><button onClick={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}} disabled={!pageMeta.route||preview}>تحديث ↻</button></div>
-        {page==='risk'?<RiskEditor config={config?unwrap(config.risk):null} apply={saveRiskForm} loading={busy}/>:
+        {page==='risk'?<div className="feature-zone">
+          <MicroCapitalOperations status={!preview&&feed.broker?status:null} risk={config?unwrap(config.risk):null}
+             portfolio={unwrap(portfolioReport).portfolio} armed={status?.requested_run===true}
+             disabled={busy||preview} onSavePortfolio={runSavePortfolio}/>
+          <RiskEditor config={config?unwrap(config.risk):null} apply={saveRiskForm} loading={busy} armed={status?.requested_run===true}/>
+          <DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/risk/monitor')}/>
+         </div>:
         page==='settings'||page==='telegram'?<div className="editor-panel"><p>إعدادات V4 المحفوظة محلياً لدى Rust Core — لا تُعرض بيانات Telegram السرية.</p>
            <label>مسار MT5 Terminal64.exe<input value={String(settingsEdit?.mt5_path||'')} onChange={e=>setSettingsEdit(s=>({...s,mt5_path:e.target.value}))}/></label>
            <label>رمز التداول<input value={String(settingsEdit?.symbol||'XAUUSD')} onChange={e=>setSettingsEdit(s=>({...s,symbol:e.target.value}))}/></label>
