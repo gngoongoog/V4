@@ -404,7 +404,19 @@ class BrokerExecutor:
         row = self.db.execute('SELECT request,result FROM sends WHERE id=?', (cmd['id'],)).fetchone()
         if row:
             saved = json.loads(row[0])
-            if any(saved.get(k)!=cmd.get(k) for k in ('login','server','currency','symbol','magic','kind','position')):
+            # Durable intent IDs bind the entire economic decision, not only
+            # the broker account. Never reinterpret a saved order with new lot,
+            # side, expiry, fees, risk permissions or Demo/REAL destination.
+            # Mutable polling state and timing metadata are deliberately omitted.
+            immutable=('login','server','currency','target','symbol','magic',
+                       'kind','position','lots','signal','revision',
+                       'deviation_points','created_ms','expires_ms',
+                       'commission_per_lot','slippage_ticks','risk_percent',
+                       'demo_flexible','micro_demo_risk_opt_in',
+                       'micro_real_temporary','micro_real_cap_percent',
+                       'micro_real_recovery_equity','daily_breaker_enabled',
+                       'daily_breaker_limit_percent','max_quote_age_ms')
+            if any(saved.get(k)!=cmd.get(k) for k in immutable):
                 return dict(id=cmd['id'], state='unknown', reason='Intent identity differs from durable journal')
             return self._reconcile(mt5, saved, json.loads(row[1]) if row[1] else None)
         if cmd.get('state') in ('unknown', 'placed'):
