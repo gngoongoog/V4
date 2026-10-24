@@ -178,6 +178,11 @@ class DemoAcceptanceTests(unittest.TestCase):
         report, rows = acceptance.build_report(metadata, samples, minimum_fast_samples=5)
         self.assertEqual(report["result"], "TARGET_MET")
         self.assertTrue(report["characterization_complete"])
+        self.assertEqual(report["broker_lifecycle_acceptance"]["status"], "NOT TESTED")
+        self.assertFalse(report["broker_lifecycle_acceptance"]["ready_for_real"])
+        self.assertEqual(report["broker_lifecycle_acceptance"]["observed_command_counts"]["sent"], 5)
+        self.assertIn("history_deals_get", " ".join(
+            report["broker_lifecycle_acceptance"]["unverified_requirements"]))
         self.assertEqual(report["fast_path"]["sources"]["native"]["count"], 3)
         self.assertEqual(report["fast_path"]["sources"]["poll"]["count"], 2)
         self.assertTrue(report["contracts"]["fast_open_skips_order_check"])
