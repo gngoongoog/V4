@@ -98,9 +98,10 @@ pub fn verify(db:&Connection,account:&str,id:&str,expected_sha:Option<&str>)
         &&payload["independent_oos"]==false
         &&payload["forward_labels"].is_null(),"Research checkpoint envelope altered");
     let scores=&payload["model_scores"];
+    let actual_model_sha=sha(&serde_json::to_vec(scores)?);
     ensure!(scores["context"]==account
         &&scores["schema"]=="p1k5d-sniper-policy-scores-v1"
-        &&sha(&serde_json::to_vec(scores)?)==payload["model_scores_sha256"],
+        &&payload["model_scores_sha256"].as_str()==Some(actual_model_sha.as_str()),
         "Frozen model scores checksum mismatch");
     let training=&payload["training_checkpoint"];
     ensure!(training["status"]=="captured"
