@@ -73,6 +73,12 @@ impl Engine {
         self.models = models;
         self.target_models = targets;
     }
+    /// Verify the frozen research model belongs to the same Broker Demo
+    /// account identity as the broker replay; sample counts alone are
+    /// insufficient to prove identity (two users may have equal counts).
+    pub fn training_account_matches(&self,expected:&str)->bool{
+        !expected.is_empty()&&self.account==expected
+    }
     pub fn reset_quotes(&mut self) { self.quotes.clear(); }
 
     /// Independent research copy of the currently learned Demo policy.
