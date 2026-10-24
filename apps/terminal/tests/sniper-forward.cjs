@@ -179,6 +179,11 @@ test('P1-K5H isolates true booked MT5 Demo broker closes from zero-order frozen 
  assert.match(booked,/v\["trading_mode"\]=="sniper"/);
  assert.match(booked,/v\["selection"\]\["brain"\]=="sniper_learner"/);
  assert.match(booked,/positions\.insert\(position_id\)/);
+ assert.match(booked,/receipts_reconcile\(db,account,position_id,&v\)/);
+ assert.match(booked,/missing_or_inconsistent_original_broker_deals/);
+ assert.match(booked,/local_broker_deal_receipts_reconciled":true/);
+ const reconciliation=code('crates/runtime/src/coordinator_learning.rs');
+ assert.match(reconciliation,/p1k5i_demo_partial_fill_disconnect_and_sqlite_restart_are_idempotent/);
  assert.match(booked,/g\+c\+s\+f-n/);
  assert.match(booked,/refused>0/);
  assert.match(booked,/source":"reconciled_mt5_demo_broker_deals"/);
@@ -191,6 +196,8 @@ test('P1-K5H isolates true booked MT5 Demo broker closes from zero-order frozen 
  assert.match(runtime,/demo_booked_execution_audit/);
  assert.match(ui,/booked\.matched_with_frozen_markouts===false/);
  assert.match(ui,/booked\.booked_costs_reconcile===true/);
+ assert.match(ui,/booked\.local_broker_deal_receipts_reconciled===true/);
+ assert.match(ui,/booked\.broker_connection_tested_here===false/);
  assert.match(ui,/booked\.strategy_win_rate===null/);
  assert.match(ui,/هذه ليست تنفيذات الدراسة المجمدة/);
 });
