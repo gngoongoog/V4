@@ -1,7 +1,7 @@
 // P1-D: read-only small-account estimates. Authoritative limits, leverage,
 // stop risk and order acceptance remain with Rust Core and the MT5 broker.
 export type MicroBrokerTelemetry={
- connected?:boolean; demo?:boolean; account_trade_mode?:number|null;
+ connected?:boolean; demo?:boolean; account_trade_mode?:number|null;login?:number;server?:string;
  equity?:number|null;balance?:number|null;currency?:string|null;
  leverage?:number|null;margin_free?:number|null;
  minimum_lot_margin?:number|null;volume_min?:number|null;
@@ -13,7 +13,7 @@ export type MicroRisk={
  micro_real_recovery_equity?:number;daily_breaker_real_enabled?:boolean;
 };
 export type MicroView={
- available:boolean;accountType:'DEMO'|'REAL'|'UNVERIFIED';currency:string;
+ available:boolean;accountType:'DEMO'|'REAL'|'UNVERIFIED';login:number|null;server:string;currency:string;
  equity:number|null;leverage:number|null;freeMargin:number|null;
  minimumLot:number|null;minimumLotMargin:number|null;
  marginCovered:boolean|null;scenarioMargin:number|null;
@@ -25,11 +25,12 @@ const nonNegative=(n:unknown):n is number=>typeof n==='number'&&Number.isFinite(
 const cap=(n:number)=>Math.round(n*10000)/10000;
 export function smallAccountPreview(status:MicroStatus|null,risk:MicroRisk|null,scenarioLeverage:number):MicroView{
  const t=status?.telemetry;
- const base:MicroView={available:false,accountType:'UNVERIFIED',currency:'',
+ const base:MicroView={available:false,accountType:'UNVERIFIED',login:null,server:'',currency:'',
   equity:null,leverage:null,freeMargin:null,minimumLot:null,minimumLotMargin:null,
   marginCovered:null,scenarioMargin:null,budget:null,budgetPercent:null,microCandidate:false,
   note:'بانتظار قراءة MT5 حديثة لحساب محدد'};
  if(status?.gateway_fresh!==true||t?.connected!==true||!positive(t.equity)||
+    !Number.isSafeInteger(t.login)||!positive(t.login)||!t.server||
     !((t.demo===true&&t.account_trade_mode===0)||(t.demo===false&&t.account_trade_mode===2)))return base;
  const actualLeverage=positive(t.leverage)&&Number.isInteger(t.leverage)?t.leverage:null;
  const freeMargin=nonNegative(t.margin_free)?t.margin_free:null;
@@ -51,7 +52,7 @@ export function smallAccountPreview(status:MicroStatus|null,risk:MicroRisk|null,
  const scenarioMargin=actualLeverage!==null&&minimumLotMargin!==null&&
     Number.isInteger(scenarioLeverage)&&scenarioLeverage>=1&&scenarioLeverage<=10000?
     cap(minimumLotMargin*actualLeverage/scenarioLeverage):null;
- return {...base,available:true,accountType:isReal?'REAL':'DEMO',currency:t.currency||'',
+ return {...base,available:true,accountType:isReal?'REAL':'DEMO',login:t.login??null,server:t.server||'',currency:t.currency||'',
     equity:t.equity,leverage:actualLeverage,freeMargin,minimumLot,minimumLotMargin,
     marginCovered:freeMargin!==null&&minimumLotMargin!==null?freeMargin>=minimumLotMargin:null,
     scenarioMargin,budgetPercent,budget:budgetPercent!==null?cap(t.equity*budgetPercent/100):null,
