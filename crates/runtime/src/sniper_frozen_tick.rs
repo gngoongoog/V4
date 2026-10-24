@@ -27,6 +27,7 @@ struct Trial{
     context:String,started_ms:u64,config:Config,
     frozen:Engine,active:bool,reason:String,
     forward:crate::sniper_forward_direction::ForwardDirectionAudit,
+    training_checkpoint:Value,
     first_future_ms:Option<u64>,last_event:Option<u64>,
     last_broker:Option<u64>,last_quote:Option<(u64,u64,u64)>,last_origin:String,
     last_dropped:Option<u64>,
@@ -42,7 +43,23 @@ struct Trial{
 pub struct Study{trial:Option<Trial>}
 impl Study{
     pub fn clear_on_mode_change(&mut self){self.trial=None;}
+    #[cfg(test)]
     pub fn freeze(&mut self,t:&Telemetry,c:&Config,adaptive:&Engine,now:u64)->Result<Value>{
+        self.freeze_impl(t,c,adaptive,json!({"status":"synthetic_fixture","independent_oos":false}),now)
+    }
+    pub fn freeze_verified(&mut self,t:&Telemetry,c:&Config,adaptive:&Engine,
+        checkpoint:Value,now:u64)->Result<Value>{
+        ensure!(checkpoint["status"]=="captured"
+            &&checkpoint["cutoff_ms"].as_u64()==Some(now)
+            &&checkpoint["broker_training_samples"]==checkpoint["cached_policy_samples"]
+            &&checkpoint["broker_target_samples"]==checkpoint["cached_target_samples"]
+            &&checkpoint["independent_oos"]==false
+            &&checkpoint["broker_pnl"].is_null(),
+            "Frozen Learner training ledger checkpoint missing, stale or inconsistent");
+        self.freeze_impl(t,c,adaptive,checkpoint,now)
+    }
+    fn freeze_impl(&mut self,t:&Telemetry,c:&Config,adaptive:&Engine,
+        checkpoint:Value,now:u64)->Result<Value>{
         ensure!(eligible(t,c,now),
             "Sniper Learner study needs a fresh bound MT5 Demo quote with original broker timestamp");
         ensure!(self.trial.as_ref().is_none_or(|x|!x.active),
@@ -52,6 +69,7 @@ impl Study{
         self.trial=Some(Trial{
             context:context(t),started_ms:now,config:c.clone(),frozen,
             active:true,reason:String::new(),forward:Default::default(),
+            training_checkpoint:checkpoint,
             first_future_ms:None,last_event:None,last_broker:None,last_quote:None,
             last_origin:String::new(),last_dropped:None,
             accepted:0,comparable:0,exact:0,side_disagreements:0,
@@ -65,7 +83,7 @@ impl Study{
             "frozen_ms":now,"policy":"p1k3-sniper-learner-forward-tick-v1",
             "model_scores_frozen":true,"prior_tick_window_discarded":true,
             "no_broker_orders":true,"no_learning_effect":true,
-            "persistence":"memory_only"}))
+            "persistence":"memory_only","training_checkpoint_status":self.trial.as_ref().unwrap().training_checkpoint["status"]}))
     }
     pub fn stop(&mut self,t:&Telemetry)->Result<Value>{
         let trial=self.trial.as_mut().filter(|v|v.context==context(t))
@@ -217,6 +235,7 @@ impl Study{
             "unpaired_same_clock_price_changes":trial.unpaired_same_clock_price_changes,
             "minimum_warmup_ms":WARMUP_MS,
             "forward_direction_audit":trial.forward.json(),
+            "training_checkpoint":trial.training_checkpoint,
             "forward_only":true,
             "model_scores_frozen":true,"prior_tick_window_discarded":true,
             "persistence":"memory_only","read_only":true,

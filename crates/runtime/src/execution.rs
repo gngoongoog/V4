@@ -770,7 +770,15 @@ impl Service {
                             &&f.telemetry.login==t.login &&f.telemetry.server==t.server
                             &&f.telemetry.symbol==t.symbol&&f.telemetry.currency==t.currency)
                         .context("Sniper reconciled quote cache not ready")?;
-                    self.sniper_frozen_tick.freeze(t,&fast.config,&self.inner.sniper,now)
+                    {
+                        // Freeze is a stopped operator action, never a Tick path.
+                        // Reconcile the actual cached Learner replay weights to
+                        // the current account's completed Demo broker ledger.
+                        let checkpoint=crate::sniper_learning::frozen_training_checkpoint(
+                            db,t,&self.inner.sniper,now)?;
+                        self.sniper_frozen_tick.freeze_verified(t,&fast.config,
+                            &self.inner.sniper,checkpoint,now)
+                    }
                 },
                 "stop"=>self.sniper_frozen_tick.stop(t),
                 _=>anyhow::bail!("Unknown Sniper frozen study action")
