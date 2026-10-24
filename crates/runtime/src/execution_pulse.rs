@@ -24,6 +24,10 @@ struct Pulse {
     quote_time_ms: u64,
     #[serde(default)]
     source_quote_time_ms: Option<u64>,
+    #[serde(default)]
+    quote_source: Option<String>,
+    #[serde(default)]
+    native_dropped_total: Option<u64>,
     tick_age_ms: u64,
 }
 
@@ -65,6 +69,16 @@ impl FastContext {
             "Invalid Sniper pulse quote"
         );
         anyhow::ensure!(pulse.quote_time_ms > 0, "Sniper pulse timestamp is required");
+        anyhow::ensure!(pulse.quote_source.as_deref().is_none_or(|v|
+            matches!(v,"native"|"poll")),"Invalid Sniper tick origin");
+        // No invented source provenance from old gateways. An explicit source
+        // must be accompanied by a genuine MT5 source timestamp.
+        anyhow::ensure!(pulse.quote_source.is_none()||pulse.source_quote_time_ms.is_some(),
+            "Explicit Sniper origin requires broker source timestamp");
+        if pulse.quote_source.is_some() {
+            anyhow::ensure!(pulse.native_dropped_total.is_some(),
+                "Explicit Sniper source requires Native mailbox overflow evidence");
+        }
         anyhow::ensure!(pulse.tick_age_ms <= 1000, "Sniper pulse quote is stale");
         anyhow::ensure!(self.telemetry.source_quote_time_ms.is_none()
             || pulse.source_quote_time_ms.is_some(),
