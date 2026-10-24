@@ -16,8 +16,30 @@ pub struct Service {
     last_error: String,
 }
 
-fn context(t: &Telemetry) -> String {
-    serde_json::to_string(&(&t.server, t.login, &t.symbol, &t.currency)).unwrap_or_default()
+/// The immutable learning dataset belongs to an exact *verified* broker mode.
+/// Legacy four-field contexts remain stored, but cannot be reused for new M1
+/// snapshots or retroactively attributed to either Demo or REAL.
+pub(crate) fn context(t: &Telemetry) -> Option<String> {
+    if !t.connected || t.login <= 0 || t.server.is_empty() || t.symbol.is_empty() || t.currency.is_empty() {
+        return None;
+    }
+    match (t.demo, t.account_trade_mode) {
+        (true, Some(0)) | (false, Some(2)) =>
+            serde_json::to_string(&(&t.server, t.login, &t.symbol, &t.currency, t.account_trade_mode.unwrap(), t.demo)).ok(),
+        _ => None,
+    }
+}
+
+/// Exports cannot train a challenger from legacy broker-mode-ambiguous rows.
+fn verified_study_context(raw: &str) -> bool {
+    let Ok(Value::Array(parts)) = serde_json::from_str::<Value>(raw) else { return false; };
+    parts.len() == 6
+        && parts[0].as_str().is_some_and(|v| !v.is_empty())
+        && parts[1].as_i64().is_some_and(|v| v > 0)
+        && parts[2].as_str().is_some_and(|v| !v.is_empty())
+        && parts[3].as_str().is_some_and(|v| !v.is_empty())
+        && matches!((parts[4].as_i64(), parts[5].as_bool()),
+            (Some(0), Some(true)) | (Some(2), Some(false)))
 }
 fn directional_score(a: &Analysis) -> f64 {
     let weight = a.votes.iter().map(|v| v.evidence.max(0.0)).sum::<f64>();
@@ -102,7 +124,7 @@ impl Service{
     }
     pub fn observe(&mut self,db:&mut Connection,t:&Telemetry,a:&Analysis,now:u64){match self.observe_inner(db,t,a,now){Ok(())=>self.last_error.clear(),Err(e)=>self.last_error=e.to_string().chars().take(240).collect()}}
     fn observe_inner(&mut self,db:&mut Connection,t:&Telemetry,a:&Analysis,now:u64)->Result<()>{
-        let Some((reference_close,atr,payload))=feature_payload(t,a)else{return Ok(());};let market=t.market.as_ref().unwrap();let key=context(t);let tx=db.transaction()?;
+        let Some((reference_close,atr,payload))=feature_payload(t,a)else{return Ok(());};let market=t.market.as_ref().unwrap();let Some(key)=context(t)else{return Ok(());};let tx=db.transaction()?;
         tx.execute("INSERT OR IGNORE INTO learning_snapshots(context,bar_time,captured_ms,feature_schema,reference_close,atr,features) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![key,a.bar_time,now,FEATURE_SCHEMA,reference_close,atr,payload.to_string()])?;
         let cutoff=market.m1.last().map(|b|b.time.saturating_sub(1800)).unwrap_or(0);
         let pending={
@@ -132,8 +154,66 @@ impl Service{
     }
     pub fn export(&self,db:&Connection,dir:&Path,now:u64)->Result<Value>{
         let name=format!("learning-dataset-{now}");let staging=dir.join("exports").join(format!(".{name}.tmp"));let destination=dir.join("exports").join(&name);if staging.exists()||destination.exists(){bail!("Learning export path already exists");}fs::create_dir_all(&staging)?;let mut output=fs::File::create(staging.join("dataset.jsonl"))?;
-        let mut statement=db.prepare("SELECT s.id,s.context,s.bar_time,s.captured_ms,s.feature_schema,s.features,l.matured_ms,l.label_schema,l.label FROM learning_snapshots s JOIN learning_labels l ON l.snapshot_id=s.id ORDER BY s.context,s.bar_time,s.id")?;let mut rows=statement.query([])?;let mut count=0usize;
-        while let Some(r)=rows.next()?{let features:Value=serde_json::from_str(&r.get::<_,String>(5)?)?;let label:Value=serde_json::from_str(&r.get::<_,String>(8)?)?;writeln!(output,"{}",json!({"snapshot_id":r.get::<_,i64>(0)?,"context":r.get::<_,String>(1)?,"bar_time":r.get::<_,u64>(2)?,"captured_ms":r.get::<_,u64>(3)?,"feature_schema":r.get::<_,String>(4)?,"features":features,"matured_ms":r.get::<_,u64>(6)?,"label_schema":r.get::<_,String>(7)?,"label":label}))?;count+=1;}output.sync_all()?;
-        fs::write(staging.join("manifest.json"),serde_json::to_vec_pretty(&json!({"version":"learning-foundation-v1","feature_schema":FEATURE_SCHEMA,"label_schema":LABEL_SCHEMA,"rows":count,"created_ms":now,"ordering":"context,bar_time,snapshot_id","scope":"matured labels only; no quote/DOM/news features in v1","trained_model_included":false}))?)?;drop(rows);drop(statement);fs::rename(staging,&destination)?;Ok(json!({"path":destination,"rows":count,"note":"Deterministic matured learning dataset export; training is offline only."}))
+        let mut statement=db.prepare("SELECT s.id,s.context,s.bar_time,s.captured_ms,s.feature_schema,s.features,l.matured_ms,l.label_schema,l.label FROM learning_snapshots s JOIN learning_labels l ON l.snapshot_id=s.id ORDER BY s.context,s.bar_time,s.id")?;let mut rows=statement.query([])?;let mut count=0usize;let mut excluded_legacy=0usize;
+        while let Some(r)=rows.next()?{let raw_context:String=r.get(1)?;if !verified_study_context(&raw_context){excluded_legacy+=1;continue;}let features:Value=serde_json::from_str(&r.get::<_,String>(5)?)?;let label:Value=serde_json::from_str(&r.get::<_,String>(8)?)?;writeln!(output,"{}",json!({"snapshot_id":r.get::<_,i64>(0)?,"context":raw_context,"bar_time":r.get::<_,u64>(2)?,"captured_ms":r.get::<_,u64>(3)?,"feature_schema":r.get::<_,String>(4)?,"features":features,"matured_ms":r.get::<_,u64>(6)?,"label_schema":r.get::<_,String>(7)?,"label":label}))?;count+=1;}output.sync_all()?;
+        fs::write(staging.join("manifest.json"),serde_json::to_vec_pretty(&json!({"version":"learning-foundation-v1","feature_schema":FEATURE_SCHEMA,"label_schema":LABEL_SCHEMA,"rows":count,"excluded_legacy_or_unverified_rows":excluded_legacy,"created_ms":now,"ordering":"context,bar_time,snapshot_id","scope":"matured, broker-mode-verified labels only; legacy unidentified modes excluded; no quote/DOM/news features","trained_model_included":false}))?)?;drop(rows);drop(statement);fs::rename(staging,&destination)?;Ok(json!({"path":destination,"rows":count,"excluded_legacy_or_unverified_rows":excluded_legacy,"note":"Only matured labels with verified broker mode exported. Legacy rows retained in DB but excluded from training export."}))
+    }
+}
+
+#[cfg(test)]
+mod p0j_learning_context_tests {
+    use super::*;
+    use braintrade_domain::Telemetry;
+    use rusqlite::Connection;
+
+    fn broker(demo: bool, mode: Option<i32>) -> Telemetry {
+        Telemetry {
+            connected: true, demo, account_trade_mode: mode, login: 17,
+            server: "Broker-Same".into(), symbol: "XAUUSD".into(),
+            currency: "USD".into(), ..Default::default()
+        }
+    }
+
+    #[test]
+    fn snapshot_context_is_unique_per_verified_demo_real_broker_mode() {
+        let demo=broker(true,Some(0));
+        let real=broker(false,Some(2));
+        let d=context(&demo).expect("verified demo");
+        let r=context(&real).expect("verified real");
+        assert_ne!(d,r);
+        assert!(verified_study_context(&d));
+        assert!(verified_study_context(&r));
+        assert!(context(&broker(true,Some(2))).is_none());
+        assert!(context(&broker(false,Some(0))).is_none());
+        assert!(context(&broker(true,None)).is_none());
+        let mut disconnected=demo.clone();disconnected.connected=false;
+        assert!(context(&disconnected).is_none());
+        let legacy=serde_json::to_string(&(&demo.server,demo.login,&demo.symbol,&demo.currency)).unwrap();
+        assert!(!verified_study_context(&legacy));
+    }
+
+    #[test]
+    fn same_broker_login_and_bar_remain_separate_after_sqlite_reopen() {
+        let filename=std::env::temp_dir().join(format!("braintrade-p0j-{}.sqlite",uuid::Uuid::new_v4()));
+        let demo=context(&broker(true,Some(0))).unwrap();
+        let real=context(&broker(false,Some(2))).unwrap();
+        let legacy=serde_json::to_string(&("Broker-Same",17,"XAUUSD","USD")).unwrap();
+        {
+            let db=Connection::open(&filename).unwrap();
+            Service::new(&db).unwrap();
+            for (ctx,price) in [(&demo,2500.),(&real,2501.),(&legacy,2499.)] {
+                db.execute("INSERT INTO learning_snapshots(context,bar_time,captured_ms,feature_schema,reference_close,atr,features) VALUES(?1,600,700,?2,?3,1,'{}')",
+                    params![ctx,FEATURE_SCHEMA,price]).unwrap();
+            }
+            assert_eq!(db.query_row("SELECT COUNT(*) FROM learning_snapshots",[],|r|r.get::<_,i64>(0)).unwrap(),3);
+        }
+        {
+            let db=Connection::open(&filename).unwrap();
+            Service::new(&db).unwrap();
+            assert_eq!(db.query_row("SELECT COUNT(*) FROM learning_snapshots WHERE context=?1",[&demo],|r|r.get::<_,i64>(0)).unwrap(),1);
+            assert_eq!(db.query_row("SELECT COUNT(*) FROM learning_snapshots WHERE context=?1",[&real],|r|r.get::<_,i64>(0)).unwrap(),1);
+            assert_eq!(db.query_row("SELECT COUNT(*) FROM learning_snapshots WHERE context=?1",[&legacy],|r|r.get::<_,i64>(0)).unwrap(),1);
+        }
+        std::fs::remove_file(filename).unwrap();
     }
 }
