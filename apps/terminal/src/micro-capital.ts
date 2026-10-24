@@ -1,5 +1,7 @@
 // P1-D: read-only small-account estimates. Authoritative limits, leverage,
 // stop risk and order acceptance remain with Rust Core and the MT5 broker.
+import {microAttestation} from './micro-readiness';
+
 export type MicroBrokerTelemetry={
  connected?:boolean; demo?:boolean; account_trade_mode?:number|null;login?:number;server?:string;
  equity?:number|null;balance?:number|null;currency?:string|null;
@@ -23,7 +25,7 @@ export type MicroView={
 const positive=(n:unknown):n is number=>typeof n==='number'&&Number.isFinite(n)&&n>0;
 const nonNegative=(n:unknown):n is number=>typeof n==='number'&&Number.isFinite(n)&&n>=0;
 const cap=(n:number)=>Math.round(n*10000)/10000;
-export function smallAccountPreview(status:MicroStatus|null,risk:MicroRisk|null,scenarioLeverage:number):MicroView{
+export function smallAccountPreview(status:MicroStatus|null,risk:MicroRisk|null,scenarioLeverage:number,monitor:unknown=null,nowMs=Date.now()):MicroView{
  const t=status?.telemetry;
  const base:MicroView={available:false,accountType:'UNVERIFIED',login:null,server:'',currency:'',
   equity:null,leverage:null,freeMargin:null,minimumLot:null,minimumLotMargin:null,
@@ -44,10 +46,14 @@ export function smallAccountPreview(status:MicroStatus|null,risk:MicroRisk|null,
     positive(risk.micro_real_recovery_equity)?risk.micro_real_recovery_equity:null):null;
  // This is a candidate by equity only. The irrevocable broker/Core recovery
  // history may already have disabled micro trading; never label it armed.
+ const audit=microAttestation(status,monitor,nowMs);
  const microCandidate=Boolean(isReal&&risk?.micro_real_temporary===true&&
-    recovery!==null&&t.equity<recovery);
- const rawPercent=microCandidate?
-    (risk?.micro_real_cap_percent===undefined?10:risk.micro_real_cap_percent):risk?.risk_percent;
+    recovery!==null&&t.equity<recovery&&audit.verified&&audit.candidate);
+ // With a configured REAL Micro policy but no current Core recovery attestation
+ // even 0.25% is a guess about the budget Core will send to MT5.
+ const uncertainMicro=isReal&&risk?.micro_real_temporary===true&&!audit.verified;
+ const rawPercent=uncertainMicro?null:microCandidate?
+    audit.capPercent:risk?.risk_percent;
  const budgetPercent=positive(rawPercent)&&rawPercent<=20?rawPercent:null;
  const scenarioMargin=actualLeverage!==null&&minimumLotMargin!==null&&
     Number.isInteger(scenarioLeverage)&&scenarioLeverage>=1&&scenarioLeverage<=10000?
@@ -57,8 +63,9 @@ export function smallAccountPreview(status:MicroStatus|null,risk:MicroRisk|null,
     marginCovered:freeMargin!==null&&minimumLotMargin!==null?freeMargin>=minimumLotMargin:null,
     scenarioMargin,budgetPercent,budget:budgetPercent!==null?cap(t.equity*budgetPercent/100):null,
     microCandidate,
-    note:microCandidate?'مرشح لوضع Micro حسب Equity فقط؛ Core وسجل التعافي الدائم يقرران السماح':
-      'المخاطرة المعروضة ميزانية تقديرية، وليست ترخيص تنفيذ أو ضمان هامش'};
+    note:uncertainMicro?'حالة Micro REAL غير مؤكدة: يلزم تقرير Core مطابق وحديث قبل عرض أي ميزانية':
+      microCandidate?'مرشح لوضع Micro حسب سجل Core الحالي؛ لا يعتبر إذناً بفتح صفقة':
+      'ميزانية مخاطرة عادية تقديرية؛ لا تمثل إذناً بالتداول أو ضمان هامش'};
 }
 export type PortfolioSettings={enabled:boolean;max_positions:number;max_lots:number;max_risk_percent:number};
 export function validatePortfolio(value:unknown):PortfolioSettings{
