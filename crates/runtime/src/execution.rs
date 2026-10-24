@@ -299,6 +299,7 @@ pub struct Service {
     sniper_opportunities: crate::sniper_opportunities::Recorder,
     sniper_tick_audit: crate::sniper_tick_audit::Audit,
     sniper_frozen_tick: crate::sniper_frozen_tick::Study,
+    sniper_classic_forward: crate::sniper_classic_forward::Study,
     portfolio: PortfolioLimits,
     portfolio_state: Value,
     supervisor: crate::enterprise_supervisor::Settings,
@@ -351,6 +352,7 @@ impl Service {
             sniper_opportunities: crate::sniper_opportunities::Recorder::default(),
             sniper_tick_audit: crate::sniper_tick_audit::Audit::default(),
             sniper_frozen_tick: crate::sniper_frozen_tick::Study::default(),
+            sniper_classic_forward: crate::sniper_classic_forward::Study::default(),
             portfolio,
             portfolio_state,
             // Cache policy once; never query/CREATE a SQLite table per Sniper tick.
@@ -391,6 +393,7 @@ impl Service {
         self.fast = None; // Never execute a new selection using a previous cached config.
         self.sniper_tick_audit=crate::sniper_tick_audit::Audit::default();
         self.sniper_frozen_tick.clear_on_mode_change();
+        self.sniper_classic_forward.clear_on_mode_change();
     }
 
     fn save_portfolio(db: &Connection, candidate: &PortfolioLimits) -> Result<()> {
@@ -521,6 +524,9 @@ impl Service {
         self.sniper_frozen_tick.reconcile(telemetry,config);
         self.inner
             .observe(db, telemetry, config, entries_allowed, frames, now)?;
+        // Separate read-only Classic forward cohort uses full M1 snapshots.
+        // It never consumes or contaminates Learner Fast Pulse comparisons.
+        self.sniper_classic_forward.observe(telemetry,config,frames,now);
         // Immutable Demo coordinator policy is a separate prospective study.
         // An audit failure cannot interfere with LIVE broker execution or exits.
         if let Some(active_signal)=self.inner.last_system_signal(){
@@ -709,6 +715,36 @@ impl Service {
         status: &Status,
         now: u64,
     ) -> Result<Value> {
+        if path=="/v1/execution/frozen-classic" {
+            let t=status.telemetry.as_ref().filter(|t|
+                status.gateway_fresh && self.account_matches(status)
+                &&self.inner.active_mode==Some(braintrade_domain::trading::TradingMode::Sniper)
+                &&t.demo&&t.account_trade_mode==Some(0));
+            if method=="GET" {return Ok(self.sniper_classic_forward.report(t,now));}
+            anyhow::ensure!(method=="POST","Unsupported Classic forward research method");
+            anyhow::ensure!(!status.requested_run && !self.pending(db)?,
+                "STOP and reconcile broker intents before Classic research");
+            let t=t.context("Fresh bound MT5 Demo Sniper Classic account required")?;
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct ClassicRequest{action:String,context:String}
+            let request:ClassicRequest=serde_json::from_slice(body)?;
+            anyhow::ensure!(request.context==context(t),
+                "Classic research account/session drift");
+            return match request.action.as_str(){
+                "freeze"=>{
+                    let fast=self.fast.as_ref()
+                        .filter(|f|f.config.trading.mode==braintrade_domain::trading::TradingMode::Sniper
+                            &&f.config.trading.sniper_brain==braintrade_domain::trading::SniperBrain::Classic
+                            &&f.telemetry.login==t.login &&f.telemetry.server==t.server
+                            &&f.telemetry.symbol==t.symbol &&f.telemetry.currency==t.currency)
+                        .context("Classic research quote cache not ready")?;
+                    self.sniper_classic_forward.freeze(t,&fast.config,now)
+                },
+                "stop"=>self.sniper_classic_forward.stop(t),
+                _=>anyhow::bail!("Unknown Classic forward research action")
+            };
+        }
         if path=="/v1/execution/frozen-sniper" {
             let t=status.telemetry.as_ref().filter(|t|
                 status.gateway_fresh&&self.account_matches(status)
