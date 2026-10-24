@@ -73,3 +73,35 @@ test('P1-K5D records frozen score data with verified digest and append-only acco
  assert.match(screen,/statusValue==='integrity_failure'/);
  assert.match(screen,/SHA-256 VERIFIED/);
 });
+
+test('P1-K5E buffers research events on Tick, flushes only on reconciled snapshots',()=>{
+ const source=code('crates/runtime/src/sniper_forward_direction.rs');
+ const journal=code('crates/runtime/src/sniper_forward_journal.rs');
+ const study=code('crates/runtime/src/sniper_frozen_tick.rs');
+ const svc=code('crates/runtime/src/execution.rs');
+ const ui=code('apps/terminal/src/sniper-frozen-operations.tsx');
+ assert.match(source,/MAX_PENDING_EVENTS:usize=256/);
+ assert.match(source,/uncommitted_events\(&self\)/);
+ assert.match(source,/fn event\(&mut self,event:Value\)/);
+ assert.match(source,/kind":"candidate"/);
+ assert.match(source,/kind":"matured"/);
+ assert.match(source,/kind":"censored"/);
+ assert.match(journal,/CREATE TABLE IF NOT EXISTS sniper_future_research_events/);
+ assert.match(journal,/sniper_future_events_no_update/);
+ assert.match(journal,/sniper_future_events_no_delete/);
+ assert.match(journal,/Conflicting repeated research event sequence/);
+ assert.match(journal,/Research label leaked before the fixed horizon/);
+ assert.match(journal,/digest\(raw\.as_bytes\(\)\)/);
+ assert.match(journal,/"complete_trace":false/);
+ assert.match(journal,/"historical_oos":false/);
+ assert.match(journal,/"broker_pnl":Value::Null/);
+ assert.match(study,/fn flush_research_events\(&mut self,db:&rusqlite::Connection/);
+ assert.match(study,/fn stop_with_research_flush\(/);
+ assert.match(svc,/sniper_frozen_tick\.flush_research_events\(db,telemetry\)/);
+ assert.match(svc,/sniper_frozen_tick\.stop_with_research_flush\(db,t\)/);
+ assert.match(svc,/sniper_forward_journal::report\(db,&account/);
+ assert.match(ui,/journal\.integrity==='verified_local'/);
+ assert.match(ui,/lastArchivedJournal\.integrity==='verified_local'/);
+ assert.match(ui,/forward\.dropped_unpersisted_events/);
+ assert.match(ui,/journal\.complete_trace===false/);
+});
