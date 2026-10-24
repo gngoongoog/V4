@@ -81,6 +81,74 @@ class DemoAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "currently connected Demo"):
             acceptance._context(mismatch)
 
+    def bound_demo(self):
+        execution = {
+            "settings": {"target": "demo", "login": 123456,
+                         "server": "Broker-Demo", "currency": "USD"},
+            "account_matches": True,
+            "context": json.dumps(["Broker-Demo", 123456, "XAUUSD", "USD"]),
+        }
+        status = {
+            "version": "v25",
+            "gateway_fresh": True,
+            "telemetry": {
+                "connected": True, "demo": True, "account_trade_mode": 0,
+                "login": 123456, "server": "Broker-Demo",
+                "symbol": "XAUUSD", "currency": "USD",
+            },
+        }
+        config = {"trading": {"mode": "sniper"}}
+        return status, execution, config
+
+    def test_capture_refuses_stale_real_or_mismatched_broker_snapshot(self):
+        status, execution, config = self.bound_demo()
+        identity = acceptance.require_fresh_demo(status, execution)
+        acceptance.validate_capture_scope(status, execution, config, identity,
+                                          "sniper", "v25")
+        for changes in (
+                {"gateway_fresh": False},
+                {"telemetry": {**status["telemetry"], "connected": False}},
+                {"telemetry": {**status["telemetry"], "demo": False,
+                               "account_trade_mode": 2}},
+                {"telemetry": {**status["telemetry"], "login": 99}},
+                {"telemetry": {**status["telemetry"], "symbol": "EURUSD"}},
+                {"telemetry": {**status["telemetry"], "server": "Other"}},
+                {"telemetry": None},
+        ):
+            with self.subTest(changes=changes):
+                with self.assertRaises(RuntimeError):
+                    acceptance.require_fresh_demo({**status, **changes}, execution)
+        with self.assertRaisesRegex(RuntimeError, "Trading mode changed"):
+            acceptance.validate_capture_scope(status, execution,
+                                              {"trading": {"mode": "swing"}},
+                                              identity, "sniper", "v25")
+        with self.assertRaisesRegex(RuntimeError, "version changed"):
+            acceptance.validate_capture_scope({**status, "version": "v26"},
+                                              execution, config, identity,
+                                              "sniper", "v25")
+        changed = dict(execution, context=json.dumps(
+            ["Broker-Demo", 123456, "EURUSD", "USD"]))
+        with self.assertRaises(RuntimeError):
+            acceptance.require_fresh_demo(status, changed)
+
+    def test_ipc_bearer_can_only_be_sent_to_http_loopback_core(self):
+        for url in ("http://127.0.0.1:18741", "http://localhost:18741",
+                    "http://[::1]:18741"):
+            with self.subTest(url=url):
+                self.assertEqual(acceptance.validate_local_core_url(url), url)
+        for url in (
+                "http://example.com:18741", "https://127.0.0.1:18741",
+                "http://127.0.0.1:18741@evil.example:80",
+                "http://user:secret@127.0.0.1:18741",
+                "http://127.0.0.1:18741/path",
+                "http://127.0.0.1:18741/?token=secret",
+                "http://127.0.0.1:18741/#fragment",
+                "http://127.0.0.1", "file:///c:/temp", "",
+        ):
+            with self.subTest(url=url):
+                with self.assertRaisesRegex(RuntimeError, "loopback"):
+                    acceptance.CoreApi("secret-which-must-not-be-sent", url)
+
     def test_source_label_only_applies_to_new_commands_and_is_preserved(self):
         identity = self.identity()
         samples = {}
