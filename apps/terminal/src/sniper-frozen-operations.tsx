@@ -26,6 +26,8 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
  const recoveredCosts=obj(view.last_archived_preregistered_costs);
  const booked=obj(view.demo_booked_execution_audit);
  const recoveredBooked=obj(view.last_archived_demo_booked_evidence);
+ const recovery=obj(view.demo_recovery_intent_audit);
+ const recoveredRecovery=obj(view.last_archived_demo_recovery_audit);
  const fixedCostScore=obj(costEvidence.holdout);
  const protocol=obj(proof.preregistered_forward_protocol);
  const holdoutScore=obj(holdout.holdout);
@@ -119,6 +121,20 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
    &&recoveredBooked.matched_with_frozen_markouts===false
    &&recoveredBooked.local_broker_deal_receipts_reconciled===true
    &&recoveredBooked.real_account_data===false;
+ const recoveryVerified=verifiedArtifact
+   &&recovery.schema==='p1k5j-demo-recovery-audit-v1'
+   &&recovery.account_context===expected
+   &&recovery.artifact_id===view.research_artifact_id
+   &&recovery.requires_live_broker_reconciliation===true
+   &&recovery.new_orders_authorized===false
+   &&recovery.automatic_retry_or_release===false
+   &&recovery.broker_connected_verified_here===false;
+ const recoveredRecoveryVerified=archivedJournalVerified
+   &&recoveredRecovery.schema==='p1k5j-demo-recovery-audit-v1'
+   &&recoveredRecovery.account_context===expected
+   &&recoveredRecovery.artifact_id===archive[0].id
+   &&recoveredRecovery.automatic_retry_or_release===false
+   &&recoveredRecovery.new_orders_authorized===false;
  const forwardScoped=scoped&&forward.schema==='p1k5b-forward-direction-v1'
    &&forward.independent_oos===false&&forward.broker_fills_observed===false
    &&forward.net_pnl===null&&forward.profitability_validated===false;
@@ -203,6 +219,29 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
     journal.integrity==='warning'||lastArchivedJournal.integrity==='warning')&&
    <p role="alert" className="safe-note">تحذير: تعذر التحقق من سلامة
     سجل الأحداث المستقبلية؛ تم حجب عدد النتائج حتى مراجعة البيانات.</p>}
+  {recoveryVerified&&<div className="feature-zone"
+    aria-label="MT5 Demo unresolved broker intent recovery P1K5J">
+   <h4>استعادة حالة أوامر MT5 Demo — P1-K5J</h4>
+   <div className="operator-grid">
+    <div>أوامر غير محسومة للحساب <strong>{count(recovery.pending_intents)}</strong></div>
+    <div>أوامر بطابور Core <strong>{count(recovery.locally_queued)}</strong></div>
+    <div>أوامر أُرسلت أو تنفذت جزئياً <strong>{count(recovery.unresolved_sent_or_partially_filled)}</strong></div>
+    <div>نتيجة تنفيذ مجهولة <strong>{count(recovery.unknown_broker_outcome)}</strong></div>
+    <div>أوامر غير محسومة بحسابات أخرى <strong>{count(recovery.other_account_pending_intents)}</strong></div>
+   </div>
+   <p role="status" className="safe-note">
+    {recovery.unresolved_new_open_risk===true
+     ?'توجد أوامر محلية غير محسومة؛ لازم استعادة سجل Broker المباشر قبل أي محاولة إعادة إرسال.'
+     :'لا تظهر أوامر عالقة في SQLite محلياً؛ هذا وحده لا يثبت أن حساب الوسيط خالٍ من مراكز أو أوامر.'}
+    لا يسمح هذا التقرير بإعادة إرسال أمر أو تحرير قفل التنفيذ أو تأكيد اتصال MT5.
+   </p>
+  </div>}
+  {recoveredRecoveryVerified&&!scoped&&
+   <p className="safe-note">تمت قراءة حالة الأوامر غير المحسومة من SQLite
+    بعد إعادة تشغيل Core. حالة السجل المحلي ليست تسوية MT5 مباشرة.</p>}
+  {verifiedArtifact&&recovery.status==='not_verified'&&
+   <p role="alert" className="safe-note">تعذّر التحقق من سجل أوامر Broker؛
+    لا يجوز اعتبار أي طلب مجهول فاشلاً أو آمناً لإعادة الإرسال.</p>}
   {bookedVerified&&<div className="feature-zone"
     aria-label="Separate real MT5 Demo booked broker cost audit">
    <h4>صفقات MT5 Demo المنفذة فعلياً — P1-K5H</h4>
