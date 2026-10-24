@@ -323,9 +323,14 @@ class BrokerExecutor:
 
     def _reconcile(self, mt5, cmd, previous):
         result = previous or dict(id=cmd['id'], state='unknown', reason='Send was interrupted; no automatic retry')
-        if result['state'] not in ('unknown', 'placed'):
+        if result['state'] not in ('unknown', 'placed', 'partial'):
             return result
-        if account_identity(mt5.account_info()) != expected(cmd):
+        # A journal is scoped to both broker identity and Demo/REAL mode.
+        # A matching login tuple alone must never authorize cross-mode recovery.
+        target_mode = 0 if cmd.get('target') == 'demo' else 2 if cmd.get('target') == 'live' else -1
+        current_account = mt5.account_info()
+        if (account_identity(current_account) != expected(cmd)
+                or getattr(current_account, 'trade_mode', None) != target_mode):
             return result
         start = datetime.fromtimestamp(max(0, cmd['created_ms']-60000)/1000, timezone.utc)
         deals = mt5.history_deals_get(start, datetime.now(timezone.utc))
@@ -349,16 +354,35 @@ class BrokerExecutor:
             return getattr(item, 'comment', '')==tag
         matches = [d for d in deals if matches_identity(d)]
         pending = any(matches_identity(o) for o in orders)
-        if account_identity(mt5.account_info()) != expected(cmd):
+        # A journal is scoped to both broker identity and Demo/REAL mode.
+        # A matching login tuple alone must never authorize cross-mode recovery.
+        target_mode = 0 if cmd.get('target') == 'demo' else 2 if cmd.get('target') == 'live' else -1
+        current_account = mt5.account_info()
+        if (account_identity(current_account) != expected(cmd)
+                or getattr(current_account, 'trade_mode', None) != target_mode):
             return result
         if matches and not pending:
             submitted = result.get('request') or cmd.get('broker_request')
             if not submitted:
                 return dict(result, reason='Fill found but submitted volume unavailable; reconciliation remains pending')
-            volume = sum(float(getattr(d, 'volume', 0)) for d in matches)
-            if not math.isfinite(volume) or volume <= 0:
-                return result
-            state = 'partial' if volume + 1e-8 < submitted['volume'] else 'filled'
+            # MT5 deals represent individual immutable fills. Never invent
+            # filled volume from corrupt history, duplicate deal IDs, or a
+            # volume greater than the durable submitted request.
+            try:
+                tickets = [int(getattr(d, 'ticket', 0)) for d in matches]
+                volumes = [float(getattr(d, 'volume', 0)) for d in matches]
+                submitted_volume = float(submitted['volume'])
+            except (TypeError, ValueError, KeyError, OverflowError):
+                return dict(result, reason='Invalid broker history deal geometry; reconciliation pending')
+            if any(t <= 0 for t in tickets) or len(set(tickets)) != len(tickets):
+                return dict(result, reason='Duplicate or invalid broker deal tickets; reconciliation pending')
+            if not (math.isfinite(submitted_volume) and submitted_volume > 0
+                    and all(math.isfinite(v) and v > 0 for v in volumes)):
+                return dict(result, reason='Invalid broker history deal volumes; reconciliation pending')
+            volume = sum(volumes)
+            if not math.isfinite(volume) or volume > submitted_volume + max(1e-8, submitted_volume * 1e-7):
+                return dict(result, reason='Broker fill volume exceeds submitted volume; reconciliation pending')
+            state = 'partial' if volume + 1e-8 < submitted_volume else 'filled'
             result = dict(result, state=state, reason='Broker history confirms fill; await Core position reconciliation; no resend',
                           request=submitted, deal=int(matches[0].ticket), deals=[int(d.ticket) for d in matches],
                           volume=volume, recovered_from_history=True)
