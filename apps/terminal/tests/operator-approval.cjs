@@ -68,6 +68,8 @@ for(const token of [
  "await saveSettings(activeSettingsEdit,activeTelegramToken,activeClearTelegram)",
  "disabled={busy||preview||!activeSettingsEdit}",
  "key={contextKey} config={safeConfig?",
+ "setTelegramToken('');setClearTelegram(false);setTelegramDraftScope(null);",
+ "setApproval(null);setLiveLogin('');",
 ]){
  assert(ui.includes(token),'account-scoped read-only editor/secret regression: '+token);
 }
