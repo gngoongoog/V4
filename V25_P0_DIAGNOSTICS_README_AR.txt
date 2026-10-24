@@ -1,9 +1,7 @@
-BRAINTRADE V25 P0 — أدوات فحص قراءة فقط
-
-1) افتح ZIP النسخة المحمولة V24 وفكّه كاملاً في مجلد ثابت.
-2) فك ZIP هذه الأدوات فوق نفس المجلد حيث BrainTradeNext.exe.
-3) شغّل VERIFY_SYSTEM.cmd. سيظهر تقرير HTML وJSON داخل verification-output.
-4) هذا الفحص لا يبدأ التداول ولا يتصل بالوسيط ولا يفتح/يغلق أوامر.
-5) فحص DEMO الحقيقي منفصل: Run-Demo-Acceptance.cmd الموجود في Portable الأصلية.
-6) نتائج Windows Build V25 وREAL وواجهة 22 صفحة وDemo end-to-end تبقى NOT TESTED.
-7) لا ترسل credentials/token/private account journal. أرسل فقط ملف v25-verification.json.
+فحص V25 — قراءة فقط
+1) فك حزمة V25 بالكامل في مجلد ثابت.
+2) شغّل VERIFY_SYSTEM.cmd.
+3) ستجد HTML وJSON داخل verification-output. أرسل ملف v25-verification.json للمراجعة.
+4) الأداة لا تشغّل MT5 ولا تفتح أو تغلق صفقة، ولا تصدّر كلمات المرور أو Telegram.
+5) PASS لبصمات الملفات أو استيراد Python لا يعني نجاح التداول أو الواجهة.
+6) MT5 Demo وMetaEditor وكل أزرار Windows تحتاج أدلة مستقلة؛ الحالات غير المنفّذة تبقى NOT TESTED.

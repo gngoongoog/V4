@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import socket
 import tempfile
 import time
 import urllib.request
@@ -20,6 +21,9 @@ from check_windows_portable import unseal
 
 
 def check(executable: Path):
+    with socket.socket() as probe:
+        if probe.connect_ex(('127.0.0.1',18741))==0:
+            raise RuntimeError('Core port occupied; isolated check will not touch an existing Core')
     executable = executable.resolve(strict=True)
     if executable.name.lower() != 'braintradenext.exe':
         raise ValueError('This smoke test only accepts BrainTradeNext.exe')
@@ -30,10 +34,10 @@ def check(executable: Path):
     with tempfile.TemporaryDirectory(prefix='braintrade-v22-smoke-') as root:
         home = Path(root)
         log_path = home / 'core.log'
-        env = dict(os.environ, BRAINTRADE_DATA_DIR=str(home), BRAINTRADE_GATEWAY_DISABLED='1')
+        env = dict(os.environ, BRAINTRADE_DATA_DIR=str(home), BRAINTRADE_GATEWAY_DISABLED='1',BRAINTRADE_NEWS_OFFLINE='1')
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with log_path.open('wb') as log:
-            process = subprocess.Popen([str(executable), '--core'], cwd=str(executable.parent),
+            process = subprocess.Popen([str(executable), '--core'], cwd=str(home),
                                        stdout=log, stderr=subprocess.STDOUT, env=env)
             try:
                 key = None

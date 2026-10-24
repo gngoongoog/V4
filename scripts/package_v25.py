@@ -1,0 +1,44 @@
+"""Package only the freshly built canonical V25 Windows application."""
+from pathlib import Path
+import hashlib,json,shutil,subprocess,sys,zipfile
+ROOT=Path(__file__).resolve().parents[1]
+DEST=ROOT/'target/portable/BRAINTRADE_V4_ENTERPRISE_V25'
+MARKER=b'BRAINTRADE_V4_ENTERPRISE_V25_P0O_20261024'
+V24='9e8011178c581bc89dcb45f62de7320abd1031dfa4f597425ed2c64d33b64d14'
+P0N='e08efc5607e56be74b919e789414d60543283752c4c8eccd7d4467501d354ef8'
+def digest(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+def stage():
+    exe=ROOT/'target/release/BrainTradeNext.exe'
+    data=exe.read_bytes()
+    if data[:2]!=b'MZ' or MARKER not in data or digest(exe) in (V24,P0N):raise ValueError('Expected newly compiled V25 P0-O Windows EXE')
+    if DEST.exists():shutil.rmtree(DEST)
+    DEST.mkdir(parents=True)
+    shutil.copy2(exe,DEST/exe.name)
+    for name in ('runtime','mt5'):shutil.copytree(ROOT/'apps/tauri'/name,DEST/name)
+    (DEST/'Tools').mkdir();shutil.copy2(ROOT/'scripts/v25_verify_system.py',DEST/'Tools/v25_verify_system.py')
+    for name in ('VERIFY_SYSTEM.cmd','V25_P0_DIAGNOSTICS_README_AR.txt'):
+        shutil.copy2(ROOT/name,DEST/name)
+    shutil.copy2(ROOT/'scripts/Create-V25-Shortcut.ps1',DEST/'DESKTOP_SHORTCUT.ps1')
+    for name,flag in [('CREATE_DESKTOP_ICON.cmd',''),('REMOVE_DESKTOP_ICON.cmd',' -Remove')]:
+        (DEST/name).write_bytes(('@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0DESKTOP_SHORTCUT.ps1"'+flag+'\r\nif errorlevel 1 exit /b 1\r\npause\r\n').encode('ascii'))
+    evidence=DEST/'release-evidence';evidence.mkdir()
+    for source,name in [('Cargo.lock','Cargo.lock'),('apps/terminal/package-lock.json','package-lock.json'),('docs/v25/P0O_PROVENANCE.json','P0O_PROVENANCE.json')]:
+        shutil.copy2(ROOT/source,evidence/name)
+    commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
+    (evidence/'build.json').write_text(json.dumps({'release':'Enterprise V25 P0-O','version':'0.25.0','source_commit':commit,'exe_sha256':digest(exe),'dependency_resolution':'committed locks; cargo --locked; npm ci','broker_demo':'NOT TESTED','windows_gui_all_controls':'NOT TESTED','ea_compile':'NOT TESTED','ready_for_real':False},indent=2)+'\n','utf-8')
+    (DEST/'READ_ME_FIRST_AR.txt').write_text('BRAINTRADE V4 Enterprise V25 — P0-O\nفك المجلد كاملاً وشغّل BrainTradeNext.exe مباشرة. لا يوجد Setup إلزامي.\nيتطلب Windows x64 وWebView2. يحتاج التداول إلى MT5 وحسابك التجريبي.\nلإنشاء اختصار سطح المكتب شغّل CREATE_DESKTOP_ICON.cmd.\nضع مسار terminal64.exe من صفحة الإعدادات، ثم اربط DEMO من صفحة التنفيذ.\nشغّل VERIFY_SYSTEM.cmd لإنتاج تقرير HTML وJSON؛ هذه الأداة لا تفتح صفقات ولا ترسل بيانات.\nهذه نسخة تحقق مرحلية: اختبار MT5 Demo وEA وجميع أزرار Windows لم يُعتمد بعد.\nSTOP يمنع الدخول الجديد ويبقي إدارة المراكز؛ لا تغلق Core مع صفقات أو أوامر غير محسومة.\nلا تنقل EXE وحده ولا تحذف بيانات التطبيق عند التحديث. احتفظ بحزمة V24 للرجوع.\n','utf-8')
+def archive():
+    shutil.copytree(ROOT/'test-output/v25',DEST/'release-evidence/validation',dirs_exist_ok=True)
+    manifest={p.relative_to(DEST).as_posix():digest(p) for p in sorted(DEST.rglob('*')) if p.is_file() and p.name!='SHA256SUMS.json'}
+    (DEST/'SHA256SUMS.json').write_text(json.dumps(manifest,indent=2)+'\n','utf-8')
+    output=DEST.parent/'BRAINTRADE_V4_ENTERPRISE_V25_PORTABLE_Windows_x64.zip'
+    with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
+        for p in sorted(DEST.rglob('*')):
+            if p.is_file():z.write(p,p.relative_to(DEST.parent))
+    with zipfile.ZipFile(output) as z:
+        if z.testzip():raise ValueError('ZIP integrity failed')
+    print(json.dumps({'archive':output.name,'sha256':digest(output),'files':len(manifest)}))
+if __name__=='__main__':
+    if sys.argv[1:]==['stage']:stage()
+    elif sys.argv[1:]==['archive']:archive()
+    else:raise SystemExit('Usage: package_v25.py stage|archive')
