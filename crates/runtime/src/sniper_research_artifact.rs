@@ -118,7 +118,14 @@ pub fn verify(db:&Connection,account:&str,id:&str,expected_sha:Option<&str>)
 /// Invalid/corrupted payloads are marked rather than silently disappearing.
 pub fn recent(db:&Connection,account:&str)->Result<Value>{
     ensure!(!account.is_empty(),"Missing verified research account");
-    setup(db)?;
+    let found:bool=db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='sniper_freeze_research_artifacts')",
+        [],|row|row.get(0))?;
+    if !found{
+        return Ok(json!({"schema":"p1k5d-research-artifact-history-v1",
+            "account_context":account,"artifacts":[],
+            "max_items":LIMIT,"no_broker_orders":true,"independent_oos":false}));
+    }
     let mut stmt=db.prepare(
         "SELECT id FROM sniper_freeze_research_artifacts
          WHERE account_context=?1 ORDER BY cutoff_ms DESC,id DESC LIMIT 8")?;
