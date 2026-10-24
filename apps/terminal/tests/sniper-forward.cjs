@@ -38,7 +38,7 @@ test('P1-K5C requires checked frozen Demo training cutoff without OOS claim',()=
  assert.match(study,/fn freeze_verified\(/);
  assert.match(study,/training_checkpoint":trial\.training_checkpoint/);
  assert.match(service,/sniper_learning::frozen_training_checkpoint\(/);
- assert.match(service,/sniper_frozen_tick\.freeze_verified\(/);
+ assert.match(service,/sniper_frozen_tick\.freeze_durable\(/);
  assert.match(ui,/training\.status==='captured'/);
  assert.match(ui,/training\.broker_pnl===null/);
  assert.match(ui,/training\.independent_oos===false/);
