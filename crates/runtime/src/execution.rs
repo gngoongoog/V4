@@ -723,7 +723,7 @@ impl Service {
             let request:Request=serde_json::from_slice(body)?;
             anyhow::ensure!(request.context==context(t),
                 "Sniper frozen research account/session drift");
-            match request.action.as_str(){
+            return match request.action.as_str(){
                 "freeze"=>{
                     let fast=self.fast.as_ref()
                         .filter(|f|f.config.trading.mode==braintrade_domain::trading::TradingMode::Sniper
