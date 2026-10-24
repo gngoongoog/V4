@@ -52,7 +52,11 @@ pub fn enrich(value:&mut Value,db:&Connection,key:&str,mode:TradingMode)->Result
         b["activity"]=json!({"checks":checks,"signals":signals,"last_ms":last});
         b["frozen_trial"]=crate::frozen_shadow::report(db,key,mode,&id)?;
         if id=="system"{
-            b["frozen_coordinator"]=crate::frozen_coordinator::report(db,key)?;
+            b["frozen_coordinator"]=if mode==TradingMode::Sniper{
+                json!({"status":"tick_native_research_not_implemented",
+                    "mode":"sniper","no_broker_orders":true,
+                    "reason":"M1-close research cannot certify Sniper tick decisions"})
+            }else{crate::frozen_coordinator::report(db,key,mode)?};
             if mode==TradingMode::Sniper {
                 b["sniper_execution_latency"]=crate::sniper_latency_audit::audit(db,key)?;
                 b["sniper_deal_link"]=crate::sniper_deal_link_audit::audit(db,key)?;
