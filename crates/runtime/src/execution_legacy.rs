@@ -37,6 +37,9 @@ impl Default for Settings {
 }
 pub struct Service {
     pub sniper: braintrade_domain::sniper::Engine,
+    /// Raw learner signal BEFORE coordinator participation/position/risk gates.
+    /// Observation-only, for the matched future-Tick frozen policy study.
+    pub last_sniper_raw: Option<Signal>,
     pub settings: Settings,
     pub brains: Vec<BrainConfig>,
     pub weights:BTreeMap<String,braintrade_domain::execution::LearnedWeight>,
@@ -124,6 +127,7 @@ impl Service {
     pub fn set_mode(&mut self, mode: TradingMode) {
         self.active_mode = Some(mode);
         self.sniper.reset_quotes();
+        self.last_sniper_raw=None;
         self.signals.clear();
     }
 
@@ -180,6 +184,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         }
         Ok(Self {
             sniper: Default::default(),
+            last_sniper_raw:None,
             settings,
             brains,
             signals: BTreeMap::new(),
@@ -399,6 +404,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         if paper_due {self.last_paper_sample_ms=now;}
         let mut activity_samples=Vec::new();
         let sniper_signal = self.sniper.evaluate(t,c,now);
+        self.last_sniper_raw=Some(sniper_signal.clone());
         let available=crate::coordinator_learning::available_frames(t,frames,now);
         for b in self.brains.clone() {
             let magic = execution::magic(&b.id).unwrap();
