@@ -76,7 +76,10 @@ assert(tauri.includes('"/v1/execution/frozen-sniper"'));
 assert(terminal.includes('<SniperFrozenOperations status={!preview&&feed.broker?status:null}'));
 assert(terminal.includes("scopedGeneration.current.beginRead('sniperFrozen')"));
 assert(terminal.includes("const mutation=beginWrite('sniper-frozen')"));
-assert(rust.includes('self.sniper_frozen_tick.freeze('));
+// P1-K5C strengthens the freeze contract: only a broker-ledger verified
+// training checkpoint may reach the frozen Learner on operator STOP.
+assert(rust.includes('sniper_learning::frozen_training_checkpoint('));
+assert(rust.includes('self.sniper_frozen_tick.freeze_verified('));
 assert(rust.includes('self.sniper_frozen_tick.observe('));
 assert(research.includes('independent_oos":false'));
 assert(research.includes('paper_pnl":Value::Null'));
