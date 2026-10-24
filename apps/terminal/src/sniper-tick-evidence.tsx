@@ -19,8 +19,8 @@ export function sniperTickEvidence(status:Status|null,report:unknown,preview:boo
   v.context!==JSON.stringify([t.server,t.login,t.symbol,t.currency])||
   a.login!==t.login||a.server!==t.server||a.symbol!==t.symbol||a.currency!==t.currency)
   return empty('لا توجد تيكات قناص مقبولة موثّقة لنفس جلسة Demo');
- const at=v.last_accepted_ms;
- if(!validCount(at)||at>now+2000||now-(at as number)>15_000)
+ const at=typeof v.last_accepted_ms==='number'?v.last_accepted_ms:NaN;
+ if(!validCount(at)||at>now+2000||now-at>15_000)
   return empty('رصد القناص متوقف أو متقادم، ولا يجوز عرضه كتيكات مباشرة');
  for(const name of ['accepted_pulses','accepted_native_pulses',
   'accepted_poll_fallback_pulses','accepted_unknown_origin_pulses',
