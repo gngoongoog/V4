@@ -142,7 +142,26 @@ def deal_summary(deals, mt5):
     if deals is None:
         return None, None
     trading = [d for d in deals if d.type in (mt5.DEAL_TYPE_BUY, mt5.DEAL_TYPE_SELL)]
-    net = sum(d.profit + d.commission + d.swap + getattr(d, "fee", 0.0) for d in trading)
+    # A missing broker-reported cost is unknown, never equivalent to a
+    # zero-commission account. Likewise, NaN/Inf must not reach Core/UI as PnL.
+    booked = []
+    for deal in trading:
+        components = []
+        for key in ('profit', 'commission', 'swap', 'fee'):
+            value = getattr(deal, key, None)
+            if isinstance(value, bool):
+                return None, None
+            try:
+                amount = float(value)
+            except (ValueError, TypeError, OverflowError):
+                return None, None
+            if not math.isfinite(amount):
+                return None, None
+            components.append(amount)
+        booked.append(math.fsum(components))
+    net = math.fsum(booked)
+    if not math.isfinite(net):
+        return None, None
     return net, len(trading)
 
 
@@ -168,13 +187,18 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
     market=market_cache.read(mt5,key,now) if market_cache is not None and info is not None else None
     dom_available,dom=dom_cache.read(mt5,key) if dom_cache is not None and info is not None else (False,[])
     current = mt5.account_info()
-    if current is None or (current.login, current.server) != (account.login, account.server):
+    identity_fields=('login','server','currency','trade_mode')
+    if (current is None or
+        tuple(getattr(current,k,None) for k in identity_fields) !=
+        tuple(getattr(account,k,None) for k in identity_fields)):
         return empty_snapshot("Account changed during snapshot; waiting for reconciliation.")
     errors = []
     if info is None:
         errors.append(f"Symbol {symbol} is unavailable; choose its exact broker name in Settings.")
     if deals is None:
         errors.append("Deal history unavailable; daily PnL is unknown.")
+    elif net is None:
+        errors.append("Broker deal cost fields missing or invalid; daily PnL is unknown.")
     # Actual account leverage is broker-owned; scenario leverage never enters trading.
     raw_leverage = getattr(account, "leverage", None)
     try:
