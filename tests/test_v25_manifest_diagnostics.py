@@ -57,13 +57,11 @@ class ManifestDiagnostics(unittest.TestCase):
         root=Path(__file__).resolve().parents[1]
         core=(root/"crates/runtime/src/lib.rs").read_text(encoding="utf-8")
         launcher=(root/"VERIFY_SYSTEM.cmd").read_text(encoding="utf-8")
-        # A previous typo inserted literal \\n in a Rust // comment. The
-        # binary still compiled, but all gateway environment setup was
-        # commented out and the embedded Python immediately crashed.
-        self.assertNotIn(r'Writing\\n',core)
-        import re
+        # Reject textual backslash-n sequences that silently commented-out
+        # Gateway credentials/data-dir in the release build.
+        self.assertNotIn(r'Writing\n',core)
         for name in ("PYTHONDONTWRITEBYTECODE","BRAINTRADE_DATA_DIR","BRAINTRADE_IPC_TOKEN"):
-            self.assertRegex(core,rf'(?m)^\\s*\\.env\\("{name}"|^\\s*command\\.env\\("{name}"')
+            self.assertRegex(core,rf'(?m)^\s*(?:command\.env|\.env)\("{name}"\s*,')
         self.assertIn('command.env("PYTHONDONTWRITEBYTECODE","1")',core)
         self.assertIn('set "PYTHONDONTWRITEBYTECODE=1"',launcher)
         self.assertIn('python.exe" -B ',launcher)
