@@ -77,6 +77,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'V24 mode-scoped market validation patch failed' }
           python ci/v25_gateway_journal_overlay.py
           if ($LASTEXITCODE -ne 0) { throw 'V25 journal race overlay rejected restored source' }
+          python ci/v25_tauri_version_stamp.py
+          if ($LASTEXITCODE -ne 0) { throw 'V25 Tauri build identity source stamp failed' }
           python -m unittest discover -s tests -p test_execution_journal_race.py -v
           if ($LASTEXITCODE -ne 0) { throw 'V25 broker journal regression failed' }
           & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Build-V23-Portable-Windows.ps1
@@ -128,6 +130,9 @@ jobs:
           $v24exe='9e8011178c581bc89dcb45f62de7320abd1031dfa4f597425ed2c64d33b64d14'
           $newexe=(Get-FileHash (Join-Path $dir 'BrainTradeNext.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($newexe -eq $v24exe) { throw 'Compiled EXE still matches archived V24 executable; refusing a falsely renamed V25 release' }
+          $exeBytes=[IO.File]::ReadAllBytes((Join-Path $dir 'BrainTradeNext.exe'))
+          $exeAscii=[Text.Encoding]::ASCII.GetString($exeBytes)
+          if (!$exeAscii.Contains('BRAINTRADE_V4_ENTERPRISE_V25_P0_20261024')) { throw 'Compiled EXE missing its V25 build identity marker' }
           $checks=@{}
           $basePath=(Resolve-Path $dir).Path
           Get-ChildItem $dir -File -Recurse | Where-Object {$_.Name -ne 'SHA256SUMS.json'} | ForEach-Object {
