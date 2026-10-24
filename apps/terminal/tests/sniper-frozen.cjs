@@ -79,7 +79,7 @@ assert(terminal.includes("const mutation=beginWrite('sniper-frozen')"));
 // P1-K5C strengthens the freeze contract: only a broker-ledger verified
 // training checkpoint may reach the frozen Learner on operator STOP.
 assert(rust.includes('sniper_learning::frozen_training_checkpoint('));
-assert(rust.includes('self.sniper_frozen_tick.freeze_verified('));
+assert(rust.includes('self.sniper_frozen_tick.freeze_durable('));
 assert(rust.includes('self.sniper_frozen_tick.observe('));
 assert(research.includes('independent_oos":false'));
 assert(research.includes('paper_pnl":Value::Null'));
