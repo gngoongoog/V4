@@ -11,6 +11,8 @@ import {approvalIsCurrent,canConfirmStart} from './operator-approval';
 import type {OperatorApproval} from './operator-approval';
 import {brokerEvidence} from './brain-evidence';
 import {ScopedReadFence} from './scoped-read-fence';
+import {OperatorWriteFence} from './operator-write-fence';
+import type {OperatorWriteTicket} from './operator-write-fence';
 import {MicroCapitalOperations} from './micro-capital-operations';
 import {ExecutionQualityOperations} from './execution-quality-operations';
 import {validatePortfolio} from './micro-capital';
@@ -129,6 +131,7 @@ export default function Terminal(){
  // Any page, broker-account or preview transition revokes unresolved manual reads.
  const viewGeneration=useRef(new PanelReadFence());
  const scopedGeneration=useRef(new ScopedReadFence());
+ const mutationFence=useRef(new OperatorWriteFence());
  scopedGeneration.current.setScope(contextKey);
  const viewScope=JSON.stringify([page,contextKey,preview]);
  // Render-fence: an old account/page result must not be visible for even a
@@ -141,6 +144,7 @@ export default function Terminal(){
  const setPageError=(message:string)=>setPageErrorSlot({scope:viewScope,message});
  const setPageUpdatedAt=(timestamp:number|null)=>setPageTimeSlot({scope:viewScope,timestamp});
  viewGeneration.current.setScope(viewScope);
+ mutationFence.current.setScope(viewScope);
  const panelSerial=()=>viewGeneration.current.beginRead();
  const publishPanel=(serial:number,result:unknown)=>{
   if(!viewGeneration.current.isCurrent(serial))return;
@@ -156,6 +160,18 @@ export default function Terminal(){
   void readPanel(route).then(data=>publishPanel(serial,data)).catch(e=>rejectPanel(serial,e));
  };
  const sendNotice=(msg:string,isError=false)=>{if(isError)setError(msg);else{setNotice(msg);setError('')}};
+ const beginWrite=(action:string):OperatorWriteTicket|null=>{
+  const ticket=mutationFence.current.begin(action);
+  if(!ticket){sendNotice('يوجد طلب تغيير لم يُحسم بعد. انتظر رجوع Core ثم أعد القراءة قبل تنفيذ طلب آخر.',true);return null}
+  setBusy(true);return ticket;
+ };
+ const writeFresh=(ticket:OperatorWriteTicket)=>mutationFence.current.isCurrent(ticket);
+ const finishWrite=(ticket:OperatorWriteTicket)=>{
+  const fresh=writeFresh(ticket);
+  mutationFence.current.finish(ticket);
+  setBusy(false);
+  if(!fresh)sendNotice('تغيّرت الصفحة أو جلسة MT5 أثناء تنفيذ الطلب. قد يكون Core حفظ التغيير للجلسة السابقة؛ اقرأ الحالة الحالية قبل أي تعديل.',true);
+ };
  const refreshBrainEvidence=async()=>{
    const ticket=scopedGeneration.current.beginRead('brains');
    try{
