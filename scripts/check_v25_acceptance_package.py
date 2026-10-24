@@ -26,11 +26,11 @@ SAFETY_CONTRACTS = {
     ),
     "Tools/Run-Demo-Acceptance.ps1": (
         "--demo-acceptance", "runtime\\gateway\\check_runtime.py",
-        "runtime-import-check.json", "-NonInteractive",
+        "runtime-import-check.json", "--source",
     ),
     "Tools/Run-Demo-Acceptance-GUI.ps1": (
         "Run-Demo-Acceptance.ps1", "demo-acceptance-latest.json",
-        "READ ONLY", "Export-ShareBundle",
+        "READ ONLY", "Export-ShareBundle", "-NonInteractive",
     ),
     "runtime/gateway/check_runtime.py": (
         '--demo-acceptance', 'Demo acceptance refuses a Live execution target',
