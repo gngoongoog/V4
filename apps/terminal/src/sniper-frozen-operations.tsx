@@ -204,7 +204,7 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
     aria-label="Separate real MT5 Demo booked broker cost audit">
    <h4>صفقات MT5 Demo المنفذة فعلياً — P1-K5H</h4>
    <p className="safe-note">هذه معاملات مُغلقة من سجل الوسيط لنظام التداول
-    التنفيذي. **مو صفقات من دراسة Sniper المجمدة**، وما يجوز نقارن أرباحها
+    التنفيذي. <strong>مو صفقات من دراسة Sniper المجمدة</strong>، وما يجوز نقارن أرباحها
     مباشرة مع قياس اتجاه الخمس ثواني.</p>
    <div className="operator-grid">
     <div>مراكز Demo المغلقة <strong>{count(booked.physical_broker_trades)}</strong></div>
