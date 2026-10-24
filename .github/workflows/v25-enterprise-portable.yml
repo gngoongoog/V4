@@ -15,6 +15,9 @@ on:
       - 'ci/v25_p0g_ui_context_overlay.py'
       - 'ci/v25_p0h_panel_generation_overlay.py'
       - 'ci/v25_p0i_panel_order_overlay.py'
+      - 'ci/v25_p0j_learning_mode_overlay.py'
+      - 'crates/runtime/src/learning.rs'
+      - 'crates/runtime/src/learning_inference.rs'
       - 'ci/v25_p0i_panel_guard.ts'
       - 'ci/v25_p0i_panel_guard.test.mjs'
       - 'tests/test_p0f_history_sync_identity.py'
@@ -113,6 +116,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'V25 Rust Core partial-fill state progression overlay failed' }
           python ci/v25_p0f_history_guard_overlay.py
           if ($LASTEXITCODE -ne 0) { throw 'V25 P0-F trading mode-scoped broker history source overlay failed' }
+          python ci/v25_p0j_learning_mode_overlay.py
+          if ($LASTEXITCODE -ne 0) { throw 'V25 P0-J learning snapshot mode isolation source drift or failed' }
           python ci/v25_p0g_ui_context_overlay.py
           if ($LASTEXITCODE -ne 0) { throw 'V25 P0-G Tauri UI broker-mode context safety overlay failed' }
           python ci/v25_p0h_panel_generation_overlay.py
@@ -154,6 +159,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'V25 P0-F STOP/owned-close authorization test failed' }
           cargo test --locked -p braintrade-runtime core_history_sync_fails_closed_for_wrong_mode_cost_or_boundary
           if ($LASTEXITCODE -ne 0) { throw 'V25 P0-F broker history Core identity/cost test failed' }
+          cargo test --locked -p braintrade-runtime snapshot_context_is_unique_per_verified_demo_real_broker_mode
+          if ($LASTEXITCODE -ne 0) { throw 'V25 P0-J research learning broker identity mode test failed' }
+          cargo test --locked -p braintrade-runtime same_broker_login_and_bar_remain_separate_after_sqlite_reopen
+          if ($LASTEXITCODE -ne 0) { throw 'V25 P0-J durable SQLite research isolation/restart test failed' }
+          cargo test --locked -p braintrade-runtime training_export_skips_untagged_legacy_rows_and_preserves_them_in_db
+          if ($LASTEXITCODE -ne 0) { throw 'V25 P0-J legacy learning export quarantine test failed' }
       - name: Promote tested V23 build outputs to V25 P0 portable and verify archive
         shell: pwsh
         run: |
