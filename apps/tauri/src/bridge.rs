@@ -24,7 +24,7 @@ fn allowed_read_route(route: &str) -> bool {
         "/v1/opportunities/history" | "/v1/events" | "/v1/risk/monitor" |
         "/v1/trading/settings" | "/v1/studio" | "/v1/news" |
         "/v1/evaluation" | "/v1/backtest" | "/v1/backups" |
-        "/v1/execution" | "/v1/execution/trades" | "/v1/execution/quality" | "/v1/execution/sniper-tick-audit" | "/v1/execution/mode-evidence" | "/v1/execution/frozen-coordinator" |
+        "/v1/execution" | "/v1/execution/trades" | "/v1/execution/quality" | "/v1/execution/sniper-tick-audit" | "/v1/execution/frozen-sniper" | "/v1/execution/mode-evidence" | "/v1/execution/frozen-coordinator" |
         "/v1/research/correlation" | "/v1/enterprise/supervisor"
     )
 }
@@ -113,6 +113,19 @@ fn update_brain_control(context: String, brain: String, mode: String, advisor: b
     open_client()?.post("/v1/execution/brain-control",
         json!({"context":context,"brain":brain,"mode":mode,
                "control":{"advisor":advisor,"paper":paper}}))
+        .map_err(|err|err.to_string())
+}
+
+#[tauri::command]
+fn frozen_sniper_action(action:String,context:String)->Result<Value,String>{
+    // Research-only, Sniper Learner. Rust Core must independently verify
+    // STOP, reconciled broker intents, fresh Demo and exact account identity.
+    if !matches!(action.as_str(),"freeze"|"stop")
+        ||context.trim().is_empty()||context.len()>500 {
+        return Err("Invalid frozen Sniper research request".into());
+    }
+    open_client()?.post("/v1/execution/frozen-sniper",
+        json!({"action":action,"context":context}))
         .map_err(|err|err.to_string())
 }
 
@@ -228,7 +241,7 @@ pub fn run() {
         .manage(AppLifecycle {stopping:Arc::new(AtomicBool::new(false))})
         .invoke_handler(tauri::generate_handler![
             get_status, read_panel, execute_control,
-            update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, update_settings, update_trading_settings,
+            update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, backtest_action, update_brain_control, bind_execution
         ])
