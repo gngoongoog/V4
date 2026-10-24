@@ -51,6 +51,7 @@ jobs:
       - name: Isolated Core integrations, no broker connectivity
         run: |
           python3 scripts/smoke_core.py
+          python3 scripts/check_gateway_launch_env.py
           python3 scripts/check_backup_restore.py
           python3 scripts/check_studio.py
           python3 scripts/check_execution.py
