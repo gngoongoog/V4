@@ -1,6 +1,7 @@
 mod backup;
 mod execution;
 mod execution_quality;
+mod broker_quality_circuit;
 mod enterprise_supervisor;
 mod coordinator_learning;
 mod sniper_learning;
