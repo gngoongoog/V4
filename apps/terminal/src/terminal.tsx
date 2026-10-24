@@ -105,12 +105,20 @@ export default function Terminal(){
  const [pageErrorSlot,setPageErrorSlot]=useState<{scope:string;message:string}|null>(null);
  const [pageTimeSlot,setPageTimeSlot]=useState<{scope:string;timestamp:number|null}|null>(null);
  const [config,setConfig]=useState<Record<string,unknown>|null>(null);const [riskSnapshot,setRiskSnapshot]=useState<Record<string,unknown>|null>(null);
+ const [configScope,setConfigScope]=useState<string|null>(null);const [riskScope,setRiskScope]=useState<string|null>(null);
  const [learning,setLearning]=useState<Record<string,unknown>|null>(null);const [brainReport,setBrainReport]=useState<Record<string,unknown>|null>(null);const [portfolioReport,setPortfolioReport]=useState<Record<string,unknown>|null>(null);const [executionQuality,setExecutionQuality]=useState<Record<string,unknown>|null>(null);const [filter,setFilter]=useState<'all'|'buy'|'sell'>('all');const [opsTab,setOpsTab]=useState<'trade'|'orders'|'advanced'>('trade');
  const [clock,setClock]=useState('');const [lastStatusAt,setLastStatusAt]=useState<number|null>(null);const [liveLogin,setLiveLogin]=useState('');const [approval,setApproval]=useState<OperatorApproval|null>(null);
- const [settingsEdit,setSettingsEdit]=useState<Record<string,unknown>|null>(null);const [telegramToken,setTelegramToken]=useState('');const [clearTelegram,setClearTelegram]=useState(false);
+ const [settingsEdit,setSettingsEdit]=useState<Record<string,unknown>|null>(null);
+ const [settingsScope,setSettingsScope]=useState<string|null>(null);
+ const [telegramToken,setTelegramToken]=useState('');const [clearTelegram,setClearTelegram]=useState(false);
  const dialogRef=useRef<HTMLDivElement|null>(null);
  const [allOpen,setAllOpen]=useState(false);
  const contextKey=`${status?.telemetry?.login??'unknown'}:${status?.telemetry?.server??'offline'}:${status?.telemetry?.symbol??'none'}:${status?.telemetry?.currency??'unknown'}:${status?.telemetry?.account_trade_mode??'unknown'}:${status?.telemetry?.demo??'unknown'}:${online}:${status?.gateway_fresh??false}:${status?.telemetry?.connected??false}`;
+ // Config, risk and unsaved secrets/editors are never carried into another
+ // MT5 account's renderer before the background refresh useEffect runs.
+ const safeConfig=configScope===contextKey?config:null;
+ const safeRiskSnapshot=riskScope===contextKey?riskSnapshot:null;
+ const activeSettingsEdit=settingsScope===contextKey?settingsEdit:null;
  const showStartConfirm=approvalIsCurrent(approval,'start',contextKey)&&!preview;
  const showStopConfirm=approvalIsCurrent(approval,'stop',contextKey)&&!preview;
  const showExitConfirm=approvalIsCurrent(approval,'exit',contextKey)&&!preview;
@@ -176,13 +184,16 @@ export default function Terminal(){
   // Invalidate old account/mode snapshots synchronously with scope change.
   setRiskSnapshot(null);setLearning(null);setBrainReport(null);
   setConfig(null);setSettingsEdit(null);
-  void get('config','/v1/config',r=>{setConfig(r?unwrap(r.config):null);setSettingsEdit(r?unwrap(r.config):null)});
-  void get('risk','/v1/risk/monitor',setRiskSnapshot);
+  void get('config','/v1/config',r=>{
+    setConfig(r?unwrap(r.config):null);setSettingsEdit(r?unwrap(r.config):null);
+    setConfigScope(contextKey);setSettingsScope(contextKey);
+  });
+  void get('risk','/v1/risk/monitor',r=>{setRiskSnapshot(r);setRiskScope(contextKey)});
   void get('learning','/v1/learning',setLearning);
   void get('brains','/v1/execution/brains',setBrainReport);
   const t=setInterval(()=>{
     if(document.visibilityState==='visible'){
-      void get('risk','/v1/risk/monitor',setRiskSnapshot);
+      void get('risk','/v1/risk/monitor',r=>{setRiskSnapshot(r);setRiskScope(contextKey)});
       void get('learning','/v1/learning',setLearning);
       void get('brains','/v1/execution/brains',setBrainReport);
     }
@@ -313,7 +324,7 @@ export default function Terminal(){
  const open=(next:PageId)=>{setPage(next);setNotice('');setError('')};
  const saveRiskForm=async(risk:Record<string,unknown>)=>{
   if(!hasTauri()||preview){sendNotice('الإعدادات لا تُحفظ في وضع المعاينة',true);return}
-  setBusy(true);const writeTicket=scopedGeneration.current.beginRead('config');try{await saveRisk(risk);const latest=unwrap(await readPanel('/v1/config'));if(scopedGeneration.current.isCurrent(writeTicket)){scopedGeneration.current.invalidate('risk');setConfig(unwrap(latest.config));setRiskSnapshot(null);}sendNotice('تم حفظ إعدادات المخاطر والتحقق من النسخة المسجلة في Rust Core');}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
+  setBusy(true);const writeTicket=scopedGeneration.current.beginRead('config');try{await saveRisk(risk);const latest=unwrap(await readPanel('/v1/config'));if(scopedGeneration.current.isCurrent(writeTicket)){scopedGeneration.current.invalidate('risk');setConfig(unwrap(latest.config));setConfigScope(contextKey);setRiskSnapshot(null);}sendNotice('تم حفظ إعدادات المخاطر والتحقق من النسخة المسجلة في Rust Core');}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
  };
  const runSavePortfolio=async(input:Record<string,unknown>)=>{
   if(preview||!hasTauri()||status?.requested_run){sendNotice('حدود المحفظة تحتاج STOP وتطبيق Windows الحقيقي',true);return;}
@@ -328,8 +339,8 @@ export default function Terminal(){
   finally{setBusy(false);}
  };
  const saveGeneral=async()=>{
-  if(!settingsEdit||preview){sendNotice('وضع المعاينة لا يدعم الحفظ',true);return}
-  setBusy(true);const writeTicket=scopedGeneration.current.beginRead('config');try{await saveSettings(settingsEdit,telegramToken,clearTelegram);const latest=unwrap(await readPanel('/v1/config'));if(scopedGeneration.current.isCurrent(writeTicket)){scopedGeneration.current.invalidate('risk');setConfig(unwrap(latest.config));setSettingsEdit(unwrap(latest.config));setRiskSnapshot(null);setTelegramToken('');setClearTelegram(false);}sendNotice('تم حفظ الإعدادات لدى Core. إعادة الاتصال قيد التنفيذ.');}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
+  if(!activeSettingsEdit||preview||!hasTauri()){sendNotice('احفظ فقط بعد تحميل إعدادات Core للحساب الحالي',true);return}
+  setBusy(true);const writeTicket=scopedGeneration.current.beginRead('config');try{await saveSettings(activeSettingsEdit,telegramToken,clearTelegram);const latest=unwrap(await readPanel('/v1/config'));if(scopedGeneration.current.isCurrent(writeTicket)){scopedGeneration.current.invalidate('risk');setConfig(unwrap(latest.config));setConfigScope(contextKey);setSettingsEdit(unwrap(latest.config));setSettingsScope(contextKey);setRiskSnapshot(null);setTelegramToken('');setClearTelegram(false);}sendNotice('تم حفظ الإعدادات لدى Core. إعادة الاتصال قيد التنفيذ.');}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
  };
  const runHandoff=async(active:boolean)=>{
   if(preview){sendNotice('التحويل الحقيقي غير متاح في المعاينة',true);return}
@@ -342,7 +353,7 @@ export default function Terminal(){
    await saveTrading(input);
    const latest=unwrap(await readPanel('/v1/trading/settings'));
    const full=unwrap(latest.config);
-   publishPanel(serial,latest);if(viewGeneration.current.isCurrent(serial)){scopedGeneration.current.invalidate('config');scopedGeneration.current.invalidate('brains');setConfig(full);setBrainReport(null);void refreshBrainEvidence();}
+   publishPanel(serial,latest);if(viewGeneration.current.isCurrent(serial)){scopedGeneration.current.invalidate('config');scopedGeneration.current.invalidate('brains');setConfig(full);setConfigScope(contextKey);setBrainReport(null);void refreshBrainEvidence();}
    sendNotice('تم تأكيد وحفظ وضع المنسق والعمولة من Rust Core');
   }catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
  };
@@ -375,7 +386,7 @@ export default function Terminal(){
    sendNotice('تم التحقق من حساب '+target.toUpperCase()+' وربط التنفيذ بواسطة Core؛ الربط وحده لا يفتح صفقة');
   }catch(e){sendNotice('فشل ربط حساب التنفيذ: '+String(e),true)}finally{setBusy(false)}
  };
- const health=buildHealth(status,online,preview,Boolean(config?.risk)&&Boolean(riskSnapshot),lastStatusAt,Date.now());
+ const health=buildHealth(status,online,preview,Boolean(safeConfig?.risk)&&Boolean(safeRiskSnapshot),lastStatusAt,Date.now());
  const pageMeta=findPage(page),PageIcon=pageMeta.icon;
  const rows=useMemo(()=>flattenRows(pageData),[pageData]);
  return <div className={'shell terminal-v15 '+(compact?'compact-nav':'')}>
@@ -431,7 +442,7 @@ export default function Terminal(){
       <section className="panel trade-distribution"><div className="panel-title"><b>توزيع الصفقات</b><button onClick={()=>open('journal')}>السجلات ›</button></div><div className="distribution-body"><div className="large-donut"><strong>{preview?'450':brokerResults?.samples??'—'}</strong><small>{preview?'صفقة تجريبية':'Demo مغلقة'}</small></div><div className="dist-legend"><span>رابحة <b className="teal">{preview?'342':brokerResults?.wins??'—'}</b></span><span>خاسرة <b className="red">{preview?'108':brokerResults?.losses??'—'}</b></span></div></div></section>
       <section className="panel execution-quality"><div className="panel-title"><b>جودة التنفيذ</b><button onClick={()=>open('execution')}>المراقبة ›</button></div><div className="quality-list">{[['الانزلاق السعري',preview?'0.12 pips':'—'],['الاستجابة',preview?'98.7%':'—'],['التنفيذ المقبول',preview?'2.1%':'—'],['الأوامر المرفوضة',preview?'0.8%':'—']].map(([label,value])=><div className="quality-row" key={label}><span>{label}</span><div className="quality-meter"><i style={{width:preview?'63%':'0%'}}/></div><small>{value}</small></div>)}</div></section>
       <section className="panel sys-alerts"><div className="panel-title"><b>إشعارات النظام</b><button onClick={()=>open('events')}>عرض الكل ›</button></div><div className="alerts-list"><div>{status?.message||'بانتظار حالة Rust Core...'}</div><div>{status?.telegram_status||'Telegram: غير متاح'}</div><div>{preview?'Design preview — sample signals':trustworthy?'MT5 snapshot verified':'لم يصل تحديث MT5 حديث'}</div></div></section>
-      <section className="panel risk-stats"><div className="panel-title"><b>مقاييس المخاطر</b></div><div className="risk-bars">{[['Free Margin',account?.margin_free],['Drawdown',drawdown],['Position count',account?positions.length:null],['Risk limit',config?unwrap(config.risk).risk_percent:null]].map(([label,value],i)=><div className="risk-line" key={String(label)}><span>{String(label)}</span><div className="risk-meter"><i style={{width:valid(value)?`${Math.min(100,Math.abs(Number(value))*(i===0?.002:10))}%`:'0%'}}/></div><strong>{valid(value)?num(value,2):'—'}</strong></div>)}</div></section>
+      <section className="panel risk-stats"><div className="panel-title"><b>مقاييس المخاطر</b></div><div className="risk-bars">{[['Free Margin',account?.margin_free],['Drawdown',drawdown],['Position count',account?positions.length:null],['Risk limit',safeConfig?unwrap(safeConfig.risk).risk_percent:null]].map(([label,value],i)=><div className="risk-line" key={String(label)}><span>{String(label)}</span><div className="risk-meter"><i style={{width:valid(value)?`${Math.min(100,Math.abs(Number(value))*(i===0?.002:10))}%`:'0%'}}/></div><strong>{valid(value)?num(value,2):'—'}</strong></div>)}</div></section>
      </div>
     </div>:<section className="subpage">
       <div className="subpage-header"><div className="sub-heading"><div className="sub-glyph"><PageIcon size={32}/></div><div><small>{pageMeta.en.toUpperCase()} • V4 RUST CORE</small><h1>{pageMeta.title}</h1><p>صفحة تفاعلية مرتبطة بمحرك V4، والبيانات تُعرض فقط إذا وصلت من مصدر فعلي.</p></div></div><ConnectionLine connectedNow={trustworthy} preview={preview}/></div>
@@ -439,21 +450,21 @@ export default function Terminal(){
       <div className="subpage-layout">
       <section className="panel subpage-primary"><div className="panel-title"><b>{pageMeta.title} — بيانات وتشغيل</b><button onClick={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}} disabled={!pageMeta.route||preview}>تحديث ↻</button></div>
         {page==='risk'?<div className="feature-zone">
-          <MicroCapitalOperations status={!preview&&feed.broker?status:null} risk={config?unwrap(config.risk):null}
-             monitor={riskSnapshot} portfolio={unwrap(portfolioReport).portfolio} armed={status?.requested_run===true}
+          <MicroCapitalOperations status={!preview&&feed.broker?status:null} risk={safeConfig?unwrap(safeConfig.risk):null}
+             monitor={safeRiskSnapshot} portfolio={unwrap(portfolioReport).portfolio} armed={status?.requested_run===true}
              disabled={busy||preview} onSavePortfolio={runSavePortfolio}/>
-          <RiskEditor config={config?unwrap(config.risk):null} apply={saveRiskForm} loading={busy} armed={status?.requested_run===true}/>
+          <RiskEditor key={contextKey} config={safeConfig?unwrap(safeConfig.risk):null} apply={saveRiskForm} loading={busy} armed={status?.requested_run===true}/>
           <DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/risk/monitor')}/>
          </div>:
         page==='settings'||page==='telegram'?<div className="editor-panel"><p>إعدادات V4 المحفوظة محلياً لدى Rust Core — لا تُعرض بيانات Telegram السرية.</p>
-           <label>مسار MT5 Terminal64.exe<input value={String(settingsEdit?.mt5_path||'')} onChange={e=>setSettingsEdit(s=>({...s,mt5_path:e.target.value}))}/></label>
-           <label>رمز التداول<input value={String(settingsEdit?.symbol||'XAUUSD')} onChange={e=>setSettingsEdit(s=>({...s,symbol:e.target.value}))}/></label>
-           <label>Telegram Chat ID<input value={String(settingsEdit?.telegram_chat_id||'')} onChange={e=>setSettingsEdit(s=>({...s,telegram_chat_id:e.target.value}))}/></label>
-           <label>Telegram User ID<input value={String(settingsEdit?.telegram_user_id||'')} onChange={e=>setSettingsEdit(s=>({...s,telegram_user_id:e.target.value}))}/></label>
+           <label>مسار MT5 Terminal64.exe<input value={String(activeSettingsEdit?.mt5_path||'')} onChange={e=>setSettingsEdit(s=>({...s,mt5_path:e.target.value}))}/></label>
+           <label>رمز التداول<input value={String(activeSettingsEdit?.symbol||'')} onChange={e=>setSettingsEdit(s=>({...s,symbol:e.target.value}))}/></label>
+           <label>Telegram Chat ID<input value={String(activeSettingsEdit?.telegram_chat_id||'')} onChange={e=>setSettingsEdit(s=>({...s,telegram_chat_id:e.target.value}))}/></label>
+           <label>Telegram User ID<input value={String(activeSettingsEdit?.telegram_user_id||'')} onChange={e=>setSettingsEdit(s=>({...s,telegram_user_id:e.target.value}))}/></label>
            <label>Bot token (اكتب فقط عند الاستبدال)<input type="password" value={telegramToken} autoComplete="new-password" onChange={e=>setTelegramToken(e.target.value)}/></label>
-           <label className="check-label"><input type="checkbox" checked={Boolean(settingsEdit?.telegram_enabled)} onChange={e=>setSettingsEdit(s=>({...s,telegram_enabled:e.target.checked}))}/>تفعيل تنبيهات Telegram</label>
+           <label className="check-label"><input type="checkbox" checked={Boolean(activeSettingsEdit?.telegram_enabled)} onChange={e=>setSettingsEdit(s=>({...s,telegram_enabled:e.target.checked}))}/>تفعيل تنبيهات Telegram</label>
            <label className="check-label"><input type="checkbox" checked={clearTelegram} onChange={e=>setClearTelegram(e.target.checked)}/>حذف رمز Telegram المحفوظ</label>
-           <button className="save-button" disabled={busy||preview||!settingsEdit} onClick={()=>void saveGeneral()}>حفظ وإعادة ربط MT5</button>
+           <button className="save-button" disabled={busy||preview||!activeSettingsEdit} onClick={()=>void saveGeneral()}>حفظ وإعادة ربط MT5</button>
           </div>:
         page==='trading'||page==='sniper'?<div className="feature-zone"><div className="live-indicator"><strong>Sniper Priority</strong><span>{display?.analysis?.regime||'UNAVAILABLE'}</span><b>{display?.analysis?.action||'WAIT'}</b></div><p>العقل المنفّذ الوحيد يختاره Core، وأي تبديل أثناء التشغيل يحتاج أوامر MT5 مُسوّاة وعدم وجود مراكز مفتوحة.</p><TradingSettingsOperations source={pageData} disabled={busy||preview} armed={status?.requested_run===true} apply={runSaveTrading}/><div className="quick-ops"><button disabled={busy||preview} onClick={()=>void runHandoff(true)}>تفعيل أولوية القناص</button><button disabled={busy||preview} onClick={()=>void runHandoff(false)}>تحويل التنفيذ للبديل</button></div><div className="safe-note">هذه الأزرار تستدعي قواعد التحويل الفعلية في Rust؛ لا يوجد تجاوز لفحوصات المحرك.</div><EnterpriseSupervisor preview={preview} armed={status?.requested_run===true}/><Table rows={rows}/></div>:
         page==='execution'?<div className="feature-zone"><ExecutionBindingOperations source={pageData} telemetry={status?.telemetry??null} ready={!preview&&trustworthy} armed={status?.requested_run===true} disabled={busy||preview} onBind={runBrokerBind}/>
