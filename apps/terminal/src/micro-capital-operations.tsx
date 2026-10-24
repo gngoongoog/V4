@@ -2,13 +2,14 @@ import {useEffect,useState} from 'react';
 import type {FormEvent} from 'react';
 import {ShieldAlert,Wallet,SlidersHorizontal} from 'lucide-react';
 import {smallAccountPreview,validatePortfolio} from './micro-capital';
+import {microAttestation} from './micro-readiness';
 import type {MicroRisk,MicroStatus,PortfolioSettings} from './micro-capital';
 
 const record=(x:unknown):Record<string,unknown>=>x!==null&&typeof x==='object'&&!Array.isArray(x)?x as Record<string,unknown>:{};
 const shown=(v:number|null,digits=2)=>v===null?'—':v.toLocaleString('en-US',{maximumFractionDigits:digits});
 
-export function MicroCapitalOperations({status,risk,portfolio,armed,disabled,onSavePortfolio}:{
- status:MicroStatus|null;risk:MicroRisk|null;portfolio:unknown;
+export function MicroCapitalOperations({status,risk,portfolio,monitor,armed,disabled,onSavePortfolio}:{
+ status:MicroStatus|null;risk:MicroRisk|null;portfolio:unknown;monitor:unknown;
  armed:boolean;disabled:boolean;onSavePortfolio:(settings:PortfolioSettings)=>Promise<void>;
 }){
  const [scenario,setScenario]=useState('500');
@@ -28,7 +29,8 @@ export function MicroCapitalOperations({status,risk,portfolio,armed,disabled,onS
   if(!edit)return;
   setDraft({...edit,[key]:value});
  };
- const view=smallAccountPreview(status,risk,Number(scenario));
+ const view=smallAccountPreview(status,risk,Number(scenario),monitor);
+ const audit=microAttestation(status,monitor,Date.now());
  const save=async(e:FormEvent)=>{
   e.preventDefault();if(armed||disabled)return;
   try{
@@ -57,6 +59,13 @@ export function MicroCapitalOperations({status,risk,portfolio,armed,disabled,onS
    <label>ميزانية وقف الصفقة من إعداد Core (تقديرية)<strong>{shown(view.budget)} {view.currency} {view.budgetPercent===null?'':`(${view.budgetPercent}%)`}</strong></label>
   </div>
   <p className="safe-note">{view.note}. {view.marginCovered===false?'الهامش الحر لا يغطي الحد الأدنى المبلغ من MT5.':view.marginCovered===true?'الهامش المبدئي قد يكفي، لكن لا يضمن قبول الصفقة.':'لا تتوفر معلومات هامش كافية.'} الرافعة الأعلى لا تقلل خسارة الستوب لنفس اللوت، واحتساب العمولة والانزلاق والحجم الفعلي يتم عند تنفيذ الوسيط.</p>
+  <div className="execution-binding-summary" aria-label="Core risk and Micro recovery audit">
+   <strong>Micro REAL — سجل Core:</strong> <b>{audit.verified?audit.label:'غير موثّق'}</b>
+   <small>{audit.reason}</small>
+   <strong>قاطع الخسارة اليومي:</strong> <b>{audit.verified?audit.dailyState.toUpperCase():'UNKNOWN'}</b>
+   <small>{audit.verified?audit.dailyReason:'يلزم تحديث تقرير Core من الحساب المتصل'}</small>
+   {audit.state==='recovered_latched'&&<p className="safe-note">تم بلوغ حد التعافي سابقاً؛ لا تعيد الإعدادات المفعّلة أو نزول Equity تصريح Micro لهذه الهوية.</p>}
+  </div>
   <h3><SlidersHorizontal size={17}/> الحد الإجمالي للمحفظة (مستقل عن Risk لكل صفقة)</h3>
   <p>القيم أدناه يقرأها البرنامج مباشرة من Rust Core. إذا فعّلت الحد الإجمالي وكان أقل من مخاطرة Micro REAL، ممكن يرفض دخول جديد. تقدر تتحكم به وأنت بوضع STOP.</p>
   {stored?<form onSubmit={e=>void save(e)}>
