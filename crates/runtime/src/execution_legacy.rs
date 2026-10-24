@@ -9,7 +9,7 @@ use braintrade_domain::{
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -68,6 +68,48 @@ fn json_rows(db: &Connection, sql: &str, key: &str) -> Result<Vec<Value>> {
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.iter().map(|r| Ok(serde_json::from_str(r)?)).collect()
 }
+/// Only monotonic, broker-history-proven split fills can supersede a partial
+/// acknowledgement. This is a result journal update, NEVER a new send intent.
+fn valid_recovered_partial_progress(previous: &Value, next: &Value) -> bool {
+    if previous["state"] != "partial"
+        || next["recovered_from_history"] != true
+        || !matches!(next["state"].as_str(), Some("partial" | "filled"))
+        || previous["request"] != next["request"]
+    {
+        return false;
+    }
+    let Some(requested) = next["request"]["volume"].as_f64() else { return false; };
+    let Some(volume) = next["volume"].as_f64() else { return false; };
+    let previous_volume = if previous["recovered_from_history"] == true {
+        previous["volume"].as_f64().unwrap_or(f64::NAN)
+    } else { 0.0 };
+    if !requested.is_finite() || !volume.is_finite() || !previous_volume.is_finite()
+        || requested <= 0.0 || volume <= 0.0 || previous_volume < 0.0
+        || volume + 1e-8 < previous_volume
+        || volume > requested + requested.mul_add(1e-7, 1e-8)
+    { return false; }
+    if next["state"] == "filled" && (volume - requested).abs() > requested.mul_add(1e-7, 1e-8) {
+        return false;
+    }
+    if next["state"] == "partial" && volume + 1e-8 >= requested {
+        return false;
+    }
+    let Some(deals) = next["deals"].as_array() else { return false; };
+    if deals.is_empty() { return false; }
+    let mut unique = BTreeSet::new();
+    for deal in deals {
+        let Some(ticket) = deal.as_u64().filter(|ticket| *ticket > 0) else { return false; };
+        if !unique.insert(ticket) { return false; }
+    }
+    if previous["recovered_from_history"] == true {
+        let Some(prior) = previous["deals"].as_array() else { return false; };
+        if !prior.iter().all(|d| d.as_u64().is_some_and(|ticket| unique.contains(&ticket))) {
+            return false;
+        }
+    }
+    true
+}
+
 impl Service {
     pub fn take_entries(&mut self) -> Vec<Value> { std::mem::take(&mut self.new_entries) }
     /// Entry execution is reserved to the coordinator of the selected trading
@@ -776,15 +818,30 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 ) {
                     bail!("Invalid broker state");
                 }
-                let old: String =
-                    db.query_row("SELECT state FROM broker_commands WHERE id=?1", [id], |r| {
-                        r.get(0)
-                    })?;
+                let (old, previous_json): (String, String) = db.query_row(
+                    "SELECT state,result FROM broker_commands WHERE id=?1", [id],
+                    |r| Ok((r.get(0)?,r.get(1)?)),
+                )?;
                 if matches!(old.as_str(), "dispatched" | "unknown" | "placed") {
                     db.execute(
                         "UPDATE broker_commands SET state=?2,result=?3 WHERE id=?1",
                         params![id, state, v.to_string()],
                     )?;
+                } else if matches!(old.as_str(), "partial" | "observed") {
+                    let previous: Value = serde_json::from_str(&previous_json)?;
+                    if valid_recovered_partial_progress(&previous, &v) {
+                        if old == "observed" {
+                            // Position stays observed; only broker-verified fill
+                            // evidence advances for cost and learning attribution.
+                            db.execute("UPDATE broker_commands SET result=?2 WHERE id=?1",
+                                params![id,v.to_string()])?;
+                        } else {
+                            db.execute(
+                                "UPDATE broker_commands SET state=?2,result=?3 WHERE id=?1",
+                                params![id,state,v.to_string()],
+                            )?;
+                        }
+                    }
                 }
                 Ok(json!({"ok":true}))
             }
@@ -842,6 +899,59 @@ mod execution_persistence_tests {
             login: 17, server: "Demo-Test".into(), currency: "USD".into(),
             symbol: "XAUUSD".into(), ..Default::default()
         }
+    }
+
+    #[test]
+    fn recovered_partial_progress_requires_exact_volume_and_new_broker_deals() {
+        let request=json!({"volume":0.10,"price":2000.1});
+        let first=json!({"state":"partial","request":request,"volume":0.04,
+            "deals":[801],"recovered_from_history":true});
+        let upgraded=json!({"state":"filled","request":request,"volume":0.10,
+            "deals":[801,802],"recovered_from_history":true});
+        assert!(valid_recovered_partial_progress(&first,&upgraded));
+        let too_large=json!({"state":"filled","request":request,"volume":0.12,
+            "deals":[801,802],"recovered_from_history":true});
+        assert!(!valid_recovered_partial_progress(&first,&too_large));
+        let duplicated=json!({"state":"filled","request":request,"volume":0.10,
+            "deals":[801,801],"recovered_from_history":true});
+        assert!(!valid_recovered_partial_progress(&first,&duplicated));
+        let regressed=json!({"state":"partial","request":request,"volume":0.03,
+            "deals":[801],"recovered_from_history":true});
+        assert!(!valid_recovered_partial_progress(&first,&regressed));
+        let switched=json!({"state":"filled","request":{"volume":0.20,"price":2000.1},
+            "volume":0.20,"deals":[801,802],"recovered_from_history":true});
+        assert!(!valid_recovered_partial_progress(&first,&switched));
+    }
+
+    #[test]
+    fn late_split_fill_updates_core_result_without_reopening_observed_order() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let st=Status::default();
+        let req=json!({"volume":0.10,"price":2000.10});
+        let first=json!({"id":"p0b-1","state":"partial","request":req,
+            "volume":0.04,"deals":[801],"recovered_from_history":true});
+        let payload=json!({"id":"p0b-1","kind":"open"});
+        db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload,result)
+            VALUES (?1,?2,'system','open',100,'partial',?3,?4)",
+            params!["p0b-1","ctx-demo",payload.to_string(),first.to_string()]).unwrap();
+        let second=json!({"id":"p0b-1","state":"filled","request":req,
+            "volume":0.10,"deals":[801,802],"recovered_from_history":true});
+        svc.route("POST","/v1/execution/result",second.to_string().as_bytes(),&db,&st,200).unwrap();
+        let row: (String,String)=db.query_row("SELECT state,result FROM broker_commands WHERE id='p0b-1'",
+            [],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(row.0,"filled");
+        assert_eq!(serde_json::from_str::<Value>(&row.1).unwrap()["volume"],0.10);
+        db.execute("UPDATE broker_commands SET state='observed',result=?1 WHERE id='p0b-1'",
+            [first.to_string()]).unwrap();
+        svc.route("POST","/v1/execution/result",second.to_string().as_bytes(),&db,&st,201).unwrap();
+        let observed:(String,String)=db.query_row("SELECT state,result FROM broker_commands WHERE id='p0b-1'",
+            [],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(observed.0,"observed");
+        assert_eq!(serde_json::from_str::<Value>(&observed.1).unwrap()["volume"],0.10);
+        svc.route("POST","/v1/execution/result",first.to_string().as_bytes(),&db,&st,202).unwrap();
+        let last:String=db.query_row("SELECT result FROM broker_commands WHERE id='p0b-1'",[],|r|r.get(0)).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&last).unwrap()["state"],"filled");
     }
 
     #[test]
