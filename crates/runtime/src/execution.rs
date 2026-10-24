@@ -689,6 +689,14 @@ impl Service {
             self.inner.set_mode(request.mode);
             return Ok(json!({"ok":true}));
         }
+        // P0-B: broker-journal diagnostics, not an order or an admission gate.
+        // Never return any history for a stale, unbound or mismatched account.
+        if method=="GET" && path=="/v1/execution/quality" {
+            let t=status.telemetry.as_ref().filter(|t|
+                status.gateway_fresh && self.account_matches(status)
+                && !t.symbol.is_empty() && !t.currency.is_empty());
+            return crate::execution_quality::report(db,t,now);
+        }
         if method=="GET" && path=="/v1/execution/brains" {
             let mut value=self.route("GET","/v1/execution",&[],db,status,now)?;
             let key=if status.gateway_fresh && self.account_matches(status) {context(status.telemetry.as_ref().unwrap())}else{String::new()};
