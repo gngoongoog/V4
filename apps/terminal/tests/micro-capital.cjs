@@ -4,13 +4,15 @@ const src=fs.readFileSync(path.join(__dirname,'../src/micro-capital.ts'),'utf8')
 const js=ts.transpileModule(src,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}});
 const loaded={};vm.runInNewContext(js.outputText,{exports:loaded});
 const {smallAccountPreview,validatePortfolio}=loaded;
-const t={connected:true,demo:false,account_trade_mode:2,equity:50,balance:50,currency:'USD',leverage:500,
+const t={connected:true,demo:false,account_trade_mode:2,login:871250,server:'Broker-REAL',equity:50,balance:50,currency:'USD',leverage:500,
  margin_free:45,minimum_lot_margin:12,volume_min:0.01};
 const risk={risk_percent:0.25,micro_real_temporary:true,micro_real_cap_percent:10,micro_real_recovery_equity:500};
 const view=smallAccountPreview({gateway_fresh:true,telemetry:t},risk,100);
 assert.equal(view.available,true);
 assert.equal(view.accountType,'REAL');
 assert.equal(view.equity,50);
+assert.equal(view.login,871250);
+assert.equal(view.server,'Broker-REAL');
 assert.equal(view.leverage,500,'real MT5 leverage must never be replaced by scenario');
 assert.equal(view.minimumLot,0.01);
 assert.equal(view.minimumLotMargin,12);
@@ -47,6 +49,8 @@ for(const status of [
  {gateway_fresh:true,telemetry:{...t,demo:true,account_trade_mode:2}},
  {gateway_fresh:true,telemetry:{...t,equity:0}},
  {gateway_fresh:true,telemetry:{...t,equity:NaN}},
+ {gateway_fresh:true,telemetry:{...t,login:0}},
+ {gateway_fresh:true,telemetry:{...t,server:''}},
 ]){
  const value=smallAccountPreview(status,risk,500);
  assert.equal(value.available,false);
