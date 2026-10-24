@@ -178,6 +178,25 @@ impl Service{
             }
             (valid,legacy)
         };
+        // Research progress is NOT the raw label count: historical broker mode
+        // and feature/label revisions must not count as eligible training evidence.
+        // Aggregate by context/schema in SQL rather than parsing every payload
+        // whenever the dashboard refreshes.
+        let (matured_schema_eligible_labels,matured_legacy_unverified_labels,matured_incompatible_schema_labels)={
+            let mut stmt=db.prepare("SELECT s.context,s.feature_schema,l.label_schema,COUNT(*) FROM learning_snapshots s JOIN learning_labels l ON l.snapshot_id=s.id GROUP BY s.context,s.feature_schema,l.label_schema")?;
+            let mut rows=stmt.query([])?;
+            let (mut valid,mut legacy,mut mismatched)=(0i64,0i64,0i64);
+            while let Some(row)=rows.next()? {
+                let context:String=row.get(0)?;
+                let feature:String=row.get(1)?;
+                let label:String=row.get(2)?;
+                let count:i64=row.get(3)?;
+                if !verified_study_context(&context) { legacy+=count; }
+                else if feature!=FEATURE_SCHEMA || label!=LABEL_SCHEMA { mismatched+=count; }
+                else { valid+=count; }
+            }
+            (valid,legacy,mismatched)
+        };
         let latest:Option<(u64,u64,String)>=db.query_row("SELECT bar_time,captured_ms,feature_schema FROM learning_snapshots ORDER BY id DESC LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
         let champion:Option<String>=db.query_row("SELECT model_id FROM learning_slots WHERE slot='champion'",[],|r|r.get::<_,Option<String>>(0)).optional()?.flatten();let challenger:Option<String>=db.query_row("SELECT model_id FROM learning_slots WHERE slot='challenger'",[],|r|r.get::<_,Option<String>>(0)).optional()?.flatten();
         let recent={
@@ -185,7 +204,7 @@ impl Service{
             let rows=s.query_map([],|r|{let metrics:String=r.get(5)?;Ok(json!({"model_id":r.get::<_,String>(0)?,"created_ms":r.get::<_,u64>(1)?,"family":r.get::<_,String>(2)?,"dataset_identity":r.get::<_,String>(3)?,"status":r.get::<_,String>(4)?,"metrics":serde_json::from_str::<Value>(&metrics).unwrap_or(Value::Null)}))})?.collect::<std::result::Result<Vec<_>,_>>()?;
             rows
         };
-        Ok(json!({"version":"learning-foundation-v1","feature_schema":FEATURE_SCHEMA,"label_schema":LABEL_SCHEMA,"snapshots":snapshots,"mode_verified_snapshots":mode_verified_snapshots,"legacy_unverified_snapshots":legacy_unverified_snapshots,"matured_labels":labels,"pending_labels":snapshots-labels,"models":models,"champion":champion,"challenger":challenger,"recent_models":recent,"latest":latest.map(|(bar_time,captured_ms,schema)|json!({"bar_time":bar_time,"captured_ms":captured_ms,"schema":schema})),"last_error":self.last_error,"training_enabled":false,"prediction_enabled":false,"champion_promotion_enabled":false,"live_self_modification":false,"note":"Registry accepts validated unreviewed challengers only. No model can influence Shadow."}))
+        Ok(json!({"version":"learning-foundation-v1","feature_schema":FEATURE_SCHEMA,"label_schema":LABEL_SCHEMA,"snapshots":snapshots,"mode_verified_snapshots":mode_verified_snapshots,"legacy_unverified_snapshots":legacy_unverified_snapshots,"matured_labels":labels,"matured_schema_eligible_labels":matured_schema_eligible_labels,"matured_legacy_unverified_labels":matured_legacy_unverified_labels,"matured_incompatible_schema_labels":matured_incompatible_schema_labels,"pending_labels":snapshots-labels,"models":models,"champion":champion,"challenger":challenger,"recent_models":recent,"latest":latest.map(|(bar_time,captured_ms,schema)|json!({"bar_time":bar_time,"captured_ms":captured_ms,"schema":schema})),"last_error":self.last_error,"training_enabled":false,"prediction_enabled":false,"champion_promotion_enabled":false,"live_self_modification":false,"note":"Registry accepts validated unreviewed challengers only. No model can influence Shadow."}))
     }
     pub fn export(&self,db:&Connection,dir:&Path,now:u64)->Result<Value>{
         let name=format!("learning-dataset-{now}");let staging=dir.join("exports").join(format!(".{name}.tmp"));let destination=dir.join("exports").join(&name);if staging.exists()||destination.exists(){bail!("Learning export path already exists");}
@@ -265,6 +284,34 @@ mod p0j_learning_context_tests {
     }
 
 
+
+    #[test]
+    fn learning_dashboard_does_not_count_legacy_or_schema_mismatch_as_eligible() {
+        let db=Connection::open_in_memory().unwrap();
+        let service=Service::new(&db).unwrap();
+        let demo=context(&broker(true,Some(0))).unwrap();
+        let legacy=serde_json::to_string(&("Broker-Same",17,"XAUUSD","USD")).unwrap();
+        for (id,ctx,feature,label) in [
+            (1,&demo,FEATURE_SCHEMA,LABEL_SCHEMA),
+            (2,&demo,"gold-m1-feature-v0",LABEL_SCHEMA),
+            (3,&demo,FEATURE_SCHEMA,"gold-m1-outcome-v0"),
+            (4,&legacy,FEATURE_SCHEMA,LABEL_SCHEMA)
+        ] {
+            db.execute("INSERT INTO learning_snapshots(id,context,bar_time,captured_ms,feature_schema,reference_close,atr,features) VALUES(?1,?2,600,700,?3,2500,1,'{}')",
+                params![id,ctx,feature]).unwrap();
+            db.execute("INSERT INTO learning_labels(snapshot_id,matured_ms,label_schema,label) VALUES(?1,1000,?2,'{}')",
+                params![id,label]).unwrap();
+        }
+        let status=service.status(&db).unwrap();
+        assert_eq!(status["matured_labels"],4);
+        assert_eq!(status["matured_schema_eligible_labels"],1);
+        assert_eq!(status["matured_legacy_unverified_labels"],1);
+        assert_eq!(status["matured_incompatible_schema_labels"],2);
+        assert_eq!(status["mode_verified_snapshots"],3);
+        assert_eq!(status["legacy_unverified_snapshots"],1);
+        assert_eq!(status["champion_promotion_enabled"],false);
+        assert_eq!(status["prediction_enabled"],false);
+    }
 
     #[test]
     fn damaged_json_export_failure_is_atomic_retryable_and_keeps_source_db() {
