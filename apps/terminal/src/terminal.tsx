@@ -15,6 +15,7 @@ import {OperatorWriteFence} from './operator-write-fence';
 import type {OperatorWriteTicket} from './operator-write-fence';
 import {MicroCapitalOperations} from './micro-capital-operations';
 import {ExecutionQualityOperations} from './execution-quality-operations';
+import {ModeEvidenceOperations} from './mode-evidence-operations';
 import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position} from './types';
 import {DESIGN_FIXTURE} from './mock';
@@ -108,7 +109,7 @@ export default function Terminal(){
  const [pageTimeSlot,setPageTimeSlot]=useState<{scope:string;timestamp:number|null}|null>(null);
  const [config,setConfig]=useState<Record<string,unknown>|null>(null);const [riskSnapshot,setRiskSnapshot]=useState<Record<string,unknown>|null>(null);
  const [configScope,setConfigScope]=useState<string|null>(null);const [riskScope,setRiskScope]=useState<string|null>(null);
- const [learning,setLearning]=useState<Record<string,unknown>|null>(null);const [brainReport,setBrainReport]=useState<Record<string,unknown>|null>(null);const [portfolioReport,setPortfolioReport]=useState<Record<string,unknown>|null>(null);const [executionQuality,setExecutionQuality]=useState<Record<string,unknown>|null>(null);const [filter,setFilter]=useState<'all'|'buy'|'sell'>('all');const [opsTab,setOpsTab]=useState<'trade'|'orders'|'advanced'>('trade');
+ const [learning,setLearning]=useState<Record<string,unknown>|null>(null);const [brainReport,setBrainReport]=useState<Record<string,unknown>|null>(null);const [portfolioReport,setPortfolioReport]=useState<Record<string,unknown>|null>(null);const [executionQuality,setExecutionQuality]=useState<Record<string,unknown>|null>(null);const [modeEvidence,setModeEvidence]=useState<Record<string,unknown>|null>(null);const [filter,setFilter]=useState<'all'|'buy'|'sell'>('all');const [opsTab,setOpsTab]=useState<'trade'|'orders'|'advanced'>('trade');
  const [clock,setClock]=useState('');const [lastStatusAt,setLastStatusAt]=useState<number|null>(null);const [liveLogin,setLiveLogin]=useState('');const [approval,setApproval]=useState<OperatorApproval|null>(null);
  const [settingsEdit,setSettingsEdit]=useState<Record<string,unknown>|null>(null);
  const [settingsScope,setSettingsScope]=useState<string|null>(null);
@@ -248,6 +249,21 @@ export default function Terminal(){
   };
   setExecutionQuality(null);get();
   const timer=setInterval(()=>{if(document.visibilityState==='visible')get()},3000);
+  return()=>{active=false;clearInterval(timer)};
+ },[page,preview,contextKey]);
+ useEffect(()=>{
+  if(page!=='execution'||preview||!hasTauri()){setModeEvidence(null);return;}
+  let active=true;
+  const get=()=>{
+   const ticket=scopedGeneration.current.beginRead('modeEvidence');
+   void readPanel('/v1/execution/mode-evidence').then(v=>{
+    if(active&&scopedGeneration.current.isCurrent(ticket))setModeEvidence(unwrap(v));
+   }).catch(()=>{
+    if(active&&scopedGeneration.current.isCurrent(ticket))setModeEvidence(null);
+   });
+  };
+  setModeEvidence(null);get();
+  const timer=setInterval(()=>{if(document.visibilityState==='visible')get()},12000);
   return()=>{active=false;clearInterval(timer)};
  },[page,preview,contextKey]);
  useEffect(()=>{
@@ -603,6 +619,8 @@ export default function Terminal(){
         page==='execution'?<div className="feature-zone"><ExecutionBindingOperations source={pageData} key={viewScope} telemetry={status?.telemetry??null} ready={!preview&&trustworthy} armed={status?.requested_run===true} disabled={busy||preview} onBind={runBrokerBind}/>
         <ExecutionQualityOperations status={!preview&&feed.broker?status:null} report={executionQuality} disabled={preview||busy}
           onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('executionQuality');void readPanel('/v1/execution/quality').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setExecutionQuality(unwrap(v))}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setExecutionQuality(null)})}}/>
+        <ModeEvidenceOperations status={!preview&&feed.broker?status:null} report={modeEvidence} disabled={preview||busy}
+          onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('modeEvidence');void readPanel('/v1/execution/mode-evidence').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setModeEvidence(unwrap(v))}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setModeEvidence(null)})}}/>
         <p className="safe-note">لا يعني الربط أن النظام جاهز للتداول؛ START يحتاج تأكيد Core وباقي شروط المنسق والمخاطر. STOP لا يغلق المراكز.</p><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/execution')}/></div>:
         page==='backtest'?<div className="feature-zone"><BacktestOperations key={viewScope} disabled={busy||preview} active={['loading','running'].includes(String(unwrap(pageData).phase||unwrap(unwrap(pageData).job).phase||''))} onStart={r=>runBacktest('start',r)} onCancel={()=>runBacktest('cancel')}/><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/backtest')}/></div>:
         page==='backups'?<div className="feature-zone"><BackupOperations disabled={busy||preview} create={()=>runBackup('create')} exportBrain={()=>runBackup('brain_export')}/><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/backups')}/></div>:
