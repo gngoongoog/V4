@@ -244,6 +244,35 @@ mod tests{
         let row:Value=report(&db,&ctx,&id,&hash).unwrap();
         assert_eq!(row["resolved_labels"],Value::Null);
     }
+    #[test]fn saved_future_direction_events_survive_core_database_reopen(){
+        let path=std::env::temp_dir().join(
+            format!("v25-forward-{}.sqlite",uuid::Uuid::new_v4()));
+        let (ctx,id,hash)={
+            let db=Connection::open(&path).unwrap();
+            db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+            let c=Config::default();
+            let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+                login:31,server:"Demo".into(),symbol:c.symbol.clone(),
+                currency:"USD".into(),..Default::default()};
+            let ctx=crate::coordinator_learning::context(&t);
+            let mut e=Engine::default();e.set_models(ctx.clone(),Default::default());
+            let checkpoint=json!({"status":"captured","account_context":ctx,
+                "cutoff_ms":100_000,"broker_training_samples":0,
+                "cached_policy_samples":0,"broker_target_samples":0,
+                "cached_target_samples":0,
+                "independent_oos":false,"broker_pnl":Value::Null});
+            let seal=crate::sniper_research_artifact::persist(
+                &db,&t,&c,&e,&checkpoint,100_000).unwrap();
+            append(&db,&ctx,&seal.id,&seal.sha256,
+                &[candidate(1,101_000),matured(2,101_000)]).unwrap();
+            (ctx,seal.id,seal.sha256)
+        };
+        let reopened=Connection::open(&path).unwrap();
+        assert_eq!(report(&reopened,&ctx,&id,&hash).unwrap()["resolved_labels"],1);
+        assert_eq!(report(&reopened,&ctx,&id,&hash).unwrap()["complete_trace"],false);
+        drop(reopened);
+        let _=std::fs::remove_file(path);
+    }
     #[test]fn digest_tamper_is_not_a_verified_success(){
         let (db,t,_,_,_,id,hash)=fixture();let ctx=crate::coordinator_learning::context(&t);
         append(&db,&ctx,&id,&hash,&[candidate(1,101_000)]).unwrap();
