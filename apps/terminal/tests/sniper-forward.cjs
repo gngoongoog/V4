@@ -66,7 +66,7 @@ test('P1-K5D records frozen score data with verified digest and append-only acco
  assert.match(study,/self\.freeze_verified\(/);
  assert.match(study,/self\.trial=None;return Err\(error\)/);
  assert.match(study,/research_artifact_id":trial\.artifact_id/);
- assert.match(route,/sniper_research_artifact::verify\(db,&account,&id,expected\)/);
+ assert.match(route,/sniper_research_artifact::verify\(db,&account,&id,expected\.as_deref\(\)\)/);
  assert.match(route,/sniper_research_artifact::recent\(db,&account\)/);
  assert.match(screen,/proof\.integrity==='verified'/);
  assert.match(screen,/archive\.map\(/);
