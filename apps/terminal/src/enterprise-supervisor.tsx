@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState} from 'react';
-import {readPanel,saveSupervisor} from './bridge';
+import {readPanel} from './bridge';
 import './enterprise-supervisor.css';
 
 type Config = {enforce_entry_gate:boolean;max_quote_age_ms:number;max_spread_atr:number;min_closed_bars:number};
@@ -7,7 +7,10 @@ const defaults:Config={enforce_entry_gate:false,max_quote_age_ms:2500,max_spread
 type Assessment = {entry_allowed?:boolean;guards?:string[];market_regime?:string;recommended_mode?:string|null;observed_spread_to_atr?:number|null;m1_efficiency?:number|null;m5_efficiency?:number|null};
 const known=(a:unknown):Record<string,unknown>=>a&&typeof a==='object'&&!Array.isArray(a)?a as Record<string,unknown>:{};
 const LABELS:Record<string,string>={sniper:'القناص',scalping:'السكالبر',swing:'السوينك',expert:'الخبير'};
-export default function EnterpriseSupervisor({preview,armed}:{preview:boolean;armed:boolean}){
+export default function EnterpriseSupervisor({preview,armed,onSave}:{
+ preview:boolean;armed:boolean;
+ onSave:(settings:Record<string,unknown>)=>Promise<Record<string,unknown>>;
+}){
  const [settings,setSettings]=useState<Config>(defaults);
  const initialized=useRef(false);
  const [assessment,setAssessment]=useState<Assessment|null>(null);
@@ -41,7 +44,14 @@ export default function EnterpriseSupervisor({preview,armed}:{preview:boolean;ar
  },[preview]);
  const persist=async()=>{
   setBusy(true);setNotice('');setError('');
-  try{await saveSupervisor(settings);setEnforced(settings.enforce_entry_gate);setIntegrity('ok');setNotice('تم حفظ السياسة في Rust Core بعد التحقق من STOP والمراكز والأوامر.');}
+  try{
+   // No direct write is allowed from a child panel: the parent serializes ALL
+   // Tauri mutations and confirms their readback for the same account scope.
+   const observed=await onSave(settings);
+   setEnforced(observed.entry_gate_enforced===true);
+   setIntegrity(observed.configuration_integrity==='ok'?'ok':'invalid_fail_closed');
+   setNotice('تأكد حفظ السياسة لدى Rust Core عبر قراءة تحقق لنفس جلسة MT5.');
+  }
   catch(e){setError(String(e));}finally{setBusy(false);}
  };
  const evidenceProblem=assessment?.entry_allowed===false;
