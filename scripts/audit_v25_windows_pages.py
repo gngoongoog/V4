@@ -26,7 +26,8 @@ APPROVED_COMMANDS=(
     "execute_control", "update_risk", "update_portfolio", "update_settings",
     "priority_handoff", "shutdown_core", "close_terminal", "backup_action",
     "backtest_action", "update_trading_settings", "update_brain_control",
-    "bind_execution", "update_supervisor", "read_panel", "get_status",
+    "bind_execution", "update_supervisor", "frozen_coordinator_action",
+    "read_panel", "get_status",
     "subscribe_status",
 )
 
