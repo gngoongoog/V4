@@ -15,6 +15,9 @@ struct Pending{
     side:i8,
     mid:f64,
     tick:f64,
+    entry_bid:f64,entry_ask:f64,
+    tick_loss:Option<f64>,tick_profit:Option<f64>,
+    roundtrip_commission:f64,slippage_ticks:f64,
 }
 #[derive(Default)]
 pub struct ForwardDirectionAudit{
@@ -58,6 +61,15 @@ impl ForwardDirectionAudit{
     /// No overlapping evaluation windows and no same-quote label/capture.
     pub fn observe(&mut self,broker_ms:u64,bid:Option<f64>,ask:Option<f64>,
                    tick_size:Option<f64>,candidate:Option<&Signal>){
+        self.observe_with_cost(broker_ms,bid,ask,tick_size,
+            None,None,0.,0.,candidate)
+    }
+    /// Approximate quote-only fixed-horizon cost envelope; no broker order,
+    /// margin, stop, partial fill or realized profit is created by this call.
+    pub fn observe_with_cost(&mut self,broker_ms:u64,bid:Option<f64>,ask:Option<f64>,
+        tick_size:Option<f64>,tick_value_loss:Option<f64>,
+        tick_value_profit:Option<f64>,commission:f64,slippage:f64,
+        candidate:Option<&Signal>){
         let valid=bid.zip(ask).zip(tick_size).and_then(|((bid,ask),tick)|{
             if bid.is_finite()&&ask.is_finite()&&tick.is_finite()
                 &&bid>0.&&ask>=bid&&tick>0. {
@@ -84,10 +96,46 @@ impl ForwardDirectionAudit{
                 }else{
                     self.flat+=1;"flat"
                 };
+                // Unlike the Midquote direction signal, an executable
+                // hypothetical BUY opens at Ask and closes at Bid (SELL vice
+                // versa). This includes spread exactly once, not twice.
+                let (entry,exit)=if pending.side==1{
+                    (pending.entry_ask,bid.unwrap_or_default())
+                }else{(pending.entry_bid,ask.unwrap_or_default())};
+                let price_markout=(exit-entry)*f64::from(pending.side);
+                let quote_cost_estimate=pending.tick_loss.zip(pending.tick_profit)
+                    .filter(|(loss,profit)|loss.is_finite()&&*loss>0.
+                        &&profit.is_finite()&&*profit>0.
+                        &&pending.roundtrip_commission.is_finite()
+                        &&pending.roundtrip_commission>=0.
+                        &&pending.slippage_ticks.is_finite()
+                        &&pending.slippage_ticks>=0.)
+                    .map(|(loss,profit)|{
+                        let money=price_markout/pending.tick
+                            *if price_markout>=0.{profit}else{loss};
+                        let slipped=2.*pending.slippage_ticks*loss.max(profit);
+                        (money,slipped,money-pending.roundtrip_commission-slipped)
+                    }).filter(|(money,slip,net)|money.is_finite()
+                        &&slip.is_finite()&&net.is_finite());
                 self.event(json!({"kind":"matured","opened_broker_ms":pending.source_broker_ms,
                     "closed_broker_ms":broker_ms,"side":pending.side,
                     "outcome":class,"threshold_tick":threshold,
                     "midquote_change":mid-pending.mid,
+                    "entry_bid":pending.entry_bid,"entry_ask":pending.entry_ask,
+                    "exit_bid":bid,"exit_ask":ask,
+                    "gross_quote_markout_price":price_markout,
+                    "entry_tick_size":pending.tick,
+                    "tick_value_loss_per_lot":pending.tick_loss,
+                    "tick_value_profit_per_lot":pending.tick_profit,
+                    "quote_gross_account_currency_per_lot":
+                        quote_cost_estimate.map(|v|v.0),
+                    "modeled_slippage_account_currency_per_lot":
+                        quote_cost_estimate.map(|v|v.1),
+                    "commission_roundtrip_account_currency_per_lot":
+                        quote_cost_estimate.map(|_|pending.roundtrip_commission),
+                    "modeled_net_quote_account_currency_per_lot":
+                        quote_cost_estimate.map(|v|v.2),
+                    "modeled_only":true,"broker_fill":false,
                     "horizon_ms":HORIZON_MS}));
                 self.pending=None;
             }
@@ -100,6 +148,9 @@ impl ForwardDirectionAudit{
             &&s.target_distance.is_finite()&&s.target_distance>0.){
             self.pending=Some(Pending{
                 source_broker_ms:broker_ms,side:signal.side,mid,tick,
+                entry_bid:bid.unwrap_or_default(),entry_ask:ask.unwrap_or_default(),
+                tick_loss:tick_value_loss,tick_profit:tick_value_profit,
+                roundtrip_commission:commission,slippage_ticks:slippage,
             });
             self.candidates+=1;
             self.event(json!({"kind":"candidate","opened_broker_ms":broker_ms,

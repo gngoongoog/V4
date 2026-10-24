@@ -56,10 +56,13 @@ pub fn persist(db:&Connection,t:&Telemetry,c:&Config,adaptive:&Engine,
     let model_sha=sha(&serde_json::to_vec(&scores)?);
     let config_sha=sha(&serde_json::to_vec(c)?);
     let id=uuid::Uuid::new_v4().to_string();
+    let prereg=crate::sniper_preregister::preregister(c,now,&t.currency);
+    ensure!(crate::sniper_preregister::valid(&prereg,now),"Invalid freeze-time registration");
     let payload=json!({
         "schema":SCHEMA,"id":id,"account_context":context(t),"cutoff_ms":now,
         "model_scores_sha256":model_sha,"config_sha256":config_sha,
         "model_scores":scores,"training_checkpoint":checkpoint,
+        "preregistered_forward_protocol":prereg,
         "forward_labels":Value::Null,
         "no_broker_orders":true,"independent_oos":false,
         "durability":"sqlite_local_append_only_checkpoint",
@@ -103,6 +106,10 @@ pub fn verify(db:&Connection,account:&str,id:&str,expected_sha:Option<&str>)
         &&scores["schema"]=="p1k5d-sniper-policy-scores-v1"
         &&payload["model_scores_sha256"].as_str()==Some(actual_model_sha.as_str()),
         "Frozen model scores checksum mismatch");
+    let protocol=&payload["preregistered_forward_protocol"];
+    // Legacy archive remains readable, but cannot certify a G protocol.
+    ensure!(protocol.is_null()||crate::sniper_preregister::valid(protocol,cutoff),
+        "Frozen forward protocol changed after registration");
     let training=&payload["training_checkpoint"];
     ensure!(training["status"]=="captured"
         &&training["account_context"]==account
@@ -113,6 +120,7 @@ pub fn verify(db:&Connection,account:&str,id:&str,expected_sha:Option<&str>)
     Ok(json!({
         "schema":SCHEMA,"id":id,"cutoff_ms":cutoff,
         "sha256":stored,"config_sha256":payload["config_sha256"],
+        "preregistered_forward_protocol":protocol,
         "model_scores_sha256":payload["model_scores_sha256"],
         "broker_training_samples":training["broker_training_samples"],
         "integrity":"verified","stored_locally":true,

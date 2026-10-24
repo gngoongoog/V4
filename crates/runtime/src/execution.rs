@@ -779,6 +779,11 @@ impl Service {
                                     db,&account,id,hash)
                                 .unwrap_or_else(|_|json!({"status":"unverified",
                                     "independent_oos":false,"broker_pnl":null}));
+                            view["last_archived_preregistered_costs"]=
+                                crate::sniper_forward_costs::from_journal(
+                                    db,&account,id,hash)
+                                .unwrap_or_else(|_|json!({"status":"unverified",
+                                    "independent_oos":false,"broker_pnl":null}));
                         }
                     }
                     if let Some(id)=view["research_artifact_id"].as_str().map(str::to_owned) {
@@ -795,6 +800,11 @@ impl Service {
                                     };
                                 view["chronological_holdout_diagnostic"]=
                                     crate::sniper_forward_holdout::from_journal(
+                                        db,&account,&id,expected.as_deref().unwrap_or(""))
+                                    .unwrap_or_else(|_|json!({"status":"unverified",
+                                        "independent_oos":false,"broker_pnl":null}));
+                                view["preregistered_cost_evidence"]=
+                                    crate::sniper_forward_costs::from_journal(
                                         db,&account,&id,expected.as_deref().unwrap_or(""))
                                     .unwrap_or_else(|_|json!({"status":"unverified",
                                         "independent_oos":false,"broker_pnl":null}));

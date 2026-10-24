@@ -22,6 +22,10 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
  const lastArchivedJournal=obj(view.last_archived_forward_journal);
  const holdout=obj(view.chronological_holdout_diagnostic);
  const recoveredHoldout=obj(view.last_archived_holdout_diagnostic);
+ const costEvidence=obj(view.preregistered_cost_evidence);
+ const recoveredCosts=obj(view.last_archived_preregistered_costs);
+ const fixedCostScore=obj(costEvidence.holdout);
+ const protocol=obj(proof.preregistered_forward_protocol);
  const holdoutScore=obj(holdout.holdout);
  const eligible=!preview&&eligibleFrozenSniper(status,page);
  const expected=t?JSON.stringify([t.server,t.login,t.symbol,t.currency]):'';
@@ -75,6 +79,21 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
    &&recoveredHoldout.broker_pnl===null;
  const percent=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=1
    ?`${(v*100).toFixed(1)}%`:'—';
+ const costVerified=journalVerified
+   &&costEvidence.schema==='p1k5g-preregistered-cost-evidence-v1'
+   &&costEvidence.status==='descriptive_quote_costs_only'
+   &&costEvidence.independent_oos===false&&costEvidence.broker_pnl===null
+   &&costEvidence.strategy_win_rate===null&&costEvidence.broker_fills_observed===false
+   &&costEvidence.automatic_promotion===false
+   &&protocol.schema==='p1k5g-predeclared-prospective-v1'
+   &&protocol.registered_at_freeze_ms===costEvidence.registered_at_freeze_ms
+   &&protocol.boundary_ms===costEvidence.boundary_ms;
+ const archiveCostVerified=archivedJournalVerified
+   &&recoveredCosts.schema==='p1k5g-preregistered-cost-evidence-v1'
+   &&recoveredCosts.status==='descriptive_quote_costs_only'
+   &&recoveredCosts.independent_oos===false&&recoveredCosts.broker_pnl===null;
+ const priceMoney=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)
+   ?v.toFixed(2):'—';
  const forwardScoped=scoped&&forward.schema==='p1k5b-forward-direction-v1'
    &&forward.independent_oos===false&&forward.broker_fills_observed===false
    &&forward.net_pnl===null&&forward.profitability_validated===false;
@@ -159,6 +178,32 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
     journal.integrity==='warning'||lastArchivedJournal.integrity==='warning')&&
    <p role="alert" className="safe-note">تحذير: تعذر التحقق من سلامة
     سجل الأحداث المستقبلية؛ تم حجب عدد النتائج حتى مراجعة البيانات.</p>}
+  {costVerified&&<div className="feature-zone"
+    aria-label="Frozen preregistered quote-only cost sensitivity P1K5G">
+   <h4>تكاليف افتراضية محددة قبل الرصد — P1-K5G</h4>
+   <div className="operator-grid">
+    <div>عينات التقييم بالمستقبل <strong>{count(costEvidence.holdout_labels)}</strong></div>
+    <div>عمولة الذهاب والإياب للوت مرجعي <strong>{priceMoney(costEvidence.roundtrip_commission_per_lot)}</strong></div>
+    <div>انزلاق مفترض (Tick لكل جهة) <strong>{priceMoney(costEvidence.hypothetical_slippage_ticks_per_side)}</strong></div>
+    <div>متوسط تحرك سعر Learner بعد السبريد والتكاليف (لكل لوت مرجعي) <strong>
+     {priceMoney(fixedCostScore.mean_modeled_quote_after_cost_per_1_lot)}
+    </strong></div>
+    <div>متوسط شراء دائم على نفس الفرص وبنفس التكاليف <strong>
+     {priceMoney(fixedCostScore.mean_baseline_buy_after_cost_per_1_lot)}
+    </strong></div>
+    <div>عملة الحساب <strong>{String(costEvidence.account_currency)}</strong></div>
+   </div>
+   <p className="safe-note">المبلغ تقديري لكل لوت مرجعي واحد اعتماداً على
+    Bid/Ask وتكاليف الحساب وقت التجميد؛ لا يمثل لوتك المختار أو ربحاً فعلياً.
+    لا يوجد تنفيذ MT5 ولا وقف/هدف أو انزلاق محقق، ولا شهادة OOS.</p>
+  </div>}
+  {archiveCostVerified&&!scoped&&<p className="safe-note">
+   توفرت مقارنة تكاليف وصفية من سجل بحث سابق محفوظ للحساب نفسه.
+   هذا تقدير أسعار وليس أرباح صفقات حقيقية.
+  </p>}
+  {journalVerified&&costEvidence.status==='insufficient_or_unverified'&&
+   <p className="safe-note">P1-K5G: بعد ما اكتملت الأيام والعينات
+    أو بيانات Bid/Ask وقيمة Tick المطلوبة لحساب تكاليف افتراضية موثوقة.</p>}
   {holdoutVerified&&<div className="feature-zone"
     aria-label="Chronological frozen research diagnostic P1K5F">
    <h4>تقييم زمني وصفي للـLearner — P1-K5F</h4>
