@@ -201,3 +201,27 @@ test('P1-K5H isolates true booked MT5 Demo broker closes from zero-order frozen 
  assert.match(ui,/booked\.strategy_win_rate===null/);
  assert.match(ui,/هذه ليست تنفيذات الدراسة المجمدة/);
 });
+
+test('P1-K5J unresolved Demo broker intents cannot imply safe automatic replay after restart',()=>{
+ const src=code('crates/runtime/src/sniper_demo_recovery_audit.rs');
+ const legacy=code('crates/runtime/src/execution_legacy.rs');
+ const route=code('crates/runtime/src/execution.rs');
+ const ui=code('apps/terminal/src/sniper-frozen-operations.tsx');
+ assert.match(src,/state IN \('queued','dispatched','unknown','placed','filled','partial'\)/);
+ assert.match(src,/other_account_pending_intents/);
+ assert.match(src,/new_orders_authorized":false/);
+ assert.match(src,/automatic_retry_or_release":false/);
+ assert.match(src,/requires_live_broker_reconciliation":true/);
+ assert.match(src,/broker_connected_verified_here":false/);
+ assert.match(src,/unresolved_intents_are_not_lost_on_sqlite_reopen/);
+ assert.match(src,/real_and_unbound_telemetry_are_not_privileged/);
+ assert.match(src,/unknown_dispatched_and_partial_never_authorize_retry/);
+ assert.match(legacy,/state IN \('queued','dispatched','unknown','placed','filled','partial'\)/);
+ assert.match(route,/sniper_demo_recovery_audit::inspect/);
+ assert.match(route,/last_archived_demo_recovery_audit/);
+ assert.match(route,/demo_recovery_intent_audit/);
+ assert.match(ui,/recovery\.new_orders_authorized===false/);
+ assert.match(ui,/recovery\.automatic_retry_or_release===false/);
+ assert.match(ui,/recovery\.broker_connected_verified_here===false/);
+ assert.match(ui,/لا يجوز اعتبار أي طلب مجهول فاشلاً أو آمناً لإعادة الإرسال/);
+});
