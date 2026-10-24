@@ -96,7 +96,7 @@ def _artifact(snapshot):
     feature_names = sorted(trainer.flatten(fixture["features"]))
     assert len(feature_names) == fixture["expected_feature_count"] == 87
     context = json.dumps(
-        [snapshot["server"], snapshot["login"], snapshot["symbol"], snapshot["currency"]],
+        [snapshot["server"], snapshot["login"], snapshot["symbol"], snapshot["currency"], snapshot["account_trade_mode"], snapshot["demo"]],
         separators=(",", ":"),
     )
     metric = dict(
