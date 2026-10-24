@@ -16,7 +16,7 @@ on:
       - 'VERIFY_SYSTEM.cmd'
       - '.github/workflows/v25-enterprise-portable.yml'
   pull_request:
-    branches: [main, feature/v25-enterprise-validation-20261024]
+    branches: [main, feature/v25-enterprise-validation-20261024, feature/v25-p1k4-same-clock-sniper-quote-integrity-20261024]
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
