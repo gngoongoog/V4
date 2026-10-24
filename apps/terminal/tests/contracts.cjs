@@ -46,7 +46,12 @@ console.log('PASS: P0-G context scoped dashboard panels and protected brain cont
 assert.match(terminal,/const viewGeneration=useRef\(new PanelReadFence\(\)\)/);
 assert.match(terminal,/viewGeneration\.current\.setScope\(viewScope\)/);
 assert.match(terminal,/if\(!viewGeneration\.current\.isCurrent\(serial\)\)return;/);
-assert.match(terminal,/publishPanel\(serial,await readPanel\('\/v1\/execution\/brains'\)\)/);
+assert.match(terminal,/publishPanel\\(serial,refreshed\\)/);
+assert.match(terminal,/const ticket=scopedGeneration\\.current\\.beginRead\\('brains'\\)/);
+assert.match(terminal,/if\\(scopedGeneration\\.current\\.isCurrent\\(ticket\\)\\)setBrainReport\\(refreshed\\)/);
+assert.match(terminal,/scopedGeneration\\.current\\.setScope\\(contextKey\\)/);
+assert.match(terminal,/feed\\.broker&&brainReport\\?\\.account_matches===true/);
+assert.doesNotMatch(terminal,/online&&valid\\(riskSnapshot\\?\\.drawdown_percent\\)/);
 assert.match(terminal,/onRefresh=\{\(\)=>refreshCurrentPanel\('\/v1\/execution'\)\}/);
 assert.doesNotMatch(terminal,/setPageData\(await readPanel\(/);
 console.log('PASS: P0-H stale IPC manual refresh/account generation rejection');
