@@ -8,6 +8,7 @@ on:
       - 'gateway/mt5_gateway.py'
       - 'gateway/sniper_native.py'
       - 'tests/test_p0e_native_lifecycle.py'
+      - 'tests/test_p0f_history_sync_identity.py'
       - 'tests/test_p0d_financial_integrity.py'
       - 'tests/test_execution_journal_race.py'
       - 'tests/test_broker_reconciliation_strict.py'
@@ -51,3 +52,5 @@ jobs:
         run: python -m unittest discover -s tests -p test_sniper_native.py -v
       - name: Validate Windows pipe worker lifetime
         run: python -m unittest discover -s tests -p test_sniper_native_lifecycle.py -v
+      - name: Protect broker history Demo REAL attribution and exact fees
+        run: python -m unittest discover -s tests -p test_p0f_history_sync_identity.py -v
