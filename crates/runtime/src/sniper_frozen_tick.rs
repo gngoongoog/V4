@@ -29,6 +29,7 @@ struct Trial{
     forward:crate::sniper_forward_direction::ForwardDirectionAudit,
     training_checkpoint:Value,
     artifact_id:Option<String>,artifact_sha256:Option<String>,
+    journal_write_failures:u64,
     first_future_ms:Option<u64>,last_event:Option<u64>,
     last_broker:Option<u64>,last_quote:Option<(u64,u64,u64)>,last_origin:String,
     last_dropped:Option<u64>,
@@ -87,6 +88,7 @@ impl Study{
             active:true,reason:String::new(),forward:Default::default(),
             training_checkpoint:checkpoint,
             artifact_id:None,artifact_sha256:None,
+            journal_write_failures:0,
             first_future_ms:None,last_event:None,last_broker:None,last_quote:None,
             last_origin:String::new(),last_dropped:None,
             accepted:0,comparable:0,exact:0,side_disagreements:0,
@@ -101,6 +103,32 @@ impl Study{
             "model_scores_frozen":true,"prior_tick_window_discarded":true,
             "no_broker_orders":true,"no_learning_effect":true,
             "persistence":"memory_only","training_checkpoint_status":self.trial.as_ref().unwrap().training_checkpoint["status"]}))
+    }
+    /// Slow reconciled snapshots and operator STOP flush prospective evidence.
+    /// A database failure must never interrupt MT5 supervision; uncommitted
+    /// events remain buffered and can be retried. A Core crash can still lose
+    /// events since the last successful flush, clearly documented.
+    pub fn flush_research_events(&mut self,db:&rusqlite::Connection,t:&Telemetry){
+        let Some(trial)=self.trial.as_mut()else{return};
+        if trial.context!=context(t)||!t.demo||t.account_trade_mode!=Some(0) {return}
+        if trial.forward.uncommitted_events().is_empty(){return}
+        let (Some(id),Some(hash))=(trial.artifact_id.as_ref(),trial.artifact_sha256.as_ref())
+            else{return};
+        let count=trial.forward.uncommitted_events().len();
+        match crate::sniper_forward_journal::append(
+            db,&trial.context,id,hash,trial.forward.uncommitted_events()){
+            Ok(n) if n==count=>trial.forward.acknowledge_committed(n),
+            _=>trial.journal_write_failures+=1,
+        }
+    }
+    pub fn stop_with_research_flush(&mut self,db:&rusqlite::Connection,
+        t:&Telemetry)->Result<Value>{
+        let mut result=self.stop(t)?;
+        self.flush_research_events(db,t);
+        let trial=self.trial.as_ref().context("Study has no active research session")?;
+        result["uncommitted_research_events"]=json!(trial.forward.uncommitted_events().len());
+        result["journal_write_failures"]=json!(trial.journal_write_failures);
+        Ok(result)
     }
     pub fn stop(&mut self,t:&Telemetry)->Result<Value>{
         let trial=self.trial.as_mut().filter(|v|v.context==context(t))
@@ -252,6 +280,7 @@ impl Study{
             "unpaired_same_clock_price_changes":trial.unpaired_same_clock_price_changes,
             "minimum_warmup_ms":WARMUP_MS,
             "forward_direction_audit":trial.forward.json(),
+            "research_event_write_failures":trial.journal_write_failures,
             "training_checkpoint":trial.training_checkpoint,
             "research_artifact_id":trial.artifact_id,
             "research_artifact_sha256":trial.artifact_sha256,
