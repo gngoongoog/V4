@@ -209,15 +209,15 @@ export default function Terminal(){
  const open=(next:PageId)=>{setPage(next);setNotice('');setError('')};
  const saveRiskForm=async(risk:Record<string,unknown>)=>{
   if(!hasTauri()||preview){sendNotice('الإعدادات لا تُحفظ في وضع المعاينة',true);return}
-  setBusy(true);try{await saveRisk(risk);const latest=unwrap(await readPanel('/v1/config'));setConfig(unwrap(latest.config));sendNotice('تم حفظ إعدادات المخاطر والتحقق من النسخة المسجلة في Rust Core');}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
+  setBusy(true);const writeTicket=scopedGeneration.current.beginRead('config');try{await saveRisk(risk);const latest=unwrap(await readPanel('/v1/config'));if(scopedGeneration.current.isCurrent(writeTicket)){scopedGeneration.current.invalidate('risk');setConfig(unwrap(latest.config));setRiskSnapshot(null);}sendNotice('تم حفظ إعدادات المخاطر والتحقق من النسخة المسجلة في Rust Core');}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
  };
  const saveGeneral=async()=>{
   if(!settingsEdit||preview){sendNotice('وضع المعاينة لا يدعم الحفظ',true);return}
-  setBusy(true);try{await saveSettings(settingsEdit,telegramToken,clearTelegram);const latest=unwrap(await readPanel('/v1/config'));setConfig(unwrap(latest.config));setSettingsEdit(unwrap(latest.config));setTelegramToken('');setClearTelegram(false);sendNotice('تم حفظ الإعدادات لدى Core. إعادة الاتصال قيد التنفيذ.');}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
+  setBusy(true);const writeTicket=scopedGeneration.current.beginRead('config');try{await saveSettings(settingsEdit,telegramToken,clearTelegram);const latest=unwrap(await readPanel('/v1/config'));if(scopedGeneration.current.isCurrent(writeTicket)){scopedGeneration.current.invalidate('risk');setConfig(unwrap(latest.config));setSettingsEdit(unwrap(latest.config));setRiskSnapshot(null);setTelegramToken('');setClearTelegram(false);}sendNotice('تم حفظ الإعدادات لدى Core. إعادة الاتصال قيد التنفيذ.');}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
  };
  const runHandoff=async(active:boolean)=>{
   if(preview){sendNotice('التحويل الحقيقي غير متاح في المعاينة',true);return}
-  setBusy(true);try{await handoff(active);sendNotice('تحويل أولوية القناص تم تأكيده من Core');}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
+  setBusy(true);try{await handoff(active);scopedGeneration.current.invalidate('brains');setBrainReport(null);void refreshBrainEvidence();sendNotice('تحويل أولوية القناص تم تأكيده من Core');}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
  };
  const runSaveTrading=async(input:Record<string,unknown>)=>{
   if(preview||!hasTauri()){sendNotice('حفظ التكاليف يحتاج Core الأصلي',true);return}
@@ -226,7 +226,7 @@ export default function Terminal(){
    await saveTrading(input);
    const latest=unwrap(await readPanel('/v1/trading/settings'));
    const full=unwrap(latest.config);
-   publishPanel(serial,latest);if(viewGeneration.current.isCurrent(serial))setConfig(full);
+   publishPanel(serial,latest);if(viewGeneration.current.isCurrent(serial)){scopedGeneration.current.invalidate('config');scopedGeneration.current.invalidate('brains');setConfig(full);setBrainReport(null);void refreshBrainEvidence();}
    sendNotice('تم تأكيد وحفظ وضع المنسق والعمولة من Rust Core');
   }catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
  };
@@ -240,7 +240,11 @@ export default function Terminal(){
   const mode=String(unwrap(pageData).trading_mode||'');
   const serial=panelSerial();setBusy(true);
   try{await updateBrainControl(context,brain,mode,advisor,paper);
-   publishPanel(serial,await readPanel('/v1/execution/brains'));
+   scopedGeneration.current.invalidate('brains');setBrainReport(null);
+   const ticket=scopedGeneration.current.beginRead('brains');
+   const refreshed=unwrap(await readPanel('/v1/execution/brains'));
+   publishPanel(serial,refreshed);
+   if(scopedGeneration.current.isCurrent(ticket))setBrainReport(refreshed);
    sendNotice('تم حفظ مشاركة العقل في Core للحساب والوضع الحاليين');
   }catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
  };
@@ -249,7 +253,9 @@ export default function Terminal(){
   const serial=panelSerial();setBusy(true);
   try{
    await bindExecution(target,deviationPoints,confirmLiveLogin);
+   scopedGeneration.current.invalidate('brains');setBrainReport(null);
    publishPanel(serial,await readPanel('/v1/execution'));
+   void refreshBrainEvidence();
    sendNotice('تم التحقق من حساب '+target.toUpperCase()+' وربط التنفيذ بواسطة Core؛ الربط وحده لا يفتح صفقة');
   }catch(e){sendNotice('فشل ربط حساب التنفيذ: '+String(e),true)}finally{setBusy(false)}
  };
