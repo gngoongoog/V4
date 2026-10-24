@@ -26,6 +26,7 @@ fn eligible(t:&Telemetry,c:&Config,now:u64)->bool{
 struct Trial{
     context:String,started_ms:u64,config:Config,
     frozen:Engine,active:bool,reason:String,
+    forward:crate::sniper_forward_direction::ForwardDirectionAudit,
     first_future_ms:Option<u64>,last_event:Option<u64>,
     last_broker:Option<u64>,last_quote:Option<(u64,u64,u64)>,last_origin:String,
     last_dropped:Option<u64>,
@@ -50,7 +51,7 @@ impl Study{
         let frozen=adaptive.frozen_study_copy();
         self.trial=Some(Trial{
             context:context(t),started_ms:now,config:c.clone(),frozen,
-            active:true,reason:String::new(),
+            active:true,reason:String::new(),forward:Default::default(),
             first_future_ms:None,last_event:None,last_broker:None,last_quote:None,
             last_origin:String::new(),last_dropped:None,
             accepted:0,comparable:0,exact:0,side_disagreements:0,
@@ -70,6 +71,7 @@ impl Study{
         let trial=self.trial.as_mut().filter(|v|v.context==context(t))
             .ok_or_else(||anyhow::anyhow!("No matching Sniper study"))?;
         trial.active=false;
+        trial.forward.invalidate_segment();
         trial.reason="operator_stopped".into();
         Ok(json!({"ok":true,"status":"stopped","no_broker_orders":true}))
     }
@@ -81,6 +83,7 @@ impl Study{
         let Some(trial)=self.trial.as_mut().filter(|x|x.active)else{return};
         if context(t)!=trial.context||c.trading.mode!=TradingMode::Sniper
            ||c.trading.sniper_brain!=SniperBrain::Learner{
+            trial.forward.invalidate_segment();
             trial.active=false;trial.reason="reconciled_broker_context_changed".into();
             return
         }
@@ -102,6 +105,7 @@ impl Study{
                 trial.unpaired_reconciled_quote_changes+=1;
                 if same_clock_price_change{trial.unpaired_same_clock_price_changes+=1;}
                 trial.first_future_ms=None;
+                trial.forward.invalidate_segment();
                 trial.frozen.reset_quotes();
                 trial.last_origin.clear();
                 trial.last_dropped=None;
@@ -116,9 +120,11 @@ impl Study{
         let Some(trial)=self.trial.as_mut().filter(|v|v.active)else{return};
         if context(t)!=trial.context||!eligible(t,c,now) {
             // Never resume an outdated/foreign account trial.
+            trial.forward.invalidate_segment();
             trial.active=false;trial.reason="broker_identity_or_mode_changed".into();return
         }
         if serde_json::to_value(c).ok()!=serde_json::to_value(&trial.config).ok(){
+            trial.forward.invalidate_segment();
             trial.active=false;trial.reason="policy_config_changed_after_freeze".into();return
         }
         let meta:Value=serde_json::from_slice(payload).unwrap_or(Value::Null);
@@ -140,6 +146,7 @@ impl Study{
         // for a fresh warmup. The executing engine is never modified.
         let bad_source=!matches!(src,"native"|"poll")||drop.is_none();
         if bad_source||changed||gap>GAP_MS||overflow {
+            trial.forward.invalidate_segment();
             trial.frozen.reset_quotes();
             trial.first_future_ms=None;
             if bad_source{trial.excluded_legacy+=1}
@@ -160,6 +167,13 @@ impl Study{
         if broker.saturating_sub(start)<WARMUP_MS {
             trial.excluded_warmup+=1;return
         }
+        // A matured label consumes ONLY subsequent paired, accepted forward
+        // broker quotes; never same-tick data or existing trade outcomes.
+        // Unmatched current raw signals may settle a prior pending markout,
+        // but must not originate a new unpaired candidate.
+        let paired=adaptive.is_some_and(|x|x.key==frozen.key);
+        trial.forward.observe(broker,t.bid,t.ask,t.tick_size,
+            if paired {Some(&frozen)} else {None});
         let Some(adaptive)=adaptive.filter(|x|x.key==frozen.key)
         else {trial.excluded_legacy+=1;return};
         trial.comparable+=1;
@@ -202,6 +216,7 @@ impl Study{
             "unpaired_reconciled_quote_changes":trial.unpaired_reconciled_quote_changes,
             "unpaired_same_clock_price_changes":trial.unpaired_same_clock_price_changes,
             "minimum_warmup_ms":WARMUP_MS,
+            "forward_direction_audit":trial.forward.json(),
             "forward_only":true,
             "model_scores_frozen":true,"prior_tick_window_discarded":true,
             "persistence":"memory_only","read_only":true,
@@ -356,6 +371,57 @@ mod tests{
             "unpaired same-ms quote must force forward warmup, not claim agreement");
         assert!(later["paper_pnl"].is_null());
         assert_eq!(later["independent_oos"],false);
+    }
+    #[test]
+    fn nonoverlapping_frozen_future_labels_require_postfreeze_continuity_and_time(){
+        let (mut t,c,e)=fixture(100_000);
+        let mut study=Study::default();
+        let mut adaptive=e.frozen_study_copy();
+        study.freeze(&t,&c,&e,100_000).unwrap();
+        for step in 1..=50u64{
+            let ts=100_000+step*250;
+            t.source_quote_time_ms=Some(ts);
+            t.quote_time_ms=Some(ts);
+            t.bid=Some(2500.0+step as f64*0.03);
+            t.ask=Some(2500.2+step as f64*0.03);
+            let raw=adaptive.evaluate(&t,&c,ts+1);
+            study.observe(&t,&c,Some(&raw),&meta("native",0),ts+1);
+        }
+        let v=study.report(Some(&t),113_000);
+        let forward=&v["forward_direction_audit"];
+        assert_eq!(forward["schema"],"p1k5b-forward-direction-v1");
+        assert_eq!(forward["fixed_horizon_ms"],5000);
+        assert!(forward["resolved_direction_labels"].as_u64().unwrap()>=1);
+        assert_eq!(forward["net_pnl"],Value::Null);
+        assert_eq!(forward["independent_oos"],false);
+        assert_eq!(v["broker_pnl"],Value::Null);
+        assert_eq!(v["no_broker_orders"],true);
+    }
+    #[test]
+    fn frozen_forward_pending_is_censored_on_native_source_switch(){
+        let (mut t,c,e)=fixture(100_000);
+        let mut study=Study::default();
+        let mut adaptive=e.frozen_study_copy();
+        study.freeze(&t,&c,&e,100_000).unwrap();
+        for step in 1..=14u64{
+            let ts=100_000+step*250;
+            t.source_quote_time_ms=Some(ts);
+            t.quote_time_ms=Some(ts);
+            t.bid=Some(2500.+step as f64*0.03);
+            t.ask=Some(2500.2+step as f64*0.03);
+            let raw=adaptive.evaluate(&t,&c,ts+1);
+            study.observe(&t,&c,Some(&raw),&meta("native",0),ts+1);
+        }
+        let before=study.report(Some(&t),104_000);
+        assert_eq!(before["forward_direction_audit"]["pending_unmatured_label"],1);
+        t.source_quote_time_ms=Some(103_750);
+        t.quote_time_ms=Some(103_750);
+        study.observe(&t,&c,None,&meta("poll",0),103_751);
+        let after=study.report(Some(&t),103_800);
+        assert_eq!(after["forward_direction_audit"]["pending_unmatured_label"],0);
+        assert_eq!(after["forward_direction_audit"]["censored_disconnected_segments"],1);
+        assert_eq!(after["forward_direction_audit"]["resolved_direction_labels"],0);
+        assert_eq!(after["excluded_source_switch"],1);
     }
     #[test]
     fn frozen_study_does_not_inherit_old_account_or_live_quotes(){
