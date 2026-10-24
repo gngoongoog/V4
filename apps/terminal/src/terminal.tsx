@@ -152,7 +152,7 @@ export default function Terminal(){
  const t=display?.telemetry;const feed=feedEvidence(status,online,lastStatusAt,Date.now());const trustworthy=preview||feed.quote;
  const account=trustworthy?t:null;const currency=account?.currency||'USD';const positions=account?.positions||[];
  const buys=positions.filter(p=>up(p.side)).length;const sells=positions.length-buys;
- const brokerResults=preview||!online?null:brokerEvidence(brainReport);
+ const brokerResults=preview||!feed.broker?null:brokerEvidence(brainReport,status);
  const win=preview?76:brokerResults?.winRate??null;
  const drawdown=preview?4.2:online&&valid(riskSnapshot?.drawdown_percent)?Number(riskSnapshot?.drawdown_percent):null;
  const showLatency=preview?28:null; // quote age is NOT execution latency
