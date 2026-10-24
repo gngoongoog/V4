@@ -184,8 +184,8 @@ mod tests{
         assert_eq!(r["calibration_days"],4);
         assert_eq!(r["holdout_days"],2);
         assert_eq!(r["holdout_labels"],120);
-        assert_eq!(r["holdout"]["mean_modeled_quote_after_cost_per_1_lot"],7.);
-        assert_eq!(r["holdout"]["mean_baseline_buy_after_cost_per_1_lot"],7.);
+        assert!((r["holdout"]["mean_modeled_quote_after_cost_per_1_lot"].as_f64().unwrap()-7.).abs()<1e-8);
+        assert!((r["holdout"]["mean_baseline_buy_after_cost_per_1_lot"].as_f64().unwrap()-7.).abs()<1e-8);
         assert_eq!(r["broker_pnl"],Value::Null);
         assert_eq!(r["independent_oos"],false);
     }
