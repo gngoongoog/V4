@@ -9,9 +9,11 @@ import {BacktestOperations,BackupOperations,TradingSettingsOperations,BrainContr
 import {feedEvidence} from './feed';
 import {brokerEvidence} from './brain-evidence';
 import {ScopedReadFence} from './scoped-read-fence';
+import {MicroCapitalOperations} from './micro-capital-operations';
+import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position} from './types';
 import {DESIGN_FIXTURE} from './mock';
-import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,backtestAction,saveTrading,updateBrainControl,bindExecution} from './bridge';
+import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,backtestAction,saveTrading,updateBrainControl,bindExecution} from './bridge';
 import {money,num,signed,up,valid} from './format';
 
 type IconComponent=typeof Home;
@@ -57,16 +59,31 @@ function Table({rows,empty='لا توجد بيانات مؤكدة'}:{rows:Record
  const headers=Array.from(new Set(rows.slice(0,10).flatMap(x=>Object.keys(x)))).slice(0,9);
  return <div className="table-scroll">{rows.length===0?<div className="table-empty">{empty}</div>:<table><thead><tr>{headers.map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((row,i)=><tr key={i}>{headers.map(h=><td title={displayCell(row[h])} key={h}>{displayCell(row[h])}</td>)}</tr>)}</tbody></table>}</div>
 }
-function RiskEditor({config,apply,loading}:{config:Record<string,unknown>|null;apply:(v:Record<string,unknown>)=>Promise<void>;loading:boolean}){
+function RiskEditor({config,apply,loading,armed}:{config:Record<string,unknown>|null;apply:(v:Record<string,unknown>)=>Promise<void>;loading:boolean;armed:boolean}){
  const [values,setValues]=useState<Record<string,unknown>>({});
  useEffect(()=>{if(config)setValues({...config})},[config]);
  if(!config)return <div className="table-empty">إعدادات المخاطر غير متاحة. يجب الاتصال بـCore أولاً.</div>;
- return <form className="risk-editor" onSubmit={e=>{e.preventDefault();if((config.daily_breaker_real_enabled===true&&values.daily_breaker_real_enabled===false)||(config.micro_real_temporary!==true&&values.micro_real_temporary===true)){if(!window.confirm('تحذير: تعديل حماية الحساب REAL قد يسبب خسارة مالية كبيرة. هل تريد إرسال التغيير إلى Core؟'))return;}void apply(values)}}>
-   <div className="risk-form-grid">{RISK_FIELDS.map(([id,title,unit])=><label key={id}>{title}<span>{unit}</span><input type="number" required step="any" value={typeof values[id]==='number'?String(values[id]):''} onChange={e=>setValues(old=>({...old,[id]:Number(e.target.value)}))}/></label>)}</div>
-   <div className="risk-flags">{RISK_FLAGS.map(([id,title])=><label key={id}><input type="checkbox" checked={values[id]===true} onChange={e=>setValues(old=>({...old,[id]:e.target.checked}))}/>{title}</label>)}</div>
-   <p className="safe-note">يحفظ المحرك إعدادات المخاطر فقط عندما يسمح وضع التنفيذ بذلك. تعطيل قاطع خسارة الحساب الحقيقي مخاطرة مالية مرتفعة.</p>
-   <button type="submit" className="save-button" disabled={loading}>حفظ إعدادات المخاطر في Rust Core</button>
-  </form>
+ return <form className="risk-editor" onSubmit={e=>{
+  e.preventDefault();if(armed)return;
+  if((config.daily_breaker_real_enabled===true&&values.daily_breaker_real_enabled===false)||
+     (config.micro_real_temporary!==true&&values.micro_real_temporary===true)||
+     (values.micro_real_temporary===true&&Number(values.micro_real_cap_percent)>Number(config.micro_real_cap_percent||0))){
+   if(!window.confirm('Micro REAL أو تعطيل قاطع الحساب قد يسبب خسارة معظم رأس المال. هل تريد حفظ هذه التغييرات؟'))return;
+  }
+  void apply(values);
+ }}>
+  <div className="risk-form-grid">{RISK_FIELDS.map(([id,title,unit])=><label key={id}>{title}<span>{unit}</span><input type="number" required step="any" disabled={loading||armed} value={typeof values[id]==='number'?String(values[id]):''} onChange={e=>setValues(old=>({...old,[id]:Number(e.target.value)}))}/></label>)}</div>
+  <div className="risk-flags">{RISK_FLAGS.map(([id,title])=><label key={id}><input type="checkbox" checked={values[id]===true} disabled={loading||armed} onChange={e=>setValues(old=>({...old,[id]:e.target.checked}))}/>{title}</label>)}</div>
+  <div className="quick-ops">
+   <button type="button" disabled={loading||armed} onClick={()=>setValues(old=>({...old,micro_real_temporary:true,micro_real_cap_percent:5,micro_real_recovery_equity:500}))}>Micro REAL · 5%</button>
+   <button type="button" disabled={loading||armed} onClick={()=>setValues(old=>({...old,micro_real_temporary:true,micro_real_cap_percent:10,micro_real_recovery_equity:500}))}>Micro REAL · 10%</button>
+   <button type="button" disabled={loading||armed} onClick={()=>setValues(old=>({...old,micro_real_temporary:true,micro_real_cap_percent:20,micro_real_recovery_equity:500}))}>Micro REAL · 20% (مخاطرة مرتفعة جداً)</button>
+   <button type="button" disabled={loading||armed} onClick={()=>setValues(old=>({...old,micro_real_temporary:false}))}>إلغاء Micro REAL</button>
+  </div>
+  <p className="safe-note">هذه النسب سقف الخسارة المقدّرة عند الستوب لكل صفقة، مو هدف ربح. تقدر تعدّل السقف وEquity التعافي يدوياً. يُطبق فقط إذا سمحت حالة الحساب وسجل التعافي والهامش، ويبقى أمر الوسيط خاضعاً للتحقق. قاطع الخسارة اليومي REAL خيار مستقل.</p>
+  <button type="submit" className="save-button" disabled={loading||armed}>حفظ إعدادات المخاطر في Rust Core</button>
+  {armed&&<p className="safe-note">أوقف الدخول STOP أولاً لتعديل إعدادات المخاطرة واللوت.</p>}
+ </form>
 }
 function ConnectionLine({connectedNow,preview}:{connectedNow:boolean;preview:boolean}){
  return <span className={`source-status ${connectedNow?'online':''}`}>{preview?'DESIGN PREVIEW • SAMPLE DATA':connectedNow?'LIVE VERIFIED MT5 FEED':'CORE / MT5 UNAVAILABLE'}</span>
@@ -77,7 +94,7 @@ export default function Terminal(){
  const [online,setOnline]=useState(false);const [busy,setBusy]=useState(false);const [error,setError]=useState('');const [notice,setNotice]=useState('');
  const [pageData,setPageData]=useState<unknown>(null);const [pageError,setPageError]=useState('');const [pageUpdatedAt,setPageUpdatedAt]=useState<number|null>(null);
  const [config,setConfig]=useState<Record<string,unknown>|null>(null);const [riskSnapshot,setRiskSnapshot]=useState<Record<string,unknown>|null>(null);
- const [learning,setLearning]=useState<Record<string,unknown>|null>(null);const [brainReport,setBrainReport]=useState<Record<string,unknown>|null>(null);const [filter,setFilter]=useState<'all'|'buy'|'sell'>('all');const [opsTab,setOpsTab]=useState<'trade'|'orders'|'advanced'>('trade');
+ const [learning,setLearning]=useState<Record<string,unknown>|null>(null);const [brainReport,setBrainReport]=useState<Record<string,unknown>|null>(null);const [portfolioReport,setPortfolioReport]=useState<Record<string,unknown>|null>(null);const [filter,setFilter]=useState<'all'|'buy'|'sell'>('all');const [opsTab,setOpsTab]=useState<'trade'|'orders'|'advanced'>('trade');
  const [clock,setClock]=useState('');const [lastStatusAt,setLastStatusAt]=useState<number|null>(null);const [liveLogin,setLiveLogin]=useState('');const [showStartConfirm,setShowStartConfirm]=useState(false);
  const [settingsEdit,setSettingsEdit]=useState<Record<string,unknown>|null>(null);const [telegramToken,setTelegramToken]=useState('');const [clearTelegram,setClearTelegram]=useState(false);
  const [showStopConfirm,setShowStopConfirm]=useState(false);const [showExitConfirm,setShowExitConfirm]=useState(false);
