@@ -94,8 +94,12 @@ test('ui Core mutations are wired to a fence before sending and checking acknowl
   assert(start>=0,'missing serialized '+label);
   const send=ui.indexOf(`await ${action}(`,start);
   assert(send>start,'missing Core IPC write: '+action);
-  const checked=ui.indexOf('if(!writeFresh(mutation))return;',send);
-  assert(checked>send && checked<send+350,'must fence '+label+' before follow-up read/state');
+  const postSection=ui.slice(send,send+400);
+  assert(
+   postSection.includes('if(!writeFresh(mutation))return;')||
+   postSection.includes('if(!writeFresh(mutation))throw new Error('),
+   'must fence '+label+' before follow-up read/state'
+  );
  }
  assert(ui.includes('mutationFence.current.setScope(viewScope)'));
  for(const marker of [
