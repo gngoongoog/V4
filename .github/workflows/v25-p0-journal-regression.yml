@@ -6,6 +6,8 @@ on:
     paths:
       - 'gateway/execution.py'
       - 'gateway/mt5_gateway.py'
+      - 'gateway/sniper_native.py'
+      - 'tests/test_p0e_native_lifecycle.py'
       - 'tests/test_p0d_financial_integrity.py'
       - 'tests/test_execution_journal_race.py'
       - 'tests/test_broker_reconciliation_strict.py'
@@ -43,3 +45,9 @@ jobs:
         run: python -m unittest discover -s tests -p test_p0d_financial_integrity.py -v
       - name: Preserve dashboard snapshot financial contracts
         run: python -m unittest discover -s tests -p test_gateway.py -v
+      - name: Validate Sniper EA reconnect and identity-scoped cache
+        run: python -m unittest discover -s tests -p test_p0e_native_lifecycle.py -v
+      - name: Validate native EA packet and real Windows pipe shutdown
+        run: python -m unittest discover -s tests -p test_sniper_native.py -v
+      - name: Validate Windows pipe worker lifetime
+        run: python -m unittest discover -s tests -p test_sniper_native_lifecycle.py -v
