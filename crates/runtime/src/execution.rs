@@ -297,6 +297,7 @@ pub struct Service {
     learner: crate::coordinator_learning::Learner,
     student: crate::student_learning::Student,
     sniper_opportunities: crate::sniper_opportunities::Recorder,
+    sniper_tick_audit: crate::sniper_tick_audit::Audit,
     portfolio: PortfolioLimits,
     portfolio_state: Value,
     supervisor: crate::enterprise_supervisor::Settings,
@@ -347,6 +348,7 @@ impl Service {
             learner: crate::coordinator_learning::Learner::new(db)?,
             student: crate::student_learning::Student::new(db)?,
             sniper_opportunities: crate::sniper_opportunities::Recorder::default(),
+            sniper_tick_audit: crate::sniper_tick_audit::Audit::default(),
             portfolio,
             portfolio_state,
             // Cache policy once; never query/CREATE a SQLite table per Sniper tick.
@@ -385,6 +387,7 @@ impl Service {
     pub fn set_mode(&mut self, mode: braintrade_domain::trading::TradingMode) {
         self.inner.set_mode(mode);
         self.fast = None; // Never execute a new selection using a previous cached config.
+        self.sniper_tick_audit=crate::sniper_tick_audit::Audit::default();
     }
 
     fn save_portfolio(db: &Connection, candidate: &PortfolioLimits) -> Result<()> {
@@ -508,6 +511,7 @@ impl Service {
                     crate::enterprise_supervisor::assess(&self.supervisor,Some(telemetry),config,&candle_frames,now).entry_allowed)
             }
         } else {false};
+        self.sniper_tick_audit.clear_on_identity_change(telemetry);
         self.inner
             .observe(db, telemetry, config, entries_allowed, frames, now)?;
         // Immutable Demo coordinator policy is a separate prospective study.
@@ -729,6 +733,17 @@ impl Service {
             }
             return Ok(quality);
         }
+        if method=="GET" && path=="/v1/execution/sniper-tick-audit" {
+            let scoped=status.telemetry.as_ref().filter(|t|
+                status.gateway_fresh && self.account_matches(status)
+                && t.connected && t.demo && t.account_trade_mode==Some(0)
+                && self.inner.active_mode==Some(braintrade_domain::trading::TradingMode::Sniper)
+                && self.fast.as_ref().is_some_and(|f|
+                    f.config.trading.mode==braintrade_domain::trading::TradingMode::Sniper
+                    && f.telemetry.login==t.login && f.telemetry.server==t.server
+                    && f.telemetry.currency==t.currency && f.telemetry.symbol==t.symbol));
+            return Ok(self.sniper_tick_audit.report(scoped,now));
+        }
         if method=="GET" && path=="/v1/execution/mode-evidence" {
             // No REAL, stale or cross-bound data may be used as evidence
             // for any of the four coordinators' Demo results.
@@ -806,6 +821,9 @@ impl Service {
                 &pulse_status,
                 now,
             )?;
+            // No SQLite writes on Sniper hot path; this is bounded in-memory
+            // accepted-pulse observation only. A failed Core pulse is not counted.
+            self.sniper_tick_audit.observe(&next.telemetry,body,now);
             work["pulse_fast_path"] = json!(true);
             work["pulse_to_work_us"] = json!(started.elapsed().as_micros() as u64);
             return Ok(work);
