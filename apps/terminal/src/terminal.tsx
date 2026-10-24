@@ -111,6 +111,7 @@ export default function Terminal(){
  const [settingsEdit,setSettingsEdit]=useState<Record<string,unknown>|null>(null);
  const [settingsScope,setSettingsScope]=useState<string|null>(null);
  const [telegramToken,setTelegramToken]=useState('');const [clearTelegram,setClearTelegram]=useState(false);
+ const [telegramDraftScope,setTelegramDraftScope]=useState<string|null>(null);
  const dialogRef=useRef<HTMLDivElement|null>(null);
  const [allOpen,setAllOpen]=useState(false);
  const contextKey=`${status?.telemetry?.login??'unknown'}:${status?.telemetry?.server??'offline'}:${status?.telemetry?.symbol??'none'}:${status?.telemetry?.currency??'unknown'}:${status?.telemetry?.account_trade_mode??'unknown'}:${status?.telemetry?.demo??'unknown'}:${online}:${status?.gateway_fresh??false}:${status?.telemetry?.connected??false}`;
@@ -119,6 +120,8 @@ export default function Terminal(){
  const safeConfig=configScope===contextKey?config:null;
  const safeRiskSnapshot=riskScope===contextKey?riskSnapshot:null;
  const activeSettingsEdit=settingsScope===contextKey?settingsEdit:null;
+ const activeTelegramToken=!preview&&telegramDraftScope===contextKey?telegramToken:'';
+ const activeClearTelegram=!preview&&telegramDraftScope===contextKey?clearTelegram:false;
  const showStartConfirm=approvalIsCurrent(approval,'start',contextKey)&&!preview;
  const showStopConfirm=approvalIsCurrent(approval,'stop',contextKey)&&!preview;
  const showExitConfirm=approvalIsCurrent(approval,'exit',contextKey)&&!preview;
@@ -340,7 +343,7 @@ export default function Terminal(){
  };
  const saveGeneral=async()=>{
   if(!activeSettingsEdit||preview||!hasTauri()){sendNotice('احفظ فقط بعد تحميل إعدادات Core للحساب الحالي',true);return}
-  setBusy(true);const writeTicket=scopedGeneration.current.beginRead('config');try{await saveSettings(activeSettingsEdit,telegramToken,clearTelegram);const latest=unwrap(await readPanel('/v1/config'));if(scopedGeneration.current.isCurrent(writeTicket)){scopedGeneration.current.invalidate('risk');setConfig(unwrap(latest.config));setConfigScope(contextKey);setSettingsEdit(unwrap(latest.config));setSettingsScope(contextKey);setRiskSnapshot(null);setTelegramToken('');setClearTelegram(false);}sendNotice('تم حفظ الإعدادات لدى Core. إعادة الاتصال قيد التنفيذ.');}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
+  setBusy(true);const writeTicket=scopedGeneration.current.beginRead('config');try{await saveSettings(activeSettingsEdit,activeTelegramToken,activeClearTelegram);const latest=unwrap(await readPanel('/v1/config'));if(scopedGeneration.current.isCurrent(writeTicket)){scopedGeneration.current.invalidate('risk');setConfig(unwrap(latest.config));setConfigScope(contextKey);setSettingsEdit(unwrap(latest.config));setSettingsScope(contextKey);setRiskSnapshot(null);setTelegramToken('');setClearTelegram(false);setTelegramDraftScope(null);}sendNotice('تم حفظ الإعدادات لدى Core. إعادة الاتصال قيد التنفيذ.');}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
  };
  const runHandoff=async(active:boolean)=>{
   if(preview){sendNotice('التحويل الحقيقي غير متاح في المعاينة',true);return}
@@ -457,13 +460,13 @@ export default function Terminal(){
           <DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/risk/monitor')}/>
          </div>:
         page==='settings'||page==='telegram'?<div className="editor-panel"><p>إعدادات V4 المحفوظة محلياً لدى Rust Core — لا تُعرض بيانات Telegram السرية.</p>
-           <label>مسار MT5 Terminal64.exe<input value={String(activeSettingsEdit?.mt5_path||'')} onChange={e=>setSettingsEdit(s=>({...s,mt5_path:e.target.value}))}/></label>
-           <label>رمز التداول<input value={String(activeSettingsEdit?.symbol||'')} onChange={e=>setSettingsEdit(s=>({...s,symbol:e.target.value}))}/></label>
-           <label>Telegram Chat ID<input value={String(activeSettingsEdit?.telegram_chat_id||'')} onChange={e=>setSettingsEdit(s=>({...s,telegram_chat_id:e.target.value}))}/></label>
-           <label>Telegram User ID<input value={String(activeSettingsEdit?.telegram_user_id||'')} onChange={e=>setSettingsEdit(s=>({...s,telegram_user_id:e.target.value}))}/></label>
-           <label>Bot token (اكتب فقط عند الاستبدال)<input type="password" value={telegramToken} autoComplete="new-password" onChange={e=>setTelegramToken(e.target.value)}/></label>
-           <label className="check-label"><input type="checkbox" checked={Boolean(activeSettingsEdit?.telegram_enabled)} onChange={e=>setSettingsEdit(s=>({...s,telegram_enabled:e.target.checked}))}/>تفعيل تنبيهات Telegram</label>
-           <label className="check-label"><input type="checkbox" checked={clearTelegram} onChange={e=>setClearTelegram(e.target.checked)}/>حذف رمز Telegram المحفوظ</label>
+           <label>مسار MT5 Terminal64.exe<input value={String(activeSettingsEdit?.mt5_path||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>setSettingsEdit(s=>({...s,mt5_path:e.target.value}))}/></label>
+           <label>رمز التداول<input value={String(activeSettingsEdit?.symbol||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>setSettingsEdit(s=>({...s,symbol:e.target.value}))}/></label>
+           <label>Telegram Chat ID<input value={String(activeSettingsEdit?.telegram_chat_id||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>setSettingsEdit(s=>({...s,telegram_chat_id:e.target.value}))}/></label>
+           <label>Telegram User ID<input value={String(activeSettingsEdit?.telegram_user_id||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>setSettingsEdit(s=>({...s,telegram_user_id:e.target.value}))}/></label>
+           <label>Bot token (اكتب فقط عند الاستبدال)<input type="password" value={activeTelegramToken} disabled={!activeSettingsEdit||busy||preview} autoComplete="new-password" onChange={e=>{setTelegramDraftScope(contextKey);setTelegramToken(e.target.value)}}/></label>
+           <label className="check-label"><input type="checkbox" checked={Boolean(activeSettingsEdit?.telegram_enabled)} disabled={!activeSettingsEdit||busy||preview} onChange={e=>setSettingsEdit(s=>({...s,telegram_enabled:e.target.checked}))}/>تفعيل تنبيهات Telegram</label>
+           <label className="check-label"><input type="checkbox" disabled={!activeSettingsEdit||busy||preview} checked={activeClearTelegram} onChange={e=>{setTelegramDraftScope(contextKey);setClearTelegram(e.target.checked)}}/>حذف رمز Telegram المحفوظ</label>
            <button className="save-button" disabled={busy||preview||!activeSettingsEdit} onClick={()=>void saveGeneral()}>حفظ وإعادة ربط MT5</button>
           </div>:
         page==='trading'||page==='sniper'?<div className="feature-zone"><div className="live-indicator"><strong>Sniper Priority</strong><span>{display?.analysis?.regime||'UNAVAILABLE'}</span><b>{display?.analysis?.action||'WAIT'}</b></div><p>العقل المنفّذ الوحيد يختاره Core، وأي تبديل أثناء التشغيل يحتاج أوامر MT5 مُسوّاة وعدم وجود مراكز مفتوحة.</p><TradingSettingsOperations source={pageData} disabled={busy||preview} armed={status?.requested_run===true} apply={runSaveTrading}/><div className="quick-ops"><button disabled={busy||preview} onClick={()=>void runHandoff(true)}>تفعيل أولوية القناص</button><button disabled={busy||preview} onClick={()=>void runHandoff(false)}>تحويل التنفيذ للبديل</button></div><div className="safe-note">هذه الأزرار تستدعي قواعد التحويل الفعلية في Rust؛ لا يوجد تجاوز لفحوصات المحرك.</div><EnterpriseSupervisor preview={preview} armed={status?.requested_run===true}/><Table rows={rows}/></div>:
