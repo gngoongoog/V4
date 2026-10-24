@@ -30,7 +30,7 @@ export function MicroCapitalOperations({status,risk,portfolio,armed,disabled,onS
  };
  const view=smallAccountPreview(status,risk,Number(scenario));
  const save=async(e:FormEvent)=>{
-  e.preventDefault();
+  e.preventDefault();if(armed||disabled)return;
   try{
    if(!edit||!hasSource)throw Error('بيانات المحفظة من Core غير متاحة');
    const next=validatePortfolio(edit);
@@ -43,7 +43,7 @@ export function MicroCapitalOperations({status,risk,portfolio,armed,disabled,onS
   <h3><Wallet size={18}/> التحكم بالحساب الصغير — Micro REAL / DEMO</h3>
   <p>ماكو حد إيداع يفرضه هذا القسم: ممكن تبدأ بحساب 50 أو 100 من عملة الوسيط إذا شروط العقد والهامش تسمح. فحص Core وMT5 النهائي يبقى إلزامياً.</p>
   <div className="execution-binding-summary">
-   نوع MT5: <b>{view.accountType}</b> · Equity: <b>{shown(view.equity)} {view.currency}</b> · الرافعة الحقيقية: <b>{view.leverage===null?'غير متاحة':`1:${view.leverage}`}</b>
+   نوع MT5: <b>{view.accountType}</b> · رقم الحساب <b>{view.login??'—'}</b> · الخادم <b>{view.server||'—'}</b> · Equity: <b>{shown(view.equity)} {view.currency}</b> · الرافعة الحقيقية: <b>{view.leverage===null?'غير متاحة':`1:${view.leverage}`}</b>
   </div>
   <div className="operator-grid">
    <label>رافعة للمقارنة فقط — لا تغيّر الوسيط
