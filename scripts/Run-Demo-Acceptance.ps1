@@ -96,7 +96,7 @@ New-Item -ItemType Directory -Path $ResolvedOutput -Force | Out-Null
 
 Write-Section "Runtime preflight"
 $ImportReport = Join-Path $ResolvedOutput "runtime-import-check.json"
-& $Python $Collector $ImportReport
+& $Python -B $Collector $ImportReport
 if ($LASTEXITCODE -ne 0) {
     Stop-WithError "Embedded Python/NumPy/MetaTrader5 import check failed. See $ImportReport" $LASTEXITCODE
 }
@@ -120,7 +120,7 @@ if ($Reset) {
 Write-Section "Read-only Demo capture"
 Write-Host "Open BrainTradeNext.exe first and bind the currently connected MT5 account as DEMO."
 Write-Host "The normal BrainTrade runtime may trade only if YOU already armed it; this launcher never arms execution."
-& $Python @CollectorArgs
+& $Python -B @CollectorArgs
 $CollectorExit = $LASTEXITCODE
 
 $ReportPath = Join-Path $ResolvedOutput "demo-acceptance-latest.json"
