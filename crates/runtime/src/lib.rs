@@ -10,6 +10,7 @@ mod sniper_latency_audit;
 mod sniper_deal_link_audit;
 mod sniper_policy_quality;
 mod sniper_opportunities;
+mod sniper_tick_audit;
 mod sniper_blocker_review;
 mod sniper_demo_lineage;
 mod trade_journal;
