@@ -79,6 +79,20 @@ impl Engine {
     pub fn training_account_matches(&self,expected:&str)->bool{
         !expected.is_empty()&&self.account==expected
     }
+    /// Deterministic JSON-safe ordered model-score snapshot. The low-latency
+    /// quote deque is explicitly omitted: only broker-trained weights belong
+    /// in the immutable research artifact. BTreeMap iteration is stable.
+    pub fn frozen_research_scores(&self)->serde_json::Value {
+        let policies=self.models.iter().map(|((definition,regime),scores)|{
+            json!({"definition":definition,"regime":regime,"arms":scores})
+        }).collect::<Vec<_>>();
+        let targets=self.target_models.iter().map(|((definition,regime,policy),scores)|{
+            json!({"definition":definition,"regime":regime,
+                "policy":policy,"arms":scores})
+        }).collect::<Vec<_>>();
+        json!({"schema":"p1k5d-sniper-policy-scores-v1",
+            "context":self.account,"policies":policies,"target_arms":targets})
+    }
     pub fn reset_quotes(&mut self) { self.quotes.clear(); }
 
     /// Independent research copy of the currently learned Demo policy.
