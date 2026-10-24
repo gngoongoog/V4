@@ -1214,10 +1214,11 @@ mod tests {
         let status=Status{requested_run:true,gateway_fresh:true,
             telemetry:Some(t.clone()),..Default::default()};
         let key=context(&t);
+        let revision=service.inner.settings.revision;
         let insert=|id:&str,kind:&str,state:&str,created:u64,result:&str|{
             let payload=json!({"id":id,"kind":kind,"brain":"system",
                 "trading_mode":"sniper","context":key,
-                "revision":service.inner.settings.revision,
+                "revision":revision,
                 "created_ms":created,"expires_ms":1_000_000_u64});
             db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload,result)
                 VALUES(?1,?2,'system',?3,?4,?5,?6,?7)",
