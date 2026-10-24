@@ -1206,6 +1206,11 @@ mod tests {
         let mut t=telemetry();
         t.demo=false;t.account_trade_mode=Some(2);
         t.trade_allowed=true;t.trade_expert=true;
+        // Synthetic 1970 timestamp requires a matching, complete daily PnL
+        // snapshot; otherwise the independent REAL daily breaker correctly
+        // denies authorization before the new quality circuit is exercised.
+        t.report_day="1970-01-01".into();
+        t.today_net=Some(0.);
         service.inner.settings.target="live".into();
         service.inner.settings.login=t.login;
         service.inner.settings.server=t.server.clone();
