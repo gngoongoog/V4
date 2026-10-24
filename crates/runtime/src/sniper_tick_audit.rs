@@ -3,21 +3,9 @@
 //! It CANNOT determine how many market ticks were missed between observations.
 //! Deliberately memory-only: no SQLite writes or broker-path IO per hot pulse.
 use braintrade_domain::Telemetry;
-use serde::Deserialize;
 use serde_json::{json,Value};
 
 const OBSERVATION_GAP_MS:u64=1500;
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Envelope {
-    // Only fields additional to the already validated Fast Pulse contract
-    // are interpreted; unknown trader-controlled content is not trusted.
-    #[serde(default)]
-    quote_source:Option<String>,
-    #[serde(default)]
-    native_dropped_total:Option<u64>,
-}
 #[derive(Default)]
 pub struct Audit {
     context:String,
