@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 use braintrade_domain::{Analysis, Candle, Telemetry};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
-use std::{collections::HashSet, fs, io::Write, path::Path};
+use std::{collections::HashSet, fs, io::Write, path::{Path, PathBuf}};
 
 const FEATURE_SCHEMA: &str = "gold-m1-feature-v1";
 const LABEL_SCHEMA: &str = "gold-m1-outcome-v1";
@@ -14,6 +14,28 @@ const HORIZONS: [u64; 3] = [5, 15, 30];
 #[derive(Default)]
 pub struct Service {
     last_error: String,
+}
+
+/// A partially generated training export must not survive a failed validation,
+/// full disk, interrupted write, or final rename error. Created before the file
+/// and SQLite handles, so those handles close before cleanup on Windows.
+struct DatasetExportStaging {
+    path: PathBuf,
+    promoted: bool,
+}
+
+impl DatasetExportStaging {
+    fn new(path: &Path) -> Self {
+        Self { path: path.to_path_buf(), promoted: false }
+    }
+}
+
+impl Drop for DatasetExportStaging {
+    fn drop(&mut self) {
+        if !self.promoted {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 }
 
 /// The immutable learning dataset belongs to an exact *verified* broker mode.
@@ -166,7 +188,7 @@ impl Service{
         Ok(json!({"version":"learning-foundation-v1","feature_schema":FEATURE_SCHEMA,"label_schema":LABEL_SCHEMA,"snapshots":snapshots,"mode_verified_snapshots":mode_verified_snapshots,"legacy_unverified_snapshots":legacy_unverified_snapshots,"matured_labels":labels,"pending_labels":snapshots-labels,"models":models,"champion":champion,"challenger":challenger,"recent_models":recent,"latest":latest.map(|(bar_time,captured_ms,schema)|json!({"bar_time":bar_time,"captured_ms":captured_ms,"schema":schema})),"last_error":self.last_error,"training_enabled":false,"prediction_enabled":false,"champion_promotion_enabled":false,"live_self_modification":false,"note":"Registry accepts validated unreviewed challengers only. No model can influence Shadow."}))
     }
     pub fn export(&self,db:&Connection,dir:&Path,now:u64)->Result<Value>{
-        let name=format!("learning-dataset-{now}");let staging=dir.join("exports").join(format!(".{name}.tmp"));let destination=dir.join("exports").join(&name);if staging.exists()||destination.exists(){bail!("Learning export path already exists");}fs::create_dir_all(&staging)?;let mut output=fs::File::create(staging.join("dataset.jsonl"))?;
+        let name=format!("learning-dataset-{now}");let staging=dir.join("exports").join(format!(".{name}.tmp"));let destination=dir.join("exports").join(&name);if staging.exists()||destination.exists(){bail!("Learning export path already exists");}fs::create_dir_all(&staging)?;let mut staging_guard=DatasetExportStaging::new(&staging);let mut output=fs::File::create(staging.join("dataset.jsonl"))?;
         let mut statement=db.prepare("SELECT s.id,s.context,s.bar_time,s.captured_ms,s.feature_schema,s.features,l.matured_ms,l.label_schema,l.label FROM learning_snapshots s JOIN learning_labels l ON l.snapshot_id=s.id ORDER BY s.context,s.bar_time,s.id")?;let mut rows=statement.query([])?;let mut count=0usize;let mut excluded_legacy=0usize;let mut excluded_schema=0usize;
         while let Some(r)=rows.next()?{let raw_context:String=r.get(1)?;if !verified_study_context(&raw_context){excluded_legacy+=1;continue;}
         // The manifest declares one immutable feature/label schema. Never blend
@@ -176,7 +198,7 @@ impl Service{
             continue;
         }
         let features:Value=serde_json::from_str(&r.get::<_,String>(5)?)?;let label:Value=serde_json::from_str(&r.get::<_,String>(8)?)?;writeln!(output,"{}",json!({"snapshot_id":r.get::<_,i64>(0)?,"context":raw_context,"bar_time":r.get::<_,u64>(2)?,"captured_ms":r.get::<_,u64>(3)?,"feature_schema":r.get::<_,String>(4)?,"features":features,"matured_ms":r.get::<_,u64>(6)?,"label_schema":r.get::<_,String>(7)?,"label":label}))?;count+=1;}output.sync_all()?;drop(output);
-        fs::write(staging.join("manifest.json"),serde_json::to_vec_pretty(&json!({"version":"learning-foundation-v1","feature_schema":FEATURE_SCHEMA,"label_schema":LABEL_SCHEMA,"rows":count,"excluded_legacy_or_unverified_rows":excluded_legacy,"excluded_incompatible_schema_rows":excluded_schema,"created_ms":now,"ordering":"context,bar_time,snapshot_id","scope":"matured, broker-mode-verified labels only; legacy unidentified modes excluded; no quote/DOM/news features","trained_model_included":false}))?)?;drop(rows);drop(statement);fs::rename(staging,&destination)?;Ok(json!({"path":destination,"rows":count,"excluded_legacy_or_unverified_rows":excluded_legacy,"excluded_incompatible_schema_rows":excluded_schema,"note":"Only matured labels with verified broker mode and exact schema exported. Legacy rows retained in DB but excluded from training export."}))
+        fs::write(staging.join("manifest.json"),serde_json::to_vec_pretty(&json!({"version":"learning-foundation-v1","feature_schema":FEATURE_SCHEMA,"label_schema":LABEL_SCHEMA,"rows":count,"excluded_legacy_or_unverified_rows":excluded_legacy,"excluded_incompatible_schema_rows":excluded_schema,"created_ms":now,"ordering":"context,bar_time,snapshot_id","scope":"matured, broker-mode-verified labels only; legacy unidentified modes excluded; no quote/DOM/news features","trained_model_included":false}))?)?;drop(rows);drop(statement);fs::rename(&staging,&destination)?;staging_guard.promoted=true;Ok(json!({"path":destination,"rows":count,"excluded_legacy_or_unverified_rows":excluded_legacy,"excluded_incompatible_schema_rows":excluded_schema,"note":"Only matured labels with verified broker mode and exact schema exported. Legacy rows retained in DB but excluded from training export."}))
     }
 }
 
@@ -237,6 +259,31 @@ mod p0j_learning_context_tests {
         std::fs::remove_file(filename).unwrap();
     }
 
+
+
+    #[test]
+    fn damaged_json_export_failure_is_atomic_retryable_and_keeps_source_db() {
+        let db=Connection::open_in_memory().unwrap();
+        let service=Service::new(&db).unwrap();
+        let key=context(&broker(true,Some(0))).unwrap();
+        db.execute("INSERT INTO learning_snapshots(id,context,bar_time,captured_ms,feature_schema,reference_close,atr,features) VALUES(1,?1,600,700,?2,2500,1,'corrupt-json')",
+            params![key,FEATURE_SCHEMA]).unwrap();
+        db.execute("INSERT INTO learning_labels(snapshot_id,matured_ms,label_schema,label) VALUES(1,1000,?1,'{}')",
+            params![LABEL_SCHEMA]).unwrap();
+        let root=std::env::temp_dir().join(format!("braintrade-learning-cleanup-{}",uuid::Uuid::new_v4()));
+        let staging=root.join("exports/.learning-dataset-2000.tmp");
+        let final_dir=root.join("exports/learning-dataset-2000");
+        assert!(service.export(&db,&root,2000).is_err());
+        assert!(!staging.exists(),"Failed export must not leave a partial dataset");
+        assert!(!final_dir.exists(),"Failed export must not appear successful");
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM learning_snapshots",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        db.execute("UPDATE learning_snapshots SET features='{}' WHERE id=1",[]).unwrap();
+        let success=service.export(&db,&root,2000).unwrap();
+        assert_eq!(success["rows"],1);
+        assert!(final_dir.join("manifest.json").is_file());
+        assert!(!staging.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn learning_export_quarantines_incompatible_feature_and_label_schema() {
