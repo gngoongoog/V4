@@ -165,6 +165,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'V25 P0-J durable SQLite research isolation/restart test failed' }
           cargo test --locked -p braintrade-runtime training_export_skips_untagged_legacy_rows_and_preserves_them_in_db
           if ($LASTEXITCODE -ne 0) { throw 'V25 P0-J legacy learning export quarantine test failed' }
+          cargo test --locked -p braintrade-runtime learning_export_quarantines_incompatible_feature_and_label_schema
+          if ($LASTEXITCODE -ne 0) { throw 'V25 P0-K training schema quarantine regression failed' }
       - name: Promote tested V23 build outputs to V25 P0 portable and verify archive
         shell: pwsh
         run: |
