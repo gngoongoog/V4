@@ -6,6 +6,9 @@ on:
       - 'scripts/smoke_core.py'
       - 'scripts/check_learning.py'
       - 'crates/runtime/src/learning_review.rs'
+      - 'scripts/check_execution.py'
+      - 'scripts/check_flexible_demo.py'
+      - 'scripts/check_sniper_learner.py'
       - '.github/workflows/v25-p0o-core-smoke.yml'
   workflow_dispatch:
 permissions:
@@ -29,5 +32,12 @@ jobs:
           python-version: '3.13'
       - name: Build exact Rust Core from repository sources
         run: cargo build --locked -p braintrade-runtime --bin braintrade-core
-      - name: Verify STOP / stale account / M1 challenger / backup & restart without broker
-        run: python3 scripts/smoke_core.py
+      - name: Verify offline lifecycle, execution reconciliation and restart without broker
+        run: |
+          python3 scripts/smoke_core.py
+          python3 scripts/check_backup_restore.py
+          python3 scripts/check_studio.py
+          python3 scripts/check_execution.py
+          python3 scripts/check_priority_handoff.py
+          python3 scripts/check_flexible_demo.py
+          python3 scripts/check_sniper_learner.py
