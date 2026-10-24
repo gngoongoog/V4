@@ -731,12 +731,40 @@ class BrokerExecutor:
         start=work.get('history_from_ms',0);identity=work.get('account')
         if start and identity and time.monotonic()>=self.next_history:
             self.next_history=time.monotonic()+5
-            wanted=(identity['login'],identity['server'],identity['currency'])
+            # Broker sync is an attribution/learning input. Binding by login
+            # and server alone permits Demo/REAL switch in the middle of a read.
+            # Older Core responses without trade_mode are not safe to sync.
+            wanted=(identity.get('login'),identity.get('server'),identity.get('currency'))
+            mode=identity.get('trade_mode')
             until=min(clock_ms(),start+86_400_000)
-            if account_identity(mt5.account_info())==wanted:
+            def same_broker_mode():
+                account=mt5.account_info()
+                return (account is not None and type(mode) is int and mode in (0,2)
+                        and account_identity(account)==wanted
+                        and getattr(account,'trade_mode',None)==mode)
+            if same_broker_mode():
                 rows=mt5.history_deals_get(datetime.fromtimestamp(start/1000,timezone.utc),datetime.fromtimestamp(until/1000,timezone.utc))
-                if rows is not None and account_identity(mt5.account_info())==wanted:
+                if rows is not None and same_broker_mode():
                     fields=('ticket','position_id','magic','symbol','entry','type','time_msc','volume','price','profit','commission','swap','fee','reason')
-                    deals=[{k:getattr(d,k,0) for k in fields} for d in rows]
-                    api('/v1/execution/sync',dict(identity,deals=deals,until_ms=until))
+                    deals=[]
+                    reliable=True
+                    for d in rows:
+                        row={k:getattr(d,k,None) for k in fields}
+                        if row['type'] in (mt5.DEAL_TYPE_BUY,mt5.DEAL_TYPE_SELL):
+                            # Never synthesize missing fee/swap/commission as 0:
+                            # it can corrupt booked PnL and brain training data.
+                            for key in ('profit','commission','swap','fee'):
+                                value=row[key]
+                                if isinstance(value,bool):
+                                    reliable=False;break
+                                try:
+                                    valid=math.isfinite(float(value))
+                                except (TypeError,ValueError,OverflowError):
+                                    valid=False
+                                if value is None or not valid:
+                                    reliable=False;break
+                        if not reliable:break
+                        deals.append(row)
+                    if reliable and same_broker_mode():
+                        api('/v1/execution/sync',dict(identity,deals=deals,until_ms=until))
         return work.get('poll_ms',250)/1000
