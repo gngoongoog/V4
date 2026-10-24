@@ -21,6 +21,7 @@ try {
   Run python @('scripts/prepare-tauri-runtime.py')
   Run cargo @('test','--locked','-p','braintrade-domain','-p','braintrade-runtime','-p','braintrade-tauri')
   Run python @('-m','unittest','discover','-s','tests','-v')
+  Run python @('scripts/audit_v25_windows_pages.py','--output','test-output/v25/windows-page-matrix.json')
   # custom-protocol embeds the production frontend; no globally installed CLI.
   Run cargo @('build','--release','--locked','-p','braintrade-tauri','--bin','BrainTradeNext')
   Run git @('diff','--exit-code','--','Cargo.lock','apps/terminal/package-lock.json')
