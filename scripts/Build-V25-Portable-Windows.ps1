@@ -27,12 +27,18 @@ try {
   Run python @('scripts/package_v25.py','stage')
   $exe=Join-Path $root 'target/portable/BRAINTRADE_V4_ENTERPRISE_V25/BrainTradeNext.exe'
   $portable=Split-Path $exe
+  # P0-B/G2: never advertise the Acceptance Center unless its launcher,
+  # restricted read-only collector, CLI, GUI and Arabic manual are all staged.
+  Run python @('scripts/check_v25_acceptance_package.py','--portable',$portable,
+    '--output','test-output/v25/demo-acceptance-package.json')
   Run (Join-Path $portable 'runtime/python/python.exe') @((Join-Path $portable 'runtime/gateway/check_runtime.py'))
   Run python @('scripts/smoke_portable_core.py',$exe)
   # Relocation and spaces must not make Core resolve Gateway relative to cwd.
   $moved=Join-Path $root 'target/portable/Relocated V25 Space'
   if(Test-Path $moved){Remove-Item $moved -Recurse -Force}
   Move-Item $portable $moved
+  Run python @('scripts/check_v25_acceptance_package.py','--portable',$moved,
+    '--output','test-output/v25/demo-acceptance-relocated.json')
   Run python @('scripts/smoke_portable_core.py',(Join-Path $moved 'BrainTradeNext.exe'))
   Move-Item $moved $portable
   & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $portable 'DESKTOP_SHORTCUT.ps1')
