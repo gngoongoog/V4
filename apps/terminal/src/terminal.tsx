@@ -329,7 +329,14 @@ export default function Terminal(){
   try{await backtestAction(action,request);sendNotice(action==='start'?'بدأت مهمة التاريخ في Core؛ راقب تقدمها أدناه':'أُلغي الاختبار في Core');publishPanel(serial,await readPanel('/v1/backtest'))}
   catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
  };
- const changePreview=()=>{setPreview(v=>!v);setPage('dashboard');sendNotice('وضع المعاينة منفصل تماماً عن أوامر التداول')};
+ const changePreview=()=>{
+  // Preview is not an operator account. Discard pending consent and unsaved
+  // sensitive Telegram edits; never revive them after leaving demo visuals.
+  setApproval(null);setLiveLogin('');
+  setTelegramToken('');setClearTelegram(false);setTelegramDraftScope(null);
+  setPreview(v=>!v);setPage('dashboard');
+  sendNotice('وضع المعاينة منفصل تماماً عن أوامر التداول؛ أُلغيت التأكيدات ومسودات الأسرار');
+ };
  const open=(next:PageId)=>{setPage(next);setNotice('');setError('')};
  const saveRiskForm=async(risk:Record<string,unknown>)=>{
   if(!hasTauri()||preview){sendNotice('الإعدادات لا تُحفظ في وضع المعاينة',true);return}
