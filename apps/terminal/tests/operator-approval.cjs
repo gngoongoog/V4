@@ -57,6 +57,20 @@ for(const token of [
 ]){
  assert(ui.includes(token),'missing dialog/account guard: '+token);
 }
+for(const token of [
+ "const showStartConfirm=approvalIsCurrent(approval,'start',contextKey)&&!preview&&feed.broker",
+ "if(approval?.action==='start'&&(!feed.broker||approval.scope!==contextKey||preview))",
+ "const safeConfig=configScope===contextKey?config:null",
+ "const safeRiskSnapshot=riskScope===contextKey?riskSnapshot:null",
+ "const activeSettingsEdit=settingsScope===contextKey?settingsEdit:null",
+ "const activeTelegramToken=!preview&&telegramDraftScope===contextKey?telegramToken:''",
+ "const activeClearTelegram=!preview&&telegramDraftScope===contextKey?clearTelegram:false",
+ "await saveSettings(activeSettingsEdit,activeTelegramToken,activeClearTelegram)",
+ "disabled={busy||preview||!activeSettingsEdit}",
+ "key={contextKey} config={safeConfig?",
+]){
+ assert(ui.includes(token),'account-scoped read-only editor/secret regression: '+token);
+}
 assert(!ui.includes('setShowStartConfirm('),'legacy boolean approval must be removed');
 assert(!ui.includes('setShowStopConfirm('),'legacy boolean approval must be removed');
 assert(!ui.includes('setShowExitConfirm('),'legacy boolean approval must be removed');
