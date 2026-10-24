@@ -31,6 +31,8 @@ try {
   # restricted read-only collector, CLI, GUI and Arabic manual are all staged.
   Run python @('scripts/check_v25_acceptance_package.py','--portable',$portable,
     '--output','test-output/v25/demo-acceptance-package.json')
+  Run python @('scripts/check_v25_native_ea_package.py','--portable',$portable,
+    '--output','test-output/v25/native-ea-package.json')
   Run (Join-Path $portable 'runtime/python/python.exe') @((Join-Path $portable 'runtime/gateway/check_runtime.py'))
   Run python @('scripts/smoke_portable_core.py',$exe)
   # Relocation and spaces must not make Core resolve Gateway relative to cwd.
@@ -39,6 +41,8 @@ try {
   Move-Item $portable $moved
   Run python @('scripts/check_v25_acceptance_package.py','--portable',$moved,
     '--output','test-output/v25/demo-acceptance-relocated.json')
+  Run python @('scripts/check_v25_native_ea_package.py','--portable',$moved,
+    '--output','test-output/v25/native-ea-relocated.json')
   Run python @('scripts/smoke_portable_core.py',(Join-Path $moved 'BrainTradeNext.exe'))
   Move-Item $moved $portable
   & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $portable 'DESKTOP_SHORTCUT.ps1')
