@@ -9,7 +9,8 @@ import subprocess
 p = Path("crates/runtime/src/execution_legacy.rs")
 s = p.read_text(encoding="utf-8")
 tracked = subprocess.check_output(
-    ["git", "show", "HEAD:crates/runtime/src/execution_legacy.rs"], text=True
+    ["git", "show", "HEAD:crates/runtime/src/execution_legacy.rs"],
+    text=True, encoding="utf-8"
 )
 
 def segment(doc, start, end):
