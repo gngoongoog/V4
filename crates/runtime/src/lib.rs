@@ -14,6 +14,7 @@ mod sniper_tick_audit;
 mod sniper_frozen_tick;
 mod sniper_classic_forward;
 mod sniper_forward_direction;
+mod sniper_forward_journal;
 mod sniper_research_artifact;
 mod sniper_blocker_review;
 mod sniper_demo_lineage;
