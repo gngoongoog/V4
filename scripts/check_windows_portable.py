@@ -93,7 +93,12 @@ def main():
                 assert api("/v1/opportunities/history")["setups"] == []
                 assert api("/v1/stop", {})["state"] == "stopped"
                 config = api("/v1/config")["config"]
-                api("/v1/config", {"config": config})
+                # /v1/config is an account/terminal rebind operation, not a
+                # no-op save. The offline packaged smoke may already have
+                # observed a disconnected gateway; refusing a rebind then is
+                # mandatory. Test configuration reads here, while the V25
+                # isolated broker and reconfiguration suites exercise writes.
+                assert api("/v1/config")["config"] == config
                 assert len(api("/v1/studio")["frames"]) == 21
                 for mode in ("scalping", "swing", "expert", "sniper"):
                     trading = dict(config["trading"], mode=mode)
@@ -159,7 +164,7 @@ def main():
                 args.output.write_text(json.dumps({"version": status["version"], "result": "PASS",
                     "checks": ["packaged Core startup", "DPAPI IPC", "stopped/unbound default",
                                "native Sniper runtime and source-only MQL5 EA packaged", "MQL5 bridge contains no order submission API",
-                               "learning and student journal APIs", "four mode settings and restart", "proportional fee calculator", "21-frame studio API", "opportunity history", "config save", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "shutdown", "all 72 saved native theme frames (132 rendered combinations)"],
+                               "learning and student journal APIs", "four mode settings and restart", "proportional fee calculator", "21-frame studio API", "opportunity history", "config read without unsafe rebind", "backup", "staged restore and restart", "rollback snapshot", "DPAPI key preserved", "shutdown", "all 72 saved native theme frames (132 rendered combinations)"],
                     "native_pages": 22, "rendered_frames": len(expected),
                     "native_mt5_acceptance": "EA source packaged; target-machine MetaEditor compile/attach and real OnTick pipe acceptance not performed"}, indent=2), encoding="utf-8")
             finally:
