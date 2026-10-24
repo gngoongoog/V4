@@ -5,8 +5,8 @@ const ts=require('typescript');
 const path=require('node:path');
 const src=fs.readFileSync(path.join(__dirname,'../src/brain-evidence.ts'),'utf8');
 const js=ts.transpileModule(src,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}});
-const exports={};vm.runInNewContext(js.outputText,{exports});
-const fn=exports.brokerEvidence;
+const loaded={};vm.runInNewContext(js.outputText,{exports:loaded});
+const fn=loaded.brokerEvidence;
 const status={gateway_fresh:true,telemetry:{connected:true,demo:true,account_trade_mode:0,login:17,server:'Demo',symbol:'XAUUSD',currency:'USD'}};
 const quality={source:'Closed MT5 DEMO deal records; net=gross+commission+swap+fee',
  policy:'read_only',paper_and_forward_excluded:true,no_auto_promotion:true,
