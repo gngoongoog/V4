@@ -9,21 +9,21 @@ use rusqlite::Connection;
 use serde_json::{json,Value};
 
 pub(crate) fn enrich(view:&mut Value,db:&Connection,status:&Status,mode:TradingMode)->Result<()>{
+    // Read account metadata BEFORE borrowing the array mutably.
+    let context=view["context"].as_str().unwrap_or("").to_string();
+    let account_matches=view["account_matches"]==true;
+    let target_is_demo=view["settings"]["target"]=="demo";
+    let broker=status.telemetry.as_ref();
+    let exact_demo=broker.is_some_and(|t|t.connected && t.demo && t.account_trade_mode==Some(0))
+        && status.gateway_fresh && account_matches && target_is_demo && !context.is_empty();
+    let current_mode=broker.and_then(|t|t.account_trade_mode);
+    let no_account=!status.gateway_fresh||!account_matches;
     let expected:BTreeSet<String>=BRAINS.iter().map(|(id,_)|id.to_string()).collect();
     let rows=view["brains"].as_array_mut().ok_or_else(||anyhow::anyhow!("Brain list is missing"))?;
     let got:BTreeSet<String>=rows.iter().filter_map(|row|row["config"]["id"].as_str().map(str::to_owned)).collect();
     if rows.len()!=BRAINS.len() || got!=expected {
         bail!("Incomplete or duplicate brain inventory; refuse to report brain integrity");
     }
-    let context=view["context"].as_str().unwrap_or("").to_string();
-    let broker=status.telemetry.as_ref();
-    let exact_demo=broker.is_some_and(|t|t.connected && t.demo && t.account_trade_mode==Some(0))
-        && status.gateway_fresh
-        && view["account_matches"]==true
-        && view["settings"]["target"]=="demo"
-        && !context.is_empty();
-    let current_mode=broker.and_then(|t|t.account_trade_mode);
-    let no_account=!status.gateway_fresh||!view["account_matches"].as_bool().unwrap_or(false);
     let mut sampled=0u64;
     for row in rows {
         let id=row["config"]["id"].as_str().unwrap_or_default().to_string();
