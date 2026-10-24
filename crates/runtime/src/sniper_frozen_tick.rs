@@ -230,6 +230,31 @@ mod tests{
         assert_eq!(r["no_broker_orders"],true);
     }
     #[test]
+    fn two_same_tick_engines_produce_actual_compared_future_decisions_after_warmup(){
+        let (mut t,c,e)=fixture(100_000);
+        let mut trial=Study::default();
+        let mut adaptive=e.frozen_study_copy();
+        trial.freeze(&t,&c,&e,100_000).unwrap();
+        for step in 1..=12u64{
+            let ts=100_000+step*250;
+            t.source_quote_time_ms=Some(ts);
+            t.quote_time_ms=Some(ts);
+            t.bid=Some(2500.0+(step as f64)*0.03);
+            t.ask=Some(2500.2+(step as f64)*0.03);
+            let raw=adaptive.evaluate(&t,&c,ts+1);
+            trial.observe(&t,&c,Some(&raw),&meta("native",0),ts+1);
+        }
+        let report=trial.report(Some(&t),103_100);
+        assert_eq!(report["accepted_prospective_pulses"],12);
+        assert!(report["comparable_future_tick_decisions"].as_u64().unwrap()>0);
+        assert_eq!(report["side_disagreements"],0);
+        assert_eq!(report["readiness_disagreements"],0);
+        assert_eq!(report["target_or_stop_disagreements"],0);
+        assert_eq!(report["paper_pnl"],Value::Null);
+        assert_eq!(report["model_scores_frozen"],true);
+        assert_eq!(report["independent_oos"],false);
+    }
+    #[test]
     fn frozen_study_does_not_inherit_old_account_or_live_quotes(){
         let (mut t,c,e)=fixture(100_000);
         let mut s=Study::default();s.freeze(&t,&c,&e,100_000).unwrap();
