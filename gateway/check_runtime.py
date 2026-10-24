@@ -386,6 +386,33 @@ def build_report(metadata: dict, samples: dict, minimum_fast_samples: int):
         },
         "broker_result_states": _count(rows, "result_state"),
         "broker_retcodes": _count([row for row in rows if row.get("retcode") is not None], "retcode"),
+        # TARGET_MET below is *only* a local Sniper latency characterization;
+        # the G2 broker lifecycle gate is independent and requires authentic
+        # ticket/deal/fee/history evidence, not just a Gateway return code.
+        "broker_lifecycle_acceptance": {
+            "status": "NOT TESTED",
+            "read_only_collector": True,
+            "ready_for_real": False,
+            "observed_command_counts": {
+                "sent": len(sent),
+                "acknowledged_fill_or_partial": sum(
+                    row.get("result_state") in ("filled", "partial") for row in sent),
+                "broker_rejections_with_retcode": sum(
+                    row.get("result_state") == "rejected"
+                    and type(row.get("retcode")) is int for row in sent),
+                "unknown_requires_reconciliation": sum(
+                    row.get("result_state") == "unknown" for row in rows),
+                "close_command_results": sum(row.get("kind") == "close" for row in rows),
+            },
+            "unverified_requirements": [
+                "Exact Demo broker order and deal tickets linked to durable intent",
+                "Partial and timeout recovery without duplicate order_send",
+                "Position close and complete history_deals_get economics",
+                "Commission, swap, broker fees and net PnL from MT5 deal history",
+                "Restart, account switch and Native EA tick-source acceptance",
+            ],
+            "reason": "Core command/retcode and timing samples alone cannot certify an MT5 Demo send-fill-close-reconcile cycle.",
+        },
         "fast_path": {
             "timings": fast_timing,
             "sources": by_source,
