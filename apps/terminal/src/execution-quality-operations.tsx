@@ -27,6 +27,21 @@ export function ExecutionQualityOperations({status,report,disabled,onRefresh}:{
   <h3>جودة التنفيذ وسبب رفض أوامر الوسيط</h3>
   <p>سجل الأوامر الحقيقي المرتبط بالحساب والرمز الحالي، وليس نتائج Paper أو Shadow. الحالات غير المحسومة ليست رفضاً ولا تُعاد إرسالها تلقائياً.</p>
   {observed.ready?<div>
+   <div className="execution-binding-summary" aria-label="Core broker quality circuit">
+    <strong>قاطع جودة أوامر الوسيط داخل Rust Core:</strong>
+    <b>{observed.circuit?.state==='blocked'?'الدخول الجديد متوقف':
+        observed.circuit?.state==='ready'?'ضمن حدود الجودة':
+        observed.circuit?.state==='demo_advisory'?'مراقبة DEMO فقط':'حالة القاطع غير مؤكدة'}</b>
+    <small>{observed.circuit?.reason==='unresolved_broker_submission'?
+        'يوجد إرسال للوسيط غير محسوم: يجب التسوية ولا يوجد إعادة إرسال تلقائي':
+        observed.circuit?.reason==='repeated_broker_rejections'?
+        'ثلاثة رفضات وسيط مؤكدة أو أكثر خلال دقيقتين — الدخول الجديد مؤجل':
+        observed.circuit?.reason==='within_quality_limits'?
+        'لا توجد حالة حظر جودة مسجلة في هذه القراءة':
+        'لا توجد أدلة كافية لعرض حالة القاطع؛ فحوص Core وGateway إلزامية'}</small>
+    {observed.circuit&&<small>UNKNOWN غير محسومة: {observed.circuit.unknown} · رفضات وسيط حديثة: {observed.circuit.rejections}</small>}
+    <small>حماية Rust هذه لا توقف إغلاق الصفقات أو مصالحة الوسيط. القاطع الافتراضي على REAL إلزامي؛ وضع DEMO للمتابعة فقط.</small>
+   </div>
    <div className="operator-grid">
     <div>أحدث الأوامر <strong>{fmt(observed.sampleSize)}</strong></div>
     <div>المرفوضة <strong>{fmt(observed.rejects)}</strong></div>
