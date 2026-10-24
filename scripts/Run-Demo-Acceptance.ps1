@@ -118,7 +118,7 @@ if ($Reset) {
 }
 
 Write-Section "Read-only Demo capture"
-Write-Host "Open BrainTrade.exe first and bind the currently connected MT5 account as DEMO."
+Write-Host "Open BrainTradeNext.exe first and bind the currently connected MT5 account as DEMO."
 Write-Host "The normal BrainTrade runtime may trade only if YOU already armed it; this launcher never arms execution."
 & $Python @CollectorArgs
 $CollectorExit = $LASTEXITCODE
@@ -136,6 +136,8 @@ $Poll = $Report.fast_path.sources.poll
 
 Write-Section "Acceptance summary"
 Write-Host ("Result:                {0}" -f $Report.result)
+$BrokerGate = if ($null -ne $Report.broker_lifecycle_acceptance) { $Report.broker_lifecycle_acceptance.status } else { "NOT TESTED" }
+Write-Host ("MT5 Broker G2 cycle:    {0} (needs broker deal/history proof, not local timing)" -f $BrokerGate)
 Write-Host ("Sent Sniper opens:    {0}/{1}" -f $Report.sample_counts.sent_sniper_opens, $Report.sample_counts.minimum_fast_samples)
 Write-Host ("Queue-to-send P95:    {0}" -f (Format-Ms $Queue.p95))
 Write-Host ("Queue-to-send P99:    {0}" -f (Format-Ms $Queue.p99))
