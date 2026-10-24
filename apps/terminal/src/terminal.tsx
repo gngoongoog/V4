@@ -8,6 +8,7 @@ import DataExplorer from './data-explorer';
 import {BacktestOperations,BackupOperations,TradingSettingsOperations,BrainControlsOperations,ExecutionBindingOperations} from './operations';
 import {feedEvidence} from './feed';
 import {brokerEvidence} from './brain-evidence';
+import {ScopedReadFence} from './scoped-read-fence';
 import type {PageId,Status,Theme,Position} from './types';
 import {DESIGN_FIXTURE} from './mock';
 import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,backtestAction,saveTrading,updateBrainControl,bindExecution} from './bridge';
@@ -81,9 +82,11 @@ export default function Terminal(){
  const [settingsEdit,setSettingsEdit]=useState<Record<string,unknown>|null>(null);const [telegramToken,setTelegramToken]=useState('');const [clearTelegram,setClearTelegram]=useState(false);
  const [showStopConfirm,setShowStopConfirm]=useState(false);const [showExitConfirm,setShowExitConfirm]=useState(false);
  const [allOpen,setAllOpen]=useState(false);
- const contextKey=`${status?.telemetry?.login??'unknown'}:${status?.telemetry?.server??'offline'}:${status?.telemetry?.symbol??'none'}:${status?.telemetry?.currency??'unknown'}:${status?.telemetry?.account_trade_mode??'unknown'}:${status?.telemetry?.demo??'unknown'}`;
+ const contextKey=`${status?.telemetry?.login??'unknown'}:${status?.telemetry?.server??'offline'}:${status?.telemetry?.symbol??'none'}:${status?.telemetry?.currency??'unknown'}:${status?.telemetry?.account_trade_mode??'unknown'}:${status?.telemetry?.demo??'unknown'}:${online}:${status?.gateway_fresh??false}:${status?.telemetry?.connected??false}`;
  // Any page, broker-account or preview transition revokes unresolved manual reads.
  const viewGeneration=useRef(new PanelReadFence());
+ const scopedGeneration=useRef(new ScopedReadFence());
+ scopedGeneration.current.setScope(contextKey);
  const viewScope=JSON.stringify([page,contextKey,preview]);
  viewGeneration.current.setScope(viewScope);
  const panelSerial=()=>viewGeneration.current.beginRead();
@@ -101,6 +104,15 @@ export default function Terminal(){
   void readPanel(route).then(data=>publishPanel(serial,data)).catch(e=>rejectPanel(serial,e));
  };
  const sendNotice=(msg:string,isError=false)=>{if(isError)setError(msg);else{setNotice(msg);setError('')}};
+ const refreshBrainEvidence=async()=>{
+   const ticket=scopedGeneration.current.beginRead('brains');
+   try{
+     const result=unwrap(await readPanel('/v1/execution/brains'));
+     if(scopedGeneration.current.isCurrent(ticket))setBrainReport(result);
+   }catch{
+     if(scopedGeneration.current.isCurrent(ticket))setBrainReport(null);
+   }
+ };
  useEffect(()=>{document.body.dataset.theme=theme;localStorage.setItem('bt-theme',theme)},[theme]);
  useEffect(()=>{const t=setInterval(()=>setClock(new Date().toLocaleTimeString('en-GB',{hour12:false})),1000);setClock(new Date().toLocaleTimeString('en-GB'));return()=>clearInterval(t)},[]);
  useEffect(()=>{
@@ -113,17 +125,26 @@ export default function Terminal(){
  useEffect(()=>{
   if(!hasTauri())return;
   let active=true;
-  const get=(route:string,setter:(v:Record<string,unknown>|null)=>void)=>readPanel(route).then(v=>{if(active)setter(unwrap(v))}).catch(()=>{if(active)setter(null)});
+  const get=(channel:string,route:string,setter:(v:Record<string,unknown>|null)=>void)=>{
+    const ticket=scopedGeneration.current.beginRead(channel);
+    return readPanel(route).then(v=>{
+      if(active&&scopedGeneration.current.isCurrent(ticket))setter(unwrap(v));
+    }).catch(()=>{
+      if(active&&scopedGeneration.current.isCurrent(ticket))setter(null);
+    });
+  };
+  // Invalidate old account/mode snapshots synchronously with scope change.
   setRiskSnapshot(null);setLearning(null);setBrainReport(null);
-  void get('/v1/config',r=>{setConfig(r?unwrap(r.config):null);setSettingsEdit(r?unwrap(r.config):null)});
-  void get('/v1/risk/monitor',setRiskSnapshot);
-  void get('/v1/learning',setLearning);
-  void get('/v1/execution/brains',setBrainReport);
+  setConfig(null);setSettingsEdit(null);
+  void get('config','/v1/config',r=>{setConfig(r?unwrap(r.config):null);setSettingsEdit(r?unwrap(r.config):null)});
+  void get('risk','/v1/risk/monitor',setRiskSnapshot);
+  void get('learning','/v1/learning',setLearning);
+  void get('brains','/v1/execution/brains',setBrainReport);
   const t=setInterval(()=>{
     if(document.visibilityState==='visible'){
-      void get('/v1/risk/monitor',setRiskSnapshot);
-      void get('/v1/learning',setLearning);
-      void get('/v1/execution/brains',setBrainReport);
+      void get('risk','/v1/risk/monitor',setRiskSnapshot);
+      void get('learning','/v1/learning',setLearning);
+      void get('brains','/v1/execution/brains',setBrainReport);
     }
   },12000);
   return()=>{active=false;clearInterval(t)};
@@ -154,7 +175,8 @@ export default function Terminal(){
  const buys=positions.filter(p=>up(p.side)).length;const sells=positions.length-buys;
  const brokerResults=preview||!feed.broker?null:brokerEvidence(brainReport,status);
  const win=preview?76:brokerResults?.winRate??null;
- const drawdown=preview?4.2:online&&valid(riskSnapshot?.drawdown_percent)?Number(riskSnapshot?.drawdown_percent):null;
+ // Core daily-loss estimate is NOT verified maximum drawdown.
+ const drawdown=preview?4.2:null;
  const showLatency=preview?28:null; // quote age is NOT execution latency
  const visiblePositions=positions.filter(p=>filter==='all'||(filter==='buy'?up(p.side):!up(p.side)));
  const runCommand=async(action:'start'|'stop'|'reconnect',login?:string)=>{
@@ -275,7 +297,7 @@ export default function Terminal(){
         </>:<div className="ops-alt"><h3>{opsTab==='orders'?'مراقبة الأوامر':'خيارات النظام المتقدمة'}</h3><p>{opsTab==='orders'?'المراكز الفعلية والتسوية تأتي من Core وMT5.':'تغيير وضع التنفيذ وإعدادات القناص يتم بعد تحقق Core.'}</p><button className="quick-link" onClick={()=>open(opsTab==='orders'?'positions':'trading')}>فتح الصفحة ذات الصلة ←</button></div>}
        </div>
        <div className="panel-title slim"><b>إشارات الذكاء الاصطناعي</b><button onClick={()=>open('brains')}>عرض الكل ›</button></div>
-       <div className="brains-inline">{!preview&&online&&array(brainReport?.brains).length?array(brainReport?.brains).slice(0,6).map((brain,i)=>{const activity=unwrap(brain.activity),orders=unwrap(brain.attributed_orders);return <button type="button" className="brain-line brain-link" key={String(unwrap(brain.config).id||i)} onClick={()=>open('brainControl')}><span className="brain-dot"/><span className="brain-name">{String(brain.name||unwrap(brain.config).id||'Brain')}</span><span className="brain-active">إشارات {displayCell(activity.signals)}</span><span className="brain-score">تنفيذ {displayCell(orders.fill_acknowledged)}</span></button>}):<div className="table-empty">{preview?'معاينة: بيانات العقول الحقيقية معطلة':'بانتظار سجل العقول الحقيقي من Core'}</div>}</div>
+       <div className="brains-inline">{!preview&&feed.broker&&brainReport?.account_matches===true&&brainReport?.context===JSON.stringify([status?.telemetry?.server,status?.telemetry?.login,status?.telemetry?.symbol,status?.telemetry?.currency])&&array(brainReport?.brains).length?array(brainReport?.brains).slice(0,6).map((brain,i)=>{const activity=unwrap(brain.activity),orders=unwrap(brain.attributed_orders);return <button type="button" className="brain-line brain-link" key={String(unwrap(brain.config).id||i)} onClick={()=>open('brainControl')}><span className="brain-dot"/><span className="brain-name">{String(brain.name||unwrap(brain.config).id||'Brain')}</span><span className="brain-active">إشارات {displayCell(activity.signals)}</span><span className="brain-score">تنفيذ {displayCell(orders.fill_acknowledged)}</span></button>}):<div className="table-empty">{preview?'معاينة: بيانات العقول الحقيقية معطلة':'بانتظار سجل العقول الحقيقي من Core'}</div>}</div>
       </section>
      </div>
      <div className="activity-grid">
