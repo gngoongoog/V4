@@ -69,7 +69,7 @@ class ManifestDiagnostics(unittest.TestCase):
         self.assertEqual(result["status"],"FAIL")
 
     def test_html_report_includes_escaped_real_error_paths_and_total_count(self):
-        (self.root/"runtime/extra<script>.py").write_bytes(b"tampered")
+        (self.root/"runtime/extra&event.py").write_bytes(b"tampered")
         out=self.root.parent/("diag-"+self.root.name)
         try:
             report=VERIFIER.verify(self.root)
@@ -77,8 +77,8 @@ class ManifestDiagnostics(unittest.TestCase):
             page=(out/"v25-verification.html").read_text("utf-8")
             raw=json.loads((out/"v25-verification.json").read_text("utf-8"))
             self.assertIn("TOTAL PROBLEMS: 1",page)
-            self.assertIn("EXTRA UNLISTED: runtime/extra&lt;script&gt;.py",page)
-            self.assertNotIn("<script>",page)
+            self.assertIn("EXTRA UNLISTED: runtime/extra&amp;event.py",page)
+            self.assertNotIn("EXTRA UNLISTED: runtime/extra&event.py",page)
             self.assertEqual(raw["checks"]["sha256_manifest"]["problems_total"],1)
         finally:
             import shutil
