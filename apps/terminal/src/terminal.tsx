@@ -358,39 +358,79 @@ export default function Terminal(){
  };
  const open=(next:PageId)=>{setPage(next);setNotice('');setError('')};
  const saveRiskForm=async(risk:Record<string,unknown>)=>{
-  if(!hasTauri()||preview){sendNotice('الإعدادات لا تُحفظ في وضع المعاينة',true);return}
-  setBusy(true);const writeTicket=scopedGeneration.current.beginRead('config');try{await saveRisk(risk);const latest=unwrap(await readPanel('/v1/config'));if(scopedGeneration.current.isCurrent(writeTicket)){scopedGeneration.current.invalidate('risk');setConfig(unwrap(latest.config));setConfigScope(contextKey);setRiskSnapshot(null);}sendNotice('تم حفظ إعدادات المخاطر والتحقق من النسخة المسجلة في Rust Core');}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
+  if(!hasTauri()||preview||status?.requested_run){sendNotice('تعديل المخاطر يتطلب توقف الدخول وحساب Core فعلي',true);return}
+  const mutation=beginWrite('risk');if(!mutation)return;
+  try{
+   await saveRisk(risk);
+   if(!writeFresh(mutation))return;
+   const latest=unwrap(await readPanel('/v1/config'));
+   if(!writeFresh(mutation))return;
+   scopedGeneration.current.invalidate('risk');
+   setConfig(unwrap(latest.config));setConfigScope(contextKey);setRiskSnapshot(null);
+   sendNotice('تم حفظ إعدادات المخاطر والتحقق من النسخة المسجلة في Rust Core');
+  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
+  finally{finishWrite(mutation)}
  };
  const runSavePortfolio=async(input:Record<string,unknown>)=>{
-  if(preview||!hasTauri()||status?.requested_run){sendNotice('حدود المحفظة تحتاج STOP وتطبيق Windows الحقيقي',true);return;}
-  setBusy(true);
-  const ticket=scopedGeneration.current.beginRead('portfolio');
+  if(preview||!hasTauri()||status?.requested_run){sendNotice('حدود المحفظة تحتاج STOP وتطبيق Windows الحقيقي',true);return}
+  const mutation=beginWrite('portfolio');if(!mutation)return;
   try{
    await savePortfolio(validatePortfolio(input));
+   if(!writeFresh(mutation))return;
    const updated=unwrap(await readPanel('/v1/execution'));
-   if(scopedGeneration.current.isCurrent(ticket))setPortfolioReport(updated);
+   if(!writeFresh(mutation))return;
+   scopedGeneration.current.invalidate('portfolio');
+   setPortfolioReport(updated);
    sendNotice('تم حفظ حدود المحفظة الاختيارية في Rust Core');
-  }catch(e){sendNotice('تعذر حفظ حدود المحفظة: '+String(e),true)}
-  finally{setBusy(false);}
+  }catch(e){if(writeFresh(mutation))sendNotice('تعذر حفظ حدود المحفظة: '+String(e),true)}
+  finally{finishWrite(mutation)}
  };
  const saveGeneral=async()=>{
-  if(!activeSettingsEdit||preview||!hasTauri()){sendNotice('احفظ فقط بعد تحميل إعدادات Core للحساب الحالي',true);return}
-  setBusy(true);const writeTicket=scopedGeneration.current.beginRead('config');try{await saveSettings(activeSettingsEdit,activeTelegramToken,activeClearTelegram);const latest=unwrap(await readPanel('/v1/config'));if(scopedGeneration.current.isCurrent(writeTicket)){scopedGeneration.current.invalidate('risk');setConfig(unwrap(latest.config));setConfigScope(contextKey);setSettingsEdit(unwrap(latest.config));setSettingsScope(contextKey);setRiskSnapshot(null);setTelegramToken('');setClearTelegram(false);setTelegramDraftScope(null);}sendNotice('تم حفظ الإعدادات لدى Core. إعادة الاتصال قيد التنفيذ.');}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
+  if(!activeSettingsEdit||preview||!hasTauri()||status?.requested_run){sendNotice('احفظ فقط بعد تحميل إعدادات Core للحساب الحالي وفي وضع STOP',true);return}
+  const mutation=beginWrite('config');if(!mutation)return;
+  try{
+   await saveSettings(activeSettingsEdit,activeTelegramToken,activeClearTelegram);
+   if(!writeFresh(mutation))return;
+   const latest=unwrap(await readPanel('/v1/config'));
+   if(!writeFresh(mutation))return;
+   scopedGeneration.current.invalidate('risk');
+   setConfig(unwrap(latest.config));setConfigScope(contextKey);
+   setSettingsEdit(unwrap(latest.config));setSettingsScope(contextKey);
+   setRiskSnapshot(null);setTelegramToken('');setClearTelegram(false);setTelegramDraftScope(null);
+   sendNotice('تم حفظ الإعدادات لدى Core. إعادة الاتصال قيد التنفيذ.');
+  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
+  finally{finishWrite(mutation)}
  };
  const runHandoff=async(active:boolean)=>{
-  if(preview){sendNotice('التحويل الحقيقي غير متاح في المعاينة',true);return}
-  setBusy(true);try{await handoff(active);scopedGeneration.current.invalidate('brains');setBrainReport(null);void refreshBrainEvidence();sendNotice('تحويل أولوية القناص تم تأكيده من Core');}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
+  if(preview||!hasTauri()||status?.requested_run){sendNotice('تغيير المنسق يحتاج STOP داخل التطبيق الحقيقي',true);return}
+  const mutation=beginWrite('handoff');if(!mutation)return;
+  try{
+   await handoff(active);
+   if(!writeFresh(mutation))return;
+   scopedGeneration.current.invalidate('brains');setBrainReport(null);
+   void refreshBrainEvidence();
+   sendNotice('تحويل أولوية القناص تم تأكيده من Core');
+  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
+  finally{finishWrite(mutation)}
  };
  const runSaveTrading=async(input:Record<string,unknown>)=>{
-  if(preview||!hasTauri()){sendNotice('حفظ التكاليف يحتاج Core الأصلي',true);return}
-  const serial=panelSerial();setBusy(true);
+  if(preview||!hasTauri()||status?.requested_run){sendNotice('حفظ الوضع والتكاليف يحتاج STOP وCore الأصلي',true);return}
+  const mutation=beginWrite('trading');if(!mutation)return;
+  const serial=panelSerial();
   try{
    await saveTrading(input);
+   if(!writeFresh(mutation))return;
    const latest=unwrap(await readPanel('/v1/trading/settings'));
+   if(!writeFresh(mutation))return;
    const full=unwrap(latest.config);
-   publishPanel(serial,latest);if(viewGeneration.current.isCurrent(serial)){scopedGeneration.current.invalidate('config');scopedGeneration.current.invalidate('brains');setConfig(full);setConfigScope(contextKey);setBrainReport(null);void refreshBrainEvidence();}
+   publishPanel(serial,latest);
+   if(viewGeneration.current.isCurrent(serial)){
+    scopedGeneration.current.invalidate('config');scopedGeneration.current.invalidate('brains');
+    setConfig(full);setConfigScope(contextKey);setBrainReport(null);void refreshBrainEvidence();
+   }
    sendNotice('تم تأكيد وحفظ وضع المنسق والعمولة من Rust Core');
-  }catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
+  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
+  finally{finishWrite(mutation)}
  };
  const runSaveBrain=async(brain:string,advisor:boolean,paper:boolean)=>{
   if(preview||!hasTauri()||!status?.gateway_fresh||!status.telemetry||status.requested_run){sendNotice('أوقف التداول وانتظر اتصال MT5 حديث لإدارة العقول',true);return}
@@ -400,26 +440,36 @@ export default function Terminal(){
   const savedContext=String(unwrap(pageData).context||'');
   if(savedContext!==context){sendNotice('تغيّر الحساب؛ انتظر تحميل صفحة العقول للحساب الحالي',true);return}
   const mode=String(unwrap(pageData).trading_mode||'');
-  const serial=panelSerial();setBusy(true);
-  try{await updateBrainControl(context,brain,mode,advisor,paper);
+  const mutation=beginWrite('brain-control');if(!mutation)return;
+  const serial=panelSerial();
+  try{
+   await updateBrainControl(context,brain,mode,advisor,paper);
+   if(!writeFresh(mutation))return;
    scopedGeneration.current.invalidate('brains');setBrainReport(null);
    const ticket=scopedGeneration.current.beginRead('brains');
    const refreshed=unwrap(await readPanel('/v1/execution/brains'));
+   if(!writeFresh(mutation))return;
    publishPanel(serial,refreshed);
    if(scopedGeneration.current.isCurrent(ticket))setBrainReport(refreshed);
    sendNotice('تم حفظ مشاركة العقل في Core للحساب والوضع الحاليين');
-  }catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
+  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
+  finally{finishWrite(mutation)}
  };
  const runBrokerBind=async(target:'demo'|'live',deviationPoints:number,confirmLiveLogin:string)=>{
   if(preview||!hasTauri()||status?.requested_run){sendNotice('اربط حساب التنفيذ فقط بعد STOP ومن تطبيق Tauri الحقيقي',true);return}
-  const serial=panelSerial();setBusy(true);
+  const mutation=beginWrite('broker-binding');if(!mutation)return;
+  const serial=panelSerial();
   try{
    await bindExecution(target,deviationPoints,confirmLiveLogin);
+   if(!writeFresh(mutation))return;
+   const refreshed=await readPanel('/v1/execution');
+   if(!writeFresh(mutation))return;
    scopedGeneration.current.invalidate('brains');setBrainReport(null);
-   publishPanel(serial,await readPanel('/v1/execution'));
+   publishPanel(serial,refreshed);
    void refreshBrainEvidence();
    sendNotice('تم التحقق من حساب '+target.toUpperCase()+' وربط التنفيذ بواسطة Core؛ الربط وحده لا يفتح صفقة');
-  }catch(e){sendNotice('فشل ربط حساب التنفيذ: '+String(e),true)}finally{setBusy(false)}
+  }catch(e){if(writeFresh(mutation))sendNotice('فشل ربط حساب التنفيذ: '+String(e),true)}
+  finally{finishWrite(mutation)}
  };
  const health=buildHealth(status,online,preview,Boolean(safeConfig?.risk)&&Boolean(safeRiskSnapshot),lastStatusAt,Date.now());
  const pageMeta=findPage(page),PageIcon=pageMeta.icon;
