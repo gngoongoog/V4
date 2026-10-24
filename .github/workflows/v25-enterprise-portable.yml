@@ -16,6 +16,9 @@ on:
       - 'ci/v25_p0h_panel_generation_overlay.py'
       - 'ci/v25_p0i_panel_order_overlay.py'
       - 'ci/v25_p0j_learning_mode_overlay.py'
+      - 'ci/v25_p0n_train_manifest_overlay.py'
+      - 'scripts/train_linear_baseline.py'
+      - 'tests/test_p0n_certified_training_export.py'
       - 'crates/runtime/src/learning.rs'
       - 'crates/runtime/src/learning_inference.rs'
       - 'ci/v25_p0i_panel_guard.ts'
@@ -118,6 +121,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'V25 P0-F trading mode-scoped broker history source overlay failed' }
           python ci/v25_p0j_learning_mode_overlay.py
           if ($LASTEXITCODE -ne 0) { throw 'V25 P0-J learning snapshot mode isolation source drift or failed' }
+          python ci/v25_p0n_train_manifest_overlay.py
+          if ($LASTEXITCODE -ne 0) { throw 'V25 P0-N certified research trainer source drift or missing manifest gate' }
           python ci/v25_p0g_ui_context_overlay.py
           if ($LASTEXITCODE -ne 0) { throw 'V25 P0-G Tauri UI broker-mode context safety overlay failed' }
           python ci/v25_p0h_panel_generation_overlay.py
@@ -146,6 +151,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'V25 P0-E actual Windows pipe lifecycle regression failed' }
           python -m unittest discover -s tests -p test_p0f_history_sync_identity.py -v
           if ($LASTEXITCODE -ne 0) { throw 'V25 P0-F broker history account mode/fee regression failed' }
+          $env:PYTHONDONTWRITEBYTECODE='1'
+          python -m unittest discover -s tests -p test_p0n_certified_training_export.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'V25 P0-N offline trainer certification and Demo/REAL gate failed' }
+          python -m unittest discover -s tests -p test_feature_ablation.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'V25 P0-N offline ablation research compatibility test failed' }
           # The historical V23 build script resolves its incomplete Cargo.lock
           # during its normal cargo test; check --locked *after* that resolution.
           # We still block publication if either targeted Rust regression fails.
