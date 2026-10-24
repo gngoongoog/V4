@@ -99,7 +99,7 @@ export default function Terminal(){
  const [page,setPage]=useState<PageId>('dashboard');const [theme,setTheme]=useState<Theme>(()=>(localStorage.getItem('bt-theme') as Theme)||'dark');
  const [compact,setCompact]=useState(false);const [preview,setPreview]=useState(false);const [status,setStatus]=useState<Status|null>(null);
  const [online,setOnline]=useState(false);const [busy,setBusy]=useState(false);const [error,setError]=useState('');const [notice,setNotice]=useState('');
- const [pageData,setPageData]=useState<unknown>(null);const [pageError,setPageError]=useState('');const [pageUpdatedAt,setPageUpdatedAt]=useState<number|null>(null);
+ const [pagePanel,setPagePanel]=useState<{scope:string;data:unknown}|null>(null);const [pageError,setPageError]=useState('');const [pageUpdatedAt,setPageUpdatedAt]=useState<number|null>(null);
  const [config,setConfig]=useState<Record<string,unknown>|null>(null);const [riskSnapshot,setRiskSnapshot]=useState<Record<string,unknown>|null>(null);
  const [learning,setLearning]=useState<Record<string,unknown>|null>(null);const [brainReport,setBrainReport]=useState<Record<string,unknown>|null>(null);const [portfolioReport,setPortfolioReport]=useState<Record<string,unknown>|null>(null);const [executionQuality,setExecutionQuality]=useState<Record<string,unknown>|null>(null);const [filter,setFilter]=useState<'all'|'buy'|'sell'>('all');const [opsTab,setOpsTab]=useState<'trade'|'orders'|'advanced'>('trade');
  const [clock,setClock]=useState('');const [lastStatusAt,setLastStatusAt]=useState<number|null>(null);const [liveLogin,setLiveLogin]=useState('');const [showStartConfirm,setShowStartConfirm]=useState(false);
@@ -112,6 +112,11 @@ export default function Terminal(){
  const scopedGeneration=useRef(new ScopedReadFence());
  scopedGeneration.current.setScope(contextKey);
  const viewScope=JSON.stringify([page,contextKey,preview]);
+ // Render-fence: an old account/page result must not be visible for even a
+ // single React paint while the async effect schedules a replacement read.
+ // The existing generation fence separately prevents late callbacks writing.
+ const pageData=pagePanel?.scope===viewScope?pagePanel.data:null;
+ const setPageData=(data:unknown)=>setPagePanel({scope:viewScope,data});
  viewGeneration.current.setScope(viewScope);
  const panelSerial=()=>viewGeneration.current.beginRead();
  const publishPanel=(serial:number,result:unknown)=>{
@@ -331,8 +336,8 @@ export default function Terminal(){
  return <div className={'shell terminal-v15 '+(compact?'compact-nav':'')}>
  <aside className="sidebar"><div className="brand"><div className="brand-logo">BRAIN<span>TRADE</span> <b>V4</b></div><div className="brand-desc">Institutional Trading System</div></div>
   <nav id="sidebarNav" aria-label="قائمة صفحات BRAINTRADE">
-   {PAGES.filter((x,i)=>allOpen||i<11).map(x=>{const Icon=x.icon;return <button type="button" key={x.id} title={x.title} className={'nav-item '+(page===x.id?'selected':'')} onClick={()=>open(x.id)}><span className="nav-glyph"><Icon size={21} strokeWidth={1.9}/></span><span>{x.title}</span></button>})}
-   <button className="nav-item all-pages" onClick={()=>setAllOpen(v=>!v)}><Layers3 size={19}/><span>{allOpen?'إخفاء الصفحات الإضافية':'كل الصفحات الـ22'}</span></button>
+   {PAGES.filter((x,i)=>allOpen||i<11||x.id===page).map(x=>{const Icon=x.icon;return <button type="button" key={x.id} title={x.title} aria-current={page===x.id?'page':undefined} className={'nav-item '+(page===x.id?'selected':'')} onClick={()=>open(x.id)}><span className="nav-glyph"><Icon size={21} strokeWidth={1.9}/></span><span>{x.title}</span></button>})}
+   <button type="button" className="nav-item all-pages" aria-expanded={allOpen} aria-controls="sidebarNav" onClick={()=>setAllOpen(v=>!v)}><Layers3 size={19}/><span>{allOpen?'إخفاء الصفحات الإضافية':'كل الصفحات الـ22'}</span></button>
   </nav>
   <SystemHealth health={health} onOpen={open}/>
   <div className="sidebar-footer"><button type="button" className="safe-exit-button" onClick={()=>setShowExitConfirm(true)} disabled={busy||preview}>خروج كامل آمن</button><button type="button" className="safe-exit-button" onClick={()=>void closeTerminal()} disabled={!hasTauri()}>إغلاق الواجهة فقط</button><strong>BRAIN<span>TRADE</span> V4</strong><small>Tauri 2 + React + Rust</small><button className="compact-toggle" onClick={()=>setCompact(v=>!v)}>{compact?'توسيع القائمة':'طي القائمة'}</button></div>
