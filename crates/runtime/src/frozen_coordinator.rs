@@ -354,16 +354,50 @@ mod tests{
         assert_eq!(report(&db,&context(&different),TradingMode::Swing).unwrap()["status"],"not_started");
     }
     #[test]
+    fn legacy_expert_snapshots_without_mode_still_evaluate_future_bars(){
+        use braintrade_domain::Candle;
+        let db=fixture();
+        let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            login:17,server:"Demo".into(),symbol:"XAUUSD".into(),
+            currency:"USD".into(),tick_age_ms:Some(0),..Default::default()};
+        let c=Config::default();
+        let brains=vec![BrainConfig{id:"system".into(),..Default::default()}];
+        let trial=freeze(&db,&t,&c,&brains,&BTreeMap::new(),
+            &BTreeMap::new(),&BTreeMap::new(),123_000).unwrap();
+        let id=trial["run_id"].as_str().unwrap();
+        let raw:String=db.query_row(
+            "SELECT snapshot FROM frozen_coordinator_runs WHERE id=?1",
+            [id],|r|r.get(0)).unwrap();
+        let mut old:Value=serde_json::from_str(&raw).unwrap();
+        old.as_object_mut().unwrap().remove("mode");
+        assert_eq!(old["policy"],POLICY);
+        db.execute("UPDATE frozen_coordinator_runs SET snapshot=?2 WHERE id=?1",
+            params![id,old.to_string()]).unwrap();
+        let frames=BTreeMap::from([("M1".into(),vec![FrameBar{
+            candle:Candle{time:180,open:100.,high:101.,low:99.,
+                close:100.5,tick_volume:100},spread_points:10,real_volume:0
+        }])]);
+        let signal=Signal{brain:"system".into(),side:1,key:"legacy:180".into(),
+            bar_time:180,stop_distance:1.,target_distance:2.,
+            hold_ms:60000,reason:"legacy report".into(),ready:true,coordination:None};
+        observe(&db,&t,&c,&signal,&frames,241_000).unwrap();
+        let r=report(&db,&context(&t),TradingMode::Expert).unwrap();
+        assert_eq!(r["bars_compared"],1);
+        assert_eq!(r["mode"],"expert");
+        assert_eq!(r["no_broker_orders"],true);
+    }
+    #[test]
     fn real_or_sniper_cannot_start_m1_frozen_policy_trial(){
         let db=fixture();
         let mut t=Telemetry{connected:true,demo:false,account_trade_mode:Some(2),
+            login:17,server:"Demo".into(),currency:"USD".into(),
             tick_age_ms:Some(0),symbol:"XAUUSD".into(),..Default::default()};
         let mut c=Config::default();
         let b=vec![BrainConfig{id:"system".into(),..Default::default()}];
         assert!(freeze(&db,&t,&c,&b,&BTreeMap::new(),
             &BTreeMap::new(),&BTreeMap::new(),1).is_err());
         t.demo=true;t.account_trade_mode=Some(0);
-        c.trading.mode=TradingMode::Scalping;
+        c.trading.mode=TradingMode::Sniper;
         assert!(freeze(&db,&t,&c,&b,&BTreeMap::new(),
             &BTreeMap::new(),&BTreeMap::new(),1).is_err());
     }
