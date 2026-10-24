@@ -155,8 +155,17 @@ def main():
                     assert offline["state"] == "stopped"
                     assert not offline["execution_enabled"] and not offline["gateway_fresh"]
                     assert offline.get("last_received_ms") is not None or offline.get("telemetry") is not None
-                    process.terminate()
+                    # Core may have spawned the isolated Python gateway,
+                    # which holds broker-journal.sqlite open on Windows.
+                    # Kill only the exact disposable Core PID and its child
+                    # process tree, not a service or another MT5 terminal.
+                    if process.poll() is None:
+                        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                       check=False, timeout=15,
+                                       stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL)
                     process.wait(timeout=15)
+                    time.sleep(0.4)
                 subprocess.run([str(executable), "--render-check"], env=environment,
                                cwd=directory, check=True, timeout=180)
                 frames = directory / "test-output" / "native-ui"
