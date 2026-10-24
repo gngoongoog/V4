@@ -16,6 +16,8 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
  const t=status?.telemetry,view=obj(report);
  const forward=obj(view.forward_direction_audit);
  const training=obj(view.training_checkpoint);
+ const proof=obj(view.research_artifact);
+ const history=obj(view.research_artifact_history);
  const eligible=!preview&&eligibleFrozenSniper(status,page);
  const expected=t?JSON.stringify([t.server,t.login,t.symbol,t.currency]):'';
  const statusValue=view.status;
@@ -25,6 +27,15 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
     &&view.paper_pnl===null&&view.broker_pnl===null
     &&(statusValue==='active'||statusValue==='stopped');
  const active=scoped&&statusValue==='active';
+ const verifiedArtifact=scoped&&proof.schema==='p1k5d-sniper-freeze-artifact-v1'
+   &&proof.integrity==='verified'&&proof.id===view.research_artifact_id
+   &&proof.sha256===view.research_artifact_sha256
+   &&proof.independent_oos===false&&proof.broker_pnl===null
+   &&proof.no_broker_orders===true;
+ const archive=eligible&&history.schema==='p1k5d-research-artifact-history-v1'
+   &&history.account_context===expected&&history.no_broker_orders===true
+   &&Array.isArray(history.artifacts)
+    ?(history.artifacts as unknown[]).slice(0,8).map(obj):[];
  const trainingVerified=scoped&&training.schema==='p1k5c-sniper-learner-training-cutoff-v1'
    &&training.status==='captured'&&training.source==='deduplicated_complete_mt5_demo_broker_samples'
    &&training.independent_oos===false&&training.broker_pnl===null
@@ -62,6 +73,30 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
    <div>لقطات MT5 خارج Pulse (استبعاد) <strong>{count(view.unpaired_reconciled_quote_changes)}</strong></div>
    <div>تغيّر سعر بنفس ملي ثانية الوسيط (مستبعد) <strong>{count(view.unpaired_same_clock_price_changes)}</strong></div>
   </div>}
+  {eligible&&statusValue==='integrity_failure'&&
+   <p role="alert" className="safe-note">فشل تدقيق SHA-256 للبحث المحفوظ؛
+    تم حجب نتائج التجربة الحالية. لا تستخدمها لتقييم أو تشغيل الاستراتيجية.</p>}
+  {verifiedArtifact&&<div className="feature-zone" aria-label="Immutable local research checkpoint">
+   <h4>سجل تجميد Learner المحفوظ P1-K5D</h4>
+   <div className="operator-grid">
+    <div>سلامة النسخة <strong>SHA-256 VERIFIED</strong></div>
+    <div>تاريخ القطع (ms) <strong>{count(proof.cutoff_ms)}</strong></div>
+    <div>معرّف النسخة <strong>{String(proof.id)}</strong></div>
+    <div>بصمة نموذج الأوزان <strong>{String(proof.model_scores_sha256).slice(0,16)}…</strong></div>
+   </div>
+   <p className="safe-note">الأوزان ونقطة التجميد محفوظة في SQLite ويمكن
+    التحقق منها بعد إعادة تشغيل Core. البصمة المحلية ليست توقيعاً خارجياً
+    ولا شهادة OOS أو نتيجة تداول حي.</p>
+  </div>}
+  {archive.length>0&&<div className="feature-zone" aria-label="Archived research checkpoints">
+   <h4>آخر سجلات التجميد لهذا الحساب (تبقى بعد إعادة تشغيل Core)</h4>
+   <div className="operator-grid">
+    {archive.map((item,index)=><div key={String(item.id||index)}>
+      نسخة {index+1} <strong>{item.integrity==='verified'?'سلامة مؤكدة محلياً':'سلامة فاشلة / غير معتمدة'}</strong>
+      <span> {count(item.cutoff_ms)}</span>
+    </div>)}
+   </div>
+  </div>}
   {trainingVerified&&<div className="feature-zone" aria-label="Sniper frozen training ledger checkpoint">
    <h4>توثيق نقطة تجميد بيانات Learner — P1-K5C</h4>
    <div className="operator-grid">
@@ -97,7 +132,7 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
    <button type="button" disabled={!canStop} onClick={()=>void onAction('stop')}>إيقاف المقارنة البحثية</button>
   </div>
   <p className="safe-note">تحتاج STOP لإنشاء/إيقاف التجربة؛ النموذج المجمد يحتفظ بنتائجه
-   في ذاكرة Core فقط ويبدأ برصد تيكات مستقبلية مع فترة تهيئة. التوافق ليس معدل نجاح،
+   في ذاكرة Core فقط ويبدأ برصد تيكات مستقبلية مع فترة تهيئة. التوافق ليس معدل نجاح,
    والعينة ليست اختبار OOS مستقلاً أو تصريحاً بالتداول الحقيقي.</p>
  </section>;
 }
