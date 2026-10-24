@@ -168,3 +168,29 @@ test('P1-K5G fixed prospective protocol is registered at freeze BEFORE broker co
  assert.match(ui,/costEvidence\.automatic_promotion===false/);
  assert.match(ui,/هذا تقدير أسعار وليس أرباح صفقات حقيقية/);
 });
+
+test('P1-K5H isolates true booked MT5 Demo broker closes from zero-order frozen research',()=>{
+ const booked=code('crates/runtime/src/sniper_demo_booked_audit.rs');
+ const runtime=code('crates/runtime/src/execution.rs');
+ const ui=code('apps/terminal/src/sniper-frozen-operations.tsx');
+ assert.match(booked,/coordinator_broker_samples/);
+ assert.match(booked,/v\["evidence_source"\]=="mt5_demo_broker"/);
+ assert.match(booked,/v\["context"\]==account/);
+ assert.match(booked,/v\["trading_mode"\]=="sniper"/);
+ assert.match(booked,/v\["selection"\]\["brain"\]=="sniper_learner"/);
+ assert.match(booked,/positions\.insert\(position_id\)/);
+ assert.match(booked,/g\+c\+s\+f-n/);
+ assert.match(booked,/refused>0/);
+ assert.match(booked,/source":"reconciled_mt5_demo_broker_deals"/);
+ assert.match(booked,/matched_with_frozen_markouts":false/);
+ assert.match(booked,/comparison_with_five_second_markout_permitted":false/);
+ assert.match(booked,/strategy_win_rate":Value::Null/);
+ assert.match(booked,/real_account_data":false/);
+ assert.match(runtime,/sniper_demo_booked_audit::inspect/);
+ assert.match(runtime,/last_archived_demo_booked_evidence/);
+ assert.match(runtime,/demo_booked_execution_audit/);
+ assert.match(ui,/booked\.matched_with_frozen_markouts===false/);
+ assert.match(ui,/booked\.booked_costs_reconcile===true/);
+ assert.match(ui,/booked\.strategy_win_rate===null/);
+ assert.match(ui,/هذه ليست تنفيذات الدراسة المجمدة/);
+});
