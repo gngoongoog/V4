@@ -26,3 +26,20 @@ test('P1-K5B UI never markets markout fraction as filled-trade winrate',()=>{
  assert.match(ui,/نسبة مطابقة اتجاه وصفية/);
  assert.match(ui,/مو PnL أو Win Rate/);
 });
+
+test('P1-K5C requires checked frozen Demo training cutoff without OOS claim',()=>{
+ const learner=code('crates/runtime/src/sniper_learning.rs');
+ const study=code('crates/runtime/src/sniper_frozen_tick.rs');
+ const service=code('crates/runtime/src/execution.rs');
+ const ui=code('apps/terminal/src/sniper-frozen-operations.tsx');
+ assert.match(learner,/pub fn frozen_training_checkpoint\(/);
+ assert.match(learner,/model_count==count&&model_targets==targets/);
+ assert.match(learner,/Future-dated broker close cannot enter training cutoff/);
+ assert.match(study,/fn freeze_verified\(/);
+ assert.match(study,/training_checkpoint":trial\.training_checkpoint/);
+ assert.match(service,/sniper_learning::frozen_training_checkpoint\(/);
+ assert.match(service,/sniper_frozen_tick\.freeze_verified\(/);
+ assert.match(ui,/training\.status==='captured'/);
+ assert.match(ui,/training\.broker_pnl===null/);
+ assert.match(ui,/training\.independent_oos===false/);
+});
