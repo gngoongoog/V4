@@ -398,6 +398,22 @@ mod tests {
 
     use super::*;
     #[test]
+    fn p0d3_broker_used_margin_accepts_explicit_zero_and_refuses_negative_or_nan() {
+        let mut t=Telemetry::default();
+        t.margin=Some(0.0);
+        assert!(t.validate());
+        let mut value=serde_json::to_value(&t).unwrap();
+        assert_eq!(value["margin"],0.0);
+        t.margin=Some(-1.0);
+        assert!(!t.validate());
+        t.margin=Some(f64::NAN);
+        assert!(!t.validate());
+        value.as_object_mut().unwrap().remove("margin");
+        let legacy:Telemetry=serde_json::from_value(value).unwrap();
+        assert!(legacy.margin.is_none());
+        assert!(legacy.validate(),"Old snapshots lacking Margin remain readable");
+    }
+    #[test]
     fn lifecycle_fails_closed_and_never_enables_execution() {
         let mut s = Status {
             requested_run: true,
