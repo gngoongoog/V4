@@ -24,7 +24,7 @@ fn allowed_read_route(route: &str) -> bool {
         "/v1/opportunities/history" | "/v1/events" | "/v1/risk/monitor" |
         "/v1/trading/settings" | "/v1/studio" | "/v1/news" |
         "/v1/evaluation" | "/v1/backtest" | "/v1/backups" |
-        "/v1/execution" | "/v1/execution/trades" | "/v1/execution/quality" | "/v1/execution/mode-evidence" | "/v1/execution/frozen-coordinator" |
+        "/v1/execution" | "/v1/execution/trades" | "/v1/execution/quality" | "/v1/execution/sniper-tick-audit" | "/v1/execution/mode-evidence" | "/v1/execution/frozen-coordinator" |
         "/v1/research/correlation" | "/v1/enterprise/supervisor"
     )
 }
