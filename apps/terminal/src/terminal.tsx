@@ -7,6 +7,7 @@ import EnterpriseSupervisor from './enterprise-supervisor';
 import DataExplorer from './data-explorer';
 import {BacktestOperations,BackupOperations,TradingSettingsOperations,BrainControlsOperations,ExecutionBindingOperations} from './operations';
 import {feedEvidence} from './feed';
+import {diagnoseMarketQuote} from './market-quote-diagnosis';
 import {approvalIsCurrent,canConfirmStart} from './operator-approval';
 import type {OperatorApproval} from './operator-approval';
 import {brokerEvidence} from './brain-evidence';
@@ -126,6 +127,7 @@ export default function Terminal(){
  // Config, risk and unsaved secrets/editors are never carried into another
  // MT5 account's renderer before the background refresh useEffect runs.
  const feed=feedEvidence(status,online,lastStatusAt,Date.now());
+ const quoteDiagnosis=diagnoseMarketQuote(status,feed);
  const safeConfig=configScope===contextKey?config:null;
  const safeRiskSnapshot=riskScope===contextKey?riskSnapshot:null;
  const activeSettingsEdit=settingsScope===contextKey?settingsEdit:null;
@@ -778,7 +780,7 @@ export default function Terminal(){
       </section>
       <section className="panel subpage-secondary"><div className="panel-title"><b>حالة المصدر والتنفيذ</b><span>{clock}</span></div>
        <div className="feature-zone"><div className={'live-indicator '+(!accountFresh?'offline':'')}><div><strong>{accountFresh?'MT5 CONNECTED':'MT5 OFFLINE'}</strong><p>{preview?'PREVIEW':feed.broker?(feed.quote?'ACCOUNT + QUOTES FRESH':'ACCOUNT CONNECTED · QUOTES STALE'):buttonLabel(status,false)}</p></div><div><span>State</span><b>{display?.state||'UNAVAILABLE'}</b></div></div>
-        <div className="phase-list"><div><i/><strong>Core</strong><span>{online?'خدمة Rust متصلة':'خدمة Rust غير متاحة'}</span></div><div><i className={trustworthy?'':'warn'}/><strong>Market Data</strong><span>{trustworthy?'لقطة حديثة مستلمة':'الأسعار غير متاحة أو قديمة'}</span></div><div><i className={!preview&&display?.execution_enabled?'':'warn'}/><strong>Execution</strong><span>{preview?'معاينة فقط':display?.execution_enabled?'مسار التنفيذ مصرح':'غير جاهز للتنفيذ'}</span></div><div><i className="warn"/><strong>Source Integrity</strong><span>لا تُستبدل النتائج الفعلية بأرقام نموذجية</span></div></div>
+        <div className="phase-list"><div><i/><strong>Core</strong><span>{online?'خدمة Rust متصلة':'خدمة Rust غير متاحة'}</span></div><div><i className={trustworthy?'':'warn'}/><strong>Market Data</strong><span>{preview?'معاينة تصميم فقط':quoteDiagnosis.detail}{!preview&&quoteDiagnosis.settingsRequired&&<button type="button" onClick={()=>open('settings')}>فتح إعدادات الرمز</button>}</span></div><div><i className={!preview&&display?.execution_enabled?'':'warn'}/><strong>Execution</strong><span>{preview?'معاينة فقط':display?.execution_enabled?'مسار التنفيذ مصرح':'غير جاهز للتنفيذ'}</span></div><div><i className="warn"/><strong>Source Integrity</strong><span>لا تُستبدل النتائج الفعلية بأرقام نموذجية</span></div></div>
        </div><div className="quick-ops"><button onClick={()=>open('dashboard')}>الرجوع للوحة القيادة</button><button onClick={()=>open('events')}>عرض سجل النظام</button></div>
       </section></div>
     </section>}

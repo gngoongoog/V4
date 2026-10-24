@@ -1,6 +1,7 @@
 import {Activity,ArrowUpRight,Clock3,Cpu,DatabaseZap,ShieldCheck,Wifi,Workflow} from 'lucide-react';
 import type {PageId,Status} from './types';
 import {feedEvidence} from './feed';
+import {diagnoseMarketQuote} from './market-quote-diagnosis';
 
 type Tone='good'|'warn'|'bad'|'idle'|'preview';
 export type HealthRow={key:string;label:string;value:string;detail:string;tone:Tone;page:PageId};
@@ -21,18 +22,19 @@ export function buildHealth(status:Status|null,online:boolean,preview:boolean,
       {key:'risk',label:'Risk Monitor',value:'DEMO',detail:'مؤشرات توضيحية',tone:'preview',page:'risk'}]
   };
   const evidence=feedEvidence(status,online,lastStatusAt,now);
+  const quoteDiagnosis=diagnoseMarketQuote(status,evidence);
   const coreCurrent=evidence.core;
   const brokerOk=evidence.broker;
   const quoteOk=evidence.quote;
   const age=evidence.quoteAgeMs;
   const requested=status?.requested_run===true;
   const executionOk=quoteOk&&requested&&status?.execution_enabled===true;
-  const title=!coreCurrent?'CORE OFFLINE':!brokerOk?'FEED OFFLINE':!quoteOk?'QUOTE STALE':executionOk?'EXECUTION ACTIVE':'MONITORING';
+  const title=!coreCurrent?'CORE OFFLINE':!brokerOk?'FEED OFFLINE':quoteDiagnosis.code==='SYMBOL_MISSING'?'SYMBOL MISSING':!quoteOk?'QUOTE STALE':executionOk?'EXECUTION ACTIVE':'MONITORING';
   const tone:Tone=!coreCurrent?'bad':!brokerOk||!quoteOk?'warn':'good';
   const rows:HealthRow[]=[
     {key:'core',label:'Rust Core',value:coreCurrent?'ONLINE':'OFFLINE',detail:'تحديث قناة الحالة',tone:coreCurrent?'good':'bad',page:'events'},
     {key:'mt5',label:'MT5 Bridge',value:brokerOk?'CONNECTED':'OFFLINE',detail:brokerOk?'اتصال الوسيط موثوق':'التغذية غير متاحة',tone:brokerOk?'good':'bad',page:'settings'},
-    {key:'quote',label:'Market Feed',value:quoteOk?'FRESH':'UNAVAILABLE',detail:quoteOk?`آخر سعر: ${Math.round(age as number)} ms`:'سعر قديم أو غير متاح',tone:quoteOk?'good':'warn',page:'analysis'},
+    {key:'quote',label:'Market Feed',value:quoteOk?'FRESH':'UNAVAILABLE',detail:quoteDiagnosis.detail,tone:quoteOk?'good':'warn',page:quoteDiagnosis.settingsRequired?'settings':'analysis'},
     {key:'execution',label:'Execution',value:executionOk?'ARMED':requested?'BLOCKED':'STOPPED',detail:executionOk?'المحرك أجاز التنفيذ':requested?'غير مؤهل للتنفيذ':'لم يُطلب التشغيل',tone:executionOk?'good':requested?'warn':'idle',page:'execution'},
     {key:'risk',label:'Risk Config',value:coreCurrent&&riskLoaded?'LOADED':'UNKNOWN',detail:coreCurrent&&riskLoaded?'إعدادات متاحة • ليست ضمان أمان':'حالة الضوابط غير مؤكدة',tone:'idle',page:'risk'}
   ];
