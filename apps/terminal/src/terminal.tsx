@@ -16,10 +16,11 @@ import type {OperatorWriteTicket} from './operator-write-fence';
 import {MicroCapitalOperations} from './micro-capital-operations';
 import {ExecutionQualityOperations} from './execution-quality-operations';
 import {ModeEvidenceOperations} from './mode-evidence-operations';
+import {FrozenCoordinatorOperations} from './frozen-coordinator-operations';
 import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position} from './types';
 import {DESIGN_FIXTURE} from './mock';
-import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,backtestAction,saveTrading,saveSupervisor,updateBrainControl,bindExecution} from './bridge';
+import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,backtestAction,saveTrading,saveSupervisor,updateBrainControl,bindExecution,frozenCoordinatorAction} from './bridge';
 import {money,num,signed,up,valid} from './format';
 
 type IconComponent=typeof Home;
@@ -109,7 +110,7 @@ export default function Terminal(){
  const [pageTimeSlot,setPageTimeSlot]=useState<{scope:string;timestamp:number|null}|null>(null);
  const [config,setConfig]=useState<Record<string,unknown>|null>(null);const [riskSnapshot,setRiskSnapshot]=useState<Record<string,unknown>|null>(null);
  const [configScope,setConfigScope]=useState<string|null>(null);const [riskScope,setRiskScope]=useState<string|null>(null);
- const [learning,setLearning]=useState<Record<string,unknown>|null>(null);const [brainReport,setBrainReport]=useState<Record<string,unknown>|null>(null);const [portfolioReport,setPortfolioReport]=useState<Record<string,unknown>|null>(null);const [executionQuality,setExecutionQuality]=useState<Record<string,unknown>|null>(null);const [modeEvidence,setModeEvidence]=useState<Record<string,unknown>|null>(null);const [filter,setFilter]=useState<'all'|'buy'|'sell'>('all');const [opsTab,setOpsTab]=useState<'trade'|'orders'|'advanced'>('trade');
+ const [learning,setLearning]=useState<Record<string,unknown>|null>(null);const [brainReport,setBrainReport]=useState<Record<string,unknown>|null>(null);const [frozenSlot,setFrozenSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [portfolioReport,setPortfolioReport]=useState<Record<string,unknown>|null>(null);const [executionQuality,setExecutionQuality]=useState<Record<string,unknown>|null>(null);const [modeEvidence,setModeEvidence]=useState<Record<string,unknown>|null>(null);const [filter,setFilter]=useState<'all'|'buy'|'sell'>('all');const [opsTab,setOpsTab]=useState<'trade'|'orders'|'advanced'>('trade');
  const [clock,setClock]=useState('');const [lastStatusAt,setLastStatusAt]=useState<number|null>(null);const [liveLogin,setLiveLogin]=useState('');const [approval,setApproval]=useState<OperatorApproval|null>(null);
  const [settingsEdit,setSettingsEdit]=useState<Record<string,unknown>|null>(null);
  const [settingsScope,setSettingsScope]=useState<string|null>(null);
@@ -139,6 +140,7 @@ export default function Terminal(){
  // single React paint while the async effect schedules a replacement read.
  // The existing generation fence separately prevents late callbacks writing.
  const pageData=pagePanel?.scope===viewScope?pagePanel.data:null;
+ const activeFrozenCoordinator=frozenSlot?.scope===viewScope?frozenSlot.report:null;
  const pageError=pageErrorSlot?.scope===viewScope?pageErrorSlot.message:'';
  const pageUpdatedAt=pageTimeSlot?.scope===viewScope?pageTimeSlot.timestamp:null;
  const setPageData=(data:unknown)=>setPagePanel({scope:viewScope,data});
@@ -265,6 +267,21 @@ export default function Terminal(){
   setModeEvidence(null);get();
   const timer=setInterval(()=>{if(document.visibilityState==='visible')get()},12000);
   return()=>{active=false;clearInterval(timer)};
+ },[page,preview,contextKey]);
+ useEffect(()=>{
+  if(!['brains','brainControl'].includes(page)||preview||!hasTauri()){setFrozenSlot(null);return;}
+  let active=true;
+  const get=()=>{
+   const ticket=scopedGeneration.current.beginRead('frozenCoordinator');
+   void readPanel('/v1/execution/frozen-coordinator').then(v=>{
+    if(active&&scopedGeneration.current.isCurrent(ticket))setFrozenSlot({scope:viewScope,report:unwrap(v)});
+   }).catch(()=>{
+    if(active&&scopedGeneration.current.isCurrent(ticket))setFrozenSlot({scope:viewScope,report:null});
+   });
+  };
+  setFrozenSlot(null);get();
+  const interval=setInterval(()=>{if(document.visibilityState==='visible')get()},12000);
+  return()=>{active=false;clearInterval(interval)};
  },[page,preview,contextKey]);
  useEffect(()=>{
   if(page==='dashboard'||!hasTauri()||preview){setPageData(null);setPageUpdatedAt(null);setPageError('');return;}
@@ -496,6 +513,27 @@ export default function Terminal(){
   }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
   finally{finishWrite(mutation)}
  };
+ const runFrozenCoordinator=async(action:'freeze'|'stop')=>{
+  const t=status?.telemetry;
+  if(preview||!hasTauri()||status?.requested_run||!status?.gateway_fresh
+    ||!t?.connected||!t.demo||t.account_trade_mode!==0
+    ||!['brains','brainControl'].includes(page)){sendNotice('التجميد البحثي يتطلب STOP وMT5 Demo موصول',true);return}
+  const expected=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
+  if(unwrap(pageData).context!==expected||unwrap(pageData).trading_mode!=='expert'){
+   sendNotice('سياق حساب MT5 Demo أو وضع Expert تغيّر، أعد تحميل صفحة العقول',true);return
+  }
+  const mutation=beginWrite('frozen-coordinator');if(!mutation)return;
+  try{
+   await frozenCoordinatorAction(action,expected);
+   if(!writeFresh(mutation))return;
+   const ticket=scopedGeneration.current.beginRead('frozenCoordinator');
+   const refreshed=unwrap(await readPanel('/v1/execution/frozen-coordinator'));
+   if(!writeFresh(mutation))return;
+   if(scopedGeneration.current.isCurrent(ticket))setFrozenSlot({scope:viewScope,report:refreshed});
+   sendNotice(action==='freeze'?'تم تثبيت تجربة Expert البحثية في Rust Core':'تم إيقاف التجربة البحثية وحفظ نتائجها في Core');
+  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
+  finally{finishWrite(mutation)}
+ };
  const runSaveBrain=async(brain:string,advisor:boolean,paper:boolean)=>{
   if(preview||!hasTauri()||!status?.gateway_fresh||!status.telemetry||status.requested_run){sendNotice('أوقف التداول وانتظر اتصال MT5 حديث لإدارة العقول',true);return}
   const t=status.telemetry;
@@ -625,7 +663,7 @@ export default function Terminal(){
         page==='backtest'?<div className="feature-zone"><BacktestOperations key={viewScope} disabled={busy||preview} active={['loading','running'].includes(String(unwrap(pageData).phase||unwrap(unwrap(pageData).job).phase||''))} onStart={r=>runBacktest('start',r)} onCancel={()=>runBacktest('cancel')}/><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/backtest')}/></div>:
         page==='backups'?<div className="feature-zone"><BackupOperations disabled={busy||preview} create={()=>runBackup('create')} exportBrain={()=>runBackup('brain_export')}/><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/backups')}/></div>:
         page==='positions'?<div className="feature-zone"><h3>مراكز MT5 الحالية</h3><Table rows={account?positions.map(p=>({...p})):[]} empty="لا توجد مراكز موثقة"/></div>:
-        page==='brains'||page==='brainControl'?<div className="feature-zone"><BrainControlsOperations source={pageData} disabled={busy||preview} armed={status?.requested_run===true} onSave={runSaveBrain}/><p className="data-description">P1-A: نسب النجاح تظهر فقط بعد 30 نتيجة مغلقة موثّقة من MT5 DEMO بعد العمولة والسواب والرسوم، ومحددة بالعقل ووضع التداول. نتائج الورق ليست صفقات وسيط؛ لا توجد ترقية تلقائية ولا اعتماد على REAL.</p><Table rows={preview?[]:array(unwrap(pageData).brains).map(b=>({brain:b.name,checks:unwrap(b.activity).checks,signals:unwrap(b.activity).signals,broker_orders:unwrap(b.attributed_orders).requested,broker_fills:unwrap(b.attributed_orders).fill_acknowledged,paper_closed:unwrap(b.paper_stats).closed,verified_demo_closes:unwrap(unwrap(b.integrity).broker_evidence).sample_count,evidence_state:unwrap(unwrap(b.integrity).broker_evidence).status==='insufficient_evidence'?'INSUFFICIENT DATA':unwrap(unwrap(b.integrity).broker_evidence).status,winrate_costed:Number.isFinite(unwrap(unwrap(b.integrity).broker_evidence).win_rate)&&unwrap(unwrap(b.integrity).broker_evidence).win_rate!==null?((Number(unwrap(unwrap(b.integrity).broker_evidence).win_rate)*100).toFixed(1)+'%'):'—',net_after_costs:unwrap(unwrap(b.integrity).broker_evidence).net_booked??'—'}))} empty={pageError||'لا توجد إحصائيات عقول من المحرك'}/></div>:
+        page==='brains'||page==='brainControl'?<div className="feature-zone"><BrainControlsOperations source={pageData} disabled={busy||preview} armed={status?.requested_run===true} onSave={runSaveBrain}/><FrozenCoordinatorOperations status={!preview&&feed.broker?status:null} source={activeFrozenCoordinator} currentMode={unwrap(pageData).trading_mode} brainContext={unwrap(pageData).context} armed={status?.requested_run===true} disabled={busy||preview} onAction={runFrozenCoordinator} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('frozenCoordinator');void readPanel('/v1/execution/frozen-coordinator').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setFrozenSlot({scope:viewScope,report:null})})}}/><p className="data-description">P1-A: نسب النجاح تظهر فقط بعد 30 نتيجة مغلقة موثّقة من MT5 DEMO بعد العمولة والسواب والرسوم، ومحددة بالعقل ووضع التداول. نتائج الورق ليست صفقات وسيط؛ لا توجد ترقية تلقائية ولا اعتماد على REAL.</p><Table rows={preview?[]:array(unwrap(pageData).brains).map(b=>({brain:b.name,checks:unwrap(b.activity).checks,signals:unwrap(b.activity).signals,broker_orders:unwrap(b.attributed_orders).requested,broker_fills:unwrap(b.attributed_orders).fill_acknowledged,paper_closed:unwrap(b.paper_stats).closed,verified_demo_closes:unwrap(unwrap(b.integrity).broker_evidence).sample_count,evidence_state:unwrap(unwrap(b.integrity).broker_evidence).status==='insufficient_evidence'?'INSUFFICIENT DATA':unwrap(unwrap(b.integrity).broker_evidence).status,winrate_costed:Number.isFinite(unwrap(unwrap(b.integrity).broker_evidence).win_rate)&&unwrap(unwrap(b.integrity).broker_evidence).win_rate!==null?((Number(unwrap(unwrap(b.integrity).broker_evidence).win_rate)*100).toFixed(1)+'%'):'—',net_after_costs:unwrap(unwrap(b.integrity).broker_evidence).net_booked??'—'}))} empty={pageError||'لا توجد إحصائيات عقول من المحرك'}/></div>:
         <div className="feature-zone"><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}}/></div>}
       </section>
       <section className="panel subpage-secondary"><div className="panel-title"><b>حالة المصدر والتنفيذ</b><span>{clock}</span></div>
