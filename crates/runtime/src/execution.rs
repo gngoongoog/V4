@@ -721,6 +721,14 @@ impl Service {
             }
             return Ok(quality);
         }
+        if method=="GET" && path=="/v1/execution/mode-evidence" {
+            // No REAL, stale or cross-bound data may be used as evidence
+            // for any of the four coordinators' Demo results.
+            let t=status.telemetry.as_ref().filter(|t|
+                status.gateway_fresh && self.account_matches(status)
+                && t.demo && t.account_trade_mode==Some(0));
+            return crate::mode_evidence::report(db,t,now);
+        }
         if method=="GET" && path=="/v1/execution/brains" {
             let mut value=self.route("GET","/v1/execution",&[],db,status,now)?;
             let key=if status.gateway_fresh && self.account_matches(status) {context(status.telemetry.as_ref().unwrap())}else{String::new()};
