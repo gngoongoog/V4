@@ -36,12 +36,17 @@ export function smallAccountPreview(status:MicroStatus|null,risk:MicroRisk|null,
  const minimumLot=positive(t.volume_min)?t.volume_min:null;
  const minimumLotMargin=nonNegative(t.minimum_lot_margin)?t.minimum_lot_margin:null;
  const isReal=t.account_trade_mode===2;
- const recovery=positive(risk?.micro_real_recovery_equity)?risk.micro_real_recovery_equity:null;
+ // Rust's RiskConfig omits the default Micro cap (10) and recovery
+ // milestone (500) from serialized config.json. Absence is NOT unknown
+ // when a valid risk policy object is present.
+ const recovery=risk?(risk.micro_real_recovery_equity===undefined?500:
+    positive(risk.micro_real_recovery_equity)?risk.micro_real_recovery_equity:null):null;
  // This is a candidate by equity only. The irrevocable broker/Core recovery
  // history may already have disabled micro trading; never label it armed.
  const microCandidate=Boolean(isReal&&risk?.micro_real_temporary===true&&
     recovery!==null&&t.equity<recovery);
- const rawPercent=microCandidate?risk?.micro_real_cap_percent:risk?.risk_percent;
+ const rawPercent=microCandidate?
+    (risk?.micro_real_cap_percent===undefined?10:risk.micro_real_cap_percent):risk?.risk_percent;
  const budgetPercent=positive(rawPercent)&&rawPercent<=20?rawPercent:null;
  const scenarioMargin=actualLeverage!==null&&minimumLotMargin!==null&&
     Number.isInteger(scenarioLeverage)&&scenarioLeverage>=1&&scenarioLeverage<=10000?
