@@ -172,7 +172,7 @@ pub fn report(db:&Connection,key:&str,mode:TradingMode)->Result<Value>{
         params![key,mode_key(mode)],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
     let Some((id,created,active))=item else{
         return Ok(json!({"status":"not_started","mode":mode_key(mode),
-            "policy":policy(mode),"no_broker_orders":true}))
+            "context":key,"policy":policy(mode),"no_broker_orders":true}))
     };
     let mut stmt=db.prepare(
         "SELECT frozen,adaptive FROM frozen_coordinator_decisions
@@ -196,7 +196,8 @@ pub fn report(db:&Connection,key:&str,mode:TradingMode)->Result<Value>{
         Some(crate::coordinator_paper::summary(db,&id)?)
     }else{None};
     Ok(json!({"status":if active{"active"}else{"stopped"},
-        "mode":mode_key(mode),"run_id":id,"frozen_ms":created,"policy":policy(mode),
+        "mode":mode_key(mode),"context":key,"run_id":id,
+        "frozen_ms":created,"policy":policy(mode),
         "bars_compared":total,"both_actionable":both,
         "paired_quote_paper":paired,
         "same_direction":same,"different_direction":different,
