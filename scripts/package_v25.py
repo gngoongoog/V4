@@ -25,6 +25,11 @@ def stage():
     for item in ('Run-Demo-Acceptance.ps1','Run-Demo-Acceptance-GUI.ps1'):
         shutil.copy2(ROOT/'scripts'/item,DEST/'Tools'/item)
     shutil.copy2(ROOT/'docs/DEMO_ACCEPTANCE_AR.md',DEST/'DEMO_ACCEPTANCE_AR.md')
+    # P0-E: ship source + a strictly explicit operator-side MetaEditor compile
+    # path. Build CI has no installed MT5 and must never claim EA .ex5 passed.
+    shutil.copy2(ROOT/'scripts/Compile-Sniper-EA.cmd',DEST/'Compile-Sniper-EA.cmd')
+    shutil.copy2(ROOT/'scripts/Compile-Sniper-EA.ps1',DEST/'Tools/Compile-Sniper-EA.ps1')
+    shutil.copy2(ROOT/'docs/v25/NATIVE_EA_ACCEPTANCE_AR.md',DEST/'NATIVE_EA_ACCEPTANCE_AR.md')
     for name,flag in [('CREATE_DESKTOP_ICON.cmd',''),('REMOVE_DESKTOP_ICON.cmd',' -Remove')]:
         (DEST/name).write_bytes(('@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0DESKTOP_SHORTCUT.ps1"'+flag+'\r\nif errorlevel 1 exit /b 1\r\npause\r\n').encode('ascii'))
     evidence=DEST/'release-evidence';evidence.mkdir()
@@ -32,7 +37,7 @@ def stage():
         shutil.copy2(ROOT/source,evidence/name)
     commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     (evidence/'build.json').write_text(json.dumps({'release':'Enterprise V25 P0-O','version':'0.25.0','source_commit':commit,'exe_sha256':digest(exe),'dependency_resolution':'committed locks; cargo --locked; npm ci','broker_demo':'NOT TESTED','windows_gui_all_controls':'NOT TESTED','ea_compile':'NOT TESTED','ready_for_real':False},indent=2)+'\n','utf-8')
-    (DEST/'READ_ME_FIRST_AR.txt').write_text('BRAINTRADE V4 Enterprise V25 — P0-O\nفك المجلد كاملاً وشغّل BrainTradeNext.exe مباشرة. لا يوجد Setup إلزامي.\nيتطلب Windows x64 وWebView2. يحتاج التداول إلى MT5 وحسابك التجريبي.\nلإنشاء اختصار سطح المكتب شغّل CREATE_DESKTOP_ICON.cmd.\nضع مسار terminal64.exe من صفحة الإعدادات، ثم اربط DEMO من صفحة التنفيذ.\nشغّل VERIFY_SYSTEM.cmd لإنتاج تقرير HTML وJSON؛ هذه الأداة لا تفتح صفقات ولا ترسل بيانات.\nلجمع نتائج تنفيذ DEMO للقراءة فقط شغّل Run-Demo-Acceptance.cmd؛ لا يفعل START أو يرسل أوامر MT5.\nهذه نسخة تحقق مرحلية: اختبار MT5 Demo وEA وجميع أزرار Windows لم يُعتمد بعد.\nSTOP يمنع الدخول الجديد ويبقي إدارة المراكز؛ لا تغلق Core مع صفقات أو أوامر غير محسومة.\nلا تنقل EXE وحده ولا تحذف بيانات التطبيق عند التحديث. احتفظ بحزمة V24 للرجوع.\n','utf-8')
+    (DEST/'READ_ME_FIRST_AR.txt').write_text('BRAINTRADE V4 Enterprise V25 — P0-O\nفك المجلد كاملاً وشغّل BrainTradeNext.exe مباشرة. لا يوجد Setup إلزامي.\nيتطلب Windows x64 وWebView2. يحتاج التداول إلى MT5 وحسابك التجريبي.\nلإنشاء اختصار سطح المكتب شغّل CREATE_DESKTOP_ICON.cmd.\nضع مسار terminal64.exe من صفحة الإعدادات، ثم اربط DEMO من صفحة التنفيذ.\nشغّل VERIFY_SYSTEM.cmd لإنتاج تقرير HTML وJSON؛ هذه الأداة لا تفتح صفقات ولا ترسل بيانات.\nلجمع نتائج تنفيذ DEMO للقراءة فقط شغّل Run-Demo-Acceptance.cmd؛ لا يفعل START أو يرسل أوامر MT5.\nلترجمة Native EA على جهاز فيه MetaEditor افتح Compile-Sniper-EA.cmd واقرأ NATIVE_EA_ACCEPTANCE_AR.md؛ لا يوجد EX5 مثبت من CI.\nهذه نسخة تحقق مرحلية: اختبار MT5 Demo وEA وجميع أزرار Windows لم يُعتمد بعد.\nSTOP يمنع الدخول الجديد ويبقي إدارة المراكز؛ لا تغلق Core مع صفقات أو أوامر غير محسومة.\nلا تنقل EXE وحده ولا تحذف بيانات التطبيق عند التحديث. احتفظ بحزمة V24 للرجوع.\n','utf-8')
 def archive():
     shutil.copytree(ROOT/'test-output/v25',DEST/'release-evidence/validation',dirs_exist_ok=True)
     manifest={p.relative_to(DEST).as_posix():digest(p) for p in sorted(DEST.rglob('*')) if p.is_file() and p.name!='SHA256SUMS.json'}
