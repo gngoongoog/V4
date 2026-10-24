@@ -34,6 +34,7 @@ struct Trial{
     target_disagreements:u64,both_waiting:u64,
     excluded_legacy:u64,excluded_switch:u64,excluded_gap:u64,
     excluded_overflow:u64,excluded_warmup:u64,
+    unpaired_reconciled_quote_changes:u64,
 }
 #[derive(Default)]
 pub struct Study{trial:Option<Trial>}
@@ -55,6 +56,7 @@ impl Study{
             readiness_disagreements:0,target_disagreements:0,
             both_waiting:0,excluded_legacy:0,excluded_switch:0,
             excluded_gap:0,excluded_overflow:0,excluded_warmup:0,
+            unpaired_reconciled_quote_changes:0,
         });
         Ok(json!({"ok":true,"status":"active","context":context(t),
             "frozen_ms":now,"policy":"p1k3-sniper-learner-forward-tick-v1",
@@ -68,6 +70,31 @@ impl Study{
         trial.active=false;
         trial.reason="operator_stopped".into();
         Ok(json!({"ok":true,"status":"stopped","no_broker_orders":true}))
+    }
+    /// Regular MT5 reconciliation can supply a NEW broker quote independently
+    /// of the Fast Pulse. The executing model consumes those quotes; if the
+    /// frozen study did not, its tick path is no longer matched. Exclude the
+    /// affected span and warm up afresh rather than fabricate parity.
+    pub fn reconcile(&mut self,t:&Telemetry,c:&Config) {
+        let Some(trial)=self.trial.as_mut().filter(|x|x.active)else{return};
+        if context(t)!=trial.context||c.trading.mode!=TradingMode::Sniper
+           ||c.trading.sniper_brain!=SniperBrain::Learner{
+            trial.active=false;trial.reason="reconciled_broker_context_changed".into();
+            return
+        }
+        if let Some(last)=trial.last_broker {
+            let incoming=t.source_quote_time_ms;
+            // Unknown quote provenance on a full snapshot is also a break in
+            // the trace once the trial has started.
+            if incoming.is_none()||incoming.is_some_and(|x|x>last){
+                trial.unpaired_reconciled_quote_changes+=1;
+                trial.first_future_ms=None;
+                trial.frozen.reset_quotes();
+                trial.last_origin.clear();
+                trial.last_dropped=None;
+                if let Some(tick)=incoming{trial.last_broker=Some(tick)}
+            }
+        }
     }
     pub fn observe(&mut self,t:&Telemetry,c:&Config,adaptive:Option<&Signal>,
         payload:&[u8],now:u64){
@@ -156,6 +183,7 @@ impl Study{
             "excluded_broker_clock_gap":trial.excluded_gap,
             "excluded_native_queue_counter_change":trial.excluded_overflow,
             "excluded_early_warmup":trial.excluded_warmup,
+            "unpaired_reconciled_quote_changes":trial.unpaired_reconciled_quote_changes,
             "minimum_warmup_ms":WARMUP_MS,
             "forward_only":true,
             "model_scores_frozen":true,"prior_tick_window_discarded":true,
@@ -253,6 +281,25 @@ mod tests{
         assert_eq!(report["paper_pnl"],Value::Null);
         assert_eq!(report["model_scores_frozen"],true);
         assert_eq!(report["independent_oos"],false);
+    }
+    #[test]
+    fn new_reconciled_snapshot_quote_invalidates_pairing_until_rewarmed(){
+        let (mut t,c,e)=fixture(100_000);
+        let mut study=Study::default();
+        study.freeze(&t,&c,&e,100_000).unwrap();
+        t.source_quote_time_ms=Some(100_500);
+        t.quote_time_ms=Some(100_500);
+        study.observe(&t,&c,None,&meta("native",0),100_501);
+        // A newer full snapshot reaches the live learner but not the
+        // frozen Fast Pulse study. Treat it as an unpaired event.
+        let mut full=t.clone();
+        full.source_quote_time_ms=Some(100_900);
+        full.quote_time_ms=Some(100_900);
+        study.reconcile(&full,&c);
+        let r=study.report(Some(&full),100_901);
+        assert_eq!(r["unpaired_reconciled_quote_changes"],1);
+        assert_eq!(r["comparable_future_tick_decisions"],0);
+        assert_eq!(r["independent_oos"],false);
     }
     #[test]
     fn frozen_study_does_not_inherit_old_account_or_live_quotes(){
