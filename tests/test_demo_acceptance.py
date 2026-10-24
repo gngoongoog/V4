@@ -149,6 +149,12 @@ class DemoAcceptanceTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "loopback"):
                     acceptance.CoreApi("secret-which-must-not-be-sent", url)
 
+    def test_local_core_refuses_redirect_even_if_initial_url_is_loopback(self):
+        handler = acceptance._NoCoreRedirect()
+        with self.assertRaisesRegex(RuntimeError, "refusing to follow"):
+            handler.redirect_request(None, None, 302, "redirect", {},
+                                     "https://external.example/steal-ipc-key")
+
     def test_source_label_only_applies_to_new_commands_and_is_preserved(self):
         identity = self.identity()
         samples = {}
