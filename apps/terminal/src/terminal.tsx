@@ -117,12 +117,13 @@ export default function Terminal(){
  const contextKey=`${status?.telemetry?.login??'unknown'}:${status?.telemetry?.server??'offline'}:${status?.telemetry?.symbol??'none'}:${status?.telemetry?.currency??'unknown'}:${status?.telemetry?.account_trade_mode??'unknown'}:${status?.telemetry?.demo??'unknown'}:${online}:${status?.gateway_fresh??false}:${status?.telemetry?.connected??false}`;
  // Config, risk and unsaved secrets/editors are never carried into another
  // MT5 account's renderer before the background refresh useEffect runs.
+ const feed=feedEvidence(status,online,lastStatusAt,Date.now());
  const safeConfig=configScope===contextKey?config:null;
  const safeRiskSnapshot=riskScope===contextKey?riskSnapshot:null;
  const activeSettingsEdit=settingsScope===contextKey?settingsEdit:null;
  const activeTelegramToken=!preview&&telegramDraftScope===contextKey?telegramToken:'';
  const activeClearTelegram=!preview&&telegramDraftScope===contextKey?clearTelegram:false;
- const showStartConfirm=approvalIsCurrent(approval,'start',contextKey)&&!preview;
+ const showStartConfirm=approvalIsCurrent(approval,'start',contextKey)&&!preview&&feed.broker;
  const showStopConfirm=approvalIsCurrent(approval,'stop',contextKey)&&!preview;
  const showExitConfirm=approvalIsCurrent(approval,'exit',contextKey)&&!preview;
  // Any page, broker-account or preview transition revokes unresolved manual reads.
@@ -254,7 +255,7 @@ export default function Terminal(){
  },[page,preview,contextKey]);
  const display=preview?DESIGN_FIXTURE:status;
  // Broker truth requires BOTH authenticated Core status and fresh MT5 data.
- const t=display?.telemetry;const feed=feedEvidence(status,online,lastStatusAt,Date.now());const trustworthy=preview||feed.quote;
+ const t=display?.telemetry;const trustworthy=preview||feed.quote;
  const account=trustworthy?t:null;const currency=account?.currency||'USD';const positions=account?.positions||[];
  const buys=positions.filter(p=>up(p.side)).length;const sells=positions.length-buys;
  const brokerResults=preview||!feed.broker?null:brokerEvidence(brainReport,status);
@@ -263,6 +264,11 @@ export default function Terminal(){
  const drawdown=preview?4.2:null;
  const showLatency=preview?28:null; // quote age is NOT execution latency
  const visiblePositions=positions.filter(p=>filter==='all'||(filter==='buy'?up(p.side):!up(p.side)));
+ useEffect(()=>{
+  if(approval?.action==='start'&&(!feed.broker||approval.scope!==contextKey||preview)){
+   setApproval(null);setLiveLogin('');
+  }
+ },[approval,contextKey,feed.broker,preview]);
  // A dialog is not durable consent: broker/account/freshness changes revoke it.
  // Restore focus after closing and trap keyboard Tab within the active dialog.
  useEffect(()=>{
