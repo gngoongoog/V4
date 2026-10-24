@@ -29,7 +29,6 @@ for(const [label,change] of [
  ['real',(s,p)=>{s.telemetry.demo=false;s.telemetry.account_trade_mode=2}],
  ['stale',(s,p)=>{s.gateway_fresh=false}],
  ['disconnected',(s,p)=>{s.telemetry.connected=false}],
- ['login',(s,p)=>{s.telemetry.login=18}],
  ['classic',(s,p)=>{p.config.trading.sniper_brain='classic'}],
  ['other mode',(s,p)=>{p.config.trading.mode='expert'}]
 ]){
@@ -60,6 +59,10 @@ assert.deepEqual(called,['stop','freeze']);
 const invalid=SniperFrozenOperations({...props,report:{...report,context:'[]',
  accepted_prospective_pulses:999999}});
 assert(!JSON.stringify(invalid).includes('999999'),'previous account score must disappear');
+const otherAccount=SniperFrozenOperations({...props,status:{...status,telemetry:{...t,login:18}}});
+assert(!JSON.stringify(otherAccount).includes('22'),'old account parity must be concealed');
+assert(buttons(otherAccount).slice(1).every(x=>x.props.disabled||x.props.children.includes('تجميد')),
+ 'no stop action against old-account report');
 const real=SniperFrozenOperations({...props,status:{...status,telemetry:{...t,demo:false,account_trade_mode:2}}});
 assert(buttons(real).slice(1).every(x=>x.props.disabled));
 const running=SniperFrozenOperations({...props,status:{...status,requested_run:true}});
