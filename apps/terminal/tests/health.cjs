@@ -6,6 +6,9 @@ const ts=require('typescript');
 const file=path.join(__dirname,'../src/system-health.tsx');
 const source=fs.readFileSync(file,'utf8');
 const feedSource=fs.readFileSync(path.join(__dirname,'../src/feed.ts'),'utf8');
+const quoteSrc=fs.readFileSync(path.join(__dirname,'../src/market-quote-diagnosis.ts'),'utf8');
+const quoteOut=ts.transpileModule(quoteSrc,{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.CommonJS}});
+const quoteExports={};vm.runInNewContext(quoteOut.outputText,{exports:quoteExports});
 const feedOut=ts.transpileModule(feedSource,{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.CommonJS}});
 const feedExports={};vm.runInNewContext(feedOut.outputText,{exports:feedExports});
 const out=ts.transpileModule(source, {compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX},reportDiagnostics:true});
@@ -15,6 +18,7 @@ const moduleExports={};
 const sandbox={exports:moduleExports,require:(id)=>{
   if(id==='react/jsx-runtime')return {jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};
   if(id==='./feed')return feedExports;
+  if(id==='./market-quote-diagnosis')return quoteExports;
   if(id==='lucide-react')return Object.fromEntries(['Activity','ArrowUpRight','Clock3','Cpu','DatabaseZap','ShieldCheck','Wifi','Workflow'].map(name=>[name,name]));
   throw Error('Unexpected browser module '+id);
 }};
