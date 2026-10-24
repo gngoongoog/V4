@@ -169,6 +169,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'V25 P0-K training schema quarantine regression failed' }
           cargo test --locked -p braintrade-runtime damaged_json_export_failure_is_atomic_retryable_and_keeps_source_db
           if ($LASTEXITCODE -ne 0) { throw 'V25 P0-L training export atomic cleanup/retry regression failed' }
+          cargo test --locked -p braintrade-runtime learning_dashboard_does_not_count_legacy_or_schema_mismatch_as_eligible
+          if ($LASTEXITCODE -ne 0) { throw 'V25 P0-M learning evidence counts/false readiness regression failed' }
       - name: Promote tested V23 build outputs to V25 P0 portable and verify archive
         shell: pwsh
         run: |
