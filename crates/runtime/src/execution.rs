@@ -301,6 +301,7 @@ pub struct Service {
     portfolio_state: Value,
     supervisor: crate::enterprise_supervisor::Settings,
     supervisor_policy_valid: bool,
+    quality_circuit: crate::broker_quality_circuit::Snapshot,
     fast: Option<pulse::FastContext>,
 }
 
@@ -352,6 +353,7 @@ impl Service {
             // A corrupt policy fails closed for entries without disabling Core.
             supervisor,
             supervisor_policy_valid,
+            quality_circuit: crate::broker_quality_circuit::Snapshot::default(),
             fast: None,
         })
     }
@@ -449,6 +451,18 @@ impl Service {
         self.inner.cancel_entries(db)
     }
 
+    // Refresh only on a reconciled snapshot or persisted broker result;
+    // Sniper tick hot path reads the cached, account-scoped state.
+    fn refresh_quality_circuit(&mut self,db:&Connection,t:&Telemetry,now:u64) {
+        let key=crate::broker_quality_circuit::context(t);
+        self.quality_circuit=if self.inner.matches_bound_telemetry(t) {
+            crate::broker_quality_circuit::inspect(db,t,now)
+                .unwrap_or_else(|_|crate::broker_quality_circuit::Snapshot::unavailable(key,now))
+        } else {
+            crate::broker_quality_circuit::Snapshot::unavailable(key,now)
+        };
+    }
+
     pub fn observe(
         &mut self,
         db: &Connection,
@@ -482,7 +496,10 @@ impl Service {
         // SQLite, and cannot transfer execution ownership to another brain.
         // A damaged supervisor settings row must never suspend broker exit
         // management. Fail closed for fresh opens while reconciliation proceeds.
-        let entries_allowed=if run && self.supervisor_policy_valid {
+        // This check reads the durable Core journal only on reconciled snapshots.
+        self.refresh_quality_circuit(db,telemetry,now);
+        let quality_allows=self.quality_circuit.entry_allowed(telemetry,self.is_live_target());
+        let entries_allowed=if run && quality_allows && self.supervisor_policy_valid {
             if !self.supervisor.enforce_entry_gate {true}
             else {
                 let candle_frames: BTreeMap<String,Vec<braintrade_domain::Candle>>=frames.iter().map(|(tf,bars)|
@@ -695,7 +712,14 @@ impl Service {
             let t=status.telemetry.as_ref().filter(|t|
                 status.gateway_fresh && self.account_matches(status)
                 && !t.symbol.is_empty() && !t.currency.is_empty());
-            return crate::execution_quality::report(db,t,now);
+            let mut quality=crate::execution_quality::report(db,t,now)?;
+            if let Some(t)=t {
+                let key=crate::broker_quality_circuit::context(t);
+                let state=crate::broker_quality_circuit::inspect(db,t,now)
+                    .unwrap_or_else(|_|crate::broker_quality_circuit::Snapshot::unavailable(key,now));
+                quality["entry_circuit"]=state.as_json(self.is_live_target());
+            }
+            return Ok(quality);
         }
         if method=="GET" && path=="/v1/execution/brains" {
             let mut value=self.route("GET","/v1/execution",&[],db,status,now)?;
@@ -733,7 +757,8 @@ impl Service {
             // Fast Pulse MUST obey the exact same optional V20 entry guard.
             // No re-sending an unknown command, no bypass on lower latency.
             // Cached reconciled candles are reused; fresh pulse quote is overlaid.
-            let enter=if status.requested_run && self.supervisor_policy_valid {
+            let quality_allows=self.quality_circuit.entry_allowed(&next.telemetry,self.is_live_target());
+            let enter=if status.requested_run && quality_allows && self.supervisor_policy_valid {
                 if !self.supervisor.enforce_entry_gate {true}
                 else {self.supervisor_permits_entry(crate::enterprise_supervisor::assess(&self.supervisor,Some(&next.telemetry),
                     &next.config,&BTreeMap::new(),now).entry_allowed)}
@@ -858,10 +883,38 @@ impl Service {
         }
 
         let value = self.inner.route(method, path, body, db, status, now)?;
+        // Final authorization is the last Core gate before Gateway calls MT5.
+        // Read the committed journal independently here; never trust only a
+        // previous tick's cached snapshot. Existing close/reconciliation intents
+        // must not be denied by the quality circuit.
+        if method=="POST" && path=="/v1/execution/authorize"
+            && value["authorized"]==true {
+            let request:Value=serde_json::from_slice(body)?;
+            let id=request["id"].as_str().context("Authorization id required")?;
+            let (kind,cmd_context):(String,String)=db.query_row(
+                "SELECT kind,context FROM broker_commands WHERE id=?1",
+                [id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+            if kind=="open" && self.is_live_target() {
+                let authorized_quality=status.telemetry.as_ref()
+                    .filter(|t|status.gateway_fresh&&self.account_matches(status)
+                        && crate::broker_quality_circuit::context(t)==cmd_context)
+                    .and_then(|t|crate::broker_quality_circuit::inspect(db,t,now).ok()
+                        .map(|quality|quality.entry_allowed(t,true)))
+                    .unwrap_or(false);
+                if !authorized_quality {
+                    return Ok(json!({"authorized":false,"reason":"core_broker_quality_entry_circuit"}));
+                }
+            }
+        }
         if method == "POST" && path == "/v1/execution/result" {
-            if let Some(t) = status.telemetry.as_ref().filter(|t| status.gateway_fresh && t.connected) {
-                // Register the acknowledged fill now, before the next quote pulse.
+            if let Some(t) = status.telemetry.as_ref().filter(|t| status.gateway_fresh && self.account_matches(status)) {
+                // Result was persisted before refreshing the cache. Next Sniper
+                // Tick cannot race back into a just-breached quality circuit.
+                self.refresh_quality_circuit(db,t,now);
+                // Register acknowledged fill before the next quote pulse.
                 self.student.observe(db, t, now)?;
+            } else {
+                self.quality_circuit=crate::broker_quality_circuit::Snapshot::default();
             }
         }
         if method == "GET" && path == "/v1/execution" {
