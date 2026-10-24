@@ -24,6 +24,8 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
  const recoveredHoldout=obj(view.last_archived_holdout_diagnostic);
  const costEvidence=obj(view.preregistered_cost_evidence);
  const recoveredCosts=obj(view.last_archived_preregistered_costs);
+ const booked=obj(view.demo_booked_execution_audit);
+ const recoveredBooked=obj(view.last_archived_demo_booked_evidence);
  const fixedCostScore=obj(costEvidence.holdout);
  const protocol=obj(proof.preregistered_forward_protocol);
  const holdoutScore=obj(holdout.holdout);
@@ -94,6 +96,26 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
    &&recoveredCosts.independent_oos===false&&recoveredCosts.broker_pnl===null;
  const priceMoney=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)
    ?v.toFixed(2):'—';
+ const bookedVerified=verifiedArtifact
+   &&booked.schema==='p1k5h-demo-booked-trade-audit-v1'
+   &&booked.status==='separate_broker_cohort_observed'
+   &&booked.source==='reconciled_mt5_demo_broker_deals'
+   &&booked.account_context===expected
+   &&booked.frozen_artifact_id===view.research_artifact_id
+   &&booked.independent_oos===false
+   &&booked.frozen_study_sent_orders===false
+   &&booked.matched_with_frozen_markouts===false
+   &&booked.comparison_with_five_second_markout_permitted===false
+   &&booked.booked_costs_reconcile===true
+   &&booked.real_account_data===false
+   &&booked.strategy_win_rate===null;
+ const recoveredBookedVerified=archivedJournalVerified
+   &&recoveredBooked.schema==='p1k5h-demo-booked-trade-audit-v1'
+   &&recoveredBooked.status==='separate_broker_cohort_observed'
+   &&recoveredBooked.account_context===expected
+   &&recoveredBooked.frozen_artifact_id===archive[0].id
+   &&recoveredBooked.matched_with_frozen_markouts===false
+   &&recoveredBooked.real_account_data===false;
  const forwardScoped=scoped&&forward.schema==='p1k5b-forward-direction-v1'
    &&forward.independent_oos===false&&forward.broker_fills_observed===false
    &&forward.net_pnl===null&&forward.profitability_validated===false;
@@ -178,6 +200,31 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
     journal.integrity==='warning'||lastArchivedJournal.integrity==='warning')&&
    <p role="alert" className="safe-note">تحذير: تعذر التحقق من سلامة
     سجل الأحداث المستقبلية؛ تم حجب عدد النتائج حتى مراجعة البيانات.</p>}
+  {bookedVerified&&<div className="feature-zone"
+    aria-label="Separate real MT5 Demo booked broker cost audit">
+   <h4>صفقات MT5 Demo المنفذة فعلياً — P1-K5H</h4>
+   <p className="safe-note">هذه معاملات مُغلقة من سجل الوسيط لنظام التداول
+    التنفيذي. <strong>مو صفقات من دراسة Sniper المجمدة</strong>، وما يجوز نقارن أرباحها
+    مباشرة مع قياس اتجاه الخمس ثواني.</p>
+   <div className="operator-grid">
+    <div>مراكز Demo المغلقة <strong>{count(booked.physical_broker_trades)}</strong></div>
+    <div>مجموع الأحجام المنفذة (لوت) <strong>{priceMoney(booked.closed_volume_lots_sum)}</strong></div>
+    <div>عمولات وسيط مسجلة <strong>{priceMoney(booked.booked_commission_account_currency)}</strong></div>
+    <div>Swap مسجل <strong>{priceMoney(booked.booked_swap_account_currency)}</strong></div>
+    <div>Fee مسجل <strong>{priceMoney(booked.booked_fee_account_currency)}</strong></div>
+    <div>صافي سجل الصفقات المنفصلة (عملة Demo) <strong>
+     {priceMoney(booked.net_demo_account_currency)}</strong></div>
+   </div>
+   <p className="safe-note">بيانات حجز Broker مسجلة محلياً، ولا تعتبر
+    نتيجة النموذج المجمد أو دليلاً مستقلاً على الربحية أو قبول REAL.</p>
+  </div>}
+  {recoveredBookedVerified&&!scoped&&
+   <p className="safe-note">أمكن استرجاع سجل صفقات Demo منفصل من قاعدة البيانات.
+    هذه ليست تنفيذات الدراسة المجمدة ولا دليل مطابقة مباشر.</p>}
+  {verifiedArtifact&&booked.status==='insufficient_broker_evidence'&&
+   <p className="safe-note">P1-K5H: لا توجد صفقات MT5 Demo منسوبة فعلياً
+    إلى نفس الحساب بعد تجميد الدراسة، أو توجد سجلات غير متسقة
+    لا تسمح بإظهار مجموع صافي موثوق.</p>}
   {costVerified&&<div className="feature-zone"
     aria-label="Frozen preregistered quote-only cost sensitivity P1K5G">
    <h4>تكاليف افتراضية محددة قبل الرصد — P1-K5G</h4>
