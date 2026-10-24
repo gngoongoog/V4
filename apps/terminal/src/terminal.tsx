@@ -16,7 +16,7 @@ import type {OperatorWriteTicket} from './operator-write-fence';
 import {MicroCapitalOperations} from './micro-capital-operations';
 import {ExecutionQualityOperations} from './execution-quality-operations';
 import {ModeEvidenceOperations} from './mode-evidence-operations';
-import {FrozenCoordinatorOperations} from './frozen-coordinator-operations';
+import {FrozenCoordinatorOperations,supportedFrozenMode} from './frozen-coordinator-operations';
 import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position} from './types';
 import {DESIGN_FIXTURE} from './mock';
@@ -519,18 +519,19 @@ export default function Terminal(){
     ||!t?.connected||!t.demo||t.account_trade_mode!==0
     ||!['brains','brainControl'].includes(page)){sendNotice('التجميد البحثي يتطلب STOP وMT5 Demo موصول',true);return}
   const expected=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
-  if(unwrap(pageData).context!==expected||unwrap(pageData).trading_mode!=='expert'){
-   sendNotice('سياق حساب MT5 Demo أو وضع Expert تغيّر، أعد تحميل صفحة العقول',true);return
+  const chosenMode=unwrap(pageData).trading_mode;
+  if(unwrap(pageData).context!==expected||!supportedFrozenMode(chosenMode)){
+   sendNotice('سياق حساب MT5 Demo أو وضع التداول تغيّر، أو Sniper يحتاج دراسة Tick مستقلة',true);return
   }
   const mutation=beginWrite('frozen-coordinator');if(!mutation)return;
   try{
-   await frozenCoordinatorAction(action,expected);
+   await frozenCoordinatorAction(action,expected,chosenMode);
    if(!writeFresh(mutation))return;
    const ticket=scopedGeneration.current.beginRead('frozenCoordinator');
    const refreshed=unwrap(await readPanel('/v1/execution/frozen-coordinator'));
    if(!writeFresh(mutation))return;
    if(scopedGeneration.current.isCurrent(ticket))setFrozenSlot({scope:viewScope,report:refreshed});
-   sendNotice(action==='freeze'?'تم تثبيت تجربة Expert البحثية في Rust Core':'تم إيقاف التجربة البحثية وحفظ نتائجها في Core');
+   sendNotice(action==='freeze'?('تم تثبيت تجربة '+chosenMode+' البحثية في Rust Core'):'تم إيقاف تجربة '+chosenMode+' البحثية وحفظ نتائجها في Core');
   }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
   finally{finishWrite(mutation)}
  };
