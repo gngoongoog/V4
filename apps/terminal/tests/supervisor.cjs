@@ -15,9 +15,12 @@ assert(runtime.includes('Mode recommendations never switch execution ownership')
 assert(runtime.includes('No reconciled MT5 telemetry'));
 assert(runtime.includes('!stopped || !broker_flat || !settled'));
 assert(core.includes('/v1/enterprise/supervisor') && core.includes('enterprise_supervisor::save'));
-assert(engine.includes('let entries_allowed=if run && self.supervisor_policy_valid {') && engine.includes('self.supervisor_permits_entry('));  
-assert(engine.includes('let enter=if status.requested_run && self.supervisor_policy_valid {') && engine.includes('self.supervisor_policy_valid && (!self.supervisor.enforce_entry_gate || assessed)'));   
+assert(engine.includes('let entries_allowed=if run && quality_allows && self.supervisor_policy_valid {') && engine.includes('self.supervisor_permits_entry('));  
+assert(engine.includes('let enter=if status.requested_run && quality_allows && self.supervisor_policy_valid {') && engine.includes('self.supervisor_policy_valid && (!self.supervisor.enforce_entry_gate || assessed)'));   
 assert(engine.includes('let current = enforce_portfolio'));
+assert(engine.includes('self.refresh_quality_circuit(db,telemetry,now);'));
+assert(engine.includes('core_broker_quality_entry_circuit'));
+assert(engine.includes('self.quality_circuit.entry_allowed(&next.telemetry,self.is_live_target())'));
 assert(engine.includes('fn load_supervisor_fail_closed') && engine.includes('refresh_supervisor'));
 assert(core.includes('self.execution.refresh_supervisor(&self.db)')); 
 assert(shell.includes('fn update_supervisor') && shell.includes('"/v1/enterprise/supervisor"'));
