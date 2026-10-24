@@ -2,7 +2,7 @@
 //! Observes the *same accepted Core pulses*; NEVER submits broker orders,
 //! learns from future closed deals, builds synthetic PnL, or backfills ticks.
 //! Classic Sniper is explicitly unsupported by this Learner-only snapshot.
-use anyhow::{ensure,Result};
+use anyhow::{ensure,Context,Result};
 use braintrade_domain::{
     execution::Signal,sniper::Engine,trading::{SniperBrain,TradingMode},
     Config,Telemetry,
