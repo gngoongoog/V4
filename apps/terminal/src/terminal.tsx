@@ -18,6 +18,7 @@ import {ExecutionQualityOperations} from './execution-quality-operations';
 import {ModeEvidenceOperations} from './mode-evidence-operations';
 import {FrozenCoordinatorOperations,supportedFrozenMode} from './frozen-coordinator-operations';
 import {QuoteClockEvidence} from './quote-clock-evidence';
+import {SniperTickEvidence} from './sniper-tick-evidence';
 import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position} from './types';
 import {DESIGN_FIXTURE} from './mock';
@@ -111,7 +112,7 @@ export default function Terminal(){
  const [pageTimeSlot,setPageTimeSlot]=useState<{scope:string;timestamp:number|null}|null>(null);
  const [config,setConfig]=useState<Record<string,unknown>|null>(null);const [riskSnapshot,setRiskSnapshot]=useState<Record<string,unknown>|null>(null);
  const [configScope,setConfigScope]=useState<string|null>(null);const [riskScope,setRiskScope]=useState<string|null>(null);
- const [learning,setLearning]=useState<Record<string,unknown>|null>(null);const [brainReport,setBrainReport]=useState<Record<string,unknown>|null>(null);const [frozenSlot,setFrozenSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [portfolioReport,setPortfolioReport]=useState<Record<string,unknown>|null>(null);const [executionQuality,setExecutionQuality]=useState<Record<string,unknown>|null>(null);const [modeEvidence,setModeEvidence]=useState<Record<string,unknown>|null>(null);const [filter,setFilter]=useState<'all'|'buy'|'sell'>('all');const [opsTab,setOpsTab]=useState<'trade'|'orders'|'advanced'>('trade');
+ const [learning,setLearning]=useState<Record<string,unknown>|null>(null);const [brainReport,setBrainReport]=useState<Record<string,unknown>|null>(null);const [frozenSlot,setFrozenSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [portfolioReport,setPortfolioReport]=useState<Record<string,unknown>|null>(null);const [executionQuality,setExecutionQuality]=useState<Record<string,unknown>|null>(null);const [modeEvidence,setModeEvidence]=useState<Record<string,unknown>|null>(null);const [sniperAuditSlot,setSniperAuditSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [filter,setFilter]=useState<'all'|'buy'|'sell'>('all');const [opsTab,setOpsTab]=useState<'trade'|'orders'|'advanced'>('trade');
  const [clock,setClock]=useState('');const [lastStatusAt,setLastStatusAt]=useState<number|null>(null);const [liveLogin,setLiveLogin]=useState('');const [approval,setApproval]=useState<OperatorApproval|null>(null);
  const [settingsEdit,setSettingsEdit]=useState<Record<string,unknown>|null>(null);
  const [settingsScope,setSettingsScope]=useState<string|null>(null);
@@ -141,6 +142,7 @@ export default function Terminal(){
  // single React paint while the async effect schedules a replacement read.
  // The existing generation fence separately prevents late callbacks writing.
  const pageData=pagePanel?.scope===viewScope?pagePanel.data:null;
+ const activeSniperAudit=sniperAuditSlot?.scope===viewScope?sniperAuditSlot.report:null;
  const activeFrozenCoordinator=frozenSlot?.scope===viewScope?frozenSlot.report:null;
  const pageError=pageErrorSlot?.scope===viewScope?pageErrorSlot.message:'';
  const pageUpdatedAt=pageTimeSlot?.scope===viewScope?pageTimeSlot.timestamp:null;
@@ -253,6 +255,23 @@ export default function Terminal(){
   setExecutionQuality(null);get();
   const timer=setInterval(()=>{if(document.visibilityState==='visible')get()},3000);
   return()=>{active=false;clearInterval(timer)};
+ },[page,preview,contextKey]);
+ useEffect(()=>{
+  if(page!=='sniper'||preview||!hasTauri()){setSniperAuditSlot(null);return;}
+  let alive=true;
+  const refresh=()=>{
+   const ticket=scopedGeneration.current.beginRead('sniperTickAudit');
+   void readPanel('/v1/execution/sniper-tick-audit').then(v=>{
+    if(alive&&scopedGeneration.current.isCurrent(ticket))
+      setSniperAuditSlot({scope:viewScope,report:unwrap(v)});
+   }).catch(()=>{
+    if(alive&&scopedGeneration.current.isCurrent(ticket))
+      setSniperAuditSlot({scope:viewScope,report:null});
+   });
+  };
+  setSniperAuditSlot(null);refresh();
+  const timer=setInterval(()=>{if(document.visibilityState==='visible')refresh()},3000);
+  return()=>{alive=false;clearInterval(timer)};
  },[page,preview,contextKey]);
  useEffect(()=>{
   if(page!=='execution'||preview||!hasTauri()){setModeEvidence(null);return;}
@@ -655,7 +674,7 @@ export default function Terminal(){
            <label className="check-label"><input type="checkbox" disabled={!activeSettingsEdit||busy||preview} checked={activeClearTelegram} onChange={e=>{setTelegramDraftScope(contextKey);setClearTelegram(e.target.checked)}}/>حذف رمز Telegram المحفوظ</label>
            <button className="save-button" disabled={busy||preview||!activeSettingsEdit} onClick={()=>void saveGeneral()}>حفظ وإعادة ربط MT5</button>
           </div>:
-        page==='trading'||page==='sniper'?<div className="feature-zone"><div className="live-indicator"><strong>Sniper Priority</strong><span>{display?.analysis?.regime||'UNAVAILABLE'}</span><b>{display?.analysis?.action||'WAIT'}</b></div><p>العقل المنفّذ الوحيد يختاره Core، وأي تبديل أثناء التشغيل يحتاج أوامر MT5 مُسوّاة وعدم وجود مراكز مفتوحة.</p>{page==='sniper'&&<QuoteClockEvidence status={status} preview={preview}/>}<TradingSettingsOperations source={pageData} key={viewScope} disabled={busy||preview} armed={status?.requested_run===true} apply={runSaveTrading}/><div className="quick-ops"><button disabled={busy||preview} onClick={()=>void runHandoff(true)}>تفعيل أولوية القناص</button><button disabled={busy||preview} onClick={()=>void runHandoff(false)}>تحويل التنفيذ للبديل</button></div><div className="safe-note">هذه الأزرار تستدعي قواعد التحويل الفعلية في Rust؛ لا يوجد تجاوز لفحوصات المحرك.</div><EnterpriseSupervisor preview={preview} key={contextKey} armed={status?.requested_run===true} onSave={runSaveSupervisor}/><Table rows={rows}/></div>:
+        page==='trading'||page==='sniper'?<div className="feature-zone"><div className="live-indicator"><strong>Sniper Priority</strong><span>{display?.analysis?.regime||'UNAVAILABLE'}</span><b>{display?.analysis?.action||'WAIT'}</b></div><p>العقل المنفّذ الوحيد يختاره Core، وأي تبديل أثناء التشغيل يحتاج أوامر MT5 مُسوّاة وعدم وجود مراكز مفتوحة.</p>{page==='sniper'&&<><QuoteClockEvidence status={status} preview={preview}/><SniperTickEvidence status={!preview&&feed.broker?status:null} report={activeSniperAudit} preview={preview} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperTickAudit');void readPanel('/v1/execution/sniper-tick-audit').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:null})})}}/></>}<TradingSettingsOperations source={pageData} key={viewScope} disabled={busy||preview} armed={status?.requested_run===true} apply={runSaveTrading}/><div className="quick-ops"><button disabled={busy||preview} onClick={()=>void runHandoff(true)}>تفعيل أولوية القناص</button><button disabled={busy||preview} onClick={()=>void runHandoff(false)}>تحويل التنفيذ للبديل</button></div><div className="safe-note">هذه الأزرار تستدعي قواعد التحويل الفعلية في Rust؛ لا يوجد تجاوز لفحوصات المحرك.</div><EnterpriseSupervisor preview={preview} key={contextKey} armed={status?.requested_run===true} onSave={runSaveSupervisor}/><Table rows={rows}/></div>:
         page==='execution'?<div className="feature-zone"><ExecutionBindingOperations source={pageData} key={viewScope} telemetry={status?.telemetry??null} ready={!preview&&trustworthy} armed={status?.requested_run===true} disabled={busy||preview} onBind={runBrokerBind}/>
         <ExecutionQualityOperations status={!preview&&feed.broker?status:null} report={executionQuality} disabled={preview||busy}
           onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('executionQuality');void readPanel('/v1/execution/quality').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setExecutionQuality(unwrap(v))}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setExecutionQuality(null)})}}/>
