@@ -7,7 +7,7 @@
     "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 4173",
-    "test": "node tests/contracts.cjs && node tests/health.cjs && node tests/data.cjs && node tests/brain-evidence.cjs && node tests/operations.cjs && node tests/supervisor.cjs && node --experimental-strip-types --test tests/panel-guard.test.mjs && node --experimental-strip-types --test tests/scoped-read-fence.test.mjs && node tests/micro-capital.cjs && node tests/micro-capital-ui.cjs && node tests/micro-readiness.cjs && node tests/execution-quality.cjs && node tests/account-binding-navigation.cjs && node tests/operator-approval.cjs",
+    "test": "node tests/contracts.cjs && node tests/health.cjs && node tests/data.cjs && node tests/brain-evidence.cjs && node tests/operations.cjs && node tests/supervisor.cjs && node --experimental-strip-types --test tests/panel-guard.test.mjs && node --experimental-strip-types --test tests/scoped-read-fence.test.mjs && node tests/micro-capital.cjs && node tests/micro-capital-ui.cjs && node tests/micro-readiness.cjs && node tests/execution-quality.cjs && node tests/account-binding-navigation.cjs && node tests/operator-approval.cjs && node --experimental-strip-types --test tests/operator-write-fence.test.mjs",
     "preview:health": "node tests/render-health-preview.cjs"
   },
   "dependencies": {
