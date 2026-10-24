@@ -89,7 +89,9 @@ function Load-AcceptanceReport {
         $Hotspot = $Report.fast_path.largest_local_pre_send_component_p95
         $Warnings = @($Report.warnings)
         $Lines = New-Object System.Collections.Generic.List[string]
-        $Lines.Add("النتيجة: $Result")
+        $Lines.Add("تقييم سرعة القناص المحلي: $Result")
+        $BrokerGate = if ($null -ne $Report.broker_lifecycle_acceptance) { [string]$Report.broker_lifecycle_acceptance.status } else { "NOT TESTED" }
+        $Lines.Add("قبول دورة MT5 Demo الكاملة (G2): $BrokerGate — يحتاج Send/Fill/Close/Deals موثقة")
         $Lines.Add("أكبر مكوّن محلي قبل الإرسال: " + $(if ($null -eq $Hotspot) { "غير متاح" } else { [string]$Hotspot }))
         if (($null -ne $Report.fast_path.sources.native.timings.queue_to_send_ms.p95) -and ($null -ne $Report.fast_path.sources.poll.timings.queue_to_send_ms.p95)) {
             $NativeP95 = [double]$Report.fast_path.sources.native.timings.queue_to_send_ms.p95
@@ -163,6 +165,7 @@ function Export-ShareBundle {
             poll = $Report.fast_path.sources.poll
             largest_local_pre_send_component_p95 = $Report.fast_path.largest_local_pre_send_component_p95
             contracts = $Report.contracts
+            broker_lifecycle_acceptance = $Report.broker_lifecycle_acceptance
             warnings = $Report.warnings
         }
         $SummaryPath = Join-Path $Staging "share-summary.json"
