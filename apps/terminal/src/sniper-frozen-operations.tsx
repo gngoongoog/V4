@@ -220,7 +220,7 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
    </div>
    <p className="safe-note">طابق Core حساب المراكز والمبالغ مع أوامر الفتح
     وتذاكر Deals الأصلية المخزنة محلياً، حتى مع الإغلاق الجزئي.
-    هذا **تدقيق SQLite لسجلات Demo** وليس اختبار اتصال مباشر بوسيط
+    هذا <strong>تدقيق SQLite لسجلات Demo</strong> وليس اختبار اتصال مباشر بوسيط
     MT5 أو نتيجة النموذج المجمد أو دليلاً مستقلاً على الربحية أو قبول REAL.</p>
   </div>}
   {recoveredBookedVerified&&!scoped&&
