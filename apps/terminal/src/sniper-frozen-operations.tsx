@@ -20,6 +20,9 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
  const history=obj(view.research_artifact_history);
  const journal=obj(view.prospective_event_journal);
  const lastArchivedJournal=obj(view.last_archived_forward_journal);
+ const holdout=obj(view.chronological_holdout_diagnostic);
+ const recoveredHoldout=obj(view.last_archived_holdout_diagnostic);
+ const holdoutScore=obj(holdout.holdout);
  const eligible=!preview&&eligibleFrozenSniper(status,page);
  const expected=t?JSON.stringify([t.server,t.login,t.symbol,t.currency]):'';
  const statusValue=view.status;
@@ -60,6 +63,18 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
    &&lastArchivedJournal.complete_trace===false
    &&lastArchivedJournal.historical_oos===false
    &&lastArchivedJournal.broker_pnl===null;
+ const holdoutVerified=journalVerified
+   &&holdout.schema==='p1k5f-chronological-prospective-diagnostic-v1'
+   &&holdout.status==='descriptive_holdout_only'
+   &&holdout.independent_oos===false&&holdout.broker_pnl===null
+   &&holdout.strategy_win_rate===null&&holdout.automatic_promotion===false;
+ const recoveredHoldoutVerified=archivedJournalVerified
+   &&recoveredHoldout.schema==='p1k5f-chronological-prospective-diagnostic-v1'
+   &&recoveredHoldout.status==='descriptive_holdout_only'
+   &&recoveredHoldout.independent_oos===false
+   &&recoveredHoldout.broker_pnl===null;
+ const percent=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=1
+   ?`${(v*100).toFixed(1)}%`:'—';
  const forwardScoped=scoped&&forward.schema==='p1k5b-forward-direction-v1'
    &&forward.independent_oos===false&&forward.broker_fills_observed===false
    &&forward.net_pnl===null&&forward.profitability_validated===false;
@@ -144,6 +159,26 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
     journal.integrity==='warning'||lastArchivedJournal.integrity==='warning')&&
    <p role="alert" className="safe-note">تحذير: تعذر التحقق من سلامة
     سجل الأحداث المستقبلية؛ تم حجب عدد النتائج حتى مراجعة البيانات.</p>}
+  {holdoutVerified&&<div className="feature-zone"
+    aria-label="Chronological frozen research diagnostic P1K5F">
+   <h4>تقييم زمني وصفي للـLearner — P1-K5F</h4>
+   <div className="operator-grid">
+    <div>أيام التقييم المحجوزة <strong>{count(holdout.holdout_days)}</strong></div>
+    <div>عينات التقييم <strong>{count(holdoutScore.matured_labels)}</strong></div>
+    <div>اتجاه Learner الموافق <strong>{percent(holdoutScore.frozen_direction_fraction)}</strong></div>
+    <div>خط أساس شراء دائم (نفس الفرص) <strong>{percent(holdoutScore.always_buy_direction_fraction)}</strong></div>
+    <div>عينات مستبعدة حول الفاصل <strong>{count(holdout.embargoed_labels)}</strong></div>
+   </div>
+   <p className="safe-note">آخر يومين من 6 أيام MT5 Demo على الأقل،
+    وفاصل 30 دقيقة بين المقارنة والفحص. هذا تحليل اتجاه على فرص Learner
+    المنتقاة، وليس اختبار OOS مستقلاً أو Win Rate أو عائداً صافياً بعد التكاليف.</p>
+  </div>}
+  {journalVerified&&holdout.status==='insufficient_or_unverified'&&
+   <p className="safe-note">P1-K5F: لا توجد بعد أيام تداول/عينات مستقبلية كافية
+    لإظهار مقارنة زمنية منضبطة. لم تُفترض نتائج مفقودة أو أرباح.</p>}
+  {recoveredHoldoutVerified&&!scoped&&
+   <p className="safe-note">استرجع Core أيضاً تقريراً زمنياً وصفياً للحساب نفسه
+    من سجل البحث السابق؛ لم يُعتبر هذا توثيق OOS مستقلاً.</p>}
   {trainingVerified&&<div className="feature-zone" aria-label="Sniper frozen training ledger checkpoint">
    <h4>توثيق نقطة تجميد بيانات Learner — P1-K5C</h4>
    <div className="operator-grid">
