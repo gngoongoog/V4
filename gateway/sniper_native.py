@@ -124,6 +124,18 @@ class NativeTickMailbox:
         self.connected = False
         self.dropped = 0
         self.last_received_ms = 0
+        self.last_login: int | None = None
+        self.last_symbol: str | None = None
+
+    def reset(self) -> None:
+        """Discard quote evidence across MT5 disconnects and account switches."""
+        with self._lock:
+            self._items.clear()
+            self.connected = False
+            self.last_received_ms = 0
+            self.last_login = None
+            self.last_symbol = None
+        self._wake.set()
 
     def set_connected(self, value: bool) -> None:
         with self._lock:
@@ -137,6 +149,8 @@ class NativeTickMailbox:
                 self.dropped += 1
             self._items.append(packet)
             self.last_received_ms = int(packet.get("received_ms", clock_ms()))
+            self.last_login = packet.get("login")
+            self.last_symbol = packet.get("symbol")
         self._wake.set()
 
     def drain(self, login: int, symbol: str, maximum: int = 256) -> list[dict]:
@@ -151,10 +165,14 @@ class NativeTickMailbox:
                 self._wake.clear()
         return selected
 
-    def recent(self, now_ms: int | None = None, maximum_age_ms: int = 500) -> bool:
+    def recent(self, now_ms: int | None = None, maximum_age_ms: int = 500,
+               *, login: int | None = None, symbol: str | None = None) -> bool:
         now_ms = clock_ms() if now_ms is None else int(now_ms)
         with self._lock:
-            return self.connected and self.last_received_ms > 0 and 0 <= now_ms - self.last_received_ms <= maximum_age_ms
+            return (self.connected and self.last_received_ms > 0
+                    and (login is None or self.last_login == login)
+                    and (symbol is None or self.last_symbol == symbol)
+                    and 0 <= now_ms - self.last_received_ms <= maximum_age_ms)
 
     def wait(self, timeout: float) -> None:
         self._wake.wait(max(0.0, float(timeout)))
@@ -307,10 +325,11 @@ class NativeTickBridge:
         self.token_path: Path | None = None
         self.data_path: Path | None = None
         self.server: _WindowsPipeServer | None = None
+        self.blocked = False  # A worker that did not stop may still carry old session ticks.
 
     @property
     def available(self) -> bool:
-        return os.name == "nt" and self.server is not None and self.server.running
+        return os.name == "nt" and not self.blocked and self.server is not None and self.server.running
 
     @property
     def connected(self) -> bool:
@@ -322,7 +341,7 @@ class NativeTickBridge:
         data_path = Path(str(getattr(terminal_info, "data_path", "") or ""))
         if not str(data_path) or str(data_path) == ".":
             return False
-        if self.server is not None and self.data_path == data_path and self.server.running:
+        if self.server is not None and self.data_path == data_path and self.server.running and not self.blocked:
             return True
         if not self.close():
             return False
@@ -334,10 +353,11 @@ class NativeTickBridge:
         return self.server.running
 
     def drain(self, login: int, symbol: str, maximum: int = 256) -> list[dict]:
-        return self.mailbox.drain(int(login), symbol, maximum)
+        return [] if self.blocked else self.mailbox.drain(int(login), symbol, maximum)
 
-    def recent(self, now_ms: int | None = None, maximum_age_ms: int = 500) -> bool:
-        return self.mailbox.recent(now_ms, maximum_age_ms)
+    def recent(self, now_ms: int | None = None, maximum_age_ms: int = 500,
+               *, login: int | None = None, symbol: str | None = None) -> bool:
+        return not self.blocked and self.mailbox.recent(now_ms, maximum_age_ms, login=login, symbol=symbol)
 
     def wait(self, timeout: float) -> None:
         self.mailbox.wait(timeout)
@@ -348,7 +368,13 @@ class NativeTickBridge:
         if server is not None:
             stopped = server.stop()
         if not stopped:
+            # Keep old server/token attached so a new pipe cannot acquire the
+            # same name, but never consider its quotes evidence for new decisions.
+            self.blocked = True
+            self.mailbox.reset()
             return False
+        self.blocked = False
+        self.mailbox.reset()
         self.server = None
         self.token_path = None
         self.data_path = None
