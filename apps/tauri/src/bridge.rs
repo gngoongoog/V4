@@ -130,6 +130,24 @@ fn update_risk(risk: Value) -> Result<Value, String> {
 }
 
 #[tauri::command]
+fn update_portfolio(settings: Value) -> Result<Value, String> {
+    // This command accepts exactly the Core's portfolio policy shape.
+    // It never starts the engine; Core requires STOPPED and no unresolved intents.
+    let data=settings.as_object().ok_or("Portfolio settings must be an object")?;
+    if data.len()!=4 || !["enabled","max_positions","max_lots","max_risk_percent"]
+        .iter().all(|field|data.contains_key(*field)) {
+        return Err("Portfolio settings fields are invalid".into());
+    }
+    if !settings["enabled"].is_boolean() ||
+        !settings["max_positions"].as_u64().is_some_and(|n|(1..=100).contains(&n)) ||
+        !settings["max_lots"].as_f64().is_some_and(|n|n.is_finite()&&(0.001..=10000.0).contains(&n)) ||
+        !settings["max_risk_percent"].as_f64().is_some_and(|n|n.is_finite()&&(0.01..=100.0).contains(&n)) {
+        return Err("Portfolio settings outside valid bounds".into());
+    }
+    open_client()?.post("/v1/execution/portfolio", settings).map_err(|err|err.to_string())
+}
+
+#[tauri::command]
 fn update_settings(config: Value, telegram_token: String, clear_telegram_token: bool) -> Result<Value, String> {
     // Never expose the saved token. Core validates account and secret changes.
     open_client()?.post("/v1/config", json!({
@@ -196,7 +214,7 @@ pub fn run() {
         .manage(AppLifecycle {stopping:Arc::new(AtomicBool::new(false))})
         .invoke_handler(tauri::generate_handler![
             get_status, read_panel, execute_control,
-            update_risk, update_supervisor, update_settings, update_trading_settings,
+            update_risk, update_portfolio, update_supervisor, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, backtest_action, update_brain_control, bind_execution
         ])
