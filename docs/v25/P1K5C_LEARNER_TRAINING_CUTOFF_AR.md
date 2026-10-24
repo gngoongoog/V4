@@ -1,27 +1,31 @@
-# BRAINTRADE V4 — Enterprise V25 / P1-K5C: Learner freeze-time training provenance
+# BRAINTRADE V4 — Enterprise V25 / المرحلة P1-K5C
 
-**Scope:** Research-only account-scoped training cutoff for Sniper Learner; stacked on P1-K5B / PR #140. No change to the executing strategy, risk manager, MT5 sends, broker journal or REAL permissions.
+## الهدف
 
-## The gap closed
-P1-K5B offers a five-second future Midquote directional observation, but before this phase it did not prove that the frozen in-memory Learner scores still represented the same completed Demo broker ledger at operator freeze time.
+توثيق **نقطة قطع بيانات التدريب عند تجميد Sniper Learner**، قبل تقييم الإشارات على الأسعار المستقبلية. تعتمد المرحلة على P1-K5B (PR #140)، ولا تغيّر صلاحيات التداول أو إدارة المخاطر أو عمولات الحساب.
 
-At a STOPPED operator freeze, Rust Core now reads **up to the latest 2,000 rows** of the deduplicated `coordinator_broker_samples` for the exact current Demo account and `sniper_learner`. The replay matches the same filters used by the Learner's model refresh: the last 30 days, closed before the cutoff, `mt5_demo_broker`, Sniper mode and policy identity, finite realized net/reward, valid policy/arm. It compares the count of accepted strategy and target-arm samples against the *in-memory engine scores* to reject stale snapshots. Any future-dated broker close rejects the freeze.
+## العمل المنفّذ
 
-There is no SQLite read or write on a Fast Pulse Tick. The provenance snapshot is held inside the frozen research trial, alongside the 5-second direction label counters, and is exposed via the account-scoped existing `/v1/execution/frozen-sniper` report. The Windows Sniper page displays the source and cutoff times only when the bound Demo account and schema match.
+1. عند ضغط **تجميد نموذج Sniper Learner** في حالة STOP وعلى حساب MT5 Demo موثّق ومتطابق، يقرأ Rust Core آخر 2,000 صف كحد أقصى من سجل صفقات Demo المكتملة المخصصة لـ`sniper_learner`.
+2. يطبق نفس حدود إعادة التدريب المستخدمة في النظام: صفقات آخر 30 يوماً، ذات النتائج المغلقة، مع مصدر `mt5_demo_broker` وتطابق سياسة Sniper، وسلامة `net` و`reward`.
+3. يحسب عدد العينات الداخلة في تعلم السياسات وعدد عينات اختيار أهداف pip، ويطابقهما مع عدادات النموذج المحمّل فعلياً داخل الذاكرة. إذا اختلفت الأعداد، يُرفض التجميد بدلاً من تقديم نموذج قديم على أنه حديث.
+4. يرفض وجود إغلاق صفقة بتوقيت لاحق لوقت التجميد؛ وهذا منع واضح لتسرّب نتائج من المستقبل إلى الفترة السابقة.
+5. يخزن وقت التجميد، وأول وآخر إغلاق تدريبي مشمول، وعدد العينات، داخل تجربة البحث المجمّدة في ذاكرة Core. تعرض واجهة Windows هذه المعلومات فقط لحساب Demo المطابق للتقرير.
+6. التحقق كله يحصل عند أمر التجميد، **ولا ينفذ استعلام SQLite على مسار Fast Pulse لكل Tick**.
 
-## What this evidence does and does not prove
-- Proves that **sample counts** used by the frozen model match the selected complete Demo broker ledger at a particular cutoff timestamp; rejects stale or future-dated training rows.
-- Does **not** provide a cryptographic digest or byte-for-byte equality of reward values; those require a separate immutable model artifact.
-- Does **not** establish independent OOS, train/test embargo for dynamically adapted systems, MT5 execution profitability, sample sufficiency or broker fills for the research trial.
-- Continues to report `independent_oos=false`, `broker_pnl=null`, and `promotion_enabled=false` by design; the future direction measurement is not a trade win rate.
-- No changes to account binding, commission configuration, small-balance flexibility, risk gates or real trading permissions.
+## حدود النتيجة
 
-## Verification matrix
-- Rust unit tests: unrefreshed weights, valid Demo ledger, source counts, REAL refusal, future-dated closed sample refusal.
-- React source-contract tests: account-scoped cutoff and refusal to display training results as OOS/PNL.
-- Existing P1-K5A Classic M1 and P1-K5B directional tests stay in `npm test`.
-- Require exact-head GitHub Research, canonical V25 Portable and Windows legacy checks before release.
-- Real Windows UI interaction, MetaEditor native EA and actual MT5 Demo broker acceptance remain **not tested** here.
+هذا إثبات **مطابقة أعداد العينات وتواريخها** بين سجل الوسيط والنموذج المجمّد. ليس تجزئة SHA-256 للملف الكامل للأوزان، ولا شهادة فصل زمني مستقل OOS، ولا اختبار تنفيذ حقيقي، ولا برهاناً على الربحية. تبقى قيم `independent_oos=false` و`broker_pnl=null`، ولا توجد ترقية تلقائية للعقل أو صفقات إضافية.
 
-## Next planned stage
-P1-K5D: durable, checksum-verified frozen research session artifact with explicit train/test origin; then predeclared chronological evaluation, independent holdout across sessions, and a separate broker-cost/fill comparison. Do not automatically promote a model based on a directional score.
+العمل على حساب حقيقي صغير (50 أو 100 دولار) وإعدادات الرافعة والعمولة والمخاطر الحالية **لم يُغيَّر** في هذه المرحلة. الدراسة نفسها تقتصر على Demo لتجنّب خلط البحث بنتائج التداول الفعلي.
+
+## الاختبارات
+
+- Rust: رفض الحساب REAL، كشف عينات جديدة لم يُعاد تحميلها في أوزان Learner، مطابقة عدد العينات السليمة، ورفض إغلاقات بتاريخ مستقبلي.
+- React: مطابقة سياق الحساب ونوع الدراسة، وعدم عرض بيانات التدريب كنسبة نجاح أو PnL.
+- GitHub Actions: فحوص Research، وWindows Portable الرسمي، وWindows القديم على **نفس SHA** مطلوبة قبل اعتماد الدمج.
+- فحص MetaEditor والـEA مع MT5 Demo الحقيقي والنقر الكامل داخل Windows WebView2 لم يجرِ هنا، ويبقى جزءاً من قبول النسخة على جهاز المستخدم.
+
+## المرحلة التالية بحسب المخطط
+
+**P1-K5D:** حفظ سجل تجربة بحثية مؤرّخ وقابل للتحقق من سلامته، مع بصمة مستقلة للمعلمات والأوزان ونوافذ الاختبار، ثم بناء تقييم زمني خارج عينات التدريب مع مراعاة تكاليف الوسيط. لا نحول نسبة الاتجاه بعد 5 ثوانٍ إلى Win Rate لصفقات فعلية.
