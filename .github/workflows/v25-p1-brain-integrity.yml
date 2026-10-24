@@ -1,0 +1,37 @@
+name: V25 P1-A Brain Evidence Integrity
+on:
+  push:
+    branches: [feature/v25-enterprise-validation-20261024]
+    paths:
+      - 'crates/runtime/src/brain_integrity.rs'
+      - 'crates/runtime/src/execution.rs'
+      - 'crates/runtime/src/lib.rs'
+      - 'scripts/check_execution.py'
+      - '.github/workflows/v25-p1-brain-integrity.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    name: Brain evidence contracts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.1'
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Run 17-brain evidence and account isolation regression
+        run: cargo test --locked -p braintrade-runtime brain_integrity::tests
+      - name: Build actual Rust Core from repository
+        run: cargo build --locked -p braintrade-runtime --bin braintrade-core
+      - name: Replay synthetic Demo reconciliation and brain evidence
+        run: python -B scripts/check_execution.py
