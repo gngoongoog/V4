@@ -47,8 +47,15 @@ fn id_ok(value: &str) -> bool {
 fn parse_dataset_context(raw: &str) -> Option<ContextKey> {
     let value: Value = serde_json::from_str(raw).ok()?;
     let row = value.as_array()?;
-    if row.len() != 4 {
-        return None;
+    if row.len() != 4 && row.len() != 6 { return None; }
+    // Version 2 research exports are scoped to a *verified* broker account
+    // mode. Market-only chronological backtest evidence below has four fields;
+    // accepting it for MANUAL research review never proves Demo/REAL fills.
+    if row.len() == 6 {
+        match (row[4].as_u64()?, row[5].as_bool()?) {
+            (0,true) | (2,false) => {}
+            _ => return None,
+        }
     }
     Some(ContextKey {
         server: row[0].as_str()?.to_owned(),
@@ -104,6 +111,7 @@ fn model_contract(artifact: &Value, stored_dataset_identity: &str) -> Result<BTr
         .filter(|rows| !rows.is_empty())
         .context("Challenger chronological split metadata missing")?;
     let mut contexts = BTreeSet::new();
+    let mut recorded_modes: BTreeMap<ContextKey, Option<(u64,bool)>> = BTreeMap::new();
     for split in splits {
         if split["purge_rows_each_side"].as_u64().unwrap_or(0) < 30 {
             bail!("Challenger split purge is below the 30-row label horizon");
@@ -111,7 +119,17 @@ fn model_contract(artifact: &Value, stored_dataset_identity: &str) -> Result<BTr
         let raw = split["context"]
             .as_str()
             .context("Challenger split context missing")?;
-        contexts.insert(parse_dataset_context(raw).context("Challenger split context is invalid")?);
+        let market = parse_dataset_context(raw).context("Challenger split context is invalid")?;
+        let decoded: Vec<Value> = serde_json::from_str(raw)?;
+        let mode = if decoded.len() == 6 {
+            Some((decoded[4].as_u64().unwrap(), decoded[5].as_bool().unwrap()))
+        } else { None };
+        if let Some(previous) = recorded_modes.insert(market.clone(),mode) {
+            if previous != mode {
+                bail!("Challenger includes conflicting legacy/Demo/REAL contexts for the same market identity");
+            }
+        }
+        contexts.insert(market);
     }
     if contexts.is_empty() {
         bail!("Challenger contains no usable training contexts");
@@ -475,6 +493,48 @@ pub fn route(method: &str, path: &str, body: &[u8], db: &mut Connection, now: u6
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn verified_mode_scoped_research_context_is_validated_without_blending_accounts() {
+        let demo=r#"["TestBroker",7,"XAUUSD","USD",0,true]"#;
+        let real=r#"["TestBroker",7,"XAUUSD","USD",2,false]"#;
+        let base=parse_dataset_context(demo).unwrap();
+        assert_eq!(parse_dataset_context(real).unwrap(),base);
+        assert!(parse_dataset_context(r#"["TestBroker",7,"XAUUSD","USD",0,false]"#).is_none());
+        assert!(parse_dataset_context(r#"["TestBroker",7,"XAUUSD","USD",2,true]"#).is_none());
+        assert!(parse_dataset_context(r#"["TestBroker",7,"XAUUSD","USD",1,false]"#).is_none());
+        assert!(parse_dataset_context(r#"["TestBroker",7,"XAUUSD","USD",0,1]"#).is_none());
+        assert!(parse_dataset_context(r#"["TestBroker",7,"XAUUSD","USD",0,true,"x"]"#).is_none());
+        assert_eq!(parse_dataset_context(r#"["TestBroker",7,"XAUUSD","USD"]"#),Some(base));
+    }
+
+    #[test]
+    fn manual_review_rejects_mixed_demo_real_splits_of_one_market_identity() {
+        // Four-field backtest evidence has no account-mode provenance. A
+        // combined Demo+REAL dataset cannot claim coverage from one such run.
+        let market=r#"["TestBroker",7,"XAUUSD","USD"]"#;
+        let demo=r#"["TestBroker",7,"XAUUSD","USD",0,true]"#;
+        let real=r#"["TestBroker",7,"XAUUSD","USD",2,false]"#;
+        let sample=serde_json::json!({
+            "schema":MODEL_SCHEMA,
+            "feature_schema":FEATURE_SCHEMA,
+            "label_schema":LABEL_SCHEMA,
+            "status":"unreviewed_challenger",
+            "eligible_for_promotion":false,
+            "training":{"random_split":false,"purged_chronological_split":true,"automatic_promotion":false},
+            "dataset":{"sha256":"a".repeat(64),"used_rows":900,
+                "split":[
+                    {"context":demo,"purge_rows_each_side":30},
+                    {"context":real,"purge_rows_each_side":30}
+                ]},
+            "metrics":{"holdout":{"rows":100,"accuracy":0.5,"balanced_accuracy":0.5,"macro_f1":0.5,"log_loss":1.0,"mean_confidence":0.5}}
+        });
+        assert!(model_contract(&sample,&"a".repeat(64)).is_err());
+        let mut safe=sample;
+        safe["dataset"]["split"]=serde_json::json!([{"context":demo,"purge_rows_each_side":30}]);
+        assert!(model_contract(&safe,&"a".repeat(64)).is_ok());
+        assert_eq!(parse_dataset_context(market),parse_dataset_context(demo));
+    }
+
     use super::*;
 
     fn metric() -> Value {
