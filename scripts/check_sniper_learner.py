@@ -124,7 +124,7 @@ def check(exe=None):
             entry=dict(ticket=77,position_id=55,symbol='XAUUSD',magic=410600,entry=0,volume=volume,
                 time_msc=now-100,profit=0.,commission=-.035,swap=0.,fee=0.,reason=3)
             partial=dict(entry,ticket=78,magic=0,entry=1,volume=volume/2,time_msc=now,profit=-.1,commission=-.0175)
-            sync=dict(login=17,server='Demo',currency='USD',until_ms=now,deals=[entry,partial])
+            sync=dict(login=17,server='Demo',currency='USD',trade_mode=0,until_ms=now,deals=[entry,partial])
             api('/v1/execution/sync',sync);publish()
             assert not api('/v1/execution')['learning_review']
             final=dict(partial,ticket=79,time_msc=now+1)
