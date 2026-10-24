@@ -791,6 +791,12 @@ impl Service {
                                     "independent_oos":false,
                                     "matched_with_frozen_markouts":false,
                                     "net_demo_account_currency":null}));
+                            view["last_archived_demo_recovery_audit"]=
+                                crate::sniper_demo_recovery_audit::inspect(
+                                    db,t,id,hash)
+                                .unwrap_or_else(|_|json!({"status":"not_verified",
+                                    "requires_live_broker_reconciliation":true,
+                                    "new_orders_authorized":false}));
                         }
                     }
                     if let Some(id)=view["research_artifact_id"].as_str().map(str::to_owned) {
@@ -825,6 +831,12 @@ impl Service {
                                         "independent_oos":false,
                                         "matched_with_frozen_markouts":false,
                                         "net_demo_account_currency":null}));
+                                view["demo_recovery_intent_audit"]=
+                                    crate::sniper_demo_recovery_audit::inspect(
+                                        db,t,&id,expected.as_deref().unwrap_or(""))
+                                    .unwrap_or_else(|_|json!({"status":"not_verified",
+                                        "requires_live_broker_reconciliation":true,
+                                        "new_orders_authorized":false}));
                             },
                             Err(_)=>{
                                 // Never present tampered research samples as verified.
