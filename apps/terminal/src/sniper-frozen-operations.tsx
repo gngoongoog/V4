@@ -45,6 +45,7 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
    <div>فجوات مصادر مستبعدة <strong>{count(view.excluded_source_switch)}</strong></div>
    <div>فواصل سعرية مستبعدة <strong>{count(view.excluded_broker_clock_gap)}</strong></div>
    <div>فقد طابور Native مستبعد <strong>{count(view.excluded_native_queue_counter_change)}</strong></div>
+   <div>لقطات MT5 خارج Pulse (استبعاد) <strong>{count(view.unpaired_reconciled_quote_changes)}</strong></div>
   </div>}
   <div className="quick-ops">
    <button type="button" disabled={preview||disabled} onClick={onRefresh}>تحديث من Rust Core</button>
