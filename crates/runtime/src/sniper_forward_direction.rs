@@ -124,6 +124,9 @@ impl ForwardDirectionAudit{
                     "entry_bid":pending.entry_bid,"entry_ask":pending.entry_ask,
                     "exit_bid":bid,"exit_ask":ask,
                     "gross_quote_markout_price":price_markout,
+                    "entry_tick_size":pending.tick,
+                    "tick_value_loss_per_lot":pending.tick_loss,
+                    "tick_value_profit_per_lot":pending.tick_profit,
                     "quote_gross_account_currency_per_lot":
                         quote_cost_estimate.map(|v|v.0),
                     "modeled_slippage_account_currency_per_lot":
