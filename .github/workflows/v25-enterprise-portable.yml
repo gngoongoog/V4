@@ -7,6 +7,8 @@ on:
       - 'ci/v25_gateway_journal_overlay.py'
       - 'ci/v25_broker_reconciliation_overlay.py'
       - 'ci/v25_core_partial_overlay.py'
+      - 'ci/v25_immutable_intent_overlay.py'
+      - 'tests/test_broker_intent_identity.py'
       - 'crates/runtime/src/execution_legacy.rs'
       - 'tests/test_broker_reconciliation_strict.py'
       - 'ci/v25-shortcut.ps1'
@@ -83,6 +85,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'V25 journal race overlay rejected restored source' }
           python ci/v25_broker_reconciliation_overlay.py
           if ($LASTEXITCODE -ne 0) { throw 'V25 strict partial-fill reconciliation overlay failed' }
+          python ci/v25_immutable_intent_overlay.py
+          if ($LASTEXITCODE -ne 0) { throw 'V25 immutable broker-intent replay overlay failed' }
           python ci/v25_core_partial_overlay.py
           if ($LASTEXITCODE -ne 0) { throw 'V25 Rust Core partial-fill state progression overlay failed' }
           python ci/v25_tauri_version_stamp.py
@@ -91,6 +95,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'V25 broker journal regression failed' }
           python -m unittest discover -s tests -p test_broker_reconciliation_strict.py -v
           if ($LASTEXITCODE -ne 0) { throw 'V25 strict broker fill recovery regression failed' }
+          python -m unittest discover -s tests -p test_broker_intent_identity.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'V25 immutable order-identity regression failed' }
           # The historical V23 build script resolves its incomplete Cargo.lock
           # during its normal cargo test; check --locked *after* that resolution.
           # We still block publication if either targeted Rust regression fails.
@@ -146,6 +152,9 @@ jobs:
           }
           if (-not (Select-String -Path (Join-Path $dir 'runtime/gateway/execution.py') -SimpleMatch 'Broker fill volume exceeds submitted volume; reconciliation pending' -Quiet)) {
             throw 'V25 P0-B broker reconciliation guard missing from packaged runtime'
+          }
+          if (-not (Select-String -Path (Join-Path $dir 'runtime/gateway/execution.py') -SimpleMatch 'Immutable intent' -Quiet) -and -not (Select-String -Path (Join-Path $dir 'runtime/gateway/execution.py') -SimpleMatch 'immutable=(' -Quiet)) {
+            throw 'V25 P0-C immutable intent binding missing from packaged runtime'
           }
           $v24exe='9e8011178c581bc89dcb45f62de7320abd1031dfa4f597425ed2c64d33b64d14'
           $newexe=(Get-FileHash (Join-Path $dir 'BrainTradeNext.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
