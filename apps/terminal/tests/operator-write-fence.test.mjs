@@ -98,5 +98,19 @@ test('ui Core mutations are wired to a fence before sending and checking acknowl
   assert(checked>send && checked<send+350,'must fence '+label+' before follow-up read/state');
  }
  assert(ui.includes('mutationFence.current.setScope(viewScope)'));
+ for(const marker of [
+  "const mutation=beginWrite('control-'+action)",
+  "const mutation=beginWrite('shutdown')",
+  "const mutation=beginWrite('backup-'+action)",
+  "const mutation=beginWrite('backtest-'+action)",
+  "if(action==='stop'){",
+  "disabled={preview||!hasTauri()}",
+  "const mutation=beginWrite('risk')",
+  "<EnterpriseSupervisor preview={preview} key={contextKey}",
+  "<TradingSettingsOperations source={pageData} key={viewScope}",
+  "<ExecutionBindingOperations source={pageData} key={viewScope}",
+  "<MicroCapitalOperations status={!preview&&feed.broker?status:null} key={contextKey}",
+  "<BacktestOperations key={viewScope}",
+ ])assert(ui.includes(marker),'missing safe writer/scope isolation: '+marker);
  assert(ui.includes('if(!fresh)sendNotice('));
 });
