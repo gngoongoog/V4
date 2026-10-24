@@ -59,7 +59,8 @@ for(const token of [
 }
 for(const token of [
  "const showStartConfirm=approvalIsCurrent(approval,'start',contextKey)&&!preview&&feed.broker",
- "if(approval?.action==='start'&&(!feed.broker||approval.scope!==contextKey||preview))",
+ "if(approval&&(approval.scope!==contextKey||preview||",
+ "approval.action==='start'&&!feed.broker",
  "const safeConfig=configScope===contextKey?config:null",
  "const safeRiskSnapshot=riskScope===contextKey?riskSnapshot:null",
  "const activeSettingsEdit=settingsScope===contextKey?settingsEdit:null",
