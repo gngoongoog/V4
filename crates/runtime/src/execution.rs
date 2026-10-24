@@ -693,6 +693,7 @@ impl Service {
             let mut value=self.route("GET","/v1/execution",&[],db,status,now)?;
             let key=if status.gateway_fresh && self.account_matches(status) {context(status.telemetry.as_ref().unwrap())}else{String::new()};
             crate::brain_control::enrich(&mut value,db,&key,self.inner.active_mode.unwrap_or_default())?;
+            crate::brain_integrity::enrich(&mut value,db,status,self.inner.active_mode.unwrap_or_default())?;
             value["controls_available"]=json!(!key.is_empty());
             return Ok(value);
         }
