@@ -14,6 +14,7 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
  onRefresh:()=>void;onAction:(action:'freeze'|'stop')=>Promise<void>;
 }){
  const t=status?.telemetry,view=obj(report);
+ const forward=obj(view.forward_direction_audit);
  const eligible=!preview&&eligibleFrozenSniper(status,page);
  const expected=t?JSON.stringify([t.server,t.login,t.symbol,t.currency]):'';
  const statusValue=view.status;
@@ -23,6 +24,12 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
     &&view.paper_pnl===null&&view.broker_pnl===null
     &&(statusValue==='active'||statusValue==='stopped');
  const active=scoped&&statusValue==='active';
+ const forwardScoped=scoped&&forward.schema==='p1k5b-forward-direction-v1'
+   &&forward.independent_oos===false&&forward.broker_fills_observed===false
+   &&forward.net_pnl===null&&forward.profitability_validated===false;
+ const fraction=forward.observed_direction_fraction;
+ const fractionLabel=forwardScoped&&typeof fraction==='number'&&Number.isFinite(fraction)
+   &&fraction>=0&&fraction<=1?`${(fraction*100).toFixed(1)}%`:'—';
  const stopped=status?.requested_run===false;
  const ready=eligible&&stopped&&!disabled;
  const canFreeze=ready&&(!scoped||!active);
@@ -47,6 +54,22 @@ export function SniperFrozenOperations({status,page,report,preview,disabled,onRe
    <div>فقد طابور Native مستبعد <strong>{count(view.excluded_native_queue_counter_change)}</strong></div>
    <div>لقطات MT5 خارج Pulse (استبعاد) <strong>{count(view.unpaired_reconciled_quote_changes)}</strong></div>
    <div>تغيّر سعر بنفس ملي ثانية الوسيط (مستبعد) <strong>{count(view.unpaired_same_clock_price_changes)}</strong></div>
+  </div>}
+  {forwardScoped&&<div className="feature-zone" aria-label="Frozen Sniper direction-only future observations">
+   <h4>تدقيق اتجاه Learner المجمد — أفق 5 ثوانٍ P1-K5B</h4>
+   <div className="operator-grid">
+    <div>مرشحات مجمدة <strong>{count(forward.frozen_learner_candidates)}</strong></div>
+    <div>تقييمات مستقبلية نضجت <strong>{count(forward.resolved_direction_labels)}</strong></div>
+    <div>اتجاه مطابق <strong>{count(forward.direction_correct)}</strong></div>
+    <div>اتجاه معاكس <strong>{count(forward.direction_opposite)}</strong></div>
+    <div>حركة غير كافية <strong>{count(forward.direction_flat)}</strong></div>
+    <div>عينات معلقة <strong>{count(forward.pending_unmatured_label)}</strong></div>
+    <div>سلاسل غير متصلة مستبعدة <strong>{count(forward.censored_disconnected_segments)}</strong></div>
+    <div>نسبة مطابقة اتجاه وصفية (100 عينة على الأقل) <strong>{fractionLabel}</strong></div>
+   </div>
+   <p className="safe-note">هذا قياس اتجاه منتصف السعر بعد 5 ثوانٍ، مو PnL أو Win Rate
+    لصفقات حقيقية. ما يحتسب السبريد التنفيذي أو العمولة أو الانزلاق ولا يؤكد OOS مستقلاً.
+    أول 100 نتيجة تعطي وصفاً فقط، بدون تفعيل أو ترقية للعقل.</p>
   </div>}
   <div className="quick-ops">
    <button type="button" disabled={preview||disabled} onClick={onRefresh}>تحديث من Rust Core</button>
