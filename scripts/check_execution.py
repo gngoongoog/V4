@@ -47,7 +47,7 @@ def check(exe=None):
             return [dict(time=end-(180-i)*seconds,open=2000+side*i*.3,high=2000+side*i*.3+.4,
                 low=2000+side*i*.3-.4,close=2000+side*i*.3+side*.1,tick_volume=100) for i in range(180)]
         snapshot = empty_snapshot('')
-        snapshot.update(connected=True, login=17, server='Demo', currency='USD', symbol='XAUUSD',
+        snapshot.update(connected=True, login=17, server='Demo', currency='USD', symbol='XAUUSD', demo=True,
             account_trade_mode=0,margin_mode=2,trade_allowed=True,trade_expert=True,balance=10000.,equity=10000.,
             today_net=0.,point=.01,tick_size=.01,tick_value_loss=1.,tick_value_profit=1.,
             volume_min=.01,volume_step=.01,volume_max=100.,bid=2053.8,ask=2053.9,
@@ -140,7 +140,7 @@ def check(exe=None):
                        profit=0.,commission=-.35,swap=0.,fee=0.,reason=3)
             exit_deal=dict(entry,ticket=78,magic=0,entry=1,time_msc=now,
                            price=2055.,profit=10.,commission=-.35,swap=-.2)
-            sync=dict(login=17,server='Demo',currency='USD',until_ms=now,deals=[entry,exit_deal])
+            sync=dict(login=17,server='Demo',currency='USD',trade_mode=0,until_ms=now,deals=[entry,exit_deal])
             api('/v1/execution/sync',sync)
             api('/v1/execution/sync',sync)
             journal=api('/v1/execution/trades',dict(offset=0,limit=50))
