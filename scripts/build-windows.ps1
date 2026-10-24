@@ -24,7 +24,11 @@ Invoke-Checked -Program py -Arguments @('-3.13','-m','venv','.build-venv')
 $Python = Join-Path $PWD '.build-venv\Scripts\python.exe'
 Invoke-Checked -Program $Python -Arguments @('-m','pip','install','pefile==2024.8.26')
 if (-not $SkipTests) {
-    Invoke-Checked -Program cargo -Arguments @('test','--workspace','--locked')
+    # This is the legacy Slint/BrainTrade.exe Windows validation route.
+    # Tauri V25 has mandatory staged runtime/ and mt5/ resources and is tested
+    # end-to-end by Build-V25-Portable-Windows.ps1 instead; including it in
+    # unstaged cargo --workspace here incorrectly fails its build.rs.
+    Invoke-Checked -Program cargo -Arguments @('test','--locked','-p','braintrade-domain','-p','braintrade-runtime','-p','braintrade-desktop')
     Invoke-Checked -Program $Python -Arguments @('-m','unittest','discover','-s','tests','-v')
 }
 Invoke-Checked -Program cargo -Arguments @('build','--release','--locked','-p','braintrade-desktop')
