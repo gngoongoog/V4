@@ -297,8 +297,8 @@ mod p0j_learning_context_tests {
             (3,&demo,FEATURE_SCHEMA,"gold-m1-outcome-v0"),
             (4,&legacy,FEATURE_SCHEMA,LABEL_SCHEMA)
         ] {
-            db.execute("INSERT INTO learning_snapshots(id,context,bar_time,captured_ms,feature_schema,reference_close,atr,features) VALUES(?1,?2,600,700,?3,2500,1,'{}')",
-                params![id,ctx,feature]).unwrap();
+            db.execute("INSERT INTO learning_snapshots(id,context,bar_time,captured_ms,feature_schema,reference_close,atr,features) VALUES(?1,?2,?3,?4,?5,2500,1,'{}')",
+                params![id,ctx,600+id,700+id,feature]).unwrap();
             db.execute("INSERT INTO learning_labels(snapshot_id,matured_ms,label_schema,label) VALUES(?1,1000,?2,'{}')",
                 params![id,label]).unwrap();
         }
