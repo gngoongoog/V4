@@ -47,6 +47,8 @@ pub fn frozen_training_checkpoint(db:&Connection,t:&Telemetry,model:&Engine,now:
     anyhow::ensure!(t.connected&&t.demo&&t.account_trade_mode==Some(0)&&t.login>0
         &&!t.server.is_empty()&&!t.symbol.is_empty(),"Bound MT5 Demo required");
     let context=crate::coordinator_learning::context(t);
+    anyhow::ensure!(model.training_account_matches(&context),
+        "Frozen Learner cached policy belongs to a different Demo account");
     let mut query=db.prepare(
         "SELECT closed_ms,payload FROM coordinator_broker_samples
          WHERE context=?1 AND brain='sniper_learner'
@@ -124,6 +126,9 @@ mod tests {
         assert_eq!(checkpoint["latest_training_closed_ms"],1000);
         assert_eq!(checkpoint["independent_oos"],false);
         assert!(checkpoint["broker_pnl"].is_null());
+        let mut different=t.clone();different.login=18;
+        assert!(frozen_training_checkpoint(&db,&different,&engine,5000).is_err(),
+            "Even an empty or equal-count ledger cannot certify a different account");
         t.demo=false;t.account_trade_mode=Some(2);
         assert!(frozen_training_checkpoint(&db,&t,&engine,5000).is_err());
         t.demo=true;t.account_trade_mode=Some(0);
