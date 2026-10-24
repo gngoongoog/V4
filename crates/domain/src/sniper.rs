@@ -74,6 +74,18 @@ impl Engine {
         self.target_models = targets;
     }
     pub fn reset_quotes(&mut self) { self.quotes.clear(); }
+
+    /// Independent research copy of the currently learned Demo policy.
+    /// The copied model scores never update and the tick history starts empty
+    /// so historical quotes cannot leak into post-freeze observations.
+    /// Does NOT reset or mutate the executing Sniper instance.
+    pub fn frozen_study_copy(&self) -> Self {
+        Self {
+            models:self.models.clone(), target_models:self.target_models.clone(),
+            account:self.account.clone(), definition:String::new(),
+            quotes:VecDeque::new(),
+        }
+    }
     pub fn evaluate(&mut self, t: &Telemetry, c: &Config, now: u64) -> Signal {
         let mut s = Signal { brain: ID.into(), side: 0, key: String::new(), bar_time: now / 1000,
             stop_distance: 0., target_distance: 0., hold_ms: c.trading.hold_ms(),
