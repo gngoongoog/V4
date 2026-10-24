@@ -58,7 +58,7 @@ pub fn append(db:&Connection,account:&str,artifact_id:&str,
         ensure!(opened>cutoff,"Training-time quote in frozen future journal");
         ensure!(matches!(e["side"].as_i64(),Some(-1|1)),"Invalid frozen research direction");
         if kind=="matured"{
-            ensure!(e["closed_broker_ms"].as_u64().is_some_and(|v|v>=opened+5_000),
+            ensure!(e["closed_broker_ms"].as_u64().is_some_and(|v|v>=opened.saturating_add(5_000)),
                 "Research label leaked before the fixed horizon");
             ensure!(matches!(e["outcome"].as_str(),Some("correct"|"opposite"|"flat")),
                 "Unknown future directional class");
@@ -116,7 +116,7 @@ pub fn report(db:&Connection,account:&str,artifact_id:&str,
         "SELECT event_seq,payload,sha256 FROM sniper_future_research_events
          WHERE artifact_id=?1 AND account_context=?2
          ORDER BY event_seq LIMIT ?3")?;
-    let rows=stmt.query_map(params![artifact_id,account,MAX_READ+1],
+    let rows=stmt.query_map(params![artifact_id,account,(MAX_READ+1) as i64],
         |r|Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut seq=0u64;
@@ -178,7 +178,11 @@ pub fn report(db:&Connection,account:&str,artifact_id:&str,
         "censored":if safe{Some(censored)}else{None},
         "opened_candidates":if safe{Some(count_candidate)}else{None},
         "pending_unresolved":if safe{Some(u64::from(pending.is_some()))}else{None},
-        "complete_trace":safe&&pending.is_none()&&resolved+censored==count_candidate&&count>0,
+        "verified_local_event_pairing":safe&&pending.is_none()
+            &&resolved+censored==count_candidate&&count>0,
+        // A Core crash may lose a complete unflushed in-memory session;
+        // an archive cannot assert complete market-tick coverage.
+        "complete_trace":false,
         "historical_oos":false,"independent_oos":false,"broker_pnl":Value::Null,
         "no_broker_orders":true,"no_learning_effect":true,
         "note":"Bounded future Native/Poll event journal tied to archived frozen weights. A crash can lose unflushed memory events; complete_trace only describes local event pairing, not exhaustive market ticks or independent OOS."}))
@@ -223,7 +227,8 @@ mod tests{
         let good=report(&db,&ctx,&id,&hash).unwrap();
         assert_eq!(good["integrity"],"verified_local");
         assert_eq!(good["resolved_labels"],1);
-        assert_eq!(good["complete_trace"],true);
+        assert_eq!(good["verified_local_event_pairing"],true);
+        assert_eq!(good["complete_trace"],false);
         assert_eq!(good["broker_pnl"],Value::Null);
         let other=serde_json::to_string(&("Demo",100,"XAUUSD","USD")).unwrap();
         assert!(report(&db,&other,&id,&hash).is_err());
