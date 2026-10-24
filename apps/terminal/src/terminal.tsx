@@ -361,9 +361,12 @@ export default function Terminal(){
   return()=>{active=false;clearInterval(timer);document.removeEventListener('visibilitychange',visible)};
  },[page,preview,contextKey]);
  const display=preview?DESIGN_FIXTURE:status;
- // Broker truth requires BOTH authenticated Core status and fresh MT5 data.
+ // Account metadata (including balance/equity) is valid with a current
+ // verified MT5 broker snapshot, even when the market is CLOSED or ticks stale.
+ // Trading/quote actions MUST still require fresh market prices separately.
  const t=display?.telemetry;const trustworthy=preview||feed.quote;
- const account=trustworthy?t:null;const currency=account?.currency||'USD';const positions=account?.positions||[];
+ const accountFresh=preview||feed.broker;
+ const account=accountFresh?t:null;const currency=account?.currency||'USD';const positions=account?.positions||[];
  const buys=positions.filter(p=>up(p.side)).length;const sells=positions.length-buys;
  const brokerResults=preview||!feed.broker?null:brokerEvidence(brainReport,status);
  const win=preview?76:brokerResults?.winRate??null;
@@ -698,7 +701,7 @@ export default function Terminal(){
     <div className="account-item server-select"><label>Server</label><button className="select-look" onClick={()=>open('execution')}><strong>{account?.server||'—'}</strong><span>⌄</span></button></div>
     <div className="account-item account-switch"><label>Account · MT5</label><div className="switch-buttons"><span aria-label="حساب الوسيط المتصل فعلياً">{account?(account.demo?'DEMO متصل':'REAL متصل'):'غير متصل'}</span><button type="button" title="فتح إعدادات الربط، وليس تبديل حساب MT5 مباشرة" onClick={()=>open('execution')}>إدارة الربط ↗</button></div></div>
     {[['Equity',money(account?.equity,currency)],['Balance',money(account?.balance,currency)],['Margin','—'],['Free Margin',money(account?.margin_free,currency)],['Daily P&L',signed(account?.today_net,currency)],['Quote Age',preview?'28 ms':feed.quote?num(feed.quoteAgeMs,0)+' ms':'—']].map(([label,value])=><div key={label} className={'top-stat '+(label==='Daily P&L'?'daily':'')}><label>{label}</label><b>{value}</b></div>)}
-    <button className="connection-pill" onClick={()=>{if((status?.requested_run||positions.length>0)&&!window.confirm('ستتم إعادة تشغيل جسر MT5. لن تُغلق الصفقات المفتوحة، لكن إدارة خروجها قد تتأخر أثناء الاتصال. تابع فقط عند الضرورة.'))return;void runCommand('reconnect')}} disabled={busy||preview}><span className={'pulse-dot '+(trustworthy?'online':'')}></span><span>{preview?'معاينة':trustworthy?'متصل':'غير متصل'}</span><RefreshCw size={16}/></button>
+    <button className="connection-pill" onClick={()=>{if((status?.requested_run||positions.length>0)&&!window.confirm('ستتم إعادة تشغيل جسر MT5. لن تُغلق الصفقات المفتوحة، لكن إدارة خروجها قد تتأخر أثناء الاتصال. تابع فقط عند الضرورة.'))return;void runCommand('reconnect')}} disabled={busy||preview}><span className={'pulse-dot '+(accountFresh?'online':'')}></span><span>{preview?'معاينة':accountFresh?'متصل':'غير متصل'}</span><RefreshCw size={16}/></button>
    </header>
    {preview&&<div className="preview-banner">◈ معاينة التصميم فقط — أرقام وأسعار وصفقات غير حقيقية — لا أوامر مالية <button onClick={changePreview}>الخروج من المعاينة</button></div>}
    {(error||notice)&&<div className={'terminal-notice '+(error?'bad':'')} role="status"><span>{error||notice}</span><button onClick={()=>{setNotice('');setError('')}}>×</button></div>}
@@ -774,7 +777,7 @@ export default function Terminal(){
         <div className="feature-zone"><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}}/></div>}
       </section>
       <section className="panel subpage-secondary"><div className="panel-title"><b>حالة المصدر والتنفيذ</b><span>{clock}</span></div>
-       <div className="feature-zone"><div className={'live-indicator '+(!trustworthy?'offline':'')}><div><strong>{trustworthy?'MT5 CONNECTED':'MT5 OFFLINE'}</strong><p>{buttonLabel(status,preview)}</p></div><div><span>State</span><b>{display?.state||'UNAVAILABLE'}</b></div></div>
+       <div className="feature-zone"><div className={'live-indicator '+(!accountFresh?'offline':'')}><div><strong>{accountFresh?'MT5 CONNECTED':'MT5 OFFLINE'}</strong><p>{preview?'PREVIEW':feed.broker?(feed.quote?'ACCOUNT + QUOTES FRESH':'ACCOUNT CONNECTED · QUOTES STALE'):buttonLabel(status,false)}</p></div><div><span>State</span><b>{display?.state||'UNAVAILABLE'}</b></div></div>
         <div className="phase-list"><div><i/><strong>Core</strong><span>{online?'خدمة Rust متصلة':'خدمة Rust غير متاحة'}</span></div><div><i className={trustworthy?'':'warn'}/><strong>Market Data</strong><span>{trustworthy?'لقطة حديثة مستلمة':'الأسعار غير متاحة أو قديمة'}</span></div><div><i className={!preview&&display?.execution_enabled?'':'warn'}/><strong>Execution</strong><span>{preview?'معاينة فقط':display?.execution_enabled?'مسار التنفيذ مصرح':'غير جاهز للتنفيذ'}</span></div><div><i className="warn"/><strong>Source Integrity</strong><span>لا تُستبدل النتائج الفعلية بأرقام نموذجية</span></div></div>
        </div><div className="quick-ops"><button onClick={()=>open('dashboard')}>الرجوع للوحة القيادة</button><button onClick={()=>open('events')}>عرض سجل النظام</button></div>
       </section></div>

@@ -16,7 +16,7 @@ on:
       - 'VERIFY_SYSTEM.cmd'
       - '.github/workflows/v25-enterprise-portable.yml'
   pull_request:
-    branches: [main, feature/v25-enterprise-validation-20261024, feature/v25-p1k4-same-clock-sniper-quote-integrity-20261024, feature/v25-p1k5-classic-prospective-research-20261024, feature/v25-p1k5b-sniper-forward-direction-audit-20261024, feature/v25-p1k5c-learner-training-cutoff-provenance-20261024, feature/v25-p1k5d-immutable-research-checkpoint-20261024, feature/v25-p1k5e-prospective-event-journal-20261024, feature/v25-p1k5f-chronological-holdout-diagnostics-20261024, feature/v25-p1k5g-preregistered-costs-20261024, feature/v25-p1k5h-demo-broker-booked-evidence-20261024, feature/v25-p1k5i-demo-deal-replay-restart-20261024, feature/v25-p1k5j-demo-intent-recovery-audit-20261024]
+    branches: [main, feature/v25-enterprise-validation-20261024, feature/v25-p1k4-same-clock-sniper-quote-integrity-20261024, feature/v25-p1k5-classic-prospective-research-20261024, feature/v25-p1k5b-sniper-forward-direction-audit-20261024, feature/v25-p1k5c-learner-training-cutoff-provenance-20261024, feature/v25-p1k5d-immutable-research-checkpoint-20261024, feature/v25-p1k5e-prospective-event-journal-20261024, feature/v25-p1k5f-chronological-holdout-diagnostics-20261024, feature/v25-p1k5g-preregistered-costs-20261024, feature/v25-p1k5h-demo-broker-booked-evidence-20261024, feature/v25-p1k5i-demo-deal-replay-restart-20261024, feature/v25-p1k5j-demo-intent-recovery-audit-20261024, fix/v25-manifest-visible-diagnostics-20261024]
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -51,6 +51,7 @@ jobs:
       - name: Isolated Core integrations, no broker connectivity
         run: |
           python3 scripts/smoke_core.py
+          python3 scripts/check_gateway_launch_env.py
           python3 scripts/check_backup_restore.py
           python3 scripts/check_studio.py
           python3 scripts/check_execution.py
