@@ -187,6 +187,29 @@ pub fn report(db:&Connection,account:&str,artifact_id:&str,
         "no_broker_orders":true,"no_learning_effect":true,
         "note":"Bounded future Native/Poll event journal tied to archived frozen weights. A crash can lose unflushed memory events; complete_trace only describes local event pairing, not exhaustive market ticks or independent OOS."}))
 }
+
+/// Read only direction maturities from a fully locally SHA-verified journal.
+/// The final diagnostic remains explicitly NOT independent OOS or broker PnL.
+pub fn validated_maturities(db:&Connection,account:&str,
+    artifact_id:&str,artifact_hash:&str)->Result<Vec<Value>>{
+    let status=report(db,account,artifact_id,artifact_hash)?;
+    ensure!(status["integrity"]=="verified_local",
+        "Frozen prospective journal failed local integrity verification");
+    let mut stmt=db.prepare(
+        "SELECT payload FROM sniper_future_research_events
+         WHERE account_context=?1 AND artifact_id=?2 AND event_seq<=?3
+         ORDER BY event_seq")?;
+    let rows=stmt.query_map(params![account,artifact_id,MAX_READ as u64],
+        |r|r.get::<_,String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut matured=Vec::new();
+    for raw in rows {
+        let value:Value=serde_json::from_str(&raw)?;
+        if value["kind"]=="matured"{matured.push(value)}
+    }
+    Ok(matured)
+}
+
 #[cfg(test)]
 mod tests{
     use super::*;

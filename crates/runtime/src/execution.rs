@@ -765,7 +765,7 @@ impl Service {
                     // and the in-memory trial no longer exists. Never infer
                     // missing future ticks from an older persisted sample.
                     let latest=view["research_artifact_history"]["artifacts"]
-                        .as_array().and_then(|items|items.first());
+                        .as_array().and_then(|items|items.first()).cloned();
                     if let Some(item)=latest.filter(|item|item["integrity"]=="verified") {
                         if let (Some(id),Some(hash))=(item["id"].as_str(),item["sha256"].as_str()){
                             view["last_archived_forward_journal"]=
@@ -774,6 +774,11 @@ impl Service {
                                     Err(_)=>json!({"integrity":"warning",
                                         "historical_oos":false,"broker_pnl":null})
                                 };
+                            view["last_archived_holdout_diagnostic"]=
+                                crate::sniper_forward_holdout::from_journal(
+                                    db,&account,id,hash)
+                                .unwrap_or_else(|_|json!({"status":"unverified",
+                                    "independent_oos":false,"broker_pnl":null}));
                         }
                     }
                     if let Some(id)=view["research_artifact_id"].as_str().map(str::to_owned) {
@@ -788,6 +793,11 @@ impl Service {
                                         Err(_)=>json!({"integrity":"warning",
                                             "historical_oos":false,"broker_pnl":null})
                                     };
+                                view["chronological_holdout_diagnostic"]=
+                                    crate::sniper_forward_holdout::from_journal(
+                                        db,&account,&id,expected.as_deref().unwrap_or(""))
+                                    .unwrap_or_else(|_|json!({"status":"unverified",
+                                        "independent_oos":false,"broker_pnl":null}));
                             },
                             Err(_)=>{
                                 // Never present tampered research samples as verified.

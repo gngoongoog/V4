@@ -105,3 +105,31 @@ test('P1-K5E buffers research events on Tick, flushes only on reconciled snapsho
  assert.match(ui,/forward\.dropped_unpersisted_events/);
  assert.match(ui,/journal\.complete_trace===false/);
 });
+
+test('P1-K5F cannot label unverified directional samples as independent OOS/PnL',()=>{
+ const split=code('crates/runtime/src/sniper_forward_holdout.rs');
+ const journal=code('crates/runtime/src/sniper_forward_journal.rs');
+ const route=code('crates/runtime/src/execution.rs');
+ const ui=code('apps/terminal/src/sniper-frozen-operations.tsx');
+ assert.match(split,/const MIN_DAYS:usize=6/);
+ assert.match(split,/const HOLDOUT_DAYS:usize=2/);
+ assert.match(split,/const EMBARGO_MS:u64=30\*60_000/);
+ assert.match(split,/const MIN_CALIBRATION:u64=50/);
+ assert.match(split,/const MIN_HOLDOUT:u64=100/);
+ assert.match(split,/need_six_distinct_utc_broker_days/);
+ assert.match(split,/journal_direction_mismatch/);
+ assert.match(split,/holdout_boundary_ms/);
+ assert.match(split,/always_buy_same_opportunities_correct/);
+ assert.match(split,/baseline_selection_bias/);
+ assert.match(split,/independent_oos":false/);
+ assert.match(split,/broker_pnl":Value::Null/);
+ assert.match(split,/automatic_promotion":false/);
+ assert.match(split,/sniper_forward_journal::validated_maturities/);
+ assert.match(journal,/pub fn validated_maturities/);
+ assert.match(route,/chronological_holdout_diagnostic/);
+ assert.match(route,/last_archived_holdout_diagnostic/);
+ assert.match(ui,/holdout\.strategy_win_rate===null/);
+ assert.match(ui,/holdout\.automatic_promotion===false/);
+ assert.match(ui,/holdout\.status==='descriptive_holdout_only'/);
+ assert.match(ui,/اختبار OOS مستقلاً/);
+});
