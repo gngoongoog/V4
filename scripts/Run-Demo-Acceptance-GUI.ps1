@@ -127,10 +127,11 @@ function Export-ShareBundle {
     $Staging = Join-Path $OutputDir ("share-staging-" + [Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $Staging -Force | Out-Null
     try {
+        # Share only aggregate/diagnostic reports. The local CSV and state
+        # store durable intent IDs, raw broker comments and command details.
+        # Never include them in a shareable ZIP without operator redaction.
         $AllowedFiles = @(
             "demo-acceptance-latest.json",
-            "demo-acceptance-latest.csv",
-            "demo-acceptance-state.json",
             "runtime-import-check.json"
         )
         foreach ($Name in $AllowedFiles) {
@@ -173,6 +174,7 @@ function Export-ShareBundle {
             "This bundle is intended for diagnosis of the target-machine Demo acceptance run.",
             "It does not contain the raw MT5 login, ipc.key, broker databases/journals, Telegram credentials, or GUI stdout/stderr logs.",
             "The account_fingerprint is a short one-way fingerprint used only to keep samples from different accounts separate.",
+            "Raw CSV and demo-acceptance-state.json are intentionally EXCLUDED because they may contain intent IDs and broker comments.",
             "queue_to_send_ms is BrainTrade-local timing; it is not broker fill latency or a profitability guarantee."
         ) -join [Environment]::NewLine
         Set-Content -LiteralPath (Join-Path $Staging "SHARE_README.txt") -Value $Readme -Encoding UTF8
