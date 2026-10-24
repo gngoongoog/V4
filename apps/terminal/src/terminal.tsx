@@ -61,7 +61,13 @@ function Table({rows,empty='لا توجد بيانات مؤكدة'}:{rows:Record
 }
 function RiskEditor({config,apply,loading,armed}:{config:Record<string,unknown>|null;apply:(v:Record<string,unknown>)=>Promise<void>;loading:boolean;armed:boolean}){
  const [values,setValues]=useState<Record<string,unknown>>({});
- useEffect(()=>{if(config)setValues({...config})},[config]);
+ // serde omits default Micro fields in the Core risk JSON; restore the
+ // explicit domain defaults before editing so required inputs are never blank.
+ useEffect(()=>{if(config)setValues({
+  micro_real_temporary:false,micro_real_recovery_equity:500,micro_real_cap_percent:10,
+  micro_demo_risk_opt_in:false,daily_breaker_demo_enabled:false,
+  daily_breaker_real_enabled:true,...config
+ })},[config]);
  if(!config)return <div className="table-empty">إعدادات المخاطر غير متاحة. يجب الاتصال بـCore أولاً.</div>;
  return <form className="risk-editor" onSubmit={e=>{
   e.preventDefault();if(armed)return;
