@@ -60,6 +60,9 @@ class ManifestDiagnostics(unittest.TestCase):
         self.assertIn('command.env("PYTHONDONTWRITEBYTECODE","1")',core)
         self.assertIn('set "PYTHONDONTWRITEBYTECODE=1"',launcher)
         self.assertIn('python.exe" -B ',launcher)
+        collector=(root/"scripts/Run-Demo-Acceptance.ps1").read_text(encoding="utf-8")
+        self.assertIn("& $Python -B $Collector $ImportReport",collector)
+        self.assertIn("& $Python -B @CollectorArgs",collector)
 
     def test_runtime_pycache_cannot_be_silently_ignored(self):
         (self.root/"runtime/__pycache__").mkdir()
