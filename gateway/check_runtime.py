@@ -24,6 +24,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 
 CORE_URL = "http://127.0.0.1:18741"
 FAST_QUEUE_TARGET_MS = 20.0
@@ -171,6 +172,59 @@ def _context(execution: dict):
         "currency": currency,
         "account_fingerprint": _fingerprint(server, login, symbol, currency),
     }
+
+
+def require_fresh_demo(status: dict, execution: dict) -> dict:
+    """Fail closed on a disconnected, stale or changed MT5 Demo snapshot.
+
+    The execution binding alone is not sufficient: it may survive a gateway
+    disconnect, account switch, or stale cached status.
+    """
+    identity = _context(execution)
+    telemetry = status.get("telemetry") if isinstance(status, dict) else None
+    if not isinstance(telemetry, dict) or status.get("gateway_fresh") is not True:
+        raise RuntimeError("Fresh MT5 Demo telemetry is required for acceptance")
+    if (telemetry.get("connected") is not True or telemetry.get("demo") is not True
+            or type(telemetry.get("account_trade_mode")) is not int
+            or telemetry["account_trade_mode"] != 0):
+        raise RuntimeError("Acceptance requires a connected MT5 Demo account; REAL and stale modes are refused")
+    if (telemetry.get("login"), telemetry.get("server"), telemetry.get("symbol"),
+            telemetry.get("currency")) != (
+            identity["login"], identity["server"], identity["symbol"],
+            identity["currency"]):
+        raise RuntimeError("Broker snapshot and bound execution identity differ; capture stopped")
+    return identity
+
+
+def validate_local_core_url(url: str) -> str:
+    """Never forward the locally decrypted IPC Bearer credential to remote sites."""
+    try:
+        parts = urlsplit(url)
+        accepted = parts.scheme == "http" and parts.hostname in (
+            "127.0.0.1", "::1", "localhost")
+        valid = (accepted and parts.port is not None and parts.port > 0
+                 and parts.username is None and parts.password is None
+                 and parts.path in ("", "/") and not parts.query and not parts.fragment)
+    except (TypeError, ValueError):
+        valid = False
+    if not valid:
+        raise RuntimeError("Core API URL must be a local HTTP loopback endpoint; refusing to disclose IPC token")
+    return url.rstrip("/")
+
+
+def validate_capture_scope(status: dict, execution: dict, config: dict,
+                           expected_identity: dict, expected_mode: str,
+                           expected_version) -> None:
+    """Check context before any sample merge or file write."""
+    current = require_fresh_demo(status, execution)
+    if current["account_fingerprint"] != expected_identity["account_fingerprint"]:
+        raise RuntimeError("Account/context changed during capture; stopped without mixing samples")
+    mode = str((config.get("trading") or {}).get("mode") or "")
+    if mode != expected_mode:
+        raise RuntimeError("Trading mode changed during capture; start a separate acceptance session")
+    if status.get("version") != expected_version:
+        raise RuntimeError("Core version changed during capture; start a separate acceptance session")
+
 
 
 def normalize_command(item: dict, identity: dict, source: str, existing: dict | None = None):
@@ -453,7 +507,7 @@ def discover_data_dir(explicit: Path | None = None) -> Path:
 class CoreApi:
     def __init__(self, key: str, base_url: str = CORE_URL):
         self.key = key
-        self.base_url = base_url.rstrip("/")
+        self.base_url = validate_local_core_url(base_url)
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def get(self, path: str):
@@ -466,7 +520,7 @@ class CoreApi:
             with self.opener.open(request, timeout=5) as response:
                 return json.load(response)
         except urllib.error.URLError as error:
-            raise RuntimeError("BrainTrade Core is not reachable; open BrainTrade.exe first") from error
+            raise RuntimeError("BrainTrade Core is not reachable; open BrainTradeNext.exe first") from error
 
 
 def acceptance_cli(argv: list[str]) -> int:
@@ -490,7 +544,7 @@ def acceptance_cli(argv: list[str]) -> int:
     status = api.get("/v1/status")
     execution = api.get("/v1/execution")
     config = api.get("/v1/config").get("config") or {}
-    identity = _context(execution)
+    identity = require_fresh_demo(status, execution)
     mode = str((config.get("trading") or {}).get("mode") or "")
     metadata = {
         "version": status.get("version"),
@@ -531,9 +585,9 @@ def acceptance_cli(argv: list[str]) -> int:
         while True:
             status = api.get("/v1/status")
             execution = api.get("/v1/execution")
-            current = _context(execution)
-            if current["account_fingerprint"] != identity["account_fingerprint"]:
-                raise RuntimeError("Account/context changed during capture; stopped without mixing samples")
+            observed_config = api.get("/v1/config").get("config") or {}
+            validate_capture_scope(status, execution, observed_config,
+                                   identity, mode, metadata["version"])
             merge_execution(samples, execution, identity, label, started_ms)
             state["samples"] = samples
             save_state(state_path, state)
