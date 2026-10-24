@@ -1,5 +1,6 @@
 mod backup;
 mod execution;
+mod enterprise_supervisor;
 mod coordinator_learning;
 mod sniper_learning;
 mod brain_control;
@@ -119,12 +120,60 @@ fn ensure_execution_mutation_stopped(status:&Status,pending:bool)->Result<()> {
     if pending { bail!("Wait for broker command reconciliation before changing execution-affecting risk or trading costs"); }
     Ok(())
 }
+// Fail-closed operator shutdown gate. STOP only prevents NEW entries. Shutting
+// down the Core would abandon timed management/reconciliation for open trades.
+fn verify_safe_reconfiguration(status: &Status, unresolved: bool) -> Result<()> {
+    anyhow::ensure!(!status.requested_run,
+        "أوقف الدخول الجديد أولاً عبر STOP قبل تبديل مسار MT5 أو الحساب");
+    anyhow::ensure!(!unresolved,"انتظر تسوية كل الأوامر المعلقة قبل تغيير اتصال MT5");
+    // Once the Core has observed a broker session, an unknown or stale
+    // portfolio NEVER proves that switching to another account is safe.
+    // Initial first-time configuration without any prior broker session is
+    // still supported so users can enter their MT5 terminal path.
+    if status.last_received_ms.is_some() || status.telemetry.is_some() {
+        anyhow::ensure!(status.gateway_fresh && status.telemetry.as_ref().is_some_and(|t|t.connected),
+            "لا يمكن تغيير حساب أو مسار MT5 أثناء انقطاعه؛ استعد الاتصال وتأكد من المراكز أولاً");
+        anyhow::ensure!(status.telemetry.as_ref().is_some_and(|t|
+            t.positions.is_empty() && t.pending_orders == 0),
+            "لا يمكن تبديل اتصال MT5 أثناء وجود مراكز مفتوحة أو أوامر معلّقة");
+    }
+    Ok(())
+}
+
+fn verify_safe_shutdown(status: &Status, unresolved: bool) -> Result<()> {
+    anyhow::ensure!(!status.requested_run, "أوقف الدخول الجديد أولاً عبر STOP قبل الخروج الكامل");
+    anyhow::ensure!(!unresolved, "تعذر الخروج الكامل: توجد أوامر وسيط غير محسومة");
+    if let Some(t) = &status.telemetry {
+        anyhow::ensure!(status.gateway_fresh && t.connected,
+            "تعذر الخروج الكامل: حالة MT5 قديمة أو الاتصال مقطوع، تحقق من الصفقات أولاً");
+        anyhow::ensure!(t.positions.is_empty() && t.pending_orders == 0,
+            "تعذر الخروج الكامل: ما زالت توجد مراكز أو أوامر معلقة في MT5");
+    } else {
+        anyhow::ensure!(status.last_received_ms.is_none(),
+            "تعذر الخروج الكامل: فقدت حالة حساب MT5 بعد الاتصال");
+    }
+    Ok(())
+}
+
 impl Engine{
     fn event(&self,kind:&str,detail:Value)->Result<()>{self.db.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,?2,?3)",params![now_ms(),kind,detail.to_string()])?;Ok(())}
     fn launch_gateway(&mut self)->Result<()>{
         if std::env::var("BRAINTRADE_GATEWAY_DISABLED").as_deref()==Ok("1"){return Ok(());}
         if let Some(child)=self.gateway.as_mut(){if child.try_wait()?.is_none(){return Ok(());}}
-        let exe=std::env::current_exe()?;let base=exe.parent().context("Executable parent missing")?;let packed=base.join("runtime").join(if cfg!(windows){"BrainTradeGateway.exe"}else{"BrainTradeGateway"});let embedded_python=base.join("runtime").join("python").join("python.exe");let embedded_script=base.join("runtime").join("gateway").join("mt5_gateway.py");
+        let exe=std::env::current_exe()?;let base=exe.parent().context("Executable parent missing")?;
+        // NSIS places Tauri resources in `resources/runtime`, while a Portable
+        // build keeps `runtime` beside BrainTradeNext.exe. Support both with
+        // no system-wide Python dependency or mutable working-directory guess.
+        let direct=base.join("runtime");
+        let bundled=base.join("resources").join("runtime");
+        let runtime_root=if direct.join("python/python.exe").is_file() || direct.join("BrainTradeGateway.exe").is_file() {
+            direct
+        } else if bundled.join("python/python.exe").is_file() || bundled.join("BrainTradeGateway.exe").is_file() {
+            bundled
+        } else { direct };
+        let packed=runtime_root.join(if cfg!(windows){"BrainTradeGateway.exe"}else{"BrainTradeGateway"});
+        let embedded_python=runtime_root.join("python").join("python.exe");
+        let embedded_script=runtime_root.join("gateway").join("mt5_gateway.py");
         let mut command=if packed.exists(){Command::new(packed)}else if cfg!(windows)&&embedded_python.is_file()&&embedded_script.is_file(){let mut c=Command::new(embedded_python);c.arg(embedded_script);c}else{let script=std::env::var_os("BRAINTRADE_GATEWAY_SCRIPT").map(PathBuf::from);let Some(script)=script else{bail!("Gateway executable missing. Build the Windows distribution or set BRAINTRADE_GATEWAY_SCRIPT for development.");};let mut c=Command::new(std::env::var_os("BRAINTRADE_PYTHON").unwrap_or("python".into()));c.arg(script);c};
         command.env("BRAINTRADE_DATA_DIR",&self.dir).env("BRAINTRADE_IPC_TOKEN",read_ipc_key(&self.dir)?);command.stdin(Stdio::null()).stdout(Stdio::null());let log=OpenOptions::new().append(true).create(true).open(self.dir.join("gateway.log"))?;command.stderr(log);
         #[cfg(windows)] {use std::os::windows::process::CommandExt;command.creation_flags(0x08000000);}
@@ -233,6 +282,22 @@ impl Engine{
             }.into();
             return Ok(trading_settings::view(&shared.config,&shared.status));
         }
+        if path=="/v1/enterprise/supervisor" {
+            let (status,config)={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());(s.status.clone(),s.config.clone())};
+            if method=="GET" {
+                let frames=status.telemetry.as_ref().map(|t|self.studio.live_frames(t,now_ms())).unwrap_or_default();
+                return enterprise_supervisor::report(&self.db,status.telemetry.as_ref(),&config,&frames,now_ms());
+            }
+            anyhow::ensure!(method=="POST","Unsupported supervisor method");
+            // Never mistake missing broker telemetry for a flat portfolio.
+            // Even STOPPED policy edits require fresh, bound MT5 reconciliation.
+            let flat=enterprise_supervisor::broker_flat_is_authoritative(
+                status.telemetry.as_ref(),status.gateway_fresh,self.execution.account_matches(&status));
+            let result=enterprise_supervisor::save(&self.db,body,!status.requested_run,flat,!self.execution.pending(&self.db)?)?;
+            self.execution.refresh_supervisor(&self.db);
+            self.event("enterprise_supervisor_settings_changed",json!({"settings":result["settings"],"scope":"entry_only","mode_handoff":false}))?;
+            return Ok(result);
+        }
         if path=="/v1/trading/settings" {
             let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());
             if method=="GET" {return Ok(trading_settings::view(&s.config,&s.status));}
@@ -333,8 +398,10 @@ impl Engine{
                 if !request.config.mt5_path.is_empty(){let path=Path::new(&request.config.mt5_path);if !path.is_absolute()||!path.is_file()||path.extension().and_then(|v|v.to_str()).map(|v|v.to_ascii_lowercase())!=Some("exe".into()){bail!("MT5 path must point to an existing terminal64.exe file");}}
                 let token=request.telegram_token.trim();if !token.is_empty()&&(token.len()<20||!token.contains(':')||token.chars().any(char::is_whitespace)){bail!("Invalid Telegram bot token format");}if request.clear_telegram_token&&!token.is_empty(){bail!("Cannot save and remove a token together");}
                 let existing=self.shared.lock().unwrap().token.clone();let effective=if request.clear_telegram_token{None}else if !token.is_empty(){Some(token.to_owned())}else{existing};if request.config.telegram_enabled&&effective.is_none(){bail!("Enter a bot token before enabling Telegram");}
-                if self.execution.pending(&self.db)?{bail!("Wait for broker command reconciliation before reconnecting settings");}
-                self.execution.cancel_entries(&self.db)?;self.shared.lock().unwrap().status.requested_run=false;
+                let pending=self.execution.pending(&self.db)?;
+                let current={let mut state=self.shared.lock().unwrap();state.status.refresh(now_ms());state.status.clone()};
+                verify_safe_reconfiguration(&current,pending)?;
+                self.execution.cancel_entries(&self.db)?;
                 if !token.is_empty(){secrets::write(&self.dir.join("telegram.sealed"),token)?;}atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&request.config)?)?;if request.clear_telegram_token&&self.dir.join("telegram.sealed").exists(){fs::remove_file(self.dir.join("telegram.sealed"))?;}
                 {let mut s=self.shared.lock().unwrap();s.config=request.config;s.token=effective;s.status.gateway_fresh=false;s.status.last_received_ms=None;s.status.telemetry=None;s.status.analysis=Default::default();s.status.paper=Default::default();s.status.message="Settings saved; reconnecting MT5".into();}
                 self.event("settings_changed",json!({"secrets":"redacted"}))?;if self.backtests.loading(){self.backtests.cancel();}self.stop_gateway();self.gateway_retry_ms=0;Ok(json!({"ok":true}))
@@ -352,12 +419,34 @@ impl Engine{
                 Ok(serde_json::to_value(&s.status)?)
             },
             ("POST","/v1/stop")=>{self.execution.cancel_entries(&self.db)?;self.event("monitoring_stopped",json!({"positions_unchanged":true}))?;let mut s=self.shared.lock().unwrap();s.status.requested_run=false;s.status.analysis.action="WAIT".into();s.status.analysis.gates.push("System stopped — new virtual entries disabled".into());s.status.message="New entries stopped. Existing owned positions retain broker SL/TP and timed exits while Core runs.".into();s.status.refresh(now_ms());Ok(serde_json::to_value(&s.status)?)},
-            ("POST","/v1/reconnect")=>{self.stop_gateway();self.gateway_retry_ms=0;{let mut s=self.shared.lock().unwrap();s.status.last_received_ms=None;s.status.telemetry=None;s.status.refresh(now_ms());}self.event("reconnect_requested",json!({}))?;Ok(json!({"ok":true}))},
+            ("POST","/v1/reconnect")=>{
+                anyhow::ensure!(!self.execution.pending(&self.db)?,
+                    "تعذر إعادة الاتصال: توجد أوامر تنفيذ غير محسومة؛ انتظر المصالحة أولاً");
+                // Recovery may be necessary with open MT5 positions. The user
+                // is warned in UI; broker reconciliation remains authoritative.
+                self.event("reconnect_requested",json!({"gateway_restart":true}))?;
+                self.stop_gateway();self.gateway_retry_ms=0;
+                {let mut s=self.shared.lock().unwrap();
+                 // Preserve the previous broker-session marker; otherwise a
+                 // reconnect with open positions could erase the evidence and
+                 // let /v1/config treat it as a never-connected installation.
+                 s.status.gateway_fresh=false;
+                 s.status.telemetry=None;
+                 s.status.refresh(now_ms());}
+                Ok(json!({"ok":true}))
+            },
             ("POST","/v1/gateway/snapshot")=>{
                 let telemetry:Telemetry=serde_json::from_slice(body)?;if !telemetry.validate(){bail!("Invalid telemetry");}let(config,run)={let s=self.shared.lock().unwrap();(s.config.for_account(&telemetry),s.status.requested_run)};let observed_ms=now_ms();let mut next=self.research.clone();let frames=self.studio.live_frames(&telemetry,observed_ms);let(analysis,paper)=next.update_with_frames(&mut self.db,&telemetry,&config,run,observed_ms,&frames)?;self.learning.observe(&mut self.db,&telemetry,&analysis,observed_ms);self.inference.observe(&self.db,&telemetry,&analysis,observed_ms);self.scoring.observe(&self.db,observed_ms);self.research=next;let execution_frames=self.studio.execution_frames(&telemetry,observed_ms);self.execution.observe(&self.db,&telemetry,&config,run,&execution_frames,observed_ms)?;let mut s=self.shared.lock().unwrap();let changed=s.status.telemetry.as_ref().map(|t|t.connected)!=Some(telemetry.connected);if changed{self.event("gateway_connection",json!({"connected":telemetry.connected}))?;}if !telemetry.error.is_empty(){s.status.message=telemetry.error.clone();}else{s.status.message="اتصال MT5 قائم. الوضع المختار وحده ينفذ، وبقية العقول للمشورة أو التدريب الافتراضي.".into();}s.status.analysis=analysis;s.status.paper=paper;s.status.telemetry=Some(telemetry);s.status.last_received_ms=Some(observed_ms);s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);Ok(json!({"ok":true}))
             },
             ("GET","/v1/events")=>{let mut statement=self.db.prepare("SELECT id,timestamp_ms,kind,detail FROM events ORDER BY id DESC LIMIT 100")?;let events=statement.query_map([],|r|Ok(Event{id:r.get(0)?,timestamp_ms:r.get(1)?,kind:r.get(2)?,detail:serde_json::from_str(&r.get::<_,String>(3)?).unwrap_or(Value::Null)}))?.collect::<std::result::Result<Vec<_>,_>>()?;Ok(json!({"events":events}))},
-            ("POST","/v1/shutdown")=>{self.event("core_shutdown_requested",json!({}))?;self.shutting_down=true;Ok(json!({"ok":true}))},
+            ("POST","/v1/shutdown")=>{
+                let unresolved=self.execution.pending(&self.db)?;
+                let current={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
+                verify_safe_shutdown(&current,unresolved)?;
+                self.event("core_shutdown_requested",json!({"safe":true,"positions":0,"pending_orders":0}))?;
+                self.shutting_down=true;
+                Ok(json!({"ok":true,"safe":true}))
+            },
             _=>bail!("Unknown API route")
         }
     }
@@ -380,6 +469,46 @@ pub fn ensure_core()->Result<Client>{
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn full_exit_is_blocked_if_monitoring_or_account_is_unverified(){
+        let mut s=Status::default();
+        assert!(verify_safe_shutdown(&s,false).is_ok());
+        assert!(verify_safe_shutdown(&s,true).is_err());
+        s.requested_run=true;
+        assert!(verify_safe_shutdown(&s,false).is_err());
+        s.requested_run=false;
+        s.last_received_ms=Some(123);
+        assert!(verify_safe_shutdown(&s,false).is_err());
+        s.telemetry=Some(braintrade_domain::Telemetry::default());
+        assert!(verify_safe_shutdown(&s,false).is_err());
+        s.gateway_fresh=true;
+        s.telemetry.as_mut().unwrap().connected=true;
+        assert!(verify_safe_shutdown(&s,false).is_ok());
+        s.telemetry.as_mut().unwrap().pending_orders=1;
+        assert!(verify_safe_shutdown(&s,false).is_err());
+    }
+    #[test]
+    fn account_reconfiguration_requires_flat_stopped_broker(){
+        let mut s=Status::default();
+        assert!(verify_safe_reconfiguration(&s,false).is_ok());
+        assert!(verify_safe_reconfiguration(&s,true).is_err());
+        s.requested_run=true;
+        assert!(verify_safe_reconfiguration(&s,false).is_err());
+        s.requested_run=false;
+        s.telemetry=Some(braintrade_domain::Telemetry::default());
+        s.telemetry.as_mut().unwrap().pending_orders=1;
+        assert!(verify_safe_reconfiguration(&s,false).is_err());
+        s.telemetry.as_mut().unwrap().pending_orders=0;
+        assert!(verify_safe_reconfiguration(&s,false).is_err(),"Disconnected broker must not be considered flat");
+        s.telemetry.as_mut().unwrap().connected=true;
+        s.gateway_fresh=true;
+        assert!(verify_safe_reconfiguration(&s,false).is_ok());
+        s.gateway_fresh=false;
+        assert!(verify_safe_reconfiguration(&s,false).is_err(),"Stale broker state must not authorize reconfiguration");
+        s.telemetry=None;
+        s.last_received_ms=Some(123);
+        assert!(verify_safe_reconfiguration(&s,false).is_err(),"Lost portfolio after reconnect must not authorize account switch");
+    }
     #[test]
     fn atomic_config_replacement(){let dir=std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());fs::create_dir_all(&dir).unwrap();let p=dir.join("config.json");atomic_write(&p,b"first").unwrap();atomic_write(&p,b"second").unwrap();assert_eq!(fs::read(&p).unwrap(),b"second");fs::remove_dir_all(dir).unwrap();}
     #[test]

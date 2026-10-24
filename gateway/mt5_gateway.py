@@ -17,12 +17,13 @@ from __future__ import annotations
 import json
 import math
 import os
+import urllib.request
 from pathlib import Path
 import time
-import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from sniper_native import NativeTickBridge
+from transport import LoopbackCore
 
 BASE = "http://127.0.0.1:18741"
 BAGHDAD = timezone(timedelta(hours=3))
@@ -415,7 +416,14 @@ def main():
     runtime_config = json.loads(config_path.read_text("utf-8")) if config_path.exists() else {}
     path = runtime_config.get("mt5_path", "")
     symbol = runtime_config.get("symbol", "XAUUSD")
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    # HTTP/1.1 connection reuse reduces loopback TCP setup on hot quote paths.
+    # A dropped connection is NEVER replayed automatically (POST ambiguity).
+    # Exact broker order_send remains exclusively in BrokerExecutor.
+    # Kill switch for emergency compatibility: set BRAINTRADE_PERSISTENT_HTTP=0
+    # in the launcher environment to restore the prior urllib transport.
+    persistent_http = os.environ.get('BRAINTRADE_PERSISTENT_HTTP', '1') == '1'
+    transport = LoopbackCore(token) if persistent_http else None
+    legacy_opener = urllib.request.build_opener(urllib.request.ProxyHandler({})) if not persistent_http else None
     try:
         import MetaTrader5 as mt5
     except ImportError:
@@ -433,18 +441,22 @@ def main():
     normal_poll_seconds=1.0
 
     def api(path, payload=None, method=None):
+        if transport is not None:
+            return transport.api(path, payload, method)
         request = urllib.request.Request(BASE+path,
-            data=json.dumps(payload, allow_nan=False).encode('utf-8') if payload is not None else None,
-            headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'},
-            method=method)
-        with opener.open(request,timeout=4) as response:
+            data=json.dumps(payload,allow_nan=False).encode('utf-8') if payload is not None else None,
+            headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'}, method=method)
+        with legacy_opener.open(request,timeout=4) as response:
             return json.load(response)
 
     def publish(snapshot):
-        body = json.dumps(snapshot, allow_nan=False).encode("utf-8")
-        request = urllib.request.Request(BASE + "/v1/gateway/snapshot", data=body,
-                  headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
-        with opener.open(request, timeout=4) as response:
+        if transport is not None:
+            transport.publish(snapshot)
+            return
+        request=urllib.request.Request(BASE+'/v1/gateway/snapshot',
+            data=json.dumps(snapshot,allow_nan=False).encode('utf-8'),
+            headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+        with legacy_opener.open(request,timeout=4) as response:
             response.read()
 
     def background_work():
@@ -602,6 +614,8 @@ def main():
                 else:
                     time.sleep(remaining)
     finally:
+        if transport is not None:
+            transport.close()
         native.close()
         executor.close()
         if mt5 is not None:

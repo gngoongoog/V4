@@ -64,6 +64,12 @@ impl FastContext {
         );
         anyhow::ensure!(pulse.quote_time_ms > 0, "Sniper pulse timestamp is required");
         anyhow::ensure!(pulse.tick_age_ms <= 1000, "Sniper pulse quote is stale");
+        // The gateway's reported age is not sufficient: a cached tick can
+        // claim age 3ms while its exchange timestamp is minutes old.
+        anyhow::ensure!(
+            now.saturating_sub(pulse.quote_time_ms) <= 1500,
+            "Sniper pulse exchange timestamp is stale"
+        );
         anyhow::ensure!(
             pulse.quote_time_ms <= now.saturating_add(2000),
             "Sniper pulse timestamp is in the future"
@@ -135,5 +141,8 @@ mod tests {
         assert!(base.apply(crossed, 1_004).is_err());
         let duplicate = br#"{"login":17,"server":"Demo","currency":"USD","symbol":"XAUUSD","bid":2500.1,"ask":2500.3,"quote_time_ms":1000,"tick_age_ms":3}"#;
         assert!(base.apply(duplicate, 1_004).is_err());
+        let false_fresh = br#"{"login":17,"server":"Demo","currency":"USD","symbol":"XAUUSD","bid":2500.1,"ask":2500.3,"quote_time_ms":1001,"tick_age_ms":3}"#;
+        assert!(base.apply(false_fresh, 100_000).is_err(),
+            "Broker timestamp must corroborate reported tick age");
     }
 }

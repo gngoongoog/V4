@@ -35,3 +35,8 @@ Thumbs.db
 *.log
 secrets/
 /runtime/
+
+# Generated Tauri resources
+/apps/terminal/dist/
+/apps/tauri/runtime/
+/apps/tauri/mt5/

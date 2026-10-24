@@ -299,6 +299,8 @@ pub struct Service {
     sniper_opportunities: crate::sniper_opportunities::Recorder,
     portfolio: PortfolioLimits,
     portfolio_state: Value,
+    supervisor: crate::enterprise_supervisor::Settings,
+    supervisor_policy_valid: bool,
     fast: Option<pulse::FastContext>,
 }
 
@@ -338,6 +340,7 @@ impl Service {
             ..Default::default()
         }
         .json(&portfolio, 0.0);
+        let (supervisor,supervisor_policy_valid)=Self::load_supervisor_fail_closed(db);
         Ok(Self {
             inner,
             learner: crate::coordinator_learning::Learner::new(db)?,
@@ -345,8 +348,36 @@ impl Service {
             sniper_opportunities: crate::sniper_opportunities::Recorder::default(),
             portfolio,
             portfolio_state,
+            // Cache policy once; never query/CREATE a SQLite table per Sniper tick.
+            // A corrupt policy fails closed for entries without disabling Core.
+            supervisor,
+            supervisor_policy_valid,
             fast: None,
         })
+    }
+
+    fn load_supervisor_fail_closed(db:&Connection)->(crate::enterprise_supervisor::Settings,bool) {
+        match crate::enterprise_supervisor::load(db) {
+            Ok(settings)=>(settings,true),
+            Err(_)=>{
+                // A malformed policy cannot be made safe by merely enabling
+                // default checks: a valid market could otherwise pass those
+                // defaults, silently allowing new broker orders.
+                let mut settings=crate::enterprise_supervisor::Settings::default();
+                settings.enforce_entry_gate=true;
+                (settings,false)
+            }
+        }
+    }
+    fn supervisor_permits_entry(&self, assessed: bool)->bool {
+        self.supervisor_policy_valid && (!self.supervisor.enforce_entry_gate || assessed)
+    }
+    pub fn refresh_supervisor(&mut self,db:&Connection) {
+        // Cache coherence is updated synchronously in Core after persisted POST.
+        // Invalid stored JSON always keeps a separate hard-block sentinel.
+        let (settings,valid)=Self::load_supervisor_fail_closed(db);
+        self.supervisor=settings;
+        self.supervisor_policy_valid=valid;
     }
 
     pub fn set_mode(&mut self, mode: braintrade_domain::trading::TradingMode) {
@@ -362,7 +393,7 @@ impl Service {
         Ok(())
     }
 
-    fn account_matches(&self, status: &Status) -> bool {
+    pub(crate) fn account_matches(&self, status: &Status) -> bool {
         status.telemetry.as_ref().is_some_and(|t| {
             t.connected
                 && t.login == self.inner.settings.login
@@ -446,8 +477,22 @@ impl Service {
         self.inner.student_policies=self.student.policies.clone();
         // Legacy engine still owns durable broker intents/reconciliation. With `system`
         // forced on, it represents coordinated execution; every other `enabled` flag means SOLO.
+        // V20 institutional admission: never prevent already-open position exits
+        // or broker reconciliation. The gate is explicit opt-in, persisted in
+        // SQLite, and cannot transfer execution ownership to another brain.
+        // A damaged supervisor settings row must never suspend broker exit
+        // management. Fail closed for fresh opens while reconciliation proceeds.
+        let entries_allowed=if run && self.supervisor_policy_valid {
+            if !self.supervisor.enforce_entry_gate {true}
+            else {
+                let candle_frames: BTreeMap<String,Vec<braintrade_domain::Candle>>=frames.iter().map(|(tf,bars)|
+                    (tf.clone(),bars.iter().map(|bar|bar.candle.clone()).collect())).collect();
+                self.supervisor_permits_entry(
+                    crate::enterprise_supervisor::assess(&self.supervisor,Some(telemetry),config,&candle_frames,now).entry_allowed)
+            }
+        } else {false};
         self.inner
-            .observe(db, telemetry, config, run, frames, now)?;
+            .observe(db, telemetry, config, entries_allowed, frames, now)?;
         // Immutable Demo coordinator policy is a separate prospective study.
         // An audit failure cannot interfere with LIVE broker execution or exits.
         if let Some(active_signal)=self.inner.last_system_signal(){
@@ -676,11 +721,19 @@ impl Service {
                 system.enabled = true;
             }
             self.student.quote(&next.telemetry, now);
+            // Fast Pulse MUST obey the exact same optional V20 entry guard.
+            // No re-sending an unknown command, no bypass on lower latency.
+            // Cached reconciled candles are reused; fresh pulse quote is overlaid.
+            let enter=if status.requested_run && self.supervisor_policy_valid {
+                if !self.supervisor.enforce_entry_gate {true}
+                else {self.supervisor_permits_entry(crate::enterprise_supervisor::assess(&self.supervisor,Some(&next.telemetry),
+                    &next.config,&BTreeMap::new(),now).entry_allowed)}
+            } else {false};
             self.inner.observe(
                 db,
                 &next.telemetry,
                 &next.config,
-                status.requested_run,
+                enter,
                 next.frames.as_ref(),
                 now,
             )?;
@@ -863,6 +916,26 @@ mod tests {
             |row| row.get(0),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn corrupt_policy_cannot_open_trades_even_if_market_assessment_would_pass() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        assert!(service.supervisor_policy_valid);
+        crate::enterprise_supervisor::load(&db).unwrap();
+        db.execute("INSERT INTO enterprise_supervisor_config(id,settings) VALUES(1,?1)",
+            [r#"{"enforce_entry_gate":"invalid"}"#]).unwrap();
+        service.refresh_supervisor(&db);
+        assert!(!service.supervisor_policy_valid);
+        assert!(service.supervisor.enforce_entry_gate);
+        assert!(!service.supervisor_permits_entry(true), "Corrupt policy must never permit entries");
+        assert!(!service.supervisor_permits_entry(false));
+        db.execute("UPDATE enterprise_supervisor_config SET settings=?1 WHERE id=1",
+            [r#"{"enforce_entry_gate":false}"#]).unwrap();
+        service.refresh_supervisor(&db);
+        assert!(service.supervisor_policy_valid);
+        assert!(service.supervisor_permits_entry(true));
     }
 
     #[test]

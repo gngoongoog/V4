@@ -1,0 +1,9 @@
+export type Candle={time:number;open:number;high:number;low:number;close:number;tick_volume:number};
+export type Market={m1?:Candle[];m5?:Candle[];m15?:Candle[]};
+export type Position={ticket:number;symbol:string;side:string;volume:number;price_open:number;price_current:number;profit:number;sl:number;tp:number};
+export type Telemetry={connected:boolean;demo:boolean;account_trade_mode?:number|null;login:number;server:string;currency:string;symbol:string;balance:number;equity:number;margin_free?:number|null;today_net?:number|null;today_deals?:number|null;tick_age_ms?:number|null;quote_time_ms?:number|null;bid?:number|null;ask?:number|null;positions:Position[];market?:Market|null};
+export type BrainStatus={regime?:string;action?:string;current?:boolean;reason?:string;gates?:string[];opportunities?:unknown};
+export type Status={version:string;state:string;requested_run:boolean;gateway_fresh:boolean;execution_enabled:boolean;last_received_ms?:number|null;telemetry?:Telemetry|null;analysis?:BrainStatus;message?:string;telegram_status?:string};
+export type StreamEvent={ok:boolean;status:Status|null;error?:string};
+export type PageId='dashboard'|'trading'|'execution'|'brains'|'brainControl'|'sniper'|'risk'|'positions'|'analysis'|'journal'|'reports'|'telegram'|'settings'|'shadow'|'learning'|'backtest'|'evaluation'|'correlation'|'studio'|'news'|'backups'|'events';
+export type Theme='dark'|'smoke'|'light';

@@ -1,0 +1,26 @@
+{
+  "name": "braintrade-tauri-terminal",
+  "version": "0.8.0-preview.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173",
+    "test": "node tests/contracts.cjs && node tests/health.cjs && node tests/data.cjs && node tests/brain-evidence.cjs && node tests/operations.cjs && node tests/supervisor.cjs && node --experimental-strip-types --test tests/panel-guard.test.mjs",
+    "preview:health": "node tests/render-health-preview.cjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.0"
+  }
+}

@@ -287,11 +287,20 @@ pub fn direction(b: &[Candle]) -> i8 {
         0
     }
 }
+/// This waiver applies ONLY to an unrelated M15 history diagnostic.
+pub fn missing_unrequired_m15_only(error: &str) -> bool {
+    let mut seen = false;
+    for warning in error.split(';').map(str::trim).filter(|v| !v.is_empty()) {
+        if !warning.starts_with("M15: ") { return false; }
+        seen = true;
+    }
+    seen
+}
 /// Validate the two frames actually used by Scalping/Sniper when full research
 /// was unavailable solely because its separate M15 requirement did not mature.
 /// Do not waive current snapshots, completed bars or gaps to force a trade.
 fn short_mode_frames_current(m: &crate::MarketData, now: u64) -> bool {
-    if !m.error.is_empty() || m.captured_ms > now
+    if (!m.error.is_empty() && !missing_unrequired_m15_only(&m.error)) || m.captured_ms > now
         || now.saturating_sub(m.captured_ms) > 15_000 { return false; }
     for (series, seconds) in [(&m.m1, 60u64), (&m.m5, 300u64)] {
         if series.len() < 100 || series.len() > 300
@@ -461,6 +470,27 @@ mod tests {
         let mut expert=Config::default();expert.trading.mode=TradingMode::Expert;
         assert!(!select(base,&t,&expert,&BTreeMap::new(),now).current,
                 "Expert research still requires its original M15 evidence");
+    }
+    #[test]
+    fn missing_m15_error_is_not_an_unrelated_m1_m5_veto() {
+        let now=1_800_000_000_000u64;
+        let mut m=crate::MarketData{captured_ms:now,m1:complete_bars(now,60),
+            m5:complete_bars(now,300),m15:Vec::new(),
+            error:"M15: waiting for 100 closed candles".into()};
+        let mut t=Telemetry{connected:true,symbol:"XAUUSD".into(),
+            bid:Some(124.),ask:Some(124.01),tick_age_ms:Some(0),
+            quote_time_ms:Some(now),market:Some(m.clone()),..Default::default()};
+        for mode in [TradingMode::Sniper,TradingMode::Scalping] {
+            let mut c=Config::default();c.trading.mode=mode;
+            assert!(select(Analysis::default(),&t,&c,&BTreeMap::new(),now).current);
+        }
+        for warning in ["", "M1: old", "M5: old", "M15: old; M1: old", "bad history"] {
+            assert!(!missing_unrequired_m15_only(warning));
+        }
+        m.error="M15: missing; M5: stale".into();
+        t.market=Some(m);
+        let mut c=Config::default();c.trading.mode=TradingMode::Scalping;
+        assert!(!select(Analysis::default(),&t,&c,&BTreeMap::new(),now).current);
     }
     #[test]
     fn short_mode_m1_m5_fallback_never_accepts_stale_incomplete_or_gapped_bars() {

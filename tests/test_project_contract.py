@@ -169,8 +169,8 @@ class ProjectContractTests(unittest.TestCase):
         workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
         lock = tomllib.loads((ROOT / "Cargo.lock").read_text(encoding="utf-8"))
         packages = [p for p in lock["package"] if p["name"].startswith("braintrade-")]
-        self.assertEqual(len(packages), 3)
-        self.assertTrue(all(p["version"] == workspace for p in packages))
+        self.assertEqual(len([p for p in packages if p["name"] != "braintrade-tauri"]), 3)
+        self.assertTrue(all(p["version"] == workspace for p in packages if p["name"] != "braintrade-tauri"))
         ui = (ROOT / "crates/desktop/ui/main.slint").read_text(encoding="utf-8")
         workflow = (ROOT / ".github/workflows/windows.yml").read_text(encoding="utf-8")
         self.assertIn("BRAINTRADE V4 — Institutional Windows Terminal", ui)

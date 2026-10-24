@@ -1,0 +1,1 @@
+{"identifier":"default","description":"Restricted local terminal IPC only — no shell/filesystem/network access in renderer","windows":["main"],"permissions":["core:default"]}

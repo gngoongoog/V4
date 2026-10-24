@@ -16,6 +16,10 @@ import json
 import math
 import sqlite3
 import time
+from institutional_controls import (
+    calendar_entry_blocked, initialise_quality_table, quality_entry_blocked,
+    record_execution_quality,
+)
 
 MAGIC_MIN, MAGIC_MAX = 410600, 410617
 # Reserved 410616 belongs to the unmerged Adaptive Learner, not this build.
@@ -232,7 +236,7 @@ class BrokerExecutor:
         self.db.execute('CREATE TABLE IF NOT EXISTS sends(id TEXT PRIMARY KEY, request TEXT NOT NULL, result TEXT, created_ms INTEGER NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS micro_real_recovered(account_key TEXT PRIMARY KEY, reached_ms INTEGER NOT NULL, reached_equity REAL NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS daily_loss_locks(account_key TEXT NOT NULL, report_day TEXT NOT NULL, reached_ms INTEGER NOT NULL, loss_amount REAL NOT NULL, PRIMARY KEY(account_key,report_day))')
-        self.db.commit()
+        initialise_quality_table(self.db)
         self.next_history = 0.0
 
     def _daily_loss_blocked(self, mt5, cmd, account):
@@ -330,9 +334,29 @@ class BrokerExecutor:
         self.db.close()
 
     def _save(self, cmd, result):
+        # Persist broker result FIRST. Quality telemetry is independent and
+        # must never swallow/transform a real send acknowledgment.
         self.db.execute('UPDATE sends SET result=? WHERE id=?', (json.dumps(result, allow_nan=False), cmd['id']))
         self.db.commit()
+        try:
+            record_execution_quality(self.db, cmd, result, clock_ms())
+        except (sqlite3.Error, KeyError, TypeError, ValueError):
+            # This is observable by the read-only quality report (missing
+            # sample). It must never make a successful broker send 'unknown'.
+            pass
         return result
+
+    def _institutional_entry_guard(self, cmd):
+        if cmd.get('kind') != 'open':
+            return
+        from pathlib import Path
+        reason = calendar_entry_blocked(Path(self.db.execute('PRAGMA database_list').fetchone()[2]).parent / 'event_calendar.json',
+                                        cmd['symbol'], clock_ms())
+        if reason:
+            raise ValueError(reason)
+        reason = quality_entry_blocked(self.db, cmd, clock_ms())
+        if reason:
+            raise ValueError(reason)
 
     def _reconcile(self, mt5, cmd, previous):
         result = previous or dict(id=cmd['id'], state='unknown', reason='Send was interrupted; no automatic retry')
@@ -454,6 +478,9 @@ class BrokerExecutor:
             target_mode = 0 if cmd['target']=='demo' else 2 if cmd['target']=='live' else -1
             if account_identity(a)!=expected(cmd) or a.trade_mode!=target_mode:
                 raise ValueError('Bound account or Demo/Live mode changed')
+            # Economic-event and measured-broker-quality gate. Closing an
+            # owned position never waits on these optional external controls.
+            self._institutional_entry_guard(cmd)
             if cmd.get('kind')=='open' and self._daily_loss_blocked(mt5,cmd,a):
                 raise ValueError('Daily breaker: account daily loss limit reached or locked; new entries blocked')
             if (cmd.get('kind')=='open' and cmd.get('micro_real_temporary') is True
@@ -600,13 +627,12 @@ class BrokerExecutor:
                                 (cmd['id'],json.dumps(dict(cmd,broker_request=request),allow_nan=False),clock_ms()))
                 self.db.commit()
             except sqlite3.IntegrityError:
-                # A concurrent worker already committed the same intent.
-                # Reuse its durable state; never cross order_send twice.
+                # Another gateway worker already committed the same intent.
+                # No second order_send is allowed.
                 self.db.rollback()
                 return self.execute(mt5,cmd,authorize)
             except sqlite3.OperationalError:
                 # A locked/unwritable journal cannot guarantee idempotency.
-                # Fail closed instead of dispatching without persistence.
                 self.db.rollback()
                 result.update(state='unknown',reason='Durable broker journal unavailable; order was not sent')
                 result['total_ms']=(time.perf_counter()-started)*1000
@@ -646,6 +672,13 @@ class BrokerExecutor:
                     reason='Daily breaker reached/locked after validation; new entry not sent')
                 result['total_ms']=(time.perf_counter()-started)*1000
                 return self._save(cmd,result)
+            if not closing:
+                try:
+                    self._institutional_entry_guard(cmd)
+                except ValueError as exc:
+                    result.update(state='cancelled', reason=str(exc)+'; entry not sent')
+                    result['total_ms']=(time.perf_counter()-started)*1000
+                    return self._save(cmd,result)
             if not closing and 'real_margin_check' in result:
                 current_free=float(getattr(final_account,'margin_free',float('nan')))
                 if (not math.isfinite(current_free)
