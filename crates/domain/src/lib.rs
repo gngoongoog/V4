@@ -146,6 +146,8 @@ pub struct Telemetry {
     pub balance: f64,
     pub equity: f64,
     #[serde(default)] pub leverage: Option<u32>,
+    /// Broker-reported used margin only; never synthesize from account equity.
+    #[serde(default)] pub margin: Option<f64>,
     #[serde(default)] pub margin_free: Option<f64>,
     #[serde(default)] pub minimum_lot_margin: Option<f64>,
     pub positions: Vec<Position>,
@@ -209,12 +211,14 @@ impl Telemetry {
                 self.tick_value_loss,
                 self.tick_value_profit,
                 self.point,
+                self.margin,
                 self.margin_free,
                 self.minimum_lot_margin,
             ]
             .iter()
             .flatten()
             .all(|v| v.is_finite())
+            && self.margin.is_none_or(|v| v >= 0.0)
             && self.market.as_ref().is_none_or(MarketData::valid)
             && self.positions.len() <= 10_000
             && self.positions.iter().all(|p| {
