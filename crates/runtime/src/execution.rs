@@ -765,7 +765,7 @@ impl Service {
                     // and the in-memory trial no longer exists. Never infer
                     // missing future ticks from an older persisted sample.
                     let latest=view["research_artifact_history"]["artifacts"]
-                        .as_array().and_then(|items|items.first());
+                        .as_array().and_then(|items|items.first()).cloned();
                     if let Some(item)=latest.filter(|item|item["integrity"]=="verified") {
                         if let (Some(id),Some(hash))=(item["id"].as_str(),item["sha256"].as_str()){
                             view["last_archived_forward_journal"]=
