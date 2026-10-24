@@ -148,7 +148,6 @@ mod tests{
         assert!(!snapshot.entry_allowed(&t,true));
         let mut wrong=t.clone();wrong.account_trade_mode=Some(0);
         assert!(!inspect(&db,&wrong,100).unwrap().entry_allowed(&wrong,true));
-        db.execute("DROP TABLE broker_commands",[]).unwrap_err();
         db.execute_batch("DROP TABLE broker_commands").unwrap();
         assert!(inspect(&db,&t,100).is_err());
     }
