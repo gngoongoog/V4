@@ -96,6 +96,18 @@ def check(exe=None):
                     if preview.get('costs'):
                         assert abs(preview['costs']['commission']-rate*lots)<1e-9,preview
             assert len(api('/v1/execution')['brains'])==17
+            # P1-A: do not let legacy/raw closed-position totals masquerade as
+            # validated Demo performance or a learned win probability.
+            integrity=api('/v1/execution/brains')
+            assert integrity['brain_integrity']['brains_accounted_for']==17
+            assert integrity['brain_integrity']['read_only'] is True
+            assert integrity['brain_integrity']['automatic_promotion'] is False
+            assert integrity['brain_integrity']['demo_account_verified'] is True
+            assert all(b['integrity']['broker_evidence']['status']=='insufficient_evidence'
+                       and b['integrity']['broker_evidence']['win_rate'] is None
+                       and b['integrity']['promotion_enabled'] is False
+                       for b in integrity['brains'])
+            assert integrity['brains'][0]['integrity']['role']=='selected_mode_coordinator'
             assert brain('system')['role']=='coordinator' and brain('trend')['role']=='advisor'
             assert brain('liquidity')['role']=='advisor' and not brain('liquidity')['solo_enabled']
             assert brain('trend_pullback')['role']=='advisor' and not brain('trend_pullback')['solo_enabled']
