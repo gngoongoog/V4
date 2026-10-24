@@ -614,15 +614,23 @@ impl Service {
             .filter(|t|status.gateway_fresh && t.connected && self.account_matches(status));
         if method=="GET"{
             let Some(t)=current else{return Ok(json!({"status":"unbound","broker_effect":false}))};
-            return crate::frozen_coordinator::report(db,&context(t));
+            if config.trading.mode==braintrade_domain::trading::TradingMode::Sniper{
+                return Ok(json!({"status":"tick_native_research_not_implemented",
+                    "mode":"sniper","read_only":true,"no_broker_orders":true,
+                    "reason":"M1 frozen coordinator cannot represent Sniper Fast Pulse ticks"}));
+            }
+            return crate::frozen_coordinator::report(db,&context(t),config.trading.mode);
         }
         anyhow::ensure!(method=="POST","Unknown frozen-coordinator method");
         anyhow::ensure!(!status.requested_run && !self.pending(db)?,
             "أوقف التداول وسوِّ جميع الأوامر قبل تجميد سياسة المنسق");
         let t=current.context("اربط MT5 Demo بقراءة حديثة أولاً")?;
         anyhow::ensure!(t.demo&&t.account_trade_mode==Some(0)
-            &&config.trading.mode==braintrade_domain::trading::TradingMode::Expert,
-            "اختبار منسق Expert مسموح في Demo فقط");
+            &&matches!(config.trading.mode,
+                braintrade_domain::trading::TradingMode::Expert|
+                braintrade_domain::trading::TradingMode::Scalping|
+                braintrade_domain::trading::TradingMode::Swing),
+            "البحث المجمّد لـ Expert/Scalping/Swing مسموح في Demo فقط؛ Sniper يحتاج بيانات Tick");
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Request {action:String,context:String,mode:braintrade_domain::trading::TradingMode}
@@ -635,7 +643,7 @@ impl Service {
                 crate::frozen_coordinator::freeze(db,t,config,&self.inner.brains,
                     &self.inner.weights,&controls,&self.inner.student_policies,now)
             },
-            "stop"=>crate::frozen_coordinator::stop(db,&req.context),
+            "stop"=>crate::frozen_coordinator::stop(db,&req.context,req.mode),
             _=>anyhow::bail!("Unknown frozen coordinator action")
         }
     }
