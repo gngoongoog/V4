@@ -49,8 +49,8 @@ for(const [name,source,state,now] of [
  }
 }
 const tauri=fs.readFileSync(path.join(base,'../../tauri/src/bridge.rs'),'utf8');
-const core=fs.readFileSync(path.join(base,'../../crates/runtime/src/execution.rs'),'utf8');
-const mod=fs.readFileSync(path.join(base,'../../crates/runtime/src/execution_quality.rs'),'utf8');
+const core=fs.readFileSync(path.join(base,'../../../crates/runtime/src/execution.rs'),'utf8');
+const mod=fs.readFileSync(path.join(base,'../../../crates/runtime/src/execution_quality.rs'),'utf8');
 const terminal=fs.readFileSync(path.join(base,'terminal.tsx'),'utf8');
 for(const [label,src,token] of [
  ['tauri',tauri,'"/v1/execution/quality"'],
