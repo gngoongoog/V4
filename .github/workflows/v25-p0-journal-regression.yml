@@ -5,6 +5,8 @@ on:
       - feature/v25-enterprise-validation-20261024
     paths:
       - 'gateway/execution.py'
+      - 'gateway/mt5_gateway.py'
+      - 'tests/test_p0d_financial_integrity.py'
       - 'tests/test_execution_journal_race.py'
       - 'tests/test_broker_reconciliation_strict.py'
       - 'tests/test_broker_intent_identity.py'
@@ -37,3 +39,7 @@ jobs:
         run: python -m unittest discover -s tests -p test_broker_reconciliation_strict.py -v
       - name: Enforce durable intent economic identity on retry
         run: python -m unittest discover -s tests -p test_broker_intent_identity.py -v
+      - name: Preserve broker net PnL truth and account-mode scope
+        run: python -m unittest discover -s tests -p test_p0d_financial_integrity.py -v
+      - name: Preserve dashboard snapshot financial contracts
+        run: python -m unittest discover -s tests -p test_gateway.py -v
