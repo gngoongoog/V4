@@ -865,7 +865,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 // The learner must never consume a 0 invented for a missing fee.
                 for d in ds {
                     if matches!(d["type"].as_i64(), Some(0 | 1)) {
-                        for field in ("profit","commission","swap","fee") {
+                        for field in ["profit","commission","swap","fee"] {
                             if !d[field].as_f64().is_some_and(f64::is_finite) {
                                 bail!("Trading deal has missing/invalid booked cost: {field}");
                             }
