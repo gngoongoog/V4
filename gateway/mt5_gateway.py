@@ -128,7 +128,7 @@ def empty_snapshot(error: str) -> dict:
                 today_net=None, today_deals=None, report_day="", bid=None, ask=None,
                 tick_age_ms=None, quote_time_ms=None, source_quote_time_ms=None,
                 native_event_id=None, symbol="", leverage=None, margin_free=None,
-                minimum_lot_margin=None, volume_min=None, volume_step=None,
+                minimum_lot_margin=None, margin=None, volume_min=None, volume_step=None,
                 tick_size=None, dom_available=False,dom=[],volume_max=None,
                 tick_value_loss=None,tick_value_profit=None,market=None,point=None)
 
@@ -215,6 +215,15 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
             margin_free = None
     except (ValueError, TypeError, OverflowError):
         margin_free = None
+    # Used Margin is a broker-reported account field, not equity - free margin
+    # or a simulated value. Preserve explicit zero; reject missing/invalid.
+    try:
+        raw_margin = getattr(account, "margin", None)
+        margin = float(raw_margin) if raw_margin is not None else None
+        if margin is not None and (not math.isfinite(margin) or margin < 0):
+            margin = None
+    except (ValueError, TypeError, OverflowError):
+        margin = None
     minimum_lot_margin = None
     if (info is not None and tick is not None
             and hasattr(mt5, "order_calc_margin") and hasattr(mt5, "ORDER_TYPE_BUY")):
@@ -232,7 +241,7 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
                   account_trade_mode=int(account.trade_mode),margin_mode=getattr(account,"margin_mode",None),
                   trade_allowed=bool(getattr(account,"trade_allowed",False) and getattr(terminal,"trade_allowed",False) and not getattr(terminal,"tradeapi_disabled",False)),trade_expert=bool(getattr(account,"trade_expert",False)),
                   balance=account.balance, equity=account.equity,
-                  leverage=leverage, margin_free=margin_free,
+                  leverage=leverage, margin=margin, margin_free=margin_free,
                   minimum_lot_margin=minimum_lot_margin,
                   positions=[dict(ticket=p.ticket, symbol=p.symbol,magic=getattr(p,"magic",0),identifier=getattr(p,"identifier",p.ticket),opened_ms=getattr(p,"time_msc",0),
                                   side="BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL",
