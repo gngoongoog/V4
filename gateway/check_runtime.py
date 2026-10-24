@@ -531,11 +531,18 @@ def discover_data_dir(explicit: Path | None = None) -> Path:
     return max(unique.values(), key=lambda path: (path / "ipc.key").stat().st_mtime)
 
 
+class _NoCoreRedirect(urllib.request.HTTPRedirectHandler):
+    """A local HTTP redirect must NEVER carry the decrypted IPC key elsewhere."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise RuntimeError("BrainTrade Core redirected its authenticated API; refusing to follow")
+
+
 class CoreApi:
     def __init__(self, key: str, base_url: str = CORE_URL):
         self.key = key
         self.base_url = validate_local_core_url(base_url)
-        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self.opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _NoCoreRedirect())
 
     def get(self, path: str):
         request = urllib.request.Request(
