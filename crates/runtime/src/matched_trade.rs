@@ -321,6 +321,23 @@ mod tests{
         assert_eq!(total["adaptive_targets"],1);
     }
     #[test]
+    fn actual_observe_detects_twenty_five_second_quote_blackout(){
+        let db=db();let c=Config::default();
+        let opened=1_000_100_000u64;let bar=1_000_001u64;
+        let long=sig(1,bar,0.5,0.5,60_000);
+        observe(&db,"r1",1_000_000_000,true,&long,&long,
+            &q(opened,100.,100.2),&c,opened).unwrap();
+        // First observed exit quote may have skipped a stop before the target.
+        observe(&db,"r1",1_000_000_000,false,&long,&long,
+            &q(opened+25_000,101.,101.2),&c,opened+25_000).unwrap();
+        let report=summary(&db,"r1").unwrap();
+        assert_eq!(report["completed_pairs"],1);
+        assert_eq!(report["pairs_with_observation_gaps"],1);
+        assert_eq!(report["clean_completed_pairs"],0);
+        assert_eq!(report["clean_mean_frozen_net_per_lot"],Value::Null);
+        assert_eq!(report["coverage_status"],"mixed_clean_and_gap_affected");
+    }
+    #[test]
     fn gap_contaminated_winners_cannot_masquerade_as_clean_forward_evidence(){
         let db=db();
         // A highly profitable-looking sampled return after a 25-second quote
