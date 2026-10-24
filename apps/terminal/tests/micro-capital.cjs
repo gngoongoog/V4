@@ -21,6 +21,13 @@ assert.equal(view.budgetPercent,10);
 assert.equal(view.budget,5);
 const lev=smallAccountPreview({gateway_fresh:true,telemetry:t},risk,500);
 assert.equal(lev.scenarioMargin,12,'same leverage preserves indicative broker minimum margin');
+const omitted=smallAccountPreview({gateway_fresh:true,telemetry:t},
+ {risk_percent:0.25,micro_real_temporary:true},500);
+assert.equal(omitted.microCandidate,true,'serde omits default recovery milestone of 500');
+assert.equal(omitted.budgetPercent,10,'serde omits default Micro cap of 10%');
+assert.equal(omitted.budget,5,'50 USD micro default remains 5 USD estimated risk');
+const unconfigured=smallAccountPreview({gateway_fresh:true,telemetry:t},null,500);
+assert.equal(unconfigured.budget,null,'missing Core risk config is not interpreted as default');
 const fifty=smallAccountPreview({gateway_fresh:true,telemetry:t},{...risk,micro_real_cap_percent:20},500);
 assert.equal(fifty.budget,10,'20% micro is a high-risk estimate, never an order authorization');
 const a100=smallAccountPreview({gateway_fresh:true,telemetry:{...t,equity:100}},risk,500);
