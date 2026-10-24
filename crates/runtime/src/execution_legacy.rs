@@ -774,7 +774,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     }
                 }
                 Ok(
-                    json!({"command":command,"history_from_ms":self.history_until_ms.max(self.settings.bound_ms).saturating_sub(120_000),"account":{"login":t.login,"server":t.server,"currency":t.currency},"poll_ms":if self.brains.iter().any(|b|b.enabled){100}else{250}}),
+                    json!({"command":command,"history_from_ms":self.history_until_ms.max(self.settings.bound_ms).saturating_sub(120_000),"account":{"login":t.login,"server":t.server,"currency":t.currency,"trade_mode":t.account_trade_mode},"poll_ms":if self.brains.iter().any(|b|b.enabled){100}else{250}}),
                 )
             }
             ("POST", "/v1/execution/authorize") => {
@@ -850,12 +850,27 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 let t = t
                     .filter(|t| self.matches(t))
                     .context("Bound account unavailable")?;
-                if v["login"] != t.login || v["server"] != t.server || v["currency"] != t.currency {
-                    bail!("Broker history account mismatch");
+                if v["login"] != t.login || v["server"] != t.server || v["currency"] != t.currency
+                    || t.account_trade_mode.is_none() || v["trade_mode"] != json!(t.account_trade_mode) {
+                    bail!("Broker history account or Demo/REAL mode mismatch");
                 }
                 let ds = v["deals"].as_array().context("Deals required")?;
                 if ds.len() > 100_000 {
                     bail!("History chunk too large");
+                }
+                let until_ms=v["until_ms"].as_u64()
+                    .filter(|boundary| *boundary <= now + 2_000)
+                    .context("Invalid history boundary")?;
+                // Verify every booked broker cost BEFORE committing any deals.
+                // The learner must never consume a 0 invented for a missing fee.
+                for d in ds {
+                    if matches!(d["type"].as_i64(), Some(0 | 1)) {
+                        for field in ("profit","commission","swap","fee") {
+                            if !d[field].as_f64().is_some_and(f64::is_finite) {
+                                bail!("Trading deal has missing/invalid booked cost: {field}");
+                            }
+                        }
+                    }
                 }
                 let tx = db.unchecked_transaction()?;
                 for d in ds {
@@ -878,10 +893,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 }
                 tx.commit()?;
                 self.last_sync_ms = now;
-                self.history_until_ms = v["until_ms"]
-                    .as_u64()
-                    .filter(|v| *v <= now + 2000)
-                    .context("Invalid history boundary")?;
+                self.history_until_ms = until_ms;
                 Ok(json!({"ok":true}))
             }
             _ => bail!("Unknown execution route"),
@@ -981,6 +993,67 @@ mod execution_persistence_tests {
         let reloaded=Service::new(&db).unwrap();
         t.report_day=stamp.with_timezone(&zone).format("%Y-%m-%d").to_string();
         assert!(reloaded.daily_breaker_blocked(&db,&t,now,true,2.).unwrap());
+    }
+
+    #[test]
+    fn stop_keeps_owned_close_authorized_but_cancels_new_open() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        service.bind(&db,&t,100).unwrap();
+        service.set_mode(TradingMode::Sniper);
+        let b=service.brains.iter().find(|b|b.id=="system").unwrap().clone();
+        let close=service.queue(&db,&t,&b,"close",None,101,200,None).unwrap();
+        let signal=Signal{brain:"system".into(),side:1,key:"before-stop".into(),bar_time:100,
+            stop_distance:1.,target_distance:2.,hold_ms:60_000,
+            reason:"stop test".into(),ready:true,coordination:None};
+        let open=service.queue(&db,&t,&b,"open",Some(&signal),0,201,Some(&Config::default())).unwrap();
+        let mut status=Status::default();
+        status.telemetry=Some(t);
+        status.gateway_fresh=true;
+        status.requested_run=false;
+        let close_work=service.route("GET","/v1/execution/gateway",b"",&db,&status,250).unwrap();
+        assert_eq!(close_work["command"]["id"],close["id"]);
+        let id=close["id"].as_str().unwrap();
+        let auth=service.route("POST","/v1/execution/authorize",
+            json!({"id":id}).to_string().as_bytes(),&db,&status,251).unwrap();
+        assert_eq!(auth["authorized"],true);
+        service.route("POST","/v1/execution/result",
+            json!({"id":id,"state":"closed"}).to_string().as_bytes(),&db,&status,252).unwrap();
+        let open_work=service.route("GET","/v1/execution/gateway",b"",&db,&status,253).unwrap();
+        assert!(open_work["command"].is_null());
+        let state:String=db.query_row("SELECT state FROM broker_commands WHERE id=?1",
+            [open["id"].as_str().unwrap()],|r|r.get(0)).unwrap();
+        assert_eq!(state,"cancelled");
+    }
+
+    #[test]
+    fn core_history_sync_fails_closed_for_wrong_mode_cost_or_boundary() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        service.bind(&db,&t,100).unwrap();
+        let mut status=Status::default();
+        status.telemetry=Some(t);
+        status.gateway_fresh=true;
+        let deal=json!({"ticket":890,"position_id":201,"magic":410601,
+            "symbol":"XAUUSD","type":0,"entry":0,"profit":1.,
+            "commission":-0.07,"swap":0.,"fee":0.});
+        let mut request=json!({"login":17,"server":"Demo-Test","currency":"USD",
+            "trade_mode":2,"until_ms":200,"deals":[deal.clone()]});
+        assert!(service.route("POST","/v1/execution/sync",request.to_string().as_bytes(),&db,&status,300).is_err());
+        request.as_object_mut().unwrap().remove("trade_mode");
+        assert!(service.route("POST","/v1/execution/sync",request.to_string().as_bytes(),&db,&status,300).is_err());
+        request["trade_mode"]=json!(0);
+        request["deals"][0].as_object_mut().unwrap().remove("fee");
+        assert!(service.route("POST","/v1/execution/sync",request.to_string().as_bytes(),&db,&status,300).is_err());
+        request["deals"]=json!([deal]);
+        request["until_ms"]=json!(99999);
+        assert!(service.route("POST","/v1/execution/sync",request.to_string().as_bytes(),&db,&status,300).is_err());
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        request["until_ms"]=json!(200);
+        service.route("POST","/v1/execution/sync",request.to_string().as_bytes(),&db,&status,300).unwrap();
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     }
 
     #[test]
