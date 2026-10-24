@@ -53,6 +53,14 @@ class ManifestDiagnostics(unittest.TestCase):
         self.assertIn("MISSING: runtime/readme.txt",r["problems"])
         self.assertIn("EXTRA UNLISTED: runtime/unknown.dll",r["problems"])
 
+    def test_portable_python_does_not_mutate_signed_site_packages(self):
+        root=Path(__file__).resolve().parents[1]
+        core=(root/"crates/runtime/src/lib.rs").read_text(encoding="utf-8")
+        launcher=(root/"VERIFY_SYSTEM.cmd").read_text(encoding="utf-8")
+        self.assertIn('command.env("PYTHONDONTWRITEBYTECODE","1")',core)
+        self.assertIn('set "PYTHONDONTWRITEBYTECODE=1"',launcher)
+        self.assertIn('python.exe" -B ',launcher)
+
     def test_runtime_pycache_cannot_be_silently_ignored(self):
         (self.root/"runtime/__pycache__").mkdir()
         (self.root/"runtime/__pycache__/evil.cpython-313.pyc").write_bytes(b"untrusted")
