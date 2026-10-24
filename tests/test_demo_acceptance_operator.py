@@ -53,8 +53,6 @@ class DemoAcceptanceOperatorTests(unittest.TestCase):
         export = source[start:end]
         for expected in (
             "demo-acceptance-latest.json",
-            "demo-acceptance-latest.csv",
-            "demo-acceptance-state.json",
             "runtime-import-check.json",
             "share-summary.json",
             "SHARE_README.txt",
@@ -72,9 +70,12 @@ class DemoAcceptanceOperatorTests(unittest.TestCase):
             "acceptance-gui-stdout.log",
             "acceptance-gui-stderr.log",
             "runtime.db",
+            "demo-acceptance-latest.csv",
+            "demo-acceptance-state.json",
         ):
             self.assertNotIn(forbidden_file, allowed)
         self.assertNotIn("metadata.login", export.lower())
+        self.assertIn("Raw CSV and demo-acceptance-state.json are intentionally EXCLUDED", export)
 
     def test_cmd_wrapper_opens_gui_without_args_and_preserves_cli_with_args(self):
         source = (ROOT / "scripts" / "Run-Demo-Acceptance.cmd").read_text(encoding="utf-8")
