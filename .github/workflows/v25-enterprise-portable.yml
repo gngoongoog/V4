@@ -91,12 +91,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'V25 broker journal regression failed' }
           python -m unittest discover -s tests -p test_broker_reconciliation_strict.py -v
           if ($LASTEXITCODE -ne 0) { throw 'V25 strict broker fill recovery regression failed' }
+          # The historical V23 build script resolves its incomplete Cargo.lock
+          # during its normal cargo test; check --locked *after* that resolution.
+          # We still block publication if either targeted Rust regression fails.
+          & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Build-V23-Portable-Windows.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'V23 build / tests / portable smoke failed; do not publish' }
           cargo test --locked -p braintrade-runtime recovered_partial_progress_requires_exact_volume_and_new_broker_deals
           if ($LASTEXITCODE -ne 0) { throw 'V25 Rust Core strict partial-fill helper regression failed' }
           cargo test --locked -p braintrade-runtime late_split_fill_updates_core_result_without_reopening_observed_order
           if ($LASTEXITCODE -ne 0) { throw 'V25 Rust Core partial/observed state transition failed' }
-          & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Build-V23-Portable-Windows.ps1
-          if ($LASTEXITCODE -ne 0) { throw 'V23 build / tests / portable smoke failed; do not publish' }
       - name: Promote tested V23 build outputs to V25 P0 portable and verify archive
         shell: pwsh
         run: |
