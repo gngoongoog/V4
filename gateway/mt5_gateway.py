@@ -183,7 +183,7 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
         mt5.symbol_select(symbol, True)
         info = mt5.symbol_info(symbol)
     tick = mt5.symbol_info_tick(symbol) if info is not None else None
-    key=(account.login,account.server,symbol)
+    key=(account.login,account.server,symbol,account.currency,account.trade_mode)
     market=market_cache.read(mt5,key,now) if market_cache is not None and info is not None else None
     dom_available,dom=dom_cache.read(mt5,key) if dom_cache is not None and info is not None else (False,[])
     current = mt5.account_info()
@@ -279,8 +279,16 @@ def advance_quote_clock(previous: dict | None, current: dict):
     if source_ms is None:
         return current, False
     current['source_quote_time_ms']=int(source_ms)
-    if not previous or not previous.get('connected'):
+    account_fields=('login','server','currency','account_trade_mode','symbol')
+    account_changed=(previous and previous.get('connected') and
+        any(previous.get(k) != current.get(k) for k in account_fields
+            if k in previous and k in current))
+    if not previous or not previous.get('connected') or account_changed:
+        # Synthetic event IDs and monotonic quote clocks belong to one broker
+        # account+symbol. A mode/login switch must not reuse the old epoch.
         current['quote_time_ms']=int(source_ms)
+        if account_changed:
+            current['native_event_id']=None
         return current, True
     changed=quote_signature(previous)!=quote_signature(current)
     previous_clock=int(previous.get('quote_time_ms') or 0)
@@ -514,12 +522,21 @@ def main():
                         full_due=latest_snapshot is None or mono >= next_full_snapshot
                         if full_due:
                             fresh_snapshot=collect(mt5,symbol,market_cache=market_cache,dom_cache=dom_cache)
+                            if (fresh_snapshot.get('connected') and latest_snapshot and
+                                    latest_snapshot.get('connected') and
+                                    any(latest_snapshot.get(k)!=fresh_snapshot.get(k)
+                                        for k in ('login','server','currency','account_trade_mode','symbol'))):
+                                # MT5 can switch accounts inside the same data directory.
+                                # Revoke the prior EA token and reject buffered old ticks.
+                                native.close()
+                                native.bind_terminal(mt5.terminal_info())
                             fresh_snapshot,_=advance_quote_clock(latest_snapshot,fresh_snapshot)
                             latest_snapshot=fresh_snapshot
                             next_full_snapshot=mono+full_interval
                             publish(latest_snapshot)
                             core_failures=0
-                        elif sniper and latest_snapshot.get('connected') and not native.recent(maximum_age_ms=NATIVE_RECENT_MS):
+                        elif sniper and latest_snapshot.get('connected') and not native.recent(login=int(latest_snapshot.get('login') or 0),symbol=symbol,
+                                maximum_age_ms=NATIVE_RECENT_MS):
                             # Native EA is optional. If it is absent/stale the exact
                             # v0.7 5 ms polling source remains active, but quote handling
                             # now uses the same execution-only pulse as the native source.
@@ -537,6 +554,7 @@ def main():
                                     except (OSError,ValueError):
                                         core_failures+=1
                         if initialized and latest_snapshot and not latest_snapshot.get('connected'):
+                            native.close()
                             dom_cache.release(mt5);mt5.shutdown();initialized=False
                     elif mono >= next_full_snapshot:
                         latest_snapshot=empty_snapshot("MT5 connection failed. Set terminal64.exe path and sign in inside MT5.")
@@ -544,6 +562,7 @@ def main():
                         publish(latest_snapshot)
                 except Exception:
                     latest_snapshot=empty_snapshot("MT5 read failed; retrying connection.")
+                    native.close()
                     dom_cache.release(mt5)
                     try:
                         mt5.shutdown()
