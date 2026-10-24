@@ -751,7 +751,29 @@ impl Service {
                 &&self.inner.active_mode==Some(braintrade_domain::trading::TradingMode::Sniper)
                 &&t.demo&&t.account_trade_mode==Some(0));
             if method=="GET" {
-                return Ok(self.sniper_frozen_tick.report(t,now));
+                let mut view=self.sniper_frozen_tick.report(t,now);
+                // Account-verified, read-only history survives Core restart.
+                // Never fetch another Demo account's archived research.
+                if let Some(t)=t {
+                    let account=crate::coordinator_learning::context(t);
+                    view["research_artifact_history"]=
+                        crate::sniper_research_artifact::recent(db,&account)?;
+                    if let Some(id)=view["research_artifact_id"].as_str().map(str::to_owned) {
+                        let expected=view["research_artifact_sha256"].as_str();
+                        match crate::sniper_research_artifact::verify(db,&account,&id,expected){
+                            Ok(verified)=>view["research_artifact"]=verified,
+                            Err(_)=>{
+                                // Never present tampered research samples as verified.
+                                view["status"]=json!("integrity_failure");
+                                view["training_checkpoint"]=serde_json::Value::Null;
+                                view["forward_direction_audit"]=serde_json::Value::Null;
+                                view["research_artifact"]=json!({"integrity":"failed",
+                                    "independent_oos":false,"broker_pnl":null});
+                            }
+                        }
+                    }
+                }
+                return Ok(view);
             }
             anyhow::ensure!(method=="POST","Unsupported frozen Sniper method");
             anyhow::ensure!(!status.requested_run && !self.pending(db)?,
@@ -776,7 +798,7 @@ impl Service {
                         // the current account's completed Demo broker ledger.
                         let checkpoint=crate::sniper_learning::frozen_training_checkpoint(
                             db,t,&self.inner.sniper,now)?;
-                        self.sniper_frozen_tick.freeze_verified(t,&fast.config,
+                        self.sniper_frozen_tick.freeze_durable(db,t,&fast.config,
                             &self.inner.sniper,checkpoint,now)
                     }
                 },
