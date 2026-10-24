@@ -117,15 +117,16 @@ fn update_brain_control(context: String, brain: String, mode: String, advisor: b
 }
 
 #[tauri::command]
-fn frozen_coordinator_action(action: String, context: String) -> Result<Value, String> {
+fn frozen_coordinator_action(action: String, context: String, mode: String) -> Result<Value, String> {
     // Research-only. The Rust Core independently requires STOPPED, no
     // pending broker intents and a fresh exact-bound MT5 DEMO Expert context.
     if !matches!(action.as_str(),"freeze"|"stop")
+        || !matches!(mode.as_str(),"expert"|"scalping"|"swing")
         || context.len()>500 || context.trim().is_empty() {
         return Err("Frozen coordinator action or account context invalid".into());
     }
     open_client()?.post("/v1/execution/frozen-coordinator",
-        json!({"action":action,"context":context,"mode":"expert"}))
+        json!({"action":action,"context":context,"mode":mode}))
         .map_err(|err|err.to_string())
 }
 
