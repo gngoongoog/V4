@@ -50,7 +50,13 @@ pub(crate) fn report(db:&Connection,telemetry:Option<&Telemetry>,now:u64)->Resul
     for mode in [TradingMode::Sniper,TradingMode::Scalping,TradingMode::Swing,TradingMode::Expert]{
         let value=serde_json::to_value(mode)?;
         let label=value.as_str().unwrap_or("unverified");
-        let evidence=crate::learning_quality::audit(db,&context,mode,"system")?;
+        // JSON1 would reject malformed payloads inside learning_quality's
+        // mode-filter query. Quarantine the entire mode matrix instead:
+        // corrupted account evidence is never interpreted as zero losses.
+        let evidence=if malformed_rows==0{
+            crate::learning_quality::audit(db,&context,mode,"system")?
+        }else{json!({"broker_samples":0,"invalid_samples":0,
+            "duplicate_position_samples":0,"distinct_strategy_sources":0})};
         let count=evidence["broker_samples"].as_u64().unwrap_or(0);
         total+=count;
         let invalid=evidence["invalid_samples"].as_u64().unwrap_or(0);
@@ -70,7 +76,10 @@ pub(crate) fn report(db:&Connection,telemetry:Option<&Telemetry>,now:u64)->Resul
             "reason":reason,"closed_costed_samples":count,
             "invalid_samples":invalid,"duplicate_positions":duplicates,
             "distinct_strategy_sources":sources,"minimum_samples":MIN_CLOSED,
-            "net_after_costs":if count>0{evidence["all"]["net_booked"].clone()}else{Value::Null},
+            "net_after_costs":if count>0&&invalid==0&&duplicates==0
+                &&cross_mode_positions==0&&malformed_rows==0{
+                evidence["all"]["net_booked"].clone()
+            }else{Value::Null},
             "win_rate_after_costs":if consistent{evidence["all"]["win_rate"].clone()}else{Value::Null},
             "recent_mean_per_lot":if consistent{evidence["recent"]["mean_net_per_lot"].clone()}else{Value::Null},
             "source":"reconciled_closed_mt5_demo_coordinator_samples",
@@ -154,6 +163,19 @@ mod tests{
         assert_eq!(v["modes"][0]["status"],"insufficient_or_contaminated");
         assert_eq!(v["modes"][0]["win_rate_after_costs"],Value::Null);
         assert_eq!(v["modes"][0]["reason"],"cross_mode_position_collision");
+    }
+    #[test]
+    fn malformed_broker_payload_is_quarantined_without_sqlite_json_error(){
+        let db=db();let t=telemetry(true);
+        let context=serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)).unwrap();
+        db.execute("INSERT INTO coordinator_broker_samples VALUES('bad',1,?1,'system',1,'{not valid json')",
+            params![context]).unwrap();
+        let r=report(&db,Some(&t),100).unwrap();
+        assert_eq!(r["state"],"observed");
+        assert_eq!(r["malformed_broker_samples"],1);
+        assert_eq!(r["modes"][0]["reason"],"malformed_account_broker_evidence");
+        assert_eq!(r["modes"][0]["win_rate_after_costs"],Value::Null);
+        assert_eq!(r["modes"][0]["net_after_costs"],Value::Null);
     }
     #[test]
     fn malformed_or_mixed_policy_fails_closed_and_never_uses_real_or_stale_account(){
