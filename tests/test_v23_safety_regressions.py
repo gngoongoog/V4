@@ -20,8 +20,10 @@ class V23SafetyRegressions(unittest.TestCase):
         self.assertIn('supervisor_policy_valid: bool',src)
         self.assertIn('fn supervisor_permits_entry(&self, assessed: bool)->bool',src)
         self.assertIn('self.supervisor_policy_valid && (!self.supervisor.enforce_entry_gate || assessed)',src)
-        self.assertIn('let entries_allowed=if run && self.supervisor_policy_valid',src)
-        self.assertIn('let enter=if status.requested_run && self.supervisor_policy_valid',src)
+        self.assertIn('let entries_allowed=if run && quality_allows && self.supervisor_policy_valid',src)
+        self.assertIn('let enter=if status.requested_run && quality_allows && self.supervisor_policy_valid',src)
+        self.assertIn('self.refresh_quality_circuit(db,telemetry,now);',src)
+        self.assertIn('self.quality_circuit.entry_allowed(&next.telemetry,self.is_live_target())',src)
         self.assertIn('corrupt_policy_cannot_open_trades_even_if_market_assessment_would_pass',src)
         self.assertNotIn('if run {\n            if !self.supervisor.enforce_entry_gate {true}',src)
 
