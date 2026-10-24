@@ -10,6 +10,7 @@ on:
       - 'ci/v25_immutable_intent_overlay.py'
       - 'ci/v25_financial_integrity_overlay.py'
       - 'ci/v25_p0e_native_reconnect.patch'
+      - 'ci/v25_apply_p0e_patch.py'
       - 'gateway/sniper_native.py'
       - 'tests/test_p0e_native_lifecycle.py'
       - 'gateway/mt5_gateway.py'
@@ -96,15 +97,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'V25 immutable broker-intent replay overlay failed' }
           python ci/v25_financial_integrity_overlay.py
           if ($LASTEXITCODE -ne 0) { throw 'V25 broker PnL financial integrity overlay failed' }
-          # Source reconstruction can preserve CRLF from the historic ZIP;
-          # apply the reviewed, narrow V25 patch only after normalizing these
-          # two UTF-8 Python files to Git's LF context. Never force a merge.
-          python -c "from pathlib import Path; files=['gateway/mt5_gateway.py','gateway/sniper_native.py']; [(lambda p: p.write_bytes(p.read_bytes().replace(b'\r\n', b'\n')))(Path(f)) for f in files]"
-          if ($LASTEXITCODE -ne 0) { throw 'V25 P0-E restored source EOL normalization failed' }
-          git apply --check --whitespace=nowarn ci/v25_p0e_native_reconnect.patch
-          if ($LASTEXITCODE -ne 0) { throw 'V25 P0-E native reconnection patch does not match V24 restored source' }
-          git apply --whitespace=nowarn ci/v25_p0e_native_reconnect.patch
-          if ($LASTEXITCODE -ne 0) { throw 'V25 P0-E native reconnection patch did not apply' }
+          # Archived V24 sources differ in unrelated context from tracked V25.
+          # Apply only changed hunks with exact unique original anchors.
+          # Ambiguity is fatal and cannot silently publish a stale Gateway.
+          python ci/v25_apply_p0e_patch.py
+          if ($LASTEXITCODE -ne 0) { throw 'V25 P0-E verified native reconnect hunk failed on restored V24' }
           python ci/v25_core_partial_overlay.py
           if ($LASTEXITCODE -ne 0) { throw 'V25 Rust Core partial-fill state progression overlay failed' }
           python ci/v25_tauri_version_stamp.py
