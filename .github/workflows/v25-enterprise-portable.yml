@@ -104,22 +104,22 @@ jobs:
           if (!(Test-Path 'ci/v25-shortcut.ps1')) { throw 'Missing safe desktop shortcut source' }
           Copy-Item 'ci/v25-shortcut.ps1' (Join-Path $dir 'DESKTOP_SHORTCUT.ps1') -Force
           $createCmd=@'
-@echo off
-setlocal
-cd /d "%~dp0"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0DESKTOP_SHORTCUT.ps1"
-if errorlevel 1 exit /b 1
-echo Desktop shortcut created.
-pause
-'@
+          @echo off
+          setlocal
+          cd /d "%~dp0"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0DESKTOP_SHORTCUT.ps1"
+          if errorlevel 1 exit /b 1
+          echo Desktop shortcut created.
+          pause
+          '@
           $removeCmd=@'
-@echo off
-setlocal
-cd /d "%~dp0"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0DESKTOP_SHORTCUT.ps1" -Remove
-if errorlevel 1 exit /b 1
-pause
-'@
+          @echo off
+          setlocal
+          cd /d "%~dp0"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0DESKTOP_SHORTCUT.ps1" -Remove
+          if errorlevel 1 exit /b 1
+          pause
+          '@
           [IO.File]::WriteAllText((Join-Path $dir 'CREATE_DESKTOP_ICON.cmd'),$createCmd,[Text.Encoding]::ASCII)
           [IO.File]::WriteAllText((Join-Path $dir 'REMOVE_DESKTOP_ICON.cmd'),$removeCmd,[Text.Encoding]::ASCII)
           if (-not (Select-String -Path (Join-Path $dir 'runtime/gateway/execution.py') -SimpleMatch 'Durable broker journal unavailable; order was not sent' -Quiet)) {
