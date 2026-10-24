@@ -10,7 +10,21 @@ use serde_json::{json,Value};
 use std::collections::BTreeMap;
 
 const POLICY:&str="frozen-expert-coordinator-decision-v1";
-fn mode_key()->&'static str{"expert"}
+const POLICY_MULTI:&str="frozen-scalping-swing-coordinator-decision-v1";
+// Sniper's price-triggered Fast Pulse is NOT an M1-close coordinator;
+// its frozen research requires a separate tick-specific experiment.
+fn supported(mode:TradingMode)->bool{
+    matches!(mode,TradingMode::Expert|TradingMode::Scalping|TradingMode::Swing)
+}
+fn mode_key(mode:TradingMode)->&'static str{
+    match mode{
+        TradingMode::Expert=>"expert",TradingMode::Scalping=>"scalping",
+        TradingMode::Swing=>"swing",TradingMode::Sniper=>"sniper"
+    }
+}
+fn policy(mode:TradingMode)->&'static str{
+    if mode==TradingMode::Expert{POLICY}else{POLICY_MULTI}
+}
 fn context(t:&Telemetry)->String{
     crate::coordinator_learning::context(t)
 }
@@ -35,8 +49,9 @@ pub fn freeze(db:&Connection,t:&Telemetry,c:&Config,brains:&[BrainConfig],
     controls:&BTreeMap<String,crate::brain_control::Control>,
     policies:&BTreeMap<String,ExitStudy>,now:u64)->Result<Value>{
     ensure!(t.connected&&t.demo&&t.account_trade_mode==Some(0)
-        &&c.trading.mode==TradingMode::Expert&&t.symbol==c.symbol,
-        "تجميد منسق Expert للتدقيق مسموح على Demo فقط");
+        &&t.login>0 && !t.server.is_empty() && !t.currency.is_empty()
+        &&supported(c.trading.mode)&&t.symbol==c.symbol,
+        "تجميد منسق Expert / Scalping / Swing للتدقيق مسموح على Demo فقط؛ Sniper يحتاج رصد Tick مستقل");
     ensure!(t.tick_age_ms.is_some_and(|ms|ms<=3000),
         "تحتاج قراءة أسعار Demo حديثة قبل التجميد");
     ensure!(brains.iter().any(|b|b.id=="system"),
@@ -46,7 +61,7 @@ pub fn freeze(db:&Connection,t:&Telemetry,c:&Config,brains:&[BrainConfig],
     let active:bool=db.query_row(
         "SELECT EXISTS(SELECT 1 FROM frozen_coordinator_runs
          WHERE context=?1 AND mode=?2 AND active=1)",
-        params![key,mode_key()],|r|r.get(0))?;
+        params![key,mode_key(c.trading.mode)],|r|r.get(0))?;
     ensure!(!active,"توجد نسخة منسق مجمدة نشطة لهذا الحساب والرمز");
     let mut all=Vec::new();
     for b in brains {
@@ -59,7 +74,7 @@ pub fn freeze(db:&Connection,t:&Telemetry,c:&Config,brains:&[BrainConfig],
                && !b.enabled && b.id!="system"}));
     }
     let id=uuid::Uuid::new_v4().simple().to_string();
-    let snapshot=json!({"policy":POLICY,"config":c,
+    let snapshot=json!({"policy":policy(c.trading.mode),"mode":mode_key(c.trading.mode),"config":c,
         "members":all,"exit_studies":policies,
         "created_ms":now,"weights_frozen":true,"broker_permission":false,
         "included_layers":["Expert system base","frozen advisor signals",
@@ -67,20 +82,23 @@ pub fn freeze(db:&Connection,t:&Telemetry,c:&Config,brains:&[BrainConfig],
            "frozen adaptive exits"]});
     db.execute(
         "INSERT INTO frozen_coordinator_runs VALUES(?1,?2,?3,?4,?5,1)",
-        params![id,key,mode_key(),now,snapshot.to_string()])?;
+        params![id,key,mode_key(c.trading.mode),now,snapshot.to_string()])?;
     Ok(json!({"ok":true,"run_id":id,"active":true,
-        "no_broker_orders":true,"no_learning_effect":true,"policy":POLICY}))
+        "no_broker_orders":true,"no_learning_effect":true,
+        "mode":mode_key(c.trading.mode),"policy":policy(c.trading.mode)}))
 }
-pub fn stop(db:&Connection,key:&str)->Result<Value>{
+pub fn stop(db:&Connection,key:&str,mode:TradingMode)->Result<Value>{
+    ensure!(supported(mode),"Sniper frozen coordinator requires a distinct tick study");
     let count=db.execute(
         "UPDATE frozen_coordinator_runs SET active=0
          WHERE context=?1 AND mode=?2 AND active=1",
-        params![key,mode_key()])?;
-    Ok(json!({"ok":true,"stopped":count,"policy":POLICY}))
+        params![key,mode_key(mode)])?;
+    Ok(json!({"ok":true,"stopped":count,
+        "mode":mode_key(mode),"policy":policy(mode)}))
 }
 pub fn observe(db:&Connection,t:&Telemetry,c:&Config,adaptive:&Signal,
     frames:&BTreeMap<String,Vec<FrameBar>>,now:u64)->Result<()>{
-    if c.trading.mode!=TradingMode::Expert||!t.demo||t.account_trade_mode!=Some(0)
+    if !supported(c.trading.mode)||!t.demo||t.account_trade_mode!=Some(0)
         ||!t.connected||t.symbol!=c.symbol
         ||t.tick_age_ms.is_none_or(|ms|ms>3000){return Ok(())}
     let key=context(t);
@@ -88,7 +106,7 @@ pub fn observe(db:&Connection,t:&Telemetry,c:&Config,adaptive:&Signal,
         "SELECT id,created_ms,snapshot FROM frozen_coordinator_runs
          WHERE context=?1 AND mode=?2 AND active=1
          ORDER BY created_ms DESC LIMIT 1",
-        params![key,mode_key()],
+        params![key,mode_key(c.trading.mode)],
         |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
     let Some((id,created,raw))=found else{return Ok(())};
     let Some(last)=frames.get("M1").and_then(|v|v.last()) else{return Ok(())};
@@ -102,9 +120,11 @@ pub fn observe(db:&Connection,t:&Telemetry,c:&Config,adaptive:&Signal,
          WHERE run_id=?1 AND bar_time=?2)",params![id,bar],|r|r.get(0))?;
     if recorded{return Ok(())}
     let snap:Value=serde_json::from_str(&raw)?;
-    ensure!(snap["policy"]==POLICY,"frozen coordinator policy mismatch");
+    ensure!(snap["policy"]==policy(c.trading.mode),
+        "frozen coordinator policy mismatch");
     let cfg:Config=serde_json::from_value(snap["config"].clone())?;
-    ensure!(cfg.symbol==t.symbol&&cfg.trading.mode==TradingMode::Expert,
+    ensure!(cfg.symbol==t.symbol&&cfg.trading.mode==c.trading.mode
+        &&snap["mode"]==mode_key(c.trading.mode),
         "frozen policy context drift");
     let mut primary=None;
     let mut votes=Vec::new();
@@ -140,14 +160,16 @@ pub fn observe(db:&Connection,t:&Telemetry,c:&Config,adaptive:&Signal,
             serde_json::to_string(adaptive)?])?;
     Ok(())
 }
-pub fn report(db:&Connection,key:&str)->Result<Value>{
-    if key.is_empty(){return Ok(json!({"status":"unbound","policy":POLICY}))}
+pub fn report(db:&Connection,key:&str,mode:TradingMode)->Result<Value>{
+    ensure!(supported(mode),"Sniper frozen coordinator is NOT available from completed M1 observations");
+    if key.is_empty(){return Ok(json!({"status":"unbound","policy":policy(mode)}))}
     let item:Option<(String,u64,bool)>=db.query_row(
         "SELECT id,created_ms,active FROM frozen_coordinator_runs
          WHERE context=?1 AND mode=?2 ORDER BY created_ms DESC,id DESC LIMIT 1",
-        params![key,mode_key()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+        params![key,mode_key(mode)],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
     let Some((id,created,active))=item else{
-        return Ok(json!({"status":"not_started","policy":POLICY}))
+        return Ok(json!({"status":"not_started","mode":mode_key(mode),
+            "policy":policy(mode),"no_broker_orders":true}))
     };
     let mut stmt=db.prepare(
         "SELECT frozen,adaptive FROM frozen_coordinator_decisions
@@ -165,18 +187,23 @@ pub fn report(db:&Connection,key:&str)->Result<Value>{
             if f.side==a.side{same+=1}else{different+=1}
         }else if f.ready{frozen_only+=1}else if a.ready{adaptive_only+=1}
     }
-    let paired=crate::coordinator_paper::summary(db,&id)?;
+    // The Expert paper simulator is NOT valid for Scalping/Swing.
+    // Their forward results are prospective *decision parity only*.
+    let paired=if mode==TradingMode::Expert{
+        Some(crate::coordinator_paper::summary(db,&id)?)
+    }else{None};
     Ok(json!({"status":if active{"active"}else{"stopped"},
-        "run_id":id,"frozen_ms":created,"policy":POLICY,
+        "mode":mode_key(mode),"run_id":id,"frozen_ms":created,"policy":policy(mode),
         "bars_compared":total,"both_actionable":both,
         "paired_quote_paper":paired,
         "same_direction":same,"different_direction":different,
         "frozen_only_ready":frozen_only,"adaptive_only_ready":adaptive_only,
         "frozen_weights_immutable":true,"no_broker_orders":true,
         "no_training_updates":true,
-        "evaluation_scope":"Expert coordinator base, frozen advisor configs/genomes, contextual weights and exit-study; compare raw decision before broker gates",
-        "not_included":"Broker margin/spread/order checks, current open-position state, system execution timing, broker reconciliations and live Sniper/Scalping/Swing",
-        "outcome":"Decision parity only; does not measure trade profitability or qualify REAL trading"
+        "evaluation_scope":"Selected mode coordinator base, frozen advisor configs/genomes, contextual weights and exit-study; compare raw decision before broker gates",
+        "not_included":"Broker margin/spread/order checks, current open-position state, order fills, broker reconciliation, and Sniper tick Fast Pulse. Paired quote-paper outcomes are Expert-only.",
+        "outcome":"Prospective M1-completed decision parity only for this exact mode; Scalping/Swing have no paper-PnL twin. Does not qualify REAL trading",
+        "independent_oos":false,"mode_isolated":true,"sniper_tick_coverage":false
     }))
 }
 #[cfg(test)]
