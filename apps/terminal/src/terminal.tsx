@@ -308,13 +308,26 @@ export default function Terminal(){
   return()=>{document.removeEventListener('keydown',keydown);previous?.focus()};
  },[approval,contextKey,preview,busy]);
  const runCommand=async(action:'start'|'stop'|'reconnect',login?:string)=>{
-  if(preview){sendNotice('هذه معاينة تصميم فقط. لا يتم تنفيذ أوامر في MT5.',true);return}
-  if(!hasTauri()){sendNotice('أوامر التداول تعمل من تطبيق ويندوز Tauri فقط.',true);return}
+  if(preview||!hasTauri()){sendNotice('أوامر التداول تعمل من تطبيق Windows الحقيقي فقط',true);return}
+  // Emergency STOP is deliberately exempt from the UI write queue: it must
+  // remain requestable while a noncritical IPC mutation is outstanding.
+  // Core remains authoritative and STOP never closes existing positions.
+  if(action==='stop'){
+   try{await control('stop');sendNotice('تم إرسال STOP إلى Core. لا يغلق الصفقات المفتوحة.')}
+   catch(e){sendNotice('فشل طلب STOP؛ راقب حالة Core: '+String(e),true)}
+   return;
+  }
   if(action==='start'&&!canConfirmStart(approval,contextKey,status,feed.broker,login??'')){
    setApproval(null);setLiveLogin('');sendNotice('تغيّر الحساب أو انتهت حداثة MT5؛ افتح تأكيد START من جديد',true);return;
   }
-  setBusy(true);
-  try{await control(action,login);sendNotice(action==='start'?'تم إرسال طلب START إلى Core':'تم إرسال الأمر إلى Core. يتم تحديث الحالة من قناة MT5.');setApproval(null);setLiveLogin('')}catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
+  const mutation=beginWrite('control-'+action);if(!mutation)return;
+  try{
+   await control(action,login);
+   if(!writeFresh(mutation))return;
+   sendNotice(action==='start'?'تم إرسال طلب START إلى Core':'أرسل Core طلب إعادة الاتصال. راقب حالة MT5.');
+   setApproval(null);setLiveLogin('');
+  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
+  finally{finishWrite(mutation)}
  };
  const requestStart=()=>{
   if(preview||busy||!hasTauri()||!feed.broker||!status?.telemetry||status.requested_run){
@@ -322,7 +335,7 @@ export default function Terminal(){
   }
   setLiveLogin('');setApproval({action:'start',scope:contextKey});
  };
- const requestStop=()=>{if(preview||busy||!hasTauri())return;setApproval({action:'stop',scope:contextKey})};
+ const requestStop=()=>{if(preview||!hasTauri())return;setApproval({action:'stop',scope:contextKey})};
  const confirmStop=()=>{
   if(!approvalIsCurrent(approval,'stop',contextKey)){setApproval(null);sendNotice('تغيّرت الجلسة؛ أعد تأكيد STOP',true);return}
   setApproval(null);void runCommand('stop');
@@ -331,22 +344,42 @@ export default function Terminal(){
   if(preview||!hasTauri()||!approvalIsCurrent(approval,'exit',contextKey)){
    setApproval(null);sendNotice('الخروج الكامل يحتاج تأكيداً جديداً لنفس جلسة Core',true);return;
   }
-  setBusy(true);
-  try{await shutdownCore();setApproval(null);await closeTerminal();}
-  catch(e){sendNotice('رفض Core الخروج الكامل: '+String(e),true);setApproval(null)}
-  finally{setBusy(false)}
+  const mutation=beginWrite('shutdown');if(!mutation)return;
+  try{
+   await shutdownCore();
+   if(!writeFresh(mutation))return;
+   setApproval(null);
+   await closeTerminal();
+  }catch(e){if(writeFresh(mutation))sendNotice('رفض Core الخروج الكامل: '+String(e),true);setApproval(null)}
+  finally{finishWrite(mutation)}
  };
  const runBackup=async(action:'create'|'brain_export')=>{
   if(preview||!hasTauri())return sendNotice('إنشاء النسخ يتطلب Core الحقيقي',true);
-  const serial=panelSerial();setBusy(true);
-  try{const outcome=unwrap(await backupAction(action));sendNotice(action==='create'?`تم حفظ نسخة محلية: ${outcome.name||outcome.path||'تم التوثيق'}`:`تصدير العقول: ${outcome.file_name||'تم'} — راجع مجلد البيانات`);publishPanel(serial,await readPanel('/v1/backups'))}
-  catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
+  const mutation=beginWrite('backup-'+action);if(!mutation)return;
+  const serial=panelSerial();
+  try{
+   const outcome=unwrap(await backupAction(action));
+   if(!writeFresh(mutation))return;
+   const data=await readPanel('/v1/backups');
+   if(!writeFresh(mutation))return;
+   publishPanel(serial,data);
+   sendNotice(action==='create'?'تم إنشاء نسخة محلية لدى Core':'تم تصدير Brain Snapshot لدى Core');
+  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
+  finally{finishWrite(mutation)}
  };
  const runBacktest=async(action:'start'|'cancel',request?:{from_date:string;to_date:string;initial_equity:number;spread_floor:number})=>{
   if(preview||!hasTauri())return sendNotice('الاختبارات التاريخية تتطلب Core وMT5',true);
-  const serial=panelSerial();setBusy(true);
-  try{await backtestAction(action,request);sendNotice(action==='start'?'بدأت مهمة التاريخ في Core؛ راقب تقدمها أدناه':'أُلغي الاختبار في Core');publishPanel(serial,await readPanel('/v1/backtest'))}
-  catch(e){sendNotice(String(e),true)}finally{setBusy(false)}
+  const mutation=beginWrite('backtest-'+action);if(!mutation)return;
+  const serial=panelSerial();
+  try{
+   await backtestAction(action,request);
+   if(!writeFresh(mutation))return;
+   const data=await readPanel('/v1/backtest');
+   if(!writeFresh(mutation))return;
+   publishPanel(serial,data);
+   sendNotice(action==='start'?'بدأت مهمة الاختبار التاريخي في Core':'استلم Core طلب إلغاء الاختبار');
+  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
+  finally{finishWrite(mutation)}
  };
  const changePreview=()=>{
   // Preview is not an operator account. Discard pending consent and unsaved
@@ -509,7 +542,7 @@ export default function Terminal(){
        <div className="ops-tabs" role="tablist">{[['trade','التداول المباشر'],['orders','إدارة الأوامر'],['advanced','متداول متقدم']].map(([key,label])=><button key={key} role="tab" aria-selected={opsTab===key} className={opsTab===key?'active':''} onClick={()=>setOpsTab(key as typeof opsTab)}>{label}</button>)}</div>
        <div className="ops-body">
        {opsTab==='trade'?<>
-        <div className="action-row double"><button className="action-btn start" onClick={requestStart} disabled={busy||preview||!feed.broker||status?.requested_run===true}><Play size={23}/><span>بدء التداول<small>Start</small></span></button><button className="action-btn stop" onClick={requestStop} disabled={busy||preview}><PauseCircle size={23}/><span>وقف الدخول<small>Stop entries</small></span></button><button className="action-btn shadow" onClick={()=>open('shadow')}><Eye size={21}/><span>ظل<small>Shadow</small></span></button></div>
+        <div className="action-row double"><button className="action-btn start" onClick={requestStart} disabled={busy||preview||!feed.broker||status?.requested_run===true}><Play size={23}/><span>بدء التداول<small>Start</small></span></button><button className="action-btn stop" onClick={requestStop} disabled={preview||!hasTauri()}><PauseCircle size={23}/><span>وقف الدخول<small>Stop entries</small></span></button><button className="action-btn shadow" onClick={()=>open('shadow')}><Eye size={21}/><span>ظل<small>Shadow</small></span></button></div>
         <div className="action-row triple"><button className="pill-btn" title="فتح شاشة ربط حساب MT5 Demo. هذا الزر لا يغيّر الحساب مباشرة" onClick={()=>open('execution')}>▣ <span>إعداد Demo</span></button><button className="pill-btn green" title="فتح شاشة ربط REAL مع تأكيد رقم الحساب؛ لا يغيّر MT5 مباشرة" onClick={()=>open('execution')}>◉ <span>إعداد Live</span></button><button className="pill-btn slate" onClick={()=>open('learning')}>⚙ <span>التعلّم<small>Learning</small></span></button></div>
         <div className="action-row quadruple"><button className="mini-btn risk" onClick={()=>open('risk')}>◉ <span>المخاطر<small>Risk</small></span></button><button className="mini-btn risk-off" onClick={()=>open('risk')}>◌ <span>Limits<small>Safety</small></span></button><button className="mini-btn telegram" onClick={()=>open('telegram')}>➤ <span>تلغرام<small>Alerts</small></span></button><button className="mini-btn" onClick={()=>open('settings')}>⚙ <span>الإعدادات<small>Setup</small></span></button></div>
         </>:<div className="ops-alt"><h3>{opsTab==='orders'?'مراقبة الأوامر':'خيارات النظام المتقدمة'}</h3><p>{opsTab==='orders'?'المراكز الفعلية والتسوية تأتي من Core وMT5.':'تغيير وضع التنفيذ وإعدادات القناص يتم بعد تحقق Core.'}</p><button className="quick-link" onClick={()=>open(opsTab==='orders'?'positions':'trading')}>فتح الصفحة ذات الصلة ←</button></div>}
@@ -571,7 +604,7 @@ export default function Terminal(){
    </main>
    <footer className="bottom-status"><div><span className={'tiny-led '+(trustworthy?'lit':'')}></span>{preview?'DESIGN PREVIEW':trustworthy?'MT5 VERIFIED':'NO VERIFIED MARKET DATA'}　•　{display?.version||'V4'}</div><div>Updates: Tauri IPC Channel · Core authoritative</div><div className="footer-tools"><button onClick={changePreview}>{preview?'عرض LIVE':'معاينة التصميم'}</button><button title="Dark theme" onClick={()=>setTheme('dark')}><Moon size={15}/></button><button title="Smoke theme" onClick={()=>setTheme('smoke')}><Cloud size={15}/></button><button title="Light theme" onClick={()=>setTheme('light')}><Sun size={15}/></button>　{clock}</div></footer>
  </section>
- {showStopConfirm&&<div className="confirm-overlay" role="dialog" aria-modal="true" aria-label="تأكيد وقف الدخول"><div className="confirm-dialog" ref={dialogRef}><div className="confirm-title"><PauseCircle size={23}/>وقف فتح الصفقات الجديدة فقط</div><p>هذا الإجراء لا يغلق أي مركز مفتوح ولا يلغي أوامر الوسيط القائمة. سيبقى Core يدير الخروج والتسوية وSL/TP للمراكز الموجودة.</p><div className="confirm-actions"><button onClick={()=>setApproval(null)}>إلغاء</button><button disabled={busy} onClick={confirmStop}>تأكيد وقف الدخول الجديد</button></div></div></div>}
+ {showStopConfirm&&<div className="confirm-overlay" role="dialog" aria-modal="true" aria-label="تأكيد وقف الدخول"><div className="confirm-dialog" ref={dialogRef}><div className="confirm-title"><PauseCircle size={23}/>وقف فتح الصفقات الجديدة فقط</div><p>هذا الإجراء لا يغلق أي مركز مفتوح ولا يلغي أوامر الوسيط القائمة. سيبقى Core يدير الخروج والتسوية وSL/TP للمراكز الموجودة.</p><div className="confirm-actions"><button onClick={()=>setApproval(null)}>إلغاء</button><button onClick={confirmStop}>تأكيد وقف الدخول الجديد</button></div></div></div>}
  {showExitConfirm&&<div className="confirm-overlay" role="dialog" aria-modal="true" aria-label="خروج كامل آمن"><div className="confirm-dialog" ref={dialogRef}><div className="confirm-title"><ShieldCheck size={23}/>الخروج الكامل الآمن</div><p>يطلب إطفاء Core والواجهة. سيُرفض إذا كان التشغيل مستمراً، أو إذا وُجد مركز مفتوح أو أمر معلّق أو كانت حالة MT5 غير موثوقة. إن أردت ترك المحرك يدير الصفقات، اضغط «إغلاق الواجهة فقط».</p><div className="confirm-actions"><button onClick={()=>setApproval(null)}>إلغاء</button><button disabled={busy} onClick={()=>void runFullExit()}>طلب الخروج الآمن</button></div></div></div>}
  {showStartConfirm&&<div className="confirm-overlay" role="dialog" aria-modal="true" aria-label="تأكيد تشغيل التداول"><div className="confirm-dialog" ref={dialogRef}><div className="confirm-title"><ShieldCheck size={23}/>تأكيد تشغيل محرك التداول</div><p>سيتم إرسال طلب التشغيل إلى Rust Core، ولن ينفذ بدون حساب MT5 صالح وفحوصات المخاطر والتحقق من الوضع.</p><p>جلسة MT5: {status?.telemetry?.demo?'DEMO':'REAL'} · {status?.telemetry?.server||'—'} · {status?.telemetry?.login??'—'}</p>
  {status?.telemetry?.demo===false&&<label>للموافقة على START في REAL، اكتب رقم الحساب بالضبط<input inputMode="numeric" autoComplete="off" value={liveLogin} onChange={e=>setLiveLogin(e.target.value)} placeholder="رقم حساب MT5 REAL" /></label>}<div className="confirm-actions"><button onClick={()=>{setApproval(null);setLiveLogin('')}}>إلغاء</button><button className="start" disabled={busy||!canConfirmStart(approval,contextKey,status,feed.broker,liveLogin)} onClick={()=>void runCommand('start',liveLogin.trim())}>إرسال أمر START إلى Core</button></div></div></div>}
