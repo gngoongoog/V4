@@ -87,7 +87,7 @@ test('ui Core mutations are wired to a fence before sending and checking acknowl
  const blocks=[
   ['risk','saveRisk'],['portfolio','savePortfolio'],['config','saveSettings'],
   ['handoff','handoff'],['trading','saveTrading'],['brain-control','updateBrainControl'],
-  ['broker-binding','bindExecution']
+  ['broker-binding','bindExecution'],['supervisor','saveSupervisor']
  ];
  for(const [label,action] of blocks){
   const start=ui.indexOf(`const mutation=beginWrite('${label}')`);
@@ -107,10 +107,14 @@ test('ui Core mutations are wired to a fence before sending and checking acknowl
   "disabled={preview||!hasTauri()}",
   "const mutation=beginWrite('risk')",
   "<EnterpriseSupervisor preview={preview} key={contextKey}",
+  "onSave={runSaveSupervisor}",
   "<TradingSettingsOperations source={pageData} key={viewScope}",
   "<ExecutionBindingOperations source={pageData} key={viewScope}",
   "<MicroCapitalOperations status={!preview&&feed.broker?status:null} key={contextKey}",
   "<BacktestOperations key={viewScope}",
  ])assert(ui.includes(marker),'missing safe writer/scope isolation: '+marker);
+ const supervisor=fs.readFileSync(path.resolve(import.meta.dirname,'../src/enterprise-supervisor.tsx'),'utf8');
+ assert(supervisor.includes('const observed=await onSave(settings)'),'supervisor must not bypass scoped parent mutation');
+ assert(!supervisor.includes('await saveSupervisor('),'child must not send unmanaged IPC mutations');
  assert(ui.includes('if(!fresh)sendNotice('));
 });
