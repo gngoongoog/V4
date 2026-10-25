@@ -106,7 +106,8 @@ def audit(db: sqlite3.Connection, manifest: dict, *, now_ms: int) -> dict:
         except (TypeError,ValueError):
             invalid["unreadable_adaptive_decision"] += 1
             continue
-        members=(value.get("coordination") or {}).get("members") if isinstance(value,dict) else None
+        coord=value.get("coordination") if isinstance(value,dict) else None
+        members=coord.get("members") if isinstance(coord,dict) else None
         if not isinstance(members,list):
             invalid["missing_adaptive_member_ledger"] += 1
             continue
