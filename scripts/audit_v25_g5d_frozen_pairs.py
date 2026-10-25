@@ -13,6 +13,7 @@ import math
 from pathlib import Path
 import random
 import sqlite3
+import time
 from typing import Any
 
 POLICY = "frozen-expert-coordinator-decision-v1"
@@ -49,7 +50,7 @@ def _leg(d: dict, p: dict, side: str, lots: float, opened: int, closed: int,
     leg = p.get(side)
     if not isinstance(signal, dict) or not isinstance(leg, dict):
         raise ValueError("missing_ex_ante_decision")
-    if signal.get("ready") is not True or signal.get("side") not in (-1, 1):
+    if signal.get("ready") is not True or type(signal.get("side")) is not int or signal["side"] not in (-1, 1):
         raise ValueError("not_actionable")
     if leg.get("state") != "closed" or leg.get("side") != signal["side"]:
         raise ValueError("leg_decision_mismatch")
@@ -96,7 +97,7 @@ def _leg(d: dict, p: dict, side: str, lots: float, opened: int, closed: int,
     return per_lot, exit_ms
 
 
-def _checked(row: sqlite3.Row, decision: sqlite3.Row, *, run_created: int) -> tuple[int, float]:
+def _checked(row: sqlite3.Row, decision: sqlite3.Row, *, run_created: int, now_ms: int) -> tuple[int, float]:
     if row["state"] != "complete":
         raise ValueError("not_complete")
     p, d = json.loads(row["payload"]), {
@@ -106,7 +107,7 @@ def _checked(row: sqlite3.Row, decision: sqlite3.Row, *, run_created: int) -> tu
     if not isinstance(p, dict):
         raise ValueError("invalid_pair")
     bar, decision_ms = _ms(row["bar_time"]), _ms(decision["observed_ms"])
-    if decision["bar_time"] != bar:
+    if decision["d_bar_time"] != bar:
         raise ValueError("wrong_decision_bar")
     # Bar is epoch seconds, while all observation/entry/exit times are ms.
     if bar * 1000 <= run_created or not (
@@ -114,7 +115,7 @@ def _checked(row: sqlite3.Row, decision: sqlite3.Row, *, run_created: int) -> tu
     ):
         raise ValueError("not_prospective_decision")
     opened, closed = _ms(row["opened_ms"]), _ms(row["closed_ms"])
-    if opened <= run_created or closed <= opened or abs(decision_ms - opened) > 3000:
+    if opened <= run_created or closed <= opened or abs(decision_ms - opened) > 3000 or closed > now_ms:
         raise ValueError("missing_same_cycle_entry_proof")
     if p.get("policy") != PAPER_POLICY or p.get("source") != \
             "MT5 Demo BID/ASK paired prospective quote; no order_send":
@@ -157,7 +158,9 @@ def _bootstrap_daily_ci(days: dict[int, list[float]], seed: int = 25) -> list[fl
     return [round(draws[49], 8), round(draws[1949], 8)]
 
 
-def audit(db: sqlite3.Connection, run_id: str) -> dict:
+def audit(db: sqlite3.Connection, run_id: str, *, now_ms: int | None = None) -> dict:
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
     db.row_factory = sqlite3.Row
     run = db.execute(
         "SELECT id,context,mode,created_ms,snapshot FROM frozen_coordinator_runs WHERE id=?",
@@ -189,7 +192,7 @@ def audit(db: sqlite3.Connection, run_id: str) -> dict:
             rejects["missing_pre_outcome_decision"] += 1
             continue
         try:
-            day, delta = _checked(row, row, run_created=created)
+            day, delta = _checked(row, row, run_created=created, now_ms=now_ms)
             days[day].append(delta)
         except (ValueError, TypeError, KeyError, OverflowError, json.JSONDecodeError) as exc:
             rejects[str(exc)] += 1
