@@ -33,6 +33,7 @@ def stage():
     for name in ('audit_v25_g5d_frozen_pairs.py',
                  'audit_v25_g6a_preregistered_quotes.py',
                  'audit_v25_g6b_executed_demo_arm.py',
+                 'audit_v25_g6d_causal_learning_evidence.py',
                  'v25_g6c_list_frozen_runs.py'):
         shutil.copy2(ROOT/'scripts'/name,study/name)
     shutil.copy2(ROOT/'scripts/Run-G6-Study.ps1',DEST/'Tools/Run-G6-Study.ps1')
