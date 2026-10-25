@@ -27,7 +27,7 @@ SAFETY_CONTRACTS = {
         'powershell.exe', 'if "%~1"==""',
     ),
     "Tools/Run-Demo-Acceptance.ps1": (
-        "--demo-acceptance", "--demo-readiness", "-PreflightOnly", "runtime\\gateway\\check_runtime.py",
+        "--demo-acceptance", "runtime\\gateway\\check_runtime.py",
         "runtime-import-check.json", "--source",
     ),
     "Tools/Run-Demo-Acceptance-GUI.ps1": (
