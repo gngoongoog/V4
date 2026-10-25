@@ -648,11 +648,10 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     let closed: Vec<_> = groups
                         .iter()
                         .filter(|(pid, _)| {
-                            !positions.iter().any(|p| p.identifier == **pid)
-                                && own.iter().any(|d| {
-                                    d["position_id"].as_u64() == Some(**pid)
-                                        && matches!(d["entry"].as_i64(), Some(1 | 3))
-                                })
+                            !positions.iter().any(|p| p.identifier == **pid || p.ticket == **pid)
+                                && receipts.get(*pid).is_some_and(|group|
+                                    crate::trade_journal::fully_closed_by_deals(group.iter().copied()))
+
                         })
                         .collect();
                     brains.push(json!({"config":b,"name":BRAINS.iter().find(|v|v.0==b.id).unwrap().1,"magic":magic,"latest":self.signals.get(&b.id).filter(|v|t.is_some_and(|t|self.matches(t))&&now.saturating_sub(v["evaluated_ms"].as_u64().unwrap_or(0))<=3000),"learning":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))),"learned_weight":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))).map(|w|w.weight()),"stats":{"deals":own.len(),"closed_positions":closed.len(),"wins":closed.iter().filter(|(_,p)|p.is_some_and(|amount| amount>0.)).count(),"net_booked":net,"booked_cost_evidence":if own.is_empty(){"NO_BROKER_DEALS"}else if net.is_some(){"BROKER_COMPONENTS_VERIFIED"}else{"MISSING_OR_INVALID_BROKER_COST"},"floating":positions.iter().filter(|p|p.magic==magic).map(|p|p.profit).sum::<f64>(),"open_positions":positions.iter().filter(|p|p.magic==magic).count()}}));
@@ -1133,6 +1132,45 @@ mod execution_persistence_tests {
         assert_eq!(again["booked_cost_evidence"],"BROKER_COMPONENTS_VERIFIED");
         assert!((again["net_booked"].as_f64().unwrap()-2.1).abs()<1e-9);
         assert_eq!(again["wins"],1);
+    }
+
+    #[test]
+    fn incomplete_exit_is_not_a_closed_brain_win_even_with_flat_snapshot() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let key=ctx(&t);
+        for (ticket,entry,volume,profit) in [
+            (710,0,0.1,0.0),(711,1,0.04,3.0)
+        ] {
+            let deal=json!({"ticket":ticket,"position_id":77,"symbol":"XAUUSD",
+                "brain":"system","type":0,"entry":entry,"volume":volume,
+                "price":2000.,"time_msc":ticket,"profit":profit,
+                "commission":0.,"swap":0.,"fee":0.});
+            db.execute("INSERT INTO broker_deals VALUES(?1,?2,77,'system',?3)",
+                params![key,ticket,deal.to_string()]).unwrap();
+        }
+        let st=Status{gateway_fresh:true,telemetry:Some(t),..Default::default()};
+        let view=svc.route("GET","/v1/execution",b"",&db,&st,800).unwrap();
+        let stats=&view["brains"].as_array().unwrap().iter()
+            .find(|v|v["config"]["id"]=="system").unwrap()["stats"];
+        assert_eq!(stats["closed_positions"],0);
+        assert_eq!(stats["wins"],0);
+        assert_eq!(stats["net_booked"],3.0,
+            "Already booked partial PnL remains visible but not a closed win");
+        let final_deal=json!({"ticket":712,"position_id":77,"symbol":"XAUUSD",
+            "brain":"system","type":1,"entry":3,"volume":0.06,
+            "price":2001.,"time_msc":712,"profit":1.,
+            "commission":0.,"swap":0.,"fee":0.});
+        db.execute("INSERT INTO broker_deals VALUES(?1,712,77,'system',?2)",
+            params![key,final_deal.to_string()]).unwrap();
+        let full=svc.route("GET","/v1/execution",b"",&db,&st,801).unwrap();
+        let complete=&full["brains"].as_array().unwrap().iter()
+            .find(|v|v["config"]["id"]=="system").unwrap()["stats"];
+        assert_eq!(complete["closed_positions"],1);
+        assert_eq!(complete["wins"],1);
+        assert_eq!(complete["net_booked"],4.0);
     }
 
     #[test]

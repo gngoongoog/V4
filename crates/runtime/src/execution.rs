@@ -1060,10 +1060,12 @@ impl Service {
                 (input["offset"].as_u64().unwrap_or(0), input["limit"].as_u64().unwrap_or(50))
             } else {(0,50)};
             anyhow::ensure!(offset<=1_000_000 && (1..=100).contains(&limit), "Invalid journal page");
-            let t = status.telemetry.as_ref().filter(|t|t.connected
-                && t.login == self.inner.settings.login
-                && t.server == self.inner.settings.server
-                && t.currency == self.inner.settings.currency);
+            // Historical positions are still readable offline, but a stale
+            // or wrong-mode snapshot must never certify a partial close as
+            // fully settled or be used as a source of floating PnL.
+            let t = status.telemetry.as_ref().filter(|t|
+                status.gateway_fresh && self.account_matches(status)
+                && t.connected && !t.symbol.is_empty());
             let mut key=t.map(|t|serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)))
                 .transpose()?.unwrap_or_default();
             if key.is_empty() && self.inner.settings.login>0 {
@@ -1398,6 +1400,60 @@ mod tests {
         let restarted=Service::new(&db).unwrap();
         assert!(restarted.portfolio.enabled);
         assert_eq!(restarted.portfolio.max_positions,2);
+    }
+
+    #[test]
+    fn stale_or_wrong_mode_mt5_snapshot_does_not_override_booked_history() {
+        let db=setup();
+        let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();
+        t.demo=true;
+        t.account_trade_mode=Some(0);
+        service.inner.settings.login=t.login;
+        service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();
+        service.inner.settings.target="demo".into();
+        let key=context(&t);
+        for (ticket,entry) in [(50,0),(51,1)] {
+            let deal=json!({"ticket":ticket,"position_id":99,"symbol":"XAUUSD",
+                "type":0,"entry":entry,"volume":0.10,
+                "time_msc":ticket*1000,"price":2000.,
+                "profit":0.,"commission":0.,"swap":0.,"fee":0.});
+            db.execute("INSERT INTO broker_deals VALUES(?1,?2,99,'system',?3)",
+                params![key,ticket,deal.to_string()]).unwrap();
+        }
+        // This terminal image claims a live position even though its last
+        // observation is stale. Never let it relabel an independently
+        // covered closed MT5 deal history as OPEN.
+        t.positions.push(Position{
+            identifier:99,ticket:99,magic:410_600,symbol:"XAUUSD".into(),
+            side:"BUY".into(),volume:0.10,profit:500.,
+            ..Default::default()
+        });
+        let stale=Status{telemetry:Some(t.clone()),gateway_fresh:false,
+            ..Default::default()};
+        let saved=service.route("GET","/v1/execution/trades",b"",
+            &db,&stale,600).unwrap();
+        assert_eq!(saved["rows"][0]["status"],"CLOSED");
+        assert_eq!(saved["rows"][0]["floating_broker_pnl"],Value::Null);
+        assert_eq!(saved["rows"][0]["broker_net_booked"],0.0);
+        let mut wrong=t.clone();
+        wrong.account_trade_mode=Some(2);
+        wrong.demo=false;
+        let mode_switched=Status{telemetry:Some(wrong),gateway_fresh:true,
+            ..Default::default()};
+        let view=service.route("GET","/v1/execution/trades",b"",
+            &db,&mode_switched,610).unwrap();
+        assert_eq!(view["rows"][0]["status"],"CLOSED");
+        assert_eq!(view["rows"][0]["floating_broker_pnl"],Value::Null);
+        // A *fresh* matching account may legitimately supersede stale
+        // book history for current open-position status.
+        let current=Status{telemetry:Some(t),gateway_fresh:true,
+            ..Default::default()};
+        let latest=service.route("GET","/v1/execution/trades",b"",
+            &db,&current,620).unwrap();
+        assert_eq!(latest["rows"][0]["status"],"PARTIAL / OPEN");
+        assert_eq!(latest["rows"][0]["floating_broker_pnl"],500.0);
     }
 
     #[test]
