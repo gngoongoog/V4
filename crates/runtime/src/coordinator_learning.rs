@@ -10,6 +10,7 @@ use braintrade_domain::{
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 pub fn context(t: &Telemetry) -> String {
@@ -472,7 +473,7 @@ fn position_deals(db: &Connection, key: &str, position_id: u64) -> Result<Vec<St
 
 /// Credit only complete closed broker positions. A partial history page or partial
 /// close is not a training label; no synthetic fills or opposing-member losses.
-fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
+fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry, observed_ms:u64) -> Result<()> {
     if !t.demo || t.account_trade_mode != Some(0) { return Ok(()); }
     if !table_exists(db,"broker_commands")? || !table_exists(db,"broker_deals")? { return Ok(()); }
     let key = context(t);
@@ -508,6 +509,10 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
                 _=>unreachable!("fully_closed_by_deals rejects other entry types"),
             }
         }
+        // Admission clock is the Core observation that first had the complete
+        // broker position, not the broker's earlier close timestamp. This is
+        // recorded in the SAME SQLite transaction as the learning sample.
+        if observed_ms<closed_ms {continue;}
         if closed_ms==0 || !entry_volume.is_finite() ||
             !exit_volume.is_finite() || exit_volume<=0. ||
             entry_volume+1e-8<result["volume"].as_f64().unwrap_or(0.) {continue;}
@@ -589,7 +594,16 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
                 "context_key":learning["context_key"],"selection":coordination["selection"],
                 "sniper_tp_preserved":sniper_tp_preserved,
                 "execution_quality":intel["execution_quality"],"costs":"exact booked MT5 deal profit + commission + swap + fee"});
-            tx.execute("INSERT OR IGNORE INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,?3,?4,?5,?6)",params![&source,position_id,&key,id,closed_ms,payload.to_string()])?;
+            let raw=payload.to_string();
+            let inserted=tx.execute(
+                "INSERT OR IGNORE INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,?3,?4,?5,?6)",
+                params![&source,position_id,&key,id,closed_ms,&raw])?;
+            if inserted==1 {
+                let hash=format!("{:x}",Sha256::digest(raw.as_bytes()));
+                tx.execute(
+                    "INSERT INTO coordinator_broker_admissions(source,position_id,context,brain,closed_ms,admitted_ms,payload_sha256,protocol) VALUES(?1,?2,?3,?4,?5,?6,?7,'g6g-runtime-same-transaction-v1')",
+                    params![&source,position_id,&key,id,closed_ms,observed_ms,hash])?;
+            }
         }
         if let Some(id)=cmd["id"].as_str() {
             tx.execute("INSERT OR IGNORE INTO broker_learning_processed(context,command_id) VALUES(?1,?2)",params![key,id])?;
@@ -617,6 +631,14 @@ impl Learner {
              CREATE TABLE IF NOT EXISTS coordinator_samples(source TEXT NOT NULL,bar INTEGER NOT NULL,payload TEXT NOT NULL,outcome TEXT,PRIMARY KEY(source,bar));
              CREATE INDEX IF NOT EXISTS coordinator_pending ON coordinator_samples(source,outcome);
              CREATE TABLE IF NOT EXISTS coordinator_broker_samples(source TEXT NOT NULL,position_id INTEGER NOT NULL,context TEXT NOT NULL,brain TEXT NOT NULL,closed_ms INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(source,position_id));
+             CREATE TABLE IF NOT EXISTS coordinator_broker_admissions(
+                source TEXT NOT NULL,position_id INTEGER NOT NULL,context TEXT NOT NULL,
+                brain TEXT NOT NULL,closed_ms INTEGER NOT NULL,admitted_ms INTEGER NOT NULL,
+                payload_sha256 TEXT NOT NULL,protocol TEXT NOT NULL,
+                PRIMARY KEY(source,position_id),
+                FOREIGN KEY(source,position_id) REFERENCES coordinator_broker_samples(source,position_id));
+             CREATE INDEX IF NOT EXISTS broker_admissions_scope_clock
+                ON coordinator_broker_admissions(context,brain,admitted_ms);
              CREATE INDEX IF NOT EXISTS coordinator_broker_context ON coordinator_broker_samples(context,brain,closed_ms);
              CREATE TABLE IF NOT EXISTS coordinator_counterfactuals(source TEXT NOT NULL,bar INTEGER NOT NULL,context TEXT NOT NULL,brain TEXT NOT NULL,regime TEXT NOT NULL,side INTEGER NOT NULL,observed_ms INTEGER NOT NULL,outcome TEXT,executed_position_id INTEGER,executed_side INTEGER,supported_execution INTEGER,PRIMARY KEY(source,bar));
              CREATE INDEX IF NOT EXISTS coordinator_counterfactual_context ON coordinator_counterfactuals(context,brain,regime,bar);",
@@ -637,7 +659,7 @@ impl Learner {
         run: bool,
         now: u64,
     ) -> Result<BTreeMap<String, LearnedWeight>> {
-        sync_demo_broker_evidence(db, t)?;
+        sync_demo_broker_evidence(db, t, now)?;
         let mut out = BTreeMap::new();
         let key = context(t);
         let mut intelligence = execution::intelligence_context(t, frames, now);
