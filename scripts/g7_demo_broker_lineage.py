@@ -188,7 +188,6 @@ def audit(db: sqlite3.Connection, *, now_ms: int) -> dict:
     results = []
     counts = Counter()
     exclusions = Counter()
-    seen_position = set()
     for registration in registrations:
         run_id, context, mode = (registration["run_id"],
                                  registration["context"], registration["mode"])
@@ -233,25 +232,25 @@ def audit(db: sqlite3.Connection, *, now_ms: int) -> dict:
                 matched = verified_label(
                     db, context, mode, cmdrow, command, adaptive, now_ms,
                     candidate_samples=sample_scope[context])
-                unique = (context, matched["position_id"])
-                if unique in seen_position:
-                    raise ValueError("position_already_attributed_to_another_pair")
-                seen_position.add(unique)
             except (ValueError, KeyError, TypeError, OverflowError) as exc:
                 reason = str(exc)
                 exclusions[reason] += 1
                 results.append(dict(key, state="unverified_or_unclosed",
                                     command_id=cmdrow["id"], reason=reason))
                 continue
-            counts["verified_closed_adaptive_positions"] += 1
             results.append(dict(key, state="locally_verified_closed_demo_adaptive",
-                                **matched))
+                                context=context, **matched))
+    # Exclude ALL uses of one physical position across runs (not just the
+    # later occurrence), otherwise double-use can inflate proven performance.
+    provisional = [r for r in results if r["state"] == "locally_verified_closed_demo_adaptive"]
+    multiplicity = Counter((r["context"], r["position_id"]) for r in provisional)
+    for row in provisional:
+        if multiplicity[row["context"], row["position_id"]] > 1:
+            row["state"] = "unverified_duplicate_physical_position"
+            row["reason"] = "duplicate_physical_position_attribution"
+            exclusions["duplicate_physical_position_attribution"] += 1
     accepted = [r for r in results if r["state"] == "locally_verified_closed_demo_adaptive"]
-    # Remove any duplicated physical-position attribution from all accepted
-    # entries, not just the second encountered one.
-    multiplicity = Counter((r.get("position_id"),) for r in accepted)
-    if any(n > 1 for n in multiplicity.values()):
-        raise ValueError("duplicate_physical_position_across_g7_pairs")
+    counts["verified_closed_adaptive_positions"] = len(accepted)
     counts["pairs"] = len(results)
     counts["unreviewed_corrupt_label_rows"] = sum(corrupt_label_rows.values())
     return dict(base, status="inconclusive", paired_decisions=core["paired_decisions"],
