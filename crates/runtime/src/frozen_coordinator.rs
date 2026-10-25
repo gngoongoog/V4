@@ -168,9 +168,9 @@ pub fn observe(db:&Connection,t:&Telemetry,c:&Config,adaptive:&Signal,
         params![id,bar,now,
             serde_json::to_string(&frozen)?,
             serde_json::to_string(adaptive)?])?;
-    if inserted==1 {
-        // The second read-only receipt is inserted atomically with the pair;
-        // it cannot grant execution authority or feed broker learning.
+    if inserted==1 && crate::g7_capture::has_registration(&tx,&id)? {
+        // Pre-G7 frozen studies remain LEGACY, not retroactively preregistered.
+        // Registered G7 receipts are atomic with the paired decision.
         crate::g7_capture::record_pair(&tx,&id,&key,mode_key(c.trading.mode),
             &raw,bar,now,t,&frozen,adaptive)?;
     }
