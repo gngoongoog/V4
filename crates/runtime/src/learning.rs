@@ -130,6 +130,56 @@ fn validate_artifact(a:&Value)->Result<(String,String,String)>{
     Ok((sha.into(),target.into(),a["metrics"].to_string()))
 }
 
+/// Read-only, *current verified account + symbol + Demo/REAL* M1 dataset counts.
+/// Global /v1/learning remains the research registry, not broker win rate.
+pub(crate) fn account_evidence(
+    db:&Connection,t:Option<&Telemetry>,gateway_fresh:bool,now_ms:u64
+)->Result<Value>{
+    let Some(t)=t.filter(|t|gateway_fresh) else {
+        return Ok(json!({"schema":"learning-account-evidence-v1","state":"unavailable",
+            "read_only":true,"account_verified":false,"observed_ms":now_ms,
+            "reason":"A fresh MT5 account is required; no broker-model claims",
+            "training_enabled":false,"prediction_enabled":false,"broker_win_rate":null}));
+    };
+    let Some(key)=context(t) else {
+        return Ok(json!({"schema":"learning-account-evidence-v1","state":"unavailable",
+            "read_only":true,"account_verified":false,"observed_ms":now_ms,
+            "reason":"MT5 account identity or Demo/REAL mode is not verified",
+            "training_enabled":false,"prediction_enabled":false,"broker_win_rate":null}));
+    };
+    let (snapshots,pending,eligible,incompatible,last_bar):(u64,u64,u64,u64,Option<u64>)=
+        db.query_row(
+            "SELECT COUNT(*),
+                COALESCE(SUM(CASE WHEN l.snapshot_id IS NULL THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN l.snapshot_id IS NOT NULL
+                    AND s.feature_schema=?2 AND l.label_schema=?3 THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN l.snapshot_id IS NOT NULL
+                    AND (s.feature_schema!=?2 OR l.label_schema!=?3) THEN 1 ELSE 0 END),0),
+                MAX(s.bar_time)
+             FROM learning_snapshots s LEFT JOIN learning_labels l ON l.snapshot_id=s.id
+             WHERE s.context=?1",
+            params![key,FEATURE_SCHEMA,LABEL_SCHEMA],
+            |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)),
+        )?;
+    Ok(json!({
+        "schema":"learning-account-evidence-v1","state":"observed",
+        "read_only":true,"account_verified":true,"observed_ms":now_ms,
+        "context":key,"account":{"server":t.server,"login":t.login,
+            "symbol":t.symbol,"currency":t.currency,
+            "mode":t.account_trade_mode,"demo":t.demo},
+        "feature_schema":FEATURE_SCHEMA,"label_schema":LABEL_SCHEMA,
+        "snapshots":snapshots,"pending_labels":pending,
+        "matured_schema_eligible_labels":eligible,
+        "matured_incompatible_schema_labels":incompatible,
+        "last_bar_time":last_bar,
+        "training_enabled":false,"prediction_enabled":false,
+        "broker_win_rate":null,"broker_net_pnl":null,
+        "automatic_promotion":false,
+        "scope":"current_bound_mt5_identity_symbol_mode_closed_m1_bars",
+        "note":"Research labels from later M1 bars, NOT actual broker trades or profit; registry models cannot auto-promote"
+    }))
+}
+
 impl Service{
     pub fn new(db:&Connection)->Result<Self>{
         db.execute_batch("CREATE TABLE IF NOT EXISTS learning_snapshots(id INTEGER PRIMARY KEY,context TEXT NOT NULL,bar_time INTEGER NOT NULL,captured_ms INTEGER NOT NULL,feature_schema TEXT NOT NULL,reference_close REAL NOT NULL,atr REAL NOT NULL,features TEXT NOT NULL,UNIQUE(context,bar_time));
@@ -311,6 +361,60 @@ mod p0j_learning_context_tests {
         assert_eq!(status["legacy_unverified_snapshots"],1);
         assert_eq!(status["champion_promotion_enabled"],false);
         assert_eq!(status["prediction_enabled"],false);
+    }
+
+    #[test]
+    fn account_learning_evidence_counts_only_matching_verified_mode_and_schema() {
+        let db=Connection::open_in_memory().unwrap();
+        Service::new(&db).unwrap();
+        let demo=broker(true,Some(0));
+        let real=broker(false,Some(2));
+        let dk=context(&demo).unwrap();
+        let rk=context(&real).unwrap();
+        let legacy=serde_json::to_string(&(&demo.server,demo.login,&demo.symbol,&demo.currency)).unwrap();
+        for (id,key,f,l) in [
+            (1,&dk,FEATURE_SCHEMA,Some(LABEL_SCHEMA)),
+            (2,&dk,FEATURE_SCHEMA,None),
+            (3,&dk,"gold-m1-feature-v0",Some(LABEL_SCHEMA)),
+            (4,&dk,FEATURE_SCHEMA,Some("gold-m1-outcome-v0")),
+            (5,&rk,FEATURE_SCHEMA,Some(LABEL_SCHEMA)),
+            (6,&legacy,FEATURE_SCHEMA,Some(LABEL_SCHEMA)),
+        ] {
+            db.execute("INSERT INTO learning_snapshots(id,context,bar_time,captured_ms,feature_schema,reference_close,atr,features)
+                VALUES(?1,?2,?3,?4,?5,2500,1,'{}')",
+                params![id,key,id*60,id*70,f]).unwrap();
+            if let Some(label)=l {
+                db.execute("INSERT INTO learning_labels(snapshot_id,matured_ms,label_schema,label)
+                    VALUES(?1,?2,?3,'{}')",params![id,1000+id,label]).unwrap();
+            }
+        }
+        let result=account_evidence(&db,Some(&demo),true,2000).unwrap();
+        assert_eq!(result["state"],"observed");
+        assert_eq!(result["snapshots"],4);
+        assert_eq!(result["pending_labels"],1);
+        assert_eq!(result["matured_schema_eligible_labels"],1);
+        assert_eq!(result["matured_incompatible_schema_labels"],2);
+        assert_eq!(result["last_bar_time"],240);
+        assert_eq!(result["broker_win_rate"],Value::Null);
+        assert_eq!(result["broker_net_pnl"],Value::Null);
+        assert_eq!(result["automatic_promotion"],false);
+        let other=account_evidence(&db,Some(&real),true,2001).unwrap();
+        assert_eq!(other["snapshots"],1);
+        assert_eq!(other["matured_schema_eligible_labels"],1);
+        let mut other_symbol=demo.clone();other_symbol.symbol="EURUSD".into();
+        assert_eq!(account_evidence(&db,Some(&other_symbol),true,2002).unwrap()["snapshots"],0);
+        for result in [
+            account_evidence(&db,Some(&demo),false,2003).unwrap(),
+            account_evidence(&db,Some(&broker(true,Some(2))),true,2003).unwrap(),
+            account_evidence(&db,Some(&broker(false,Some(0))),true,2003).unwrap(),
+            account_evidence(&db,None,true,2003).unwrap(),
+        ] {
+            assert_eq!(result["state"],"unavailable");
+            assert_eq!(result["account_verified"],false);
+            assert!(result.get("snapshots").is_none());
+            assert!(result.get("context").is_none());
+            assert_eq!(result["broker_win_rate"],Value::Null);
+        }
     }
 
     #[test]
