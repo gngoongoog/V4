@@ -1,0 +1,24 @@
+name: V25 G6-I Sniper Learning Admission Parity
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/v25-g6i-sniper-training-admission-parity-20261025]
+    paths:
+      - 'crates/runtime/src/sniper_learning.rs'
+      - '.github/workflows/v25-g6i-sniper-admission.yml'
+  pull_request:
+    branches: [feature/v25-g6h-runtime-admission-causal-gate-20261025]
+permissions:
+  contents: read
+jobs:
+  sniper-trainer-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Reject unadmitted and tampered Sniper entry/TP broker rewards
+        run: cargo test --locked -p braintrade-runtime sniper_learning::tests -- --nocapture
+      - name: Ensure Coordinator and entire runtime still pass
+        run: cargo test --locked -p braintrade-domain -p braintrade-runtime

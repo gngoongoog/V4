@@ -4,19 +4,77 @@ use anyhow::Result;
 use braintrade_domain::{sniper::{Engine, Models, TargetModels, ID, POLICIES, TARGET_ARMS}, Telemetry};
 use rusqlite::Connection;
 use serde_json::Value;
+use sha2::{Digest,Sha256};
+
+struct SniperBrokerRow {
+    source:String, position:i64, context:String, brain:String, closed:i64,
+    raw:String, admitted_context:Option<String>,admitted_brain:Option<String>,
+    admitted_closed:Option<i64>,admitted_ms:Option<i64>,
+    admitted_hash:Option<String>, protocol:Option<String>,
+}
+
+fn sniper_broker_rows(db:&Connection,context:&str)->Result<Vec<SniperBrokerRow>>{
+    let mut st=db.prepare(
+        "SELECT s.source,s.position_id,s.context,s.brain,s.closed_ms,s.payload,
+                a.context,a.brain,a.closed_ms,a.admitted_ms,a.payload_sha256,a.protocol
+         FROM coordinator_broker_samples s LEFT JOIN coordinator_broker_admissions a
+           ON a.source=s.source AND a.position_id=s.position_id
+         WHERE s.context=?1 AND s.brain='sniper_learner'
+         ORDER BY s.closed_ms DESC,s.position_id DESC LIMIT 2000")?;
+    let mapped=st.query_map([context],|r|Ok(SniperBrokerRow{
+        source:r.get(0)?,position:r.get::<_,i64>(1).unwrap_or(-1),
+        context:r.get(2)?,brain:r.get(3)?,
+        closed:r.get::<_,i64>(4).unwrap_or(-1),raw:r.get(5)?,
+        admitted_context:r.get::<_,Option<String>>(6).unwrap_or(None),
+        admitted_brain:r.get::<_,Option<String>>(7).unwrap_or(None),
+        admitted_closed:r.get::<_,Option<i64>>(8).unwrap_or(None),
+        admitted_ms:r.get::<_,Option<i64>>(9).unwrap_or(None),
+        admitted_hash:r.get::<_,Option<String>>(10).unwrap_or(None),
+        protocol:r.get::<_,Option<String>>(11).unwrap_or(None),
+    }))?;
+    let collected=mapped.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(collected)
+}
+
+fn verified_sniper_admission(row:&SniperBrokerRow,context:&str,now:u64)->Option<Value>{
+    let pos=u64::try_from(row.position).ok().filter(|v|*v>0)?;
+    let close=u64::try_from(row.closed).ok().filter(|v|*v>0)?;
+    let admitted=row.admitted_ms.and_then(|v|u64::try_from(v).ok())?;
+    if admitted<close || admitted>now || close>now
+        || row.context!=context || row.brain!=ID
+        || row.admitted_context.as_deref()!=Some(context)
+        || row.admitted_brain.as_deref()!=Some(ID)
+        || row.admitted_closed!=Some(row.closed)
+        || row.protocol.as_deref()!=Some("g6g-runtime-same-transaction-v1")
+        || row.admitted_hash.as_deref()!=
+             Some(format!("{:x}",Sha256::digest(row.raw.as_bytes())).as_str())
+    {return None;}
+    let p:Value=serde_json::from_str(&row.raw).ok()?;
+    if p["evidence_source"]!="mt5_demo_broker" || p["trading_mode"]!="sniper"
+        || p["context"]!=context || p["brain"]!=ID
+        || p["position_id"].as_u64()!=Some(pos)
+        || p["closed_ms"].as_u64()!=Some(close) {return None;}
+    let parts:Value=serde_json::from_str(&row.source).ok()?;
+    let tuple=parts.as_array().filter(|a|a.len()==6)?;
+    if tuple[0]!=context || tuple[1]!="adaptive-member-v1"
+        || tuple[2]!="sniper" || tuple[3]!=ID
+        || p["timeframe"]!=tuple[4] || p["report_id"]!=tuple[5]
+        || crate::coordinator_learning::verified_broker_feedback(&p).is_none()
+    {return None;}
+    Some(p)
+}
 
 pub fn refresh(engine: &mut Engine, db: &Connection, t: &Telemetry, now: u64) -> Result<()> {
     let context = crate::coordinator_learning::context(t);
     let mut models = Models::new();
     let mut targets=TargetModels::new();
     if t.demo && t.account_trade_mode == Some(0) {
-        let mut st = db.prepare("SELECT closed_ms,payload FROM coordinator_broker_samples WHERE context=?1 AND brain='sniper_learner' ORDER BY closed_ms DESC,position_id DESC LIMIT 2000")?;
-        let rows = st.query_map([&context], |r| Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        for (closed, raw) in rows.into_iter().rev() {
-            if closed == 0 || closed > now || now.saturating_sub(closed) > 30*24*60*60*1000 { continue; }
-            let p: Value = serde_json::from_str(&raw)?;
-            if p["evidence_source"] != "mt5_demo_broker" || p["trading_mode"] != "sniper" { continue; }
+        for row in sniper_broker_rows(db,&context)?.into_iter().rev(){
+            let Some(closed)=u64::try_from(row.closed).ok().filter(|v|*v>0) else{continue;};
+            if closed>now || now.saturating_sub(closed)>30*24*60*60*1000{continue;}
+            // Never train a TP/policy from labels that did not exist at this
+            // Core decision time. Corrupt JSON is skipped, not a fatal error.
+            let Some(p)=verified_sniper_admission(&row,&context,now) else{continue;};
             let s = &p["selection"];
             if s["brain"] != ID || s["policy"] != "sniper-ticks-v1" { continue; }
             let Some(policy) = POLICIES.iter().position(|name| s["sniper_policy"] == *name) else { continue; };
@@ -55,21 +113,17 @@ pub fn frozen_training_checkpoint(db:&Connection,t:&Telemetry,model:&Engine,now:
     let context=crate::coordinator_learning::context(t);
     anyhow::ensure!(model.training_account_matches(&context),
         "Frozen Learner cached policy belongs to a different Demo account");
-    let mut query=db.prepare(
-        "SELECT closed_ms,payload FROM coordinator_broker_samples
-         WHERE context=?1 AND brain='sniper_learner'
-         ORDER BY closed_ms DESC,position_id DESC LIMIT 2000")?;
-    let rows=query.query_map([&context],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let rows=sniper_broker_rows(db,&context)?;
     let mut count=0u64;
     let mut targets=0u64;
     let mut latest=0u64;
     let mut earliest:Option<u64>=None;
     let scanned=rows.len();
-    for (closed,raw) in rows {
+    for row in rows {
+        let Some(closed)=u64::try_from(row.closed).ok().filter(|v|*v>0) else{continue;};
         anyhow::ensure!(closed<=now,"Future-dated broker close cannot enter training cutoff");
-        if closed==0||now.saturating_sub(closed)>30*24*60*60*1000{continue}
-        let p:Value=serde_json::from_str(&raw)?;
+        if now.saturating_sub(closed)>30*24*60*60*1000{continue;}
+        let Some(p)=verified_sniper_admission(&row,&context,now) else{continue;};
         let s=&p["selection"];
         if p["evidence_source"]!="mt5_demo_broker"||p["trading_mode"]!="sniper"
             ||s["brain"]!=ID||s["policy"]!="sniper-ticks-v1"
@@ -111,6 +165,39 @@ pub fn frozen_training_checkpoint(db:&Connection,t:&Telemetry,model:&Engine,now:
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // Actual test receipts used to have arbitrary source names and no
+    // physical MT5 identity. Normalize synthetic fixtures before admitting
+    // them; invalid financial receipts are intentionally NOT stamped.
+    fn stamp_fixture_sniper(db:&Connection,ctx:&str,now:u64){
+        let mut st=db.prepare("SELECT source,position_id,closed_ms,payload
+             FROM coordinator_broker_samples WHERE context=?1 AND brain='sniper_learner'").unwrap();
+        let rows=st.query_map([ctx],|r|Ok((
+            r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?,
+            r.get::<_,String>(3)?
+        ))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+        drop(st);
+        let source=json!([ctx,"adaptive-member-v1","sniper",ID,"M1",""]).to_string();
+        for(previous,pos,closed,raw) in rows{
+            let Ok(mut p)=serde_json::from_str::<Value>(&raw) else{continue;};
+            p["context"]=json!(ctx);p["brain"]=json!(ID);
+            p["position_id"]=json!(pos);p["closed_ms"]=json!(closed);
+            p["timeframe"]=json!("M1");p["report_id"]=json!("");
+            let normalized=p.to_string();
+            db.execute("UPDATE coordinator_broker_samples SET source=?1,payload=?2
+                WHERE source=?3 AND position_id=?4",
+                rusqlite::params![&source,&normalized,&previous,pos]).unwrap();
+            if pos<=0||closed<=0||(closed as u64)>now
+                ||p["evidence_source"]!="mt5_demo_broker"
+                ||crate::coordinator_learning::verified_broker_feedback(&p).is_none()
+            {continue;}
+            let hash=format!("{:x}",Sha256::digest(normalized.as_bytes()));
+            db.execute("INSERT OR IGNORE INTO coordinator_broker_admissions
+                (source,position_id,context,brain,closed_ms,admitted_ms,payload_sha256,protocol)
+                VALUES(?1,?2,?3,?4,?5,?6,?7,'g6g-runtime-same-transaction-v1')",
+                rusqlite::params![&source,pos,ctx,ID,closed,now,hash]).unwrap();
+        }
+    }
     #[test] fn frozen_training_cutoff_rejects_unrefreshed_or_future_dated_ledger(){
         let db=Connection::open_in_memory().unwrap();
         crate::coordinator_learning::Learner::new(&db).unwrap();
@@ -124,6 +211,7 @@ mod tests {
             "sniper_policy":"impulse","sniper_definition":"A","sniper_regime":"B"}});
         db.execute("INSERT INTO coordinator_broker_samples VALUES('first',1,?1,'sniper_learner',1000,?2)",
             rusqlite::params![ctx,record.to_string()]).unwrap();
+        stamp_fixture_sniper(&db,&ctx,5000);
         let mut engine=Engine::default();
         assert!(frozen_training_checkpoint(&db,&t,&engine,5000).is_err());
         refresh(&mut engine,&db,&t,5000).unwrap();
@@ -158,6 +246,7 @@ mod tests {
             db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,?3,?4,1000,?5)",rusqlite::params![i.to_string(),i,account,brain,p.to_string()]).unwrap();
         }
         let mut e=Engine::default();
+        stamp_fixture_sniper(&db,&context,2000);
         for _ in 0..2 { refresh(&mut e,&db,&t,2000).unwrap(); assert_eq!(e.models.len(),1);assert_eq!(e.models.values().next().unwrap()[0].samples,1); }
         let mut restarted=Engine::default();refresh(&mut restarted,&db,&t,2000).unwrap();
         assert_eq!(restarted.models.values().next().unwrap()[0].reward,e.models.values().next().unwrap()[0].reward);
@@ -189,8 +278,9 @@ mod tests {
             "A legacy missing-swap label is not a completed broker training sample");
         let before=frozen_training_checkpoint(&db,&t,&engine,2000).unwrap();
         assert_eq!(before["broker_training_samples"],0);
-        db.execute("UPDATE coordinator_broker_samples SET payload=?1 WHERE source='corrupt'",
+        db.execute("UPDATE coordinator_broker_samples SET payload=?1 WHERE position_id=111",
             [valid.to_string()]).unwrap();
+        stamp_fixture_sniper(&db,&context,2000);
         refresh(&mut engine,&db,&t,2000).unwrap();
         assert_eq!(engine.models.values().next().unwrap()[0].samples,1);
         let after=frozen_training_checkpoint(&db,&t,&engine,2000).unwrap();
@@ -229,7 +319,8 @@ mod tests {
         assert_eq!(frozen_training_checkpoint(&db,&t,&engine,2000).unwrap()
             ["broker_training_samples"],0);
         db.execute("UPDATE coordinator_broker_samples SET payload=?1
-            WHERE source='forged'",[valid.to_string()]).unwrap();
+            WHERE position_id=1",[valid.to_string()]).unwrap();
+        stamp_fixture_sniper(&db,&context,2000);
         refresh(&mut engine,&db,&t,2000).unwrap();
         assert_eq!(engine.models.values().next().unwrap()[0].samples,1);
         assert_eq!(engine.target_models.values().next().unwrap()[2].samples,1);
@@ -262,6 +353,7 @@ mod tests {
             db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,?3,?4,1000,?5)",
                 rusqlite::params![format!("pos-{id}"),id,ctx,brain,payload.to_string()]).unwrap();
         }
+        stamp_fixture_sniper(&db,&context,2000);
         let mut engine=Engine::default();
         for _ in 0..3 {
             refresh(&mut engine,&db,&t,2000).unwrap();
@@ -272,12 +364,68 @@ mod tests {
         }
         // The same historical booked net can remain strategy feedback while
         // a broker-widened TP is excluded from the exact pip-arm estimate.
-        db.execute("UPDATE coordinator_broker_samples SET payload=json_set(payload,'$.sniper_tp_preserved',false) WHERE source='pos-1'",[]).unwrap();
+        db.execute("UPDATE coordinator_broker_samples SET payload=json_set(payload,'$.sniper_tp_preserved',false) WHERE position_id=1",[]).unwrap();
         refresh(&mut engine,&db,&t,2000).unwrap();
         assert_eq!(engine.target_models.len(),0);
         let mut live=t.clone();live.demo=false;live.account_trade_mode=Some(2);
         refresh(&mut engine,&db,&live,2000).unwrap();
         assert!(engine.target_models.is_empty());
+    }
+
+    #[test]
+    fn g6i_sniper_never_trains_from_late_unstamped_or_changed_broker_results(){
+        let db=Connection::open_in_memory().unwrap();
+        crate::coordinator_learning::Learner::new(&db).unwrap();
+        let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            login:70,server:"Demo".into(),symbol:"XAUUSD".into(),
+            currency:"USD".into(),..Default::default()};
+        let context=crate::coordinator_learning::context(&t);
+        let valid=json!({"evidence_source":"mt5_demo_broker","trading_mode":"sniper",
+            "gross":2.0,"commission":-0.5,"swap":0.0,"fee":0.0,
+            "net":1.5,"closed_volume":0.1,"net_per_lot":15.,
+            "risk_money":5.,"r_multiple":0.3,"reward":0.3_f64.tanh(),
+            "sniper_tp_preserved":true,
+            "selection":{"brain":ID,"policy":"sniper-ticks-v1",
+              "sniper_policy":"impulse","sniper_definition":"G6I",
+              "sniper_regime":"directional_normal",
+              "sniper_target_mode":"adaptive","sniper_target_arm":2,
+              "sniper_target_pips":6.}
+        });
+        db.execute("INSERT INTO coordinator_broker_samples
+            VALUES('pre-g6g',70,?1,'sniper_learner',1000,?2)",
+            rusqlite::params![&context,valid.to_string()]).unwrap();
+        let mut engine=Engine::default();
+        refresh(&mut engine,&db,&t,2000).unwrap();
+        assert!(engine.models.is_empty(),"Unstamped Broker labels cannot train Sniper");
+        stamp_fixture_sniper(&db,&context,2500);
+        refresh(&mut engine,&db,&t,2499).unwrap();
+        assert!(engine.models.is_empty(),"A close time is not the first Core admission");
+        refresh(&mut engine,&db,&t,2500).unwrap();
+        assert_eq!(engine.models.values().next().unwrap()[0].samples,1);
+        assert_eq!(engine.target_models.values().next().unwrap()[2].samples,1);
+        let checkpoint=frozen_training_checkpoint(&db,&t,&engine,2500).unwrap();
+        assert_eq!(checkpoint["broker_training_samples"],1);
+        db.execute("UPDATE coordinator_broker_samples
+            SET payload=json_set(payload,'$.net',100000) WHERE position_id=70",[]).unwrap();
+        assert!(frozen_training_checkpoint(&db,&t,&engine,2500).is_err(),
+            "Frozen policy must fail if Broker receipt changes after stamped entry");
+        refresh(&mut engine,&db,&t,2500).unwrap();
+        assert!(engine.models.is_empty());
+        // Restored original payload still cannot pass with a malformed
+        // admission clock, but it must not crash a running Sniper refresh.
+        let reconstructed=json!([context,"adaptive-member-v1","sniper",ID,"M1",""]).to_string();
+        db.execute("UPDATE coordinator_broker_samples SET payload=?1 WHERE source=?2 AND position_id=70",
+            rusqlite::params![{
+                let mut p=valid.clone();
+                p["context"]=json!(context);p["brain"]=json!(ID);
+                p["position_id"]=json!(70);p["closed_ms"]=json!(1000);
+                p["timeframe"]=json!("M1");p["report_id"]=json!("");
+                p.to_string()
+            },&reconstructed]).unwrap();
+        db.execute("UPDATE coordinator_broker_admissions SET admitted_ms='invalid'
+            WHERE source=?1 AND position_id=70",[&reconstructed]).unwrap();
+        refresh(&mut engine,&db,&t,2500).unwrap();
+        assert!(engine.models.is_empty());
     }
 
 }
