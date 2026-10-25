@@ -12,7 +12,7 @@ class Broker:
     TRADE_ACTION_DEAL=1; ORDER_TYPE_BUY=0; ORDER_TYPE_SELL=1; POSITION_TYPE_BUY=0
     ORDER_TIME_GTC=0; ORDER_FILLING_FOK=0; ORDER_FILLING_IOC=1; ORDER_FILLING_RETURN=2
     ACCOUNT_MARGIN_MODE_RETAIL_HEDGING=2; SYMBOL_TRADE_EXECUTION_MARKET=2
-    DEAL_TYPE_BUY=0; DEAL_TYPE_SELL=1
+    DEAL_TYPE_BUY=0; DEAL_TYPE_SELL=1; DEAL_ENTRY_IN=0; DEAL_ENTRY_OUT=1; DEAL_ENTRY_OUT_BY=3
     def __init__(self):
         self.account=N(balance=10000.,equity=10000.,margin_free=10000.,login=17,server='Demo',currency='USD',trade_mode=0,margin_mode=2,trade_allowed=True,trade_expert=True)
         self.terminal=N(connected=True,trade_allowed=True,tradeapi_disabled=False)
@@ -408,7 +408,8 @@ class ExecutionTests(unittest.TestCase):
         self.ex.close();self.ex=BrokerExecutor(self.path);self.assertEqual(self.send()['state'],'filled');self.assertEqual(len(self.mt.sends),1)
     def test_timeout_never_retries_and_later_history_reconciles(self):
         self.mt.raise_send=True;self.assertEqual(self.send()['state'],'unknown');self.mt.raise_send=False;self.assertEqual(self.send()['state'],'unknown');self.assertEqual(len(self.mt.sends),1)
-        self.mt.deals=[N(ticket=77,magic=self.cmd['magic'],symbol='XAUUSD',volume=.1,comment='BT:'+self.cmd['id'][:20])];self.assertEqual(self.send()['state'],'filled');self.assertEqual(len(self.mt.sends),1)
+        self.mt.deals=[N(ticket=77,magic=self.cmd['magic'],symbol='XAUUSD',volume=.1,
+                         type=0,entry=0,position_id=700,comment='BT:'+self.cmd['id'][:20])];self.assertEqual(self.send()['state'],'filled');self.assertEqual(len(self.mt.sends),1)
     def test_broker_done_without_deal_ticket_is_not_falsely_booked_as_filled(self):
         self.mt.reply_deal=0
         first=self.send()
@@ -421,7 +422,7 @@ class ExecutionTests(unittest.TestCase):
         # A different broker comment can still be linked to the exact original
         # order number. Never synthesize fills or send the order twice.
         self.mt.deals=[N(ticket=78,order=55,position_id=900,magic=self.cmd['magic'],symbol='XAUUSD',
-                         volume=.1,comment='broker-stripped-comment',price=2000.10,time_msc=clock_ms())]
+                         volume=.1,type=0,entry=0,comment='broker-stripped-comment',price=2000.10,time_msc=clock_ms())]
         result=self.send()
         self.assertEqual(result['state'],'filled')
         self.assertEqual(result['deal'],78)
@@ -437,7 +438,7 @@ class ExecutionTests(unittest.TestCase):
         self.mt.reply_deal=0
         self.assertEqual(self.send()['state'],'placed')
         self.mt.deals=[N(ticket=78,order=999,position_id=900,magic=self.cmd['magic'],symbol='XAUUSD',
-                         volume=.1,comment='another-order',price=2000.10,time_msc=clock_ms())]
+                         volume=.1,type=0,entry=0,comment='another-order',price=2000.10,time_msc=clock_ms())]
         self.assertEqual(self.send()['state'],'placed')
         self.assertEqual(len(self.mt.sends),1)
 
@@ -445,7 +446,7 @@ class ExecutionTests(unittest.TestCase):
         self.mt.reply_deal=0
         self.assertEqual(self.send()['state'],'placed')
         self.mt.deals=[N(ticket=88,order=999,position_id=900,magic=self.cmd['magic'],symbol='XAUUSD',
-                         volume=.1,comment='BT:'+self.cmd['id'][:20],price=2000.10,time_msc=clock_ms())]
+                         volume=.1,type=0,entry=0,comment='BT:'+self.cmd['id'][:20],price=2000.10,time_msc=clock_ms())]
         self.assertEqual(self.send()['state'],'placed')
         self.assertEqual(len(self.mt.sends),1)
 
@@ -463,7 +464,8 @@ class ExecutionTests(unittest.TestCase):
         self.mt.raise_send=True;self.assertEqual(self.send()['state'],'unknown')
         self.ex.db.execute('UPDATE sends SET result=NULL');self.ex.db.commit()
         self.ex.close();self.ex=BrokerExecutor(self.path)
-        self.mt.deals=[N(ticket=77,magic=self.cmd['magic'],symbol='XAUUSD',volume=.04,comment='BT:'+self.cmd['id'][:20])]
+        self.mt.deals=[N(ticket=77,magic=self.cmd['magic'],symbol='XAUUSD',volume=.04,
+                         type=1,entry=1,position_id=700,comment='BT:'+self.cmd['id'][:20])]
         result=self.send();self.assertEqual(result['state'],'partial');self.assertEqual(result['request']['volume'],.1)
         self.assertEqual(result['deal'],77);self.assertEqual(len(self.mt.sends),1)
     def test_crash_between_journal_and_send_stays_unknown(self):

@@ -419,6 +419,39 @@ class BrokerExecutor:
             volume = sum(volumes)
             if not math.isfinite(volume) or volume > submitted_volume + max(1e-8, submitted_volume * 1e-7):
                 return dict(result, reason='Broker fill volume exceeds submitted volume; reconciliation pending')
+            # A broker deal with the same magic, symbol, comment or order ticket
+            # is not necessarily a fill of THIS market request. A close/reversal
+            # must never make a pending open look filled (or vice versa).
+            # MT5 history deals expose type, entry and position_id; refuse to
+            # infer economic outcomes if any of this evidence is missing.
+            try:
+                requested_type = int(submitted['type'])
+                deal_types = [int(d.type) for d in matches]
+                entries = [int(d.entry) for d in matches]
+                positions = [int(d.position_id) for d in matches]
+            except (KeyError, AttributeError, TypeError, ValueError, OverflowError):
+                return dict(result, reason='Broker deal type/entry/position evidence unavailable; reconciliation pending')
+            buy = getattr(mt5, 'DEAL_TYPE_BUY', 0)
+            sell = getattr(mt5, 'DEAL_TYPE_SELL', 1)
+            open_entry = getattr(mt5, 'DEAL_ENTRY_IN', 0)
+            close_entries = (getattr(mt5, 'DEAL_ENTRY_OUT', 1),
+                             getattr(mt5, 'DEAL_ENTRY_OUT_BY', 3))
+            expected_types = (getattr(mt5, 'ORDER_TYPE_BUY', 0),
+                              getattr(mt5, 'ORDER_TYPE_SELL', 1))
+            if requested_type not in expected_types or any(
+                    typ != (buy if requested_type == expected_types[0] else sell)
+                    for typ in deal_types):
+                return dict(result, reason='Broker deal direction conflicts with submitted order; reconciliation pending')
+            if cmd['kind'] == 'open':
+                valid_entries = (open_entry,)
+            elif cmd['kind'] == 'close':
+                valid_entries = close_entries
+            else:
+                return dict(result, reason='Unknown broker intent kind; reconciliation pending')
+            if any(entry not in valid_entries for entry in entries):
+                return dict(result, reason='Broker deal entry/exit classification conflicts with intent; reconciliation pending')
+            if any(pos <= 0 for pos in positions) or len(set(positions)) != 1:
+                return dict(result, reason='Broker fills have missing or conflicting physical position IDs; reconciliation pending')
             state = 'partial' if volume + 1e-8 < submitted_volume else 'filled'
             result = dict(result, state=state, reason='Broker history confirms fill; await Core position reconciliation; no resend',
                           request=submitted, deal=int(matches[0].ticket), deals=[int(d.ticket) for d in matches],
@@ -429,9 +462,7 @@ class BrokerExecutor:
             times = [int(getattr(d, 'time_msc', 0)) for d in matches]
             if all(t > 0 for t in times):
                 result['fill_time_ms'] = min(times)
-            positions = {int(getattr(d, 'position_id', 0)) for d in matches}
-            if len(positions) == 1 and next(iter(positions)) > 0:
-                result['position_id'] = next(iter(positions))
+            result['position_id'] = positions[0]
             # Recovery can restore booked evidence, never the unobserved quote path.
             result['reconciled_ms'] = clock_ms()
             return self._save(cmd, result)
