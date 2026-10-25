@@ -7,6 +7,7 @@ exercise native PowerShell dialogs. No writes to app/core databases.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import hashlib
 import json
 from pathlib import Path
@@ -63,7 +64,10 @@ def _bundled_python_sqlite_study_smoke(runtime_python: Path,
                        "report_id":"","enabled":True},
                         "genome":None,"weight":None,"advisor_enabled":False}],
         }
-        with sqlite3.connect(database) as db:
+        # sqlite3.Connection.__exit__ commits but does NOT close the handle.
+        # Windows forbids unlinking this temp database until close(), unlike
+        # Linux; closing() guarantees no locked test fixture leaks into CI.
+        with closing(sqlite3.connect(database)) as db:
             db.executescript("""
                 CREATE TABLE frozen_coordinator_runs(
                     id TEXT PRIMARY KEY,context TEXT,mode TEXT,created_ms INTEGER,
@@ -79,6 +83,7 @@ def _bundled_python_sqlite_study_smoke(runtime_python: Path,
             db.execute("INSERT INTO frozen_coordinator_runs VALUES(?,?,?,?,?,1)",
                 ("synthetic-run",context,"expert",snapshot["created_ms"],
                  json.dumps(snapshot)))
+            db.commit()
         def command(script: str, *args: str) -> subprocess.CompletedProcess:
             return subprocess.run(
                 [str(runtime_python),str(scripts/script),*map(str,args)],
