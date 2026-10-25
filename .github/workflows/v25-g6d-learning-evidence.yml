@@ -6,6 +6,9 @@ on:
     paths:
       - 'scripts/audit_v25_g6d_causal_learning_evidence.py'
       - 'tests/test_v25_g6d_causal_learning_evidence.py'
+      - 'scripts/Run-G6-Study.ps1'
+      - 'scripts/package_v25.py'
+      - 'scripts/check_v25_g6c_study_package.py'
       - '.github/workflows/v25-g6d-learning-evidence.yml'
   pull_request:
     branches: [feature/v25-g6c-portable-demo-study-tools-20261025]
@@ -24,6 +27,8 @@ jobs:
         run: python3 -m compileall -q scripts/audit_v25_g6d_causal_learning_evidence.py tests/test_v25_g6d_causal_learning_evidence.py
       - name: Test causal member count provenance and no fake OOS certification
         run: python3 -m unittest discover -s tests -p 'test_v25_g6d_causal_learning_evidence.py' -v
+      - name: Exercise isolated Python and bundle privacy tests
+        run: python3 -m unittest discover -s tests -p 'test_v25_g6c_portable_studies.py' -v
       - name: Keep preregistration and executed Broker evidence gates green
         run: |
           python3 -m unittest discover -s tests -p 'test_v25_g6a_preregistered_quotes.py' -v
