@@ -203,7 +203,7 @@ mod tests {
     fn g5e_sniper_models_ignore_forged_reward_with_exact_broker_costs() {
         let db=Connection::open_in_memory().unwrap();
         crate::coordinator_learning::Learner::new(&db).unwrap();
-        let t=Telemetry{demo:true,account_trade_mode:Some(0),login:19,
+        let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),login:19,
             server:"Demo".into(),symbol:"XAUUSD".into(),..Default::default()};
         let context=crate::coordinator_learning::context(&t);
         let valid=json!({
