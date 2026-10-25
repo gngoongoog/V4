@@ -346,12 +346,13 @@ pub fn setup(ui:&Dashboard,bound:BoundAccountScope)->slint::Timer {
                 "حساب MT5 أو وضع التداول تغيّر أثناء تحميل العقول؛ أعد التحديث");
             Ok(response)})();
         let cache=cache.clone();
+        let event_scope=bound.clone();
         let _=weak.upgrade_in_event_loop(move |ui|{
             ui.set_brain_monitor_busy(false);
             match result {Ok(v)=>{
                 // The network request may have started under another account.
                 // Reject both stale responses and a now-disconnected account.
-                let scope_now=bound.lock().unwrap().clone();
+                let scope_now=event_scope.lock().unwrap().clone();
                 if scope_before!=scope_now || !report_matches_bound_account(&v,&scope_now){
                     *cache.lock().unwrap()=json!({});
                     invalidate_account_view(&ui);
