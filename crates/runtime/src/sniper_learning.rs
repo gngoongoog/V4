@@ -120,7 +120,7 @@ mod tests {
         let record=json!({"evidence_source":"mt5_demo_broker","trading_mode":"sniper",
             "gross":2.0,"commission":0.0,"swap":0.0,"fee":0.0,
             "closed_volume":0.1,"net":2.,"net_per_lot":20.0,
-            "reward":0.4,"selection":{"brain":ID,"policy":"sniper-ticks-v1",
+            "risk_money":0.0,"r_multiple":0.0,"reward":0.25,"selection":{"brain":ID,"policy":"sniper-ticks-v1",
             "sniper_policy":"impulse","sniper_definition":"A","sniper_regime":"B"}});
         db.execute("INSERT INTO coordinator_broker_samples VALUES('first',1,?1,'sniper_learner',1000,?2)",
             rusqlite::params![ctx,record.to_string()]).unwrap();
@@ -152,7 +152,8 @@ mod tests {
         for (i,brain,account,source) in [(1,ID,context.as_str(),"mt5_demo_broker"),(2,ID,context.as_str(),"virtual"),(3,"trend",context.as_str(),"mt5_demo_broker"),(4,ID,"another-account","mt5_demo_broker")] {
             let p=json!({"evidence_source":source,"trading_mode":"sniper",
                 "gross":-2.0,"commission":0.0,"swap":0.0,"fee":0.0,
-                "closed_volume":0.1,"net":-2.,"net_per_lot":-20.0,"reward":-0.5,
+                "closed_volume":0.1,"net":-2.,"net_per_lot":-20.0,
+                "risk_money":0.0,"r_multiple":0.0,"reward":-0.25,
                 "selection":{"brain":ID,"policy":"sniper-ticks-v1","sniper_policy":"impulse","sniper_definition":"config-A","sniper_regime":"choppy"}});
             db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,?3,?4,1000,?5)",rusqlite::params![i.to_string(),i,account,brain,p.to_string()]).unwrap();
         }
@@ -172,7 +173,8 @@ mod tests {
         let context=crate::coordinator_learning::context(&t);
         let valid=json!({"evidence_source":"mt5_demo_broker","trading_mode":"sniper",
             "gross":2.0,"commission":-0.5,"swap":0.0,"fee":0.0,
-            "net":1.5,"net_per_lot":15.0,"closed_volume":0.1,"reward":0.4,
+            "net":1.5,"net_per_lot":15.0,"closed_volume":0.1,
+            "risk_money":0.0,"r_multiple":0.0,"reward":0.25,
             "selection":{"brain":ID,"policy":"sniper-ticks-v1",
                 "sniper_policy":"impulse","sniper_definition":"A","sniper_regime":"B"}});
         let mut corrupt=valid.clone();
@@ -198,6 +200,44 @@ mod tests {
     }
 
     #[test]
+    fn g5e_sniper_models_ignore_forged_reward_with_exact_broker_costs() {
+        let db=Connection::open_in_memory().unwrap();
+        crate::coordinator_learning::Learner::new(&db).unwrap();
+        let t=Telemetry{demo:true,account_trade_mode:Some(0),login:19,
+            server:"Demo".into(),symbol:"XAUUSD".into(),..Default::default()};
+        let context=crate::coordinator_learning::context(&t);
+        let valid=json!({
+            "evidence_source":"mt5_demo_broker","trading_mode":"sniper",
+            "gross":2.0,"commission":-0.5,"swap":0.0,"fee":0.0,
+            "net":1.5,"net_per_lot":15.0,"closed_volume":0.1,
+            "risk_money":5.0,"r_multiple":0.3,"reward":0.3_f64.tanh(),
+            "sniper_tp_preserved":true,
+            "selection":{"brain":ID,"policy":"sniper-ticks-v1",
+              "sniper_policy":"impulse","sniper_definition":"G5E",
+              "sniper_regime":"directional_normal",
+              "sniper_target_mode":"adaptive","sniper_target_arm":2,
+              "sniper_target_pips":6.0}
+        });
+        let mut false_reward=valid.clone();false_reward["reward"]=json!(0.99);
+        db.execute("INSERT INTO coordinator_broker_samples
+            VALUES('forged',1,?1,'sniper_learner',1000,?2)",
+            rusqlite::params![context,false_reward.to_string()]).unwrap();
+        let mut engine=Engine::default();
+        refresh(&mut engine,&db,&t,2000).unwrap();
+        assert!(engine.models.is_empty());
+        assert!(engine.target_models.is_empty());
+        assert_eq!(frozen_training_checkpoint(&db,&t,&engine,2000).unwrap()
+            ["broker_training_samples"],0);
+        db.execute("UPDATE coordinator_broker_samples SET payload=?1
+            WHERE source='forged'",[valid.to_string()]).unwrap();
+        refresh(&mut engine,&db,&t,2000).unwrap();
+        assert_eq!(engine.models.values().next().unwrap()[0].samples,1);
+        assert_eq!(engine.target_models.values().next().unwrap()[2].samples,1);
+        assert_eq!(frozen_training_checkpoint(&db,&t,&engine,2000).unwrap()
+            ["broker_training_samples"],1);
+    }
+
+    #[test]
     fn target_learning_is_real_demo_only_account_scoped_replay_idempotent_and_arm_specific() {
         let db=Connection::open_in_memory().unwrap();
         crate::coordinator_learning::Learner::new(&db).unwrap();
@@ -213,7 +253,8 @@ mod tests {
         ] {
             let payload=json!({"evidence_source":source,"trading_mode":"sniper",
                 "gross":1.2,"commission":0.0,"swap":0.0,"fee":0.0,
-                "closed_volume":0.1,"net":1.2,"net_per_lot":12.0,"reward":0.4,
+                "closed_volume":0.1,"net":1.2,"net_per_lot":12.0,
+                "risk_money":0.0,"r_multiple":0.0,"reward":0.25,
                 "sniper_tp_preserved":true,
                 "selection":{"brain":ID,"policy":"sniper-ticks-v1","sniper_policy":"impulse",
                     "sniper_definition":"config-P","sniper_regime":"directional_normal",
