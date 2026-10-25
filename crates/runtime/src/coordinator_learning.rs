@@ -263,15 +263,37 @@ pub(crate) fn verified_broker_feedback(p:&Value)->Option<(f64,f64,f64)>{
     }
     Some((vals[4],vals[5],reward))
 }
+// Financial arithmetic alone cannot prove that a broker receipt belongs to
+// this actual account, mode, member, timeframe and physical MT5 position.
+// Recheck immutable DB columns against the stored payload AND the original
+// canonical member source key before ANY Rust weight/mistake update.
+// Old noncanonical source strings are retained in SQLite but not trainable.
+fn verified_broker_row(source:&str,stored_context:&str,stored_brain:&str,
+    pos:u64,closed:u64,p:&Value)->Option<(f64,f64,f64)>{
+    if pos==0||closed==0||p["context"]!=stored_context
+        ||p["brain"]!=stored_brain
+        ||p["position_id"].as_u64()!=Some(pos)
+        ||p["closed_ms"].as_u64()!=Some(closed) {return None}
+    let tuple:Value=serde_json::from_str(source).ok()?;
+    let parts=tuple.as_array().filter(|a|a.len()==6)?;
+    if parts[0]!=stored_context||parts[1]!="adaptive-member-v1"
+        ||parts[3]!=stored_brain
+        ||p["trading_mode"]!=parts[2]
+        ||p["timeframe"]!=parts[4]
+        ||p["report_id"]!=parts[5] {return None}
+    verified_broker_feedback(p)
+}
+
 fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<Stats>{
-    let mut st=db.prepare("SELECT closed_ms,payload FROM coordinator_broker_samples WHERE source=?1 ORDER BY closed_ms DESC LIMIT 4000")?;
-    let rows=st.query_map([source],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut st=db.prepare("SELECT context,brain,position_id,closed_ms,payload FROM coordinator_broker_samples WHERE source=?1 ORDER BY closed_ms DESC LIMIT 4000")?;
+    let rows=st.query_map([source],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?,r.get::<_,u64>(3)?,r.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let(mut samples,mut wins,mut weighted_wins,mut weighted_net,mut weighted_reward,mut effective)=(0u64,0u64,0.,0.,0.,0.);
-    for(ts,raw)in rows{
-        let p:Value=serde_json::from_str(&raw)?;
+    for(stored_context,stored_brain,pos,ts,raw)in rows{
+        let Ok(p)=serde_json::from_str::<Value>(&raw) else{continue;};
         let sample_regime=p["regime"].as_str().unwrap_or("legacy");
         if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}
-        let Some((_,net_per_lot,reward))=verified_broker_feedback(&p) else{continue;};
+        let Some((_,net_per_lot,reward))=verified_broker_row(
+            source,&stored_context,&stored_brain,pos,ts,&p) else{continue;};
         if ts==0||ts>now {continue;}
         let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);
         samples+=1;
@@ -286,16 +308,17 @@ fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<
 // in coordinator_broker_samples. An observed loss is not proof that the strategy
 // caused the market move. The response is a temporary, bounded preference shift.
 fn contextual_stats(db:&Connection,source:&str,key:&str,now:u64)->Result<(u64,f64,f64,u64,f64)> {
-    let mut st=db.prepare("SELECT closed_ms,payload FROM coordinator_broker_samples WHERE source=?1 ORDER BY closed_ms DESC,position_id DESC LIMIT 4000")?;
-    let rows=st.query_map([source],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut st=db.prepare("SELECT context,brain,position_id,closed_ms,payload FROM coordinator_broker_samples WHERE source=?1 ORDER BY closed_ms DESC,position_id DESC LIMIT 4000")?;
+    let rows=st.query_map([source],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?,r.get::<_,u64>(3)?,r.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let(mut count,mut sum,mut mass)=(0u64,0.,0.);
     let(mut recent_loss_streak,mut recent_cost_losses)=(0u64,0u64);
     let mut streak_unbroken=true;
     const MEMORY_HORIZON_MS:u64=14*24*60*60*1000;
-    for(ts,raw) in rows {
-        let p:Value=serde_json::from_str(&raw)?;
+    for(stored_context,stored_brain,pos,ts,raw) in rows {
+        let Ok(p)=serde_json::from_str::<Value>(&raw) else{continue;};
         if p["context_key"].as_str()!=Some(key){continue;}
-        let Some((net,_,reward))=verified_broker_feedback(&p) else {continue;};
+        let Some((net,_,reward))=verified_broker_row(
+            source,&stored_context,&stored_brain,pos,ts,&p) else {continue;};
         if ts==0||ts>now {continue;}
         {
             let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);
