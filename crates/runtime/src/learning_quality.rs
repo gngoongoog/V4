@@ -90,12 +90,20 @@ pub fn audit(db:&Connection,context:&str,mode:TradingMode,brain:&str)->Result<Va
     // closed Demo samples; never attribute paper/forward samples as real fills.
     let mut stmt=db.prepare(
       "SELECT source,position_id,closed_ms,payload FROM coordinator_broker_samples
-       WHERE context=?1 AND brain=?2 AND json_extract(payload,'$.trading_mode')=?3
+       WHERE context=?1 AND brain=?2
+         AND CASE WHEN json_valid(payload)
+             THEN json_extract(payload,'$.trading_mode') ELSE NULL END=?3
        ORDER BY closed_ms DESC,position_id DESC LIMIT 240")?;
     let raw=stmt.query_map(params![context,brain,mode_key],|r|{
        Ok((r.get::<_,String>(0)?,r.get::<_,u64>(1)?,
            r.get::<_,u64>(2)?,r.get::<_,String>(3)?))
     })?.collect::<rusqlite::Result<Vec<_>>>()?;
+    // Corrupt JSON has no attestable trading mode. Count it separately in
+    // this broker context/brain, never guess its mode or break the report.
+    let malformed_unknown_mode:u64=db.query_row(
+       "SELECT COUNT(*) FROM coordinator_broker_samples
+        WHERE context=?1 AND brain=?2 AND NOT json_valid(payload)",
+       params![context,brain],|r|r.get(0))?;
     let mut records=Vec::new();
     let mut invalid=0usize;let mut duplicates=0usize;
     let mut seen=HashSet::new();let mut sources=BTreeSet::new();
@@ -131,6 +139,7 @@ pub fn audit(db:&Connection,context:&str,mode:TradingMode,brain:&str)->Result<Va
        "status":status,"warnings":warnings,
        "policy":"read_only","broker_samples":total,
        "invalid_samples":invalid,"duplicate_position_samples":duplicates,
+       "malformed_json_unknown_mode_rows":malformed_unknown_mode,
        "sample_cap":MAX_HISTORY,
        "distinct_strategy_sources":sources.len(),
        "minimum_samples_for_comparison":MIN_TOTAL,
@@ -216,6 +225,18 @@ mod tests {
         assert_eq!(view["all"]["r_sample_count"],1);
         assert_eq!(view["learning_eligible_broker_samples_only"],true);
         assert_eq!(view["no_auto_promotion"],true);
+    }
+    #[test]
+    fn g5g_malformed_legacy_json_cannot_crash_quality_or_fake_samples(){
+        let db=setup();
+        add(&db,"A","expert","trend","policy-m5",1,2.0,2.7);
+        db.execute("INSERT INTO coordinator_broker_samples VALUES(
+            'broken',2,'A','trend',2000,'{invalid-json')",[]).unwrap();
+        let report=audit(&db,"A",TradingMode::Expert,"trend").unwrap();
+        assert_eq!(report["broker_samples"],1);
+        assert_eq!(report["all"]["net_booked"],2.0);
+        assert_eq!(report["malformed_json_unknown_mode_rows"],1);
+        assert_eq!(report["no_auto_promotion"],true);
     }
     #[test]
     fn g5g_mismatched_broker_payload_identity_is_never_brain_performance(){
