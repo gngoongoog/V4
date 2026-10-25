@@ -36,6 +36,16 @@ try {
     '--output','test-output/v25/native-ea-package.json')
   Run python @('scripts/check_v25_g6c_study_package.py','--portable',$portable,
     '--output','test-output/v25/g6c-study-package.json')
+  # Validate the actual shipped Windows study launcher syntax (not only
+  # Python help/sha checks). No Core DB or MT5 is opened here.
+  $studyTokens=$null
+  $studyErrors=$null
+  [System.Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path $portable 'Tools/Run-G6-Study.ps1'),
+    [ref]$studyTokens,[ref]$studyErrors) | Out-Null
+  if($studyErrors.Count -gt 0){
+    throw ('G6 Portable PowerShell study launcher invalid: '+$studyErrors[0].Message)
+  }
   Run (Join-Path $portable 'runtime/python/python.exe') @((Join-Path $portable 'runtime/gateway/check_runtime.py'))
   Run python @('scripts/smoke_portable_core.py',$exe)
   Run python @('scripts/check_sniper_quote_clock.py','--exe',$exe)
