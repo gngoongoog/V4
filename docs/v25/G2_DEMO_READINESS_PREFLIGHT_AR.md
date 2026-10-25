@@ -24,3 +24,10 @@
 - `python3 -m unittest tests.test_demo_readiness -v` أو `python3 -m unittest discover -s tests -v`.
 - نجاح `Research` و`Windows build` و`V25 Windows Portable` على Commit هذا الإصدار.
 - بعد رفع تقرير Preflight من جهاز Windows، استكمل بوابة G2 ذات حالات رفض التنفيذ والإغلاق الجزئي والأوامر غير المعلومة، ثم اختبارات Native EA وواجهة WebView2 كاملة. لا توجد صفقات REAL أثناء التطوير.
+
+## G2-B — تطابق التنفيذ مع حساب Demo (25 أكتوبر 2026)
+- فحص مستقل لبيانات GET `/v1/execution`: هدف demo، وحقل account_matches، وسياق server/login/symbol/currency مقابل هوية لقطة MT5 وإعدادات التنفيذ.
+- `account_snapshot_status=VERIFIED_DEMO` وحده لا يعني أن Core مربوط بنفس الحساب. `execution_binding_status=BOUND_DEMO` يثبت توافق القراءة الحالية فقط.
+- عند عدم توفر الربط: `EXECUTION_BINDING_UNAVAILABLE`؛ عند ضبط الهدف إلى REAL: `EXECUTION_TARGET_NOT_DEMO`؛ عند اختلاف الحساب أو الرمز: `DEMO_EXECUTION_BINDING_MISMATCH`.
+- كل تقارير فحص الاستعداد تعرض `preflight_ready_to_trade=false` و`broker_lifecycle_acceptance=NOT_TESTED` حتى مع اتصال صحيح، ولا تصدر رقم الحساب أو السيرفر أو كلمات السر.
+- اختبارات Python محاكاة فقط، لا إثبات لأوامر MT5 Demo أو عمل Native EA أو الواجهة الرسومية الفعلية.
