@@ -54,8 +54,18 @@ class DemoRealTrainingContractTests(unittest.TestCase):
         compact = "".join(source.split())
         self.assertIn("coordinator_broker_samples", source)
         self.assertIn('"mt5_demo_broker"', source)
-        for field in ('d["profit"]', 'd["commission"]', 'd["swap"]', 'd["fee"]'):
-            self.assertIn(field, source)
+        # Cost math is shared with trade_journal::booked_costs, which requires
+        # finite, present profit/commission/swap/fee on every MT5 Deal. Do not
+        # reintroduce silent unwrap_or(0.0) at the learning ingestion boundary.
+        journal = self.text("crates/runtime/src/trade_journal.rs")
+        self.assertIn("fn booked_costs", journal)
+        self.assertIn('["profit", "commission", "swap", "fee"]', journal)
+        self.assertIn('let amount = d[*name].as_f64().filter(|n| n.is_finite())?', journal)
+        self.assertIn('crate::trade_journal::booked_costs(&parsed)', source)
+        self.assertIn('crate::trade_journal::fully_closed_by_deals(&parsed)', source)
+        self.assertIn('verified_broker_label(&p)', source)
+        self.assertNotIn('gross+=d["profit"].as_f64().unwrap_or(0.)', source)
+        self.assertNotIn('commission+=d["commission"].as_f64().unwrap_or(0.)', source)
         self.assertIn("!t.demo||t.account_trade_mode!=Some(0)", compact)
         self.assertIn('member["ready"]!=true', compact)
         # Intelligence V3 names the agreement explicitly so the same value can also be
