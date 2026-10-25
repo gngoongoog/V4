@@ -924,7 +924,7 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
             let (source, raw) = r?;
             let attested=study_aggregate_attested(db,key,&source,&raw,observed_now)?;
             Ok(if attested {
-                json!({"source":source,"provenance":"locally_admitted_g6k",
+                json!({"source":source,"provenance":"locally_replayed_g6l",
                        "study":serde_json::from_str::<Value>(&raw)?})
             } else {
                 // Never display a forged old promotion, learned profile or
@@ -1472,7 +1472,7 @@ mod tests {
         student.observe(&db,&t,5000).unwrap();
         let v=view(&db,&ctx).unwrap();
         assert_eq!(v["studies"][0]["study"]["reviewed_losses"],1);
-        assert_eq!(v["studies"][0]["provenance"],"locally_admitted_g6k");
+        assert_eq!(v["studies"][0]["provenance"],"locally_replayed_g6l");
         let events:u64=db.query_row("SELECT COUNT(*) FROM student_study_events
             WHERE context=?1 AND kind='loss'",[&ctx],|r|r.get(0)).unwrap();
         assert_eq!(events,1);
@@ -1528,7 +1528,7 @@ mod tests {
         let mut student=Student::new(&db).unwrap();
         student.observe(&db,&t,5000).unwrap();
         let v=view(&db,&ctx).unwrap();
-        assert_eq!(v["studies"][0]["provenance"],"locally_admitted_g6k");
+        assert_eq!(v["studies"][0]["provenance"],"locally_replayed_g6l");
         assert_eq!(v["studies"][0]["study"]["reviewed_losses"],1);
         // This study has no paired quote experiment: do not forge one.
         assert_eq!(v["usable_shadow_pairs"],0);
