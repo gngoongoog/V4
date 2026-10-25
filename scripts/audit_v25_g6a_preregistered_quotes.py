@@ -195,10 +195,14 @@ def audit(db: sqlite3.Connection, manifest: dict, *, now_ms: int) -> dict:
     excluded_before_start = 0
     for row in rows:
         if (row["bar_time"] * 1000 < doc["holdout_start_ms"]
-                or row["opened_ms"] < doc["holdout_start_ms"]
-                or row["observed_ms"] is None
-                or row["observed_ms"] < doc["holdout_start_ms"]):
+                or row["opened_ms"] < doc["holdout_start_ms"]):
             excluded_before_start += 1
+            continue
+        if row["observed_ms"] is None:
+            rejects["missing_pre_outcome_decision"] += 1
+            continue
+        if row["observed_ms"] < doc["holdout_start_ms"]:
+            rejects["decision_predates_holdout_start"] += 1
             continue
         try:
             day, delta = g5d._checked(row, row,
