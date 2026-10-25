@@ -27,6 +27,7 @@ mod trade_journal;
 mod shadow_paper;
 mod frozen_shadow;
 mod frozen_coordinator;
+mod g7_capture;
 mod coordinator_paper;
 mod research_order_lifecycle;
 mod research_admission;
