@@ -1418,9 +1418,22 @@ mod tests {
             (source,position_id,context,brain,closed_ms,payload)
             VALUES(?1,90,'account-a','trend',?2,?3)",
             params![&source,now-500,real.to_string()]).unwrap();
+        // A booked Broker receipt without a first Core admission timestamp
+        // is historical/unknown, never proof available during this decision.
+        assert_eq!(broker_stats(&db,&source,None,now).unwrap().samples,0);
+        assert_eq!(contextual_stats(&db,&source,ctx,now).unwrap().0,0);
         stamp_test_samples(&db,&source,now);
+        assert_eq!(broker_stats(&db,&source,None,now-1).unwrap().samples,0,
+            "The close occurred earlier but the receipt was not admitted until now");
+        assert_eq!(contextual_stats(&db,&source,ctx,now-1).unwrap().0,0);
         assert_eq!(broker_stats(&db,&source,None,now).unwrap().samples,1);
         assert_eq!(contextual_stats(&db,&source,ctx,now).unwrap().0,1);
+        db.execute("UPDATE coordinator_broker_samples
+            SET payload=json_set(payload,'$.net',10000)
+            WHERE source=?1 AND position_id=90",[&source]).unwrap();
+        assert_eq!(broker_stats(&db,&source,None,now).unwrap().samples,0,
+            "Any changed stored receipt must fail its original admission hash");
+        assert_eq!(contextual_stats(&db,&source,ctx,now).unwrap().0,0);
         assert_eq!(broker_stats(&db,"legacy-not-a-canonical-source",None,now).unwrap().samples,0);
     }
 
