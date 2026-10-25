@@ -1,0 +1,24 @@
+name: V25 G6-L Student Study Event Replay
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/v25-g6l-student-exit-event-replay-proof-20261025]
+    paths:
+      - 'crates/runtime/src/student_learning.rs'
+      - '.github/workflows/v25-g6l-student-replay.yml'
+  pull_request:
+    branches: [feature/v25-g6k-student-study-provenance-gate-20261025]
+permissions:
+  contents: read
+jobs:
+  event-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify every Student learned policy can be replayed from broker-verified loss and quote events
+        run: cargo test --locked -p braintrade-runtime student_learning::tests -- --nocapture
+      - name: Regression-test entire Rust runtime and domain
+        run: cargo test --locked -p braintrade-runtime -p braintrade-domain

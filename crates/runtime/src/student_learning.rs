@@ -279,6 +279,10 @@ pub struct Student {
     pub policies: BTreeMap<String, ExitStudy>,
     // No prior aggregate may masquerade as a new provenance-verified policy.
     attested_studies:BTreeSet<String>,
+    // Every contributing event is inserted atomically with the experience
+    // and the policy. An aggregate digest without a replayable event trace is
+    // not sufficient to prove that Student ever learned the displayed counts.
+    pending_study_events:Vec<(String,String,String,Value)>,
     timing: timing::Learner,
 }
 #[path = "student_timing.rs"]
@@ -295,6 +299,12 @@ impl Student {
             CREATE TABLE IF NOT EXISTS student_study_admissions(
                 source TEXT PRIMARY KEY,context TEXT NOT NULL,payload_sha256 TEXT NOT NULL,
                 first_stamped_ms INTEGER NOT NULL,protocol TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS student_study_events(
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                context TEXT NOT NULL, source TEXT NOT NULL,
+                command_id TEXT NOT NULL, kind TEXT NOT NULL,
+                event_ms INTEGER NOT NULL, payload TEXT NOT NULL,
+                UNIQUE(context,command_id,kind));
             CREATE TABLE IF NOT EXISTS student_opportunities(context TEXT NOT NULL,brain TEXT NOT NULL,minute INTEGER NOT NULL,reason TEXT NOT NULL,observations INTEGER NOT NULL,PRIMARY KEY(context,brain,minute,reason));
             CREATE INDEX IF NOT EXISTS student_opportunity_expiry ON student_opportunities(minute);")?;
         Ok(Self {
@@ -302,6 +312,7 @@ impl Student {
             active: BTreeMap::new(),
             policies: BTreeMap::new(),
             attested_studies:BTreeSet::new(),
+            pending_study_events:Vec::new(),
             timing: timing::Learner::new(db)?,
         })
     }
@@ -311,6 +322,14 @@ impl Student {
             tx.execute("INSERT INTO student_experiences VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(context,command_id) DO UPDATE SET complete=excluded.complete,payload=excluded.payload",
                 params![e.context,e.command_id,e.source,e.opened_ms,e.complete(),serde_json::to_string(e)?])?;
         }
+        for (source,cmd,kind,event) in &self.pending_study_events {
+            tx.execute("INSERT OR IGNORE INTO student_study_events
+                (context,source,command_id,kind,event_ms,payload)
+                VALUES(?1,?2,?3,?4,?5,?6)",
+                params![self.context,source,cmd,kind,
+                    event["event_ms"].as_u64().unwrap_or(0),
+                    serde_json::to_string(event)?])?;
+        }
         for (key, study) in &self.policies {
             let raw=serde_json::to_string(study)?;
             tx.execute("INSERT OR REPLACE INTO student_exit_studies VALUES(?1,?2,?3)",
@@ -319,7 +338,9 @@ impl Student {
             // outcomes, or loaded with a valid pre-existing study digest, can
             // receive/update this local provenance stamp. Never sign legacy
             // aggregates merely because they were parsed from SQLite.
-            if self.attested_studies.contains(key){
+            if self.attested_studies.contains(key) &&
+                student_study_replay_verified(&tx,&self.context,key,&raw,
+                    u64::MAX)? {
                 let sha=format!("{:x}",Sha256::digest(raw.as_bytes()));
                 tx.execute("INSERT INTO student_study_admissions
                     (source,context,payload_sha256,first_stamped_ms,protocol)
@@ -341,6 +362,7 @@ impl Student {
         self.active.clear();
         self.policies.clear();
         self.attested_studies.clear();
+        self.pending_study_events.clear();
         self.context = key.into();
         self.timing.load(db, key)?;
         let mut st=db.prepare("SELECT payload FROM student_experiences WHERE context=?1 AND complete=0 ORDER BY opened_ms")?;
@@ -365,7 +387,7 @@ impl Student {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })? {
             let (k, raw) = row?;
-            if !study_aggregate_attested(db,key,&k,&raw)? {
+            if !study_aggregate_attested(db,key,&k,&raw,now)? {
                 // Preserve old aggregates in DB for historical audit but do
                 // not apply or continue training an unverifiable exit policy.
                 continue;
@@ -410,6 +432,21 @@ impl Student {
         }
         let key = crate::coordinator_learning::context(t);
         self.load(db, &key, now)?;
+        // A policy attested on a previous pulse must not keep controlling
+        // exits if any of its original Broker/paired events were edited while
+        // Core stayed connected to this same account. Recheck the full replay
+        // before it can be used on the next decision; baseline remains.
+        let mut revoked=Vec::new();
+        for (source,study) in &self.policies {
+            let raw=serde_json::to_string(study)?;
+            if !study_aggregate_attested(db,&key,source,&raw,now)? {
+                revoked.push(source.clone());
+            }
+        }
+        for source in revoked {
+            self.policies.remove(&source);
+            self.attested_studies.remove(&source);
+        }
         self.timing.restore(db, &key, now)?;
         // Register from acknowledged fills immediately, without waiting five seconds for history.
         let mut st=db.prepare("SELECT c.payload,c.result FROM broker_commands c WHERE c.context=?1 AND c.kind='open' AND CAST(json_extract(c.result,'$.deal') AS INTEGER)>0 AND json_extract(c.payload,'$.signal.coordination.student.version')=1 AND NOT EXISTS(SELECT 1 FROM student_experiences e WHERE e.context=c.context AND e.command_id=c.id) ORDER BY c.created_ms,c.id")?;
@@ -607,6 +644,10 @@ impl Student {
                         .or_insert_with(|| if e.trial.outcomes.len() == 5 { ExitStudy::expanded() } else { ExitStudy::default() })
                         .record_loss(&patterns);
                     self.attested_studies.insert(e.source.clone());
+                    self.pending_study_events.push((
+                        e.source.clone(),e.command_id.clone(),"loss".into(),
+                        json!({"event_ms":now,"patterns":patterns})
+                    ));
                 }
                 e.loss_reviewed = true;
             }
@@ -623,9 +664,16 @@ impl Student {
             if (e.trial.complete() || e.shadow_expired) && e.actual.is_some() && !e.study_consumed {
                 let study = self.policies.entry(e.source.clone()).or_insert_with(|| if e.trial.outcomes.len() == 5 { ExitStudy::expanded() } else { ExitStudy::default() });
                 if let Some(rewards) = e.trial.paired_rewards() {
-                    let accepted=study.observe(e.opened_ms, now, rewards);
+                    let accepted=study.observe(e.opened_ms, now, &rewards);
                     e.admitted=Some(accepted);
-                    if accepted {self.attested_studies.insert(e.source.clone());}
+                    if accepted {
+                        self.attested_studies.insert(e.source.clone());
+                        self.pending_study_events.push((
+                            e.source.clone(),e.command_id.clone(),"paired".into(),
+                            json!({"event_ms":now,"opened_ms":e.opened_ms,
+                                   "rewards":rewards})
+                        ));
+                    }
                 } else if e.trial.usable && e.trial.samples < 2 {
                     e.trial.usable = false;
                     e.trial.exclusion_reason = "too_few_quotes".into();
@@ -635,6 +683,7 @@ impl Student {
         }
         self.timing.finish(db, now)?;
         self.flush(db)?;
+        self.pending_study_events.clear();
         self.active.retain(|_, e| !e.complete());
         Ok(())
     }
@@ -747,14 +796,78 @@ fn cached_student_label_verified(db:&Connection,ctx:&str,e:&Experience,now:u64)-
         .as_ref().is_some_and(|current|current==saved))
 }
 
-fn study_aggregate_attested(db:&Connection,ctx:&str,source:&str,raw:&str)->Result<bool>{
+// A G6-K aggregate SHA is only self-consistent; it cannot establish its
+// original per-trade inputs. G6-L verifies the actual immutable broker label
+// and exact paired quote rewards for EVERY contributing event, then rebuilds
+// ExitStudy deterministically in its original observation order. No event
+// evidence => old G6-K counters are not considered trainable.
+fn student_study_replay_verified(db:&Connection,ctx:&str,source:&str,
+    raw:&str,now:u64)->Result<bool>{
+    let mut st=db.prepare(
+        "SELECT command_id,kind,event_ms,payload FROM student_study_events
+         WHERE context=?1 AND source=?2 ORDER BY seq")?;
+    let rows=st.query_map(params![ctx,source],|r|Ok((
+        r.get::<_,String>(0)?,r.get::<_,String>(1)?,
+        r.get::<_,i64>(2).unwrap_or(-1),r.get::<_,String>(3)?
+    )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    if rows.is_empty(){return Ok(false);}
+    let mut replay:Option<ExitStudy>=None;
+    let mut seen=BTreeSet::new();
+    for(cmd,kind,event_time,content)in rows {
+        let Ok(at)=u64::try_from(event_time)else{return Ok(false);};
+        if at==0 || at>now || !seen.insert((cmd.clone(),kind.clone())){
+            return Ok(false);
+        }
+        let Some(payload):Option<String>=db.query_row(
+            "SELECT payload FROM student_experiences
+             WHERE context=?1 AND command_id=?2",
+            params![ctx,&cmd],|r|r.get(0)).optional()? else{return Ok(false);};
+        let Ok(e)=serde_json::from_str::<Experience>(&payload)else{return Ok(false);};
+        if e.source!=source || e.context!=ctx || e.command_id!=cmd
+            || !cached_student_label_verified(db,ctx,&e,at)? {
+            return Ok(false);
+        }
+        let Ok(ev)=serde_json::from_str::<Value>(&content)else{return Ok(false);};
+        if ev["event_ms"].as_u64()!=Some(at) {return Ok(false);}
+        let study=replay.get_or_insert_with(||if e.trial.outcomes.len()==5 {
+            ExitStudy::expanded()
+        }else{ExitStudy::default()});
+        match kind.as_str(){
+            "loss"=>{
+                if !e.loss_reviewed ||
+                    !e.actual.as_ref().and_then(|a|a["net"].as_f64()).is_some_and(|n|n<0.)
+                {return Ok(false);}
+                let patterns=e.review()["patterns"].as_array().cloned().unwrap_or_default();
+                if ev["patterns"]!=json!(patterns){return Ok(false);}
+                let Some(patterns)=patterns.iter().map(|v|v.as_str().map(str::to_owned))
+                    .collect::<Option<Vec<_>>>()else{return Ok(false);};
+                study.record_loss(&patterns);
+            },
+            "paired"=>{
+                if !e.study_consumed || e.admitted!=Some(true)
+                    || at<e.opened_ms {return Ok(false);}
+                let Some(rewards)=e.trial.paired_rewards()else{return Ok(false);};
+                if ev["opened_ms"].as_u64()!=Some(e.opened_ms)
+                    || ev["rewards"]!=json!(rewards){return Ok(false);}
+                if !study.observe(e.opened_ms,at,rewards){return Ok(false);}
+            },
+            _=>return Ok(false)
+        }
+    }
+    let Some(replay)=replay else{return Ok(false);};
+    let Ok(expected)=serde_json::from_str::<Value>(raw)else{return Ok(false);};
+    Ok(serde_json::to_value(replay)?==expected)
+}
+
+fn study_aggregate_attested(db:&Connection,ctx:&str,source:&str,raw:&str,now:u64)->Result<bool>{
     let r:Option<(String,String,String)>=db.query_row(
         "SELECT context,payload_sha256,protocol FROM student_study_admissions
          WHERE source=?1",[source],
         |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
     Ok(r.is_some_and(|(stored_ctx,hash,protocol)|
         stored_ctx==ctx && protocol=="g6k-student-admitted-study-v1"
-        && hash==format!("{:x}",Sha256::digest(raw.as_bytes()))))
+        && hash==format!("{:x}",Sha256::digest(raw.as_bytes())))
+        && student_study_replay_verified(db,ctx,source,raw,now)?)
 }
 
 pub fn view(db: &Connection, key: &str) -> Result<Value> {
@@ -824,9 +937,9 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
         })?
         .map(|r| {
             let (source, raw) = r?;
-            let attested=study_aggregate_attested(db,key,&source,&raw)?;
+            let attested=study_aggregate_attested(db,key,&source,&raw,observed_now)?;
             Ok(if attested {
-                json!({"source":source,"provenance":"locally_admitted_g6k",
+                json!({"source":source,"provenance":"locally_replayed_g6l",
                        "study":serde_json::from_str::<Value>(&raw)?})
             } else {
                 // Never display a forged old promotion, learned profile or
@@ -1123,7 +1236,11 @@ mod tests {
         db.execute("UPDATE student_experiences SET payload=json_remove(payload,'$.admitted') WHERE context=?1",[&key]).unwrap();
         let legacy = view(&db, &key).unwrap();
         assert!(legacy["experiences"][0]["admitted"].is_null());
-        assert_eq!(legacy["usable_shadow_pairs"], 1);
+        // Legacy missing admission cannot preserve a supposedly replayable
+        // quote-pair counter. The raw record remains for forensic review.
+        assert_eq!(legacy["usable_shadow_pairs"], 0);
+        assert_eq!(legacy["studies"][0]["provenance"],
+            "legacy_or_tampered_unverified");
         t.login = 99;
         student.observe(&db, &t, 2500).unwrap();
         assert!(student.policies.is_empty());
@@ -1332,6 +1449,65 @@ mod tests {
     }
 
     #[test]
+    fn g6l_signed_aggregate_without_original_trade_events_stays_quarantined(){
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let t=telemetry();
+        let key=crate::coordinator_learning::context(&t);
+        let mut legacy=ExitStudy::expanded();
+        legacy.active=ExitProfile::Protective;
+        legacy.promotions=500;
+        legacy.total_pairs=600;
+        let raw=serde_json::to_string(&legacy).unwrap();
+        db.execute("INSERT INTO student_exit_studies VALUES('unsigned-history',?1,?2)",
+            params![&key,&raw]).unwrap();
+        db.execute("INSERT INTO student_study_admissions VALUES(
+            'unsigned-history',?1,?2,10,'g6k-student-admitted-study-v1')",
+            params![&key,format!("{:x}",Sha256::digest(raw.as_bytes()))]).unwrap();
+        assert_eq!(view(&db,&key).unwrap()["usable_shadow_pairs"],0,
+            "A valid aggregate SHA alone is not proof of individual MT5 trades");
+        let mut student=Student::new(&db).unwrap();
+        student.observe(&db,&t,5000).unwrap();
+        assert!(student.policies.is_empty());
+        assert_eq!(view(&db,&key).unwrap()["studies"][0]["provenance"],
+            "legacy_or_tampered_unverified");
+    }
+
+    #[test]
+    fn g6l_loss_event_journal_matches_broker_and_rejects_corrupt_input(){
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let t=telemetry();
+        let ctx=seed_entry(&db,&t,json!({"deal":77}));
+        db.execute("INSERT INTO broker_deals VALUES(?1,77,55,'trend',?2)",
+            params![&ctx,json!({"entry":0,"position_id":55,"price":100.,
+                "volume":0.1,"time_msc":1000}).to_string()]).unwrap();
+        label(&db,&ctx,1200);
+        let mut student=Student::new(&db).unwrap();
+        student.observe(&db,&t,5000).unwrap();
+        let v=view(&db,&ctx).unwrap();
+        assert_eq!(v["studies"][0]["study"]["reviewed_losses"],1);
+        assert_eq!(v["studies"][0]["provenance"],"locally_replayed_g6l");
+        let events:u64=db.query_row("SELECT COUNT(*) FROM student_study_events
+            WHERE context=?1 AND kind='loss'",[&ctx],|r|r.get(0)).unwrap();
+        assert_eq!(events,1);
+        // Corrupt even one input while leaving aggregate and SHA untouched:
+        // replay MUST detect the forgery and remove policy from future trading.
+        db.execute("UPDATE student_study_events
+            SET payload=json_set(payload,'$.patterns',json('[]'))
+            WHERE context=?1",[&ctx]).unwrap();
+        let v=view(&db,&ctx).unwrap();
+        assert_eq!(v["usable_shadow_pairs"],0);
+        assert!(v["studies"][0]["study"].is_null());
+        student.observe(&db,&t,5500).unwrap();
+        assert!(student.policies.is_empty(),
+            "An already-running Student must immediately revoke learned exit geometry");
+        let mut restarted=Student::new(&db).unwrap();
+        restarted.observe(&db,&t,6000).unwrap();
+        assert!(restarted.policies.is_empty());
+    }
+
+    #[test]
     fn g6k_legacy_student_exit_aggregate_does_not_activate_trading_exit_policy(){
         let db=Connection::open_in_memory().unwrap();
         let _=crate::execution::Service::new(&db).unwrap();
@@ -1370,7 +1546,7 @@ mod tests {
         let mut student=Student::new(&db).unwrap();
         student.observe(&db,&t,5000).unwrap();
         let v=view(&db,&ctx).unwrap();
-        assert_eq!(v["studies"][0]["provenance"],"locally_admitted_g6k");
+        assert_eq!(v["studies"][0]["provenance"],"locally_replayed_g6l");
         assert_eq!(v["studies"][0]["study"]["reviewed_losses"],1);
         // This study has no paired quote experiment: do not forge one.
         assert_eq!(v["usable_shadow_pairs"],0);
