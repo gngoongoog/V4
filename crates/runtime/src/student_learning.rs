@@ -328,9 +328,7 @@ impl Student {
             // from before G5-E. Recheck them on EVERY load, not only fresh
             // coordinator_broker_samples, before any further exit learning.
             if e.actual.as_ref().is_some_and(|p| {
-                crate::coordinator_learning::verified_broker_feedback(p).is_none()
-                    || e.position_id==0
-                    || p["position_id"].as_u64()!=Some(e.position_id)
+                !verified_student_broker_label(p,e.position_id)
             }) {
                 e.actual=None;
                 e.trial.usable=false;
@@ -542,8 +540,7 @@ impl Student {
                     |r|r.get(0)).optional()?;
                 if let Some(raw) = actual {
                     let label: Value = serde_json::from_str(&raw)?;
-                    if crate::coordinator_learning::verified_broker_feedback(&label).is_none()
-                        || label["position_id"].as_u64()!=Some(e.position_id) {
+                    if !verified_student_broker_label(&label,e.position_id) {
                         // Missing MT5 costs/risk/reward or a mismatched physical
                         // position must never trigger a Student loss pattern or
                         // unlock a paired exit study. Keep the raw broker row.
@@ -650,6 +647,12 @@ pub fn log_opportunities(
     Ok(())
 }
 
+fn verified_student_broker_label(p:&Value,position_id:u64)->bool{
+    position_id>0
+        &&p["position_id"].as_u64()==Some(position_id)
+        &&crate::coordinator_learning::verified_broker_feedback(p).is_some()
+}
+
 pub fn view(db: &Connection, key: &str) -> Result<Value> {
     let mut st=db.prepare("SELECT payload FROM student_experiences WHERE context=?1 ORDER BY opened_ms DESC LIMIT 100")?;
     let mut experiences = Vec::new();
@@ -658,7 +661,14 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
     let mut recent_net = 0.;
     let mut recent_closed = 0;
     for raw in st.query_map([key], |r| r.get::<_, String>(0))? {
-        let e: Experience = serde_json::from_str(&raw?)?;
+        let mut e: Experience = serde_json::from_str(&raw?)?;
+        if e.actual.as_ref().is_some_and(|p|!verified_student_broker_label(p,e.position_id)){
+            // Read-only revalidation for old persisted experiences: never
+            // paint invalid broker PnL, win/loss patterns or training progress.
+            e.actual=None;
+            e.trial.usable=false;
+            e.trial.exclusion_reason="broker_label_unverified".into();
+        }
         let v = e.review();
         if let Some(net) = e.actual.as_ref().and_then(|v| v["net"].as_f64()) {
             recent_net += net;
@@ -683,7 +693,20 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
         }
         experiences.push(v);
     }
-    let (total,closed):(u64,u64)=db.query_row("SELECT COUNT(*),COALESCE(SUM(json_type(payload,'$.actual')='object'),0) FROM student_experiences WHERE context=?1",[key],|r|Ok((r.get(0)?,r.get(1)?)))?;
+    let total:u64=db.query_row("SELECT COUNT(*) FROM student_experiences WHERE context=?1",
+        [key],|r|r.get(0))?;
+    // Do not count arbitrary legacy JSON actual blobs as MT5 closes.
+    // This is read-only; underlying SQLite records remain available for audit.
+    let mut counted=db.prepare("SELECT payload FROM student_experiences
+        WHERE context=?1 AND json_type(payload,'$.actual')='object'")?;
+    let candidates=counted.query_map([key],|r|r.get::<_,String>(0))?;
+    let mut closed=0u64;
+    for raw in candidates {
+        let Ok(e)=serde_json::from_str::<Experience>(&raw?) else{continue;};
+        if e.actual.as_ref().is_some_and(|p|verified_student_broker_label(p,e.position_id)){
+            closed+=1;
+        }
+    }
     let mut st = db.prepare(
         "SELECT source,payload FROM student_exit_studies WHERE context=?1 ORDER BY source",
     )?;
