@@ -20,7 +20,7 @@ fn get_status() -> Result<Value, String> {
 // browser proxy, secret file, or POST to gateway endpoints can be requested.
 fn allowed_read_route(route: &str) -> bool {
     matches!(route,
-        "/v1/config" | "/v1/learning" | "/v1/execution/brains" | "/v1/decisions" |
+        "/v1/config" | "/v1/learning" | "/v1/learning/account-evidence" | "/v1/execution/brains" | "/v1/decisions" |
         "/v1/opportunities/history" | "/v1/events" | "/v1/risk/monitor" |
         "/v1/trading/settings" | "/v1/studio" | "/v1/news" |
         "/v1/evaluation" | "/v1/backtest" | "/v1/backups" |

@@ -391,6 +391,14 @@ impl Engine{
         match(method,path){
             ("GET","/v1/status")=>{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());Ok(serde_json::to_value(&s.status)?)},
             ("GET","/v1/config")=>{let s=self.shared.lock().unwrap();Ok(json!({"config":s.config,"token_saved":s.token.is_some()}))},
+            ("GET","/v1/learning/account-evidence")=>{
+                let (telemetry,fresh)={
+                    let mut shared=self.shared.lock().unwrap();
+                    shared.status.refresh(now_ms());
+                    (shared.status.telemetry.clone(),shared.status.gateway_fresh)
+                };
+                learning::account_evidence(&self.db,telemetry.as_ref(),fresh,now_ms())
+            },
             ("GET","/v1/learning")=>{let base=self.learning.status(&self.db)?;let reviewed=learning_review::enrich_learning_status(&self.db,base)?;let inferred=self.inference.enrich_learning_status(&self.db,reviewed)?;let scored=self.scoring.enrich_learning_status(&self.db,inferred)?;let reviewed=learning_performance_review::enrich_learning_status(&self.db,scored)?;let mut result=reviewed;result["frozen_forward_audit"]=learning_forward_audit::audit(&self.db)?;Ok(result)},
             ("POST","/v1/learning/export")=>self.learning.export(&self.db,&self.dir,now_ms()),
             ("POST","/v1/learning/register")=>{let artifact:Value=serde_json::from_slice(body)?;self.learning.register(&mut self.db,artifact,now_ms())},
