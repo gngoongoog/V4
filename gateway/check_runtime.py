@@ -648,7 +648,36 @@ def acceptance_cli(argv: list[str]) -> int:
     return 1 if report["result"] == "CONTRACT_FAIL" else 0
 
 
+def readiness_cli(argv: list[str]) -> int:
+    """No MT5 initialize/order operation: GET read-only local Core data only."""
+    from demo_readiness import evaluate, save_report
+
+    parser = argparse.ArgumentParser(description="Read-only, redacted MT5 Demo readiness (NOT broker-cycle acceptance)")
+    parser.add_argument("--data-dir", type=Path)
+    parser.add_argument("--output-dir", type=Path, default=Path("acceptance-output"))
+    parser.add_argument("--base-url", default=CORE_URL)
+    args = parser.parse_args(argv)
+    data_dir = discover_data_dir(args.data_dir)
+    api = CoreApi(read_ipc_key(data_dir / "ipc.key"), args.base_url)
+    status = api.get("/v1/status")
+    config = api.get("/v1/config").get("config") or {}
+    report = evaluate(status, config)
+    json_path, html_path = save_report(report, args.output_dir)
+    print(json.dumps({
+        "result": report["result"], "quote_status": report["quote_status"],
+        "demo_account": report["account_snapshot_status"],
+        "broker_cycle": report["broker_lifecycle_acceptance"],
+        "read_only": True,
+        "json": str(json_path), "html": str(html_path),
+    }, ensure_ascii=False, indent=2))
+    # A completed safe diagnostic is not equivalent to broker acceptance;
+    # callers MUST inspect result and NOT_TESTED fields.
+    return 0
+
+
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "--demo-readiness":
+        return readiness_cli(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] == "--demo-acceptance":
         return acceptance_cli(sys.argv[2:])
     output = sys.argv[1] if len(sys.argv) > 1 else None
