@@ -8,7 +8,7 @@
 
 - crates/desktop/src/brain_monitor.rs: هوية الحساب مستمدة من Status.telemetry الحالية بشرط Gateway Fresh واتصال مثبت، login إيجابي، وسيرفر ورمز وعملة غير فارغين.
 - crates/desktop/src/main.rs: عند تبديل الحساب أو انقطاع Core، يسحب التقرير السابق ويعطّل أزرار Brain Monitor مباشرة.
-- Worker يراجع السياق في بداية الطلب وعند وصول الرد؛ يفحص response.context، صلاحية وضع التداول، وcontrols_available. أي اختلاف يلغي عرض الرد.
+- Worker يراجع السياق في بداية الطلب وعند وصول الرد؛ كما يطلب GET /v1/status وGET /v1/config مرة ثانية بعد GET /v1/execution/brains للتحقق من الحساب المتصل ووضع التداول الحالي (Sniper/Scalping/Swing/Expert) أثناء تغييرهما. أي اختلاف يلغي عرض الرد.
 - طلبات الحفظ والتجميد لا تُرسل من صفحة تملك سياقاً قديمًا. Backend يستمر بحارس context/mode المستقل ولا تتغير صلاحيات التنفيذ.
 - فشل قراءة البيانات يمسح نتائج Brain Monitor القديمة بدلاً من ترك رقم غير موثق معروضاً كأنه حي.
 
@@ -16,6 +16,7 @@
 
 - g5h_old_responses_are_not_authoritative_after_account_switch
 - g5h_status_requires_fresh_proven_account_not_only_old_telemetry
+- g5h_current_core_mode_and_account_must_match_response_before_paint
 
 ## الحدود
 
