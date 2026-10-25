@@ -12,7 +12,7 @@ fn number(v: &Value, k: &str) -> f64 { v[k].as_f64().filter(|v|v.is_finite()).un
 /// Only exact, finite MT5 broker-booked values can enter a trade's net PnL.
 /// Historical SQLite rows might predate fee validation or have corrupted
 /// receipts: an absent component is *unknown*, never a zero-fee broker.
-fn booked_costs(deals: &[Value]) -> Option<[f64; 5]> {
+pub(crate) fn booked_costs<'a>(deals: impl IntoIterator<Item = &'a Value>) -> Option<[f64; 5]> {
     let mut parts = [0.0_f64; 4];
     for d in deals {
         // No attribution for balance adjustments or ambiguous deal types.

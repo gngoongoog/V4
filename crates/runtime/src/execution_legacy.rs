@@ -631,18 +631,20 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 for b in &self.brains {
                     let magic = execution::magic(&b.id).unwrap();
                     let own: Vec<_> = deals.iter().filter(|d| d["brain"] == b.id).collect();
-                    let mut groups: BTreeMap<u64, f64> = BTreeMap::new();
-                    let mut net = 0.;
+                    // Same strict cost provenance as /v1/execution/trades.
+                    // A corrupt historical broker fee must not become an
+                    // invented $0.00 and falsely improve a brain's win count.
+                    let net = crate::trade_journal::booked_costs(own.iter().copied())
+                        .map(|totals| totals[0]);
+                    let mut receipts: BTreeMap<u64, Vec<&Value>> = BTreeMap::new();
                     for d in &own {
-                        let pnl = d["profit"].as_f64().unwrap_or(0.)
-                            + d["commission"].as_f64().unwrap_or(0.)
-                            + d["swap"].as_f64().unwrap_or(0.)
-                            + d["fee"].as_f64().unwrap_or(0.);
-                        net += pnl;
-                        *groups
-                            .entry(d["position_id"].as_u64().unwrap_or(0))
-                            .or_default() += pnl;
+                        receipts.entry(d["position_id"].as_u64().unwrap_or(0))
+                            .or_default().push(*d);
                     }
+                    let groups: BTreeMap<u64, Option<f64>> = receipts.iter().map(|(pid, deals)| {
+                        (*pid, crate::trade_journal::booked_costs(deals.iter().copied())
+                            .map(|totals| totals[0]))
+                    }).collect();
                     let closed: Vec<_> = groups
                         .iter()
                         .filter(|(pid, _)| {
@@ -653,7 +655,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                                 })
                         })
                         .collect();
-                    brains.push(json!({"config":b,"name":BRAINS.iter().find(|v|v.0==b.id).unwrap().1,"magic":magic,"latest":self.signals.get(&b.id).filter(|v|t.is_some_and(|t|self.matches(t))&&now.saturating_sub(v["evaluated_ms"].as_u64().unwrap_or(0))<=3000),"learning":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))),"learned_weight":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))).map(|w|w.weight()),"stats":{"deals":own.len(),"closed_positions":closed.len(),"wins":closed.iter().filter(|(_,p)|**p>0.).count(),"net_booked":net,"floating":positions.iter().filter(|p|p.magic==magic).map(|p|p.profit).sum::<f64>(),"open_positions":positions.iter().filter(|p|p.magic==magic).count()}}));
+                    brains.push(json!({"config":b,"name":BRAINS.iter().find(|v|v.0==b.id).unwrap().1,"magic":magic,"latest":self.signals.get(&b.id).filter(|v|t.is_some_and(|t|self.matches(t))&&now.saturating_sub(v["evaluated_ms"].as_u64().unwrap_or(0))<=3000),"learning":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))),"learned_weight":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))).map(|w|w.weight()),"stats":{"deals":own.len(),"closed_positions":closed.len(),"wins":closed.iter().filter(|(_,p)|p.is_some_and(|amount| amount>0.)).count(),"net_booked":net,"booked_cost_evidence":if own.is_empty(){"NO_BROKER_DEALS"}else if net.is_some(){"BROKER_COMPONENTS_VERIFIED"}else{"MISSING_OR_INVALID_BROKER_COST"},"floating":positions.iter().filter(|p|p.magic==magic).map(|p|p.profit).sum::<f64>(),"open_positions":positions.iter().filter(|p|p.magic==magic).count()}}));
                 }
                 let commands=json_rows(db,"SELECT json_object('request',json(payload),'state',state,'result',json(result)) FROM broker_commands WHERE context=?1 ORDER BY created_ms DESC LIMIT 100",&key)?;
                 Ok(
