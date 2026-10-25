@@ -166,6 +166,32 @@ class ExecutedBrokerEvidence(unittest.TestCase):
         self.assertEqual(r["exactly_linked_adaptive_broker_positions"],0)
         self.assertEqual(r["rejected_by_reason"]["broker_deal_geometry_unknown"],1)
 
+    def test_backdated_mt5_entry_cannot_pretend_to_be_new_study_execution(self):
+        pos,deal=self.add()
+        command=self.db.execute(
+            "SELECT created_ms FROM broker_commands WHERE id=?",
+            (f"cmd-{pos}",)).fetchone()[0]
+        self.db.execute(
+            "UPDATE broker_deals SET payload=json_set(payload,'$.time_msc',?) "
+            "WHERE ticket=?",(command-1,deal))
+        r=study.audit(self.db,self.manifest,now_ms=NOW)
+        self.assertEqual(r["exactly_linked_adaptive_broker_positions"],0)
+        self.assertEqual(r["predeclared_intents_without_verified_full_close"],1)
+        self.assertEqual(r["rejected_by_reason"]["broker_entry_exit_not_fully_reconciled"],1)
+        self.assertEqual(r["status"],"incomplete_prospective_broker_outcome_capture")
+
+    def test_invalid_extra_receipt_blocks_false_complete_study_census(self):
+        for i in range(32):
+            self.add(FUTURE+i*6*3600)
+        self.db.execute(
+            "INSERT INTO coordinator_broker_samples VALUES("
+            "'forged',99999,?,'system',?,?)",
+            (CONTEXT,(FUTURE+60)*1000,json.dumps({"net":999999})))
+        r=study.audit(self.db,self.manifest,now_ms=NOW)
+        self.assertEqual(r["exactly_linked_adaptive_broker_positions"],32)
+        self.assertFalse(r["all_post_holdout_expert_intents_accounted_for"])
+        self.assertEqual(r["status"],"incomplete_prospective_broker_outcome_capture")
+
     def test_missing_cost_component_fails_closed(self):
         pos,deal=self.add()
         self.db.execute(
