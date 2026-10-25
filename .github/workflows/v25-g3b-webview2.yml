@@ -48,6 +48,8 @@ jobs:
           if($found.Count -eq 0){throw 'WebView2 runtime unavailable on this Windows image; GUI not tested'}
       - name: Real WebView2 clicks, native IPC, save and restart
         shell: pwsh
+        env:
+          G3B_MACHINE_POLICY: '1'
         run: |
           node apps/windows-gui-tests/run.mjs --exe test-input/app/BRAINTRADE_V4_ENTERPRISE_V25/BrainTradeNext.exe --expected-source 54ee875c88be1be2b1f4d251e292841079b9b4cd --output test-output/v25/g3b
       - uses: actions/upload-artifact@v4

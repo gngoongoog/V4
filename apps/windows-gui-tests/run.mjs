@@ -36,11 +36,29 @@ async function freePort(port=0){return new Promise((resolve,reject)=>{
  server.listen(port,'127.0.0.1',()=>{const p=server.address().port;server.close(()=>resolve(p));});});}
 async function check(name,fn){try{await fn();report.checks.push({name,status:'PASS'});}
  catch(e){report.checks.push({name,status:'FAIL',error:String(e)});throw e;}finally{await writeReport();}}
-let child,browser,page,home,appLogs='';
+let child,browser,page,home,appLogs='',machinePolicyOwned=false;
+const machinePolicyKey='HKLM\\Software\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments';
+function configureCdpPolicy(port){
+ // Current elevated GitHub Windows runners ignore user-scoped WebView2 flags.
+ // Scope the documented machine override to this executable on disposable CI only.
+ if(process.env.G3B_MACHINE_POLICY!=='1')return;
+ assert.equal(process.env.GITHUB_ACTIONS,'true');
+ assert.equal(process.env.RUNNER_ENVIRONMENT,'github-hosted');
+ if(!machinePolicyOwned){
+  let exists=false;
+  try{execFileSync('reg',['query',machinePolicyKey,'/v','BrainTradeNext.exe','/reg:64'],{stdio:'pipe'});exists=true;}catch{}
+  assert.equal(exists,false,'Refusing to replace an existing WebView2 machine policy');
+ }
+ execFileSync('reg',['add',machinePolicyKey,'/v','BrainTradeNext.exe','/t','REG_SZ','/d',
+  `--remote-debugging-port=${port} --remote-debugging-address=127.0.0.1 --disable-gpu`,'/f','/reg:64'],{stdio:'pipe'});
+ machinePolicyOwned=true;
+ report.cdp_configuration='Temporary per-executable HKLM policy on disposable GitHub Windows runner';
+}
 async function ipc(command,args={}){
  return page.evaluate(({command,args})=>window.__TAURI_INTERNALS__.invoke(command,args),{command,args});}
 async function launch(){
  const port=await freePort();
+ configureCdpPolicy(port);
  child=spawn(exe,[],{cwd:home,windowsHide:false,env:{...process.env,
   BRAINTRADE_DATA_DIR:path.join(home,'data'),BRAINTRADE_GATEWAY_DISABLED:'1',BRAINTRADE_NEWS_OFFLINE:'1',
   WEBVIEW2_USER_DATA_FOLDER:path.join(home,'webview'),
@@ -200,6 +218,10 @@ try{
  if(page)await ipc('shutdown_core').catch(()=>{});
  if(child&&child.exitCode===null){try{execFileSync('taskkill',['/PID',String(child.pid),'/T','/F'],{stdio:'ignore'});}catch{}}
  if(browser)await browser.close().catch(()=>{});
+ if(machinePolicyOwned){
+  try{execFileSync('reg',['delete',machinePolicyKey,'/v','BrainTradeNext.exe','/f','/reg:64'],{stdio:'pipe'});}
+  catch(error){report.status='FAIL';report.policy_cleanup_error=String(error);process.exitCode=1;}
+ }
  if(home){await fs.copyFile(path.join(home,'data/core.log'),path.join(output,'core.log')).catch(()=>{});}
  await fs.writeFile(path.join(output,'launcher.log'),appLogs);
  await writeReport();console.log(JSON.stringify({status:report.status,checks:report.checks,pages:report.pages.length}));
