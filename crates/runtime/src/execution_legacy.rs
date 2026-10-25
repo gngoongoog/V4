@@ -872,7 +872,31 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 // Verify every booked broker cost BEFORE committing any deals.
                 // The learner must never consume a 0 invented for a missing fee.
                 for d in ds {
+                    // The broker history cursor is a completeness claim.
+                    // Refuse selected-symbol trading receipts whose mandatory
+                    // execution geometry was omitted or malformed. Otherwise
+                    // the cursor would skip that deal permanently and later
+                    // PnL, partial volumes or learner history become fictitious.
+                    // BALANCE/CREDIT/non-trading entries and other symbols are
+                    // not coerced into strategy positions.
+                    if d["symbol"] == t.symbol && d["type"].as_i64().is_none() {
+                        bail!("MT5 deal type missing for selected symbol; history sync refused");
+                    }
                     if matches!(d["type"].as_i64(), Some(0 | 1)) {
+                        if d["symbol"] == t.symbol {
+                            let valid_magic=d["magic"].as_u64().is_some();
+                            let valid_entry=matches!(d["entry"].as_i64(),Some(0 | 1 | 2 | 3));
+                            let valid_time=d["time_msc"].as_u64()
+                                .is_some_and(|ms| ms>0 && ms<=until_ms.saturating_add(2_000));
+                            let valid_volume=d["volume"].as_f64()
+                                .is_some_and(|v| v.is_finite() && v>0.);
+                            let valid_price=d["price"].as_f64()
+                                .is_some_and(|v| v.is_finite() && v>0.);
+                            if !(valid_magic && valid_entry && valid_time
+                                && valid_volume && valid_price) {
+                                bail!("MT5 trading Deal has missing/invalid type, entry, time, volume, price or magic; sync refused");
+                            }
+                        }
                         for field in ["profit","commission","swap","fee"] {
                             if !d[field].as_f64().is_some_and(f64::is_finite) {
                                 bail!("Trading deal has missing/invalid booked cost: {field}");
@@ -1118,7 +1142,8 @@ mod execution_persistence_tests {
         status.telemetry=Some(t);
         status.gateway_fresh=true;
         let deal=json!({"ticket":890,"position_id":201,"magic":410601,
-            "symbol":"XAUUSD","type":0,"entry":0,"profit":1.,
+            "symbol":"XAUUSD","type":0,"entry":0,"time_msc":150,
+            "volume":0.1,"price":2000.,"profit":1.,
             "commission":-0.07,"swap":0.,"fee":0.});
         let mut request=json!({"login":17,"server":"Demo-Test","currency":"USD",
             "trade_mode":2,"until_ms":200,"deals":[deal.clone()]});
@@ -1147,7 +1172,8 @@ mod execution_persistence_tests {
         status.telemetry=Some(t);
         status.gateway_fresh=true;
         let original=json!({"ticket":809,"position_id":99,"magic":410601,
-            "symbol":"XAUUSD","type":0,"entry":0,"profit":0.0,
+            "symbol":"XAUUSD","type":0,"entry":0,"time_msc":150,
+            "volume":0.1,"price":2000.0,"profit":0.0,
             "commission":0.0,"swap":0.0,"fee":0.0});
         let mut req=json!({"login":17,"server":"Demo-Test","currency":"USD",
             "trade_mode":0,"until_ms":220,"deals":[]});
@@ -1176,6 +1202,58 @@ mod execution_persistence_tests {
         assert_eq!(service.history_until_ms,220);
         assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
             [],|r|r.get::<_,u64>(0)).unwrap(),0);
+    }
+
+    #[test]
+    fn strict_broker_deal_geometry_blocks_cursor_and_bad_strategy_metrics() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let mut st=Status::default();
+        st.gateway_fresh=true;
+        st.telemetry=Some(t);
+        let original=json!({"ticket":800,"position_id":88,"symbol":"XAUUSD",
+            "magic":410601,"type":0,"entry":0,"time_msc":150,
+            "volume":0.1,"price":2000.1,"profit":2.,"commission":0.,
+            "fee":0.,"swap":0.});
+        let mut req=json!({"login":17,"server":"Demo-Test","currency":"USD",
+            "trade_mode":0,"until_ms":210,"deals":[]});
+        for (field,replacement) in [
+            ("type",Value::Null),("type",json!("BUY")),
+            ("entry",Value::Null),("entry",json!(9)),
+            ("time_msc",Value::Null),("time_msc",json!(0)),
+            ("time_msc",json!(100_000)),
+            ("volume",Value::Null),("volume",json!(0.)),
+            ("volume",json!(-0.2)),("volume",json!("NaN")),
+            ("price",Value::Null),("price",json!(0.)),
+            ("price",json!(-2000.)),("price",json!("Infinity")),
+            ("magic",Value::Null),("magic",json!(-3))
+        ] {
+            let mut damaged=original.clone();
+            damaged[field]=replacement;
+            req["deals"]=json!([damaged]);
+            assert!(svc.route("POST","/v1/execution/sync",
+                req.to_string().as_bytes(),&db,&st,300).is_err(),
+                "Corrupt broker {field} must not advance history");
+            assert_eq!(svc.history_until_ms,100,"History cursor moved despite invalid {field}");
+            assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
+                [],|r|r.get::<_,u64>(0)).unwrap(),0);
+        }
+        // MT5 netting/close-by classifications can exist in the broker
+        // ledger. They are kept for accounting, but not reinterpreted as a
+        // filled new opening order by Gateway's stricter intent reconciler.
+        for entry in [0,1,2,3] {
+            let mut valid=original.clone();
+            valid["entry"]=json!(entry);
+            valid["ticket"]=json!(800+entry);
+            req["deals"]=json!([valid]);
+            svc.route("POST","/v1/execution/sync",
+                req.to_string().as_bytes(),&db,&st,300).unwrap();
+        }
+        assert_eq!(svc.history_until_ms,210);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
+            [],|r|r.get::<_,u64>(0)).unwrap(),4);
     }
 
     #[test]
