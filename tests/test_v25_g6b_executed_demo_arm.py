@@ -61,8 +61,8 @@ class ExecutedBrokerEvidence(unittest.TestCase):
         for ticket, entry, kind, profit, commission, when in (
             (deal,0,1,0.0,-0.2,observed+700),
             (deal+1,1,0,2.0,-0.3,closed)):
-            p = {"ticket":ticket,"position_id":pos,"type":kind,
-                 "entry":entry,"volume":0.1,"time_msc":when,
+            p = {"ticket":ticket,"position_id":pos,"symbol":"XAUUSD",
+                 "type":kind,"entry":entry,"volume":0.1,"time_msc":when,
                  "profit":profit,"commission":commission,"swap":0.0,"fee":0.0}
             self.db.execute("INSERT INTO broker_deals VALUES(?,?,?,'system',?)",
                             (CONTEXT,ticket,pos,json.dumps(p)))
@@ -96,6 +96,24 @@ class ExecutedBrokerEvidence(unittest.TestCase):
         r=study.audit(self.db,self.manifest,now_ms=NOW)
         self.assertEqual(r["exactly_linked_adaptive_broker_positions"],0)
         self.assertEqual(r["rejected_by_reason"]["broker_entry_exit_not_fully_reconciled"],1)
+
+    def test_small_partial_close_never_passes_rust_volume_geometry(self):
+        pos,deal=self.add()
+        self.db.execute(
+            "UPDATE broker_deals SET payload=json_set(payload,'$.volume',0.0999998) "
+            "WHERE ticket=?", (deal+1,))
+        r=study.audit(self.db,self.manifest,now_ms=NOW)
+        self.assertEqual(r["exactly_linked_adaptive_broker_positions"],0)
+        self.assertEqual(r["rejected_by_reason"]["broker_entry_exit_not_fully_reconciled"],1)
+
+    def test_wrong_symbol_in_deal_is_never_this_account_trade(self):
+        pos,deal=self.add()
+        self.db.execute(
+            "UPDATE broker_deals SET payload=json_set(payload,'$.symbol','EURUSD') "
+            "WHERE ticket=?", (deal+1,))
+        r=study.audit(self.db,self.manifest,now_ms=NOW)
+        self.assertEqual(r["exactly_linked_adaptive_broker_positions"],0)
+        self.assertEqual(r["rejected_by_reason"]["broker_deal_geometry_unknown"],1)
 
     def test_missing_cost_component_fails_closed(self):
         pos,deal=self.add()
