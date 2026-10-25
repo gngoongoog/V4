@@ -57,6 +57,14 @@ pub fn preregister(
     Ok(())
 }
 
+/// Pre-G7 frozen runs continue as legacy research; their pairs must never
+/// be represented as newly preregistered G7 evidence.
+pub fn has_registration(db: &Connection, run_id: &str) -> Result<bool> {
+    Ok(db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM g7_pair_registrations WHERE run_id=?1)",
+        [run_id], |r| r.get(0))?)
+}
+
 /// Call in the SAME transaction as frozen_coordinator_decisions insertion.
 /// Fail closed on missing/changed run snapshot. An error is isolated by
 /// execution::Service::observe and cannot block broker exits or entries.
@@ -123,7 +131,7 @@ pub fn record_pair(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use braintrade_domain::{Config, Telemetry};
+    use braintrade_domain::Telemetry;
     use crate::frozen_coordinator;
 
     fn setup() -> Connection {
@@ -150,7 +158,7 @@ mod tests {
         let db=setup();
         let t=Telemetry::default();
         let sig=braintrade_domain::execution::Signal {
-            brain:"system".into(), side:1,key:"key".into(),reason:"test".into(),
+            brain:"system".into(), side:1,key:"key".into(),bar_time:1,reason:"test".into(),
             ready:true,stop_distance:1.,target_distance:2.,hold_ms:10_000,
             coordination:None,
         };
