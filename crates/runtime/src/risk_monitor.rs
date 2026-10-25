@@ -63,8 +63,15 @@ pub fn snapshot(db:&Connection,config:&Config,status:&Status,now_ms:u64)->Result
     let Some(day)=day_at(now_ms) else {
         return Ok(json!({"state":"unavailable","reason":"ساعة النظام غير صالحة","demo_enabled":demo_on,"real_enabled":real_on,"limit_percent":pct}));
     };
-    let Some(t)=status.telemetry.as_ref().filter(|t|status.gateway_fresh && t.connected) else {
-        return Ok(json!({"state":"unavailable","reason":"لا توجد قراءة MT5 حديثة وموثوقة","day":day,
+    // Account identity is not attested by a fresh transport heartbeat alone.
+    // Demo/REAL mode, login and server/currency must all be consistent before
+    // any lock state, day loss or Micro REAL budget is exposed to the operator.
+    // This is presentation-only: authoritative risk admission is still in Core.
+    let Some(t)=status.telemetry.as_ref().filter(|t|
+        status.gateway_fresh && t.connected && t.login>0
+        && !t.server.is_empty() && !t.currency.is_empty()
+        && t.account_trade_mode==Some(if t.demo {0}else{2})) else {
+        return Ok(json!({"state":"unavailable","reason":"هوية أو نوع حساب MT5 غير موثّقين أو الاتصال غير حديث","day":day,
             "demo_enabled":demo_on,"real_enabled":real_on,"limit_percent":pct}));
     };
     let c=config.for_account(t);
@@ -161,6 +168,47 @@ mod tests {
         assert_eq!(snapshot(&db,&c,&status,now).unwrap()["state"],"ready");
         t.report_day="2020-01-01".into();status.telemetry=Some(t);
         assert_eq!(snapshot(&db,&c,&status,now).unwrap()["state"],"unavailable");
+    }
+    #[test]
+    fn risk_readout_never_attests_demo_as_real_or_unknown_login() {
+        let db=Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE daily_loss_locks(account_key TEXT NOT NULL,
+            report_day TEXT NOT NULL,reached_ms INTEGER NOT NULL,loss_amount REAL NOT NULL,
+            PRIMARY KEY(account_key,report_day));
+            CREATE TABLE micro_real_recovered(account_key TEXT PRIMARY KEY,
+            reached_ms INTEGER NOT NULL,reached_equity REAL NOT NULL);").unwrap();
+        let now=1_729_500_000_000u64;
+        let day=day_at(now).unwrap();
+        let base=Telemetry{connected:true,account_trade_mode:Some(0),demo:true,
+            login:701,server:"Demo-Server".into(),currency:"USD".into(),
+            balance:100.,equity:99.,today_net:Some(-1.),report_day:day,
+            ..Default::default()};
+        let c=Config::default();
+        let status=|t:Telemetry|Status{gateway_fresh:true,
+            telemetry:Some(t),..Default::default()};
+        assert_eq!(snapshot(&db,&c,&status(base.clone()),now).unwrap()["state"],"disabled");
+        for corrupted in [
+            Telemetry{account_trade_mode:Some(2),..base.clone()},
+            Telemetry{demo:false,..base.clone()},
+            Telemetry{account_trade_mode:None,..base.clone()},
+            Telemetry{login:0,..base.clone()},
+            Telemetry{server:String::new(),..base.clone()},
+            Telemetry{currency:String::new(),..base.clone()},
+        ] {
+            let v=snapshot(&db,&c,&status(corrupted),now).unwrap();
+            assert_eq!(v["state"],"unavailable");
+            assert!(v.get("account").is_none());
+            assert!(v.get("micro_real").is_none());
+            assert!(v.get("estimated_day_loss").is_none());
+            assert!(v.get("locked").is_none());
+        }
+        let real=Telemetry{account_trade_mode:Some(2),demo:false,..base.clone()};
+        let verified=snapshot(&db,&c,&status(real),now).unwrap();
+        assert_eq!(verified["account"]["mode"],2);
+        assert_eq!(verified["state"],"ready");
+        let stale=Status{gateway_fresh:false,telemetry:Some(base),
+            ..Default::default()};
+        assert_eq!(snapshot(&db,&c,&stale,now).unwrap()["state"],"unavailable");
     }
     #[test]
     fn p1e_micro_recovery_reports_irreversible_account_latch_across_symbols() {
