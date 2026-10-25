@@ -204,7 +204,83 @@ def _verified_position(db: sqlite3.Connection, row: sqlite3.Row,
        signal.get("key") != adaptive.get("key") or \
        p.get("executed_side") != adaptive["side"]:
         raise ValueError("booked_trade_cannot_be_matched_to_adaptive_arm")
-    return net, per_lot, costs, closed // 86_400_000
+    return net, per_lot, costs, closed // 86_400_000, cmd_id
+
+
+def _prospective_intent_census(db: sqlite3.Connection, doc: dict,
+                               context: str, now_ms: int) -> dict:
+    """Count ALL prospective Expert open intents, not just closed winners.
+
+    Broker learning receipts exist only for reconciled closed positions. Using
+    receipts alone creates survivorship bias and an inflated win-rate.
+    """
+    commands = db.execute(
+        "SELECT id,created_ms,state,payload FROM broker_commands "
+        "WHERE context=? AND brain='system' AND kind='open' "
+        "AND created_ms>=? AND created_ms<=? ORDER BY created_ms,id",
+        (context,doc["holdout_start_ms"],now_ms),
+    ).fetchall()
+    matched, unlinked, unknown = set(), set(), 0
+    status = Counter()
+    for row in commands:
+        cmd_id = row["id"]
+        try:
+            p = json.loads(row["payload"])
+        except (ValueError, TypeError):
+            unknown += 1
+            continue
+        if not isinstance(p, dict):
+            unknown += 1
+            continue
+        signal=p.get("signal")
+        if not isinstance(signal, dict):
+            unknown += 1
+            continue
+        learning=p.get("learning")
+        mode=learning.get("trading_mode") if isinstance(learning,dict) else None
+        coord=signal.get("coordination")
+        if mode is None and isinstance(coord,dict):
+            mode=coord.get("trading_mode")
+        if mode not in ("expert",):
+            if mode is None:
+                unknown += 1
+            continue
+        status[str(row["state"])] += 1
+        bar=signal.get("bar_time")
+        if type(bar) is not int or bar*1000<doc["holdout_start_ms"]:
+            unlinked.add(cmd_id)
+            continue
+        prior=db.execute(
+            "SELECT observed_ms,adaptive FROM frozen_coordinator_decisions "
+            "WHERE run_id=? AND bar_time=?",(doc["run_id"],bar)
+        ).fetchone()
+        if prior is None:
+            unlinked.add(cmd_id)
+            continue
+        try:
+            decision=json.loads(prior["adaptive"])
+        except (ValueError, TypeError):
+            unlinked.add(cmd_id)
+            continue
+        observed=prior["observed_ms"]
+        if (not isinstance(decision,dict) or decision.get("ready") is not True
+                or type(decision.get("side")) is not int
+                or decision["side"] not in (-1,1)
+                or signal.get("side")!=decision["side"]
+                or signal.get("key")!=decision.get("key")
+                or type(observed) is not int
+                or not doc["holdout_start_ms"] <= observed <= row["created_ms"]
+                <= observed+MAX_COMMAND_AGE_MS):
+            unlinked.add(cmd_id)
+            continue
+        matched.add(cmd_id)
+    return {
+        "eligible_intent_ids":matched,
+        "unlinked_expert_open_intent_ids":unlinked,
+        "unverified_mode_open_intents":unknown,
+        "expert_open_intents_total":len(matched)+len(unlinked),
+        "expert_open_states":dict(sorted(status.items())),
+    }
 
 
 def audit(db: sqlite3.Connection, manifest: dict, *, now_ms: int) -> dict:
@@ -235,28 +311,52 @@ def audit(db: sqlite3.Connection, manifest: dict, *, now_ms: int) -> dict:
     ).fetchall()
     reasons: Counter[str] = Counter()
     counts = Counter(row["position_id"] for row in source)
-    accepted: list[tuple[float,float,float,int]] = []
-    days = set()
+    potential: list[tuple[float,float,float,int,str]] = []
     for row in source:
         if counts[row["position_id"]] > 1:
             reasons["duplicate_broker_position_attribution"] += 1
             continue
         try:
-            result = _verified_position(db,row,doc,run["context"],now_ms)
-            accepted.append(result)
-            days.add(result[3])
+            potential.append(_verified_position(db,row,doc,run["context"],now_ms))
         except (ValueError, TypeError, KeyError, OverflowError,
                 json.JSONDecodeError) as exc:
             reasons[str(exc)] += 1
-    enough = len(accepted) >= 30 and len(days) >= 5
+    census=_prospective_intent_census(db,doc,run["context"],now_ms)
+    duplicate_commands=Counter(x[4] for x in potential)
+    accepted=[x for x in potential if duplicate_commands[x[4]]==1
+              and x[4] in census["eligible_intent_ids"]]
+    reasons["duplicate_open_command_receipt"] += sum(
+        duplicate_commands[x[4]]>1 for x in potential)
+    reasons["receipt_without_matching_predeclared_intent"] += sum(
+        x[4] not in census["eligible_intent_ids"] for x in potential
+        if duplicate_commands[x[4]]==1)
+    accepted_ids={x[4] for x in accepted}
+    unresolved=census["eligible_intent_ids"]-accepted_ids
+    days={x[3] for x in accepted}
+    complete_census=(not unresolved and
+        not census["unlinked_expert_open_intent_ids"] and
+        census["unverified_mode_open_intents"]==0 and
+        not any(duplicate_commands[x[4]]>1 for x in potential))
+    enough = complete_census and len(accepted)>=30 and len(days)>=5
     return {
         "study": "G6-B", "run_id": doc["run_id"],
         "manifest_sha256": manifest["manifest_sha256"],
         "status": "single_executed_adaptive_arm_descriptive_only" if enough
+                  else "incomplete_prospective_broker_outcome_capture"
+                  if not complete_census
                   else "insufficient_exactly_attributed_mt5_demo_closes",
         "broker_records_examined": len(source),
         "excluded_pre_holdout_broker_records": excluded_before_start,
         "exactly_linked_adaptive_broker_positions": len(accepted),
+        "preregistered_expert_open_intents": census["expert_open_intents_total"],
+        "predeclared_adaptive_open_intents": len(census["eligible_intent_ids"]),
+        "predeclared_intents_without_verified_full_close": len(unresolved),
+        "expert_open_intents_missing_prior_adaptive_match":
+            len(census["unlinked_expert_open_intent_ids"]),
+        "unverified_mode_open_intents": census["unverified_mode_open_intents"],
+        "expert_open_intent_states": census["expert_open_states"],
+        "all_post_holdout_expert_intents_accounted_for": complete_census,
+        "booked_net_scope": "verified_closed_adaptive_positions_only",
         "distinct_utc_days": len(days),
         "rejected_by_reason": dict(sorted(reasons.items())),
         "adaptive_executed_demo_booked_net":
@@ -268,6 +368,7 @@ def audit(db: sqlite3.Connection, manifest: dict, *, now_ms: int) -> dict:
             round(sum(x[2] for x in accepted), 8) if accepted else None,
         "adaptive_executed_demo_win_rate":
             sum(x[0]>0 for x in accepted)/len(accepted) if accepted else None,
+        "win_rate_scope": "matched_closed_positions_only_not_all_open_intents",
         "frozen_executed_broker_pnl": None,
         "paired_executed_broker_delta": None,
         "broker_fills_for_frozen_comparator": 0,
@@ -278,6 +379,9 @@ def audit(db: sqlite3.Connection, manifest: dict, *, now_ms: int) -> dict:
         "note": "Only fully closed broker_deals reconciled to a system receipt and "
                 "pre-outcome Adaptive Expert signal and exact broker open deal. "
                 "Frozen is paper-only, and adaptive training is not locked. "
+                "Non-closed and unmatched Expert orders are counted in the "
+                "prospective intent census; booked net covers ONLY verified "
+                "fully closed positions, not total account PnL. "
                 "This is NOT a paired broker A/B edge or an independent OOS study."
     }
 
