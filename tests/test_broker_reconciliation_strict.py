@@ -115,11 +115,17 @@ class BrokerReconciliationStrictTests(unittest.TestCase):
                 self.assertIn('entry/exit',r['reason'])
 
     def test_missing_economic_deal_classification_blocks_learning_recovery(self):
-        self.broker.deals=[self.deal(812,.1)]
-        delattr(self.broker.deals[0],'entry')
+        for field in ('type', 'entry', 'position_id'):
+            with self.subTest(missing=field):
+                self.broker.deals=[self.deal(812,.1)]
+                delattr(self.broker.deals[0],field)
+                r=self.result()
+                self.assertEqual(r['state'],'unknown',r)
+                self.assertIn('type/entry/position',r['reason'])
+        self.broker.deals=[self.deal(812,.1,position_id=0)]
         r=self.result()
         self.assertEqual(r['state'],'unknown',r)
-        self.assertIn('type/entry/position',r['reason'])
+        self.assertIn('physical position',r['reason'])
 
     def test_mixed_physical_positions_not_summed_into_one_fill(self):
         self.broker.deals=[self.deal(813,.04),self.deal(814,.06,position_id=800)]
