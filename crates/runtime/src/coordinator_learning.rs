@@ -244,9 +244,21 @@ pub(crate) fn verified_broker_feedback(p:&Value)->Option<(f64,f64,f64)>{
     }
     let volume=p["closed_volume"].as_f64().filter(|v|v.is_finite()&&*v>0.)?;
     let reward=p["reward"].as_f64().filter(|v|v.is_finite()&&(-1.0..=1.0).contains(v))?;
+    // A complete MT5 cost receipt is not sufficient if a historical/corrupt
+    // learner reward was replaced after the position closed. Broker weights,
+    // contextual mistake memory and Sniper arm scores all read this function.
+    // Validate the EXACT stored reward_v2 calculation, not just its range.
+    let risk=p["risk_money"].as_f64().filter(|v|v.is_finite()&&*v>=0.)?;
+    let stored_r=p["r_multiple"].as_f64().filter(|v|v.is_finite())?;
     let net=vals[0]+vals[1]+vals[2]+vals[3];
     if !net.is_finite()||(net-vals[4]).abs()>1e-6_f64.max(vals[4].abs()*1e-8)
         ||(vals[4]/volume-vals[5]).abs()>1e-6_f64.max(vals[5].abs()*1e-8) {
+        return None;
+    }
+    let (expected_r,expected_reward)=reward_v2(vals[4],risk);
+    if !expected_r.is_finite()||!expected_reward.is_finite()
+        ||(stored_r-expected_r).abs()>1e-6_f64.max(expected_r.abs()*1e-8)
+        ||(reward-expected_reward).abs()>1e-8 {
         return None;
     }
     Some((vals[4],vals[5],reward))
@@ -857,10 +869,12 @@ mod tests {
             db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,'account','trend',1000,?3)",
                 params![source,id,json!({"evidence_source":"mt5_demo_broker","context_key":key,
                     "gross":reward,"commission":0.0,"swap":0.0,"fee":0.0,
-                    "net":reward,"net_per_lot":reward,"closed_volume":1.0,"reward":reward}).to_string()]).unwrap();
+                    "net":reward,"net_per_lot":reward,"closed_volume":1.0,
+                    "risk_money":0.0,"r_multiple":0.0,
+                    "reward":reward_v2(reward,0.0).1}).to_string()]).unwrap();
         }
         let (n,reward,confidence,streak,penalty)=contextual_stats(&db,"same","trend_up_normal|london|tight",1000).unwrap();
-        assert_eq!(n,1);assert_eq!(reward,0.8);assert!(confidence>0. && confidence<0.2);
+        assert_eq!(n,1);assert_eq!(reward,0.25);assert!(confidence>0. && confidence<0.2);
         assert_eq!(streak,0);assert_eq!(penalty,0.);
         assert_eq!(contextual_stats(&db,"missing","trend_up_normal|london|tight",1000).unwrap().0,0);
     }
@@ -1141,7 +1155,8 @@ mod tests {
         let valid=json!({"evidence_source":"mt5_demo_broker",
             "gross":2.0,"commission":-0.5,"swap":0.0,"fee":0.0,
             "net":1.5,"net_per_lot":15.0,"closed_volume":0.1,
-            "reward":0.8,"regime":"trend_up_normal","context_key":key});
+            "risk_money":0.0,"r_multiple":0.0,"reward":0.25,
+            "regime":"trend_up_normal","context_key":key});
         let broken=[
             json!({"evidence_source":"mt5_demo_broker","gross":2.0,
                 "commission":-0.5,"swap":0.0,"net":1.5,
@@ -1186,6 +1201,62 @@ mod tests {
     }
 
     #[test]
+    fn g5e_forbid_manipulated_reward_and_r_multiple_with_valid_mt5_costs() {
+        let db=Connection::open_in_memory().unwrap();
+        let _=Learner::new(&db).unwrap();
+        let now=2_000_000_000_000u64;
+        let key="trend_up_normal|london|tight";
+        let source="demo-adaptive";
+        let exact=json!({
+            "evidence_source":"mt5_demo_broker","gross":3.0,
+            "commission":-0.50,"swap":-0.10,"fee":-0.05,"net":2.35,
+            "closed_volume":0.10,"net_per_lot":23.5,
+            "risk_money":5.0,"r_multiple":0.47,"reward":0.47_f64.tanh(),
+            "context_key":key,"regime":"trend_up_normal"
+        });
+        let mut corrupt_reward=exact.clone();corrupt_reward["reward"]=json!(0.99);
+        let mut corrupt_r=exact.clone();corrupt_r["r_multiple"]=json!(-40.0);
+        let mut missing_r=exact.clone();missing_r.as_object_mut().unwrap().remove("r_multiple");
+        let mut missing_risk=exact.clone();missing_risk.as_object_mut().unwrap().remove("risk_money");
+        let mut invalid_risk=exact.clone();invalid_risk["risk_money"]=json!(-1.0);
+        for (i,p) in [corrupt_reward,corrupt_r,missing_r,missing_risk,invalid_risk]
+            .iter().enumerate() {
+            db.execute("INSERT INTO coordinator_broker_samples
+                 (source,position_id,context,brain,closed_ms,payload)
+                 VALUES(?1,?2,'demo','trend',?3,?4)",
+                params![source,i+1,now-1000,p.to_string()]).unwrap();
+        }
+        assert_eq!(broker_stats(&db,source,None,now).unwrap().samples,0);
+        assert_eq!(contextual_stats(&db,source,key,now).unwrap().0,0);
+        let neutral=selected_weight(Stats::default(),Stats::default(),
+            broker_stats(&db,source,None,now).unwrap(),Stats::default(),
+            &IntelligenceContext::default());
+        assert_eq!(neutral.weight(),1.0);
+        db.execute("INSERT INTO coordinator_broker_samples
+             (source,position_id,context,brain,closed_ms,payload)
+             VALUES(?1,99,'demo','trend',?2,?3)",
+            params![source,now-500,exact.to_string()]).unwrap();
+        let valid=broker_stats(&db,source,None,now).unwrap();
+        assert_eq!(valid.samples,1);
+        assert!((valid.mean_net_per_lot-23.5).abs()<1e-9);
+        assert!((valid.mean_reward-0.47_f64.tanh()).abs()<1e-9);
+        assert_eq!(contextual_stats(&db,source,key,now).unwrap().0,1);
+        let positive=selected_weight(Stats::default(),Stats::default(),
+            valid,Stats::default(),&IntelligenceContext::default());
+        assert!(positive.weight()>1.0,"Only exact reward lineage can tune broker weights");
+        // Missing risk geometry in old data cannot be silently backfilled.
+        let mut fallback=json!({
+            "evidence_source":"mt5_demo_broker","gross":1.0,"commission":0.0,
+            "swap":0.0,"fee":0.0,"net":1.0,"net_per_lot":10.0,
+            "closed_volume":0.1,"risk_money":0.0,"r_multiple":0.0,"reward":0.25
+        });
+        assert!(verified_broker_feedback(&fallback).is_some(),
+            "An explicit zero-risk fallback must retain reward_v2 provenance");
+        fallback["reward"]=json!(0.95);
+        assert!(verified_broker_feedback(&fallback).is_none());
+    }
+
+    #[test]
     fn sparse_regime_keeps_global_prior_without_double_counting() {
         let global=Stats{samples:101,wins:100,mean_reward:99./101.,weighted_win_rate:100./101.,effective_samples:101.,..Default::default()};
         let local=Stats{samples:1,wins:0,mean_reward:-1.,weighted_win_rate:0.,effective_samples:1.,..Default::default()};
@@ -1208,8 +1279,8 @@ mod tests {
         let mut add=|source:&str,id:u64,age:u64,net:f64,attr:&str|{
             let payload=json!({"evidence_source":"mt5_demo_broker","context_key":ctx,
                 "gross":net,"commission":0.0,"swap":0.0,"fee":0.0,"net":net,
-                "net_per_lot":net,"closed_volume":1.0,
-                "reward":if net<0.{-0.5}else{0.5},"attribution":attr});
+                "net_per_lot":net,"closed_volume":1.0,"risk_money":0.0,
+                "r_multiple":0.0,"reward":reward_v2(net,0.0).1,"attribution":attr});
             db.execute("INSERT INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,'account','trend',?3,?4)",
                 params![source,id,now-age,payload.to_string()]).unwrap();
         };
