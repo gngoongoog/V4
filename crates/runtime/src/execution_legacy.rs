@@ -724,8 +724,14 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     // Same strict cost provenance as /v1/execution/trades.
                     // A corrupt historical broker fee must not become an
                     // invented $0.00 and falsely improve a brain's win count.
-                    let net = crate::trade_journal::booked_costs(own.iter().copied())
-                        .map(|totals| totals[0]);
+                    // No broker receipts is unknown trading PnL, not
+                    // a verified 0.00 profit or an implicitly zero fee.
+                    // In particular, a switched/unbound MT5 account must
+                    // never display fabricated performance statistics.
+                    let net = if own.is_empty() { None } else {
+                        crate::trade_journal::booked_costs(own.iter().copied())
+                            .map(|totals| totals[0])
+                    };
                     let mut receipts: BTreeMap<u64, Vec<&Value>> = BTreeMap::new();
                     for d in &own {
                         receipts.entry(d["position_id"].as_u64().unwrap_or(0))
