@@ -1042,10 +1042,10 @@ mod execution_persistence_tests {
         let t=demo();
         svc.bind(&db,&t,100).unwrap();
         let key=ctx(&t);
-        let entry=json!({"ticket":710,"position_id":77,"symbol":"XAUUSD",
+        let entry=json!({"ticket":710,"position_id":77,"symbol":"XAUUSD","brain":"system",
             "type":0,"entry":0,"magic":410600,"volume":0.1,
             "profit":0.,"commission":-0.35,"swap":0.,"fee":0.});
-        let mut exit=json!({"ticket":711,"position_id":77,"symbol":"XAUUSD",
+        let mut exit=json!({"ticket":711,"position_id":77,"symbol":"XAUUSD","brain":"system",
             "type":1,"entry":1,"magic":410600,"volume":0.1,
             "profit":3.,"swap":-0.2,"fee":0.});
         for (ticket,deal) in [(710,&entry),(711,&exit)] {
