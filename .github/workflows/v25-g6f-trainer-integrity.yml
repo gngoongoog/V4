@@ -1,0 +1,26 @@
+name: V25 G6-F Broker Learner Read-Time Integrity
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/v25-g6f-causal-broker-trainer-row-admission-20261025]
+    paths:
+      - 'crates/runtime/src/coordinator_learning.rs'
+      - '.github/workflows/v25-g6f-trainer-integrity.yml'
+  pull_request:
+    branches: [feature/v25-g6e-frozen-policy-training-cutoff-audit-20261025]
+permissions:
+  contents: read
+jobs:
+  rust-broker-learner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile and execute real source-scoped learning and mismatch regression
+        run: cargo test --locked -p braintrade-runtime g6f_ -- --nocapture
+      - name: Ensure original coordinator learner tests still hold
+        run: cargo test --locked -p braintrade-runtime coordinator_learning::tests -- --nocapture
+      - name: Run all Rust runtime and domain tests
+        run: cargo test --locked -p braintrade-domain -p braintrade-runtime
