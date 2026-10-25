@@ -1,0 +1,26 @@
+name: V25 G5-D Read-only Frozen Adaptive Audit
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/v25-g5d-frozen-adaptive-oos-audit-20261025]
+    paths:
+      - 'scripts/audit_v25_g5d_frozen_pairs.py'
+      - 'tests/test_v25_g5d_frozen_pairs.py'
+      - '.github/workflows/v25-g5d-audit.yml'
+  pull_request:
+    branches: [feature/v25-g5c-causal-forward-learning-evidence-20261025]
+permissions:
+  contents: read
+jobs:
+  offline-prospective-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile read-only G5-D scripts
+        run: python3 -m compileall -q scripts/audit_v25_g5d_frozen_pairs.py tests/test_v25_g5d_frozen_pairs.py
+      - name: Adversarial causal/commission/provenance/cross-account regressions
+        run: python3 -m unittest discover -s tests -p 'test_v25_g5d_frozen_pairs.py' -v
