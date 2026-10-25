@@ -1,5 +1,4 @@
 """G5-D adversarial fixtures: never a real MT5 Demo win-rate experiment."""
-import copy
 import importlib.util
 import json
 from pathlib import Path
@@ -14,7 +13,7 @@ SPEC = importlib.util.spec_from_file_location(
 AUDIT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(AUDIT)
 
-BAR = 1_800_000_000
+BAR = 1_760_000_000
 
 
 def sample(bar=BAR):
