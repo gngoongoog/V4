@@ -181,6 +181,15 @@ def check(exe=None):
             restored=api('/v1/execution/trades',dict(offset=0,limit=50))
             assert restored['rows'][0]['origin']['trading_mode']=='scalping',restored
             assert abs(restored['rows'][0]['broker_net_booked']-9.1)<1e-7
+            # The new Rust process must recover the last completed broker
+            # history high-water mark, retaining only the intentional 120s
+            # overlap rather than replaying from the old account bind time.
+            resumed=api('/v1/execution/gateway')
+            expected_resume=max(0,now-120_000)
+            assert resumed['history_from_ms']==expected_resume, (resumed,expected_resume)
+            persisted=api('/v1/execution')
+            assert persisted['history_until_ms']==now,persisted
+            assert persisted['last_broker_sync_ms']>=now,persisted
             # Switching MT5 accounts never enables broker execution.
             snapshot['login']=99;publish()
             assert not api('/v1/status')['execution_enabled']
