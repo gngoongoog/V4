@@ -21,7 +21,7 @@ fn sniper_broker_rows(db:&Connection,context:&str)->Result<Vec<SniperBrokerRow>>
            ON a.source=s.source AND a.position_id=s.position_id
          WHERE s.context=?1 AND s.brain='sniper_learner'
          ORDER BY s.closed_ms DESC,s.position_id DESC LIMIT 2000")?;
-    Ok(st.query_map([context],|r|Ok(SniperBrokerRow{
+    let mapped=st.query_map([context],|r|Ok(SniperBrokerRow{
         source:r.get(0)?,position:r.get::<_,i64>(1).unwrap_or(-1),
         context:r.get(2)?,brain:r.get(3)?,
         closed:r.get::<_,i64>(4).unwrap_or(-1),raw:r.get(5)?,
@@ -31,7 +31,9 @@ fn sniper_broker_rows(db:&Connection,context:&str)->Result<Vec<SniperBrokerRow>>
         admitted_ms:r.get::<_,Option<i64>>(9).unwrap_or(None),
         admitted_hash:r.get::<_,Option<String>>(10).unwrap_or(None),
         protocol:r.get::<_,Option<String>>(11).unwrap_or(None),
-    }))?.collect::<rusqlite::Result<Vec<_>>>()?)
+    }))?;
+    let collected=mapped.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(collected)
 }
 
 fn verified_sniper_admission(row:&SniperBrokerRow,context:&str,now:u64)->Option<Value>{
