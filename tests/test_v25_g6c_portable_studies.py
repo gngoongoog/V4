@@ -92,6 +92,15 @@ class G6CPortableStudies(unittest.TestCase):
                 self.assertEqual(command.returncode,0,command.stderr)
                 self.assertIn("usage:",command.stdout.lower())
 
+    def test_real_python_cli_can_register_fake_core_and_deny_premature_audit(self):
+        spec=importlib.util.spec_from_file_location(
+            "g6e_checker",ROOT/"scripts"/"check_v25_g6c_study_package.py")
+        checker=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        problems=checker._bundled_python_sqlite_study_smoke(
+            Path(sys.executable),ROOT/"scripts")
+        self.assertEqual(problems,[],problems)
+
     def test_package_verifier_rejects_missing_study_scripts_without_python(self):
         spec=importlib.util.spec_from_file_location(
             "g6c_checker",ROOT/"scripts"/"check_v25_g6c_study_package.py")
