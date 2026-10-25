@@ -819,14 +819,15 @@ mod tests {
 
     #[test]
     fn gaps_cannot_generate_a_false_twelve_bar_forward_label() {
-        let mut frames=bars(1_800_000_000);
+        let frames=bars(1_800_000_000);
         let bar=frames[100].candle.time;
         let contiguous: Vec<_> = frames.iter().skip(101).take(12).collect();
         assert!(contiguous_forward_horizon(bar,&contiguous,"M1"));
-        frames[107].candle.time+=60;
-        let gap: Vec<_> = frames.iter().skip(101).take(12).collect();
-        assert!(!contiguous_forward_horizon(bar,&gap,"M1"));
         assert!(!contiguous_forward_horizon(bar,&contiguous,"MN1"));
+        let mut gap_frames=frames.clone();
+        gap_frames[107].candle.time+=60;
+        let gap: Vec<_> = gap_frames.iter().skip(101).take(12).collect();
+        assert!(!contiguous_forward_horizon(bar,&gap,"M1"));
     }
 
     #[test]
