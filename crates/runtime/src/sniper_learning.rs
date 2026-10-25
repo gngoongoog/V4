@@ -4,19 +4,75 @@ use anyhow::Result;
 use braintrade_domain::{sniper::{Engine, Models, TargetModels, ID, POLICIES, TARGET_ARMS}, Telemetry};
 use rusqlite::Connection;
 use serde_json::Value;
+use sha2::{Digest,Sha256};
+
+struct SniperBrokerRow {
+    source:String, position:i64, context:String, brain:String, closed:i64,
+    raw:String, admitted_context:Option<String>,admitted_brain:Option<String>,
+    admitted_closed:Option<i64>,admitted_ms:Option<i64>,
+    admitted_hash:Option<String>, protocol:Option<String>,
+}
+
+fn sniper_broker_rows(db:&Connection,context:&str)->Result<Vec<SniperBrokerRow>>{
+    let mut st=db.prepare(
+        "SELECT s.source,s.position_id,s.context,s.brain,s.closed_ms,s.payload,
+                a.context,a.brain,a.closed_ms,a.admitted_ms,a.payload_sha256,a.protocol
+         FROM coordinator_broker_samples s LEFT JOIN coordinator_broker_admissions a
+           ON a.source=s.source AND a.position_id=s.position_id
+         WHERE s.context=?1 AND s.brain='sniper_learner'
+         ORDER BY s.closed_ms DESC,s.position_id DESC LIMIT 2000")?;
+    Ok(st.query_map([context],|r|Ok(SniperBrokerRow{
+        source:r.get(0)?,position:r.get::<_,i64>(1).unwrap_or(-1),
+        context:r.get(2)?,brain:r.get(3)?,
+        closed:r.get::<_,i64>(4).unwrap_or(-1),raw:r.get(5)?,
+        admitted_context:r.get::<_,Option<String>>(6).unwrap_or(None),
+        admitted_brain:r.get::<_,Option<String>>(7).unwrap_or(None),
+        admitted_closed:r.get::<_,Option<i64>>(8).unwrap_or(None),
+        admitted_ms:r.get::<_,Option<i64>>(9).unwrap_or(None),
+        admitted_hash:r.get::<_,Option<String>>(10).unwrap_or(None),
+        protocol:r.get::<_,Option<String>>(11).unwrap_or(None),
+    }))?.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+fn verified_sniper_admission(row:&SniperBrokerRow,context:&str,now:u64)->Option<Value>{
+    let pos=u64::try_from(row.position).ok().filter(|v|*v>0)?;
+    let close=u64::try_from(row.closed).ok().filter(|v|*v>0)?;
+    let admitted=row.admitted_ms.and_then(|v|u64::try_from(v).ok())?;
+    if admitted<close || admitted>now || close>now
+        || row.context!=context || row.brain!=ID
+        || row.admitted_context.as_deref()!=Some(context)
+        || row.admitted_brain.as_deref()!=Some(ID)
+        || row.admitted_closed!=Some(row.closed)
+        || row.protocol.as_deref()!=Some("g6g-runtime-same-transaction-v1")
+        || row.admitted_hash.as_deref()!=
+             Some(format!("{:x}",Sha256::digest(row.raw.as_bytes())).as_str())
+    {return None;}
+    let p:Value=serde_json::from_str(&row.raw).ok()?;
+    if p["evidence_source"]!="mt5_demo_broker" || p["trading_mode"]!="sniper"
+        || p["context"]!=context || p["brain"]!=ID
+        || p["position_id"].as_u64()!=Some(pos)
+        || p["closed_ms"].as_u64()!=Some(close) {return None;}
+    let parts:Value=serde_json::from_str(&row.source).ok()?;
+    let tuple=parts.as_array().filter(|a|a.len()==6)?;
+    if tuple[0]!=context || tuple[1]!="adaptive-member-v1"
+        || tuple[2]!="sniper" || tuple[3]!=ID
+        || p["timeframe"]!=tuple[4] || p["report_id"]!=tuple[5]
+        || crate::coordinator_learning::verified_broker_feedback(&p).is_none()
+    {return None;}
+    Some(p)
+}
 
 pub fn refresh(engine: &mut Engine, db: &Connection, t: &Telemetry, now: u64) -> Result<()> {
     let context = crate::coordinator_learning::context(t);
     let mut models = Models::new();
     let mut targets=TargetModels::new();
     if t.demo && t.account_trade_mode == Some(0) {
-        let mut st = db.prepare("SELECT closed_ms,payload FROM coordinator_broker_samples WHERE context=?1 AND brain='sniper_learner' ORDER BY closed_ms DESC,position_id DESC LIMIT 2000")?;
-        let rows = st.query_map([&context], |r| Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        for (closed, raw) in rows.into_iter().rev() {
-            if closed == 0 || closed > now || now.saturating_sub(closed) > 30*24*60*60*1000 { continue; }
-            let p: Value = serde_json::from_str(&raw)?;
-            if p["evidence_source"] != "mt5_demo_broker" || p["trading_mode"] != "sniper" { continue; }
+        for row in sniper_broker_rows(db,&context)?.into_iter().rev(){
+            let Some(closed)=u64::try_from(row.closed).ok().filter(|v|*v>0) else{continue;};
+            if closed>now || now.saturating_sub(closed)>30*24*60*60*1000{continue;}
+            // Never train a TP/policy from labels that did not exist at this
+            // Core decision time. Corrupt JSON is skipped, not a fatal error.
+            let Some(p)=verified_sniper_admission(&row,&context,now) else{continue;};
             let s = &p["selection"];
             if s["brain"] != ID || s["policy"] != "sniper-ticks-v1" { continue; }
             let Some(policy) = POLICIES.iter().position(|name| s["sniper_policy"] == *name) else { continue; };
@@ -55,21 +111,17 @@ pub fn frozen_training_checkpoint(db:&Connection,t:&Telemetry,model:&Engine,now:
     let context=crate::coordinator_learning::context(t);
     anyhow::ensure!(model.training_account_matches(&context),
         "Frozen Learner cached policy belongs to a different Demo account");
-    let mut query=db.prepare(
-        "SELECT closed_ms,payload FROM coordinator_broker_samples
-         WHERE context=?1 AND brain='sniper_learner'
-         ORDER BY closed_ms DESC,position_id DESC LIMIT 2000")?;
-    let rows=query.query_map([&context],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let rows=sniper_broker_rows(db,&context)?;
     let mut count=0u64;
     let mut targets=0u64;
     let mut latest=0u64;
     let mut earliest:Option<u64>=None;
     let scanned=rows.len();
-    for (closed,raw) in rows {
+    for row in rows {
+        let Some(closed)=u64::try_from(row.closed).ok().filter(|v|*v>0) else{continue;};
         anyhow::ensure!(closed<=now,"Future-dated broker close cannot enter training cutoff");
-        if closed==0||now.saturating_sub(closed)>30*24*60*60*1000{continue}
-        let p:Value=serde_json::from_str(&raw)?;
+        if now.saturating_sub(closed)>30*24*60*60*1000{continue;}
+        let Some(p)=verified_sniper_admission(&row,&context,now) else{continue;};
         let s=&p["selection"];
         if p["evidence_source"]!="mt5_demo_broker"||p["trading_mode"]!="sniper"
             ||s["brain"]!=ID||s["policy"]!="sniper-ticks-v1"
