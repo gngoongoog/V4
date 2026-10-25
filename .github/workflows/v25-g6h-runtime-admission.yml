@@ -1,0 +1,30 @@
+name: V25 G6-H Runtime Broker Admission Gate
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/v25-g6h-runtime-admission-causal-gate-20261025]
+    paths:
+      - 'crates/runtime/src/coordinator_learning.rs'
+      - 'docs/v25/G6H_RUNTIME_ADMISSION_GATE_AR.md'
+      - '.github/workflows/v25-g6h-runtime-admission.yml'
+  pull_request:
+    branches: [feature/v25-g6g-broker-training-admission-clock-20261025]
+permissions:
+  contents: read
+jobs:
+  real-admission-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Reject backdated admissions, tampered payloads and unadmitted training in Rust
+        run: cargo test --locked -p braintrade-runtime coordinator_learning::tests -- --nocapture
+      - name: Verify all runtime and domain regressions
+        run: cargo test --locked -p braintrade-domain -p braintrade-runtime
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Keep prospective G6-G paper/audit evidence checks valid
+        run: python3 -m unittest discover -s tests -p 'test_v25_g6g_broker_admission_clock.py' -v
