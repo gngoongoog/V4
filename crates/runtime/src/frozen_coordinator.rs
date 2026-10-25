@@ -41,6 +41,7 @@ pub fn init(db:&Connection)->Result<()>{
           PRIMARY KEY(run_id,bar_time),
           FOREIGN KEY(run_id) REFERENCES frozen_coordinator_runs(id));")?;
     // Keep direct frozen_coordinator init, test fixtures and full Service init in sync.
+    crate::g7_capture::init(db)?;
     crate::coordinator_paper::init(db)?;
     Ok(())
 }
@@ -80,9 +81,14 @@ pub fn freeze(db:&Connection,t:&Telemetry,c:&Config,brains:&[BrainConfig],
         "included_layers":["Expert system base","frozen advisor signals",
            "frozen learned weights","frozen contextual Demo selection",
            "frozen adaptive exits"]});
-    db.execute(
+    let tx=db.unchecked_transaction()?;
+    tx.execute(
         "INSERT INTO frozen_coordinator_runs VALUES(?1,?2,?3,?4,?5,1)",
         params![id,key,mode_key(c.trading.mode),now,snapshot.to_string()])?;
+    // Register the research cohort BEFORE any new completed-bar evidence.
+    crate::g7_capture::preregister(&tx,&id,&key,mode_key(c.trading.mode),
+        &snapshot.to_string(),now)?;
+    tx.commit()?;
     Ok(json!({"ok":true,"run_id":id,"active":true,
         "no_broker_orders":true,"no_learning_effect":true,
         "mode":mode_key(c.trading.mode),"policy":policy(c.trading.mode)}))
@@ -154,13 +160,21 @@ pub fn observe(db:&Connection,t:&Telemetry,c:&Config,adaptive:&Signal,
     crate::student_learning::adapt(&mut frozen,t,&cfg,&sys,&studies);
     // Record BEFORE any future simulated trade outcome. This table is neither
     // the broker-command ledger nor the adaptive learner's scored labels.
-    db.execute(
+    let tx=db.unchecked_transaction()?;
+    let inserted=tx.execute(
         "INSERT OR IGNORE INTO frozen_coordinator_decisions
          (run_id,bar_time,observed_ms,frozen,adaptive)
          VALUES(?1,?2,?3,?4,?5)",
         params![id,bar,now,
             serde_json::to_string(&frozen)?,
             serde_json::to_string(adaptive)?])?;
+    if inserted==1 {
+        // The second read-only receipt is inserted atomically with the pair;
+        // it cannot grant execution authority or feed broker learning.
+        crate::g7_capture::record_pair(&tx,&id,&key,mode_key(c.trading.mode),
+            &raw,bar,now,t,&frozen,adaptive)?;
+    }
+    tx.commit()?;
     Ok(())
 }
 pub fn report(db:&Connection,key:&str,mode:TradingMode)->Result<Value>{
