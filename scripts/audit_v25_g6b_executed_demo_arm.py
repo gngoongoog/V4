@@ -219,10 +219,19 @@ def audit(db: sqlite3.Connection, manifest: dict, *, now_ms: int) -> dict:
         for t in ("broker_commands", "broker_deals", "coordinator_broker_samples")
     ):
         return _empty_report(doc, manifest, "broker_tables_unavailable")
+    # The sampling universe is precommitted: only closes AFTER the G6-A
+    # holdout start. Old Demo winners/losers are not part of the study.
+    excluded_before_start: int = db.execute(
+        "SELECT COUNT(*) FROM coordinator_broker_samples "
+        "WHERE context=? AND brain='system' AND closed_ms<?",
+        (run["context"], doc["holdout_start_ms"]),
+    ).fetchone()[0]
     source = db.execute(
         "SELECT source,position_id,closed_ms,payload "
         "FROM coordinator_broker_samples WHERE context=? AND brain='system' "
-        "ORDER BY closed_ms,position_id,source", (run["context"],)
+        "AND closed_ms>=? "
+        "ORDER BY closed_ms,position_id,source",
+        (run["context"], doc["holdout_start_ms"]),
     ).fetchall()
     reasons: Counter[str] = Counter()
     counts = Counter(row["position_id"] for row in source)
@@ -246,6 +255,7 @@ def audit(db: sqlite3.Connection, manifest: dict, *, now_ms: int) -> dict:
         "status": "single_executed_adaptive_arm_descriptive_only" if enough
                   else "insufficient_exactly_attributed_mt5_demo_closes",
         "broker_records_examined": len(source),
+        "excluded_pre_holdout_broker_records": excluded_before_start,
         "exactly_linked_adaptive_broker_positions": len(accepted),
         "distinct_utc_days": len(days),
         "rejected_by_reason": dict(sorted(reasons.items())),
