@@ -1221,7 +1221,11 @@ mod tests {
         db.execute("UPDATE student_experiences SET payload=json_remove(payload,'$.admitted') WHERE context=?1",[&key]).unwrap();
         let legacy = view(&db, &key).unwrap();
         assert!(legacy["experiences"][0]["admitted"].is_null());
-        assert_eq!(legacy["usable_shadow_pairs"], 1);
+        // Legacy missing admission cannot preserve a supposedly replayable
+        // quote-pair counter. The raw record remains for forensic review.
+        assert_eq!(legacy["usable_shadow_pairs"], 0);
+        assert_eq!(legacy["studies"][0]["provenance"],
+            "legacy_or_tampered_unverified");
         t.login = 99;
         student.observe(&db, &t, 2500).unwrap();
         assert!(student.policies.is_empty());
