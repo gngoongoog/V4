@@ -166,12 +166,15 @@ def audit(db: sqlite3.Connection, manifest: dict, *, now_ms: int) -> dict:
         closed>frozen_start
         for values in candidates.values() for closed in values
     )
+    # A valid but empty coordinator member list is not evidence that even
+    # one real member was trained or evaluated.
+    has_member_evidence=bool(decisions) and checked_members>0 and not invalid
     return {
         "study":"G6-D",
         "run_id":doc["run_id"],
         "manifest_sha256":manifest["manifest_sha256"],
         "status":"causal_member_counter_consistency_checked"
-                 if decisions and not invalid
+                 if has_member_evidence
                  else "insufficient_or_unverified_training_provenance",
         "decisions_examined":len(decisions),
         "decision_rows_without_detected_inconsistency":honest,
@@ -185,7 +188,7 @@ def audit(db: sqlite3.Connection, manifest: dict, *, now_ms: int) -> dict:
         "members_with_changed_first_to_last_displayed_weights":weight_changes,
         "invalid_claims_by_reason":dict(sorted(invalid.items())),
         "excluded_broker_labels_by_reason":dict(sorted(rejected_labels.items())),
-        "training_evidence_consistency":bool(decisions) and not invalid,
+        "training_evidence_consistency":has_member_evidence,
         "training_cutoff_independently_enforced":False,
         "adaptive_policy_sealed_across_study":False,
         "local_db_insert_time_attested":False,
