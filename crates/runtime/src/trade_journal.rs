@@ -221,7 +221,7 @@ mod tests {
     fn historical_missing_cost_cannot_masquerade_as_zero_fee_or_profit() {
         let db=Connection::open_in_memory().unwrap();
         let _=crate::execution::Service::new(&db).unwrap();
-        let ctx="[\\"Demo\\",17,\\"XAUUSD\\",\\"USD\\"]";
+        let ctx="[\"Demo\",17,\"XAUUSD\",\"USD\"]";
         let baseline=json!({
             "ticket":10,"position_id":99,"symbol":"XAUUSD","type":0,"entry":0,
             "time_msc":1000,"volume":0.1,"price":2000.,
