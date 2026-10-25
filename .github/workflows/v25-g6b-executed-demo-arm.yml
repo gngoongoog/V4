@@ -1,0 +1,29 @@
+name: V25 G6-B Exact Executed Demo Arm
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/v25-g6b-exact-executed-demo-arm-audit-20261025]
+    paths:
+      - 'scripts/audit_v25_g6b_executed_demo_arm.py'
+      - 'scripts/audit_v25_g6a_preregistered_quotes.py'
+      - 'tests/test_v25_g6b_executed_demo_arm.py'
+      - '.github/workflows/v25-g6b-executed-demo-arm.yml'
+  pull_request:
+    branches: [feature/v25-g6a-preregistered-prospective-coordinator-audit-20261025]
+permissions:
+  contents: read
+jobs:
+  real-deal-lineage-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Check read-only broker-deal auditor syntax
+        run: python3 -m compileall -q scripts/audit_v25_g6b_executed_demo_arm.py tests/test_v25_g6b_executed_demo_arm.py
+      - name: Reject fake executed PnL and ensure real booked costs close positions
+        run: python3 -m unittest discover -s tests -p 'test_v25_g6b_executed_demo_arm.py' -v
+      - name: Preserve original preregistration checks
+        run: python3 -m unittest discover -s tests -p 'test_v25_g6a_preregistered_quotes.py' -v
