@@ -217,15 +217,31 @@ def audit(db: sqlite3.Connection, *, now_ms: int) -> dict:
                 if p is None:
                     anomalies["malformed_system_broker_label"] += 1
                     continue
-                if p.get("trading_mode") not in MODES:
+                mode = p.get("trading_mode")
+                if mode not in MODES or (context, mode) not in mode_start:
                     counts["other_mode_broker_labels"] += 1
                     continue
+                mode_cutoff = mode_start[context, mode]
+                if row["closed_ms"] < mode_cutoff:
+                    counts["broker_label_before_mode_start"] += 1
+                    continue
+                # A trade opened before preregistration can close afterward.
+                # This is historical overlap, not a new prospective G7 intent.
+                cmd_id = p.get("open_command_id")
+                opening = db.execute(
+                    "SELECT created_ms FROM broker_commands "
+                    "WHERE id=? AND context=? AND kind='open'",
+                    (cmd_id, context)).fetchone() if isinstance(cmd_id, str) else None
+                if (opening is not None and type(opening["created_ms"]) is int
+                        and opening["created_ms"] < mode_cutoff):
+                    counts["pre_registration_open_closed_in_cohort"] += 1
+                    continue
                 counts["post_cohort_system_broker_labels"] += 1
-                linked = p.get("open_command_id") in matched_ids
+                linked = cmd_id in matched_ids
                 if not linked:
                     anomalies["post_cohort_broker_label_without_g7_link"] += 1
                 labels.append({"position_id":row["position_id"],
-                               "open_command_id":p.get("open_command_id"),
+                               "open_command_id":cmd_id,
                                "linked_to_g7_decision": linked})
 
     numerator = counts["exactly_linked_open_intents"]
