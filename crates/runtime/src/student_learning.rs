@@ -649,7 +649,7 @@ impl Student {
             if (e.trial.complete() || e.shadow_expired) && e.actual.is_some() && !e.study_consumed {
                 let study = self.policies.entry(e.source.clone()).or_insert_with(|| if e.trial.outcomes.len() == 5 { ExitStudy::expanded() } else { ExitStudy::default() });
                 if let Some(rewards) = e.trial.paired_rewards() {
-                    let accepted=study.observe(e.opened_ms, now, rewards);
+                    let accepted=study.observe(e.opened_ms, now, &rewards);
                     e.admitted=Some(accepted);
                     if accepted {
                         self.attested_studies.insert(e.source.clone());
