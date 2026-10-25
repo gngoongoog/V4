@@ -3,6 +3,13 @@ import type {Status,StreamEvent} from './types';
 export const hasTauri=()=>typeof window!=='undefined'&&('__TAURI_INTERNALS__' in window);
 export async function coreStatus():Promise<Status>{return invoke<Status>('get_status')}
 export async function readPanel(route:string):Promise<unknown>{return invoke('read_panel',{route})}
+// Exact read-only native pagination: no arbitrary HTTP methods or destinations.
+export async function readTradeHistory(offset:number,limit:number):Promise<unknown>{
+ if(!Number.isSafeInteger(offset)||offset<0||offset>1000000||
+    !Number.isSafeInteger(limit)||limit<1||limit>100)
+  throw new Error('Invalid Core trade-history pagination');
+ return invoke('read_trade_history',{offset,limit});
+}
 export async function control(action:'start'|'stop'|'reconnect',confirmLiveLogin?:string):Promise<unknown>{return invoke('execute_control',{action,confirmLiveLogin:confirmLiveLogin??null})}
 export async function saveRisk(risk:Record<string,unknown>):Promise<unknown>{return invoke('update_risk',{risk})}
 export async function savePortfolio(settings:Record<string,unknown>):Promise<unknown>{return invoke('update_portfolio',{settings})}
