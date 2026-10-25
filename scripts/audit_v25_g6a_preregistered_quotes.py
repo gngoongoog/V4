@@ -19,6 +19,7 @@ import sqlite3
 import sys
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import audit_v25_g5d_frozen_pairs as g5d
 
 POLICY = "g6a-registered-prospective-quote-paper-v1"
