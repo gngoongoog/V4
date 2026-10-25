@@ -348,7 +348,8 @@ export default function Terminal(){
   return()=>{active=false;clearInterval(interval)};
  },[page,preview,contextKey]);
  useEffect(()=>{
-  if(page==='dashboard'||page==='journal'||!hasTauri()||preview){setPageData(null);setPageUpdatedAt(null);setPageError('');return;}
+  if(page==='journal'){setPageData(null);setPageUpdatedAt(null);setPageError('');return;}
+   if(page==='dashboard'||!hasTauri()||preview){setPageData(null);setPageUpdatedAt(null);setPageError('');return;}
   const route=findPage(page).route;
   if(!route){setPageData(null);setPageUpdatedAt(null);setPageError('لا يوجد مصدر مرتبط بهذه الصفحة');return;}
   let active=true;let fetching=false;
