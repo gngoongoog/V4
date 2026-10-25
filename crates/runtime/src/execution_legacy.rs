@@ -113,6 +113,94 @@ fn valid_recovered_partial_progress(previous: &Value, next: &Value) -> bool {
     true
 }
 
+/// A broker ACK never certifies observation by itself. Match the exact
+/// immutable MT5 Deal ticket to a physical position before releasing this
+/// intent's per-brain reconciliation gate. A flat position list is not proof
+/// of complete exit receipts.
+fn broker_command_observed(
+    db:&Connection, context:&str, t:&Telemetry, command:&Value, result:&Value
+) -> Result<bool> {
+    let Some(ticket)=result["deal"].as_u64().filter(|v|*v>0)
+        else{return Ok(false)};
+    let Some(magic)=command["magic"].as_u64() else{return Ok(false)};
+    if command["symbol"]!=t.symbol {return Ok(false)}
+    let stored:Option<(u64,String)>=db.query_row(
+        "SELECT position_id,payload FROM broker_deals WHERE context=?1 AND ticket=?2",
+        params![context,ticket],|r|Ok((r.get(0)?,r.get(1)?))
+    ).optional()?;
+    let Some((pid,raw))=stored else{return Ok(false)};
+    if pid==0 {return Ok(false)}
+    let deal:Value=serde_json::from_str(&raw)
+        .context("Corrupt booked MT5 Deal receipt; cannot observe command")?;
+    if deal["ticket"].as_u64()!=Some(ticket)
+        || deal["position_id"].as_u64()!=Some(pid)
+        || deal["symbol"]!=t.symbol
+        || !matches!(deal["type"].as_i64(),Some(0|1))
+        || result["position_id"].as_u64().is_some_and(|v|v!=pid)
+    {return Ok(false)}
+    let position=t.positions.iter().find(|p|
+        (p.identifier==pid || p.identifier==0 && p.ticket==pid)
+        && p.symbol==t.symbol && p.magic==magic);
+    if command["kind"]=="open" {
+        if deal["entry"]!=0 || deal["magic"].as_u64()!=Some(magic) {
+            return Ok(false)
+        }
+        let created=command["created_ms"].as_u64().unwrap_or(0);
+        let filled=deal["time_msc"].as_u64().unwrap_or(0);
+        if created>0 && filled>0 && filled.saturating_add(60_000)<created {
+            return Ok(false)
+        }
+        if position.is_some() {return Ok(true)}
+    } else if command["kind"]=="close" {
+        if !matches!(deal["entry"].as_i64(),Some(1|3)) {
+            return Ok(false)
+        }
+        let Some(target)=command["position"].as_u64().filter(|v|*v>0)
+            else{return Ok(false)};
+        // MT5 position ticket can differ from immutable position identifier.
+        // Match the current ticket or a previously observed, account-scoped
+        // physical-position snapshot, never a different brain's close.
+        let recorded:Option<String>=db.query_row(
+            "SELECT payload FROM broker_observations WHERE context=?1 AND position_id=?2",
+            params![context,pid],|r|r.get(0)
+        ).optional()?;
+        let historical_target=recorded
+            .and_then(|s|serde_json::from_str::<Value>(&s).ok())
+            .is_some_and(|p|p["ticket"].as_u64()==Some(target)
+                && p["magic"].as_u64()==Some(magic) && p["symbol"]==t.symbol);
+        let current_target=position.is_some_and(|p|p.ticket==target);
+        if pid!=target && !current_target && !historical_target {
+            return Ok(false)
+        }
+        if result["state"]=="partial" && current_target {
+            let requested=result["request"]["volume"].as_f64()
+                .filter(|v|v.is_finite()&&*v>0.);
+            if let Some(requested)=requested {
+                if position.is_some_and(|p|p.volume.is_finite()
+                    && p.volume>0. && p.volume+1e-8<requested) {
+                    return Ok(true)
+                }
+            }
+        }
+    } else {
+        return Ok(false)
+    }
+    // An older ACK can coexist with a late partial exit. Only an entirely
+    // covered physical position, absent from the fresh broker snapshot,
+    // proves final observation without keeping a stale pending command.
+    if t.positions.iter().any(|p|p.identifier==pid || p.ticket==pid) {
+        return Ok(false)
+    }
+    let mut stmt=db.prepare(
+        "SELECT payload FROM broker_deals WHERE context=?1 AND position_id=?2 ORDER BY ticket"
+    )?;
+    let raw=stmt.query_map(params![context,pid],|r|r.get::<_,String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let receipts=raw.iter().map(|s|serde_json::from_str::<Value>(s))
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    Ok(crate::trade_journal::fully_closed_by_deals(&receipts))
+}
+
 impl Service {
     pub fn take_entries(&mut self) -> Vec<Value> { std::mem::take(&mut self.new_entries) }
     /// Entry execution is reserved to the coordinator of the selected trading
@@ -377,22 +465,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         for item in acknowledged {
             let q = &item["request"];
             let r = &item["result"];
-            let magic = q["magic"].as_u64().unwrap_or(0);
-            let is_open = q["kind"] == "open";
-            let visible = if is_open {
-                t.positions.iter().any(|p| {
-                    p.magic == magic
-                        && p.symbol == t.symbol
-                        && p.opened_ms + 5000 >= q["created_ms"].as_u64().unwrap_or(u64::MAX)
-                })
-            } else {
-                !t.positions
-                    .iter()
-                    .any(|p| p.ticket == q["position"].as_u64().unwrap_or(0))
-            };
-            let confirmed_closed:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_deals d JOIN broker_deals e ON e.context=d.context AND e.position_id=d.position_id WHERE d.context=?1 AND d.ticket=?2 AND CAST(json_extract(e.payload,'$.entry') AS INTEGER) IN (1,3))",params![key,r["deal"].as_u64().unwrap_or(0)],|r|r.get(0))?;
-            let partial_close_seen=!is_open&&r["state"]=="partial"&&t.positions.iter().find(|p|p.ticket==q["position"].as_u64().unwrap_or(0)).is_some_and(|p|p.volume+1e-8<r["request"]["volume"].as_f64().unwrap_or(0.));
-            if visible||(is_open&&confirmed_closed)||partial_close_seen {
+            if broker_command_observed(db,&key,t,q,r)? {
                 db.execute(
                     "UPDATE broker_commands SET state='observed' WHERE id=?1",
                     [q["id"].as_str().unwrap()],
@@ -820,7 +893,9 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         | "unknown"
                         | "placed"
                         | "closed"
-                        | "observed"
+                        // 'observed' is reserved for Core's exact Deal and
+                        // physical-position reconciler; never accept it from
+                        // a Gateway /result packet, even after restart.
                         | "cancelled"
                 ) {
                     bail!("Invalid broker state");
@@ -981,6 +1056,120 @@ mod execution_persistence_tests {
             login: 17, server: "Demo-Test".into(), currency: "USD".into(),
             symbol: "XAUUSD".into(), ..Default::default()
         }
+    }
+
+    fn receipt(ticket:u64,pid:u64,magic:u64,entry:u64,volume:f64)->Value {
+        json!({"ticket":ticket,"position_id":pid,"symbol":"XAUUSD",
+            "magic":magic,"type":if entry==0 {0}else{1},
+            "entry":entry,"time_msc":250,"volume":volume,
+            "price":2000.0,"profit":0.0,"commission":0.0,"swap":0.0,"fee":0.0})
+    }
+    fn save_deal(db:&Connection,context:&str,d:&Value) {
+        db.execute("INSERT INTO broker_deals VALUES (?1,?2,?3,'system',?4)",
+            params![context,d["ticket"].as_u64().unwrap(),
+                d["position_id"].as_u64().unwrap(),d.to_string()]).unwrap();
+    }
+
+    #[test]
+    fn external_gateway_result_cannot_force_observed_without_mt5_proof() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        service.bind(&db,&t,100).unwrap();
+        let context=ctx(&t);
+        db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload)
+            VALUES('unverified',?1,'system','open',100,'dispatched',?2)",
+            params![context,json!({"id":"unverified","kind":"open",
+                "symbol":"XAUUSD","magic":410600}).to_string()]).unwrap();
+        let status=Status{gateway_fresh:true,telemetry:Some(t),..Default::default()};
+        let forged=json!({"id":"unverified","state":"observed",
+            "deal":123,"reason":"no proof"});
+        assert!(service.route("POST","/v1/execution/result",
+            forged.to_string().as_bytes(),&db,&status,200).is_err());
+        let (state,result):(String,String)=db.query_row(
+            "SELECT state,result FROM broker_commands WHERE id='unverified'",
+            [],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(state,"dispatched");
+        assert_eq!(result,"{}");
+        // A standard fill ACK remains eligible for eventual Core-only
+        // reconciliation but does not itself become observed.
+        let filled=json!({"id":"unverified","state":"filled","deal":123});
+        service.route("POST","/v1/execution/result",
+            filled.to_string().as_bytes(),&db,&status,201).unwrap();
+        let stored:String=db.query_row(
+            "SELECT state FROM broker_commands WHERE id='unverified'",
+            [],|r|r.get(0)).unwrap();
+        assert_eq!(stored,"filled");
+    }
+
+    #[test]
+    fn open_observation_requires_exact_deal_position_and_not_just_same_magic() {
+        let db=Connection::open_in_memory().unwrap();
+        let _=Service::new(&db).unwrap();
+        let mut t=demo();
+        let context=ctx(&t);
+        t.positions.push(braintrade_domain::Position{
+            ticket:999,identifier:999,magic:410600,symbol:"XAUUSD".into(),
+            volume:0.1,..Default::default()
+        });
+        let q=json!({"kind":"open","id":"intent-1","symbol":"XAUUSD",
+            "magic":410600,"created_ms":200});
+        let r=json!({"state":"filled","deal":700,"volume":0.1});
+        assert!(!broker_command_observed(&db,&context,&t,&q,&r).unwrap());
+        let own=receipt(700,55,410600,0,0.1);
+        save_deal(&db,&context,&own);
+        assert!(!broker_command_observed(&db,&context,&t,&q,&r).unwrap(),
+            "Unrelated same-magic position must never mark command observed");
+        t.positions.push(braintrade_domain::Position{
+            ticket:55,identifier:55,magic:410600,symbol:"XAUUSD".into(),
+            volume:0.1,..Default::default()
+        });
+        assert!(broker_command_observed(&db,&context,&t,&q,&r).unwrap());
+        t.positions.clear();
+        let close=receipt(701,55,0,1,0.04);
+        save_deal(&db,&context,&close);
+        assert!(!broker_command_observed(&db,&context,&t,&q,&r).unwrap(),
+            "Partially closed history does not release full-open intent");
+        save_deal(&db,&context,&receipt(702,55,0,1,0.06));
+        assert!(broker_command_observed(&db,&context,&t,&q,&r).unwrap());
+        assert!(!broker_command_observed(&db,&context,&t,&q,
+            &json!({"state":"filled","deal":701})).unwrap(),
+            "An EXIT receipt cannot stand in for an opening ticket");
+    }
+
+    #[test]
+    fn close_observation_requires_own_exit_ticket_and_broker_covered_exit() {
+        let db=Connection::open_in_memory().unwrap();
+        let _=Service::new(&db).unwrap();
+        let mut t=demo();
+        let context=ctx(&t);
+        let q=json!({"kind":"close","id":"close-1","symbol":"XAUUSD",
+            "magic":410600,"position":55});
+        let r=json!({"state":"filled","deal":801,
+            "request":{"volume":0.1}});
+        assert!(!broker_command_observed(&db,&context,&t,&q,&r).unwrap(),
+            "Missing position is NOT proof of broker close execution");
+        save_deal(&db,&context,&receipt(800,55,410600,0,0.1));
+        save_deal(&db,&context,&receipt(801,55,0,1,0.04));
+        assert!(!broker_command_observed(&db,&context,&t,&q,&r).unwrap(),
+            "Exit receipt must cover entire position before final observation");
+        t.positions.push(braintrade_domain::Position{
+            ticket:55,identifier:55,magic:410600,symbol:"XAUUSD".into(),
+            volume:0.06,..Default::default()
+        });
+        let partial=json!({"state":"partial","deal":801,
+            "request":{"volume":0.1}});
+        assert!(broker_command_observed(&db,&context,&t,&q,&partial).unwrap(),
+            "Broker-proven partial close can be observed with reduced volume");
+        assert!(!broker_command_observed(&db,&context,&t,&q,&r).unwrap(),
+            "Filled close may not be marked complete while position remains");
+        t.positions.clear();
+        save_deal(&db,&context,&receipt(802,55,0,1,0.06));
+        assert!(broker_command_observed(&db,&context,&t,&q,&r).unwrap());
+        let wrong=json!({"kind":"close","symbol":"XAUUSD",
+            "magic":410600,"position":77});
+        assert!(!broker_command_observed(&db,&context,&t,&wrong,&r).unwrap(),
+            "A different physical ticket cannot claim another position's close");
     }
 
     #[test]
