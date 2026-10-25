@@ -646,7 +646,9 @@ mod tests {
             (2,"same","trend_up_normal|asia|tight",-0.8),(3,"same","trend_up_normal|london|wide",-0.9),
             (4,"other","trend_up_normal|london|tight",-1.)] {
             db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,'account','trend',1000,?3)",
-                params![source,id,json!({"context_key":key,"reward":reward}).to_string()]).unwrap();
+                params![source,id,json!({"context_key":key,"evidence_source":"mt5_demo_broker","gross":reward,
+                    "commission":0.0,"swap":0.0,"fee":0.0,"net":reward,
+                    "closed_volume":1.0,"net_per_lot":reward,"reward":reward}).to_string()]).unwrap();
         }
         let (n,reward,confidence,streak,penalty)=contextual_stats(&db,"same","trend_up_normal|london|tight",1000).unwrap();
         assert_eq!(n,1);assert_eq!(reward,0.8);assert!(confidence>0. && confidence<0.2);
@@ -799,12 +801,12 @@ mod tests {
         )
         .unwrap();
         let open = json!({
-            "ticket":100,"position_id":900,"magic":410600,"symbol":"XAUUSD","entry":0,
+            "ticket":100,"position_id":900,"magic":410600,"symbol":"XAUUSD","type":0,"entry":0,
             "time_msc":now-60_000,"volume":0.10,"price":2000.0,"profit":0.0,
             "commission":-0.35,"swap":0.0,"fee":0.0,"brain":"system"
         });
         let close = json!({
-            "ticket":101,"position_id":900,"magic":410600,"symbol":"XAUUSD","entry":1,
+            "ticket":101,"position_id":900,"magic":410600,"symbol":"XAUUSD","type":1,"entry":1,
             "time_msc":now-1_000,"volume":0.10,"price":2000.2,"profit":2.0,
             "commission":-0.35,"swap":-0.10,"fee":-0.05,"brain":"system"
         });
@@ -887,7 +889,9 @@ mod tests {
             "learning":{"trading_mode":"expert","timeframe":"M1","report_id":"","tick_size":0.01,"tick_value_loss":1.,"weight_at_entry":1.}});
         db.execute("INSERT INTO broker_commands VALUES('solo',?1,'trend','open',1,'observed',?2,?3)",params![key,cmd.to_string(),json!({"deal":1,"request":{"price":2000.,"sl":1999.}}).to_string()]).unwrap();
         let insert=|ticket:u64,entry:i64,volume:f64,profit:f64,commission:f64| {
-            db.execute("INSERT INTO broker_deals VALUES(?1,?2,90,'trend',?3)",params![key,ticket,json!({"entry":entry,"volume":volume,"profit":profit,"commission":commission,"time_msc":1000+ticket,"reason":5}).to_string()]).unwrap();
+            db.execute("INSERT INTO broker_deals VALUES(?1,?2,90,'trend',?3)",params![key,ticket,json!({"type":if entry==0{0}else{1},"entry":entry,"volume":volume,
+                "profit":profit,"commission":commission,"swap":0.0,"fee":0.0,
+                "time_msc":1000+ticket,"reason":5}).to_string()]).unwrap();
         };
         insert(1,0,0.1,0.,-0.35);insert(2,1,0.04,0.2,-0.14);
         sync_demo_broker_evidence(&db,&t).unwrap();assert!(broker_review(&db,&key).unwrap().is_empty());
@@ -927,7 +931,10 @@ mod tests {
         let source="demo-account-1/trend";
         let other="demo-account-2/trend";
         let mut add=|source:&str,id:u64,age:u64,net:f64,attr:&str|{
-            let payload=json!({"context_key":ctx,"net":net,"reward":if net<0.{-0.5}else{0.5},"attribution":attr});
+            let payload=json!({"context_key":ctx,"evidence_source":"mt5_demo_broker",
+                "gross":net,"commission":0.0,"swap":0.0,"fee":0.0,"net":net,
+                "closed_volume":1.0,"net_per_lot":net,
+                "reward":if net<0.{-0.5}else{0.5},"attribution":attr});
             db.execute("INSERT INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,'account','trend',?3,?4)",
                 params![source,id,now-age,payload.to_string()]).unwrap();
         };
@@ -1010,7 +1017,8 @@ mod tests {
             let insert=|ticket:u64,entry:i64,volume:f64,profit:f64,commission:f64,
                         swap:f64,fee:f64,stamp:u64|{
                 let v=json!({"ticket":ticket,"position_id":555,"magic":410600,
-                    "entry":entry,"time_msc":stamp,"volume":volume,
+                    "entry":entry,"type":if entry==0{0}else{1},
+                    "time_msc":stamp,"volume":volume,
                     "profit":profit,"commission":commission,"swap":swap,
                     "fee":fee,"brain":"system"});
                 db.execute("INSERT INTO broker_deals VALUES(?1,?2,555,'system',?3)",
@@ -1119,7 +1127,8 @@ mod tests {
             (801,1,1.5,-0.20,now-1_000)
         ] {
             let payload = json!({"ticket":ticket,"position_id":777,"magic":410600,
-                "entry":entry,"time_msc":stamp,"volume":0.1,"profit":profit,
+                "entry":entry,"type":if entry==0{0}else{1},
+                "time_msc":stamp,"volume":0.1,"profit":profit,
                 "commission":commission,"swap":0.0,"fee":0.0,"brain":"system"});
             db.execute(
                 "INSERT INTO broker_deals(context,ticket,position_id,brain,payload)
