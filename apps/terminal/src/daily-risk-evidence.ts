@@ -39,6 +39,11 @@ export function dailyRiskView(status:Status|null,source:unknown,now:number):Dail
     num(m.estimated_day_loss_percent)&&
     Math.abs(m.allowed_day_loss-m.estimated_day_start_balance*m.limit_percent/100)
        <=Math.max(0.01,Math.abs(m.allowed_day_loss)*1e-6));
+ // READY or BREACHED are comparisons against the actual configured budget.
+ // A mathematically inconsistent allowance must invalidate these claims;
+ // only a durable LOCKED flag survives missing/inconsistent estimate math.
+ if((state==='ready'||state==='breached')&&!trustworthy)
+  return unknown('تقرير Core فيه تعارض بين حد الخسارة والرصيد ونسبة المخاطرة');
  const known=(x:unknown):number|null=>trustworthy&&num(x)?x:null;
  const allowed=known(m.allowed_day_loss),loss=known(m.estimated_day_loss);
  // If daily breaker is disabled there is no enforced daily allowance.
