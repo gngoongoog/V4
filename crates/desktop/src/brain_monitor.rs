@@ -19,6 +19,7 @@ fn report_matches_bound_account(v:&Value,scope:&Option<String>)->bool{
         &&v["brains"].as_array().is_some_and(|brains|!brains.is_empty()))
 }
 pub(crate) fn invalidate_account_view(ui:&Dashboard){
+    ui.set_brain_monitor_busy(false);
     ui.set_brain_monitor_available(false);
     ui.set_frozen_trial_available(false);
     ui.set_brain_monitor_summary(
@@ -317,8 +318,13 @@ pub fn setup(ui:&Dashboard,bound:BoundAccountScope)->slint::Timer {
         // An action queued for an account that has since been replaced must
         // never be submitted on the wire. Core also rechecks mode/context.
         let scope_before=bound.lock().unwrap().clone();
-        if scope_before.is_none(){continue}
-        if action!="poll" && body["context"].as_str()!=scope_before.as_deref(){continue}
+        if scope_before.is_none()
+           ||(action!="poll" && body["context"].as_str()!=scope_before.as_deref()){
+            let _=weak.upgrade_in_event_loop(move |ui|{
+                invalidate_account_view(&ui);
+            });
+            continue;
+        }
         let result=(||->anyhow::Result<Value>{let c=Client::new(&data_dir())?;
             if action=="save"{c.post("/v1/execution/brain-control",body)?;}
             else if action=="freeze"||action=="stop_frozen"{c.post("/v1/execution/frozen-shadow",body)?;}
