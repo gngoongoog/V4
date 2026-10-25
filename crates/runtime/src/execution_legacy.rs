@@ -889,12 +889,34 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     if pid == 0 || d["symbol"] != t.symbol {
                         continue;
                     }
+                    // A ticket is an immutable broker receipt, not an
+                    // updatable cost estimate. INSERT OR IGNORE previously
+                    // hid conflicts in commission, fee, volume or position and
+                    // still advanced history_until_ms, leaving false net PnL.
+                    // Inspect existing tickets *before* the magic/owner lookup:
+                    // changing position IDs or attribution cannot bypass this.
+                    let stored:Option<(u64,String)>=tx.query_row(
+                        "SELECT position_id,payload FROM broker_deals WHERE context=?1 AND ticket=?2",
+                        params![key,ticket],|r|Ok((r.get(0)?,r.get(1)?))
+                    ).optional()?;
+                    if let Some((stored_pid,raw))=stored {
+                        let saved:Value=serde_json::from_str(&raw)
+                            .context("Corrupt saved broker deal receipt; sync blocked")?;
+                        let immutable=["ticket","position_id","magic","symbol","entry","type",
+                            "time_msc","volume","price","profit","commission","swap","fee"];
+                        if stored_pid!=pid || immutable.iter().any(|k|saved[*k]!=d[*k]) {
+                            bail!("Conflicting MT5 receipt for already-booked Deal ticket; history sync refused");
+                        }
+                        // Exact broker replay is idempotent. Do not rewrite
+                        // the durable original or relabel its brain.
+                        continue;
+                    }
                     let owner:Option<String>=execution::brain_for_magic(d["magic"].as_u64().unwrap_or(0)).map(str::to_string).or(tx.query_row("SELECT brain FROM broker_observations WHERE context=?1 AND position_id=?2 UNION ALL SELECT brain FROM broker_deals WHERE context=?1 AND position_id=?2 LIMIT 1",params![key,pid],|r|r.get(0)).optional()?);
                     if let Some(owner) = owner {
                         let mut d = d.clone();
                         d["brain"] = json!(owner);
                         tx.execute(
-                            "INSERT OR IGNORE INTO broker_deals VALUES(?1,?2,?3,?4,?5)",
+                            "INSERT INTO broker_deals VALUES(?1,?2,?3,?4,?5)",
                             params![key, ticket, pid, owner, d.to_string()],
                         )?;
                     }
@@ -1099,6 +1121,97 @@ mod execution_persistence_tests {
         request["until_ms"]=json!(200);
         service.route("POST","/v1/execution/sync",request.to_string().as_bytes(),&db,&status,300).unwrap();
         assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    }
+
+    #[test]
+    fn broker_deal_receipt_replays_exactly_but_refuses_changed_booked_costs() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        service.bind(&db,&t,100).unwrap();
+        let mut status=Status::default();
+        status.telemetry=Some(t);
+        status.gateway_fresh=true;
+        let deal=json!({"ticket":890,"position_id":201,"magic":410601,
+            "symbol":"XAUUSD","type":0,"entry":0,"time_msc":150,
+            "volume":0.1,"price":2000.0,"profit":1.25,
+            "commission":-0.07,"swap":0.0,"fee":0.0,"reason":3});
+        let mut req=json!({"login":17,"server":"Demo-Test","currency":"USD",
+            "trade_mode":0,"until_ms":200,"deals":[deal.clone()]});
+        service.route("POST","/v1/execution/sync",req.to_string().as_bytes(),
+            &db,&status,300).unwrap();
+        let original:String=db.query_row(
+            "SELECT payload FROM broker_deals WHERE ticket=890",[],|r|r.get(0)).unwrap();
+        req["until_ms"]=json!(220);
+        req["deals"]=json!([deal.clone(),deal.clone()]);
+        service.route("POST","/v1/execution/sync",req.to_string().as_bytes(),
+            &db,&status,320).unwrap();
+        assert_eq!(service.history_until_ms,220);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
+            [],|r|r.get::<_,u64>(0)).unwrap(),1);
+        for (field, value) in [
+            ("profit",json!(1.30)), ("commission",json!(-0.70)),
+            ("swap",json!(-0.20)), ("fee",json!(-0.01)),
+            ("volume",json!(0.2)), ("price",json!(2001.0)),
+            ("type",json!(1)), ("entry",json!(1)),
+            ("position_id",json!(202)), ("magic",json!(410602)),
+            ("time_msc",json!(151))
+        ] {
+            let mut altered=deal.clone();
+            altered[field]=value;
+            req["deals"]=json!([altered]);
+            req["until_ms"]=json!(230);
+            let rejected=service.route("POST","/v1/execution/sync",
+                req.to_string().as_bytes(),&db,&status,330);
+            assert!(rejected.is_err(),"Changed broker {field} was accepted");
+            let saved:String=db.query_row(
+                "SELECT payload FROM broker_deals WHERE ticket=890",[],|r|r.get(0)).unwrap();
+            assert_eq!(saved,original,"Replayed ticket must remain immutable");
+            assert_eq!(service.history_until_ms,220,
+                "A broker receipt conflict must not advance history cursor");
+        }
+    }
+
+    #[test]
+    fn conflicted_history_batch_is_atomic_and_does_not_save_new_deals() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let mut st=Status::default();
+        st.telemetry=Some(t);
+        st.gateway_fresh=true;
+        let first=json!({"ticket":900,"position_id":301,"magic":410601,
+            "symbol":"XAUUSD","type":0,"entry":0,"time_msc":150,
+            "volume":0.1,"price":2000.0,"profit":0.0,
+            "commission":-0.07,"swap":0.0,"fee":0.0});
+        let mut req=json!({"login":17,"server":"Demo-Test","currency":"USD",
+            "trade_mode":0,"until_ms":200,"deals":[first.clone()]});
+        svc.route("POST","/v1/execution/sync",req.to_string().as_bytes(),
+            &db,&st,300).unwrap();
+        let mut newer=first.clone();
+        newer["ticket"]=json!(901);
+        newer["position_id"]=json!(302);
+        let mut conflicting=first.clone();
+        conflicting["fee"]=json!(-99.0);
+        req["deals"]=json!([newer,conflicting]);
+        req["until_ms"]=json!(240);
+        assert!(svc.route("POST","/v1/execution/sync",req.to_string().as_bytes(),
+            &db,&st,320).is_err());
+        assert_eq!(svc.history_until_ms,200);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
+            [],|r|r.get::<_,u64>(0)).unwrap(),1,
+            "Insert of ticket 901 must rollback with ticket 900 conflict");
+        // Two contradictory receipts in one new sync batch are also rejected.
+        let mut variant=first.clone();
+        variant["ticket"]=json!(902);
+        let mut altered=variant.clone();
+        altered["commission"]=json!(-7.0);
+        req["deals"]=json!([variant,altered]);
+        assert!(svc.route("POST","/v1/execution/sync",req.to_string().as_bytes(),
+            &db,&st,321).is_err());
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
+            [],|r|r.get::<_,u64>(0)).unwrap(),1);
     }
 
     #[test]
