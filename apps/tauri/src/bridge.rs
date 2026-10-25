@@ -37,9 +37,13 @@ fn read_panel(route: String) -> Result<Value, String> {
 
 /// Pagination is read-only, even though Core exposes this specific query as
 /// POST. The renderer cannot choose a destination, method or arbitrary body.
+fn valid_trade_page(offset:u32,limit:u32)->bool{
+    offset<=1_000_000 && (1..=100).contains(&limit)
+}
+
 #[tauri::command]
 fn read_trade_history(offset: u32, limit: u32) -> Result<Value, String> {
-    if offset > 1_000_000 || !(1..=100).contains(&limit) {
+    if !valid_trade_page(offset,limit) {
         return Err("حدود تصفح سجل التداول غير صالحة".into());
     }
     open_client()?.post("/v1/execution/trades",json!({"offset":offset,"limit":limit}))
@@ -288,10 +292,11 @@ mod tests {
     #[test]
     fn journal_pagination_is_bounded_and_not_an_arbitrary_post_proxy() {
         // Core must retain the only exact destination and numeric bounds.
-        assert!(1u32<=100);
-        assert!(1_000_000u32<=1_000_000);
-        assert!(!(1..=100).contains(&0));
-        assert!(!(1..=100).contains(&101));
+        assert!(valid_trade_page(0,1));
+        assert!(valid_trade_page(1_000_000,100));
+        assert!(!valid_trade_page(1_000_001,25));
+        assert!(!valid_trade_page(0,0));
+        assert!(!valid_trade_page(0,101));
         assert!(!allowed_read_route("/v1/execution/trades?limit=999999"));
     }
 }
