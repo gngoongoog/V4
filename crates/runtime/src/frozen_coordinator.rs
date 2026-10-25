@@ -379,6 +379,9 @@ mod tests{
         let trial=freeze(&db,&t,&c,&brains,&BTreeMap::new(),
             &BTreeMap::new(),&BTreeMap::new(),123_000).unwrap();
         let id=trial["run_id"].as_str().unwrap();
+        // Simulate a genuine pre-G7 frozen run: old studies had no G7
+        // registration. Never silently re-sign an edited G7 checkpoint.
+        db.execute("DELETE FROM g7_pair_registrations WHERE run_id=?1",[id]).unwrap();
         let raw:String=db.query_row(
             "SELECT snapshot FROM frozen_coordinator_runs WHERE id=?1",
             [id],|r|r.get(0)).unwrap();
@@ -397,6 +400,8 @@ mod tests{
         observe(&db,&t,&c,&signal,&frames,241_000).unwrap();
         let r=report(&db,&context(&t),TradingMode::Expert).unwrap();
         assert_eq!(r["bars_compared"],1);
+        let receipts:i64=db.query_row("SELECT COUNT(*) FROM g7_paired_decision_evidence",[],|r|r.get(0)).unwrap();
+        assert_eq!(receipts,0,"Legacy pairs must not receive invented G7 provenance");
         assert_eq!(r["mode"],"expert");
         assert_eq!(r["no_broker_orders"],true);
     }
