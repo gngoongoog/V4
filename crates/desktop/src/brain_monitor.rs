@@ -18,6 +18,14 @@ fn report_matches_bound_account(v:&Value,scope:&Option<String>)->bool{
         &&matches!(v["trading_mode"].as_str(),Some("sniper"|"scalping"|"swing"|"expert"))
         &&v["brains"].as_array().is_some_and(|brains|!brains.is_empty()))
 }
+fn response_matches_current_core(v:&Value,status:&Status,config:&Value)->bool{
+    // Two independent round-trips make a mid-request account/mode switch
+    // observable, instead of relying solely on the rendered status or a
+    // response that was correct at the beginning of the request.
+    let scope=scope_for_status(status);
+    report_matches_bound_account(v,&scope)
+        &&config["config"]["trading"]["mode"]==v["trading_mode"]
+}
 pub(crate) fn invalidate_account_view(ui:&Dashboard){
     ui.set_brain_monitor_busy(false);
     ui.set_brain_monitor_available(false);
@@ -331,7 +339,12 @@ pub fn setup(ui:&Dashboard,bound:BoundAccountScope)->slint::Timer {
             else if action=="freeze_coordinator"||action=="stop_coordinator"{
                 c.post("/v1/execution/frozen-coordinator",body)?;
             }
-            c.get("/v1/execution/brains")})();
+            let response=c.get("/v1/execution/brains")?;
+            let status:Status=serde_json::from_value(c.get("/v1/status")?)?;
+            let config=c.get("/v1/config")?;
+            anyhow::ensure!(response_matches_current_core(&response,&status,&config),
+                "حساب MT5 أو وضع التداول تغيّر أثناء تحميل العقول؛ أعد التحديث");
+            Ok(response)})();
         let cache=cache.clone();
         let _=weak.upgrade_in_event_loop(move |ui|{
             ui.set_brain_monitor_busy(false);
@@ -380,6 +393,28 @@ mod account_switch_tests {
         stale["controls_available"]=json!(true);
         stale["trading_mode"]=json!("missing");
         assert!(!report_matches_bound_account(&stale,&first));
+    }
+    #[test]
+    fn g5h_current_core_mode_and_account_must_match_response_before_paint(){
+        let mut status=Status::default();
+        status.gateway_fresh=true;
+        status.telemetry=Some(braintrade_domain::Telemetry{
+            connected:true,login:17,server:"Demo".into(),
+            symbol:"XAUUSD".into(),currency:"USD".into(),
+            demo:true,account_trade_mode:Some(0),..Default::default()});
+        let v=json!({"context":r#"["Demo",17,"XAUUSD","USD"]"#,
+            "trading_mode":"sniper","controls_available":true,
+            "brains":[{"config":{"id":"system"}}]});
+        let config=json!({"config":{"trading":{"mode":"sniper"}}});
+        assert!(response_matches_current_core(&v,&status,&config));
+        let changed=json!({"config":{"trading":{"mode":"expert"}}});
+        assert!(!response_matches_current_core(&v,&status,&changed),
+            "Same broker account with switched mode cannot paint stale Sniper");
+        status.telemetry.as_mut().unwrap().login=18;
+        assert!(!response_matches_current_core(&v,&status,&config));
+        status.telemetry.as_mut().unwrap().login=17;
+        status.gateway_fresh=false;
+        assert!(!response_matches_current_core(&v,&status,&config));
     }
     #[test]
     fn g5h_status_requires_fresh_proven_account_not_only_old_telemetry(){
