@@ -5,6 +5,8 @@ import importlib.util
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -72,6 +74,21 @@ class G6CPortableStudies(unittest.TestCase):
             self.assertTrue(all(not r["can_register_new_study"] for r in rows))
         finally:
             db.close()
+
+    def test_g6_cli_help_under_isolated_python_path(self):
+        # The Windows Embedded Python's python313._pth omits the script dir,
+        # unlike a normal venv. -I catches forgotten sibling imports on Linux.
+        for script in (
+            "v25_g6c_list_frozen_runs.py",
+            "audit_v25_g6a_preregistered_quotes.py",
+            "audit_v25_g6b_executed_demo_arm.py",
+        ):
+            with self.subTest(script=script):
+                command=subprocess.run(
+                    [sys.executable,"-I",str(ROOT/"scripts"/script),"--help"],
+                    capture_output=True,text=True,timeout=10)
+                self.assertEqual(command.returncode,0,command.stderr)
+                self.assertIn("usage:",command.stdout.lower())
 
     def test_package_verifier_rejects_missing_study_scripts_without_python(self):
         spec=importlib.util.spec_from_file_location(
