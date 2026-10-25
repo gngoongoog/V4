@@ -55,7 +55,11 @@ class FullSystemDataflowAudit(unittest.TestCase):
         self.assertIn("brain='sniper_learner'", self.sniper)
         self.assertIn('s["sniper_target_mode"]=="adaptive"', self.sniper)
         self.assertIn('p["sniper_tp_preserved"]==true', self.sniper)
-        self.assertIn("ORDER BY closed_ms DESC", self.sniper)
+        self.assertIn("ORDER BY s.closed_ms DESC", self.sniper)
+        self.assertIn("LEFT JOIN coordinator_broker_admissions a", self.sniper)
+        self.assertIn("verified_sniper_admission(&row,&context,now)", self.sniper)
+        self.assertIn("admitted>now", self.sniper)
+        self.assertIn("payload_sha256", self.sniper)
         self.assertIn("LIMIT 2000", self.sniper)
 
     def test_executable_quote_fast_path_does_not_replace_identity_or_reconciliation(self):
