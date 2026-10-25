@@ -25,6 +25,7 @@ def stage():
     for item in ('Run-Demo-Acceptance.ps1','Run-Demo-Acceptance-GUI.ps1'):
         shutil.copy2(ROOT/'scripts'/item,DEST/'Tools'/item)
     shutil.copy2(ROOT/'docs/DEMO_ACCEPTANCE_AR.md',DEST/'DEMO_ACCEPTANCE_AR.md')
+    shutil.copy2(ROOT/'docs/v25/G2_DEMO_READINESS_PREFLIGHT_AR.md',DEST/'G2_DEMO_READINESS_AR.md')
     # P0-E: ship source + a strictly explicit operator-side MetaEditor compile
     # path. Build CI has no installed MT5 and must never claim EA .ex5 passed.
     shutil.copy2(ROOT/'scripts/Compile-Sniper-EA.cmd',DEST/'Compile-Sniper-EA.cmd')

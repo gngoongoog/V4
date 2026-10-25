@@ -17,6 +17,8 @@ REQUIRED_TOOLS = (
     "DEMO_ACCEPTANCE_AR.md",
     "runtime/python/python.exe",
     "runtime/gateway/check_runtime.py",
+    "runtime/gateway/demo_readiness.py",
+    "G2_DEMO_READINESS_AR.md",
     "runtime/gateway/execution.py",
 )
 SAFETY_CONTRACTS = {
