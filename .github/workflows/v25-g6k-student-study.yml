@@ -1,0 +1,24 @@
+name: V25 G6-K Student Study Aggregate Provenance
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/v25-g6k-student-study-provenance-gate-20261025]
+    paths:
+      - 'crates/runtime/src/student_learning.rs'
+      - '.github/workflows/v25-g6k-student-study.yml'
+  pull_request:
+    branches: [feature/v25-g6j-student-admission-training-gate-20261025]
+permissions:
+  contents: read
+jobs:
+  study-provenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Reject legacy and altered Student exit policy aggregates
+        run: cargo test --locked -p braintrade-runtime student_learning::tests -- --nocapture
+      - name: Run full domain and runtime regressions
+        run: cargo test --locked -p braintrade-domain -p braintrade-runtime
