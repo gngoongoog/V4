@@ -59,19 +59,26 @@ fn summarize(rows:&[Sample])->Value {
         "last_closed_ms":rows.last().map(|r|r.closed),
     })
 }
-fn read_sample(source:String,pos:u64,closed:u64,p:&Value)->Option<Sample>{
-    if pos==0||closed==0||p["evidence_source"]!="mt5_demo_broker"{return None}
+fn read_sample(source:String,pos:u64,closed:u64,context:&str,mode:&str,brain:&str,p:&Value)->Option<Sample>{
+    if pos==0||closed==0 ||p["context"]!=context||p["trading_mode"]!=mode
+        ||p["brain"]!=brain||p["position_id"].as_u64()!=Some(pos)
+        ||p["closed_ms"].as_u64()!=Some(closed){return None}
+    // Performance and learner weights must use the SAME broker admission
+    // contract. Financially plausible receipts with forged/missing reward or
+    // risk cannot be represented as verified learning performance.
+    let (net,net_per_lot,_reward)=
+        crate::coordinator_learning::verified_broker_feedback(p)?;
     let g=p["gross"].as_f64()?;
     let fee=p["fee"].as_f64()?;
     let swap=p["swap"].as_f64()?;
     let com=p["commission"].as_f64()?;
-    let net=p["net"].as_f64()?;
     let volume=p["closed_volume"].as_f64()?;
-    if ![g,fee,swap,com,net,volume].iter().all(|x|x.is_finite())||volume<=0.{return None}
-    let calculated=g+fee+swap+com;
-    if (calculated-net).abs()>1e-6_f64.max(net.abs()*1e-8){return None}
+    let reported_per_lot=net/volume;
+    if (reported_per_lot-net_per_lot).abs()>1e-6_f64.max(net_per_lot.abs()*1e-8){
+        return None
+    }
     Some(Sample{pos,closed,source,gross:g,cost:com+fee+swap,net,volume,
-        r:p["r_multiple"].as_f64().filter(|v|v.is_finite())})
+        r:Some(p["r_multiple"].as_f64()?)})
 }
 pub fn audit(db:&Connection,context:&str,mode:TradingMode,brain:&str)->Result<Value>{
     let mode_key=serde_json::to_value(mode)?;
@@ -83,12 +90,20 @@ pub fn audit(db:&Connection,context:&str,mode:TradingMode,brain:&str)->Result<Va
     // closed Demo samples; never attribute paper/forward samples as real fills.
     let mut stmt=db.prepare(
       "SELECT source,position_id,closed_ms,payload FROM coordinator_broker_samples
-       WHERE context=?1 AND brain=?2 AND json_extract(payload,'$.trading_mode')=?3
+       WHERE context=?1 AND brain=?2
+         AND CASE WHEN json_valid(payload)
+             THEN json_extract(payload,'$.trading_mode') ELSE NULL END=?3
        ORDER BY closed_ms DESC,position_id DESC LIMIT 240")?;
     let raw=stmt.query_map(params![context,brain,mode_key],|r|{
        Ok((r.get::<_,String>(0)?,r.get::<_,u64>(1)?,
            r.get::<_,u64>(2)?,r.get::<_,String>(3)?))
     })?.collect::<rusqlite::Result<Vec<_>>>()?;
+    // Corrupt JSON has no attestable trading mode. Count it separately in
+    // this broker context/brain, never guess its mode or break the report.
+    let malformed_unknown_mode:u64=db.query_row(
+       "SELECT COUNT(*) FROM coordinator_broker_samples
+        WHERE context=?1 AND brain=?2 AND NOT json_valid(payload)",
+       params![context,brain],|r|r.get(0))?;
     let mut records=Vec::new();
     let mut invalid=0usize;let mut duplicates=0usize;
     let mut seen=HashSet::new();let mut sources=BTreeSet::new();
@@ -98,7 +113,7 @@ pub fn audit(db:&Connection,context:&str,mode:TradingMode,brain:&str)->Result<Va
         // but those are correlated labels, not independent market outcomes.
         if !seen.insert(pos){duplicates+=1;continue}
         let parsed=serde_json::from_str::<Value>(&payload);
-        let Some(row)=parsed.ok().and_then(|v|read_sample(source,pos,closed,&v)) else{
+        let Some(row)=parsed.ok().and_then(|v|read_sample(source,pos,closed,context,mode_key,brain,&v)) else{
             invalid+=1;continue
         };
         sources.insert(row.source.clone());
@@ -124,12 +139,16 @@ pub fn audit(db:&Connection,context:&str,mode:TradingMode,brain:&str)->Result<Va
        "status":status,"warnings":warnings,
        "policy":"read_only","broker_samples":total,
        "invalid_samples":invalid,"duplicate_position_samples":duplicates,
+       "malformed_json_unknown_mode_rows":malformed_unknown_mode,
        "sample_cap":MAX_HISTORY,
        "distinct_strategy_sources":sources.len(),
        "minimum_samples_for_comparison":MIN_TOTAL,
        "recent_window":RECENT_TRADES,
        "all":all,"earlier":old,"recent":new,
-       "source":"Closed MT5 DEMO deal records; net=gross+commission+swap+fee",
+       "source":"Closed MT5 DEMO deal records with verified reward/risk and row identity; net=gross+commission+swap+fee",
+       "broker_admission_gate":"verified_broker_feedback + strict context/mode/brain/position/close identity",
+       "learning_eligible_broker_samples_only":true,
+       "legacy_unverified_samples_excluded_not_deleted":true,
        "source_scope":"bound account + symbol + trading mode + brain; strategy source revisions remain visible",
        "temporal_warning":"The recent chronological window is not independent out-of-sample: an online learner may already have used the results.",
        "no_auto_promotion":true,"no_execution_change":true,
@@ -146,8 +165,10 @@ mod tests {
     }
     fn add(db:&Connection,context:&str,mode:&str,brain:&str,source:&str,id:u64,net:f64,gross:f64){
         let payload=json!({"evidence_source":"mt5_demo_broker","trading_mode":mode,
+            "context":context,"position_id":id,"closed_ms":id*1000,"brain":brain,
             "net":net,"gross":gross,"commission":net-gross,"swap":0.,"fee":0.,"closed_volume":0.1,
-            "r_multiple":net/5.0});
+            "net_per_lot":net/0.1,"risk_money":5.0,
+            "r_multiple":net/5.0,"reward":(net/5.0).tanh()});
         db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,?3,?4,?5,?6)",
             params![source,id,context,brain,id*1000,payload.to_string()]).unwrap();
     }
@@ -178,6 +199,73 @@ mod tests {
         assert_eq!(v["all"]["gross_positive_but_net_nonpositive"],0);
         assert_eq!(v["no_auto_promotion"],true);
         assert_eq!(v["paper_and_forward_excluded"],true);
+    }
+    #[test]
+    fn g5g_report_counts_only_verified_learning_receipts_not_forged_reward_or_missing_risk(){
+        let db=setup();
+        add(&db,"A","expert","trend","policy-m5",1,2.0,2.7);
+        for (id,field) in [(2,"reward"),(3,"risk_money"),(4,"r_multiple"),
+                           (5,"net_per_lot")] {
+            let mut p=json!({"evidence_source":"mt5_demo_broker",
+                "trading_mode":"expert","context":"A","brain":"trend",
+                "position_id":id,"closed_ms":id*1000,"net":2.0,"gross":2.7,
+                "commission":-0.7,"swap":0.0,"fee":0.0,
+                "closed_volume":0.1,"net_per_lot":20.0,
+                "risk_money":5.0,"r_multiple":0.4,"reward":0.4_f64.tanh()});
+            if id==2 {p["reward"]=json!(0.99);}
+            else {p.as_object_mut().unwrap().remove(field);}
+            db.execute("INSERT INTO coordinator_broker_samples
+                VALUES('policy-m5',?1,'A','trend',?2,?3)",
+                params![id,id*1000,p.to_string()]).unwrap();
+        }
+        let view=audit(&db,"A",TradingMode::Expert,"trend").unwrap();
+        assert_eq!(view["broker_samples"],1);
+        assert_eq!(view["invalid_samples"],4);
+        assert_eq!(view["all"]["net_booked"],2.0);
+        assert_eq!(view["all"]["r_sample_count"],1);
+        assert_eq!(view["learning_eligible_broker_samples_only"],true);
+        assert_eq!(view["no_auto_promotion"],true);
+    }
+    #[test]
+    fn g5g_malformed_legacy_json_cannot_crash_quality_or_fake_samples(){
+        let db=setup();
+        add(&db,"A","expert","trend","policy-m5",1,2.0,2.7);
+        db.execute("INSERT INTO coordinator_broker_samples VALUES(
+            'broken',2,'A','trend',2000,'{invalid-json')",[]).unwrap();
+        let report=audit(&db,"A",TradingMode::Expert,"trend").unwrap();
+        assert_eq!(report["broker_samples"],1);
+        assert_eq!(report["all"]["net_booked"],2.0);
+        assert_eq!(report["malformed_json_unknown_mode_rows"],1);
+        assert_eq!(report["no_auto_promotion"],true);
+    }
+    #[test]
+    fn g5g_mismatched_broker_payload_identity_is_never_brain_performance(){
+        let db=setup();
+        add(&db,"A","expert","trend","policy-m5",1,2.0,2.7);
+        let variants=[("context",json!("B")),("brain",json!("sniper_learner")),
+            ("position_id",json!(999_u64)),("closed_ms",json!(999_u64)),
+            ("trading_mode",json!("scalping"))];
+        for (n,(field,value)) in variants.iter().enumerate(){
+            let pos=(n+2) as u64;
+            let mut p=json!({"evidence_source":"mt5_demo_broker","context":"A",
+                "trading_mode":"expert","brain":"trend","position_id":pos,
+                "closed_ms":pos*1000,"gross":2.7,"commission":-0.7,
+                "swap":0.0,"fee":0.0,"net":2.0,"closed_volume":0.1,
+                "net_per_lot":20.0,"risk_money":5.0,"r_multiple":0.4,
+                "reward":0.4_f64.tanh()});
+            p[*field]=value.clone();
+            db.execute("INSERT INTO coordinator_broker_samples VALUES(
+                'policy-m5',?1,'A','trend',?2,?3)",
+                params![pos,pos*1000,p.to_string()]).unwrap();
+        }
+        // Deliberately change an existing row after the original Demo label:
+        // a correct net cannot authorize wrong broker-attribution provenance.
+        let v=audit(&db,"A",TradingMode::Expert,"trend").unwrap();
+        assert_eq!(v["broker_samples"],1);
+        // mode-mismatched payload is excluded by the original SQL mode scope,
+        // so only 4 corrupted rows were returned for read-time rejection.
+        assert_eq!(v["invalid_samples"],4);
+        assert_eq!(v["all"]["net_booked"],2.0);
     }
     #[test]
     fn mixed_sources_and_corrupt_broker_evidence_do_not_claim_quality(){

@@ -120,8 +120,13 @@ mod tests{
     }
     fn add(db:&Connection,t:&Telemetry,mode:&str,source:&str,pos:u64,net:f64,kind:&str){
         let context=serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)).unwrap();
-        let value=json!({"evidence_source":kind,"trading_mode":mode,"gross":net+0.70,
-            "commission":-0.70,"swap":0.0,"fee":0.0,"net":net,"closed_volume":0.1});
+        let value=json!({"evidence_source":kind,"trading_mode":mode,
+            "context":context,"brain":"system","position_id":pos,
+            "closed_ms":pos*1000,"gross":net+0.70,
+            "commission":-0.70,"swap":0.0,"fee":0.0,"net":net,
+            "closed_volume":0.1,"net_per_lot":net/0.1,
+            "risk_money":5.0,"r_multiple":net/5.0,
+            "reward":(net/5.0).tanh()});
         db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,?3,'system',?4,?5)",
             params![source,pos,context,pos*1000,value.to_string()]).unwrap();
     }

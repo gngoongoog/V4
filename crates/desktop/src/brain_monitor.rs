@@ -10,7 +10,7 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
     let rows=v["brains"].as_array();
     let mut overview=String::new();
     for b in rows.into_iter().flatten() {
-        overview.push_str(&format!("{} | إشارات {} | دخول منسوب {} / تعبئة مؤكدة {} | تدريب مغلق {} / رابح {} | تقييم Demo مغلق {} ({}؛ لا يرقي تلقائياً)\n",
+        overview.push_str(&format!("{} | إشارات {} | دخول منسوب {} / تعبئة مؤكدة {} | تدريب مغلق {} / رابح {} | عينات Demo مؤهلة للتعلّم {} ({}؛ لا يرقي تلقائياً)\n",
             b["name"].as_str().unwrap_or("—"),b["activity"]["signals"],
             b["attributed_orders"]["requested"],b["attributed_orders"]["fill_acknowledged"],
             b["paper_stats"]["closed"],b["paper_stats"]["wins"],
@@ -56,9 +56,9 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
         _=>"تقييم غير متاح",
     };
     detail.push_str(&format!(
-        "\n\nتدقيق جودة التعلّم — صفقات MT5 Demo مغلقة فقط، وليس Paper/Shadow:\n{}\nعينات صالحة {} | مستبعدة {} | تكرارات متقاطعة {} | مصادر استراتيجية {}\nالجزء الأقدم: {} صفقة | متوسط صافي/لوت {} | معدل ربح بعد التكلفة {}\nآخر {} صفقات: {} صفقة | متوسط صافي/لوت {} | معدل ربح بعد التكلفة {}\nالإجمالي: صافي محقق {} | عمولات ورسوم وسواب {} | صفقات محا الربحَ فيها أثرُ التكلفة {}\nالجزء الأخير مراقبة زمنية وليس اختبار OOS مستقلاً؛ قد يكون العقل تعلّم من هذه الصفقات بالفعل. لا يوجد تعديل آلي للأوزان أو الموافقة على تنفيذ جديد بهذه الصفحة.",
+        "\n\nتدقيق جودة التعلّم — عينات MT5 Demo مغلقة اجتازت فحص الربح والمكافأة وهوية الصفقة، وليس Paper/Shadow:\n{}\nعينات مؤهلة {} | مستبعدة {} | JSON غير موثوق بوضع مجهول {} | مكررة {} | مصادر استراتيجية {}\nالجزء الأقدم: {} صفقة | متوسط صافي/لوت {} | معدل ربح بعد التكلفة {}\nآخر {} صفقات: {} صفقة | متوسط صافي/لوت {} | معدل ربح بعد التكلفة {}\nضمن العينات المؤهلة فقط: صافي MT5 Demo المسجل {} | عمولات ورسوم وسواب {} | صفقات محا الربحَ فيها أثرُ التكلفة {}\nالجزء الأخير مراقبة زمنية وليس اختبار OOS مستقلاً؛ قد يكون العقل تعلّم من هذه الصفقات بالفعل. لا يوجد تعديل آلي للأوزان أو الموافقة على تنفيذ جديد بهذه الصفحة.",
         description,
-        q["broker_samples"],q["invalid_samples"],q["duplicate_position_samples"],q["distinct_strategy_sources"],
+        q["broker_samples"],q["invalid_samples"],q["malformed_json_unknown_mode_rows"],q["duplicate_position_samples"],q["distinct_strategy_sources"],
         q["earlier"]["samples"],maybe_number(&q["earlier"]["mean_net_per_lot"]),
         q["earlier"]["win_rate"].as_f64().map(|v|format!("{:.1}%",v*100.)).unwrap_or_else(||"—".into()),
         q["recent_window"],q["recent"]["samples"],maybe_number(&q["recent"]["mean_net_per_lot"]),
@@ -127,9 +127,10 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
             }
             let quality=&b["sniper_policy_quality"];
             detail.push_str(&format!(
-                "\n\nتقييم أساليب القناص من صفقات MT5 Demo المغلقة فقط:\nمراكز مكتملة {} | مرفوضة/غير منسوبة {} | مكررة {} | مجموعات بحسب الأسلوب وحالة السوق وإصدار السياسة {}\nالنتائج وصفية للمراقبة فقط؛ آخر الصفقات ليست اختباراً مستقلاً، ولا يوجد اعتماد تلقائي لأسلوب جديد.",
+                "\n\nتقييم أساليب القناص من صفقات MT5 Demo المغلقة فقط:\nمراكز Demo مؤهلة {} | مرفوضة/غير منسوبة {} | JSON غير موثوق بوضع مجهول {} | مكررة {} | مجموعات بحسب الأسلوب وحالة السوق وإصدار السياسة {}\nالنتائج وصفية للمراقبة فقط؛ آخر الصفقات ليست اختباراً مستقلاً، ولا يوجد اعتماد تلقائي لأسلوب جديد.",
                 quality["closed_demo_positions"],
                 quality["invalid_or_unattributed_samples"],
+                quality["malformed_json_unknown_mode_rows"],
                 quality["duplicate_position_samples"],
                 quality["distinct_policy_regime_definition_groups"]
             ));

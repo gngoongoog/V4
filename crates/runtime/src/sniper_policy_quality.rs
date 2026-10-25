@@ -54,8 +54,9 @@ fn bounded_key(v:&Value)->Option<String>{
     let name=v.as_str()?;
     if name.is_empty()||name.len()>256||name.chars().any(|c|c.is_control()){None}else{Some(name.to_owned())}
 }
-fn read(pos:u64,closed:u64,v:&Value)->Option<(String,String,String,Entry)>{
-    if pos==0||closed==0||v["evidence_source"]!="mt5_demo_broker"
+fn read(pos:u64,closed:u64,context:&str,v:&Value)->Option<(String,String,String,Entry)>{
+    if pos==0||closed==0||v["context"]!=context
+       ||v["evidence_source"]!="mt5_demo_broker"
        ||v["trading_mode"]!="sniper"
        ||v["brain"]!="sniper_learner"
        ||v["selection"]["brain"]!="sniper_learner"
@@ -66,17 +67,22 @@ fn read(pos:u64,closed:u64,v:&Value)->Option<(String,String,String,Entry)>{
     if !matches!(policy.as_str(),"impulse"|"rebound"){return None;}
     let definition=bounded_key(&v["selection"]["sniper_definition"])?;
     let regime=bounded_key(&v["selection"]["sniper_regime"])?;
+    // Match the actual Sniper/Coordinator training admission gate.
+    // A financial sum alone does not attest that stored reward/R came from
+    // the booked broker net and the frozen risk at entry.
+    let (net,net_per_lot,_reward)=
+        crate::coordinator_learning::verified_broker_feedback(v)?;
     let volume=positive(&v["closed_volume"])?;
     let gross=finite(&v["gross"])?;
     let commission=finite(&v["commission"])?;
     let swap=finite(&v["swap"])?;
     let fee=finite(&v["fee"])?;
-    let net=finite(&v["net"])?;
-    let expected=gross+commission+swap+fee;
-    if !expected.is_finite() || (expected-net).abs()>1e-6_f64.max(net.abs()*1e-8){return None;}
+    if (net/volume-net_per_lot).abs()>1e-6_f64.max(net_per_lot.abs()*1e-8){
+        return None;
+    }
     let e=Entry{position:pos,closed,net,gross,volume,
         cost:commission+swap+fee,
-        r:finite(&v["r_multiple"])};
+        r:Some(finite(&v["r_multiple"])?)};
     Some((definition,regime,policy,e))
 }
 pub fn report(db:&Connection,context:&str)->Result<Value>{
@@ -85,13 +91,19 @@ pub fn report(db:&Connection,context:&str)->Result<Value>{
     let mut stmt=db.prepare(
         "SELECT source,position_id,closed_ms,payload FROM coordinator_broker_samples
          WHERE context=?1 AND brain='sniper_learner'
-           AND json_extract(payload,'$.trading_mode')='sniper'
+           AND CASE WHEN json_valid(payload)
+             THEN json_extract(payload,'$.trading_mode') ELSE NULL END='sniper'
          ORDER BY closed_ms DESC,position_id DESC LIMIT ?2")?;
     let data=stmt.query_map(params![context,MAX_RECENT],
         |r|Ok((r.get::<_,String>(0)?,r.get::<_,u64>(1)?,
             r.get::<_,u64>(2)?,r.get::<_,String>(3)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let scanned=data.len();
+    // Mode cannot be safely inferred from a corrupt legacy JSON receipt.
+    let malformed_unknown_mode:u64=db.query_row(
+        "SELECT COUNT(*) FROM coordinator_broker_samples
+         WHERE context=?1 AND brain='sniper_learner' AND NOT json_valid(payload)",
+        [context],|r|r.get(0))?;
     let mut groups=BTreeMap::<(String,String,String),Group>::new();
     let mut seen=HashSet::<u64>::new();
     let mut duplicate=0usize;let mut invalid=0usize;
@@ -101,7 +113,7 @@ pub fn report(db:&Connection,context:&str)->Result<Value>{
         if !seen.insert(pos){duplicate+=1;continue;}
         let parsed=serde_json::from_str::<Value>(&raw);
         let Some((definition,regime,policy,sample))=
-            parsed.ok().and_then(|v|read(pos,closed,&v)) else {invalid+=1;continue;};
+            parsed.ok().and_then(|v|read(pos,closed,context,&v)) else {invalid+=1;continue;};
         groups.entry((definition,regime,policy)).or_default().positions.push(sample);
     }
     let count:usize=groups.values().map(|g|g.positions.len()).sum();
@@ -143,13 +155,17 @@ pub fn report(db:&Connection,context:&str)->Result<Value>{
     Ok(json!({
         "status":if !any_group_descriptive{"insufficient_closed_demo_evidence"}
             else{"descriptive_broker_outcome_monitor_only"},
-        "source":"coordinator_broker_samples: MT5 Demo closed reconciled positions",
+        "source":"coordinator_broker_samples: MT5 Demo closed positions with audited learner reward/risk",
+        "broker_admission_gate":"verified_broker_feedback + exact account/context/position/close identity",
+        "learning_eligible_broker_samples_only":true,
+        "legacy_unverified_samples_excluded_not_deleted":true,
         "policy":"sniper_policy_demo_quality_v1",
         "account_scoped":true,
         "mode_scoped":"sniper",
         "sample_cap":MAX_RECENT,"sampled_rows":scanned,
         "closed_demo_positions":count,
         "invalid_or_unattributed_samples":invalid,
+        "malformed_json_unknown_mode_rows":malformed_unknown_mode,
         "duplicate_position_samples":duplicate,
         "distinct_definitions":unique_definitions,
         "distinct_policy_regime_definition_groups":group_count,
@@ -173,10 +189,12 @@ mod tests {
             brain TEXT NOT NULL,closed_ms INTEGER NOT NULL,payload TEXT NOT NULL);").unwrap();d
     }
     fn add(d:&Connection,ctx:&str,pos:u64,policy:&str,definition:&str,regime:&str,net:f64,source:&str){
-        let p=json!({"evidence_source":source,"trading_mode":"sniper",
+        let p=json!({"evidence_source":source,"context":ctx,"trading_mode":"sniper",
             "brain":"sniper_learner","position_id":pos,"closed_ms":pos*1000,
             "gross":net+0.70,"commission":-0.70,"fee":0.0,"swap":0.0,
-            "net":net,"closed_volume":0.10,
+            "net":net,"net_per_lot":net/0.10,"closed_volume":0.10,
+            "risk_money":5.0,"r_multiple":net/5.0,
+            "reward":(net/5.0).tanh(),
             "selection":{"brain":"sniper_learner","policy":"sniper-ticks-v1",
               "sniper_policy":policy,"sniper_definition":definition,"sniper_regime":regime}});
         d.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,?3,'sniper_learner',?4,?5)",
@@ -219,6 +237,66 @@ mod tests {
         assert_eq!(r["duplicate_position_samples"],1);
         assert_eq!(r["invalid_or_unattributed_samples"],1);
         assert_eq!(r["closed_demo_positions"],1);
+    }
+    #[test]
+    fn g5g_sniper_scorecard_rejects_reward_poisoning_and_missing_risk(){
+        let d=db();
+        add(&d,"a",1,"impulse","v1","trending",2.0,"mt5_demo_broker");
+        for (pos,variant) in [(2,"reward"),(3,"risk"),(4,"r"),(5,"volume")] {
+            let mut p=json!({"evidence_source":"mt5_demo_broker",
+                "trading_mode":"sniper","brain":"sniper_learner",
+                "position_id":pos,"closed_ms":pos*1000,
+                "gross":2.7,"commission":-0.7,"swap":0.0,"fee":0.0,
+                "net":2.0,"net_per_lot":20.0,"closed_volume":0.1,
+                "risk_money":5.0,"r_multiple":0.4,"reward":0.4_f64.tanh(),
+                "selection":{"brain":"sniper_learner","policy":"sniper-ticks-v1",
+                    "sniper_policy":"impulse","sniper_definition":"v1",
+                    "sniper_regime":"trending"}});
+            match variant {
+                "reward"=>p["reward"]=json!(0.99),
+                "risk"=>{p.as_object_mut().unwrap().remove("risk_money");},
+                "r"=>p["r_multiple"]=json!(-7.0),
+                "volume"=>p["net_per_lot"]=json!(999.0),
+                _=>unreachable!()
+            }
+            d.execute("INSERT INTO coordinator_broker_samples
+                VALUES(?1,?2,'a','sniper_learner',?3,?4)",
+                params![format!("bad-{pos}"),pos,pos*1000,p.to_string()]).unwrap();
+        }
+        let report=report(&d,"a").unwrap();
+        assert_eq!(report["sampled_rows"],5);
+        assert_eq!(report["closed_demo_positions"],1);
+        assert_eq!(report["invalid_or_unattributed_samples"],4);
+        assert_eq!(report["groups"][0]["all"]["samples"],1);
+        assert_eq!(report["groups"][0]["all"]["net_booked"],2.0);
+        assert_eq!(report["learning_eligible_broker_samples_only"],true);
+        assert_eq!(report["promotion_authorized"],false);
+    }
+    #[test]
+    fn g5g_sniper_corrupt_json_is_excluded_without_aborting_other_brains(){
+        let db=db();
+        add(&db,"a",1,"impulse","v1","trending",2.0,"mt5_demo_broker");
+        db.execute("INSERT INTO coordinator_broker_samples VALUES(
+            'bad-json',500,'a','sniper_learner',500000,'{not-json')",[]).unwrap();
+        let result=report(&db,"a").unwrap();
+        assert_eq!(result["closed_demo_positions"],1);
+        assert_eq!(result["malformed_json_unknown_mode_rows"],1);
+        assert_eq!(result["groups"][0]["all"]["net_booked"],2.0);
+        assert_eq!(result["promotion_authorized"],false);
+    }
+    #[test]
+    fn g5g_sniper_rejects_cross_account_payload_with_correct_broker_net(){
+        let d=db();
+        add(&d,"a",1,"impulse","v1","trending",2.0,"mt5_demo_broker");
+        add(&d,"a",2,"impulse","v1","trending",2.0,"mt5_demo_broker");
+        d.execute("UPDATE coordinator_broker_samples SET
+            payload=json_set(payload,'$.context','other-account')
+            WHERE position_id=2",[]).unwrap();
+        let result=report(&d,"a").unwrap();
+        assert_eq!(result["closed_demo_positions"],1);
+        assert_eq!(result["invalid_or_unattributed_samples"],1);
+        assert_eq!(result["groups"][0]["all"]["net_booked"],2.0);
+        assert_eq!(result["promotion_authorized"],false);
     }
     #[test]
     fn cost_drag_and_recent_deterioration_are_not_certified_edge(){
