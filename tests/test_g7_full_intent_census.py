@@ -74,7 +74,7 @@ class G7CensusTests(unittest.TestCase):
         db,a=make_db()
         with db:
             add_command(db,a)
-            add_extra(db,"sniper","sniper",at=244000)
+            add_extra(db,"sniper",mode="sniper",at=244000)
             add_extra(db,"other-brain",brain="generated",at=244001)
             r=audit(db,now_ms=260000)
             self.assertEqual(r["all_open_intents_in_registered_accounts"],3)
