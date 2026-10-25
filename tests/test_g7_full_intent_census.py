@@ -113,6 +113,48 @@ class G7CensusTests(unittest.TestCase):
             self.assertEqual(r["anomalies"]["unmatched_eligible_demo_open_intent"],1)
             self.assertEqual(r["status"],"inconclusive")
 
+    def test_conflicting_command_mode_and_learning_mode_is_anomaly(self):
+        db,a=make_db()
+        with db:
+            add_command(db,a)
+            add_extra(db,"mode-disagreement")
+            raw=db.execute("SELECT payload FROM broker_commands WHERE id='mode-disagreement'").fetchone()[0]
+            cmd=json.loads(raw)
+            cmd["trading_mode"]="swing"
+            db.execute("UPDATE broker_commands SET payload=? WHERE id='mode-disagreement'",
+                       (as_json(cmd),))
+            r=audit(db,now_ms=260000)
+            self.assertEqual(r["anomalies"]["invalid_open_intent_identity"],1)
+            self.assertFalse(r["local_command_census_complete"])
+
+    def test_orphan_postcohort_broker_label_cannot_be_ignored(self):
+        db,a=make_db()
+        with db:
+            add_command(db,a)
+            add_closed(db)
+            original=db.execute("SELECT source,closed_ms,payload FROM coordinator_broker_samples").fetchone()
+            label=json.loads(original["payload"])
+            label["position_id"]=901
+            label["open_command_id"]="unrelated"
+            db.execute(
+                "INSERT INTO coordinator_broker_samples VALUES (?,?,?,?,?,?)",
+                (original["source"],901,CTX,"system",original["closed_ms"],as_json(label)))
+            r=audit(db,now_ms=260000)
+            self.assertEqual(r["locally_verified_full_demo_closes"],1)
+            self.assertEqual(r["anomalies"]["post_cohort_broker_label_without_g7_link"],1)
+            self.assertFalse(r["local_command_census_complete"])
+
+    def test_cancelled_intent_not_converted_to_broker_loss_or_win(self):
+        db,a=make_db()
+        with db:
+            add_command(db,a,state="cancelled")
+            r=audit(db,now_ms=260000)
+            self.assertEqual(r["eligible_system_demo_open_intents"],1)
+            self.assertEqual(r["exactly_linked_open_intents"],1)
+            self.assertEqual(r["counts"]["matched_not_executed"],1)
+            self.assertEqual(r["locally_verified_full_demo_closes"],0)
+            self.assertIsNone(r["g7b_broker_booked_net_for_verified_closes_only"])
+
     def test_corrupted_pair_fails_before_census(self):
         db,a=make_db()
         with db:
