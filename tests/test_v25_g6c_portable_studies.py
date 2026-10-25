@@ -83,6 +83,7 @@ class G6CPortableStudies(unittest.TestCase):
             "audit_v25_g6a_preregistered_quotes.py",
             "audit_v25_g6b_executed_demo_arm.py",
             "audit_v25_g6d_causal_learning_evidence.py",
+            "audit_v25_g6e_frozen_policy_cutoff.py",
         ):
             with self.subTest(script=script):
                 command=subprocess.run(
