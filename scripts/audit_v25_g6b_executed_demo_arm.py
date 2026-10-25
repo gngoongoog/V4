@@ -71,9 +71,17 @@ def _verified_full_broker_deals(db: sqlite3.Connection, context: str,
     ).fetchall()
     if not records:
         raise ValueError("broker_deal_history_missing")
+    try:
+        scoped = json.loads(context)
+        expected_symbol = scoped[2] if len(scoped) == 4 else None
+    except (ValueError, TypeError, IndexError):
+        expected_symbol = None
+    if not isinstance(expected_symbol, str) or not expected_symbol:
+        raise ValueError("invalid_broker_account_symbol_context")
     opened = closed = 0.0
     sums = [0.0] * 4
     latest_exit = 0
+    first_entry_time = None
     found_entry_ticket = False
     for record in records:
         try:
@@ -82,6 +90,7 @@ def _verified_full_broker_deals(db: sqlite3.Connection, context: str,
             raise ValueError("broker_deal_corrupt_json") from None
         if (not isinstance(d, dict) or d.get("position_id") != position_id
                 or d.get("ticket") != record["ticket"]
+                or d.get("symbol") != expected_symbol
                 or type(d.get("type")) is not int or d["type"] not in (0, 1)
                 or type(d.get("entry")) is not int or d["entry"] not in (0, 1, 3)):
             raise ValueError("broker_deal_geometry_unknown")
@@ -95,14 +104,21 @@ def _verified_full_broker_deals(db: sqlite3.Connection, context: str,
                 raise ValueError("nonfinite_broker_booked_component")
         if d["entry"] == 0:
             opened += volume
+            first_entry_time = timestamp if first_entry_time is None else min(
+                timestamp, first_entry_time)
             if record["ticket"] == open_deal:
                 found_entry_ticket = True
         else:
             closed += volume
             latest_exit = max(latest_exit, timestamp)
+    # Rust trade_journal::fully_closed_by_deals uses this stricter geometry,
+    # NOT a $-oriented 1e-6 tolerance for sublot accounting.
+    exact_full_close = abs(opened-closed) <= opened * 1e-7 + 1e-8
+    exact_receipt_volume = abs(closed-_finite(receipt.get("closed_volume"))) <= (
+        closed * 1e-7 + 1e-8)
     if (not found_entry_ticket or opened <= 0 or closed <= 0
-            or not _equal(opened, closed)
-            or not _equal(closed, _finite(receipt.get("closed_volume")))
+            or not exact_full_close or not exact_receipt_volume
+            or first_entry_time is None or latest_exit <= first_entry_time
             or latest_exit != closed_ms):
         raise ValueError("broker_entry_exit_not_fully_reconciled")
     expected_net = sum(sums)
