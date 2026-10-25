@@ -26,7 +26,7 @@ ASSETS = [
      "sha256": "b0544343a702fa80c95ad5d3d608ea3599dd54d4632df855e4c8d24eb6ecfa1c", "destination": "runtime/python/Lib/site-packages"},
 ]
 SYSTEM_DLLS = set("""advapi32 avrt bcrypt bcryptprimitives cfgmgr32 comctl32 comdlg32 crypt32 cryptbase cryptsp d2d1 d3d11 d3d12 dcomp dbghelp dhcpcsvc dnsapi dwmapi dwrite dxgi gdi32 gdiplus hid imm32 iphlpapi kernel32 kernelbase msimg32 msvcrt ncrypt normaliz ntdll ole32 oleacc oleaut32 opengl32 powrprof propsys psapi rpcrt4 secur32 setupapi shell32 shlwapi user32 userenv usp10 uxtheme version windowscodecs winhttp wininet winmm winscard winspool wintrust ws2_32 wtsapi32 ucrtbase mswsock ntmarta shcore combase netapi32 sensapi wldap32""".split())
-GATEWAY_FILES = ("mt5_gateway.py", "studio_feed.py", "execution.py", "check_runtime.py", "sniper_native.py", "institutional_controls.py", "transport.py", "strategy_lab.py")
+GATEWAY_FILES = ("mt5_gateway.py", "studio_feed.py", "execution.py", "check_runtime.py", "demo_readiness.py", "sniper_native.py", "institutional_controls.py", "transport.py", "strategy_lab.py")
 NATIVE_EA = "BrainTradeSniperBridge.mq5"
 OPERATOR_POWERSHELL = "Run-Demo-Acceptance.ps1"
 OPERATOR_GUI = "Run-Demo-Acceptance-GUI.ps1"
