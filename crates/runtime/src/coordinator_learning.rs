@@ -285,11 +285,51 @@ fn verified_broker_row(source:&str,stored_context:&str,stored_brain:&str,
     verified_broker_feedback(p)
 }
 
+// G6-H: closed_ms is a broker fact, NOT when Core first learned the
+// position outcome. Only same-transaction G6-G admissions can alter a
+// Coordinator weight or its contextual-loss memory. Historic unadmitted
+// rows remain in SQLite, but cannot be retroactively certified as training.
+struct BrokerAdmission {
+    context:Option<String>, brain:Option<String>, closed:Option<i64>,
+    admitted:Option<i64>, hash:Option<String>, protocol:Option<String>,
+}
+fn verified_admission(source:&str,ctx:&str,brain:&str,pos:u64,closed:u64,
+    raw:&str,now:u64,a:&BrokerAdmission)->bool {
+    let _=source;
+    let _=pos;
+    let (Some(admitted),Some(admitted_closed))=(
+        a.admitted.and_then(|v|u64::try_from(v).ok()),
+        a.closed.and_then(|v|u64::try_from(v).ok())
+    )else{return false;};
+    admitted>=closed && admitted<=now && admitted_closed==closed
+        && a.context.as_deref()==Some(ctx)
+        && a.brain.as_deref()==Some(brain)
+        && a.protocol.as_deref()==Some("g6g-runtime-same-transaction-v1")
+        && a.hash.as_deref()==Some(format!("{:x}",Sha256::digest(raw.as_bytes())).as_str())
+}
+
 fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<Stats>{
-    let mut st=db.prepare("SELECT context,brain,position_id,closed_ms,payload FROM coordinator_broker_samples WHERE source=?1 ORDER BY closed_ms DESC LIMIT 4000")?;
-    let rows=st.query_map([source],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?,r.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut st=db.prepare(
+        "SELECT s.context,s.brain,s.position_id,s.closed_ms,s.payload,
+            a.context,a.brain,a.closed_ms,a.admitted_ms,a.payload_sha256,a.protocol
+         FROM coordinator_broker_samples s
+         LEFT JOIN coordinator_broker_admissions a
+            ON a.source=s.source AND a.position_id=s.position_id
+         WHERE s.source=?1 ORDER BY s.closed_ms DESC LIMIT 4000")?;
+    let rows=st.query_map([source],|r|Ok((
+        r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,
+        r.get::<_,i64>(3)?,r.get::<_,String>(4)?,
+        BrokerAdmission{
+            context:r.get::<_,Option<String>>(5).unwrap_or(None),
+            brain:r.get::<_,Option<String>>(6).unwrap_or(None),
+            closed:r.get::<_,Option<i64>>(7).unwrap_or(None),
+            admitted:r.get::<_,Option<i64>>(8).unwrap_or(None),
+            hash:r.get::<_,Option<String>>(9).unwrap_or(None),
+            protocol:r.get::<_,Option<String>>(10).unwrap_or(None)
+        }
+    )))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let(mut samples,mut wins,mut weighted_wins,mut weighted_net,mut weighted_reward,mut effective)=(0u64,0u64,0.,0.,0.,0.);
-    for(stored_context,stored_brain,signed_pos,signed_ts,raw)in rows{
+    for(stored_context,stored_brain,signed_pos,signed_ts,raw,admission)in rows{
         // SQLite may contain legacy negative identifiers/timestamps. A single
         // broken row must be ignored, never abort the live training cycle.
         let (Ok(pos),Ok(ts))=(u64::try_from(signed_pos),u64::try_from(signed_ts))
@@ -299,7 +339,8 @@ fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<
         if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}
         let Some((_,net_per_lot,reward))=verified_broker_row(
             source,&stored_context,&stored_brain,pos,ts,&p) else{continue;};
-        if ts==0||ts>now {continue;}
+        if ts==0||ts>now || !verified_admission(source,&stored_context,
+            &stored_brain,pos,ts,&raw,now,&admission) {continue;}
         let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);
         samples+=1;
         if net_per_lot>0.{wins+=1;weighted_wins+=w;}
@@ -313,20 +354,38 @@ fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<
 // in coordinator_broker_samples. An observed loss is not proof that the strategy
 // caused the market move. The response is a temporary, bounded preference shift.
 fn contextual_stats(db:&Connection,source:&str,key:&str,now:u64)->Result<(u64,f64,f64,u64,f64)> {
-    let mut st=db.prepare("SELECT context,brain,position_id,closed_ms,payload FROM coordinator_broker_samples WHERE source=?1 ORDER BY closed_ms DESC,position_id DESC LIMIT 4000")?;
-    let rows=st.query_map([source],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?,r.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut st=db.prepare(
+        "SELECT s.context,s.brain,s.position_id,s.closed_ms,s.payload,
+            a.context,a.brain,a.closed_ms,a.admitted_ms,a.payload_sha256,a.protocol
+         FROM coordinator_broker_samples s
+         LEFT JOIN coordinator_broker_admissions a
+            ON a.source=s.source AND a.position_id=s.position_id
+         WHERE s.source=?1 ORDER BY s.closed_ms DESC,s.position_id DESC LIMIT 4000")?;
+    let rows=st.query_map([source],|r|Ok((
+        r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,
+        r.get::<_,i64>(3)?,r.get::<_,String>(4)?,
+        BrokerAdmission{
+            context:r.get::<_,Option<String>>(5).unwrap_or(None),
+            brain:r.get::<_,Option<String>>(6).unwrap_or(None),
+            closed:r.get::<_,Option<i64>>(7).unwrap_or(None),
+            admitted:r.get::<_,Option<i64>>(8).unwrap_or(None),
+            hash:r.get::<_,Option<String>>(9).unwrap_or(None),
+            protocol:r.get::<_,Option<String>>(10).unwrap_or(None)
+        }
+    )))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let(mut count,mut sum,mut mass)=(0u64,0.,0.);
     let(mut recent_loss_streak,mut recent_cost_losses)=(0u64,0u64);
     let mut streak_unbroken=true;
     const MEMORY_HORIZON_MS:u64=14*24*60*60*1000;
-    for(stored_context,stored_brain,signed_pos,signed_ts,raw) in rows {
+    for(stored_context,stored_brain,signed_pos,signed_ts,raw,admission) in rows {
         let (Ok(pos),Ok(ts))=(u64::try_from(signed_pos),u64::try_from(signed_ts))
             else {continue;};
         let Ok(p)=serde_json::from_str::<Value>(&raw) else{continue;};
         if p["context_key"].as_str()!=Some(key){continue;}
         let Some((net,_,reward))=verified_broker_row(
             source,&stored_context,&stored_brain,pos,ts,&p) else {continue;};
-        if ts==0||ts>now {continue;}
+        if ts==0||ts>now || !verified_admission(source,&stored_context,
+            &stored_brain,pos,ts,&raw,now,&admission) {continue;}
         {
             let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);
             count+=1;sum+=reward*w;mass+=w;
@@ -826,6 +885,26 @@ impl Learner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Synthetic test helper: stamp receipts as if Core inserted their first
+    // admission in the same SQLite transaction. Never used by production.
+    fn stamp_test_samples(db:&Connection,source:&str,now:u64) {
+        let mut st=db.prepare("SELECT position_id,context,brain,closed_ms,payload
+             FROM coordinator_broker_samples WHERE source=?1").unwrap();
+        let rows=st.query_map([source],|r|Ok((
+            r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,
+            r.get::<_,i64>(3)?,r.get::<_,String>(4)?
+        ))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+        drop(st);
+        for(pos,ctx,brain,close,raw) in rows {
+            if pos<=0||close<=0||close as u64>now {continue;}
+            let hash=format!("{:x}",Sha256::digest(raw.as_bytes()));
+            db.execute("INSERT OR IGNORE INTO coordinator_broker_admissions
+                (source,position_id,context,brain,closed_ms,admitted_ms,payload_sha256,protocol)
+                VALUES(?1,?2,?3,?4,?5,?6,?7,'g6g-runtime-same-transaction-v1')",
+                params![source,pos,ctx,brain,close,now,hash]).unwrap();
+        }
+    }
     use braintrade_domain::Candle;
 
     #[test]
@@ -943,6 +1022,8 @@ mod tests {
                     "risk_money":0.0,"r_multiple":0.0,
                     "reward":reward_v2(reward,0.0).1}).to_string()]).unwrap();
         }
+        stamp_test_samples(&db,&same,1000);
+        stamp_test_samples(&db,&other,1000);
         let (n,reward,confidence,streak,penalty)=contextual_stats(&db,&same,"trend_up_normal|london|tight",1000).unwrap();
         assert_eq!(n,1);assert_eq!(reward,0.25);assert!(confidence>0. && confidence<0.2);
         assert_eq!(streak,0);assert_eq!(penalty,0.);
@@ -1280,6 +1361,7 @@ mod tests {
                 (source,position_id,context,brain,closed_ms,payload)
                 VALUES(?1,10,'demo','trend',?2,?3)",
                 params![source,now-500,valid.to_string()]).unwrap();
+        stamp_test_samples(&db,source,now);
         let updated=broker_stats(&db,source,None,now).unwrap();
         assert_eq!(updated.samples,1);
         assert!((updated.mean_net_per_lot-15.0).abs()<1e-6);
@@ -1348,8 +1430,30 @@ mod tests {
             (source,position_id,context,brain,closed_ms,payload)
             VALUES(?1,90,'account-a','trend',?2,?3)",
             params![&source,now-500,real.to_string()]).unwrap();
+        // A booked Broker receipt without a first Core admission timestamp
+        // is historical/unknown, never proof available during this decision.
+        assert_eq!(broker_stats(&db,&source,None,now).unwrap().samples,0);
+        assert_eq!(contextual_stats(&db,&source,ctx,now).unwrap().0,0);
+        stamp_test_samples(&db,&source,now);
+        assert_eq!(broker_stats(&db,&source,None,now-1).unwrap().samples,0,
+            "The close occurred earlier but the receipt was not admitted until now");
+        assert_eq!(contextual_stats(&db,&source,ctx,now-1).unwrap().0,0);
         assert_eq!(broker_stats(&db,&source,None,now).unwrap().samples,1);
         assert_eq!(contextual_stats(&db,&source,ctx,now).unwrap().0,1);
+        db.execute("UPDATE coordinator_broker_samples
+            SET payload=json_set(payload,'$.net',10000)
+            WHERE source=?1 AND position_id=90",[&source]).unwrap();
+        assert_eq!(broker_stats(&db,&source,None,now).unwrap().samples,0,
+            "Any changed stored receipt must fail its original admission hash");
+        assert_eq!(contextual_stats(&db,&source,ctx,now).unwrap().0,0);
+        // A database file can contain SQLite type-corrupt clock fields. They
+        // must fail CLOSED without taking down the trading learning cycle.
+        db.execute("UPDATE coordinator_broker_samples SET payload=?1 WHERE source=?2 AND position_id=90",
+            params![real.to_string(),&source]).unwrap();
+        db.execute("UPDATE coordinator_broker_admissions SET admitted_ms='invalid-clock'
+            WHERE source=?1 AND position_id=90",[&source]).unwrap();
+        assert_eq!(broker_stats(&db,&source,None,now).unwrap().samples,0);
+        assert_eq!(contextual_stats(&db,&source,ctx,now).unwrap().0,0);
         assert_eq!(broker_stats(&db,"legacy-not-a-canonical-source",None,now).unwrap().samples,0);
     }
 
@@ -1392,6 +1496,7 @@ mod tests {
              (source,position_id,context,brain,closed_ms,payload)
              VALUES(?1,99,'demo','trend',?2,?3)",
             params![source,now-500,exact.to_string()]).unwrap();
+        stamp_test_samples(&db,source,now);
         let valid=broker_stats(&db,source,None,now).unwrap();
         assert_eq!(valid.samples,1);
         assert!((valid.mean_net_per_lot-23.5).abs()<1e-9);
@@ -1443,6 +1548,7 @@ mod tests {
                 "r_multiple":0.0,"reward":reward_v2(net,0.0).1,"attribution":attr});
             db.execute("INSERT INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,'account','trend',?3,?4)",
                 params![source,id,now-age,payload.to_string()]).unwrap();
+            stamp_test_samples(&db,source,now);
         };
         add(&source,1,4000,-1.,"adverse_price_move");
         add(&source,2,3000,-1.,"costs_erased_gross_profit");
