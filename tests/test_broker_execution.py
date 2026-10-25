@@ -542,7 +542,37 @@ class ExecutionTests(unittest.TestCase):
     def test_filling_policy_and_broker_rejection(self):
         self.mt.info.filling_mode=2;self.mt.code=10019;self.assertEqual(self.send()['state'],'rejected');self.assertEqual(self.mt.sends[0]['type_filling'],1)
     def test_missing_journal_unknown_never_becomes_new_order(self):
-        self.cmd['state']='unknown';self.assertEqual(self.send()['state'],'unknown');self.assertFalse(self.mt.sends)
+        self.cmd['state']='unknown'
+        self.assertEqual(self.send()['state'],'unknown')
+        self.assertFalse(self.mt.sends)
+
+    def test_every_non_new_core_state_without_durable_journal_never_resends(self):
+        # Even a stale callback that claims authorisation cannot make a
+        # second broker send for filled / partial / observed / terminal state.
+        # This models lost local journal after a crash or Windows restore.
+        for state in ('unknown','placed','partial','filled','observed',
+                      'closed','cancelled','rejected','expired',''):
+            self.cmd['id']='missing-journal-'+(state or 'empty')
+            self.cmd['state']=state
+            authorized=[]
+            result=self.ex.execute(
+                self.mt,self.cmd,lambda ident: authorized.append(ident) or True)
+            self.assertEqual(result['state'],'unknown',(state,result))
+            self.assertIn('never resend',result['reason'])
+            self.assertFalse(authorized,(state,authorized))
+            self.assertFalse(self.mt.sends,(state,self.mt.sends))
+            self.assertIsNone(self.ex.db.execute(
+                'SELECT id FROM sends WHERE id=?',(self.cmd['id'],)).fetchone())
+        # A new queued Core work response can be accepted only once
+        # Core's second authorization verifies its current dispatched
+        # state; it gets a durable journal before order_send.
+        self.cmd['id']='fresh-intent-after-stale'
+        self.cmd['state']='queued'
+        result=self.send()
+        self.assertEqual(result['state'],'filled',result)
+        self.assertEqual(len(self.mt.sends),1)
+        self.assertEqual(self.send()['state'],'filled')
+        self.assertEqual(len(self.mt.sends),1)
     def test_sniper_tick_fast_path_skips_broker_check_and_reports_timings(self):
         self.cmd['signal']['key']='tick:123456789'
         self.mt.check_code=10019

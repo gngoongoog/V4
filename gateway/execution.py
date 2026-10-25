@@ -487,8 +487,16 @@ class BrokerExecutor:
             if any(saved.get(k)!=cmd.get(k) for k in immutable):
                 return dict(id=cmd['id'], state='unknown', reason='Intent identity differs from durable journal')
             return self._reconcile(mt5, saved, json.loads(row[1]) if row[1] else None)
-        if cmd.get('state') in ('unknown', 'placed'):
-            return dict(id=cmd['id'], state='unknown', reason='Missing gateway journal; inspect broker history')
+        # The Core gateway response may still carry 'queued' from the
+        # same poll that durably moves it to 'dispatched'; final Core
+        # authorization independently rejects anything not dispatched.
+        # An old callback/queue item can survive Core or Gateway restart.
+        # With no matching durable send journal, a previously accepted,
+        # filled, partial, observed or terminal command must NEVER be
+        # treated as a fresh order_send opportunity.
+        if cmd.get('state') not in ('queued', 'dispatched'):
+            return dict(id=cmd['id'], state='unknown',
+                        reason='Non-new broker intent without durable Gateway journal; never resend. Reconcile exact MT5 history')
 
         started = time.perf_counter()
         fast_path = is_fast_path(cmd)
