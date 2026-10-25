@@ -9,7 +9,9 @@ use braintrade_domain::{
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn source(context: &str, mode: &Value, brain: &str, timeframe: &str, report: &str) -> String {
     json!([context, "student-exits-v2", mode, brain, timeframe, report]).to_string()
@@ -312,7 +314,7 @@ impl Student {
         tx.commit()?;
         Ok(())
     }
-    fn load(&mut self, db: &Connection, key: &str) -> Result<()> {
+    fn load(&mut self, db: &Connection, key: &str, now:u64) -> Result<()> {
         if self.context == key {
             return Ok(());
         }
@@ -327,9 +329,7 @@ impl Student {
             // Old cached student experiences may contain accepted broker labels
             // from before G5-E. Recheck them on EVERY load, not only fresh
             // coordinator_broker_samples, before any further exit learning.
-            if e.actual.as_ref().is_some_and(|p| {
-                !verified_student_broker_label(p,e.position_id)
-            }) {
+            if e.actual.is_some() && !cached_student_label_verified(db,key,&e,now)? {
                 e.actual=None;
                 e.trial.usable=false;
                 e.trial.exclusion_reason="broker_label_unverified".into();
@@ -382,7 +382,7 @@ impl Student {
             return Ok(());
         }
         let key = crate::coordinator_learning::context(t);
-        self.load(db, &key)?;
+        self.load(db, &key, now)?;
         self.timing.restore(db, &key, now)?;
         // Register from acknowledged fills immediately, without waiting five seconds for history.
         let mut st=db.prepare("SELECT c.payload,c.result FROM broker_commands c WHERE c.context=?1 AND c.kind='open' AND CAST(json_extract(c.result,'$.deal') AS INTEGER)>0 AND json_extract(c.payload,'$.signal.coordination.student.version')=1 AND NOT EXISTS(SELECT 1 FROM student_experiences e WHERE e.context=c.context AND e.command_id=c.id) ORDER BY c.created_ms,c.id")?;
@@ -520,6 +520,20 @@ impl Student {
             };
             self.active.insert(id.into(), e);
         }
+        // Even while remaining in the same account/context, an on-disk
+        // broker receipt or its admission may become damaged between observe
+        // cycles. Cached actual losses must be revalidated before ANY further
+        // Student loss-memory/study learning, not only during restart/load.
+        for e in self.active.values_mut() {
+            if e.actual.is_some() && !cached_student_label_verified(db,&key,e,now)? {
+                e.actual=None;
+                e.trial.usable=false;
+                e.trial.exclusion_reason="broker_admission_unverified".into();
+                e.path_overflow=true;
+                e.loss_reviewed=false;
+                e.study_consumed=false;
+            }
+        }
         for e in self.active.values_mut() {
             if e.position_id == 0 {
                 e.position_id = db
@@ -532,23 +546,8 @@ impl Student {
                     .unwrap_or(0);
             }
             if e.actual.is_none() && e.position_id>0 {
-                let actual:Option<String>=db.query_row(
-                    "SELECT payload FROM coordinator_broker_samples
-                     WHERE context=?1 AND json_extract(payload,'$.open_command_id')=?2
-                       AND brain=?3 AND position_id=?4 LIMIT 1",
-                    params![key,e.command_id,e.owner,e.position_id],
-                    |r|r.get(0)).optional()?;
-                if let Some(raw) = actual {
-                    let label: Value = serde_json::from_str(&raw)?;
-                    if !verified_student_broker_label(&label,e.position_id) {
-                        // Missing MT5 costs/risk/reward or a mismatched physical
-                        // position must never trigger a Student loss pattern or
-                        // unlock a paired exit study. Keep the raw broker row.
-                        e.trial.usable=false;
-                        e.trial.exclusion_reason="broker_label_unverified".into();
-                        e.path_overflow=true;
-                        continue;
-                    }
+                if let Some(label)=verified_student_accepted_label(
+                    db,&key,&e.owner,&e.command_id,e.position_id,now)? {
                     if label["closed_volume"]
                         .as_f64()
                         .is_some_and(|volume| (volume - e.volume).abs() > 1e-8)
@@ -653,7 +652,76 @@ fn verified_student_broker_label(p:&Value,position_id:u64)->bool{
         &&crate::coordinator_learning::verified_broker_feedback(p).is_some()
 }
 
+// G6-J: Student is a separate learning engine. The original broker close
+// timestamp only says when MT5 booked the outcome; it is NOT proof that the
+// Student had seen it then. A legitimate current label needs the exact
+// G6-G first-Core-admission receipt stamped in the same SQLite transaction.
+// Legacy unadmitted rows remain in the ledger but are not training evidence.
+fn verified_student_accepted_label(db:&Connection,ctx:&str,owner:&str,
+    cmd:&str,position_id:u64,now:u64)->Result<Option<Value>>{
+    if position_id==0 || cmd.is_empty() || owner.is_empty(){return Ok(None);}
+    let mut st=db.prepare(
+        "SELECT s.source,s.position_id,s.context,s.brain,s.closed_ms,s.payload,
+                a.context,a.brain,a.closed_ms,a.admitted_ms,a.payload_sha256,a.protocol
+         FROM coordinator_broker_samples s
+         LEFT JOIN coordinator_broker_admissions a
+             ON a.source=s.source AND a.position_id=s.position_id
+         WHERE s.context=?1 AND s.brain=?2 AND s.position_id=?3
+         ORDER BY s.closed_ms DESC LIMIT 30")?;
+    let rows=st.query_map(params![ctx,owner,position_id],|r|Ok((
+        r.get::<_,String>(0)?,r.get::<_,i64>(1).unwrap_or(-1),
+        r.get::<_,String>(2)?,r.get::<_,String>(3)?,
+        r.get::<_,i64>(4).unwrap_or(-1),r.get::<_,String>(5)?,
+        r.get::<_,Option<String>>(6).unwrap_or(None),
+        r.get::<_,Option<String>>(7).unwrap_or(None),
+        r.get::<_,Option<i64>>(8).unwrap_or(None),
+        r.get::<_,Option<i64>>(9).unwrap_or(None),
+        r.get::<_,Option<String>>(10).unwrap_or(None),
+        r.get::<_,Option<String>>(11).unwrap_or(None)
+    )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut accepted:Option<Value>=None;
+    for(source,pos,stored_ctx,stored_brain,closed,raw,actx,abrain,
+        aclosed,admitted,hash,protocol)in rows{
+        let (Ok(pos),Ok(closed),Some(admitted))=(
+            u64::try_from(pos),u64::try_from(closed),
+            admitted.and_then(|v|u64::try_from(v).ok()))else{continue;};
+        if pos!=position_id||closed==0||admitted<closed||admitted>now
+            ||actx.as_deref()!=Some(ctx)||abrain.as_deref()!=Some(owner)
+            ||aclosed!=i64::try_from(closed).ok()
+            ||protocol.as_deref()!=Some("g6g-runtime-same-transaction-v1")
+            ||hash.as_deref()!=Some(format!("{:x}",Sha256::digest(raw.as_bytes())).as_str())
+            ||stored_ctx!=ctx||stored_brain!=owner
+        {continue;}
+        let Ok(p)=serde_json::from_str::<Value>(&raw)else{continue;};
+        if p["context"]!=ctx||p["brain"]!=owner
+            ||p["open_command_id"]!=cmd
+            ||p["closed_ms"].as_u64()!=Some(closed)
+            ||!verified_student_broker_label(&p,pos){continue;}
+        let Ok(source_value)=serde_json::from_str::<Value>(&source)else{continue;};
+        let Some(parts)=source_value.as_array().filter(|p|p.len()==6)else{continue;};
+        if parts[0]!=ctx||parts[1]!="adaptive-member-v1"
+            ||parts[3]!=owner||p["trading_mode"]!=parts[2]
+            ||p["timeframe"]!=parts[4]||p["report_id"]!=parts[5]
+        {continue;}
+        // Multiple apparently valid same-position labels are ambiguous.
+        // Never choose the first by SQL order and invent Student credit.
+        if accepted.is_some(){return Ok(None);}
+        accepted=Some(p);
+    }
+    Ok(accepted)
+}
+
+fn cached_student_label_verified(db:&Connection,ctx:&str,e:&Experience,now:u64)->Result<bool>{
+    let Some(saved)=e.actual.as_ref()else{return Ok(false);};
+    Ok(verified_student_accepted_label(db,ctx,&e.owner,&e.command_id,e.position_id,now)?
+        .as_ref().is_some_and(|current|current==saved))
+}
+
 pub fn view(db: &Connection, key: &str) -> Result<Value> {
+    // Dashboard read time is NOT the MT5 close time. Future local admissions
+    // must not make cached losses/learning appear settled before they arrive.
+    let observed_now=SystemTime::now().duration_since(UNIX_EPOCH)
+        .map(|d|u64::try_from(d.as_millis()).unwrap_or(u64::MAX)).unwrap_or(0);
     let mut st=db.prepare("SELECT payload FROM student_experiences WHERE context=?1 ORDER BY opened_ms DESC LIMIT 100")?;
     let mut experiences = Vec::new();
     let mut patterns: BTreeMap<String, u64> = BTreeMap::new();
@@ -662,7 +730,7 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
     let mut recent_closed = 0;
     for raw in st.query_map([key], |r| r.get::<_, String>(0))? {
         let mut e: Experience = serde_json::from_str(&raw?)?;
-        if e.actual.as_ref().is_some_and(|p|!verified_student_broker_label(p,e.position_id)){
+        if e.actual.is_some()&&!cached_student_label_verified(db,key,&e,observed_now)?{
             // Read-only revalidation for old persisted experiences: never
             // paint invalid broker PnL, win/loss patterns or training progress.
             e.actual=None;
@@ -703,7 +771,7 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
     let mut closed=0u64;
     for raw in candidates {
         let Ok(e)=serde_json::from_str::<Experience>(&raw?) else{continue;};
-        if e.actual.as_ref().is_some_and(|p|verified_student_broker_label(p,e.position_id)){
+        if cached_student_label_verified(db,key,&e,observed_now)? {
             closed+=1;
         }
     }
@@ -740,6 +808,36 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Test-only: convert old synthetic source='fixture' to a receipt that
+    // matches Rust's actual canonical member key, then stamp an original
+    // first-Core-admission SHA. Production cannot backdate legacy rows.
+    fn stamp_student_fixture(db:&Connection,ctx:&str,admitted:u64){
+        let mut st=db.prepare("SELECT source,position_id,closed_ms,payload
+          FROM coordinator_broker_samples WHERE context=?1 AND brain='trend'").unwrap();
+        let rows=st.query_map([ctx],|r|Ok((
+            r.get::<_,String>(0)?,r.get::<_,i64>(1)?,
+            r.get::<_,i64>(2)?,r.get::<_,String>(3)?
+        ))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+        drop(st);
+        for(source,pos,closed,raw)in rows{
+            if pos<=0||closed<=0||u64::try_from(closed).unwrap()>admitted {continue;}
+            let Ok(mut label)=serde_json::from_str::<Value>(&raw)else{continue;};
+            label["context"]=json!(ctx);label["brain"]=json!("trend");
+            label["trading_mode"]=json!("expert");
+            label["timeframe"]=json!("M1");label["report_id"]=json!("");
+            let new_source=json!([ctx,"adaptive-member-v1","expert","trend","M1",""]).to_string();
+            let normalized=label.to_string();
+            db.execute("UPDATE coordinator_broker_samples SET source=?1,payload=?2
+                WHERE source=?3 AND position_id=?4",
+                params![&new_source,&normalized,&source,pos]).unwrap();
+            let hash=format!("{:x}",Sha256::digest(normalized.as_bytes()));
+            db.execute("INSERT OR IGNORE INTO coordinator_broker_admissions
+                (source,position_id,context,brain,closed_ms,admitted_ms,payload_sha256,protocol)
+                VALUES(?1,?2,?3,'trend',?4,?5,?6,'g6g-runtime-same-transaction-v1')",
+                params![&new_source,pos,ctx,closed,admitted,hash]).unwrap();
+        }
+    }
     use braintrade_domain::Position;
     fn telemetry() -> Telemetry {
         Telemetry {
@@ -957,6 +1055,7 @@ mod tests {
             params![key, label.to_string()],
         )
         .unwrap();
+        stamp_student_fixture(&db,&key,2100);
         t.positions.clear();
         t.quote_time_ms = Some(2250);
         student.observe(&db, &t, 2250).unwrap();
@@ -1008,6 +1107,7 @@ mod tests {
             "swap":0.0,"fee":0.0,"net":-0.5,"net_per_lot":-5.0,
             "closed_volume":0.1,"risk_money":0.0,"r_multiple":0.0,"reward":-0.25,
             "attribution":"costs_erased_gross_profit"}).to_string()]).unwrap();
+        stamp_student_fixture(db,key,closed);
     }
     #[test]
     fn g5f_student_never_converts_fake_mt5_reward_into_real_loss_memory() {
@@ -1020,7 +1120,7 @@ mod tests {
                 "volume":0.1,"time_msc":1000}).to_string()]).unwrap();
         label(&db,&key,1200);
         db.execute("UPDATE coordinator_broker_samples SET
-            payload=json_set(payload,'$.reward',0.99) WHERE source='fixture'",[]).unwrap();
+            payload=json_set(payload,'$.reward',0.99) WHERE position_id=55",[]).unwrap();
         let mut student=Student::new(&db).unwrap();
         student.observe(&db,&t,5000).unwrap();
         let v=view(&db,&key).unwrap();
@@ -1029,7 +1129,7 @@ mod tests {
         assert_eq!(v["usable_shadow_pairs"],0);
         assert_eq!(v["experiences"][0]["actual"],Value::Null);
         db.execute("UPDATE coordinator_broker_samples SET
-            payload=json_set(payload,'$.reward',-0.25) WHERE source='fixture'",[]).unwrap();
+            payload=json_set(payload,'$.reward',-0.25) WHERE position_id=55",[]).unwrap();
         let mut restarted=Student::new(&db).unwrap();
         restarted.observe(&db,&t,5500).unwrap();
         let v=view(&db,&key).unwrap();
@@ -1146,6 +1246,40 @@ mod tests {
         let mut s=signal(); adapt(&mut s,&t,&c,&b,&policies);
         assert_eq!(s.stop_distance,1.); assert!(s.ready);
         assert_eq!(s.coordination.unwrap()["student"]["fallback_reason"],"stop_inside_spread");
+    }
+
+    #[test]
+    fn g6j_student_never_credits_future_or_changed_broker_admissions(){
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let t=telemetry();
+        let key=seed_entry(&db,&t,json!({"deal":77}));
+        db.execute("INSERT INTO broker_deals VALUES(?1,77,55,'trend',?2)",
+            params![&key,json!({"entry":0,"position_id":55,"price":100.,
+                "volume":0.1,"time_msc":1000}).to_string()]).unwrap();
+        label(&db,&key,1200);
+        db.execute("UPDATE coordinator_broker_admissions
+            SET admitted_ms=6000 WHERE position_id=55",[]).unwrap();
+        let mut student=Student::new(&db).unwrap();
+        student.observe(&db,&t,5000).unwrap();
+        let v=view(&db,&key).unwrap();
+        assert_eq!(v["closed_broker_trades"],0,
+            "An MT5 close older than 5000 is not sufficient when Core first admitted at 6000");
+        assert!(v["experiences"][0]["actual"].is_null());
+        student.observe(&db,&t,6000).unwrap();
+        let v=view(&db,&key).unwrap();
+        assert_eq!(v["closed_broker_trades"],1);
+        assert_eq!(v["studies"][0]["study"]["reviewed_losses"],1);
+        // Changing the booked Broker payoff breaks the original SHA.
+        db.execute("UPDATE coordinator_broker_samples
+            SET payload=json_set(payload,'$.net',99)
+            WHERE position_id=55",[]).unwrap();
+        assert_eq!(view(&db,&key).unwrap()["closed_broker_trades"],0);
+        student.observe(&db,&t,6500).unwrap();
+        assert_eq!(view(&db,&key).unwrap()["closed_broker_trades"],0);
+        let mut restarted=Student::new(&db).unwrap();
+        restarted.observe(&db,&t,6600).unwrap();
+        assert_eq!(view(&db,&key).unwrap()["closed_broker_trades"],0);
     }
 
 }
