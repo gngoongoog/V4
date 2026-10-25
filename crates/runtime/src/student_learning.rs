@@ -10,7 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn source(context: &str, mode: &Value, brain: &str, timeframe: &str, report: &str) -> String {
@@ -277,6 +277,8 @@ pub struct Student {
     context: String,
     active: BTreeMap<String, Experience>,
     pub policies: BTreeMap<String, ExitStudy>,
+    // No prior aggregate may masquerade as a new provenance-verified policy.
+    attested_studies:BTreeSet<String>,
     timing: timing::Learner,
 }
 #[path = "student_timing.rs"]
@@ -290,12 +292,16 @@ impl Student {
         db.execute_batch("CREATE TABLE IF NOT EXISTS student_experiences(context TEXT NOT NULL,command_id TEXT NOT NULL,source TEXT NOT NULL,opened_ms INTEGER NOT NULL,complete INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,command_id));
             CREATE INDEX IF NOT EXISTS student_pending ON student_experiences(context,complete,opened_ms);
             CREATE TABLE IF NOT EXISTS student_exit_studies(source TEXT PRIMARY KEY,context TEXT NOT NULL,payload TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS student_study_admissions(
+                source TEXT PRIMARY KEY,context TEXT NOT NULL,payload_sha256 TEXT NOT NULL,
+                first_stamped_ms INTEGER NOT NULL,protocol TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS student_opportunities(context TEXT NOT NULL,brain TEXT NOT NULL,minute INTEGER NOT NULL,reason TEXT NOT NULL,observations INTEGER NOT NULL,PRIMARY KEY(context,brain,minute,reason));
             CREATE INDEX IF NOT EXISTS student_opportunity_expiry ON student_opportunities(minute);")?;
         Ok(Self {
             context: String::new(),
             active: BTreeMap::new(),
             policies: BTreeMap::new(),
+            attested_studies:BTreeSet::new(),
             timing: timing::Learner::new(db)?,
         })
     }
@@ -306,10 +312,23 @@ impl Student {
                 params![e.context,e.command_id,e.source,e.opened_ms,e.complete(),serde_json::to_string(e)?])?;
         }
         for (key, study) in &self.policies {
-            tx.execute(
-                "INSERT OR REPLACE INTO student_exit_studies VALUES(?1,?2,?3)",
-                params![key, self.context, serde_json::to_string(study)?],
-            )?;
+            let raw=serde_json::to_string(study)?;
+            tx.execute("INSERT OR REPLACE INTO student_exit_studies VALUES(?1,?2,?3)",
+                params![key, self.context,&raw])?;
+            // Only Student policies that were learned from G6-J admitted Demo
+            // outcomes, or loaded with a valid pre-existing study digest, can
+            // receive/update this local provenance stamp. Never sign legacy
+            // aggregates merely because they were parsed from SQLite.
+            if self.attested_studies.contains(key){
+                let sha=format!("{:x}",Sha256::digest(raw.as_bytes()));
+                tx.execute("INSERT INTO student_study_admissions
+                    (source,context,payload_sha256,first_stamped_ms,protocol)
+                    VALUES(?1,?2,?3,CAST(strftime('%s','now') AS INTEGER)*1000,
+                        'g6k-student-admitted-study-v1')
+                    ON CONFLICT(source) DO UPDATE SET
+                        payload_sha256=excluded.payload_sha256",
+                    params![key,self.context,sha])?;
+            }
         }
         tx.commit()?;
         Ok(())
@@ -321,6 +340,7 @@ impl Student {
         self.flush(db)?;
         self.active.clear();
         self.policies.clear();
+        self.attested_studies.clear();
         self.context = key.into();
         self.timing.load(db, key)?;
         let mut st=db.prepare("SELECT payload FROM student_experiences WHERE context=?1 AND complete=0 ORDER BY opened_ms")?;
@@ -345,7 +365,14 @@ impl Student {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })? {
             let (k, raw) = row?;
-            self.policies.insert(k, serde_json::from_str(&raw)?);
+            if !study_aggregate_attested(db,key,&k,&raw)? {
+                // Preserve old aggregates in DB for historical audit but do
+                // not apply or continue training an unverifiable exit policy.
+                continue;
+            }
+            let study=serde_json::from_str::<ExitStudy>(&raw)?;
+            self.attested_studies.insert(k.clone());
+            self.policies.insert(k,study);
         }
         Ok(())
     }
@@ -579,6 +606,7 @@ impl Student {
                         .entry(e.source.clone())
                         .or_insert_with(|| if e.trial.outcomes.len() == 5 { ExitStudy::expanded() } else { ExitStudy::default() })
                         .record_loss(&patterns);
+                    self.attested_studies.insert(e.source.clone());
                 }
                 e.loss_reviewed = true;
             }
@@ -595,7 +623,9 @@ impl Student {
             if (e.trial.complete() || e.shadow_expired) && e.actual.is_some() && !e.study_consumed {
                 let study = self.policies.entry(e.source.clone()).or_insert_with(|| if e.trial.outcomes.len() == 5 { ExitStudy::expanded() } else { ExitStudy::default() });
                 if let Some(rewards) = e.trial.paired_rewards() {
-                    e.admitted = Some(study.observe(e.opened_ms, now, rewards));
+                    let accepted=study.observe(e.opened_ms, now, rewards);
+                    e.admitted=Some(accepted);
+                    if accepted {self.attested_studies.insert(e.source.clone());}
                 } else if e.trial.usable && e.trial.samples < 2 {
                     e.trial.usable = false;
                     e.trial.exclusion_reason = "too_few_quotes".into();
@@ -717,6 +747,16 @@ fn cached_student_label_verified(db:&Connection,ctx:&str,e:&Experience,now:u64)-
         .as_ref().is_some_and(|current|current==saved))
 }
 
+fn study_aggregate_attested(db:&Connection,ctx:&str,source:&str,raw:&str)->Result<bool>{
+    let r:Option<(String,String,String)>=db.query_row(
+        "SELECT context,payload_sha256,protocol FROM student_study_admissions
+         WHERE source=?1",[source],
+        |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+    Ok(r.is_some_and(|(stored_ctx,hash,protocol)|
+        stored_ctx==ctx && protocol=="g6k-student-admitted-study-v1"
+        && hash==format!("{:x}",Sha256::digest(raw.as_bytes()))))
+}
+
 pub fn view(db: &Connection, key: &str) -> Result<Value> {
     // Dashboard read time is NOT the MT5 close time. Future local admissions
     // must not make cached losses/learning appear settled before they arrive.
@@ -784,7 +824,16 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
         })?
         .map(|r| {
             let (source, raw) = r?;
-            Ok(json!({"source":source,"study":serde_json::from_str::<Value>(&raw)?}))
+            let attested=study_aggregate_attested(db,key,&source,&raw)?;
+            Ok(if attested {
+                json!({"source":source,"provenance":"locally_admitted_g6k",
+                       "study":serde_json::from_str::<Value>(&raw)?})
+            } else {
+                // Never display a forged old promotion, learned profile or
+                // aggregate shadow wins as verified training performance.
+                json!({"source":source,"provenance":"legacy_or_tampered_unverified",
+                       "study":Value::Null})
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     let admitted: u64 = studies
