@@ -370,4 +370,60 @@ mod tests {
         assert!(engine.target_models.is_empty());
     }
 
+    #[test]
+    fn g6i_sniper_never_trains_from_late_unstamped_or_changed_broker_results(){
+        let db=Connection::open_in_memory().unwrap();
+        crate::coordinator_learning::Learner::new(&db).unwrap();
+        let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            login:70,server:"Demo".into(),symbol:"XAUUSD".into(),
+            currency:"USD".into(),..Default::default()};
+        let context=crate::coordinator_learning::context(&t);
+        let valid=json!({"evidence_source":"mt5_demo_broker","trading_mode":"sniper",
+            "gross":2.0,"commission":-0.5,"swap":0.0,"fee":0.0,
+            "net":1.5,"closed_volume":0.1,"net_per_lot":15.,
+            "risk_money":5.,"r_multiple":0.3,"reward":0.3_f64.tanh(),
+            "sniper_tp_preserved":true,
+            "selection":{"brain":ID,"policy":"sniper-ticks-v1",
+              "sniper_policy":"impulse","sniper_definition":"G6I",
+              "sniper_regime":"directional_normal",
+              "sniper_target_mode":"adaptive","sniper_target_arm":2,
+              "sniper_target_pips":6.}
+        });
+        db.execute("INSERT INTO coordinator_broker_samples
+            VALUES('pre-g6g',70,?1,'sniper_learner',1000,?2)",
+            rusqlite::params![&context,valid.to_string()]).unwrap();
+        let mut engine=Engine::default();
+        refresh(&mut engine,&db,&t,2000).unwrap();
+        assert!(engine.models.is_empty(),"Unstamped Broker labels cannot train Sniper");
+        stamp_fixture_sniper(&db,&context,2500);
+        refresh(&mut engine,&db,&t,2499).unwrap();
+        assert!(engine.models.is_empty(),"A close time is not the first Core admission");
+        refresh(&mut engine,&db,&t,2500).unwrap();
+        assert_eq!(engine.models.values().next().unwrap()[0].samples,1);
+        assert_eq!(engine.target_models.values().next().unwrap()[2].samples,1);
+        let checkpoint=frozen_training_checkpoint(&db,&t,&engine,2500).unwrap();
+        assert_eq!(checkpoint["broker_training_samples"],1);
+        db.execute("UPDATE coordinator_broker_samples
+            SET payload=json_set(payload,'$.net',100000) WHERE position_id=70",[]).unwrap();
+        assert!(frozen_training_checkpoint(&db,&t,&engine,2500).is_err(),
+            "Frozen policy must fail if Broker receipt changes after stamped entry");
+        refresh(&mut engine,&db,&t,2500).unwrap();
+        assert!(engine.models.is_empty());
+        // Restored original payload still cannot pass with a malformed
+        // admission clock, but it must not crash a running Sniper refresh.
+        let reconstructed=json!([context,"adaptive-member-v1","sniper",ID,"M1",""]).to_string();
+        db.execute("UPDATE coordinator_broker_samples SET payload=?1 WHERE source=?2 AND position_id=70",
+            rusqlite::params![{
+                let mut p=valid.clone();
+                p["context"]=json!(context);p["brain"]=json!(ID);
+                p["position_id"]=json!(70);p["closed_ms"]=json!(1000);
+                p["timeframe"]=json!("M1");p["report_id"]=json!("");
+                p.to_string()
+            },&reconstructed]).unwrap();
+        db.execute("UPDATE coordinator_broker_admissions SET admitted_ms='invalid'
+            WHERE source=?1 AND position_id=70",[&reconstructed]).unwrap();
+        refresh(&mut engine,&db,&t,2500).unwrap();
+        assert!(engine.models.is_empty());
+    }
+
 }
