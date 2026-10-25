@@ -17,12 +17,19 @@ const empty=(reason:string):DashboardView=>({ready:false,reason,trades:[],qualit
 export function dashboardView(status:Status|null,read:DashboardRead|null,scope:string,now:number):DashboardView{
  const t=status?.telemetry;
  const execution=obj(read?.execution);
+ const binding=obj(execution.settings);
  if(!read||read.scope!==scope||!Number.isSafeInteger(read.readMs)||
     read.readMs>now+2000||now-read.readMs>20000||
     !status?.gateway_fresh||!t?.connected||
     !Number.isSafeInteger(t.login)||t.login<=0||!t.server||!t.symbol||!t.currency||
     !((t.demo===true&&t.account_trade_mode===0)||(t.demo===false&&t.account_trade_mode===2))||
     execution.account_matches!==true||
+    // MT5 account type is not part of journal context's four-field key;
+    // verify the bound Demo/REAL target plus the actual persisted identity,
+    // even if a stale or incorrectly cached account_matches says true.
+    binding.target!==(t.demo?'demo':'live')||
+    binding.login!==t.login||binding.server!==t.server||
+    binding.currency!==t.currency||
     execution.context!==JSON.stringify([t.server,t.login,t.symbol,t.currency]))
   return empty('بانتظار تقرير حديث ومطابق لحساب MT5 المربوط بالتنفيذ');
  const journal=obj(read.trades);

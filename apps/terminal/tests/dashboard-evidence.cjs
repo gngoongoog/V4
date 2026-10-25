@@ -17,7 +17,8 @@ const cards={};vm.runInNewContext(load('dashboard-operations.tsx'),{
 const now=Date.now(),t={connected:true,demo:true,account_trade_mode:0,
  login:10,server:'DEMO',currency:'USD',symbol:'XAUUSD'};
 const status={gateway_fresh:true,telemetry:t},scope='test-bound-account';
-const bound={account_matches:true,context:JSON.stringify([t.server,t.login,t.symbol,t.currency])};
+const bound={account_matches:true,context:JSON.stringify([t.server,t.login,t.symbol,t.currency]),
+ settings:{target:'demo',login:t.login,server:t.server,currency:t.currency}};
 const trades={total:2,offset:0,limit:50,rows:[
  {position_id:901,symbol:'XAUUSD',side:'BUY',status:'CLOSED',
   lots_opened:0.1,broker_net_booked:12.75,booked_cost_evidence:'BROKER_COMPONENTS_VERIFIED'},
@@ -45,6 +46,8 @@ for(const [name,s,data,sc,at] of [
  ['previous page scope',status,read,'another-scope',now],
  ['expired report',status,read,scope,now+21000],
  ['unbound execution',status,{...read,execution:{...bound,account_matches:false}},scope,now],
+ ['wrong Core binding mode',status,{...read,execution:{...bound,settings:{...bound.settings,target:'live'}}},scope,now],
+ ['wrong Core bound login',status,{...read,execution:{...bound,settings:{...bound.settings,login:99}}},scope,now],
  ['wrong execution context',status,{...read,execution:{...bound,context:'other-account'}},scope,now],
  ['different symbol',status,{...read,trades:{...trades,rows:[{...trades.rows[0],symbol:'EURUSD'}]}},scope,now],
  ['fabricated closed result',status,{...read,trades:{...trades,rows:[{...trades.rows[0],status:'WIN'}]}},scope,now],
