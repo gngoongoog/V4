@@ -9,7 +9,9 @@ use braintrade_domain::{
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn source(context: &str, mode: &Value, brain: &str, timeframe: &str, report: &str) -> String {
     json!([context, "student-exits-v2", mode, brain, timeframe, report]).to_string()
@@ -312,7 +314,7 @@ impl Student {
         tx.commit()?;
         Ok(())
     }
-    fn load(&mut self, db: &Connection, key: &str) -> Result<()> {
+    fn load(&mut self, db: &Connection, key: &str, now:u64) -> Result<()> {
         if self.context == key {
             return Ok(());
         }
@@ -327,9 +329,7 @@ impl Student {
             // Old cached student experiences may contain accepted broker labels
             // from before G5-E. Recheck them on EVERY load, not only fresh
             // coordinator_broker_samples, before any further exit learning.
-            if e.actual.as_ref().is_some_and(|p| {
-                !verified_student_broker_label(p,e.position_id)
-            }) {
+            if e.actual.is_some() && !cached_student_label_verified(db,key,&e,now)? {
                 e.actual=None;
                 e.trial.usable=false;
                 e.trial.exclusion_reason="broker_label_unverified".into();
@@ -382,7 +382,7 @@ impl Student {
             return Ok(());
         }
         let key = crate::coordinator_learning::context(t);
-        self.load(db, &key)?;
+        self.load(db, &key, now)?;
         self.timing.restore(db, &key, now)?;
         // Register from acknowledged fills immediately, without waiting five seconds for history.
         let mut st=db.prepare("SELECT c.payload,c.result FROM broker_commands c WHERE c.context=?1 AND c.kind='open' AND CAST(json_extract(c.result,'$.deal') AS INTEGER)>0 AND json_extract(c.payload,'$.signal.coordination.student.version')=1 AND NOT EXISTS(SELECT 1 FROM student_experiences e WHERE e.context=c.context AND e.command_id=c.id) ORDER BY c.created_ms,c.id")?;
@@ -532,23 +532,8 @@ impl Student {
                     .unwrap_or(0);
             }
             if e.actual.is_none() && e.position_id>0 {
-                let actual:Option<String>=db.query_row(
-                    "SELECT payload FROM coordinator_broker_samples
-                     WHERE context=?1 AND json_extract(payload,'$.open_command_id')=?2
-                       AND brain=?3 AND position_id=?4 LIMIT 1",
-                    params![key,e.command_id,e.owner,e.position_id],
-                    |r|r.get(0)).optional()?;
-                if let Some(raw) = actual {
-                    let label: Value = serde_json::from_str(&raw)?;
-                    if !verified_student_broker_label(&label,e.position_id) {
-                        // Missing MT5 costs/risk/reward or a mismatched physical
-                        // position must never trigger a Student loss pattern or
-                        // unlock a paired exit study. Keep the raw broker row.
-                        e.trial.usable=false;
-                        e.trial.exclusion_reason="broker_label_unverified".into();
-                        e.path_overflow=true;
-                        continue;
-                    }
+                if let Some(label)=verified_student_accepted_label(
+                    db,&key,&e.owner,&e.command_id,e.position_id,now)? {
                     if label["closed_volume"]
                         .as_f64()
                         .is_some_and(|volume| (volume - e.volume).abs() > 1e-8)
@@ -653,7 +638,76 @@ fn verified_student_broker_label(p:&Value,position_id:u64)->bool{
         &&crate::coordinator_learning::verified_broker_feedback(p).is_some()
 }
 
+// G6-J: Student is a separate learning engine. The original broker close
+// timestamp only says when MT5 booked the outcome; it is NOT proof that the
+// Student had seen it then. A legitimate current label needs the exact
+// G6-G first-Core-admission receipt stamped in the same SQLite transaction.
+// Legacy unadmitted rows remain in the ledger but are not training evidence.
+fn verified_student_accepted_label(db:&Connection,ctx:&str,owner:&str,
+    cmd:&str,position_id:u64,now:u64)->Result<Option<Value>>{
+    if position_id==0 || cmd.is_empty() || owner.is_empty(){return Ok(None);}
+    let mut st=db.prepare(
+        "SELECT s.source,s.position_id,s.context,s.brain,s.closed_ms,s.payload,
+                a.context,a.brain,a.closed_ms,a.admitted_ms,a.payload_sha256,a.protocol
+         FROM coordinator_broker_samples s
+         LEFT JOIN coordinator_broker_admissions a
+             ON a.source=s.source AND a.position_id=s.position_id
+         WHERE s.context=?1 AND s.brain=?2 AND s.position_id=?3
+         ORDER BY s.closed_ms DESC LIMIT 30")?;
+    let rows=st.query_map(params![ctx,owner,position_id],|r|Ok((
+        r.get::<_,String>(0)?,r.get::<_,i64>(1).unwrap_or(-1),
+        r.get::<_,String>(2)?,r.get::<_,String>(3)?,
+        r.get::<_,i64>(4).unwrap_or(-1),r.get::<_,String>(5)?,
+        r.get::<_,Option<String>>(6).unwrap_or(None),
+        r.get::<_,Option<String>>(7).unwrap_or(None),
+        r.get::<_,Option<i64>>(8).unwrap_or(None),
+        r.get::<_,Option<i64>>(9).unwrap_or(None),
+        r.get::<_,Option<String>>(10).unwrap_or(None),
+        r.get::<_,Option<String>>(11).unwrap_or(None)
+    )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut accepted:Option<Value>=None;
+    for(source,pos,stored_ctx,stored_brain,closed,raw,actx,abrain,
+        aclosed,admitted,hash,protocol)in rows{
+        let (Ok(pos),Ok(closed),Some(admitted))=(
+            u64::try_from(pos),u64::try_from(closed),
+            admitted.and_then(|v|u64::try_from(v).ok()))else{continue;};
+        if pos!=position_id||closed==0||admitted<closed||admitted>now
+            ||actx.as_deref()!=Some(ctx)||abrain.as_deref()!=Some(owner)
+            ||aclosed!=i64::try_from(closed).ok()
+            ||protocol.as_deref()!=Some("g6g-runtime-same-transaction-v1")
+            ||hash.as_deref()!=Some(format!("{:x}",Sha256::digest(raw.as_bytes())).as_str())
+            ||stored_ctx!=ctx||stored_brain!=owner
+        {continue;}
+        let Ok(p)=serde_json::from_str::<Value>(&raw)else{continue;};
+        if p["context"]!=ctx||p["brain"]!=owner
+            ||p["open_command_id"]!=cmd
+            ||p["closed_ms"].as_u64()!=Some(closed)
+            ||!verified_student_broker_label(&p,pos){continue;}
+        let Ok(source_value)=serde_json::from_str::<Value>(&source)else{continue;};
+        let Some(parts)=source_value.as_array().filter(|p|p.len()==6)else{continue;};
+        if parts[0]!=ctx||parts[1]!="adaptive-member-v1"
+            ||parts[3]!=owner||p["trading_mode"]!=parts[2]
+            ||p["timeframe"]!=parts[4]||p["report_id"]!=parts[5]
+        {continue;}
+        // Multiple apparently valid same-position labels are ambiguous.
+        // Never choose the first by SQL order and invent Student credit.
+        if accepted.is_some(){return Ok(None);}
+        accepted=Some(p);
+    }
+    Ok(accepted)
+}
+
+fn cached_student_label_verified(db:&Connection,ctx:&str,e:&Experience,now:u64)->Result<bool>{
+    let Some(saved)=e.actual.as_ref()else{return Ok(false);};
+    Ok(verified_student_accepted_label(db,ctx,&e.owner,&e.command_id,e.position_id,now)?
+        .as_ref().is_some_and(|current|current==saved))
+}
+
 pub fn view(db: &Connection, key: &str) -> Result<Value> {
+    // Dashboard read time is NOT the MT5 close time. Future local admissions
+    // must not make cached losses/learning appear settled before they arrive.
+    let observed_now=SystemTime::now().duration_since(UNIX_EPOCH)
+        .map(|d|u64::try_from(d.as_millis()).unwrap_or(u64::MAX)).unwrap_or(0);
     let mut st=db.prepare("SELECT payload FROM student_experiences WHERE context=?1 ORDER BY opened_ms DESC LIMIT 100")?;
     let mut experiences = Vec::new();
     let mut patterns: BTreeMap<String, u64> = BTreeMap::new();
@@ -662,7 +716,7 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
     let mut recent_closed = 0;
     for raw in st.query_map([key], |r| r.get::<_, String>(0))? {
         let mut e: Experience = serde_json::from_str(&raw?)?;
-        if e.actual.as_ref().is_some_and(|p|!verified_student_broker_label(p,e.position_id)){
+        if e.actual.is_some()&&!cached_student_label_verified(db,key,&e,observed_now)?{
             // Read-only revalidation for old persisted experiences: never
             // paint invalid broker PnL, win/loss patterns or training progress.
             e.actual=None;
@@ -703,7 +757,7 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
     let mut closed=0u64;
     for raw in candidates {
         let Ok(e)=serde_json::from_str::<Experience>(&raw?) else{continue;};
-        if e.actual.as_ref().is_some_and(|p|verified_student_broker_label(p,e.position_id)){
+        if cached_student_label_verified(db,key,&e,observed_now)? {
             closed+=1;
         }
     }
