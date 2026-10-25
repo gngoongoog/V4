@@ -794,6 +794,36 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Test-only: convert old synthetic source='fixture' to a receipt that
+    // matches Rust's actual canonical member key, then stamp an original
+    // first-Core-admission SHA. Production cannot backdate legacy rows.
+    fn stamp_student_fixture(db:&Connection,ctx:&str,admitted:u64){
+        let mut st=db.prepare("SELECT source,position_id,closed_ms,payload
+          FROM coordinator_broker_samples WHERE context=?1 AND brain='trend'").unwrap();
+        let rows=st.query_map([ctx],|r|Ok((
+            r.get::<_,String>(0)?,r.get::<_,i64>(1)?,
+            r.get::<_,i64>(2)?,r.get::<_,String>(3)?
+        ))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+        drop(st);
+        for(source,pos,closed,raw)in rows{
+            if pos<=0||closed<=0||u64::try_from(closed).unwrap()>admitted {continue;}
+            let Ok(mut label)=serde_json::from_str::<Value>(&raw)else{continue;};
+            label["context"]=json!(ctx);label["brain"]=json!("trend");
+            label["trading_mode"]=json!("expert");
+            label["timeframe"]=json!("M1");label["report_id"]=json!("");
+            let new_source=json!([ctx,"adaptive-member-v1","expert","trend","M1",""]).to_string();
+            let normalized=label.to_string();
+            db.execute("UPDATE coordinator_broker_samples SET source=?1,payload=?2
+                WHERE source=?3 AND position_id=?4",
+                params![&new_source,&normalized,&source,pos]).unwrap();
+            let hash=format!("{:x}",Sha256::digest(normalized.as_bytes()));
+            db.execute("INSERT OR IGNORE INTO coordinator_broker_admissions
+                (source,position_id,context,brain,closed_ms,admitted_ms,payload_sha256,protocol)
+                VALUES(?1,?2,?3,'trend',?4,?5,?6,'g6g-runtime-same-transaction-v1')",
+                params![&new_source,pos,ctx,closed,admitted,hash]).unwrap();
+        }
+    }
     use braintrade_domain::Position;
     fn telemetry() -> Telemetry {
         Telemetry {
@@ -1011,6 +1041,7 @@ mod tests {
             params![key, label.to_string()],
         )
         .unwrap();
+        stamp_student_fixture(&db,&key,2100);
         t.positions.clear();
         t.quote_time_ms = Some(2250);
         student.observe(&db, &t, 2250).unwrap();
@@ -1062,6 +1093,7 @@ mod tests {
             "swap":0.0,"fee":0.0,"net":-0.5,"net_per_lot":-5.0,
             "closed_volume":0.1,"risk_money":0.0,"r_multiple":0.0,"reward":-0.25,
             "attribution":"costs_erased_gross_profit"}).to_string()]).unwrap();
+        stamp_student_fixture(db,key,closed);
     }
     #[test]
     fn g5f_student_never_converts_fake_mt5_reward_into_real_loss_memory() {
@@ -1074,7 +1106,7 @@ mod tests {
                 "volume":0.1,"time_msc":1000}).to_string()]).unwrap();
         label(&db,&key,1200);
         db.execute("UPDATE coordinator_broker_samples SET
-            payload=json_set(payload,'$.reward',0.99) WHERE source='fixture'",[]).unwrap();
+            payload=json_set(payload,'$.reward',0.99) WHERE position_id=55",[]).unwrap();
         let mut student=Student::new(&db).unwrap();
         student.observe(&db,&t,5000).unwrap();
         let v=view(&db,&key).unwrap();
@@ -1083,7 +1115,7 @@ mod tests {
         assert_eq!(v["usable_shadow_pairs"],0);
         assert_eq!(v["experiences"][0]["actual"],Value::Null);
         db.execute("UPDATE coordinator_broker_samples SET
-            payload=json_set(payload,'$.reward',-0.25) WHERE source='fixture'",[]).unwrap();
+            payload=json_set(payload,'$.reward',-0.25) WHERE position_id=55",[]).unwrap();
         let mut restarted=Student::new(&db).unwrap();
         restarted.observe(&db,&t,5500).unwrap();
         let v=view(&db,&key).unwrap();
