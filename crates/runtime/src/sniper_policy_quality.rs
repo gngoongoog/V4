@@ -54,8 +54,9 @@ fn bounded_key(v:&Value)->Option<String>{
     let name=v.as_str()?;
     if name.is_empty()||name.len()>256||name.chars().any(|c|c.is_control()){None}else{Some(name.to_owned())}
 }
-fn read(pos:u64,closed:u64,v:&Value)->Option<(String,String,String,Entry)>{
-    if pos==0||closed==0||v["evidence_source"]!="mt5_demo_broker"
+fn read(pos:u64,closed:u64,context:&str,v:&Value)->Option<(String,String,String,Entry)>{
+    if pos==0||closed==0||v["context"]!=context
+       ||v["evidence_source"]!="mt5_demo_broker"
        ||v["trading_mode"]!="sniper"
        ||v["brain"]!="sniper_learner"
        ||v["selection"]["brain"]!="sniper_learner"
@@ -81,7 +82,7 @@ fn read(pos:u64,closed:u64,v:&Value)->Option<(String,String,String,Entry)>{
     }
     let e=Entry{position:pos,closed,net,gross,volume,
         cost:commission+swap+fee,
-        r:Some(finite(&v["r_multiple"]) ?)};
+        r:Some(finite(&v["r_multiple"])?)};
     Some((definition,regime,policy,e))
 }
 pub fn report(db:&Connection,context:&str)->Result<Value>{
@@ -106,7 +107,7 @@ pub fn report(db:&Connection,context:&str)->Result<Value>{
         if !seen.insert(pos){duplicate+=1;continue;}
         let parsed=serde_json::from_str::<Value>(&raw);
         let Some((definition,regime,policy,sample))=
-            parsed.ok().and_then(|v|read(pos,closed,&v)) else {invalid+=1;continue;};
+            parsed.ok().and_then(|v|read(pos,closed,context,&v)) else {invalid+=1;continue;};
         groups.entry((definition,regime,policy)).or_default().positions.push(sample);
     }
     let count:usize=groups.values().map(|g|g.positions.len()).sum();
@@ -149,7 +150,7 @@ pub fn report(db:&Connection,context:&str)->Result<Value>{
         "status":if !any_group_descriptive{"insufficient_closed_demo_evidence"}
             else{"descriptive_broker_outcome_monitor_only"},
         "source":"coordinator_broker_samples: MT5 Demo closed positions with audited learner reward/risk",
-        "broker_admission_gate":"coordinator_learning::verified_broker_feedback",
+        "broker_admission_gate":"verified_broker_feedback + exact account/context/position/close identity",
         "learning_eligible_broker_samples_only":true,
         "legacy_unverified_samples_excluded_not_deleted":true,
         "policy":"sniper_policy_demo_quality_v1",
@@ -181,7 +182,7 @@ mod tests {
             brain TEXT NOT NULL,closed_ms INTEGER NOT NULL,payload TEXT NOT NULL);").unwrap();d
     }
     fn add(d:&Connection,ctx:&str,pos:u64,policy:&str,definition:&str,regime:&str,net:f64,source:&str){
-        let p=json!({"evidence_source":source,"trading_mode":"sniper",
+        let p=json!({"evidence_source":source,"context":ctx,"trading_mode":"sniper",
             "brain":"sniper_learner","position_id":pos,"closed_ms":pos*1000,
             "gross":net+0.70,"commission":-0.70,"fee":0.0,"swap":0.0,
             "net":net,"net_per_lot":net/0.10,"closed_volume":0.10,
@@ -263,6 +264,20 @@ mod tests {
         assert_eq!(report["groups"][0]["all"]["net_booked"],2.0);
         assert_eq!(report["learning_eligible_broker_samples_only"],true);
         assert_eq!(report["promotion_authorized"],false);
+    }
+    #[test]
+    fn g5g_sniper_rejects_cross_account_payload_with_correct_broker_net(){
+        let d=db();
+        add(&d,"a",1,"impulse","v1","trending",2.0,"mt5_demo_broker");
+        add(&d,"a",2,"impulse","v1","trending",2.0,"mt5_demo_broker");
+        d.execute("UPDATE coordinator_broker_samples SET
+            payload=json_set(payload,'$.context','other-account')
+            WHERE position_id=2",[]).unwrap();
+        let result=report(&d,"a").unwrap();
+        assert_eq!(result["closed_demo_positions"],1);
+        assert_eq!(result["invalid_or_unattributed_samples"],1);
+        assert_eq!(result["groups"][0]["all"]["net_booked"],2.0);
+        assert_eq!(result["promotion_authorized"],false);
     }
     #[test]
     fn cost_drag_and_recent_deterioration_are_not_certified_edge(){
