@@ -286,9 +286,13 @@ fn verified_broker_row(source:&str,stored_context:&str,stored_brain:&str,
 
 fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<Stats>{
     let mut st=db.prepare("SELECT context,brain,position_id,closed_ms,payload FROM coordinator_broker_samples WHERE source=?1 ORDER BY closed_ms DESC LIMIT 4000")?;
-    let rows=st.query_map([source],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?,r.get::<_,u64>(3)?,r.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let rows=st.query_map([source],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?,r.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let(mut samples,mut wins,mut weighted_wins,mut weighted_net,mut weighted_reward,mut effective)=(0u64,0u64,0.,0.,0.,0.);
-    for(stored_context,stored_brain,pos,ts,raw)in rows{
+    for(stored_context,stored_brain,signed_pos,signed_ts,raw)in rows{
+        // SQLite may contain legacy negative identifiers/timestamps. A single
+        // broken row must be ignored, never abort the live training cycle.
+        let (Ok(pos),Ok(ts))=(u64::try_from(signed_pos),u64::try_from(signed_ts))
+            else {continue;};
         let Ok(p)=serde_json::from_str::<Value>(&raw) else{continue;};
         let sample_regime=p["regime"].as_str().unwrap_or("legacy");
         if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}
@@ -309,12 +313,14 @@ fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<
 // caused the market move. The response is a temporary, bounded preference shift.
 fn contextual_stats(db:&Connection,source:&str,key:&str,now:u64)->Result<(u64,f64,f64,u64,f64)> {
     let mut st=db.prepare("SELECT context,brain,position_id,closed_ms,payload FROM coordinator_broker_samples WHERE source=?1 ORDER BY closed_ms DESC,position_id DESC LIMIT 4000")?;
-    let rows=st.query_map([source],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?,r.get::<_,u64>(3)?,r.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let rows=st.query_map([source],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?,r.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let(mut count,mut sum,mut mass)=(0u64,0.,0.);
     let(mut recent_loss_streak,mut recent_cost_losses)=(0u64,0u64);
     let mut streak_unbroken=true;
     const MEMORY_HORIZON_MS:u64=14*24*60*60*1000;
-    for(stored_context,stored_brain,pos,ts,raw) in rows {
+    for(stored_context,stored_brain,signed_pos,signed_ts,raw) in rows {
+        let (Ok(pos),Ok(ts))=(u64::try_from(signed_pos),u64::try_from(signed_ts))
+            else {continue;};
         let Ok(p)=serde_json::from_str::<Value>(&raw) else{continue;};
         if p["context_key"].as_str()!=Some(key){continue;}
         let Some((net,_,reward))=verified_broker_row(
@@ -1272,6 +1278,16 @@ mod tests {
             (source,position_id,context,brain,closed_ms,payload)
             VALUES(?1,80,'account-a','trend',?2,'{corrupt JSON')",
             params![&source,now-700]).unwrap();
+        // Broken persisted SQLite numeric columns must never abort a whole
+        // learning cycle while an otherwise healthy Demo account is online.
+        db.execute("INSERT INTO coordinator_broker_samples
+            (source,position_id,context,brain,closed_ms,payload)
+            VALUES(?1,-7,'account-a','trend',?2,'{}')",
+            params![&source,now-300]).unwrap();
+        db.execute("INSERT INTO coordinator_broker_samples
+            (source,position_id,context,brain,closed_ms,payload)
+            VALUES(?1,81,'account-a','trend',-1,'{}')",
+            params![&source]).unwrap();
         assert_eq!(broker_stats(&db,&source,None,now).unwrap().samples,0);
         assert_eq!(contextual_stats(&db,&source,ctx,now).unwrap().0,0,
             "Even correct net with wrong source, mode or account cannot train mistake memory");
