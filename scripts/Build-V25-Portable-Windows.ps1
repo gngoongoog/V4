@@ -34,6 +34,8 @@ try {
     '--output','test-output/v25/demo-acceptance-package.json')
   Run python @('scripts/check_v25_native_ea_package.py','--portable',$portable,
     '--output','test-output/v25/native-ea-package.json')
+  Run python @('scripts/check_v25_g6c_study_package.py','--portable',$portable,
+    '--output','test-output/v25/g6c-study-package.json')
   Run (Join-Path $portable 'runtime/python/python.exe') @((Join-Path $portable 'runtime/gateway/check_runtime.py'))
   Run python @('scripts/smoke_portable_core.py',$exe)
   Run python @('scripts/check_sniper_quote_clock.py','--exe',$exe)
@@ -45,6 +47,8 @@ try {
     '--output','test-output/v25/demo-acceptance-relocated.json')
   Run python @('scripts/check_v25_native_ea_package.py','--portable',$moved,
     '--output','test-output/v25/native-ea-relocated.json')
+  Run python @('scripts/check_v25_g6c_study_package.py','--portable',$moved,
+    '--output','test-output/v25/g6c-study-relocated.json')
   Run python @('scripts/smoke_portable_core.py',(Join-Path $moved 'BrainTradeNext.exe'))
   Move-Item $moved $portable
   & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $portable 'DESKTOP_SHORTCUT.ps1')
