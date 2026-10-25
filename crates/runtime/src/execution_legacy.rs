@@ -1517,60 +1517,60 @@ mod execution_persistence_tests {
         let db=Connection::open_in_memory().unwrap();
         let mut svc=Service::new(&db).unwrap();
         let t=demo();
-        svc.bind(&db,&t,100).unwrap();
+        svc.bind(&db,&t,100_000).unwrap();
         let status=Status{gateway_fresh:true,telemetry:Some(t.clone()),..Default::default()};
         let mut request=json!({"login":t.login,"server":t.server,"currency":t.currency,
-            "trade_mode":0,"until_ms":500,"deals":[]});
+            "trade_mode":0,"until_ms":500_000,"deals":[]});
         svc.route("POST","/v1/execution/sync",
-            request.to_string().as_bytes(),&db,&status,650).unwrap();
-        assert_eq!(broker_sync_watermark(&db,&ctx(&t),"demo").unwrap(),(500,650));
-        let work=svc.route("GET","/v1/execution/gateway",b"",&db,&status,660).unwrap();
-        assert_eq!(work["history_from_ms"],380);
-        let view=svc.route("GET","/v1/execution",b"",&db,&status,660).unwrap();
-        assert_eq!(view["history_until_ms"],500);
-        assert_eq!(view["last_broker_sync_ms"],650);
+            request.to_string().as_bytes(),&db,&status,650_000).unwrap();
+        assert_eq!(broker_sync_watermark(&db,&ctx(&t),"demo").unwrap(),(500_000,650_000));
+        let work=svc.route("GET","/v1/execution/gateway",b"",&db,&status,660_000).unwrap();
+        assert_eq!(work["history_from_ms"],380_000);
+        let view=svc.route("GET","/v1/execution",b"",&db,&status,660_000).unwrap();
+        assert_eq!(view["history_until_ms"],500_000);
+        assert_eq!(view["last_broker_sync_ms"],650_000);
         // The rebuilt Rust Core must read committed cursor from SQLite,
         // never replay from the original bind time.
         let mut restored=Service::new(&db).unwrap();
         assert_eq!(restored.history_until_ms,0);
         let work=restored.route("GET","/v1/execution/gateway",
-            b"",&db,&status,670).unwrap();
-        assert_eq!(work["history_from_ms"],380);
+            b"",&db,&status,670_000).unwrap();
+        assert_eq!(work["history_from_ms"],380_000);
         // An overlapping older read is allowed to carry delayed broker
         // tickets, but cannot rewind a successful newer watermark.
-        request["until_ms"]=json!(450);
+        request["until_ms"]=json!(450_000);
         request["deals"]=json!([{"ticket":900,"position_id":42,
             "magic":410600,"symbol":"XAUUSD","entry":0,"type":0,
-            "time_msc":400,"volume":0.1,"price":2000.,
+            "time_msc":400_000,"volume":0.1,"price":2000.,
             "profit":0.,"commission":0.,"swap":0.,"fee":0.}]);
         restored.route("POST","/v1/execution/sync",
-            request.to_string().as_bytes(),&db,&status,680).unwrap();
-        assert_eq!(broker_sync_watermark(&db,&ctx(&t),"demo").unwrap(),(500,680));
+            request.to_string().as_bytes(),&db,&status,680_000).unwrap();
+        assert_eq!(broker_sync_watermark(&db,&ctx(&t),"demo").unwrap(),(500_000,680_000));
         let trades:u64=db.query_row("SELECT COUNT(*) FROM broker_deals",[],
             |r|r.get(0)).unwrap();
         assert_eq!(trades,1);
         // Failure in the next batch cannot claim that 700ms of history
         // was settled. SQLite cursor and booked financial evidence agree.
-        request["until_ms"]=json!(700);
+        request["until_ms"]=json!(700_000);
         request["deals"][0]["commission"]=json!(-100.);
         assert!(restored.route("POST","/v1/execution/sync",
-            request.to_string().as_bytes(),&db,&status,710).is_err());
-        assert_eq!(broker_sync_watermark(&db,&ctx(&t),"demo").unwrap(),(500,680));
+            request.to_string().as_bytes(),&db,&status,710_000).is_err());
+        assert_eq!(broker_sync_watermark(&db,&ctx(&t),"demo").unwrap(),(500_000,680_000));
         assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",[],
             |r|r.get::<_,u64>(0)).unwrap(),1);
         let other=Telemetry{login:99,..t.clone()};
-        restored.bind(&db,&other,800).unwrap();
+        restored.bind(&db,&other,800_000).unwrap();
         let other_status=Status{gateway_fresh:true,telemetry:Some(other.clone()),..Default::default()};
         let other_work=restored.route("GET","/v1/execution/gateway",
-            b"",&db,&other_status,810).unwrap();
-        assert_eq!(other_work["history_from_ms"],680);
+            b"",&db,&other_status,810_000).unwrap();
+        assert_eq!(other_work["history_from_ms"],680_000);
         assert_eq!(broker_sync_watermark(&db,&ctx(&other),"demo").unwrap(),(0,0));
         let mut other_symbol=other.clone();
         other_symbol.symbol="EURUSD".into();
         let other_symbol_status=Status{gateway_fresh:true,telemetry:Some(other_symbol.clone()),..Default::default()};
         let changed=restored.route("GET","/v1/execution/gateway",
-            b"",&db,&other_symbol_status,820).unwrap();
-        assert_eq!(changed["history_from_ms"],680);
+            b"",&db,&other_symbol_status,820_000).unwrap();
+        assert_eq!(changed["history_from_ms"],680_000);
         assert_eq!(broker_sync_watermark(&db,&ctx(&other_symbol),"demo").unwrap(),(0,0));
         // No automatic promotion between Demo and REAL historical cursors.
         assert_eq!(broker_sync_watermark(&db,&ctx(&t),"live").unwrap(),(0,0));
