@@ -85,7 +85,7 @@ def make_db():
 def add_command(db, adaptive, *, target="demo", state="observed"):
     command={"id":CMD,"context":CTX,"brain":"system","kind":"open",
              "created_ms":OBS,"server":"Demo","login":17,"symbol":"XAUUSD",
-             "currency":"USD","target":target,"signal":adaptive,
+             "currency":"USD","target":target,"magic":410600,"signal":adaptive,
              "learning":{"trading_mode":"expert","timeframe":"M1","report_id":""}}
     result={"deal":OPEN,"position_id":POS}
     db.execute("INSERT INTO broker_commands VALUES (?,?,?,?,?,?,?,?)",
@@ -93,7 +93,7 @@ def add_command(db, adaptive, *, target="demo", state="observed"):
 
 
 def add_closed(db, *, late_admission=False, tamper_deal=False):
-    deal_common={"symbol":"XAUUSD","type":0,"position_id":POS,"volume":.01,
+    deal_common={"symbol":"XAUUSD","type":0,"magic":410600,"position_id":POS,"volume":.01,
                  "swap":0.0,"fee":0.0}
     opening=dict(deal_common,ticket=OPEN,entry=0,time_msc=241010,
                  profit=0.,commission=-.035)
@@ -159,6 +159,34 @@ class G7BookkeepingTests(unittest.TestCase):
             r=audit(db,now_ms=260000)
             self.assertEqual(r["verified_closed_adaptive_positions"],0)
             self.assertIn("missing_accepted_closed_broker_label",r["unverified_by_reason"])
+
+    def test_wrong_open_deal_direction_never_proves_adaptive_buy(self):
+        db,a=make_db()
+        with db:
+            add_command(db,a)
+            add_closed(db)
+            raw=db.execute("SELECT payload FROM broker_deals WHERE ticket=?",(OPEN,)).fetchone()[0]
+            receipt=json.loads(raw)
+            receipt["type"]=1
+            db.execute("UPDATE broker_deals SET payload=? WHERE ticket=?",
+                       (as_json(receipt),OPEN))
+            r=audit(db,now_ms=260000)
+            self.assertEqual(r["verified_closed_adaptive_positions"],0)
+            self.assertIn("original_broker_entry_magic_or_direction_mismatch",r["unverified_by_reason"])
+
+    def test_wrong_open_magic_cannot_steal_broker_position(self):
+        db,a=make_db()
+        with db:
+            add_command(db,a)
+            add_closed(db)
+            raw=db.execute("SELECT payload FROM broker_deals WHERE ticket=?",(OPEN,)).fetchone()[0]
+            receipt=json.loads(raw)
+            receipt["magic"]=410617
+            db.execute("UPDATE broker_deals SET payload=? WHERE ticket=?",
+                       (as_json(receipt),OPEN))
+            r=audit(db,now_ms=260000)
+            self.assertEqual(r["verified_closed_adaptive_positions"],0)
+            self.assertIn("original_broker_entry_magic_or_direction_mismatch",r["unverified_by_reason"])
 
     def test_changed_broker_deal_cost_excludes_close(self):
         db,a=make_db()
