@@ -64,6 +64,9 @@ def _leg(d: dict, p: dict, side: str, lots: float, opened: int, closed: int,
         raise ValueError("entry_price_mismatch")
     if _ms(leg.get("last_quote_ms")) < opened:
         raise ValueError("quote_time_regression")
+    stop = _num(leg.get("stop_distance"), positive=True)
+    target = _num(leg.get("target_distance"), positive=True)
+    hold = _ms(leg.get("hold_ms"))
     result = leg.get("result")
     if not isinstance(result, dict) or result.get("provenance") != PROVENANCE:
         raise ValueError("unknown_price_provenance")
@@ -71,13 +74,23 @@ def _leg(d: dict, p: dict, side: str, lots: float, opened: int, closed: int,
     if not opened < exit_ms <= closed:
         raise ValueError("future_or_backdated_exit")
     _num(result.get("exit"), positive=True)
-    if result.get("reason") not in ("stop", "target", "time"):
-        raise ValueError("unknown_exit_reason")
+    exit_price = _num(result.get("exit"), positive=True)
+    movement = (exit_price - entry) * signal["side"]
+    expected_reason = ("stop" if movement <= -stop
+                       else "target" if movement >= target
+                       else "time" if exit_ms - opened >= hold
+                       else None)
+    if expected_reason is None or result.get("reason") != expected_reason:
+        raise ValueError("exit_policy_reason_mismatch")
+    if _ms(leg.get("last_quote_ms")) != exit_ms:
+        raise ValueError("last_quote_exit_mismatch")
     gap = result.get("max_quote_gap_ms")
     if type(gap) is not int or gap < 0:
         raise ValueError("unknown_quote_coverage")
     if type(result.get("gap_risk")) is not bool or result["gap_risk"] != (gap > GAP_LIMIT_MS):
         raise ValueError("contradictory_gap_flag")
+    if leg.get("max_gap_ms") != gap:
+        raise ValueError("quote_gap_receipt_mismatch")
     if gap > GAP_LIMIT_MS:
         raise ValueError("sampled_quote_gap")
     gross = _num(result.get("gross"))
@@ -85,7 +98,6 @@ def _leg(d: dict, p: dict, side: str, lots: float, opened: int, closed: int,
     net = _num(result.get("net_paper"))
     per_lot = _num(result.get("net_per_lot"))
     calculated_fee = commission_per_lot * lots
-    movement = (float(result["exit"]) - entry) * signal["side"]
     adjusted_ticks = movement / tick - 2 * slippage_ticks
     calculated_gross = adjusted_ticks * (
         profit_tick if adjusted_ticks >= 0 else loss_tick
