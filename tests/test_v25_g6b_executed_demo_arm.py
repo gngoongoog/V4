@@ -90,6 +90,17 @@ class ExecutedBrokerEvidence(unittest.TestCase):
         self.assertFalse(r["independent_oos"])
         self.assertFalse(r["automatic_model_promotion"])
 
+    def test_old_broker_sample_never_enters_new_holdout_denominator(self):
+        self.add()
+        self.db.execute(
+            "INSERT INTO coordinator_broker_samples VALUES('legacy',9,?,'system',?,?)",
+            (CONTEXT,REGISTERED-1000,json.dumps({"net":9999.0})))
+        r=study.audit(self.db,self.manifest,now_ms=NOW)
+        self.assertEqual(r["excluded_pre_holdout_broker_records"],1)
+        self.assertEqual(r["broker_records_examined"],1)
+        self.assertEqual(r["exactly_linked_adaptive_broker_positions"],1)
+        self.assertEqual(r["adaptive_executed_demo_booked_net"],1.5)
+
     def test_missing_exit_deal_never_creates_a_broker_win(self):
         pos,deal = self.add()
         self.db.execute("DELETE FROM broker_deals WHERE ticket=?", (deal+1,))
