@@ -17,6 +17,8 @@ REQUIRED_TOOLS = (
     "DEMO_ACCEPTANCE_AR.md",
     "runtime/python/python.exe",
     "runtime/gateway/check_runtime.py",
+    "runtime/gateway/demo_readiness.py",
+    "G2_DEMO_READINESS_AR.md",
     "runtime/gateway/execution.py",
 )
 SAFETY_CONTRACTS = {
@@ -25,7 +27,7 @@ SAFETY_CONTRACTS = {
         'powershell.exe', 'if "%~1"==""',
     ),
     "Tools/Run-Demo-Acceptance.ps1": (
-        "--demo-acceptance", "runtime\\gateway\\check_runtime.py",
+        "--demo-acceptance", "--demo-readiness", "-PreflightOnly", "runtime\\gateway\\check_runtime.py",
         "runtime-import-check.json", "--source",
     ),
     "Tools/Run-Demo-Acceptance-GUI.ps1": (
