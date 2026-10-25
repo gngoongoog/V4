@@ -51,7 +51,7 @@ class ExecutionRecoveryContractTests(unittest.TestCase):
                 ticket=701,
                 magic=self.cmd["magic"],
                 symbol=self.cmd["symbol"],
-                volume=0.1,
+                volume=0.1, type=0, entry=0, position_id=700,
                 comment="BT:" + self.cmd["id"][:20],
             )
         ]
@@ -69,8 +69,10 @@ class ExecutionRecoveryContractTests(unittest.TestCase):
         self.broker.raise_send = False
         tag = "BT:" + self.cmd["id"][:20]
         self.broker.deals = [
-            N(ticket=801, magic=self.cmd["magic"], symbol=self.cmd["symbol"], volume=0.04, comment=tag),
-            N(ticket=802, magic=self.cmd["magic"], symbol=self.cmd["symbol"], volume=0.06, comment=tag),
+            N(ticket=801, magic=self.cmd["magic"], symbol=self.cmd["symbol"], volume=0.04, comment=tag,
+              type=0, entry=0, position_id=700),
+            N(ticket=802, magic=self.cmd["magic"], symbol=self.cmd["symbol"], volume=0.06, comment=tag,
+              type=0, entry=0, position_id=700),
         ]
         recovered = self.execute()
         self.assertEqual(recovered["state"], "filled")
@@ -97,9 +99,9 @@ class ExecutionRecoveryContractTests(unittest.TestCase):
         tag = 'BT:' + self.cmd['id'][:20]
         self.broker.deals = [
             N(ticket=901, magic=self.cmd['magic'], symbol=self.cmd['symbol'], comment=tag,
-              volume=.04, price=2000., time_msc=1000, position_id=700),
+              volume=.04, price=2000., time_msc=1000, position_id=700, type=0, entry=0),
             N(ticket=902, magic=self.cmd['magic'], symbol=self.cmd['symbol'], comment=tag,
-              volume=.06, price=2001., time_msc=1100, position_id=700),
+              volume=.06, price=2001., time_msc=1100, position_id=700, type=0, entry=0),
         ]
         recovered = self.execute()
         self.assertAlmostEqual(recovered['volume'], .1)
