@@ -131,7 +131,28 @@ fn forward_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result
     let mut st=db.prepare("SELECT payload,outcome FROM coordinator_samples WHERE source=?1 AND json_extract(outcome,'$.state')='scored' ORDER BY bar DESC LIMIT 4000")?;
     let rows=st.query_map([source],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let(mut samples,mut wins,mut weighted_wins,mut weighted_net,mut weighted_reward,mut effective)=(0u64,0u64,0.,0.,0.,0.);
-    for(raw_p,raw_o)in rows{let p:Value=serde_json::from_str(&raw_p)?;let o:Value=serde_json::from_str(&raw_o)?;let sample_regime=p["regime"].as_str().unwrap_or("legacy");if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}let net=o["net"].as_f64().unwrap_or(0.);let reward=o["reward"].as_f64().unwrap_or_else(||reward_v2(net,0.).1);let ts=o["scored_ms"].as_u64().or_else(||p["observed_ms"].as_u64()).unwrap_or(now);let w=decay_weight(ts,now,FORWARD_HALF_LIFE_MS);samples+=1;if net>0.{wins+=1;weighted_wins+=w;}weighted_net+=net*w;weighted_reward+=reward*w;effective+=w;}
+    for(raw_p,raw_o)in rows {
+        let p:Value=serde_json::from_str(&raw_p)?;
+        let o:Value=serde_json::from_str(&raw_o)?;
+        let sample_regime=p["regime"].as_str().unwrap_or("legacy");
+        if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}
+        // A damaged old 'scored' row is not a neutral learning example.
+        // It must represent an actual, causally later bar mark-out with the
+        // frozen contract cost assumptions and finite net/reward.
+        let Some(net)=o["net"].as_f64().filter(|v|v.is_finite()) else {continue;};
+        let Some(reward)=o["reward"].as_f64().filter(|v|v.is_finite()&&(-1.0..=1.0).contains(v)) else {continue;};
+        let Some(ts)=o["scored_ms"].as_u64().filter(|v|*v>0&&*v<=now) else {continue;};
+        let Some(exit_bar)=o["exit_bar"].as_u64() else {continue;};
+        let Some(source_bar)=p["signal"]["bar_time"].as_u64() else {continue;};
+        if exit_bar<=source_bar ||
+           !p["entry"].as_f64().is_some_and(|v|v.is_finite()&&v>0.) ||
+           !o["risk_per_lot"].as_f64().is_some_and(|v|v.is_finite()&&v>=0.) ||
+           !o["r_multiple"].as_f64().is_some_and(f64::is_finite) ||
+           !o["cost_model"].as_str().is_some_and(|v|!v.is_empty()) {continue;}
+        let w=decay_weight(ts,now,FORWARD_HALF_LIFE_MS);
+        samples+=1;if net>0.{wins+=1;weighted_wins+=w;}
+        weighted_net+=net*w;weighted_reward+=reward*w;effective+=w;
+    }
     Ok(finish_stats(samples,wins,weighted_wins,weighted_net,weighted_reward,effective))
 }
 /// A legacy stored sample does not become a broker success just because a
@@ -743,6 +764,40 @@ mod tests {
                 .samples,
             0
         );
+    }
+
+    #[test]
+    fn old_forward_scored_rows_do_not_pad_learning_numbers() {
+        let db=Connection::open_in_memory().unwrap();
+        Learner::new(&db).unwrap();
+        let now=1_800_000_000_000u64;
+        let source="forward-m1-demo";
+        let entry=json!({"entry":2000.0,"regime":"trend_up_normal",
+            "signal":{"bar_time":1000}});
+        let valid=json!({"state":"scored","net":2.0,"reward":0.4,
+            "scored_ms":now-1000,"exit_bar":1720,
+            "risk_per_lot":10.0,"r_multiple":0.2,
+            "cost_model":"fixed broker spread and configured commission"});
+        for (bar,outcome) in [
+            (1000,valid.clone()),
+            (2000,json!({"state":"scored","net":9000.0})),
+            (3000,json!({"state":"scored","net":-3.0,"reward":-0.3,
+                "scored_ms":now+1000,"exit_bar":1720,
+                "risk_per_lot":10.0,"r_multiple":-0.3,
+                "cost_model":"forward"})),
+            (4000,json!({"state":"scored","net":-3.0,"reward":-0.3,
+                "scored_ms":now-1000,"exit_bar":1000,
+                "risk_per_lot":10.0,"r_multiple":-0.3,
+                "cost_model":"forward"})),
+        ] {
+            db.execute("INSERT INTO coordinator_samples(source,bar,payload,outcome)
+                VALUES(?1,?2,?3,?4)",
+                params![source,bar,entry.to_string(),outcome.to_string()]).unwrap();
+        }
+        let stats=forward_stats(&db,source,None,now).unwrap();
+        assert_eq!(stats.samples,1,"Only causal scored rows can change weight");
+        assert_eq!(stats.wins,1);
+        assert!((stats.mean_reward-0.4).abs()<1e-10);
     }
 
     #[test]
