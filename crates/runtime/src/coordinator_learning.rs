@@ -1393,7 +1393,7 @@ mod tests {
         assert_eq!(contextual_stats(&db,&source,ctx,later).unwrap().4,0.);
         // Three unbroken losses in a new isolated account do not affect the first.
         for i in 0..3 {add(&other,10+i,700-i*100,-1.,"adverse_price_move");}
-        assert!(contextual_stats(&db,other,ctx,now).unwrap().4>0.);
+        assert!(contextual_stats(&db,&other,ctx,now).unwrap().4>0.);
         assert_eq!(contextual_stats(&db,&source,ctx,now).unwrap().4,0.);
     }
 
