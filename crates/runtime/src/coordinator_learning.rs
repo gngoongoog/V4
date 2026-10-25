@@ -1664,8 +1664,11 @@ mod tests {
         sync_demo_broker_evidence(&db,&t,now).unwrap();
         crate::sniper_learning::refresh(&mut engine,&db,&t,now).unwrap();
         assert_eq!(engine.target_models.values().next().unwrap()[2].samples,1);
-        // Migrating an older installation: the system outcome and processed
-        // marker already exist, but the specialist credit was absent.
+        // Simulate migrating a PRE-G6G installation where the specialist
+        // credit AND its local admission stamp were both absent. Current
+        // protected DBs cannot delete an admitted label while its admission
+        // row still exists (foreign key is intentionally enforced).
+        db.execute("DELETE FROM coordinator_broker_admissions WHERE brain='sniper_learner'",[]).unwrap();
         db.execute("DELETE FROM coordinator_broker_samples WHERE brain='sniper_learner'",[]).unwrap();
         sync_demo_broker_evidence(&db,&t,now).unwrap();
         assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_broker_samples WHERE brain='sniper_learner'",[],|r|r.get::<_,u64>(0)).unwrap(),1);
