@@ -35,6 +35,21 @@ fn read_panel(route: String) -> Result<Value, String> {
     open_client()?.get(&route).map_err(|err| err.to_string())
 }
 
+/// Pagination is read-only, even though Core exposes this specific query as
+/// POST. The renderer cannot choose a destination, method or arbitrary body.
+fn valid_trade_page(offset:u32,limit:u32)->bool{
+    offset<=1_000_000 && (1..=100).contains(&limit)
+}
+
+#[tauri::command]
+fn read_trade_history(offset: u32, limit: u32) -> Result<Value, String> {
+    if !valid_trade_page(offset,limit) {
+        return Err("حدود تصفح سجل التداول غير صالحة".into());
+    }
+    open_client()?.post("/v1/execution/trades",json!({"offset":offset,"limit":limit}))
+        .map_err(|err|err.to_string())
+}
+
 #[tauri::command]
 fn execute_control(action: String, confirm_live_login: Option<String>) -> Result<Value, String> {
     let (route, body) = match action.as_str() {
@@ -252,7 +267,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppLifecycle {stopping:Arc::new(AtomicBool::new(false))})
         .invoke_handler(tauri::generate_handler![
-            get_status, read_panel, execute_control,
+            get_status, read_panel, read_trade_history, execute_control,
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, backtest_action, update_brain_control, bind_execution
@@ -273,5 +288,15 @@ mod tests {
         assert!(!allowed_read_route("http://attacker.local"));
         assert!(!allowed_read_route("/v1/config/../../ipc.key"));
         assert!(!allowed_read_route("/v1/status?token=x"));
+    }
+    #[test]
+    fn journal_pagination_is_bounded_and_not_an_arbitrary_post_proxy() {
+        // Core must retain the only exact destination and numeric bounds.
+        assert!(valid_trade_page(0,1));
+        assert!(valid_trade_page(1_000_000,100));
+        assert!(!valid_trade_page(1_000_001,25));
+        assert!(!valid_trade_page(0,0));
+        assert!(!valid_trade_page(0,101));
+        assert!(!allowed_read_route("/v1/execution/trades?limit=999999"));
     }
 }

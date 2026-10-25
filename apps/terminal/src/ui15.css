@@ -209,3 +209,16 @@
 .terminal-v15 .broker-feed-row small{grid-column:1/-1;opacity:.74;font-size:11px}
 @media (max-width:620px){.terminal-v15 .broker-feed-row{grid-template-columns:1fr}
  .terminal-v15 .broker-feed-row strong{text-align:right}}
+
+/* G3-B: each journal row holds a bounded, readable broker receipt detail. */
+.terminal-v15 .broker-journal-detail{min-width:200px;max-width:360px;
+ margin-top:8px;padding:8px 10px;border:1px solid rgba(140,159,177,.22);
+ border-radius:8px;background:rgba(22,30,38,.13);font-size:11px;
+ line-height:1.65;white-space:normal;overflow-wrap:anywhere}
+.terminal-v15 .broker-journal-detail strong{display:block;margin-top:5px}
+.terminal-v15 .operator-card[aria-label="MT5 broker trade journal"] .quick-ops{
+ display:flex;flex-wrap:wrap;align-items:end;gap:10px}
+.terminal-v15 .operator-card[aria-label="MT5 broker trade journal"] .quick-ops label{font-size:12px}
+.terminal-v15 .operator-card[aria-label="MT5 broker trade journal"] .quick-ops select{
+ display:block;margin-top:5px}
+@media (max-width:620px){.terminal-v15 .broker-journal-detail{max-width:245px}}
