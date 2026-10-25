@@ -1098,8 +1098,13 @@ mod tests {
             t.quote_time_ms = Some(ms);
             student.quote(&t, ms);
         }
-        // No position snapshot or deal mapping was needed to capture these prices.
+        // Capturing quote extrema did not need a position snapshot. Final
+        // broker attribution DOES require the immutable Deal->Position link;
+        // it may arrive after the quotes and even after the close.
         label(&db, &key, 1400);
+        db.execute("INSERT INTO broker_deals VALUES(?1,77,55,'trend',?2)",
+            params![key,json!({"entry":0,"position_id":55,"price":100.0,
+                "volume":0.1,"time_msc":1000}).to_string()]).unwrap();
         student.observe(&db, &t, 1800).unwrap();
         let v = view(&db, &key).unwrap();
         let e = &v["experiences"][0];
