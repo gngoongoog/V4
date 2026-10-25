@@ -296,6 +296,17 @@ mod tests{
         assert_eq!(status["bars_compared"],1);
         assert_eq!(status["adaptive_only_ready"],1);
         assert_eq!(status["no_broker_orders"],true);
+        // The actual future completed-bar path writes exactly one G7 receipt,
+        // sharing the transaction with the original Frozen/Adaptive pair.
+        let receipt:String=db.query_row(
+            "SELECT payload FROM g7_paired_decision_evidence",[],|r|r.get(0)).unwrap();
+        let proof:Value=serde_json::from_str(&receipt).unwrap();
+        assert_eq!(proof["protocol"],"g7-local-paired-decisions-v1");
+        assert_eq!(proof["coverage"],"local_quote_observed");
+        assert_eq!(proof["execution"],"decision_only_neither_arm_broker_executed");
+        assert!(proof["booked_pnl"].is_null());
+        let n:i64=db.query_row("SELECT COUNT(*) FROM g7_paired_decision_evidence",[],|r|r.get(0)).unwrap();
+        assert_eq!(n,1);
         // Historical replay too late after close cannot create fabricated new rows.
         t.quote_time_ms=Some(999_000);
         observe(&db,&t,&c,&adaptive,&sample(240),999_000).unwrap();
