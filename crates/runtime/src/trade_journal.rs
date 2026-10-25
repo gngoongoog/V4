@@ -252,7 +252,8 @@ mod tests {
         assert!(!fully_closed_by_deals(&[mk(0,0.1),mk(1,0.04)]));
         assert!(!fully_closed_by_deals(&[mk(0,0.1),mk(1,0.2)]));
         assert!(!fully_closed_by_deals(&[mk(0,0.1),mk(2,0.1)]));
-        assert!(!fully_closed_by_deals(&[mk(0,0.1),mk(1,"NaN")]));
+        assert!(!fully_closed_by_deals(&[mk(0,0.1),
+            json!({"type":0,"entry":1,"volume":"NaN"})]));
         assert!(!fully_closed_by_deals(&[mk(1,0.1)]));
         assert!(fully_closed_by_deals(&[mk(0,0.1),mk(1,0.04),mk(3,0.06)]));
     }
