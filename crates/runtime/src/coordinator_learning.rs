@@ -1116,6 +1116,17 @@ mod tests {
         db.execute("UPDATE broker_deals SET payload=?1 WHERE context=?2 AND ticket=101",
             params![close.to_string(),key]).unwrap();
         let w = l.observe(&db, &t, &c, &[b], &f, false, now+1).unwrap();
+        // A previously closed position is only admitted to learning at the
+        // Core observation that actually saw the complete booked history.
+        let (receipt_source,stored_hash,admitted_ms):(String,String,u64)=db.query_row(
+            "SELECT source,payload_sha256,admitted_ms FROM coordinator_broker_admissions WHERE context=?1 AND position_id=900",
+            [&key],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+        let (stored_payload,stored_close):(String,u64)=db.query_row(
+            "SELECT payload,closed_ms FROM coordinator_broker_samples WHERE source=?1 AND position_id=900",
+            [&receipt_source],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(admitted_ms,now+1);
+        assert!(admitted_ms>=stored_close);
+        assert_eq!(stored_hash,format!("{:x}",Sha256::digest(stored_payload.as_bytes())));
         let trend = &w["trend"];
         assert_eq!(trend.broker_samples, 1);
         assert_eq!(trend.samples, 1);
@@ -1129,6 +1140,10 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM coordinator_broker_samples", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1);
+        let admissions:u64=db.query_row(
+            "SELECT COUNT(*) FROM coordinator_broker_admissions WHERE context=?1",
+            [&key],|r|r.get(0)).unwrap();
+        assert_eq!(admissions,1,"the same closed MT5 position is never admitted twice");
         l.observe(
             &db,
             &t,
