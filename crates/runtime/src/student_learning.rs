@@ -432,6 +432,21 @@ impl Student {
         }
         let key = crate::coordinator_learning::context(t);
         self.load(db, &key, now)?;
+        // A policy attested on a previous pulse must not keep controlling
+        // exits if any of its original Broker/paired events were edited while
+        // Core stayed connected to this same account. Recheck the full replay
+        // before it can be used on the next decision; baseline remains.
+        let mut revoked=Vec::new();
+        for (source,study) in &self.policies {
+            let raw=serde_json::to_string(study)?;
+            if !study_aggregate_attested(db,&key,source,&raw,now)? {
+                revoked.push(source.clone());
+            }
+        }
+        for source in revoked {
+            self.policies.remove(&source);
+            self.attested_studies.remove(&source);
+        }
         self.timing.restore(db, &key, now)?;
         // Register from acknowledged fills immediately, without waiting five seconds for history.
         let mut st=db.prepare("SELECT c.payload,c.result FROM broker_commands c WHERE c.context=?1 AND c.kind='open' AND CAST(json_extract(c.result,'$.deal') AS INTEGER)>0 AND json_extract(c.payload,'$.signal.coordination.student.version')=1 AND NOT EXISTS(SELECT 1 FROM student_experiences e WHERE e.context=c.context AND e.command_id=c.id) ORDER BY c.created_ms,c.id")?;
@@ -1484,6 +1499,9 @@ mod tests {
         let v=view(&db,&ctx).unwrap();
         assert_eq!(v["usable_shadow_pairs"],0);
         assert!(v["studies"][0]["study"].is_null());
+        student.observe(&db,&t,5500).unwrap();
+        assert!(student.policies.is_empty(),
+            "An already-running Student must immediately revoke learned exit geometry");
         let mut restarted=Student::new(&db).unwrap();
         restarted.observe(&db,&t,6000).unwrap();
         assert!(restarted.policies.is_empty());
