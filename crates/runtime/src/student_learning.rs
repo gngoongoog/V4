@@ -987,6 +987,36 @@ mod tests {
             "attribution":"costs_erased_gross_profit"}).to_string()]).unwrap();
     }
     #[test]
+    fn g5f_student_never_converts_fake_mt5_reward_into_real_loss_memory() {
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let t=telemetry();
+        let key=seed_entry(&db,&t,json!({"deal":77}));
+        db.execute("INSERT INTO broker_deals VALUES(?1,77,55,'trend',?2)",
+            params![key,json!({"entry":0,"position_id":55,"price":100.,
+                "volume":0.1,"time_msc":1000}).to_string()]).unwrap();
+        label(&db,&key,1200);
+        db.execute("UPDATE coordinator_broker_samples SET
+            payload=json_set(payload,'$.reward',0.99) WHERE source='fixture'",[]).unwrap();
+        let mut student=Student::new(&db).unwrap();
+        student.observe(&db,&t,5000).unwrap();
+        let v=view(&db,&key).unwrap();
+        assert_eq!(v["closed_broker_trades"],0,
+            "Even a correct booked net cannot be credited with a forged reward");
+        assert_eq!(v["usable_shadow_pairs"],0);
+        assert_eq!(v["experiences"][0]["actual"],Value::Null);
+        db.execute("UPDATE coordinator_broker_samples SET
+            payload=json_set(payload,'$.reward',-0.25) WHERE source='fixture'",[]).unwrap();
+        let mut restarted=Student::new(&db).unwrap();
+        restarted.observe(&db,&t,5500).unwrap();
+        let v=view(&db,&key).unwrap();
+        assert_eq!(v["closed_broker_trades"],1,
+            "After exact MT5 feedback is restored, matching broker evidence can be read");
+        assert_eq!(v["usable_shadow_pairs"],0,
+            "Unverified earlier sampled path cannot be promoted after restoration");
+    }
+
+    #[test]
     fn recovered_old_fill_is_journaled_but_never_invents_a_shadow_path() {
         let db = Connection::open_in_memory().unwrap();
         let _ = crate::execution::Service::new(&db).unwrap();
