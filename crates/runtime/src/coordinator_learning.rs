@@ -134,11 +134,30 @@ fn forward_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result
     for(raw_p,raw_o)in rows{let p:Value=serde_json::from_str(&raw_p)?;let o:Value=serde_json::from_str(&raw_o)?;let sample_regime=p["regime"].as_str().unwrap_or("legacy");if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}let net=o["net"].as_f64().unwrap_or(0.);let reward=o["reward"].as_f64().unwrap_or_else(||reward_v2(net,0.).1);let ts=o["scored_ms"].as_u64().or_else(||p["observed_ms"].as_u64()).unwrap_or(now);let w=decay_weight(ts,now,FORWARD_HALF_LIFE_MS);samples+=1;if net>0.{wins+=1;weighted_wins+=w;}weighted_net+=net*w;weighted_reward+=reward*w;effective+=w;}
     Ok(finish_stats(samples,wins,weighted_wins,weighted_net,weighted_reward,effective))
 }
+/// A legacy stored sample does not become a broker success just because a
+/// position ID and reward were saved. Require every booked cost component,
+/// exact closed volume, a reconciled net and finite bounded reward.
+pub(crate) fn verified_broker_label(p:&Value)->Option<(f64,f64)> {
+    if p["evidence_source"]!="mt5_demo_broker"{return None;}
+    let read=|name:&str| p[name].as_f64().filter(|v|v.is_finite());
+    let (gross,commission,swap,fee,net,volume,per_lot,reward)=(
+        read("gross")?,read("commission")?,read("swap")?,read("fee")?,
+        read("net")?,read("closed_volume")?,read("net_per_lot")?,read("reward")?);
+    if volume<=0. || !(-1.0..=1.0).contains(&reward){return None;}
+    let booked=gross+commission+swap+fee;
+    if !booked.is_finite() || !net.is_finite(){return None;}
+    let tolerance=1e-7_f64.max(net.abs()*1e-8);
+    if (booked-net).abs()>tolerance ||
+        ((net/volume)-per_lot).abs()>tolerance/volume.max(1e-4) {
+        return None;
+    }
+    Some((per_lot,reward))
+}
 fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<Stats>{
     let mut st=db.prepare("SELECT closed_ms,payload FROM coordinator_broker_samples WHERE source=?1 ORDER BY closed_ms DESC LIMIT 4000")?;
     let rows=st.query_map([source],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let(mut samples,mut wins,mut weighted_wins,mut weighted_net,mut weighted_reward,mut effective)=(0u64,0u64,0.,0.,0.,0.);
-    for(ts,raw)in rows{let p:Value=serde_json::from_str(&raw)?;let sample_regime=p["regime"].as_str().unwrap_or("legacy");if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}let net=p["net_per_lot"].as_f64().unwrap_or(0.);let reward=p["reward"].as_f64().unwrap_or_else(||reward_v2(net,0.).1);let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);samples+=1;if net>0.{wins+=1;weighted_wins+=w;}weighted_net+=net*w;weighted_reward+=reward*w;effective+=w;}
+    for(ts,raw)in rows{if ts==0||ts>now{continue;}let p:Value=serde_json::from_str(&raw)?;let sample_regime=p["regime"].as_str().unwrap_or("legacy");if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}let Some((net,reward))=verified_broker_label(&p) else {continue;};let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);samples+=1;if net>0.{wins+=1;weighted_wins+=w;}weighted_net+=net*w;weighted_reward+=reward*w;effective+=w;}
     Ok(finish_stats(samples,wins,weighted_wins,weighted_net,weighted_reward,effective))
 }
 // Repeated-mistake memory uses only exact completed Demo broker evidence already
@@ -153,11 +172,10 @@ fn contextual_stats(db:&Connection,source:&str,key:&str,now:u64)->Result<(u64,f6
     const MEMORY_HORIZON_MS:u64=14*24*60*60*1000;
     for(ts,raw) in rows {
         let p:Value=serde_json::from_str(&raw)?;
-        if p["context_key"].as_str()!=Some(key){continue;}
-        if let Some(reward)=p["reward"].as_f64().filter(|v|v.is_finite()) {
-            let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);
-            count+=1;sum+=reward*w;mass+=w;
-        }
+        if p["context_key"].as_str()!=Some(key)||ts==0||ts>now{continue;}
+        let Some((_,reward))=verified_broker_label(&p) else {continue;};
+        let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);
+        count+=1;sum+=reward*w;mass+=w;
         // Nonfinite or missing booked net breaks the streak; never invent a loss.
         // Expiration stops stale mistakes from holding back a recovered strategy.
         if streak_unbroken {
@@ -311,15 +329,12 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
         let position_id:Option<u64>=db.query_row("SELECT position_id FROM broker_deals WHERE context=?1 AND ticket=?2",params![&key,open_deal],|r|r.get(0)).optional()?;
         let Some(position_id)=position_id.filter(|v|*v>0) else {continue;};
         if t.positions.iter().any(|p|p.identifier==position_id||p.ticket==position_id) {continue;}
-        let (mut gross,mut commission,mut swap,mut fee,mut entry_volume,mut exit_volume,mut closed_ms)=(0.,0.,0.,0.,0.,0.,0u64);
+        let (mut entry_volume,mut exit_volume,mut closed_ms)=(0.,0.,0u64);
         let mut reasons=Vec::new();
         let mut valid=true;
+        let mut parsed=Vec::<Value>::new();
         for raw in position_deals(db,&key,position_id)? {
             let d:Value=serde_json::from_str(&raw)?;
-            gross+=d["profit"].as_f64().unwrap_or(0.);
-            commission+=d["commission"].as_f64().unwrap_or(0.);
-            swap+=d["swap"].as_f64().unwrap_or(0.);
-            fee+=d["fee"].as_f64().unwrap_or(0.);
             let volume=d["volume"].as_f64().unwrap_or(0.);
             match d["entry"].as_i64() {
                 Some(0)=>entry_volume+=volume,
@@ -329,10 +344,15 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
                 Some(2)=>valid=false,
                 _=>{}
             }
+            parsed.push(d);
         }
-        let net=gross+commission+swap+fee;
-        if !valid || !net.is_finite() || !exit_volume.is_finite() || exit_volume<=0.
-            || !entry_volume.is_finite() || entry_volume+1e-8<result["volume"].as_f64().unwrap_or(0.) || (entry_volume-exit_volume).abs()>1e-8 {continue;}
+        // Same strict broker-cost and covered-close contract as trade_journal.
+        // Missing commission/swap/fee/type is UNKNOWN, not a free trade.
+        let Some([net,gross,commission,swap,fee])=crate::trade_journal::booked_costs(&parsed) else {continue;};
+        if !valid || !crate::trade_journal::fully_closed_by_deals(&parsed)
+            || closed_ms==0 || !exit_volume.is_finite() || exit_volume<=0.
+            || !entry_volume.is_finite() || entry_volume+1e-8<result["volume"].as_f64().unwrap_or(0.)
+            || (entry_volume-exit_volume).abs()>1e-8 {continue;}
         let coordination=&cmd["signal"]["coordination"];
         let learning=&cmd["learning"];
         let owner=cmd["brain"].as_str().unwrap_or("system");
