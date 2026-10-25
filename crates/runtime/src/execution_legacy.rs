@@ -878,6 +878,16 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                                 bail!("Trading deal has missing/invalid booked cost: {field}");
                             }
                         }
+                        // No trade can be accounted against the selected
+                        // symbol after advancing the cursor without a durable
+                        // positive Deal ticket AND physical position ID.
+                        // Balance/credit transfers and other symbols are not
+                        // attributed to this account+symbol broker journal.
+                        if d["symbol"] == t.symbol
+                            && (d["ticket"].as_u64().is_none_or(|v|v==0)
+                                || d["position_id"].as_u64().is_none_or(|v|v==0)) {
+                            bail!("Trading broker deal lacks a valid ticket or position ID; sync refused");
+                        }
                     }
                 }
                 let tx = db.unchecked_transaction()?;
@@ -1125,6 +1135,47 @@ mod execution_persistence_tests {
         request["until_ms"]=json!(200);
         service.route("POST","/v1/execution/sync",request.to_string().as_bytes(),&db,&status,300).unwrap();
         assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    }
+
+    #[test]
+    fn sync_cannot_skip_trading_deal_with_missing_ticket_or_position() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        service.bind(&db,&t,100).unwrap();
+        let mut status=Status::default();
+        status.telemetry=Some(t);
+        status.gateway_fresh=true;
+        let original=json!({"ticket":809,"position_id":99,"magic":410601,
+            "symbol":"XAUUSD","type":0,"entry":0,"profit":0.0,
+            "commission":0.0,"swap":0.0,"fee":0.0});
+        let mut req=json!({"login":17,"server":"Demo-Test","currency":"USD",
+            "trade_mode":0,"until_ms":220,"deals":[]});
+        for (field,value) in [
+            ("ticket",Value::Null),("ticket",json!(0)),
+            ("position_id",Value::Null),("position_id",json!(0))
+        ] {
+            let mut damaged=original.clone();
+            damaged[field]=value;
+            req["deals"]=json!([damaged]);
+            assert!(service.route("POST","/v1/execution/sync",
+                req.to_string().as_bytes(),&db,&status,300).is_err(),
+                "Missing broker {field} advanced history");
+            assert_eq!(service.history_until_ms,100);
+            let count:u64=db.query_row("SELECT COUNT(*) FROM broker_deals",
+                [],|r|r.get(0)).unwrap();
+            assert_eq!(count,0);
+        }
+        // A different broker symbol is not silently assigned to XAUUSD.
+        let mut foreign=original.clone();
+        foreign["symbol"]=json!("EURUSD");
+        foreign["position_id"]=Value::Null;
+        req["deals"]=json!([foreign]);
+        service.route("POST","/v1/execution/sync",
+            req.to_string().as_bytes(),&db,&status,300).unwrap();
+        assert_eq!(service.history_until_ms,220);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
+            [],|r|r.get::<_,u64>(0)).unwrap(),0);
     }
 
     #[test]
