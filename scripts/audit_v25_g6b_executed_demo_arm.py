@@ -17,6 +17,7 @@ import sqlite3
 import sys
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import audit_v25_g6a_preregistered_quotes as g6a
 
 MAX_COMMAND_AGE_MS = 180_000
