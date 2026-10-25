@@ -19,12 +19,20 @@
 - لا يتغير التنفيذ أو حساب اللوت أو المخاطرة أو بيانات حساب REAL، ولا يجري ترقية تلقائية لأي عقل أو نموذج.
 - إحصائيات Win Rate وProfit Factor تبقى وصفية لـDemo فقط، ولا تعتبر OOS مستقلاً أو إثبات ربحية.
 
+## تعافي السجل المعطوب وعرض الواجهة
+
+- استبدلنا تصفية JSON غير المحمية بفحص `json_valid` قبل `json_extract` في تقريري Expert/Brain Quality وSniper Quality. السجل النصي الفاسد لم يعد يستطيع تعطيل التقرير بالكامل.
+- يظهر الحقل `malformed_json_unknown_mode_rows` للصفوف ذات JSON معطوب في نفس سياق الحساب والعقل، مع بيان أننا **لا نستطيع تحديد وضع التداول** لهذه الصفوف وبالتالي لا يجوز إضافتها لعداد عينات الوضع المعروض.
+- عدّلنا عبارات Brain Monitor في واجهة Windows حتى لا تصف مجموع عينات التعلّم المؤهلة على أنها جميع المراكز المنفذة أو دفتر أرباح الحساب بالكامل. تبقى أرقام دفتر الصفقات مستقلة، والسجلات الأصلية محفوظة.
+
 ## اختبارات مباشرة
 
 - g5g_report_counts_only_verified_learning_receipts_not_forged_reward_or_missing_risk
 - g5g_mismatched_broker_payload_identity_is_never_brain_performance
 - g5g_sniper_scorecard_rejects_reward_poisoning_and_missing_risk
 - g5g_sniper_rejects_cross_account_payload_with_correct_broker_net
+- g5g_malformed_legacy_json_cannot_crash_quality_or_fake_samples
+- g5g_sniper_corrupt_json_is_excluded_without_aborting_other_brains
 
 تضمن الاختبارات أن السجلات ذات نتائج مالية متوازنة لكن مكافأة مزورة، risk مفقود، R خاطئ، حجم مخالف، أو حساب/مركز/عقل/وقت مخالف لا تدخل إحصائيات التعلم.
 
