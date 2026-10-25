@@ -1,0 +1,40 @@
+name: V25 G7 Prospective Audit
+on:
+  pull_request:
+    paths:
+      - 'scripts/g7_prospective_audit.py'
+      - 'scripts/g7_core_source_audit.py'
+      - 'tests/test_g7_core_source_audit.py'
+      - 'crates/runtime/src/g7_capture.rs'
+      - 'crates/runtime/src/frozen_coordinator.rs'
+      - 'crates/runtime/src/lib.rs'
+      - 'tests/test_g7_prospective_audit.py'
+      - '.github/workflows/v25-g7-prospective-audit.yml'
+  workflow_dispatch:
+jobs:
+  offline-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Run adversarial offline audit tests
+        run: python -m unittest discover -s tests -p 'test_g7_prospective_audit.py' -v
+      - name: Run Core SQLite source audit regression tests
+        run: python -m unittest discover -s tests -p 'test_g7_core_source_audit.py' -v
+      - name: Compile offline auditors
+        run: python -m py_compile scripts/g7_prospective_audit.py scripts/g7_core_source_audit.py
+  rust-source:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test G7 runtime with locked dependencies
+        run: cargo test -p braintrade-runtime --lib g7_capture --locked
+      - name: Test frozen coordinator integration
+        run: cargo test -p braintrade-runtime --lib frozen_coordinator --locked

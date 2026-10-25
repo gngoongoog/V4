@@ -41,6 +41,7 @@ pub fn init(db:&Connection)->Result<()>{
           PRIMARY KEY(run_id,bar_time),
           FOREIGN KEY(run_id) REFERENCES frozen_coordinator_runs(id));")?;
     // Keep direct frozen_coordinator init, test fixtures and full Service init in sync.
+    crate::g7_capture::init(db)?;
     crate::coordinator_paper::init(db)?;
     Ok(())
 }
@@ -80,9 +81,14 @@ pub fn freeze(db:&Connection,t:&Telemetry,c:&Config,brains:&[BrainConfig],
         "included_layers":["Expert system base","frozen advisor signals",
            "frozen learned weights","frozen contextual Demo selection",
            "frozen adaptive exits"]});
-    db.execute(
+    let tx=db.unchecked_transaction()?;
+    tx.execute(
         "INSERT INTO frozen_coordinator_runs VALUES(?1,?2,?3,?4,?5,1)",
         params![id,key,mode_key(c.trading.mode),now,snapshot.to_string()])?;
+    // Register the research cohort BEFORE any new completed-bar evidence.
+    crate::g7_capture::preregister(&tx,&id,&key,mode_key(c.trading.mode),
+        &snapshot.to_string(),now)?;
+    tx.commit()?;
     Ok(json!({"ok":true,"run_id":id,"active":true,
         "no_broker_orders":true,"no_learning_effect":true,
         "mode":mode_key(c.trading.mode),"policy":policy(c.trading.mode)}))
@@ -154,13 +160,21 @@ pub fn observe(db:&Connection,t:&Telemetry,c:&Config,adaptive:&Signal,
     crate::student_learning::adapt(&mut frozen,t,&cfg,&sys,&studies);
     // Record BEFORE any future simulated trade outcome. This table is neither
     // the broker-command ledger nor the adaptive learner's scored labels.
-    db.execute(
+    let tx=db.unchecked_transaction()?;
+    let inserted=tx.execute(
         "INSERT OR IGNORE INTO frozen_coordinator_decisions
          (run_id,bar_time,observed_ms,frozen,adaptive)
          VALUES(?1,?2,?3,?4,?5)",
         params![id,bar,now,
             serde_json::to_string(&frozen)?,
             serde_json::to_string(adaptive)?])?;
+    if inserted==1 && crate::g7_capture::has_registration(&tx,&id)? {
+        // Pre-G7 frozen studies remain LEGACY, not retroactively preregistered.
+        // Registered G7 receipts are atomic with the paired decision.
+        crate::g7_capture::record_pair(&tx,&id,&key,mode_key(c.trading.mode),
+            &raw,bar,now,t,&frozen,adaptive)?;
+    }
+    tx.commit()?;
     Ok(())
 }
 pub fn report(db:&Connection,key:&str,mode:TradingMode)->Result<Value>{
@@ -282,6 +296,17 @@ mod tests{
         assert_eq!(status["bars_compared"],1);
         assert_eq!(status["adaptive_only_ready"],1);
         assert_eq!(status["no_broker_orders"],true);
+        // The actual future completed-bar path writes exactly one G7 receipt,
+        // sharing the transaction with the original Frozen/Adaptive pair.
+        let receipt:String=db.query_row(
+            "SELECT payload FROM g7_paired_decision_evidence",[],|r|r.get(0)).unwrap();
+        let proof:Value=serde_json::from_str(&receipt).unwrap();
+        assert_eq!(proof["protocol"],"g7-local-paired-decisions-v1");
+        assert_eq!(proof["coverage"],"local_quote_observed");
+        assert_eq!(proof["execution"],"decision_only_neither_arm_broker_executed");
+        assert!(proof["booked_pnl"].is_null());
+        let n:i64=db.query_row("SELECT COUNT(*) FROM g7_paired_decision_evidence",[],|r|r.get(0)).unwrap();
+        assert_eq!(n,1);
         // Historical replay too late after close cannot create fabricated new rows.
         t.quote_time_ms=Some(999_000);
         observe(&db,&t,&c,&adaptive,&sample(240),999_000).unwrap();
@@ -365,6 +390,9 @@ mod tests{
         let trial=freeze(&db,&t,&c,&brains,&BTreeMap::new(),
             &BTreeMap::new(),&BTreeMap::new(),123_000).unwrap();
         let id=trial["run_id"].as_str().unwrap();
+        // Simulate a genuine pre-G7 frozen run: old studies had no G7
+        // registration. Never silently re-sign an edited G7 checkpoint.
+        db.execute("DELETE FROM g7_pair_registrations WHERE run_id=?1",[id]).unwrap();
         let raw:String=db.query_row(
             "SELECT snapshot FROM frozen_coordinator_runs WHERE id=?1",
             [id],|r|r.get(0)).unwrap();
@@ -383,6 +411,8 @@ mod tests{
         observe(&db,&t,&c,&signal,&frames,241_000).unwrap();
         let r=report(&db,&context(&t),TradingMode::Expert).unwrap();
         assert_eq!(r["bars_compared"],1);
+        let receipts:i64=db.query_row("SELECT COUNT(*) FROM g7_paired_decision_evidence",[],|r|r.get(0)).unwrap();
+        assert_eq!(receipts,0,"Legacy pairs must not receive invented G7 provenance");
         assert_eq!(r["mode"],"expert");
         assert_eq!(r["no_broker_orders"],true);
     }
