@@ -323,7 +323,20 @@ impl Student {
         self.timing.load(db, key)?;
         let mut st=db.prepare("SELECT payload FROM student_experiences WHERE context=?1 AND complete=0 ORDER BY opened_ms")?;
         for raw in st.query_map([key], |r| r.get::<_, String>(0))? {
-            let e: Experience = serde_json::from_str(&raw?)?;
+            let mut e: Experience = serde_json::from_str(&raw?)?;
+            // Old cached student experiences may contain accepted broker labels
+            // from before G5-E. Recheck them on EVERY load, not only fresh
+            // coordinator_broker_samples, before any further exit learning.
+            if e.actual.as_ref().is_some_and(|p| {
+                !verified_student_broker_label(p,e.position_id)
+            }) {
+                e.actual=None;
+                e.trial.usable=false;
+                e.trial.exclusion_reason="broker_label_unverified".into();
+                e.path_overflow=true;
+                e.loss_reviewed=false;
+                e.study_consumed=false;
+            }
             self.active.insert(e.command_id.clone(), e);
         }
         let mut st =
@@ -518,10 +531,24 @@ impl Student {
                     .optional()?
                     .unwrap_or(0);
             }
-            if e.actual.is_none() {
-                let actual:Option<String>=db.query_row("SELECT payload FROM coordinator_broker_samples WHERE context=?1 AND json_extract(payload,'$.open_command_id')=?2 AND brain=?3 LIMIT 1",params![key,e.command_id,e.owner],|r|r.get(0)).optional()?;
+            if e.actual.is_none() && e.position_id>0 {
+                let actual:Option<String>=db.query_row(
+                    "SELECT payload FROM coordinator_broker_samples
+                     WHERE context=?1 AND json_extract(payload,'$.open_command_id')=?2
+                       AND brain=?3 AND position_id=?4 LIMIT 1",
+                    params![key,e.command_id,e.owner,e.position_id],
+                    |r|r.get(0)).optional()?;
                 if let Some(raw) = actual {
                     let label: Value = serde_json::from_str(&raw)?;
+                    if !verified_student_broker_label(&label,e.position_id) {
+                        // Missing MT5 costs/risk/reward or a mismatched physical
+                        // position must never trigger a Student loss pattern or
+                        // unlock a paired exit study. Keep the raw broker row.
+                        e.trial.usable=false;
+                        e.trial.exclusion_reason="broker_label_unverified".into();
+                        e.path_overflow=true;
+                        continue;
+                    }
                     if label["closed_volume"]
                         .as_f64()
                         .is_some_and(|volume| (volume - e.volume).abs() > 1e-8)
@@ -620,6 +647,12 @@ pub fn log_opportunities(
     Ok(())
 }
 
+fn verified_student_broker_label(p:&Value,position_id:u64)->bool{
+    position_id>0
+        &&p["position_id"].as_u64()==Some(position_id)
+        &&crate::coordinator_learning::verified_broker_feedback(p).is_some()
+}
+
 pub fn view(db: &Connection, key: &str) -> Result<Value> {
     let mut st=db.prepare("SELECT payload FROM student_experiences WHERE context=?1 ORDER BY opened_ms DESC LIMIT 100")?;
     let mut experiences = Vec::new();
@@ -628,7 +661,14 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
     let mut recent_net = 0.;
     let mut recent_closed = 0;
     for raw in st.query_map([key], |r| r.get::<_, String>(0))? {
-        let e: Experience = serde_json::from_str(&raw?)?;
+        let mut e: Experience = serde_json::from_str(&raw?)?;
+        if e.actual.as_ref().is_some_and(|p|!verified_student_broker_label(p,e.position_id)){
+            // Read-only revalidation for old persisted experiences: never
+            // paint invalid broker PnL, win/loss patterns or training progress.
+            e.actual=None;
+            e.trial.usable=false;
+            e.trial.exclusion_reason="broker_label_unverified".into();
+        }
         let v = e.review();
         if let Some(net) = e.actual.as_ref().and_then(|v| v["net"].as_f64()) {
             recent_net += net;
@@ -653,7 +693,20 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
         }
         experiences.push(v);
     }
-    let (total,closed):(u64,u64)=db.query_row("SELECT COUNT(*),COALESCE(SUM(json_type(payload,'$.actual')='object'),0) FROM student_experiences WHERE context=?1",[key],|r|Ok((r.get(0)?,r.get(1)?)))?;
+    let total:u64=db.query_row("SELECT COUNT(*) FROM student_experiences WHERE context=?1",
+        [key],|r|r.get(0))?;
+    // Do not count arbitrary legacy JSON actual blobs as MT5 closes.
+    // This is read-only; underlying SQLite records remain available for audit.
+    let mut counted=db.prepare("SELECT payload FROM student_experiences
+        WHERE context=?1 AND json_type(payload,'$.actual')='object'")?;
+    let candidates=counted.query_map([key],|r|r.get::<_,String>(0))?;
+    let mut closed=0u64;
+    for raw in candidates {
+        let Ok(e)=serde_json::from_str::<Experience>(&raw?) else{continue;};
+        if e.actual.as_ref().is_some_and(|p|verified_student_broker_label(p,e.position_id)){
+            closed+=1;
+        }
+    }
     let mut st = db.prepare(
         "SELECT source,payload FROM student_exit_studies WHERE context=?1 ORDER BY source",
     )?;
@@ -894,7 +947,11 @@ mod tests {
                 .unwrap(),
             0
         );
-        let label = json!({"open_command_id":"one","closed_ms":2100,"closed_volume":0.1,"net":-0.5,"attribution":"costs_erased_gross_profit"});
+        let label = json!({"open_command_id":"one","position_id":55,"closed_ms":2100,
+            "evidence_source":"mt5_demo_broker","gross":-0.5,"commission":0.0,
+            "swap":0.0,"fee":0.0,"net":-0.5,"net_per_lot":-5.0,
+            "closed_volume":0.1,"risk_money":0.0,"r_multiple":0.0,"reward":-0.25,
+            "attribution":"costs_erased_gross_profit"});
         db.execute(
             "INSERT INTO coordinator_broker_samples VALUES('fixture',55,?1,'trend',2100,?2)",
             params![key, label.to_string()],
@@ -946,8 +1003,51 @@ mod tests {
         key
     }
     fn label(db: &Connection, key: &str, closed: u64) {
-        db.execute("INSERT INTO coordinator_broker_samples VALUES('fixture',55,?1,'trend',?2,?3)",params![key,closed,json!({"open_command_id":"repair","closed_ms":closed,"closed_volume":0.1,"net":-0.5,"attribution":"costs_erased_gross_profit"}).to_string()]).unwrap();
+        db.execute("INSERT INTO coordinator_broker_samples VALUES('fixture',55,?1,'trend',?2,?3)",params![key,closed,json!({"open_command_id":"repair","position_id":55,"closed_ms":closed,
+            "evidence_source":"mt5_demo_broker","gross":-0.5,"commission":0.0,
+            "swap":0.0,"fee":0.0,"net":-0.5,"net_per_lot":-5.0,
+            "closed_volume":0.1,"risk_money":0.0,"r_multiple":0.0,"reward":-0.25,
+            "attribution":"costs_erased_gross_profit"}).to_string()]).unwrap();
     }
+    #[test]
+    fn g5f_student_never_converts_fake_mt5_reward_into_real_loss_memory() {
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let t=telemetry();
+        let key=seed_entry(&db,&t,json!({"deal":77}));
+        db.execute("INSERT INTO broker_deals VALUES(?1,77,55,'trend',?2)",
+            params![key,json!({"entry":0,"position_id":55,"price":100.,
+                "volume":0.1,"time_msc":1000}).to_string()]).unwrap();
+        label(&db,&key,1200);
+        db.execute("UPDATE coordinator_broker_samples SET
+            payload=json_set(payload,'$.reward',0.99) WHERE source='fixture'",[]).unwrap();
+        let mut student=Student::new(&db).unwrap();
+        student.observe(&db,&t,5000).unwrap();
+        let v=view(&db,&key).unwrap();
+        assert_eq!(v["closed_broker_trades"],0,
+            "Even a correct booked net cannot be credited with a forged reward");
+        assert_eq!(v["usable_shadow_pairs"],0);
+        assert_eq!(v["experiences"][0]["actual"],Value::Null);
+        db.execute("UPDATE coordinator_broker_samples SET
+            payload=json_set(payload,'$.reward',-0.25) WHERE source='fixture'",[]).unwrap();
+        let mut restarted=Student::new(&db).unwrap();
+        restarted.observe(&db,&t,5500).unwrap();
+        let v=view(&db,&key).unwrap();
+        assert_eq!(v["closed_broker_trades"],1,
+            "After exact MT5 feedback is restored, matching broker evidence can be read");
+        assert_eq!(v["usable_shadow_pairs"],0,
+            "Unverified earlier sampled path cannot be promoted after restoration");
+        // Emulate an old persisted Experience.actual corrupted after the
+        // actual broker ledger was accepted. Reports must not count it.
+        db.execute("UPDATE student_experiences SET
+            payload=json_set(payload,'$.actual.reward',0.99) WHERE context=?1",
+            [&key]).unwrap();
+        let archived=view(&db,&key).unwrap();
+        assert_eq!(archived["closed_broker_trades"],0);
+        assert_eq!(archived["recent_closed"],0);
+        assert_eq!(archived["experiences"][0]["actual"],Value::Null);
+    }
+
     #[test]
     fn recovered_old_fill_is_journaled_but_never_invents_a_shadow_path() {
         let db = Connection::open_in_memory().unwrap();
@@ -998,8 +1098,13 @@ mod tests {
             t.quote_time_ms = Some(ms);
             student.quote(&t, ms);
         }
-        // No position snapshot or deal mapping was needed to capture these prices.
+        // Capturing quote extrema did not need a position snapshot. Final
+        // broker attribution DOES require the immutable Deal->Position link;
+        // it may arrive after the quotes and even after the close.
         label(&db, &key, 1400);
+        db.execute("INSERT INTO broker_deals VALUES(?1,77,55,'trend',?2)",
+            params![key,json!({"entry":0,"position_id":55,"price":100.0,
+                "volume":0.1,"time_msc":1000}).to_string()]).unwrap();
         student.observe(&db, &t, 1800).unwrap();
         let v = view(&db, &key).unwrap();
         let e = &v["experiences"][0];
