@@ -64,6 +64,16 @@ fn micro_account_key(t: &Telemetry) -> String {
 fn daily_account_key(t: &Telemetry) -> String {
     serde_json::to_string(&(&t.server, t.login, &t.currency, t.account_trade_mode)).unwrap()
 }
+/// Durable, account/mode/symbol-scoped high-water mark. The DB row is only
+/// advanced inside the same transaction that writes verified broker Deal
+/// receipts, so a crash or a rejected receipt cannot claim unrecorded history.
+fn broker_sync_watermark(db: &Connection, context: &str, target: &str) -> Result<(u64,u64)> {
+    Ok(db.query_row(
+        "SELECT until_ms,synced_ms FROM broker_history_sync WHERE context=?1 AND target=?2",
+        params![context,target],|row|Ok((row.get(0)?,row.get(1)?))
+    ).optional()?.unwrap_or((0,0)))
+}
+
 fn json_rows(db: &Connection, sql: &str, key: &str) -> Result<Vec<Value>> {
     let mut st = db.prepare(sql)?;
     let rows = st
@@ -240,6 +250,7 @@ CREATE TABLE IF NOT EXISTS broker_commands(id TEXT PRIMARY KEY,context TEXT NOT 
 CREATE INDEX IF NOT EXISTS broker_commands_context ON broker_commands(context,brain,created_ms);
 CREATE TABLE IF NOT EXISTS broker_seen(context TEXT NOT NULL,brain TEXT NOT NULL,signal TEXT NOT NULL,PRIMARY KEY(context,brain,signal));
 CREATE TABLE IF NOT EXISTS broker_deals(context TEXT NOT NULL,ticket INTEGER NOT NULL,position_id INTEGER NOT NULL,brain TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,ticket));
+CREATE TABLE IF NOT EXISTS broker_history_sync(context TEXT NOT NULL,target TEXT NOT NULL CHECK(target IN ('demo','live')),until_ms INTEGER NOT NULL CHECK(until_ms>=0),synced_ms INTEGER NOT NULL CHECK(synced_ms>=0),PRIMARY KEY(context,target));
 CREATE TABLE IF NOT EXISTS broker_observations(context TEXT NOT NULL,position_id INTEGER NOT NULL,brain TEXT NOT NULL,opened_ms INTEGER NOT NULL,hold_ms INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,position_id));
 CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT NOT NULL,brain TEXT NOT NULL,timestamp_ms INTEGER NOT NULL,payload TEXT NOT NULL);")?;
         let raw: Option<String> = db
@@ -730,8 +741,11 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     brains.push(json!({"config":b,"name":BRAINS.iter().find(|v|v.0==b.id).unwrap().1,"magic":magic,"latest":self.signals.get(&b.id).filter(|v|t.is_some_and(|t|self.matches(t))&&now.saturating_sub(v["evaluated_ms"].as_u64().unwrap_or(0))<=3000),"learning":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))),"learned_weight":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))).map(|w|w.weight()),"stats":{"deals":own.len(),"closed_positions":closed.len(),"wins":closed.iter().filter(|(_,p)|p.is_some_and(|amount| amount>0.)).count(),"net_booked":net,"booked_cost_evidence":if own.is_empty(){"NO_BROKER_DEALS"}else if net.is_some(){"BROKER_COMPONENTS_VERIFIED"}else{"MISSING_OR_INVALID_BROKER_COST"},"floating":positions.iter().filter(|p|p.magic==magic).map(|p|p.profit).sum::<f64>(),"open_positions":positions.iter().filter(|p|p.magic==magic).count()}}));
                 }
                 let commands=json_rows(db,"SELECT json_object('request',json(payload),'state',state,'result',json(result)) FROM broker_commands WHERE context=?1 ORDER BY created_ms DESC LIMIT 100",&key)?;
+                let (history_until,last_sync)=if t.is_some_and(|t|self.matches(t)) {
+                    broker_sync_watermark(db,&key,&self.settings.target)?
+                }else{(0,0)};
                 Ok(
-                    json!({"settings":self.settings,"armed":self.enabled(status),"account_matches":t.is_some_and(|t|self.matches(t)),"context":key,"brains":brains,"commands":commands,"last_broker_sync_ms":self.last_sync_ms,"history_until_ms":self.history_until_ms,"note":"أرباح محققة من سجل الوسيط؛ العمولات المنفصلة التي لا تحمل position_id لا تنسب تلقائياً لعقل. STOP يمنع دخولاً جديداً، وإدارة خروج الصفقات المملوكة تستمر."}),
+                    json!({"settings":self.settings,"armed":self.enabled(status),"account_matches":t.is_some_and(|t|self.matches(t)),"context":key,"brains":brains,"commands":commands,"last_broker_sync_ms":last_sync,"history_until_ms":history_until,"note":"أرباح محققة من سجل الوسيط؛ العمولات المنفصلة التي لا تحمل position_id لا تنسب تلقائياً لعقل. STOP يمنع دخولاً جديداً، وإدارة خروج الصفقات المملوكة تستمر."}),
                 )
             }
             ("POST", "/v1/execution/settings") => {
@@ -853,8 +867,11 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         }
                     }
                 }
+                // Crash-safe cursor recovery: never resume from a different
+                // symbol/account/target's in-memory watermark.
+                let (persisted_until,_)=broker_sync_watermark(db,&key,&self.settings.target)?;
                 Ok(
-                    json!({"command":command,"history_from_ms":self.history_until_ms.max(self.settings.bound_ms).saturating_sub(120_000),"account":{"login":t.login,"server":t.server,"currency":t.currency,"trade_mode":t.account_trade_mode},"poll_ms":if self.brains.iter().any(|b|b.enabled){100}else{250}}),
+                    json!({"command":command,"history_from_ms":persisted_until.max(self.settings.bound_ms).saturating_sub(120_000),"account":{"login":t.login,"server":t.server,"currency":t.currency,"trade_mode":t.account_trade_mode},"poll_ms":if self.brains.iter().any(|b|b.enabled){100}else{250}}),
                 )
             }
             ("POST", "/v1/execution/authorize") => {
@@ -1033,11 +1050,20 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         )?;
                     }
                 }
+                // The receipt batch and its high-water mark are ONE atomic
+                // SQLite transaction. A failed insertion or conflicting
+                // immutable ticket rolls both back; stale overlapping reads
+                // can add late fills but cannot rewind an existing cursor.
+                tx.execute(
+                    "INSERT INTO broker_history_sync(context,target,until_ms,synced_ms)
+                     VALUES(?1,?2,?3,?4)
+                     ON CONFLICT(context,target) DO UPDATE SET
+                     until_ms=MAX(broker_history_sync.until_ms,excluded.until_ms),
+                     synced_ms=MAX(broker_history_sync.synced_ms,excluded.synced_ms)",
+                    params![key,self.settings.target,until_ms,now],
+                )?;
                 tx.commit()?;
                 self.last_sync_ms = now;
-                // Overlap/backfill reads are expected; they may discover
-                // late broker deals. Never roll the in-memory high-water mark
-                // backwards after a successful older-range sync.
                 self.history_until_ms = self.history_until_ms.max(until_ms);
                 Ok(json!({"ok":true}))
             }
@@ -1484,6 +1510,70 @@ mod execution_persistence_tests {
         assert_eq!(svc.history_until_ms,210);
         assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
             [],|r|r.get::<_,u64>(0)).unwrap(),4);
+    }
+
+    #[test]
+    fn durable_history_watermark_survives_core_restart_and_isolates_broker_contexts() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let status=Status{gateway_fresh:true,telemetry:Some(t.clone()),..Default::default()};
+        let mut request=json!({"login":t.login,"server":t.server,"currency":t.currency,
+            "trade_mode":0,"until_ms":500,"deals":[]});
+        svc.route("POST","/v1/execution/sync",
+            request.to_string().as_bytes(),&db,&status,650).unwrap();
+        assert_eq!(broker_sync_watermark(&db,&ctx(&t),"demo").unwrap(),(500,650));
+        let work=svc.route("GET","/v1/execution/gateway",b"",&db,&status,660).unwrap();
+        assert_eq!(work["history_from_ms"],380);
+        let view=svc.route("GET","/v1/execution",b"",&db,&status,660).unwrap();
+        assert_eq!(view["history_until_ms"],500);
+        assert_eq!(view["last_broker_sync_ms"],650);
+        // The rebuilt Rust Core must read committed cursor from SQLite,
+        // never replay from the original bind time.
+        let mut restored=Service::new(&db).unwrap();
+        assert_eq!(restored.history_until_ms,0);
+        let work=restored.route("GET","/v1/execution/gateway",
+            b"",&db,&status,670).unwrap();
+        assert_eq!(work["history_from_ms"],380);
+        // An overlapping older read is allowed to carry delayed broker
+        // tickets, but cannot rewind a successful newer watermark.
+        request["until_ms"]=json!(450);
+        request["deals"]=json!([{"ticket":900,"position_id":42,
+            "magic":410600,"symbol":"XAUUSD","entry":0,"type":0,
+            "time_msc":400,"volume":0.1,"price":2000.,
+            "profit":0.,"commission":0.,"swap":0.,"fee":0.}]);
+        restored.route("POST","/v1/execution/sync",
+            request.to_string().as_bytes(),&db,&status,680).unwrap();
+        assert_eq!(broker_sync_watermark(&db,&ctx(&t),"demo").unwrap(),(500,680));
+        let trades:u64=db.query_row("SELECT COUNT(*) FROM broker_deals",[],
+            |r|r.get(0)).unwrap();
+        assert_eq!(trades,1);
+        // Failure in the next batch cannot claim that 700ms of history
+        // was settled. SQLite cursor and booked financial evidence agree.
+        request["until_ms"]=json!(700);
+        request["deals"][0]["commission"]=json!(-100.);
+        assert!(restored.route("POST","/v1/execution/sync",
+            request.to_string().as_bytes(),&db,&status,710).is_err());
+        assert_eq!(broker_sync_watermark(&db,&ctx(&t),"demo").unwrap(),(500,680));
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",[],
+            |r|r.get::<_,u64>(0)).unwrap(),1);
+        let other=Telemetry{login:99,..t.clone()};
+        restored.bind(&db,&other,800).unwrap();
+        let other_status=Status{gateway_fresh:true,telemetry:Some(other.clone()),..Default::default()};
+        let other_work=restored.route("GET","/v1/execution/gateway",
+            b"",&db,&other_status,810).unwrap();
+        assert_eq!(other_work["history_from_ms"],680);
+        assert_eq!(broker_sync_watermark(&db,&ctx(&other),"demo").unwrap(),(0,0));
+        let mut other_symbol=other.clone();
+        other_symbol.symbol="EURUSD".into();
+        let other_symbol_status=Status{gateway_fresh:true,telemetry:Some(other_symbol.clone()),..Default::default()};
+        let changed=restored.route("GET","/v1/execution/gateway",
+            b"",&db,&other_symbol_status,820).unwrap();
+        assert_eq!(changed["history_from_ms"],680);
+        assert_eq!(broker_sync_watermark(&db,&ctx(&other_symbol),"demo").unwrap(),(0,0));
+        // No automatic promotion between Demo and REAL historical cursors.
+        assert_eq!(broker_sync_watermark(&db,&ctx(&t),"live").unwrap(),(0,0));
     }
 
     #[test]
