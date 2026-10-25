@@ -151,6 +151,28 @@ def verified_label(db, context, mode, cmdrow, command, adaptive,
     if source_parts != [context, "adaptive-member-v1", mode, "system",
                         learning.get("timeframe"), learning.get("report_id")]:
         raise ValueError("wrong_causal_member_source")
+    # The real opening deal must have the exact Core-owned strategy magic
+    # and direction. A same-position/same-cost SELL may not prove a BUY.
+    # Exit deals can have a different magic when closed manually on MT5.
+    opening = db.execute(
+        "SELECT payload FROM broker_deals WHERE context=? AND ticket=? "
+        "AND position_id=?", (context, open_deal, position_id)).fetchone()
+    if opening is None:
+        raise ValueError("missing_original_opening_deal")
+    open_receipt = parse_object(opening["payload"], "corrupt_original_opening_deal")
+    side = adaptive.get("side")
+    if (type(command.get("magic")) is not int or command["magic"] <= 0
+            or type(side) is not int or side not in (-1, 1)
+            or open_receipt.get("ticket") != open_deal
+            or open_receipt.get("position_id") != position_id
+            or open_receipt.get("entry") != 0
+            or open_receipt.get("symbol") != command.get("symbol")
+            or open_receipt.get("magic") != command["magic"]
+            or open_receipt.get("type") != (0 if side == 1 else 1)):
+        raise ValueError("original_broker_entry_magic_or_direction_mismatch")
+    ack_pid = result.get("position_id")
+    if type(ack_pid) is int and ack_pid > 0 and ack_pid != position_id:
+        raise ValueError("broker_ack_position_mismatch")
     _verified_full_broker_deals(db, context, position_id, open_deal,
                                 closed_ms, payload, cmdrow["created_ms"])
     return {"command_id":command_id, "position_id":position_id,
