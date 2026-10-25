@@ -1,0 +1,34 @@
+name: V25 G6-C Portable Demo Study Tools
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/v25-g6c-portable-demo-study-tools-20261025]
+    paths:
+      - 'scripts/v25_g6c_list_frozen_runs.py'
+      - 'scripts/Run-G6-Study.ps1'
+      - 'scripts/Run-G6-Study.cmd'
+      - 'scripts/check_v25_g6c_study_package.py'
+      - 'scripts/package_v25.py'
+      - 'tests/test_v25_g6c_portable_studies.py'
+      - '.github/workflows/v25-g6c-portable-study.yml'
+  pull_request:
+    branches: [feature/v25-g6b-exact-executed-demo-arm-audit-20261025]
+permissions:
+  contents: read
+jobs:
+  offline-research-tool-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile packaged study scripts
+        run: python3 -m compileall -q scripts/v25_g6c_list_frozen_runs.py scripts/check_v25_g6c_study_package.py scripts/package_v25.py tests/test_v25_g6c_portable_studies.py
+      - name: Validate offline listing and packaging denial scenarios
+        run: python3 -m unittest discover -s tests -p 'test_v25_g6c_portable_studies.py' -v
+      - name: Verify G6-A and G6-B original learning-evidence gates
+        run: |
+          python3 -m unittest discover -s tests -p 'test_v25_g6a_preregistered_quotes.py' -v
+          python3 -m unittest discover -s tests -p 'test_v25_g6b_executed_demo_arm.py' -v
