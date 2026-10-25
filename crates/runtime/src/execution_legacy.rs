@@ -893,7 +893,9 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         | "unknown"
                         | "placed"
                         | "closed"
-                        | "observed"
+                        // 'observed' is reserved for Core's exact Deal and
+                        // physical-position reconciler; never accept it from
+                        // a Gateway /result packet, even after restart.
                         | "cancelled"
                 ) {
                     bail!("Invalid broker state");
@@ -1066,6 +1068,38 @@ mod execution_persistence_tests {
         db.execute("INSERT INTO broker_deals VALUES (?1,?2,?3,'system',?4)",
             params![context,d["ticket"].as_u64().unwrap(),
                 d["position_id"].as_u64().unwrap(),d.to_string()]).unwrap();
+    }
+
+    #[test]
+    fn external_gateway_result_cannot_force_observed_without_mt5_proof() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        service.bind(&db,&t,100).unwrap();
+        let context=ctx(&t);
+        db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload)
+            VALUES('unverified',?1,'system','open',100,'dispatched',?2)",
+            params![context,json!({"id":"unverified","kind":"open",
+                "symbol":"XAUUSD","magic":410600}).to_string()]).unwrap();
+        let status=Status{gateway_fresh:true,telemetry:Some(t),..Default::default()};
+        let forged=json!({"id":"unverified","state":"observed",
+            "deal":123,"reason":"no proof"});
+        assert!(service.route("POST","/v1/execution/result",
+            forged.to_string().as_bytes(),&db,&status,200).is_err());
+        let (state,result):(String,String)=db.query_row(
+            "SELECT state,result FROM broker_commands WHERE id='unverified'",
+            [],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(state,"dispatched");
+        assert_eq!(result,"{}");
+        // A standard fill ACK remains eligible for eventual Core-only
+        // reconciliation but does not itself become observed.
+        let filled=json!({"id":"unverified","state":"filled","deal":123});
+        service.route("POST","/v1/execution/result",
+            filled.to_string().as_bytes(),&db,&status,201).unwrap();
+        let stored:String=db.query_row(
+            "SELECT state FROM broker_commands WHERE id='unverified'",
+            [],|r|r.get(0)).unwrap();
+        assert_eq!(stored,"filled");
     }
 
     #[test]
