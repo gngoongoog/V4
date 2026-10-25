@@ -12,6 +12,8 @@ import {approvalIsCurrent,canConfirmStart} from './operator-approval';
 import type {OperatorApproval} from './operator-approval';
 import {brokerEvidence} from './brain-evidence';
 import {ScopedReadFence} from './scoped-read-fence';
+import {DashboardTradeFeed,DashboardExecutionQuality} from './dashboard-operations';
+import type {DashboardRead} from './dashboard-evidence';
 import {OperatorWriteFence} from './operator-write-fence';
 import type {OperatorWriteTicket} from './operator-write-fence';
 import {MicroCapitalOperations} from './micro-capital-operations';
@@ -111,6 +113,7 @@ export default function Terminal(){
  const [compact,setCompact]=useState(false);const [preview,setPreview]=useState(false);const [status,setStatus]=useState<Status|null>(null);
  const [online,setOnline]=useState(false);const [busy,setBusy]=useState(false);const [error,setError]=useState('');const [notice,setNotice]=useState('');
  const [pagePanel,setPagePanel]=useState<{scope:string;data:unknown}|null>(null);
+ const [dashboardRead,setDashboardRead]=useState<DashboardRead|null>(null);
  const [pageErrorSlot,setPageErrorSlot]=useState<{scope:string;message:string}|null>(null);
  const [pageTimeSlot,setPageTimeSlot]=useState<{scope:string;timestamp:number|null}|null>(null);
  const [config,setConfig]=useState<Record<string,unknown>|null>(null);const [riskSnapshot,setRiskSnapshot]=useState<Record<string,unknown>|null>(null);
@@ -361,6 +364,31 @@ export default function Terminal(){
   const visible=()=>{if(document.visibilityState==='visible')void refresh()};
   document.addEventListener('visibilitychange',visible);
   return()=>{active=false;clearInterval(timer);document.removeEventListener('visibilitychange',visible)};
+ },[page,preview,contextKey]);
+ // G3: a single generation-scoped read-only bundle from the actual
+ // Core account, trades and broker quality. No invented LIVE metrics.
+ useEffect(()=>{
+  if(page!=='dashboard'||preview||!hasTauri()){setDashboardRead(null);return}
+  let alive=true,fetching=false;
+  const refresh=async()=>{
+   if(!alive||fetching||document.visibilityState!=='visible')return;
+   fetching=true;
+   const ticket=scopedGeneration.current.beginRead('dashboardBroker');
+   try{
+    const [execution,trades,quality]=await Promise.all([
+     readPanel('/v1/execution'),readPanel('/v1/execution/trades'),
+     readPanel('/v1/execution/quality')]);
+    if(alive&&scopedGeneration.current.isCurrent(ticket))
+     setDashboardRead({scope:contextKey,readMs:Date.now(),execution,trades,quality});
+   }catch{
+    if(alive&&scopedGeneration.current.isCurrent(ticket))setDashboardRead(null);
+   }finally{fetching=false}
+  };
+  setDashboardRead(null);void refresh();
+  const interval=setInterval(()=>{void refresh()},10000);
+  const visible=()=>{if(document.visibilityState==='visible')void refresh()};
+  document.addEventListener('visibilitychange',visible);
+  return()=>{alive=false;clearInterval(interval);document.removeEventListener('visibilitychange',visible)};
  },[page,preview,contextKey]);
  const display=preview?DESIGN_FIXTURE:status;
  // Account metadata (including balance/equity) is valid with a current
@@ -734,12 +762,12 @@ export default function Terminal(){
      </div>
      <div className="activity-grid">
       <section className="panel positions-panel"><div className="panel-title"><b>المراكز النشطة</b><div className="microtabs">{(['all','buy','sell'] as const).map(k=><button className={filter===k?'chosen':''} key={k} onClick={()=>setFilter(k)}>{k==='all'?`الكل (${account?positions.length:'—'})`:k==='buy'?'شراء':'بيع'}</button>)}</div></div><div className="table-scroll"><table><thead><tr>{['#','الرمز','النوع','الحجم','سعر الدخول','السعر الحالي','الربح / الخسارة','الإجراء'].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{visiblePositions.length?visiblePositions.map(p=><tr key={p.ticket}><td>{p.ticket}</td><td>{p.symbol}</td><td className={up(p.side)?'teal':'red'}>{p.side}</td><td>{num(p.volume,2)}</td><td>{num(p.price_open)}</td><td>{num(p.price_current)}</td><td className={p.profit>=0?'teal':'red'}>{signed(p.profit,currency)}</td><td><button className="row-action" onClick={()=>open('execution')}>التفاصيل ›</button></td></tr>):<tr><td colSpan={8} className="empty-row">لا توجد مراكز MT5 حالياً أو المصدر غير متاح</td></tr>}</tbody></table></div></section>
-      <section className="panel trades-panel"><div className="panel-title"><b>أحدث الصفقات المنفذة</b><button onClick={()=>open('journal')}>عرض الكل ›</button></div><div className="preview-list">{preview?<><div>17:24:11　 XAUUSD　 Buy　　 0.50</div><div>17:16:30　 GBPUSD　 Sell　　 1.00</div><div>17:11:25　 NAS100　 Buy　　 0.20</div><div className="preview-tag">DEMONSTRATION ONLY</div></>:<div className="table-empty">الصفقات التاريخية تُقرأ من سجل Core في صفحة السجلات.</div>}</div></section>
+      <DashboardTradeFeed status={!preview&&feed.broker?status:null} read={dashboardRead} scope={contextKey} now={Date.now()} preview={preview} onJournal={()=>open('journal')}/>
      </div>
      <div className="bottom-grid">
       <section className="panel equity-history"><div className="panel-title"><b>أداء الحساب</b><small>رصيد • حقوق ملكية • تراجع</small></div><div className="equity-placeholder">{preview?<div className="decor-lines">╱╲╱╲╱╲╱╱╲╱╲╱</div>:<>غير متاح: تاريخ Equity الموثق غير محمّل <button onClick={()=>open('reports')}>عرض السجلات</button></>}</div></section>
       <section className="panel trade-distribution"><div className="panel-title"><b>توزيع الصفقات</b><button onClick={()=>open('journal')}>السجلات ›</button></div><div className="distribution-body"><div className="large-donut"><strong>{preview?'450':brokerResults?.samples??'—'}</strong><small>{preview?'صفقة تجريبية':'Demo مغلقة'}</small></div><div className="dist-legend"><span>رابحة <b className="teal">{preview?'342':brokerResults?.wins??'—'}</b></span><span>خاسرة <b className="red">{preview?'108':brokerResults?.losses??'—'}</b></span></div></div></section>
-      <section className="panel execution-quality"><div className="panel-title"><b>جودة التنفيذ</b><button onClick={()=>open('execution')}>المراقبة ›</button></div><div className="quality-list">{[['الانزلاق السعري',preview?'0.12 pips':'—'],['الاستجابة',preview?'98.7%':'—'],['التنفيذ المقبول',preview?'2.1%':'—'],['الأوامر المرفوضة',preview?'0.8%':'—']].map(([label,value])=><div className="quality-row" key={label}><span>{label}</span><div className="quality-meter"><i style={{width:preview?'63%':'0%'}}/></div><small>{value}</small></div>)}</div></section>
+      <DashboardExecutionQuality status={!preview&&feed.broker?status:null} read={dashboardRead} scope={contextKey} now={Date.now()} preview={preview} onExecution={()=>open('execution')}/>
       <section className="panel sys-alerts"><div className="panel-title"><b>إشعارات النظام</b><button onClick={()=>open('events')}>عرض الكل ›</button></div><div className="alerts-list"><div>{status?.message||'بانتظار حالة Rust Core...'}</div><div>{status?.telegram_status||'Telegram: غير متاح'}</div><div>{preview?'Design preview — sample signals':trustworthy?'MT5 snapshot verified':'لم يصل تحديث MT5 حديث'}</div></div></section>
       <section className="panel risk-stats"><div className="panel-title"><b>مقاييس المخاطر</b></div><div className="risk-bars">{[['Free Margin',account?.margin_free],['Drawdown',drawdown],['Position count',account?positions.length:null],['Risk limit',safeConfig?unwrap(safeConfig.risk).risk_percent:null]].map(([label,value],i)=><div className="risk-line" key={String(label)}><span>{String(label)}</span><div className="risk-meter"><i style={{width:valid(value)?`${Math.min(100,Math.abs(Number(value))*(i===0?.002:10))}%`:'0%'}}/></div><strong>{valid(value)?num(value,2):'—'}</strong></div>)}</div></section>
      </div>

@@ -2,7 +2,7 @@ name: V25 P0-O canonical source and Windows Portable
 on:
   workflow_dispatch:
   push:
-    branches: [feature/v25-enterprise-validation-20261024, feature/v25-g2c-strict-deal-reconciliation-20261025, feature/v25-g2d-exact-booked-cost-provenance-20261025, feature/v25-g2e-immutable-broker-receipts-20261025, feature/v25-g2f-history-deal-geometry-20261025, feature/v25-g2g-history-cursor-monotonic-20261025, feature/v25-g2h-verified-closed-volume-20261025, feature/v25-g2i-exact-observed-broker-proof-20261025, feature/v25-g2j-durable-broker-cursor-20261025, feature/v25-g2k-dashboard-account-isolation-20261025, feature/v25-g2l-unsent-close-no-false-fill-20261025, feature/v25-g2m-no-journal-stale-intent-resend-20261025]
+    branches: [feature/v25-enterprise-validation-20261024, feature/v25-g2c-strict-deal-reconciliation-20261025, feature/v25-g2d-exact-booked-cost-provenance-20261025, feature/v25-g2e-immutable-broker-receipts-20261025, feature/v25-g2f-history-deal-geometry-20261025, feature/v25-g2g-history-cursor-monotonic-20261025, feature/v25-g2h-verified-closed-volume-20261025, feature/v25-g2i-exact-observed-broker-proof-20261025, feature/v25-g2j-durable-broker-cursor-20261025, feature/v25-g2k-dashboard-account-isolation-20261025, feature/v25-g2l-unsent-close-no-false-fill-20261025, feature/v25-g2m-no-journal-stale-intent-resend-20261025, feature/v25-g3a-dashboard-verified-broker-panels-20261025]
     paths:
       - 'apps/**'
       - 'crates/**'

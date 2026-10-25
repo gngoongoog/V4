@@ -197,3 +197,15 @@
 .execution-binding-summary{font-size:12px;padding:10px;border:1px solid #305261;background:rgba(9,36,50,.85);color:#b6d9e3;border-radius:8px}
 .operator-card>label{display:grid;gap:7px;font-size:12px}
 .operator-card>label>input{background:#081a26;border:1px solid #315063;border-radius:8px;color:#eef7fa;padding:10px;font:inherit}
+
+/* V25 G3-A: actual MT5 journal entries are legible without fake sparklines. */
+.terminal-v15 .broker-feed-row{display:grid;grid-template-columns:minmax(0,1fr) auto;
+ column-gap:12px;row-gap:3px;padding:9px 3px;border-bottom:1px solid rgba(140,159,177,.15);
+ line-height:1.45;align-items:center}
+.terminal-v15 .broker-feed-row:last-child{border-bottom:0}
+.terminal-v15 .broker-feed-row span{min-width:0;overflow-wrap:anywhere;font-size:12px}
+.terminal-v15 .broker-feed-row strong{font-size:12px;font-variant-numeric:tabular-nums;
+ white-space:normal;text-align:left}
+.terminal-v15 .broker-feed-row small{grid-column:1/-1;opacity:.74;font-size:11px}
+@media (max-width:620px){.terminal-v15 .broker-feed-row{grid-template-columns:1fr}
+ .terminal-v15 .broker-feed-row strong{text-align:right}}
