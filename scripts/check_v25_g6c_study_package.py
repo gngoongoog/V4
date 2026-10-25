@@ -23,6 +23,8 @@ FILES = (
      "Tools/G6/audit_v25_g6b_executed_demo_arm.py"),
     ("scripts/audit_v25_g6d_causal_learning_evidence.py",
      "Tools/G6/audit_v25_g6d_causal_learning_evidence.py"),
+    ("scripts/audit_v25_g6e_frozen_policy_cutoff.py",
+     "Tools/G6/audit_v25_g6e_frozen_policy_cutoff.py"),
     ("scripts/v25_g6c_list_frozen_runs.py",
      "Tools/G6/v25_g6c_list_frozen_runs.py"),
     ("scripts/Run-G6-Study.ps1", "Tools/Run-G6-Study.ps1"),
