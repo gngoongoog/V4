@@ -100,7 +100,7 @@ def verified_label(db, context, mode, cmdrow, command, adaptive,
     open_deal = result.get("deal")
     if type(open_deal) is not int or open_deal <= 0:
         raise ValueError("missing_exact_open_broker_deal")
-    labels = [r for r, p in candidate_samples
+    labels = [(r, p) for r, p in candidate_samples
               if p.get("open_command_id") == command_id]
     if not labels:
         raise ValueError("missing_accepted_closed_broker_label")
