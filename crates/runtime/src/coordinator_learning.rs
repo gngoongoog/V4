@@ -134,11 +134,40 @@ fn forward_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result
     for(raw_p,raw_o)in rows{let p:Value=serde_json::from_str(&raw_p)?;let o:Value=serde_json::from_str(&raw_o)?;let sample_regime=p["regime"].as_str().unwrap_or("legacy");if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}let net=o["net"].as_f64().unwrap_or(0.);let reward=o["reward"].as_f64().unwrap_or_else(||reward_v2(net,0.).1);let ts=o["scored_ms"].as_u64().or_else(||p["observed_ms"].as_u64()).unwrap_or(now);let w=decay_weight(ts,now,FORWARD_HALF_LIFE_MS);samples+=1;if net>0.{wins+=1;weighted_wins+=w;}weighted_net+=net*w;weighted_reward+=reward*w;effective+=w;}
     Ok(finish_stats(samples,wins,weighted_wins,weighted_net,weighted_reward,effective))
 }
+// Broker training labels can predate G5-B. Validate again AT READ TIME:
+// upgrading the admission gate does not make legacy polluted rows trustworthy.
+fn verified_broker_feedback(p:&Value)->Option<(f64,f64,f64)>{
+    if p["evidence_source"]!="mt5_demo_broker" {return None;}
+    let mut vals=[0.0_f64;6];
+    for (i,name) in ["gross","commission","swap","fee","net","net_per_lot"].iter().enumerate(){
+        vals[i]=p[*name].as_f64().filter(|n|n.is_finite())?;
+    }
+    let volume=p["closed_volume"].as_f64().filter(|v|v.is_finite()&&*v>0.)?;
+    let reward=p["reward"].as_f64().filter(|v|v.is_finite()&&(-1.0..=1.0).contains(v))?;
+    let net=vals[0]+vals[1]+vals[2]+vals[3];
+    if !net.is_finite()||(net-vals[4]).abs()>1e-6_f64.max(vals[4].abs()*1e-8)
+        ||(vals[4]/volume-vals[5]).abs()>1e-6_f64.max(vals[5].abs()*1e-8) {
+        return None;
+    }
+    Some((vals[4],vals[5],reward))
+}
 fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<Stats>{
     let mut st=db.prepare("SELECT closed_ms,payload FROM coordinator_broker_samples WHERE source=?1 ORDER BY closed_ms DESC LIMIT 4000")?;
     let rows=st.query_map([source],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let(mut samples,mut wins,mut weighted_wins,mut weighted_net,mut weighted_reward,mut effective)=(0u64,0u64,0.,0.,0.,0.);
-    for(ts,raw)in rows{let p:Value=serde_json::from_str(&raw)?;let sample_regime=p["regime"].as_str().unwrap_or("legacy");if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}let net=p["net_per_lot"].as_f64().unwrap_or(0.);let reward=p["reward"].as_f64().unwrap_or_else(||reward_v2(net,0.).1);let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);samples+=1;if net>0.{wins+=1;weighted_wins+=w;}weighted_net+=net*w;weighted_reward+=reward*w;effective+=w;}
+    for(ts,raw)in rows{
+        let p:Value=serde_json::from_str(&raw)?;
+        let sample_regime=p["regime"].as_str().unwrap_or("legacy");
+        if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}
+        let Some((_,net_per_lot,reward))=verified_broker_feedback(&p) else{continue;};
+        if ts==0||ts>now {continue;}
+        let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);
+        samples+=1;
+        if net_per_lot>0.{wins+=1;weighted_wins+=w;}
+        weighted_net+=net_per_lot*w;
+        weighted_reward+=reward*w;
+        effective+=w;
+    }
     Ok(finish_stats(samples,wins,weighted_wins,weighted_net,weighted_reward,effective))
 }
 // Repeated-mistake memory uses only exact completed Demo broker evidence already
@@ -154,7 +183,9 @@ fn contextual_stats(db:&Connection,source:&str,key:&str,now:u64)->Result<(u64,f6
     for(ts,raw) in rows {
         let p:Value=serde_json::from_str(&raw)?;
         if p["context_key"].as_str()!=Some(key){continue;}
-        if let Some(reward)=p["reward"].as_f64().filter(|v|v.is_finite()) {
+        let Some((net,_,reward))=verified_broker_feedback(&p) else {continue;};
+        if ts==0||ts>now {continue;}
+        {
             let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);
             count+=1;sum+=reward*w;mass+=w;
         }
@@ -163,7 +194,7 @@ fn contextual_stats(db:&Connection,source:&str,key:&str,now:u64)->Result<(u64,f6
         if streak_unbroken {
             if ts==0 || ts>now || now.saturating_sub(ts)>MEMORY_HORIZON_MS {
                 streak_unbroken=false;
-            } else if p["net"].as_f64().is_some_and(|net|net.is_finite() && net<0.) {
+            } else if net<0. {
                 recent_loss_streak+=1;
                 if p["attribution"]=="costs_erased_gross_profit" || p["attribution"]=="booked_costs" {
                     recent_cost_losses+=1;
@@ -632,7 +663,9 @@ mod tests {
             (2,"same","trend_up_normal|asia|tight",-0.8),(3,"same","trend_up_normal|london|wide",-0.9),
             (4,"other","trend_up_normal|london|tight",-1.)] {
             db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,'account','trend',1000,?3)",
-                params![source,id,json!({"context_key":key,"reward":reward}).to_string()]).unwrap();
+                params![source,id,json!({"evidence_source":"mt5_demo_broker","context_key":key,
+                    "gross":reward,"commission":0.0,"swap":0.0,"fee":0.0,
+                    "net":reward,"net_per_lot":reward,"closed_volume":1.0,"reward":reward}).to_string()]).unwrap();
         }
         let (n,reward,confidence,streak,penalty)=contextual_stats(&db,"same","trend_up_normal|london|tight",1000).unwrap();
         assert_eq!(n,1);assert_eq!(reward,0.8);assert!(confidence>0. && confidence<0.2);
@@ -907,6 +940,60 @@ mod tests {
     }
 
     #[test]
+    fn historical_incomplete_broker_rows_are_not_weights_or_mistake_memory(){
+        let db=Connection::open_in_memory().unwrap();
+        let _=Learner::new(&db).unwrap();
+        let key="trend_up_normal|london|tight";
+        let source="old-demo-trend";
+        let now=2_000_000_000_000u64;
+        let valid=json!({"evidence_source":"mt5_demo_broker",
+            "gross":2.0,"commission":-0.5,"swap":0.0,"fee":0.0,
+            "net":1.5,"net_per_lot":15.0,"closed_volume":0.1,
+            "reward":0.8,"regime":"trend_up_normal","context_key":key});
+        let broken=[
+            json!({"evidence_source":"mt5_demo_broker","gross":2.0,
+                "commission":-0.5,"swap":0.0,"net":1.5,
+                "net_per_lot":15.0,"closed_volume":0.1,"reward":0.8,
+                "regime":"trend_up_normal","context_key":key}),
+            json!({"evidence_source":"mt5_demo_broker","gross":2.0,
+                "commission":-0.5,"swap":0.0,"fee":0.0,"net":20.0,
+                "net_per_lot":200.0,"closed_volume":0.1,"reward":0.8,
+                "regime":"trend_up_normal","context_key":key}),
+            json!({"evidence_source":"mt5_demo_broker","gross":2.0,
+                "commission":-0.5,"swap":0.0,"fee":0.0,"net":1.5,
+                "net_per_lot":15.0,"closed_volume":0.1,
+                "regime":"trend_up_normal","context_key":key}),
+            json!({"evidence_source":"synthetic_shadow","gross":2.0,
+                "commission":-0.5,"swap":0.0,"fee":0.0,"net":1.5,
+                "net_per_lot":15.0,"closed_volume":0.1,"reward":0.8,
+                "regime":"trend_up_normal","context_key":key}),
+        ];
+        for (i,row) in broken.iter().enumerate(){
+            db.execute("INSERT INTO coordinator_broker_samples
+                (source,position_id,context,brain,closed_ms,payload)
+                VALUES(?1,?2,'demo','trend',?3,?4)",
+                params![source,i+1,now-1000,row.to_string()]).unwrap();
+        }
+        let clean=broker_stats(&db,source,None,now).unwrap();
+        assert_eq!(clean.samples,0,"Incomplete past receipts are not training evidence");
+        assert_eq!(contextual_stats(&db,source,key,now).unwrap().0,0);
+        let weight=selected_weight(Stats::default(),Stats::default(),clean,Stats::default(),
+            &IntelligenceContext::default());
+        assert_eq!(weight.weight(),1.0,"No historical broker labels: neutral weight");
+        db.execute("INSERT INTO coordinator_broker_samples
+                (source,position_id,context,brain,closed_ms,payload)
+                VALUES(?1,10,'demo','trend',?2,?3)",
+                params![source,now-500,valid.to_string()]).unwrap();
+        let updated=broker_stats(&db,source,None,now).unwrap();
+        assert_eq!(updated.samples,1);
+        assert!((updated.mean_net_per_lot-15.0).abs()<1e-6);
+        assert_eq!(contextual_stats(&db,source,key,now).unwrap().0,1);
+        let tuned=selected_weight(Stats::default(),Stats::default(),updated,Stats::default(),
+            &IntelligenceContext::default());
+        assert!(tuned.weight()>1.0,"Verified positive after-cost feedback updates actual weight");
+    }
+
+    #[test]
     fn sparse_regime_keeps_global_prior_without_double_counting() {
         let global=Stats{samples:101,wins:100,mean_reward:99./101.,weighted_win_rate:100./101.,effective_samples:101.,..Default::default()};
         let local=Stats{samples:1,wins:0,mean_reward:-1.,weighted_win_rate:0.,effective_samples:1.,..Default::default()};
@@ -927,7 +1014,10 @@ mod tests {
         let source="demo-account-1/trend";
         let other="demo-account-2/trend";
         let mut add=|source:&str,id:u64,age:u64,net:f64,attr:&str|{
-            let payload=json!({"context_key":ctx,"net":net,"reward":if net<0.{-0.5}else{0.5},"attribution":attr});
+            let payload=json!({"evidence_source":"mt5_demo_broker","context_key":ctx,
+                "gross":net,"commission":0.0,"swap":0.0,"fee":0.0,"net":net,
+                "net_per_lot":net,"closed_volume":1.0,
+                "reward":if net<0.{-0.5}else{0.5},"attribution":attr});
             db.execute("INSERT INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,'account','trend',?3,?4)",
                 params![source,id,now-age,payload.to_string()]).unwrap();
         };
