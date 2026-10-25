@@ -821,6 +821,16 @@ mod tests {
         )
         .unwrap();
 
+        // A closed volume and known profit without the booked fee is not an
+        // actual net trade outcome. This previously silently assumed fee=0.
+        db.execute("UPDATE broker_deals SET payload=json_remove(payload,'$.fee')
+            WHERE context=?1 AND ticket=101",[&key]).unwrap();
+        let missing=l.observe(&db,&t,&c,&[b.clone()],&f,false,now).unwrap();
+        assert_eq!(missing["trend"].broker_samples,0);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_broker_samples",[],
+            |r|r.get::<_,u64>(0)).unwrap(),0);
+        db.execute("UPDATE broker_deals SET payload=json_set(payload,'$.fee',-0.05)
+            WHERE context=?1 AND ticket=101",[&key]).unwrap();
         let w = l.observe(&db, &t, &c, &[b], &f, false, now).unwrap();
         let trend = &w["trend"];
         assert_eq!(trend.broker_samples, 1);
@@ -853,6 +863,91 @@ mod tests {
             .unwrap();
         assert_eq!(count2, 1);
     }
+    #[test]
+    fn cost_provenance_blocks_corrupt_legacy_labels_and_expert_votes_really_adapt() {
+        let valid=|net:f64| json!({
+            "evidence_source":"mt5_demo_broker",
+            "gross":net+0.7,"commission":-0.7,"swap":0.0,"fee":0.0,
+            "net":net,"net_per_lot":net/0.1,"closed_volume":0.1,
+            "reward":if net>0.{0.9}else{-0.9}
+        });
+        let good=valid(3.0);
+        assert!(verified_broker_label(&good).is_some());
+        for field in ["fee","commission","swap","gross","net","net_per_lot","closed_volume","reward"] {
+            let mut broken=good.clone();broken.as_object_mut().unwrap().remove(field);
+            assert!(verified_broker_label(&broken).is_none(),"Missing {field} must not train");
+        }
+        for damaged in [
+            json!({"evidence_source":"paper","gross":3.7,"commission":-0.7,
+                "swap":0.0,"fee":0.0,"net":3.0,"net_per_lot":30.0,
+                "closed_volume":0.1,"reward":0.9}),
+            json!({"evidence_source":"mt5_demo_broker","gross":3.7,"commission":-0.7,
+                "swap":0.0,"fee":0.0,"net":9.0,"net_per_lot":90.0,
+                "closed_volume":0.1,"reward":0.9}),
+            json!({"evidence_source":"mt5_demo_broker","gross":3.7,"commission":-0.7,
+                "swap":0.0,"fee":0.0,"net":3.0,"net_per_lot":30.0,
+                "closed_volume":0.1,"reward":4.0}),
+        ] {
+            assert!(verified_broker_label(&damaged).is_none());
+        }
+
+        let db=Connection::open_in_memory().unwrap();
+        Learner::new(&db).unwrap();
+        let now=1_800_000_000_000u64;
+        let trend_source=source_key("verified-demo-account",TradingMode::Expert,"trend","M1","").unwrap();
+        let gann_source=source_key("verified-demo-account",TradingMode::Expert,"gann","M1","").unwrap();
+        let save=|src:&str,id:u64,net:f64,closed:u64|{
+            db.execute("INSERT INTO coordinator_broker_samples
+                (source,position_id,context,brain,closed_ms,payload)
+                VALUES(?1,?2,'verified-demo-account','advisor',?3,?4)",
+                params![src,id,closed,valid(net).to_string()]).unwrap();
+        };
+        for i in 0..40u64 {
+            save(&trend_source,1000+i,3.0,now-100_000+i);
+            save(&gann_source,2000+i,-3.0,now-100_000+i);
+        }
+        let choose=||{
+            let weight=|src:&str|selected_weight(
+                Stats::default(),Stats::default(),
+                broker_stats(&db,src,None,now).unwrap(),Stats::default(),
+                &IntelligenceContext::default());
+            let signal=|brain:&str,side:i8|execution::Signal{
+                brain:brain.into(),side,ready:true,key:brain.into(),bar_time:12,
+                stop_distance:1.0,target_distance:2.0,hold_ms:1000,
+                reason:"verifiable ready signal".into(),coordination:None
+            };
+            let mut cfg=Config::default();
+            cfg.trading.mode=TradingMode::Expert;
+            let trend=BrainConfig{id:"trend".into(),..Default::default()};
+            let gann=BrainConfig{id:"gann".into(),..Default::default()};
+            let w_trend=weight(&trend_source);
+            let w_gann=weight(&gann_source);
+            let choice=execution::coordinate(signal("system",0),&cfg,vec![
+                (trend,signal("trend",1),w_trend.clone()),
+                (gann,signal("gann",-1),w_gann.clone())]);
+            (choice.side,w_trend,w_gann)
+        };
+        let (buy,good_trend,poor_gann)=choose();
+        assert_eq!(buy,1,"Correct MT5 costed rewards must favor Buy advisor");
+        assert!(good_trend.weight()>poor_gann.weight());
+        for i in 0..120u64{
+            save(&trend_source,3000+i,-3.0,now-10_000+i);
+            save(&gann_source,4000+i,3.0,now-10_000+i);
+        }
+        let (sell,negative_trend,improved_gann)=choose();
+        assert_eq!(sell,-1,"New immutable broker outcomes must actually reverse Expert vote");
+        assert!(negative_trend.weight()<improved_gann.weight());
+        db.execute("INSERT INTO coordinator_broker_samples
+            (source,position_id,context,brain,closed_ms,payload)
+            VALUES(?1,9999,'verified-demo-account','advisor',?2,?3)",
+            params![trend_source,now,json!({"evidence_source":"mt5_demo_broker",
+                "gross":1_000_000.0,"net":1_000_000.0,"reward":1.0,
+                "closed_volume":0.1,"net_per_lot":10_000_000.0}).to_string()]).unwrap();
+        let (unchanged,trend_after_corrupt,_)=choose();
+        assert_eq!(unchanged,-1,"Unpriced legacy record must not flip a live learning choice");
+        assert_eq!(trend_after_corrupt.broker_samples,160);
+    }
+
     #[test]
     fn execution_history_quality_learns_from_fill_slippage_and_rejections() {
         let db = Connection::open_in_memory().unwrap();
