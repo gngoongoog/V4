@@ -961,7 +961,10 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 }
                 tx.commit()?;
                 self.last_sync_ms = now;
-                self.history_until_ms = until_ms;
+                // Overlap/backfill reads are expected; they may discover
+                // late broker deals. Never roll the in-memory high-water mark
+                // backwards after a successful older-range sync.
+                self.history_until_ms = self.history_until_ms.max(until_ms);
                 Ok(json!({"ok":true}))
             }
             _ => bail!("Unknown execution route"),
@@ -1254,6 +1257,47 @@ mod execution_persistence_tests {
         assert_eq!(svc.history_until_ms,210);
         assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
             [],|r|r.get::<_,u64>(0)).unwrap(),4);
+    }
+
+    #[test]
+    fn older_overlapping_broker_sync_keeps_cursor_and_accepts_late_deal() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        service.bind(&db,&t,100).unwrap();
+        let mut status=Status::default();
+        status.telemetry=Some(t);
+        status.gateway_fresh=true;
+        let first=json!({"ticket":710,"position_id":55,"magic":410600,
+            "symbol":"XAUUSD","type":0,"entry":0,"time_msc":150,
+            "volume":0.1,"price":2000.0,"profit":0.0,
+            "commission":-0.35,"swap":0.0,"fee":0.0});
+        let mut req=json!({"login":17,"server":"Demo-Test","currency":"USD",
+            "trade_mode":0,"until_ms":220,"deals":[first.clone()]});
+        service.route("POST","/v1/execution/sync",
+            req.to_string().as_bytes(),&db,&status,300).unwrap();
+        assert_eq!(service.history_until_ms,220);
+        // The broker disclosed a delayed fill in an older overlap window.
+        let mut late=first.clone();
+        late["ticket"]=json!(711);
+        late["time_msc"]=json!(180);
+        late["volume"]=json!(0.04);
+        late["commission"]=json!(-0.14);
+        req["until_ms"]=json!(190);
+        req["deals"]=json!([first.clone(),late.clone()]);
+        service.route("POST","/v1/execution/sync",
+            req.to_string().as_bytes(),&db,&status,310).unwrap();
+        assert_eq!(service.history_until_ms,220,
+            "Overlapping history must not rewind the most recent cursor");
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
+            [],|r|r.get::<_,u64>(0)).unwrap(),2,
+            "Previously-unseen late receipt must be recorded");
+        req["deals"]=json!([first,late]);
+        service.route("POST","/v1/execution/sync",
+            req.to_string().as_bytes(),&db,&status,320).unwrap();
+        assert_eq!(service.history_until_ms,220);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
+            [],|r|r.get::<_,u64>(0)).unwrap(),2);
     }
 
     #[test]
