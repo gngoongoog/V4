@@ -92,7 +92,15 @@ class Tests(unittest.TestCase):
         self.assertIn('if ($PreflightOnly) {',ps)
         self.assertIn('if (-not $PreflightOnly -and -not $PSBoundParameters.ContainsKey("Source")) {',ps)
         self.assertIn('if len(sys.argv) > 1 and sys.argv[1] == "--demo-readiness":',cli)
-        self.assertNotIn("order_send(",readiness.FILE.read_text("utf-8"))
+        import ast
+        tree=ast.parse(readiness.FILE.read_text("utf-8"))
+        calls=[node.func for node in ast.walk(tree) if isinstance(node,ast.Call)]
+        forbidden={"order_send","initialize","order_check","positions_close"}
+        self.assertFalse(any(
+            (isinstance(call,ast.Name) and call.id in forbidden)
+            or (isinstance(call,ast.Attribute) and call.attr in forbidden)
+            for call in calls
+        ),"Read-only preflight may not initialize MT5 or submit broker orders")
 
 if __name__=="__main__":
     unittest.main()
