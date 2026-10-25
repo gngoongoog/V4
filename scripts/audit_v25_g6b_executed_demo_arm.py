@@ -58,7 +58,8 @@ def _verify_booked(p: dict) -> tuple[float, float, float]:
 
 def _verified_full_broker_deals(db: sqlite3.Connection, context: str,
                                 position_id: int, open_deal: int,
-                                closed_ms: int, receipt: dict) -> None:
+                                closed_ms: int, receipt: dict,
+                                command_created_ms: int) -> None:
     """Independently reconstruct all MT5 deal costs and exact full close.
 
     Mirrors Rust trade_journal::booked_costs/fully_closed_by_deals. A
@@ -118,8 +119,8 @@ def _verified_full_broker_deals(db: sqlite3.Connection, context: str,
         closed * 1e-7 + 1e-8)
     if (not found_entry_ticket or opened <= 0 or closed <= 0
             or not exact_full_close or not exact_receipt_volume
-            or first_entry_time is None or latest_exit <= first_entry_time
-            or latest_exit != closed_ms):
+            or first_entry_time is None or first_entry_time < command_created_ms
+            or latest_exit <= first_entry_time or latest_exit != closed_ms):
         raise ValueError("broker_entry_exit_not_fully_reconciled")
     expected_net = sum(sums)
     if (not _equal(expected_net, _finite(receipt.get("net")))
@@ -129,7 +130,7 @@ def _verified_full_broker_deals(db: sqlite3.Connection, context: str,
 
 
 def _verified_position(db: sqlite3.Connection, row: sqlite3.Row,
-                       doc: dict, context: str, now_ms: int) -> tuple[float, float, float, int]:
+                       doc: dict, context: str, now_ms: int) -> tuple[float, float, float, int, str]:
     pos = row["position_id"]
     closed = row["closed_ms"]
     if type(pos) is not int or pos <= 0 or type(closed) is not int or \
@@ -170,7 +171,7 @@ def _verified_position(db: sqlite3.Connection, row: sqlite3.Row,
     deal = result.get("deal")
     if type(deal) is not int or deal <= 0 or p.get("open_deal") != deal:
         raise ValueError("exact_broker_entry_deal_missing")
-    _verified_full_broker_deals(db, context, pos, deal, closed, p)
+    _verified_full_broker_deals(db, context, pos, deal, closed, p, created)
     signal = payload.get("signal")
     if not isinstance(signal, dict) or type(signal.get("bar_time")) is not int:
         raise ValueError("no_original_ex_ante_signal")
@@ -336,7 +337,8 @@ def audit(db: sqlite3.Connection, manifest: dict, *, now_ms: int) -> dict:
     complete_census=(not unresolved and
         not census["unlinked_expert_open_intent_ids"] and
         census["unverified_mode_open_intents"]==0 and
-        not any(duplicate_commands[x[4]]>1 for x in potential))
+        not any(duplicate_commands[x[4]]>1 for x in potential)
+        and not any(reasons.values()))
     enough = complete_census and len(accepted)>=30 and len(days)>=5
     return {
         "study": "G6-B", "run_id": doc["run_id"],
