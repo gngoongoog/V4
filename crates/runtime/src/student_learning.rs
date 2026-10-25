@@ -1430,6 +1430,62 @@ mod tests {
     }
 
     #[test]
+    fn g6l_signed_aggregate_without_original_trade_events_stays_quarantined(){
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let t=telemetry();
+        let key=crate::coordinator_learning::context(&t);
+        let mut legacy=ExitStudy::expanded();
+        legacy.active=ExitProfile::Protective;
+        legacy.promotions=500;
+        legacy.total_pairs=600;
+        let raw=serde_json::to_string(&legacy).unwrap();
+        db.execute("INSERT INTO student_exit_studies VALUES('unsigned-history',?1,?2)",
+            params![&key,&raw]).unwrap();
+        db.execute("INSERT INTO student_study_admissions VALUES(
+            'unsigned-history',?1,?2,10,'g6k-student-admitted-study-v1')",
+            params![&key,format!("{:x}",Sha256::digest(raw.as_bytes()))]).unwrap();
+        assert_eq!(view(&db,&key).unwrap()["usable_shadow_pairs"],0,
+            "A valid aggregate SHA alone is not proof of individual MT5 trades");
+        let mut student=Student::new(&db).unwrap();
+        student.observe(&db,&t,5000).unwrap();
+        assert!(student.policies.is_empty());
+        assert_eq!(view(&db,&key).unwrap()["studies"][0]["provenance"],
+            "legacy_or_tampered_unverified");
+    }
+
+    #[test]
+    fn g6l_loss_event_journal_matches_broker_and_rejects_corrupt_input(){
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let t=telemetry();
+        let ctx=seed_entry(&db,&t,json!({"deal":77}));
+        db.execute("INSERT INTO broker_deals VALUES(?1,77,55,'trend',?2)",
+            params![&ctx,json!({"entry":0,"position_id":55,"price":100.,
+                "volume":0.1,"time_msc":1000}).to_string()]).unwrap();
+        label(&db,&ctx,1200);
+        let mut student=Student::new(&db).unwrap();
+        student.observe(&db,&t,5000).unwrap();
+        let v=view(&db,&ctx).unwrap();
+        assert_eq!(v["studies"][0]["study"]["reviewed_losses"],1);
+        assert_eq!(v["studies"][0]["provenance"],"locally_admitted_g6k");
+        let events:u64=db.query_row("SELECT COUNT(*) FROM student_study_events
+            WHERE context=?1 AND kind='loss'",[&ctx],|r|r.get(0)).unwrap();
+        assert_eq!(events,1);
+        // Corrupt even one input while leaving aggregate and SHA untouched:
+        // replay MUST detect the forgery and remove policy from future trading.
+        db.execute("UPDATE student_study_events
+            SET payload=json_set(payload,'$.patterns',json('[]'))
+            WHERE context=?1",[&ctx]).unwrap();
+        let v=view(&db,&ctx).unwrap();
+        assert_eq!(v["usable_shadow_pairs"],0);
+        assert!(v["studies"][0]["study"].is_null());
+        let mut restarted=Student::new(&db).unwrap();
+        restarted.observe(&db,&t,6000).unwrap();
+        assert!(restarted.policies.is_empty());
+    }
+
+    #[test]
     fn g6k_legacy_student_exit_aggregate_does_not_activate_trading_exit_policy(){
         let db=Connection::open_in_memory().unwrap();
         let _=crate::execution::Service::new(&db).unwrap();
