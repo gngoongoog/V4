@@ -538,7 +538,10 @@ class BrokerExecutor:
             if closing:
                 owned=[p for p in positions if p.ticket==cmd['position'] and p.magic==cmd['magic'] and p.symbol==symbol]
                 if not owned:
-                    return dict(result,state='closed',reason='Owned ticket is already absent; no order sent')
+                    # No close was sent. A flat or foreign-owned position
+                    # is not proof of booked MT5 exit or settled costs.
+                    return dict(result,state='cancelled',
+                                reason='Exact owned MT5 position absent; no close order sent. Verify exit from broker Deal history.')
                 p=owned[0]; lots=float(p.volume); side=-1 if p.type==mt5.POSITION_TYPE_BUY else 1
             else:
                 if any(p.magic==cmd['magic'] for p in positions) or any(o.magic==cmd['magic'] for o in orders):

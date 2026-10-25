@@ -921,7 +921,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         | "rejected"
                         | "unknown"
                         | "placed"
-                        | "closed"
+                        // 'closed' cannot be claimed by Gateway without
+                        // booked exit proof. An unsent close is cancelled.
                         // 'observed' is reserved for Core's exact Deal and
                         // physical-position reconciler; never accept it from
                         // a Gateway /result packet, even after restart.
@@ -1106,6 +1107,35 @@ mod execution_persistence_tests {
         db.execute("INSERT INTO broker_deals VALUES (?1,?2,?3,'system',?4)",
             params![context,d["ticket"].as_u64().unwrap(),
                 d["position_id"].as_u64().unwrap(),d.to_string()]).unwrap();
+    }
+
+    #[test]
+    fn close_result_cannot_claim_broker_exit_without_a_verified_deal() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let context=ctx(&t);
+        db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload)
+            VALUES ('no-send',?1,'system','close',100,'dispatched',?2)",
+            params![context,json!({"id":"no-send","kind":"close","magic":410600,
+                "position":99}).to_string()]).unwrap();
+        let st=Status{gateway_fresh:true,telemetry:Some(t),..Default::default()};
+        let false_exit=json!({"id":"no-send","state":"closed",
+            "reason":"Position was absent"});
+        assert!(svc.route("POST","/v1/execution/result",
+            false_exit.to_string().as_bytes(),&db,&st,150).is_err());
+        assert_eq!(db.query_row(
+            "SELECT state FROM broker_commands WHERE id='no-send'",
+            [],|r|r.get::<_,String>(0)).unwrap(),"dispatched");
+        let no_send=json!({"id":"no-send","state":"cancelled",
+            "reason":"No exact owned ticket and no close order sent"});
+        svc.route("POST","/v1/execution/result",
+            no_send.to_string().as_bytes(),&db,&st,160).unwrap();
+        assert_eq!(db.query_row("SELECT state FROM broker_commands WHERE id='no-send'",
+            [],|r|r.get::<_,String>(0)).unwrap(),"cancelled");
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",[],
+            |r|r.get::<_,u64>(0)).unwrap(),0);
     }
 
     #[test]
@@ -1316,7 +1346,9 @@ mod execution_persistence_tests {
             json!({"id":id}).to_string().as_bytes(),&db,&status,251).unwrap();
         assert_eq!(auth["authorized"],true);
         service.route("POST","/v1/execution/result",
-            json!({"id":id,"state":"closed"}).to_string().as_bytes(),&db,&status,252).unwrap();
+            json!({"id":id,"state":"cancelled",
+                "reason":"No owned broker position; no order sent"})
+                .to_string().as_bytes(),&db,&status,252).unwrap();
         let open_work=service.route("GET","/v1/execution/gateway",b"",&db,&status,253).unwrap();
         assert!(open_work["command"].is_null());
         let state:String=db.query_row("SELECT state FROM broker_commands WHERE id=?1",
