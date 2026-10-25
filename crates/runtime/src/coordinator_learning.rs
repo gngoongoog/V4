@@ -285,11 +285,45 @@ fn verified_broker_row(source:&str,stored_context:&str,stored_brain:&str,
     verified_broker_feedback(p)
 }
 
+// G6-H: closed_ms is a broker fact, NOT when Core first learned the
+// position outcome. Only same-transaction G6-G admissions can alter a
+// Coordinator weight or its contextual-loss memory. Historic unadmitted
+// rows remain in SQLite, but cannot be retroactively certified as training.
+struct BrokerAdmission {
+    context:Option<String>, brain:Option<String>, closed:Option<i64>,
+    admitted:Option<i64>, hash:Option<String>, protocol:Option<String>,
+}
+fn verified_admission(source:&str,ctx:&str,brain:&str,pos:u64,closed:u64,
+    raw:&str,now:u64,a:&BrokerAdmission)->bool {
+    let _=source;
+    let _=pos;
+    let (Some(admitted),Some(admitted_closed))=(
+        a.admitted.and_then(|v|u64::try_from(v).ok()),
+        a.closed.and_then(|v|u64::try_from(v).ok())
+    )else{return false;};
+    admitted>=closed && admitted<=now && admitted_closed==closed
+        && a.context.as_deref()==Some(ctx)
+        && a.brain.as_deref()==Some(brain)
+        && a.protocol.as_deref()==Some("g6g-runtime-same-transaction-v1")
+        && a.hash.as_deref()==Some(format!("{:x}",Sha256::digest(raw.as_bytes())).as_str())
+}
+
 fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<Stats>{
-    let mut st=db.prepare("SELECT context,brain,position_id,closed_ms,payload FROM coordinator_broker_samples WHERE source=?1 ORDER BY closed_ms DESC LIMIT 4000")?;
-    let rows=st.query_map([source],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?,r.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut st=db.prepare(
+        "SELECT s.context,s.brain,s.position_id,s.closed_ms,s.payload,
+            a.context,a.brain,a.closed_ms,a.admitted_ms,a.payload_sha256,a.protocol
+         FROM coordinator_broker_samples s
+         LEFT JOIN coordinator_broker_admissions a
+            ON a.source=s.source AND a.position_id=s.position_id
+         WHERE s.source=?1 ORDER BY s.closed_ms DESC LIMIT 4000")?;
+    let rows=st.query_map([source],|r|Ok((
+        r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,
+        r.get::<_,i64>(3)?,r.get::<_,String>(4)?,
+        BrokerAdmission{context:r.get(5)?,brain:r.get(6)?,closed:r.get(7)?,
+            admitted:r.get(8)?,hash:r.get(9)?,protocol:r.get(10)?}
+    )))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let(mut samples,mut wins,mut weighted_wins,mut weighted_net,mut weighted_reward,mut effective)=(0u64,0u64,0.,0.,0.,0.);
-    for(stored_context,stored_brain,signed_pos,signed_ts,raw)in rows{
+    for(stored_context,stored_brain,signed_pos,signed_ts,raw,admission)in rows{
         // SQLite may contain legacy negative identifiers/timestamps. A single
         // broken row must be ignored, never abort the live training cycle.
         let (Ok(pos),Ok(ts))=(u64::try_from(signed_pos),u64::try_from(signed_ts))
@@ -299,7 +333,8 @@ fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<
         if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}
         let Some((_,net_per_lot,reward))=verified_broker_row(
             source,&stored_context,&stored_brain,pos,ts,&p) else{continue;};
-        if ts==0||ts>now {continue;}
+        if ts==0||ts>now || !verified_admission(source,&stored_context,
+            &stored_brain,pos,ts,&raw,now,&admission) {continue;}
         let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);
         samples+=1;
         if net_per_lot>0.{wins+=1;weighted_wins+=w;}
@@ -313,20 +348,32 @@ fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<
 // in coordinator_broker_samples. An observed loss is not proof that the strategy
 // caused the market move. The response is a temporary, bounded preference shift.
 fn contextual_stats(db:&Connection,source:&str,key:&str,now:u64)->Result<(u64,f64,f64,u64,f64)> {
-    let mut st=db.prepare("SELECT context,brain,position_id,closed_ms,payload FROM coordinator_broker_samples WHERE source=?1 ORDER BY closed_ms DESC,position_id DESC LIMIT 4000")?;
-    let rows=st.query_map([source],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?,r.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut st=db.prepare(
+        "SELECT s.context,s.brain,s.position_id,s.closed_ms,s.payload,
+            a.context,a.brain,a.closed_ms,a.admitted_ms,a.payload_sha256,a.protocol
+         FROM coordinator_broker_samples s
+         LEFT JOIN coordinator_broker_admissions a
+            ON a.source=s.source AND a.position_id=s.position_id
+         WHERE s.source=?1 ORDER BY s.closed_ms DESC,s.position_id DESC LIMIT 4000")?;
+    let rows=st.query_map([source],|r|Ok((
+        r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,
+        r.get::<_,i64>(3)?,r.get::<_,String>(4)?,
+        BrokerAdmission{context:r.get(5)?,brain:r.get(6)?,closed:r.get(7)?,
+            admitted:r.get(8)?,hash:r.get(9)?,protocol:r.get(10)?}
+    )))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let(mut count,mut sum,mut mass)=(0u64,0.,0.);
     let(mut recent_loss_streak,mut recent_cost_losses)=(0u64,0u64);
     let mut streak_unbroken=true;
     const MEMORY_HORIZON_MS:u64=14*24*60*60*1000;
-    for(stored_context,stored_brain,signed_pos,signed_ts,raw) in rows {
+    for(stored_context,stored_brain,signed_pos,signed_ts,raw,admission) in rows {
         let (Ok(pos),Ok(ts))=(u64::try_from(signed_pos),u64::try_from(signed_ts))
             else {continue;};
         let Ok(p)=serde_json::from_str::<Value>(&raw) else{continue;};
         if p["context_key"].as_str()!=Some(key){continue;}
         let Some((net,_,reward))=verified_broker_row(
             source,&stored_context,&stored_brain,pos,ts,&p) else {continue;};
-        if ts==0||ts>now {continue;}
+        if ts==0||ts>now || !verified_admission(source,&stored_context,
+            &stored_brain,pos,ts,&raw,now,&admission) {continue;}
         {
             let w=decay_weight(ts,now,BROKER_HALF_LIFE_MS);
             count+=1;sum+=reward*w;mass+=w;
