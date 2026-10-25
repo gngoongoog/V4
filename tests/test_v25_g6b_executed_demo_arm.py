@@ -101,6 +101,46 @@ class ExecutedBrokerEvidence(unittest.TestCase):
         self.assertEqual(r["exactly_linked_adaptive_broker_positions"],1)
         self.assertEqual(r["adaptive_executed_demo_booked_net"],1.5)
 
+    def test_missing_learning_receipt_cannot_hide_open_intent_from_denominator(self):
+        self.add()
+        self.db.execute("DELETE FROM coordinator_broker_samples")
+        r=study.audit(self.db,self.manifest,now_ms=NOW)
+        self.assertEqual(r["preregistered_expert_open_intents"],1)
+        self.assertEqual(r["predeclared_adaptive_open_intents"],1)
+        self.assertEqual(r["predeclared_intents_without_verified_full_close"],1)
+        self.assertEqual(r["exactly_linked_adaptive_broker_positions"],0)
+        self.assertEqual(r["status"],"incomplete_prospective_broker_outcome_capture")
+        self.assertIsNone(r["adaptive_executed_demo_booked_net"])
+        self.assertFalse(r["all_post_holdout_expert_intents_accounted_for"])
+
+    def test_open_intent_with_wrong_prior_signal_is_visible_as_unattributed(self):
+        self.add()
+        self.db.execute(
+            "UPDATE broker_commands SET payload=json_set(payload,'$.signal.key','late-changed')")
+        r=study.audit(self.db,self.manifest,now_ms=NOW)
+        self.assertEqual(r["preregistered_expert_open_intents"],1)
+        self.assertEqual(r["expert_open_intents_missing_prior_adaptive_match"],1)
+        self.assertEqual(r["exactly_linked_adaptive_broker_positions"],0)
+        self.assertFalse(r["all_post_holdout_expert_intents_accounted_for"])
+
+    def test_open_intent_without_any_decision_must_not_improve_report(self):
+        self.add()
+        bar=FUTURE+3600
+        opened=(bar+60)*1000
+        command={"id":"stray","brain":"system",
+                 "learning":{"trading_mode":"expert"},
+                 "signal":{"bar_time":bar,"key":"stray-signal","side":1}}
+        self.db.execute("INSERT INTO broker_commands VALUES("
+            "'stray',?,'system','open',?,'unknown',?,NULL)",
+            (CONTEXT,opened,json.dumps(command)))
+        r=study.audit(self.db,self.manifest,now_ms=NOW)
+        self.assertEqual(r["exactly_linked_adaptive_broker_positions"],1)
+        self.assertEqual(r["expert_open_intents_missing_prior_adaptive_match"],1)
+        self.assertEqual(r["status"],"incomplete_prospective_broker_outcome_capture")
+        self.assertEqual(r["adaptive_executed_demo_win_rate"],1.0)
+        self.assertEqual(r["win_rate_scope"],
+                         "matched_closed_positions_only_not_all_open_intents")
+
     def test_missing_exit_deal_never_creates_a_broker_win(self):
         pos,deal = self.add()
         self.db.execute("DELETE FROM broker_deals WHERE ticket=?", (deal+1,))
