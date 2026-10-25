@@ -144,6 +144,22 @@ class G7CensusTests(unittest.TestCase):
             self.assertEqual(r["anomalies"]["post_cohort_broker_label_without_g7_link"],1)
             self.assertFalse(r["local_command_census_complete"])
 
+    def test_pre_registration_open_closed_later_is_historical_overlap(self):
+        db,a=make_db()
+        with db:
+            add_command(db,a)
+            add_closed(db)
+            cmdrow=db.execute("SELECT payload FROM broker_commands WHERE id=?",(CMD,)).fetchone()
+            command=json.loads(cmdrow["payload"])
+            command["created_ms"]=122000
+            db.execute("UPDATE broker_commands SET created_ms=?,payload=? WHERE id=?",
+                       (122000,as_json(command),CMD))
+            r=audit(db,now_ms=260000)
+            self.assertEqual(r["eligible_system_demo_open_intents"],0)
+            self.assertEqual(r["counts"]["pre_registration_open_closed_in_cohort"],1)
+            self.assertNotIn("post_cohort_broker_label_without_g7_link",r["anomalies"])
+            self.assertIsNone(r["g7b_broker_booked_net_for_verified_closes_only"])
+
     def test_cancelled_intent_not_converted_to_broker_loss_or_win(self):
         db,a=make_db()
         with db:
