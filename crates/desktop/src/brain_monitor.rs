@@ -2,6 +2,40 @@
 use super::*;
 use braintrade_domain::execution::BRAINS;
 use std::{thread, sync::{Arc,Mutex}};
+/// Shared with the primary Status painter. Never infer the MT5 account from
+/// displayed strings, because those can lag and are presentation only.
+pub(crate) type BoundAccountScope=Arc<Mutex<Option<String>>>;
+pub(crate) fn scope_for_status(status:&Status)->Option<String>{
+    let t=status.telemetry.as_ref().filter(|t|
+        status.gateway_fresh && t.connected && t.login>0
+        &&!t.server.is_empty()&&!t.symbol.is_empty()&&!t.currency.is_empty())?;
+    serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)).ok()
+}
+fn report_matches_bound_account(v:&Value,scope:&Option<String>)->bool{
+    scope.as_ref().is_some_and(|key|
+        v["context"].as_str()==Some(key.as_str())
+        &&v["controls_available"]==true
+        &&matches!(v["trading_mode"].as_str(),Some("sniper"|"scalping"|"swing"|"expert"))
+        &&v["brains"].as_array().is_some_and(|brains|!brains.is_empty()))
+}
+fn response_matches_current_core(v:&Value,status:&Status,config:&Value)->bool{
+    // Two independent round-trips make a mid-request account/mode switch
+    // observable, instead of relying solely on the rendered status or a
+    // response that was correct at the beginning of the request.
+    let scope=scope_for_status(status);
+    report_matches_bound_account(v,&scope)
+        &&config["config"]["trading"]["mode"]==v["trading_mode"]
+}
+pub(crate) fn invalidate_account_view(ui:&Dashboard){
+    ui.set_brain_monitor_busy(false);
+    ui.set_brain_monitor_available(false);
+    ui.set_frozen_trial_available(false);
+    ui.set_brain_monitor_summary(
+        "تحديث هوية حساب MT5؛ تم إخفاء إحصائيات العقول القديمة حتى وصول دليل حديث".into());
+    ui.set_brain_monitor_overview("بيانات الحساب السابق غير معروضة".into());
+    ui.set_brain_monitor_detail("بانتظار بيانات العقول لهذا الحساب والوضع".into());
+    ui.set_brain_monitor_message("تم سحب صلاحية العرض القديمة عند تغيير الحساب أو انقطاعه".into());
+}
 fn amount(v:&Value)->f64 {v.as_f64().unwrap_or(0.)}
 fn maybe_number(v:&Value)->String {v.as_f64().filter(|n|n.is_finite()).map(|n|format!("{n:.2}")).unwrap_or_else(||"—".into())}
 fn yes(v:&Value)->&'static str {if *v==true {"نعم"}else{"لا"}}
@@ -249,15 +283,21 @@ fn paint(ui:&Dashboard,v:&Value,index:usize,load:bool) {
     ));
     ui.set_brain_monitor_detail(detail.into());
 }
-pub fn setup(ui:&Dashboard)->slint::Timer {
+pub fn setup(ui:&Dashboard,bound:BoundAccountScope)->slint::Timer {
     ui.set_brain_monitor_names(slint::ModelRc::new(slint::VecModel::from(BRAINS.iter().map(|(_,n)|slint::SharedString::from(*n)).collect::<Vec<_>>())));
     let cache=Arc::new(Mutex::new(json!({})));
     let (tx,rx)=mpsc::channel::<(String,Value,usize)>();
     let sender=tx.clone();let weak=ui.as_weak();let current=cache.clone();
+    let action_scope=bound.clone();
     ui.on_brain_monitor_action(move |a| {
         let Some(ui)=weak.upgrade() else{return};if ui.get_brain_monitor_busy(){return}
         let index=ui.get_brain_monitor_selected().max(0) as usize;
         let v=current.lock().unwrap();
+        let scope=action_scope.lock().unwrap().clone();
+        if !report_matches_bound_account(&v,&scope){
+            invalidate_account_view(&ui);
+            return;
+        }
         if a=="select" {paint(&ui,&v,index,true);return}
         let body=if a=="freeze_coordinator"||a=="stop_coordinator" {
             json!({"action":if a=="freeze_coordinator"{"freeze"}else{"stop"},
@@ -274,24 +314,50 @@ pub fn setup(ui:&Dashboard)->slint::Timer {
         let _=sender.send((a.to_string(),body,index));
     });
     let timer=slint::Timer::default();let weak=ui.as_weak();
+    let polling_scope=bound.clone();
     timer.start(slint::TimerMode::Repeated,Duration::from_secs(3),move ||{
-        if let Some(ui)=weak.upgrade(){if ui.get_page()==21 && !ui.get_brain_monitor_busy(){
+        if let Some(ui)=weak.upgrade(){if ui.get_page()==21 && !ui.get_brain_monitor_busy()
+            &&polling_scope.lock().unwrap().is_some(){
             ui.set_brain_monitor_busy(true);let _=tx.send(("poll".into(),json!({}),ui.get_brain_monitor_selected().max(0) as usize));
         }}
     });
     let weak=ui.as_weak();
     thread::spawn(move ||while let Ok((action,body,index))=rx.recv(){
+        // An action queued for an account that has since been replaced must
+        // never be submitted on the wire. Core also rechecks mode/context.
+        let scope_before=bound.lock().unwrap().clone();
+        if scope_before.is_none()
+           ||(action!="poll" && body["context"].as_str()!=scope_before.as_deref()){
+            let _=weak.upgrade_in_event_loop(move |ui|{
+                invalidate_account_view(&ui);
+            });
+            continue;
+        }
         let result=(||->anyhow::Result<Value>{let c=Client::new(&data_dir())?;
             if action=="save"{c.post("/v1/execution/brain-control",body)?;}
             else if action=="freeze"||action=="stop_frozen"{c.post("/v1/execution/frozen-shadow",body)?;}
             else if action=="freeze_coordinator"||action=="stop_coordinator"{
                 c.post("/v1/execution/frozen-coordinator",body)?;
             }
-            c.get("/v1/execution/brains")})();
+            let response=c.get("/v1/execution/brains")?;
+            let status:Status=serde_json::from_value(c.get("/v1/status")?)?;
+            let config=c.get("/v1/config")?;
+            anyhow::ensure!(response_matches_current_core(&response,&status,&config),
+                "حساب MT5 أو وضع التداول تغيّر أثناء تحميل العقول؛ أعد التحديث");
+            Ok(response)})();
         let cache=cache.clone();
+        let event_scope=bound.clone();
         let _=weak.upgrade_in_event_loop(move |ui|{
             ui.set_brain_monitor_busy(false);
             match result {Ok(v)=>{
+                // The network request may have started under another account.
+                // Reject both stale responses and a now-disconnected account.
+                let scope_now=event_scope.lock().unwrap().clone();
+                if scope_before!=scope_now || !report_matches_bound_account(&v,&scope_now){
+                    *cache.lock().unwrap()=json!({});
+                    invalidate_account_view(&ui);
+                    return;
+                }
                 let changed={let previous=cache.lock().unwrap();previous["trading_mode"]!=v["trading_mode"] || previous["context"]!=v["context"]};
                 paint(&ui,&v,index,action!="poll"||changed);*cache.lock().unwrap()=v;
                 if action=="save"{ui.set_brain_monitor_message("حُفظت المشاركة والتدريب لهذا الحساب والرمز والوضع فقط".into());}
@@ -299,7 +365,72 @@ pub fn setup(ui:&Dashboard)->slint::Timer {
                 if action=="stop_frozen"{ui.set_brain_monitor_message("أُنهِي استقبال دخول Shadow جديد؛ الصفقة الافتراضية المفتوحة ستُسوى عند وصول سعر لاحق".into());}
                 if action=="freeze_coordinator"{ui.set_brain_monitor_message("تم تجميد سياسة منسّق Expert على Demo؛ ستُقارن قرارات مستقبلية دون أي أوامر جديدة".into());}
                 if action=="stop_coordinator"{ui.set_brain_monitor_message("أُوقِف رصد سياسة منسّق Expert؛ السجل السابق باقٍ للمراجعة".into());}
-            },Err(e)=>ui.set_brain_monitor_message(format!("تعذر التحديث: {e}").into())}
+            },Err(e)=>{
+                *cache.lock().unwrap()=json!({});
+                invalidate_account_view(&ui);
+                ui.set_brain_monitor_message(format!("تعذر تحديث حساب MT5 الحالي: {e}").into());
+            }}
         });
     });timer
+}
+
+
+#[cfg(test)]
+mod account_switch_tests {
+    use super::*;
+    #[test]
+    fn g5h_old_responses_are_not_authoritative_after_account_switch(){
+        let first=Some(r#"["Demo",17,"XAUUSD","USD"]"#.to_string());
+        let next=Some(r#"["Demo",18,"XAUUSD","USD"]"#.to_string());
+        let v=json!({"context":first.as_ref().unwrap(),
+            "trading_mode":"expert","controls_available":true,
+            "brains":[{"config":{"id":"system"}}]});
+        assert!(report_matches_bound_account(&v,&first));
+        assert!(!report_matches_bound_account(&v,&next));
+        assert!(!report_matches_bound_account(&v,&None));
+        let mut stale=v.clone();
+        stale["controls_available"]=json!(false);
+        assert!(!report_matches_bound_account(&stale,&first));
+        stale["controls_available"]=json!(true);
+        stale["trading_mode"]=json!("missing");
+        assert!(!report_matches_bound_account(&stale,&first));
+    }
+    #[test]
+    fn g5h_current_core_mode_and_account_must_match_response_before_paint(){
+        let mut status=Status::default();
+        status.gateway_fresh=true;
+        status.telemetry=Some(braintrade_domain::Telemetry{
+            connected:true,login:17,server:"Demo".into(),
+            symbol:"XAUUSD".into(),currency:"USD".into(),
+            demo:true,account_trade_mode:Some(0),..Default::default()});
+        let v=json!({"context":r#"["Demo",17,"XAUUSD","USD"]"#,
+            "trading_mode":"sniper","controls_available":true,
+            "brains":[{"config":{"id":"system"}}]});
+        let config=json!({"config":{"trading":{"mode":"sniper"}}});
+        assert!(response_matches_current_core(&v,&status,&config));
+        let changed=json!({"config":{"trading":{"mode":"expert"}}});
+        assert!(!response_matches_current_core(&v,&status,&changed),
+            "Same broker account with switched mode cannot paint stale Sniper");
+        status.telemetry.as_mut().unwrap().login=18;
+        assert!(!response_matches_current_core(&v,&status,&config));
+        status.telemetry.as_mut().unwrap().login=17;
+        status.gateway_fresh=false;
+        assert!(!response_matches_current_core(&v,&status,&config));
+    }
+    #[test]
+    fn g5h_status_requires_fresh_proven_account_not_only_old_telemetry(){
+        let mut s=Status::default();
+        let mut t=braintrade_domain::Telemetry{
+            connected:true,login:17,server:"Demo".into(),
+            symbol:"XAUUSD".into(),currency:"USD".into(),
+            demo:true,account_trade_mode:Some(0),..Default::default()};
+        s.telemetry=Some(t.clone());s.gateway_fresh=false;
+        assert_eq!(scope_for_status(&s),None);
+        s.gateway_fresh=true;
+        assert_eq!(scope_for_status(&s),Some(r#"["Demo",17,"XAUUSD","USD"]"#.into()));
+        t.login=18;s.telemetry=Some(t);
+        assert_eq!(scope_for_status(&s),Some(r#"["Demo",18,"XAUUSD","USD"]"#.into()));
+        s.telemetry.as_mut().unwrap().connected=false;
+        assert_eq!(scope_for_status(&s),None);
+    }
 }

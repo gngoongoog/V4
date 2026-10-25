@@ -29,6 +29,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libfontconfig1-dev
+      - name: Execute native desktop account/mode switch unit regressions
+        run: cargo test -p braintrade-desktop --locked g5h_ -- --nocapture
       - name: Compile and render the actual 22-page Rust/Slint Windows UI
         run: cargo run -p braintrade-desktop --locked -- --render-check
       - name: Verify screenshot integrity for all responsive sizes and palettes

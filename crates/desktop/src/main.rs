@@ -63,7 +63,19 @@ fn native_chart_candles(market: &braintrade_domain::MarketData, frame: i32) -> V
     }).collect()
 }
 
-fn paint(ui: &Dashboard, status: Status) {
+fn paint(ui: &Dashboard, status: Status, bound: &brain_monitor::BoundAccountScope) {
+    let current=brain_monitor::scope_for_status(&status);
+    let changed={
+        let mut previous=bound.lock().unwrap();
+        let changed=*previous!=current;
+        *previous=current;
+        changed
+    };
+    if changed {
+        // The independent Brain Monitor worker may still hold a response
+        // from the former account. Remove it as soon as primary status changes.
+        brain_monitor::invalidate_account_view(ui);
+    }
     // A fresh response from the gateway does not imply an authenticated MT5
     // account is connected. Both conditions must hold for an ONLINE display.
     let broker_online = status.gateway_fresh
@@ -278,7 +290,9 @@ fn run_ui() -> anyhow::Result<()> {
     let _execution_timer=execution::setup(&ui);
     let _student_timer=student::setup(&ui);
     let _trade_journal_timer=trade_journal::setup(&ui);
-    let _brain_monitor_timer=brain_monitor::setup(&ui);
+    let bound_account:brain_monitor::BoundAccountScope=std::sync::Arc::new(
+        std::sync::Mutex::new(None));
+    let _brain_monitor_timer=brain_monitor::setup(&ui,bound_account.clone());
     let _risk_monitor_timer=risk_monitor::setup(&ui);
     let weak = ui.as_weak();
     ui.on_save_appearance(move |theme, collapsed, expanded| {
@@ -533,10 +547,14 @@ fn run_ui() -> anyhow::Result<()> {
                 .and_then(|v| Ok(serde_json::from_value::<Status>(v)?))
             {
                 Ok(s) => {
-                    let _ = weak.upgrade_in_event_loop(move |ui| paint(&ui, s));
+                    let current_scope=bound_account.clone();
+                    let _ = weak.upgrade_in_event_loop(move |ui| paint(&ui, s, &current_scope));
                 }
                 Err(_) => {
+                    let current_scope=bound_account.clone();
                     let _ = weak.upgrade_in_event_loop(move |ui| {
+                        *current_scope.lock().unwrap()=None;
+                        brain_monitor::invalidate_account_view(&ui);
                         ui.set_online(false);
                         ui.set_state("CORE UNREACHABLE".into());
                         ui.set_connection(
