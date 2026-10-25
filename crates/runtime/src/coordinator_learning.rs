@@ -311,28 +311,34 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
         let position_id:Option<u64>=db.query_row("SELECT position_id FROM broker_deals WHERE context=?1 AND ticket=?2",params![&key,open_deal],|r|r.get(0)).optional()?;
         let Some(position_id)=position_id.filter(|v|*v>0) else {continue;};
         if t.positions.iter().any(|p|p.identifier==position_id||p.ticket==position_id) {continue;}
-        let (mut gross,mut commission,mut swap,mut fee,mut entry_volume,mut exit_volume,mut closed_ms)=(0.,0.,0.,0.,0.,0.,0u64);
+        // G5-B: same immutable broker-cost and Deal-geometry verification used
+        // by the trading journal. A missing profit, commission, swap, fee or
+        // deal type is UNKNOWN, never a synthetic $0 learning reward.
+        // Partial fills and reversal/unknown deal types cannot label an arm.
+        let deals=position_deals(db,&key,position_id)?
+            .into_iter().map(|raw|serde_json::from_str::<Value>(&raw))
+            .collect::<std::result::Result<Vec<_>,_>>()?;
+        let Some([net,gross,commission,swap,fee])=
+            crate::trade_journal::booked_costs(deals.iter()) else {continue;};
+        if !crate::trade_journal::fully_closed_by_deals(deals.iter()) {continue;}
+        let (mut entry_volume,mut exit_volume,mut closed_ms)=(0.,0.,0u64);
         let mut reasons=Vec::new();
-        let mut valid=true;
-        for raw in position_deals(db,&key,position_id)? {
-            let d:Value=serde_json::from_str(&raw)?;
-            gross+=d["profit"].as_f64().unwrap_or(0.);
-            commission+=d["commission"].as_f64().unwrap_or(0.);
-            swap+=d["swap"].as_f64().unwrap_or(0.);
-            fee+=d["fee"].as_f64().unwrap_or(0.);
-            let volume=d["volume"].as_f64().unwrap_or(0.);
+        for d in &deals {
+            let volume=d["volume"].as_f64().unwrap();
             match d["entry"].as_i64() {
                 Some(0)=>entry_volume+=volume,
-                Some(1)|Some(3)=>{exit_volume+=volume;closed_ms=closed_ms.max(d["time_msc"].as_u64().unwrap_or(0));
-                    if let Some(reason)=d["reason"].as_i64(){if !reasons.contains(&reason){reasons.push(reason);}}},
-                // Netting reversal mixes an opening and an exit: do not guess attribution.
-                Some(2)=>valid=false,
-                _=>{}
+                Some(1)|Some(3)=>{exit_volume+=volume;
+                    closed_ms=closed_ms.max(d["time_msc"].as_u64().unwrap_or(0));
+                    if let Some(reason)=d["reason"].as_i64(){
+                        if !reasons.contains(&reason){reasons.push(reason);}
+                    }
+                },
+                _=>unreachable!("fully_closed_by_deals rejects other entry types"),
             }
         }
-        let net=gross+commission+swap+fee;
-        if !valid || !net.is_finite() || !exit_volume.is_finite() || exit_volume<=0.
-            || !entry_volume.is_finite() || entry_volume+1e-8<result["volume"].as_f64().unwrap_or(0.) || (entry_volume-exit_volume).abs()>1e-8 {continue;}
+        if closed_ms==0 || !entry_volume.is_finite() ||
+            !exit_volume.is_finite() || exit_volume<=0. ||
+            entry_volume+1e-8<result["volume"].as_f64().unwrap_or(0.) {continue;}
         let coordination=&cmd["signal"]["coordination"];
         let learning=&cmd["learning"];
         let owner=cmd["brain"].as_str().unwrap_or("system");
@@ -779,12 +785,12 @@ mod tests {
         )
         .unwrap();
         let open = json!({
-            "ticket":100,"position_id":900,"magic":410600,"symbol":"XAUUSD","entry":0,
+            "ticket":100,"position_id":900,"magic":410600,"symbol":"XAUUSD","type":0,"entry":0,
             "time_msc":now-60_000,"volume":0.10,"price":2000.0,"profit":0.0,
             "commission":-0.35,"swap":0.0,"fee":0.0,"brain":"system"
         });
         let close = json!({
-            "ticket":101,"position_id":900,"magic":410600,"symbol":"XAUUSD","entry":1,
+            "ticket":101,"position_id":900,"magic":410600,"symbol":"XAUUSD","type":1,"entry":1,
             "time_msc":now-1_000,"volume":0.10,"price":2000.2,"profit":2.0,
             "commission":-0.35,"swap":-0.10,"fee":-0.05,"brain":"system"
         });
@@ -799,7 +805,21 @@ mod tests {
         )
         .unwrap();
 
-        let w = l.observe(&db, &t, &c, &[b], &f, false, now).unwrap();
+        // Corrupted broker history must NEVER become a profitable training
+        // example. Missing cost components are not evidence of zero costs.
+        let mut missing=close.clone();
+        missing.as_object_mut().unwrap().remove("fee");
+        db.execute("UPDATE broker_deals SET payload=?1 WHERE context=?2 AND ticket=101",
+            params![missing.to_string(),key]).unwrap();
+        let rejected=l.observe(&db,&t,&c,&[b.clone()],&f,false,now).unwrap();
+        assert_eq!(rejected["trend"].broker_samples,0);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_broker_samples",
+            [],|row|row.get::<_,u64>(0)).unwrap(),0);
+        // A complete, independent broker receipt arriving later makes the
+        // SAME physical position eligible. No synthetic retry/trade is created.
+        db.execute("UPDATE broker_deals SET payload=?1 WHERE context=?2 AND ticket=101",
+            params![close.to_string(),key]).unwrap();
+        let w = l.observe(&db, &t, &c, &[b], &f, false, now+1).unwrap();
         let trend = &w["trend"];
         assert_eq!(trend.broker_samples, 1);
         assert_eq!(trend.samples, 1);
@@ -867,7 +887,7 @@ mod tests {
             "learning":{"trading_mode":"expert","timeframe":"M1","report_id":"","tick_size":0.01,"tick_value_loss":1.,"weight_at_entry":1.}});
         db.execute("INSERT INTO broker_commands VALUES('solo',?1,'trend','open',1,'observed',?2,?3)",params![key,cmd.to_string(),json!({"deal":1,"request":{"price":2000.,"sl":1999.}}).to_string()]).unwrap();
         let insert=|ticket:u64,entry:i64,volume:f64,profit:f64,commission:f64| {
-            db.execute("INSERT INTO broker_deals VALUES(?1,?2,90,'trend',?3)",params![key,ticket,json!({"entry":entry,"volume":volume,"profit":profit,"commission":commission,"time_msc":1000+ticket,"reason":5}).to_string()]).unwrap();
+            db.execute("INSERT INTO broker_deals VALUES(?1,?2,90,'trend',?3)",params![key,ticket,json!({"type":if entry==0 {0}else{1},"entry":entry,"volume":volume,"profit":profit,"commission":commission,"swap":0.,"fee":0.,"time_msc":1000+ticket,"reason":5}).to_string()]).unwrap();
         };
         insert(1,0,0.1,0.,-0.35);insert(2,1,0.04,0.2,-0.14);
         sync_demo_broker_evidence(&db,&t).unwrap();assert!(broker_review(&db,&key).unwrap().is_empty());
@@ -990,7 +1010,7 @@ mod tests {
             let insert=|ticket:u64,entry:i64,volume:f64,profit:f64,commission:f64,
                         swap:f64,fee:f64,stamp:u64|{
                 let v=json!({"ticket":ticket,"position_id":555,"magic":410600,
-                    "entry":entry,"time_msc":stamp,"volume":volume,
+                    "type":if entry==0 {0}else{1},"entry":entry,"time_msc":stamp,"volume":volume,
                     "profit":profit,"commission":commission,"swap":swap,
                     "fee":fee,"brain":"system"});
                 db.execute("INSERT INTO broker_deals VALUES(?1,?2,555,'system',?3)",
@@ -1099,7 +1119,7 @@ mod tests {
             (801,1,1.5,-0.20,now-1_000)
         ] {
             let payload = json!({"ticket":ticket,"position_id":777,"magic":410600,
-                "entry":entry,"time_msc":stamp,"volume":0.1,"profit":profit,
+                "type":if entry==0 {0}else{1},"entry":entry,"time_msc":stamp,"volume":0.1,"profit":profit,
                 "commission":commission,"swap":0.0,"fee":0.0,"brain":"system"});
             db.execute(
                 "INSERT INTO broker_deals(context,ticket,position_id,brain,payload)
