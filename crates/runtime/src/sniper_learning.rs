@@ -22,7 +22,13 @@ pub fn refresh(engine: &mut Engine, db: &Connection, t: &Telemetry, now: u64) ->
             let Some(policy) = POLICIES.iter().position(|name| s["sniper_policy"] == *name) else { continue; };
             let (Some(definition),Some(regime),Some(reward),Some(net)) =
                 (s["sniper_definition"].as_str(),s["sniper_regime"].as_str(),p["reward"].as_f64(),p["net"].as_f64()) else { continue; };
-            if !reward.is_finite() || !net.is_finite() { continue; }
+            // Reject legacy or malformed broker labels before they can
+            // train the Sniper entry-policy or TP-arm. Historical $0 fee
+            // assumptions never become a REAL MT5 success signal.
+            let Some((verified_net,_,verified_reward))=
+                crate::coordinator_learning::verified_broker_feedback(&p) else {continue;};
+            if !reward.is_finite()||!net.is_finite()
+                || (net-verified_net).abs()>1e-8 ||(reward-verified_reward).abs()>1e-8 {continue;}
             models.entry((definition.into(),regime.into())).or_default()[policy].learn(reward,net);
             // The chosen arm is frozen with the entry's signal; it is NOT
             // inferred from realized profit, MFE or an optimistic simulation.
@@ -70,8 +76,8 @@ pub fn frozen_training_checkpoint(db:&Connection,t:&Telemetry,model:&Engine,now:
             ||!POLICIES.iter().any(|item|s["sniper_policy"]==*item)
             ||s["sniper_definition"].as_str().is_none()
             ||s["sniper_regime"].as_str().is_none()
-            ||!p["reward"].as_f64().is_some_and(f64::is_finite)
-            ||!p["net"].as_f64().is_some_and(f64::is_finite) {continue}
+            ||crate::coordinator_learning::verified_broker_feedback(&p).is_none()
+            {continue}
         count+=1;
         latest=latest.max(closed);
         earliest=Some(earliest.map_or(closed,|v|v.min(closed)));
@@ -112,7 +118,9 @@ mod tests {
             login:17,server:"Demo".into(),symbol:"XAUUSD".into(),..Default::default()};
         let ctx=crate::coordinator_learning::context(&t);
         let record=json!({"evidence_source":"mt5_demo_broker","trading_mode":"sniper",
-            "net":2.,"reward":0.4,"selection":{"brain":ID,"policy":"sniper-ticks-v1",
+            "gross":2.0,"commission":0.0,"swap":0.0,"fee":0.0,
+            "closed_volume":0.1,"net":2.,"net_per_lot":20.0,
+            "reward":0.4,"selection":{"brain":ID,"policy":"sniper-ticks-v1",
             "sniper_policy":"impulse","sniper_definition":"A","sniper_regime":"B"}});
         db.execute("INSERT INTO coordinator_broker_samples VALUES('first',1,?1,'sniper_learner',1000,?2)",
             rusqlite::params![ctx,record.to_string()]).unwrap();
@@ -142,7 +150,9 @@ mod tests {
         let t=Telemetry{demo:true,account_trade_mode:Some(0),login:17,server:"Demo".into(),symbol:"XAUUSD".into(),..Default::default()};
         let context=crate::coordinator_learning::context(&t);
         for (i,brain,account,source) in [(1,ID,context.as_str(),"mt5_demo_broker"),(2,ID,context.as_str(),"virtual"),(3,"trend",context.as_str(),"mt5_demo_broker"),(4,ID,"another-account","mt5_demo_broker")] {
-            let p=json!({"evidence_source":source,"trading_mode":"sniper","net":-2.,"reward":-0.5,
+            let p=json!({"evidence_source":source,"trading_mode":"sniper",
+                "gross":-2.0,"commission":0.0,"swap":0.0,"fee":0.0,
+                "closed_volume":0.1,"net":-2.,"net_per_lot":-20.0,"reward":-0.5,
                 "selection":{"brain":ID,"policy":"sniper-ticks-v1","sniper_policy":"impulse","sniper_definition":"config-A","sniper_regime":"choppy"}});
             db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,?3,?4,1000,?5)",rusqlite::params![i.to_string(),i,account,brain,p.to_string()]).unwrap();
         }
@@ -152,6 +162,41 @@ mod tests {
         assert_eq!(restarted.models.values().next().unwrap()[0].reward,e.models.values().next().unwrap()[0].reward);
         let mut live=t.clone();live.demo=false;live.account_trade_mode=Some(2);refresh(&mut e,&db,&live,2000).unwrap();assert!(e.models.is_empty());
     }
+    #[test]
+    fn invalid_legacy_broker_fee_can_neither_train_sniper_nor_be_frozen(){
+        let db=Connection::open_in_memory().unwrap();
+        crate::coordinator_learning::Learner::new(&db).unwrap();
+        let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            login:70,server:"Demo".into(),symbol:"XAUUSD".into(),
+            currency:"USD".into(),..Default::default()};
+        let context=crate::coordinator_learning::context(&t);
+        let valid=json!({"evidence_source":"mt5_demo_broker","trading_mode":"sniper",
+            "gross":2.0,"commission":-0.5,"swap":0.0,"fee":0.0,
+            "net":1.5,"net_per_lot":15.0,"closed_volume":0.1,"reward":0.4,
+            "selection":{"brain":ID,"policy":"sniper-ticks-v1",
+                "sniper_policy":"impulse","sniper_definition":"A","sniper_regime":"B"}});
+        let mut corrupt=valid.clone();
+        corrupt.as_object_mut().unwrap().remove("swap");
+        db.execute("INSERT INTO coordinator_broker_samples
+            (source,position_id,context,brain,closed_ms,payload)
+            VALUES('corrupt',111,?1,'sniper_learner',1000,?2)",
+            rusqlite::params![context,corrupt.to_string()]).unwrap();
+        let mut engine=Engine::default();
+        refresh(&mut engine,&db,&t,2000).unwrap();
+        assert!(engine.models.is_empty(),
+            "A legacy missing-swap label is not a completed broker training sample");
+        let before=frozen_training_checkpoint(&db,&t,&engine,2000).unwrap();
+        assert_eq!(before["broker_training_samples"],0);
+        db.execute("UPDATE coordinator_broker_samples SET payload=?1 WHERE source='corrupt'",
+            [valid.to_string()]).unwrap();
+        refresh(&mut engine,&db,&t,2000).unwrap();
+        assert_eq!(engine.models.values().next().unwrap()[0].samples,1);
+        let after=frozen_training_checkpoint(&db,&t,&engine,2000).unwrap();
+        assert_eq!(after["broker_training_samples"],1);
+        refresh(&mut engine,&db,&t,2000).unwrap();
+        assert_eq!(engine.models.values().next().unwrap()[0].samples,1);
+    }
+
     #[test]
     fn target_learning_is_real_demo_only_account_scoped_replay_idempotent_and_arm_specific() {
         let db=Connection::open_in_memory().unwrap();
@@ -166,7 +211,9 @@ mod tests {
             (5,ID,context.as_str(),"mt5_demo_broker",3,"fixed"),
             (6,ID,context.as_str(),"mt5_demo_broker",6,"adaptive")
         ] {
-            let payload=json!({"evidence_source":source,"trading_mode":"sniper","net":1.2,"reward":0.4,
+            let payload=json!({"evidence_source":source,"trading_mode":"sniper",
+                "gross":1.2,"commission":0.0,"swap":0.0,"fee":0.0,
+                "closed_volume":0.1,"net":1.2,"net_per_lot":12.0,"reward":0.4,
                 "sniper_tp_preserved":true,
                 "selection":{"brain":ID,"policy":"sniper-ticks-v1","sniper_policy":"impulse",
                     "sniper_definition":"config-P","sniper_regime":"directional_normal",

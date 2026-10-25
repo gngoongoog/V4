@@ -136,7 +136,7 @@ fn forward_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result
 }
 // Broker training labels can predate G5-B. Validate again AT READ TIME:
 // upgrading the admission gate does not make legacy polluted rows trustworthy.
-fn verified_broker_feedback(p:&Value)->Option<(f64,f64,f64)>{
+pub(crate) fn verified_broker_feedback(p:&Value)->Option<(f64,f64,f64)>{
     if p["evidence_source"]!="mt5_demo_broker" {return None;}
     let mut vals=[0.0_f64;6];
     for (i,name) in ["gross","commission","swap","fee","net","net_per_lot"].iter().enumerate(){
