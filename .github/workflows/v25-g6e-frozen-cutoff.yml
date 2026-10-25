@@ -1,0 +1,31 @@
+name: V25 G6-E Fixed Expert Checkpoint Cutoff
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/v25-g6e-frozen-policy-training-cutoff-audit-20261025]
+    paths:
+      - 'scripts/audit_v25_g6e_frozen_policy_cutoff.py'
+      - 'tests/test_v25_g6e_frozen_policy_cutoff.py'
+      - '.github/workflows/v25-g6e-frozen-cutoff.yml'
+  pull_request:
+    branches: [feature/v25-g6d-causal-member-learning-attribution-20261025]
+permissions:
+  contents: read
+jobs:
+  immutable-cutoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile fixed-policy auditor and test fixtures
+        run: python3 -m compileall -q scripts/audit_v25_g6e_frozen_policy_cutoff.py tests/test_v25_g6e_frozen_policy_cutoff.py
+      - name: Reject future broker labels, mutable snapshots and false OOS
+        run: python3 -m unittest discover -s tests -p 'test_v25_g6e_frozen_policy_cutoff.py' -v
+      - name: Ensure earlier G6-A/B/D research safeguards still pass
+        run: |
+          python3 -m unittest discover -s tests -p 'test_v25_g6a_preregistered_quotes.py' -v
+          python3 -m unittest discover -s tests -p 'test_v25_g6b_executed_demo_arm.py' -v
+          python3 -m unittest discover -s tests -p 'test_v25_g6d_causal_learning_evidence.py' -v
