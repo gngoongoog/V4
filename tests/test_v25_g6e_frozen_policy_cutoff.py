@@ -112,6 +112,18 @@ class TestFrozenPolicyCutoff(unittest.TestCase):
         self.assertEqual(r["snapshot_violations"]
                          ["frozen_broker_sample_claim_exceeds_prior_verified_closes"],1)
 
+    def test_scoped_source_with_wrong_broker_mode_cannot_back_expert_weight(self):
+        self.receipt(self.cutoff-1000)
+        self.db.execute(
+            "UPDATE coordinator_broker_samples "
+            "SET payload=json_set(payload,'$.trading_mode','sniper')",())
+        m=self.manifest()
+        r=g6e.audit(self.db,m,now_ms=NOW)
+        self.assertEqual(r["matching_verified_broker_receipts_closed_before_freeze"],0)
+        self.assertEqual(r["invalid_or_legacy_broker_receipts"],1)
+        self.assertEqual(r["snapshot_violations"]
+                         ["frozen_broker_sample_claim_exceeds_prior_verified_closes"],1)
+
     def test_wrong_account_or_mode_config_never_becomes_fixed_checkpoint(self):
         self.snapshot["config"]["symbol"]="EURUSD"
         m=self.manifest()
