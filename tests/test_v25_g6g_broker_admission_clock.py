@@ -30,7 +30,7 @@ class G6GAdmittedLearning(unittest.TestCase):
             payload_sha256 TEXT NOT NULL,protocol TEXT NOT NULL,
             PRIMARY KEY(source,position_id));
         """)
-        self.observed=(fixture.FUTURE+75)*1000
+        self.observed=(fixture.FUTURE+60)*1000+500
         self.admitted=self.observed-100
         self.closed=self.admitted-1000
 
