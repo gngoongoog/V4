@@ -14,6 +14,7 @@ import {brokerEvidence} from './brain-evidence';
 import {ScopedReadFence} from './scoped-read-fence';
 import {DashboardTradeFeed,DashboardExecutionQuality} from './dashboard-operations';
 import {TradeJournalOperations} from './trade-journal-operations';
+import {BrokerReportOperations} from './broker-report-operations';
 import type {DashboardRead} from './dashboard-evidence';
 import {OperatorWriteFence} from './operator-write-fence';
 import type {OperatorWriteTicket} from './operator-write-fence';
@@ -43,7 +44,7 @@ const PAGES:{id:PageId;title:string;en:string;icon:IconComponent;route?:string}[
  {id:'positions',title:'المراكز النشطة',en:'Positions',icon:BriefcaseBusiness,route:'/v1/execution/trades'},
  {id:'analysis',title:'التحليلات',en:'Analysis',icon:LineChart,route:'/v1/opportunities/history'},
  {id:'journal',title:'السجلات',en:'Trade Journal',icon:NotebookTabs,route:'/v1/execution/trades'},
- {id:'reports',title:'التقارير',en:'Reports',icon:FileText,route:'/v1/decisions'},
+ {id:'reports',title:'التقارير',en:'Reports',icon:FileText,route:'/v1/execution/trades'},
  {id:'telegram',title:'التلغرام',en:'Telegram',icon:MessageCircle,route:'/v1/config'},
  {id:'settings',title:'الإعدادات',en:'Settings',icon:Settings,route:'/v1/config'},
  {id:'shadow',title:'بحث الظل',en:'Shadow Research',icon:Eye,route:'/v1/decisions'},
@@ -348,7 +349,7 @@ export default function Terminal(){
   return()=>{active=false;clearInterval(interval)};
  },[page,preview,contextKey]);
  useEffect(()=>{
-  if(page==='journal'){setPageData(null);setPageUpdatedAt(null);setPageError('');return;}
+  if(page==='journal'||page==='reports'){setPageData(null);setPageUpdatedAt(null);setPageError('');return;}
    if(page==='dashboard'||!hasTauri()||preview){setPageData(null);setPageUpdatedAt(null);setPageError('');return;}
   const route=findPage(page).route;
   if(!route){setPageData(null);setPageUpdatedAt(null);setPageError('لا يوجد مصدر مرتبط بهذه الصفحة');return;}
@@ -777,7 +778,7 @@ export default function Terminal(){
       <div className="subpage-header"><div className="sub-heading"><div className="sub-glyph"><PageIcon size={32}/></div><div><small>{pageMeta.en.toUpperCase()} • V4 RUST CORE</small><h1>{pageMeta.title}</h1><p>صفحة تفاعلية مرتبطة بمحرك V4، والبيانات تُعرض فقط إذا وصلت من مصدر فعلي.</p></div></div><ConnectionLine connectedNow={trustworthy} preview={preview}/></div>
       <div className="subpage-stats"><article><small>EQUITY</small><strong>{money(account?.equity,currency)}</strong><span>رأس المال في الحساب</span></article><article><small>DAILY P&L</small><strong className="teal">{signed(account?.today_net,currency)}</strong><span>نتيجة جلسة MT5</span></article><article><small>POSITIONS</small><strong>{account?positions.length:'—'}</strong><span>المراكز المفتوحة</span></article><article><small>ACCOUNT</small><strong>{account?.demo?'DEMO':account?'REAL':'OFFLINE'}</strong><span>حالة الاتصال بالوسيط</span></article></div>
       <div className="subpage-layout">
-      <section className="panel subpage-primary"><div className="panel-title"><b>{pageMeta.title} — بيانات وتشغيل</b><button onClick={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}} disabled={!pageMeta.route||preview||page==='journal'}>تحديث ↻</button></div>
+      <section className="panel subpage-primary"><div className="panel-title"><b>{pageMeta.title} — بيانات وتشغيل</b><button onClick={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}} disabled={!pageMeta.route||preview||page==='journal'||page==='reports'}>تحديث ↻</button></div>
         {page==='risk'?<div className="feature-zone">
           <MicroCapitalOperations status={!preview&&feed.broker?status:null} key={contextKey} risk={safeConfig?unwrap(safeConfig.risk):null}
              monitor={safeRiskSnapshot} portfolio={unwrap(portfolioReport).portfolio} armed={status?.requested_run===true}
@@ -805,6 +806,7 @@ export default function Terminal(){
         page==='backtest'?<div className="feature-zone"><BacktestOperations key={viewScope} disabled={busy||preview} active={['loading','running'].includes(String(unwrap(pageData).phase||unwrap(unwrap(pageData).job).phase||''))} onStart={r=>runBacktest('start',r)} onCancel={()=>runBacktest('cancel')}/><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/backtest')}/></div>:
         page==='backups'?<div className="feature-zone"><BackupOperations disabled={busy||preview} create={()=>runBackup('create')} exportBrain={()=>runBackup('brain_export')}/><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/backups')}/></div>:
         page==='journal'?<div className="feature-zone"><TradeJournalOperations key={viewScope} status={!preview&&feed.broker?status:null} scope={contextKey} preview={preview}/></div>:
+        page==='reports'?<div className="feature-zone"><BrokerReportOperations key={viewScope} status={!preview&&feed.broker?status:null} scope={contextKey} preview={preview} onJournal={()=>open('journal')}/></div>:
         page==='positions'?<div className="feature-zone"><h3>مراكز MT5 الحالية</h3><Table rows={account?positions.map(p=>({...p})):[]} empty="لا توجد مراكز موثقة"/></div>:
         page==='brains'||page==='brainControl'?<div className="feature-zone"><BrainControlsOperations source={pageData} disabled={busy||preview} armed={status?.requested_run===true} onSave={runSaveBrain}/><FrozenCoordinatorOperations status={!preview&&feed.broker?status:null} source={activeFrozenCoordinator} currentMode={unwrap(pageData).trading_mode} brainContext={unwrap(pageData).context} armed={status?.requested_run===true} disabled={busy||preview} onAction={runFrozenCoordinator} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('frozenCoordinator');void readPanel('/v1/execution/frozen-coordinator').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setFrozenSlot({scope:viewScope,report:null})})}}/><p className="data-description">P1-A: نسب النجاح تظهر فقط بعد 30 نتيجة مغلقة موثّقة من MT5 DEMO بعد العمولة والسواب والرسوم، ومحددة بالعقل ووضع التداول. نتائج الورق ليست صفقات وسيط؛ لا توجد ترقية تلقائية ولا اعتماد على REAL.</p><Table rows={preview?[]:array(unwrap(pageData).brains).map(b=>({brain:b.name,checks:unwrap(b.activity).checks,signals:unwrap(b.activity).signals,broker_orders:unwrap(b.attributed_orders).requested,broker_fills:unwrap(b.attributed_orders).fill_acknowledged,paper_closed:unwrap(b.paper_stats).closed,verified_demo_closes:unwrap(unwrap(b.integrity).broker_evidence).sample_count,evidence_state:unwrap(unwrap(b.integrity).broker_evidence).status==='insufficient_evidence'?'INSUFFICIENT DATA':unwrap(unwrap(b.integrity).broker_evidence).status,winrate_costed:Number.isFinite(unwrap(unwrap(b.integrity).broker_evidence).win_rate)&&unwrap(unwrap(b.integrity).broker_evidence).win_rate!==null?((Number(unwrap(unwrap(b.integrity).broker_evidence).win_rate)*100).toFixed(1)+'%'):'—',net_after_costs:unwrap(unwrap(b.integrity).broker_evidence).net_booked??'—'}))} empty={pageError||'لا توجد إحصائيات عقول من المحرك'}/></div>:
         <div className="feature-zone"><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}}/></div>}
