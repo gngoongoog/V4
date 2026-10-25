@@ -323,7 +323,22 @@ impl Student {
         self.timing.load(db, key)?;
         let mut st=db.prepare("SELECT payload FROM student_experiences WHERE context=?1 AND complete=0 ORDER BY opened_ms")?;
         for raw in st.query_map([key], |r| r.get::<_, String>(0))? {
-            let e: Experience = serde_json::from_str(&raw?)?;
+            let mut e: Experience = serde_json::from_str(&raw?)?;
+            // Old cached student experiences may contain accepted broker labels
+            // from before G5-E. Recheck them on EVERY load, not only fresh
+            // coordinator_broker_samples, before any further exit learning.
+            if e.actual.as_ref().is_some_and(|p| {
+                crate::coordinator_learning::verified_broker_feedback(p).is_none()
+                    || e.position_id==0
+                    || p["position_id"].as_u64()!=Some(e.position_id)
+            }) {
+                e.actual=None;
+                e.trial.usable=false;
+                e.trial.exclusion_reason="broker_label_unverified".into();
+                e.path_overflow=true;
+                e.loss_reviewed=false;
+                e.study_consumed=false;
+            }
             self.active.insert(e.command_id.clone(), e);
         }
         let mut st =
@@ -518,10 +533,25 @@ impl Student {
                     .optional()?
                     .unwrap_or(0);
             }
-            if e.actual.is_none() {
-                let actual:Option<String>=db.query_row("SELECT payload FROM coordinator_broker_samples WHERE context=?1 AND json_extract(payload,'$.open_command_id')=?2 AND brain=?3 LIMIT 1",params![key,e.command_id,e.owner],|r|r.get(0)).optional()?;
+            if e.actual.is_none() && e.position_id>0 {
+                let actual:Option<String>=db.query_row(
+                    "SELECT payload FROM coordinator_broker_samples
+                     WHERE context=?1 AND json_extract(payload,'$.open_command_id')=?2
+                       AND brain=?3 AND position_id=?4 LIMIT 1",
+                    params![key,e.command_id,e.owner,e.position_id],
+                    |r|r.get(0)).optional()?;
                 if let Some(raw) = actual {
                     let label: Value = serde_json::from_str(&raw)?;
+                    if crate::coordinator_learning::verified_broker_feedback(&label).is_none()
+                        || label["position_id"].as_u64()!=Some(e.position_id) {
+                        // Missing MT5 costs/risk/reward or a mismatched physical
+                        // position must never trigger a Student loss pattern or
+                        // unlock a paired exit study. Keep the raw broker row.
+                        e.trial.usable=false;
+                        e.trial.exclusion_reason="broker_label_unverified".into();
+                        e.path_overflow=true;
+                        continue;
+                    }
                     if label["closed_volume"]
                         .as_f64()
                         .is_some_and(|volume| (volume - e.volume).abs() > 1e-8)
@@ -894,7 +924,11 @@ mod tests {
                 .unwrap(),
             0
         );
-        let label = json!({"open_command_id":"one","closed_ms":2100,"closed_volume":0.1,"net":-0.5,"attribution":"costs_erased_gross_profit"});
+        let label = json!({"open_command_id":"one","position_id":55,"closed_ms":2100,
+            "evidence_source":"mt5_demo_broker","gross":-0.5,"commission":0.0,
+            "swap":0.0,"fee":0.0,"net":-0.5,"net_per_lot":-5.0,
+            "closed_volume":0.1,"risk_money":0.0,"r_multiple":0.0,"reward":-0.25,
+            "attribution":"costs_erased_gross_profit"});
         db.execute(
             "INSERT INTO coordinator_broker_samples VALUES('fixture',55,?1,'trend',2100,?2)",
             params![key, label.to_string()],
@@ -946,7 +980,11 @@ mod tests {
         key
     }
     fn label(db: &Connection, key: &str, closed: u64) {
-        db.execute("INSERT INTO coordinator_broker_samples VALUES('fixture',55,?1,'trend',?2,?3)",params![key,closed,json!({"open_command_id":"repair","closed_ms":closed,"closed_volume":0.1,"net":-0.5,"attribution":"costs_erased_gross_profit"}).to_string()]).unwrap();
+        db.execute("INSERT INTO coordinator_broker_samples VALUES('fixture',55,?1,'trend',?2,?3)",params![key,closed,json!({"open_command_id":"repair","position_id":55,"closed_ms":closed,
+            "evidence_source":"mt5_demo_broker","gross":-0.5,"commission":0.0,
+            "swap":0.0,"fee":0.0,"net":-0.5,"net_per_lot":-5.0,
+            "closed_volume":0.1,"risk_money":0.0,"r_multiple":0.0,"reward":-0.25,
+            "attribution":"costs_erased_gross_profit"}).to_string()]).unwrap();
     }
     #[test]
     fn recovered_old_fill_is_journaled_but_never_invents_a_shadow_path() {
