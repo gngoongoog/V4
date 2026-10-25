@@ -319,8 +319,14 @@ fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<
     let rows=st.query_map([source],|r|Ok((
         r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,
         r.get::<_,i64>(3)?,r.get::<_,String>(4)?,
-        BrokerAdmission{context:r.get(5)?,brain:r.get(6)?,closed:r.get(7)?,
-            admitted:r.get(8)?,hash:r.get(9)?,protocol:r.get(10)?}
+        BrokerAdmission{
+            context:r.get::<_,Option<String>>(5).unwrap_or(None),
+            brain:r.get::<_,Option<String>>(6).unwrap_or(None),
+            closed:r.get::<_,Option<i64>>(7).unwrap_or(None),
+            admitted:r.get::<_,Option<i64>>(8).unwrap_or(None),
+            hash:r.get::<_,Option<String>>(9).unwrap_or(None),
+            protocol:r.get::<_,Option<String>>(10).unwrap_or(None)
+        }
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let(mut samples,mut wins,mut weighted_wins,mut weighted_net,mut weighted_reward,mut effective)=(0u64,0u64,0.,0.,0.,0.);
     for(stored_context,stored_brain,signed_pos,signed_ts,raw,admission)in rows{
@@ -358,8 +364,14 @@ fn contextual_stats(db:&Connection,source:&str,key:&str,now:u64)->Result<(u64,f6
     let rows=st.query_map([source],|r|Ok((
         r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,
         r.get::<_,i64>(3)?,r.get::<_,String>(4)?,
-        BrokerAdmission{context:r.get(5)?,brain:r.get(6)?,closed:r.get(7)?,
-            admitted:r.get(8)?,hash:r.get(9)?,protocol:r.get(10)?}
+        BrokerAdmission{
+            context:r.get::<_,Option<String>>(5).unwrap_or(None),
+            brain:r.get::<_,Option<String>>(6).unwrap_or(None),
+            closed:r.get::<_,Option<i64>>(7).unwrap_or(None),
+            admitted:r.get::<_,Option<i64>>(8).unwrap_or(None),
+            hash:r.get::<_,Option<String>>(9).unwrap_or(None),
+            protocol:r.get::<_,Option<String>>(10).unwrap_or(None)
+        }
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let(mut count,mut sum,mut mass)=(0u64,0.,0.);
     let(mut recent_loss_streak,mut recent_cost_losses)=(0u64,0u64);
@@ -1433,6 +1445,14 @@ mod tests {
             WHERE source=?1 AND position_id=90",[&source]).unwrap();
         assert_eq!(broker_stats(&db,&source,None,now).unwrap().samples,0,
             "Any changed stored receipt must fail its original admission hash");
+        assert_eq!(contextual_stats(&db,&source,ctx,now).unwrap().0,0);
+        // A database file can contain SQLite type-corrupt clock fields. They
+        // must fail CLOSED without taking down the trading learning cycle.
+        db.execute("UPDATE coordinator_broker_samples SET payload=?1 WHERE source=?2 AND position_id=90",
+            params![real.to_string(),&source]).unwrap();
+        db.execute("UPDATE coordinator_broker_admissions SET admitted_ms='invalid-clock'
+            WHERE source=?1 AND position_id=90",[&source]).unwrap();
+        assert_eq!(broker_stats(&db,&source,None,now).unwrap().samples,0);
         assert_eq!(contextual_stats(&db,&source,ctx,now).unwrap().0,0);
         assert_eq!(broker_stats(&db,"legacy-not-a-canonical-source",None,now).unwrap().samples,0);
     }
