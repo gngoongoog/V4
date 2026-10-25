@@ -1037,6 +1037,15 @@ mod tests {
             "After exact MT5 feedback is restored, matching broker evidence can be read");
         assert_eq!(v["usable_shadow_pairs"],0,
             "Unverified earlier sampled path cannot be promoted after restoration");
+        // Emulate an old persisted Experience.actual corrupted after the
+        // actual broker ledger was accepted. Reports must not count it.
+        db.execute("UPDATE student_experiences SET
+            payload=json_set(payload,'$.actual.reward',0.99) WHERE context=?1",
+            [&key]).unwrap();
+        let archived=view(&db,&key).unwrap();
+        assert_eq!(archived["closed_broker_trades"],0);
+        assert_eq!(archived["recent_closed"],0);
+        assert_eq!(archived["experiences"][0]["actual"],Value::Null);
     }
 
     #[test]
