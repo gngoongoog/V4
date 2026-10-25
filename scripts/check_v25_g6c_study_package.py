@@ -56,6 +56,7 @@ def verify(portable: Path, *, exec_help: bool = True) -> dict:
             "v25_g6c_list_frozen_runs.py",
             "audit_v25_g6a_preregistered_quotes.py",
             "audit_v25_g6b_executed_demo_arm.py",
+            "audit_v25_g6d_causal_learning_evidence.py",
         ):
             try:
                 proc=subprocess.run(
