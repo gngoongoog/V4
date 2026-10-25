@@ -1,0 +1,22 @@
+name: V25 G7 Prospective Audit
+on:
+  pull_request:
+    paths:
+      - 'scripts/g7_prospective_audit.py'
+      - 'tests/test_g7_prospective_audit.py'
+      - '.github/workflows/v25-g7-prospective-audit.yml'
+  workflow_dispatch:
+jobs:
+  offline-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Run adversarial offline audit tests
+        run: python -m unittest discover -s tests -p 'test_g7_prospective_audit.py' -v
+      - name: Compile offline auditor
+        run: python -m py_compile scripts/g7_prospective_audit.py
