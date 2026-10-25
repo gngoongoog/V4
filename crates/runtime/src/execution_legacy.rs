@@ -705,12 +705,18 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         let key = t.map(ctx).unwrap_or_default();
         match (method, path) {
             ("GET", "/v1/execution") => {
+                // The connected terminal can switch accounts or Demo/REAL
+                // mode while the Core remains bound to its prior identity.
+                // Never use the new terminal context for private commands,
+                // broker PnL, floating positions, or learning statistics.
+                let scoped = t.filter(|t| self.matches(t));
+                let bound_key = scoped.map(ctx).unwrap_or_default();
                 let deals = json_rows(
                     db,
                     "SELECT payload FROM broker_deals WHERE context=?1 ORDER BY ticket DESC",
-                    &key,
+                    &bound_key,
                 )?;
-                let positions = t.map(|t| t.positions.clone()).unwrap_or_default();
+                let positions = scoped.map(|t| t.positions.clone()).unwrap_or_default();
                 let mut brains = vec![];
                 for b in &self.brains {
                     let magic = execution::magic(&b.id).unwrap();
@@ -740,12 +746,12 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         .collect();
                     brains.push(json!({"config":b,"name":BRAINS.iter().find(|v|v.0==b.id).unwrap().1,"magic":magic,"latest":self.signals.get(&b.id).filter(|v|t.is_some_and(|t|self.matches(t))&&now.saturating_sub(v["evaluated_ms"].as_u64().unwrap_or(0))<=3000),"learning":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))),"learned_weight":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))).map(|w|w.weight()),"stats":{"deals":own.len(),"closed_positions":closed.len(),"wins":closed.iter().filter(|(_,p)|p.is_some_and(|amount| amount>0.)).count(),"net_booked":net,"booked_cost_evidence":if own.is_empty(){"NO_BROKER_DEALS"}else if net.is_some(){"BROKER_COMPONENTS_VERIFIED"}else{"MISSING_OR_INVALID_BROKER_COST"},"floating":positions.iter().filter(|p|p.magic==magic).map(|p|p.profit).sum::<f64>(),"open_positions":positions.iter().filter(|p|p.magic==magic).count()}}));
                 }
-                let commands=json_rows(db,"SELECT json_object('request',json(payload),'state',state,'result',json(result)) FROM broker_commands WHERE context=?1 ORDER BY created_ms DESC LIMIT 100",&key)?;
-                let (history_until,last_sync)=if t.is_some_and(|t|self.matches(t)) {
-                    broker_sync_watermark(db,&key,&self.settings.target)?
+                let commands=json_rows(db,"SELECT json_object('request',json(payload),'state',state,'result',json(result)) FROM broker_commands WHERE context=?1 ORDER BY created_ms DESC LIMIT 100",&bound_key)?;
+                let (history_until,last_sync)=if scoped.is_some() {
+                    broker_sync_watermark(db,&bound_key,&self.settings.target)?
                 }else{(0,0)};
                 Ok(
-                    json!({"settings":self.settings,"armed":self.enabled(status),"account_matches":t.is_some_and(|t|self.matches(t)),"context":key,"brains":brains,"commands":commands,"last_broker_sync_ms":last_sync,"history_until_ms":history_until,"note":"أرباح محققة من سجل الوسيط؛ العمولات المنفصلة التي لا تحمل position_id لا تنسب تلقائياً لعقل. STOP يمنع دخولاً جديداً، وإدارة خروج الصفقات المملوكة تستمر."}),
+                    json!({"settings":self.settings,"armed":self.enabled(status),"account_matches":scoped.is_some(),"context":bound_key,"brains":brains,"commands":commands,"last_broker_sync_ms":last_sync,"history_until_ms":history_until,"note":"أرباح محققة من سجل الوسيط؛ العمولات المنفصلة التي لا تحمل position_id لا تنسب تلقائياً لعقل. STOP يمنع دخولاً جديداً، وإدارة خروج الصفقات المملوكة تستمر."}),
                 )
             }
             ("POST", "/v1/execution/settings") => {
@@ -1347,6 +1353,69 @@ mod execution_persistence_tests {
         assert_eq!(again["booked_cost_evidence"],"BROKER_COMPONENTS_VERIFIED");
         assert!((again["net_booked"].as_f64().unwrap()-2.1).abs()<1e-9);
         assert_eq!(again["wins"],1);
+    }
+
+    #[test]
+    fn dashboard_stats_never_read_other_accounts_or_other_demo_real_mode() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let a=ctx(&t);
+        let other=Telemetry{login:99,..t.clone()};
+        let b=ctx(&other);
+        // Simulate already-persisted broker history from both accounts.
+        // The switch from one MT5 login to another must never cause a
+        // previously-bound dashboard to show the other user's PnL.
+        for (key,ticket,profit) in [(a.clone(),701,3.),(b.clone(),702,500.)] {
+            let deal=json!({"ticket":ticket,"position_id":ticket,
+                "symbol":"XAUUSD","brain":"system","magic":410600,
+                "type":0,"entry":0,"time_msc":150,"volume":0.1,
+                "price":2000.0,"profit":profit,"commission":0.0,
+                "swap":0.0,"fee":0.0});
+            db.execute("INSERT INTO broker_deals VALUES(?1,?2,?3,'system',?4)",
+                params![key,ticket,ticket,deal.to_string()]).unwrap();
+            db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload)
+                VALUES(?1,?2,'system','open',100,'observed',?3)",
+                params![format!("order-{ticket}"),key,
+                    json!({"id":format!("order-{ticket}")}).to_string()]).unwrap();
+        }
+        let status=|tel:Telemetry,fresh:bool|Status{
+            gateway_fresh:fresh,telemetry:Some(tel),..Default::default()
+        };
+        let bound=svc.route("GET","/v1/execution",b"",
+            &db,&status(t.clone(),true),300).unwrap();
+        assert_eq!(bound["account_matches"],true);
+        assert_eq!(bound["context"],a);
+        assert_eq!(bound["commands"].as_array().unwrap().len(),1);
+        let net=&bound["brains"].as_array().unwrap().iter()
+            .find(|v|v["config"]["id"]=="system").unwrap()["stats"];
+        assert_eq!(net["deals"],1);
+        assert_eq!(net["net_booked"],3.0);
+        let switched=svc.route("GET","/v1/execution",b"",
+            &db,&status(other.clone(),true),301).unwrap();
+        assert_eq!(switched["account_matches"],false);
+        assert_eq!(switched["context"],"");
+        assert!(switched["commands"].as_array().unwrap().is_empty());
+        let masked=&switched["brains"].as_array().unwrap().iter()
+            .find(|v|v["config"]["id"]=="system").unwrap()["stats"];
+        assert_eq!(masked["deals"],0);
+        assert!(masked["net_booked"].is_null());
+        assert_eq!(masked["floating"],0.0);
+        // Same login/server/currency is insufficient when MT5 changes
+        // between Demo and REAL: the existing bound target is still Demo.
+        let real=Telemetry{account_trade_mode:Some(2),demo:false,..t.clone()};
+        let wrong_mode=svc.route("GET","/v1/execution",b"",
+            &db,&status(real,true),302).unwrap();
+        assert_eq!(wrong_mode["account_matches"],false);
+        assert_eq!(wrong_mode["context"],"");
+        let stale=svc.route("GET","/v1/execution",b"",
+            &db,&status(t.clone(),false),303).unwrap();
+        assert_eq!(stale["context"],"");
+        let recovered=svc.route("GET","/v1/execution",b"",
+            &db,&status(t,true),304).unwrap();
+        assert_eq!(recovered["context"],a);
+        assert_eq!(recovered["commands"].as_array().unwrap().len(),1);
     }
 
     #[test]
