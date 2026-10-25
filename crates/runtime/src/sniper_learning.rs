@@ -16,7 +16,8 @@ pub fn refresh(engine: &mut Engine, db: &Connection, t: &Telemetry, now: u64) ->
         for (closed, raw) in rows.into_iter().rev() {
             if closed == 0 || closed > now || now.saturating_sub(closed) > 30*24*60*60*1000 { continue; }
             let p: Value = serde_json::from_str(&raw)?;
-            if p["evidence_source"] != "mt5_demo_broker" || p["trading_mode"] != "sniper" { continue; }
+            if crate::coordinator_learning::verified_broker_label(&p).is_none()
+                || p["trading_mode"] != "sniper" { continue; }
             let s = &p["selection"];
             if s["brain"] != ID || s["policy"] != "sniper-ticks-v1" { continue; }
             let Some(policy) = POLICIES.iter().position(|name| s["sniper_policy"] == *name) else { continue; };
@@ -70,8 +71,7 @@ pub fn frozen_training_checkpoint(db:&Connection,t:&Telemetry,model:&Engine,now:
             ||!POLICIES.iter().any(|item|s["sniper_policy"]==*item)
             ||s["sniper_definition"].as_str().is_none()
             ||s["sniper_regime"].as_str().is_none()
-            ||!p["reward"].as_f64().is_some_and(f64::is_finite)
-            ||!p["net"].as_f64().is_some_and(f64::is_finite) {continue}
+            ||crate::coordinator_learning::verified_broker_label(&p).is_none() {continue}
         count+=1;
         latest=latest.max(closed);
         earliest=Some(earliest.map_or(closed,|v|v.min(closed)));
@@ -112,7 +112,9 @@ mod tests {
             login:17,server:"Demo".into(),symbol:"XAUUSD".into(),..Default::default()};
         let ctx=crate::coordinator_learning::context(&t);
         let record=json!({"evidence_source":"mt5_demo_broker","trading_mode":"sniper",
-            "net":2.,"reward":0.4,"selection":{"brain":ID,"policy":"sniper-ticks-v1",
+            "gross":2.7,"commission":-0.7,"swap":0.0,"fee":0.0,
+            "closed_volume":0.1,"net":2.0,"net_per_lot":20.0,"reward":0.4,
+            "selection":{"brain":ID,"policy":"sniper-ticks-v1",
             "sniper_policy":"impulse","sniper_definition":"A","sniper_regime":"B"}});
         db.execute("INSERT INTO coordinator_broker_samples VALUES('first',1,?1,'sniper_learner',1000,?2)",
             rusqlite::params![ctx,record.to_string()]).unwrap();
@@ -142,7 +144,8 @@ mod tests {
         let t=Telemetry{demo:true,account_trade_mode:Some(0),login:17,server:"Demo".into(),symbol:"XAUUSD".into(),..Default::default()};
         let context=crate::coordinator_learning::context(&t);
         for (i,brain,account,source) in [(1,ID,context.as_str(),"mt5_demo_broker"),(2,ID,context.as_str(),"virtual"),(3,"trend",context.as_str(),"mt5_demo_broker"),(4,ID,"another-account","mt5_demo_broker")] {
-            let p=json!({"evidence_source":source,"trading_mode":"sniper","net":-2.,"reward":-0.5,
+            let p=json!({"evidence_source":source,"trading_mode":"sniper","gross":-1.3,"commission":-0.7,"swap":0.0,"fee":0.0,
+                "closed_volume":0.1,"net":-2.0,"net_per_lot":-20.0,"reward":-0.5,
                 "selection":{"brain":ID,"policy":"sniper-ticks-v1","sniper_policy":"impulse","sniper_definition":"config-A","sniper_regime":"choppy"}});
             db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,?3,?4,1000,?5)",rusqlite::params![i.to_string(),i,account,brain,p.to_string()]).unwrap();
         }
@@ -166,7 +169,8 @@ mod tests {
             (5,ID,context.as_str(),"mt5_demo_broker",3,"fixed"),
             (6,ID,context.as_str(),"mt5_demo_broker",6,"adaptive")
         ] {
-            let payload=json!({"evidence_source":source,"trading_mode":"sniper","net":1.2,"reward":0.4,
+            let payload=json!({"evidence_source":source,"trading_mode":"sniper","gross":1.9,"commission":-0.7,"swap":0.0,"fee":0.0,
+                "closed_volume":0.1,"net":1.2,"net_per_lot":12.0,"reward":0.4,
                 "sniper_tp_preserved":true,
                 "selection":{"brain":ID,"policy":"sniper-ticks-v1","sniper_policy":"impulse",
                     "sniper_definition":"config-P","sniper_regime":"directional_normal",
