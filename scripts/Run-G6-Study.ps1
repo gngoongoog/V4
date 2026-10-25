@@ -1,5 +1,5 @@
 param(
-  [ValidateSet('List','Register','Paper','Executed')][string]$Action='',
+  [ValidateSet('List','Register','Paper','Executed','Learning')][string]$Action='',
   [string]$Db='',
   [string]$RunId='',
   [string]$Manifest='',
@@ -21,8 +21,9 @@ if(-not $Action){
   Write-Host '2 - Register new prospective study (before new trades)'
   Write-Host '3 - Audit prospective paired quote-paper results'
   Write-Host '4 - Audit exact MT5 Demo booked Adaptive closes'
-  $choice=Read-Host 'Choose 1/2/3/4'
-  $Action=switch($choice){'1'{'List'}'2'{'Register'}'3'{'Paper'}'4'{'Executed'}default{throw 'Invalid selection'}}
+  Write-Host '5 - Audit causal member learning evidence, no OOS claim'
+  $choice=Read-Host 'Choose 1/2/3/4/5'
+  $Action=switch($choice){'1'{'List'}'2'{'Register'}'3'{'Paper'}'4'{'Executed'}'5'{'Learning'}default{throw 'Invalid selection'}}
 }
 if(-not $Db){$Db=Read-Host 'Enter the path to the existing Core SQLite database'}
 if(-not(Test-Path -LiteralPath $Db -PathType Leaf)){throw "Core database file not found: $Db"}
@@ -49,15 +50,18 @@ if($Action -eq 'Register'){
   if(-not(Test-Path -LiteralPath $Manifest -PathType Leaf)){throw 'Existing study manifest is required'}
   $Manifest=(Resolve-Path -LiteralPath $Manifest).Path
   if(-not $Output){
-    $prefix=if($Action -eq 'Paper'){'G6A-paper'}else{'G6B-booked-Demo'}
+    $prefix=switch($Action){'Paper'{'G6A-paper'}'Executed'{'G6B-booked-Demo'}'Learning'{'G6D-learning-evidence'}}
     $Output=Join-Path $studies "$prefix-$stamp.json"
   }
   if(Test-Path -LiteralPath $Output){throw 'Report output already exists; refusing to overwrite it'}
   if($Action -eq 'Paper'){
     $script=Join-Path $toolDir 'audit_v25_g6a_preregistered_quotes.py'
     $arguments=@($script,'audit','--db',$Db,'--manifest',$Manifest,'--output',$Output)
-  } else {
+  } elseif($Action -eq 'Executed'){
     $script=Join-Path $toolDir 'audit_v25_g6b_executed_demo_arm.py'
+    $arguments=@($script,'--db',$Db,'--manifest',$Manifest,'--output',$Output)
+  } else {
+    $script=Join-Path $toolDir 'audit_v25_g6d_causal_learning_evidence.py'
     $arguments=@($script,'--db',$Db,'--manifest',$Manifest,'--output',$Output)
   }
 }
