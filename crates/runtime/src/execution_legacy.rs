@@ -1036,6 +1036,43 @@ mod execution_persistence_tests {
     }
 
     #[test]
+    fn brain_summary_refuses_missing_historical_fee_as_verified_profit() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let key=ctx(&t);
+        let entry=json!({"ticket":710,"position_id":77,"symbol":"XAUUSD",
+            "type":0,"entry":0,"magic":410600,"volume":0.1,
+            "profit":0.,"commission":-0.35,"swap":0.,"fee":0.});
+        let mut exit=json!({"ticket":711,"position_id":77,"symbol":"XAUUSD",
+            "type":1,"entry":1,"magic":410600,"volume":0.1,
+            "profit":3.,"swap":-0.2,"fee":0.});
+        for (ticket,deal) in [(710,&entry),(711,&exit)] {
+            db.execute("INSERT INTO broker_deals VALUES(?1,?2,77,'system',?3)",
+                params![key,ticket,deal.to_string()]).unwrap();
+        }
+        let mut st=Status::default();
+        st.gateway_fresh=true;
+        st.telemetry=Some(t);
+        let first=svc.route("GET","/v1/execution",b"",&db,&st,200).unwrap();
+        let stats=&first["brains"].as_array().unwrap().iter()
+            .find(|v|v["config"]["id"]=="system").unwrap()["stats"];
+        assert!(stats["net_booked"].is_null());
+        assert_eq!(stats["booked_cost_evidence"],"MISSING_OR_INVALID_BROKER_COST");
+        assert_eq!(stats["wins"],0);
+        exit["commission"]=json!(-0.35);
+        db.execute("UPDATE broker_deals SET payload=?1 WHERE context=?2 AND ticket=711",
+            params![exit.to_string(),key]).unwrap();
+        let clean=svc.route("GET","/v1/execution",b"",&db,&st,201).unwrap();
+        let again=&clean["brains"].as_array().unwrap().iter()
+            .find(|v|v["config"]["id"]=="system").unwrap()["stats"];
+        assert_eq!(again["booked_cost_evidence"],"BROKER_COMPONENTS_VERIFIED");
+        assert!((again["net_booked"].as_f64().unwrap()-2.1).abs()<1e-9);
+        assert_eq!(again["wins"],1);
+    }
+
+    #[test]
     fn core_history_sync_fails_closed_for_wrong_mode_cost_or_boundary() {
         let db=Connection::open_in_memory().unwrap();
         let mut service=Service::new(&db).unwrap();
