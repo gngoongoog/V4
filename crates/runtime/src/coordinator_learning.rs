@@ -886,20 +886,26 @@ mod tests {
     #[test]
     fn context_rewards_do_not_cross_sessions_cost_buckets_or_sources() {
         let db=Connection::open_in_memory().unwrap();let _=Learner::new(&db).unwrap();
-        for (id,source,key,reward) in [(1,"same","trend_up_normal|london|tight",0.8),
-            (2,"same","trend_up_normal|asia|tight",-0.8),(3,"same","trend_up_normal|london|wide",-0.9),
-            (4,"other","trend_up_normal|london|tight",-1.)] {
+        let same=source_key("account",TradingMode::Expert,"trend","M1","").unwrap();
+        let other=source_key("account",TradingMode::Expert,"trend","M1","other").unwrap();
+        for (id,source,key,reward) in [(1,&same,"trend_up_normal|london|tight",0.8),
+            (2,&same,"trend_up_normal|asia|tight",-0.8),(3,&same,"trend_up_normal|london|wide",-0.9),
+            (4,&other,"trend_up_normal|london|tight",-1.)] {
+            let report_id=if source==&other {"other"} else {""};
             db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,'account','trend',1000,?3)",
-                params![source,id,json!({"evidence_source":"mt5_demo_broker","context_key":key,
+                params![source,id,json!({"evidence_source":"mt5_demo_broker",
+                    "context":"account","brain":"trend","trading_mode":"expert",
+                    "timeframe":"M1","report_id":report_id,
+                    "position_id":id,"closed_ms":1000,"context_key":key,
                     "gross":reward,"commission":0.0,"swap":0.0,"fee":0.0,
                     "net":reward,"net_per_lot":reward,"closed_volume":1.0,
                     "risk_money":0.0,"r_multiple":0.0,
                     "reward":reward_v2(reward,0.0).1}).to_string()]).unwrap();
         }
-        let (n,reward,confidence,streak,penalty)=contextual_stats(&db,"same","trend_up_normal|london|tight",1000).unwrap();
+        let (n,reward,confidence,streak,penalty)=contextual_stats(&db,&same,"trend_up_normal|london|tight",1000).unwrap();
         assert_eq!(n,1);assert_eq!(reward,0.25);assert!(confidence>0. && confidence<0.2);
         assert_eq!(streak,0);assert_eq!(penalty,0.);
-        assert_eq!(contextual_stats(&db,"missing","trend_up_normal|london|tight",1000).unwrap().0,0);
+        assert_eq!(contextual_stats(&db,&other,"trend_up_normal|asia|tight",1000).unwrap().0,0);
     }
 
     fn bars(end: u64) -> Vec<FrameBar> {
@@ -1173,9 +1179,12 @@ mod tests {
         let db=Connection::open_in_memory().unwrap();
         let _=Learner::new(&db).unwrap();
         let key="trend_up_normal|london|tight";
-        let source="old-demo-trend";
+        let source=&source_key("demo",TradingMode::Expert,"trend","M1","").unwrap();
         let now=2_000_000_000_000u64;
         let valid=json!({"evidence_source":"mt5_demo_broker",
+            "context":"demo","brain":"trend","trading_mode":"expert",
+            "timeframe":"M1","report_id":"","position_id":10,
+            "closed_ms":now-500,
             "gross":2.0,"commission":-0.5,"swap":0.0,"fee":0.0,
             "net":1.5,"net_per_lot":15.0,"closed_volume":0.1,
             "risk_money":0.0,"r_multiple":0.0,"reward":0.25,
@@ -1206,7 +1215,7 @@ mod tests {
         }
         let clean=broker_stats(&db,source,None,now).unwrap();
         assert_eq!(clean.samples,0,"Incomplete past receipts are not training evidence");
-        assert_eq!(contextual_stats(&db,source,key,now).unwrap().0,0);
+        assert_eq!(contextual_stats(&db,&source,key,now).unwrap().0,0);
         let weight=selected_weight(Stats::default(),Stats::default(),clean,Stats::default(),
             &IntelligenceContext::default());
         assert_eq!(weight.weight(),1.0,"No historical broker labels: neutral weight");
@@ -1217,7 +1226,7 @@ mod tests {
         let updated=broker_stats(&db,source,None,now).unwrap();
         assert_eq!(updated.samples,1);
         assert!((updated.mean_net_per_lot-15.0).abs()<1e-6);
-        assert_eq!(contextual_stats(&db,source,key,now).unwrap().0,1);
+        assert_eq!(contextual_stats(&db,&source,key,now).unwrap().0,1);
         let tuned=selected_weight(Stats::default(),Stats::default(),updated,Stats::default(),
             &IntelligenceContext::default());
         assert!(tuned.weight()>1.0,"Verified positive after-cost feedback updates actual weight");
@@ -1229,9 +1238,12 @@ mod tests {
         let _=Learner::new(&db).unwrap();
         let now=2_000_000_000_000u64;
         let key="trend_up_normal|london|tight";
-        let source="demo-adaptive";
+        let source=&source_key("demo",TradingMode::Expert,"trend","M1","").unwrap();
         let exact=json!({
-            "evidence_source":"mt5_demo_broker","gross":3.0,
+            "evidence_source":"mt5_demo_broker",
+            "context":"demo","brain":"trend","trading_mode":"expert",
+            "timeframe":"M1","report_id":"",
+            "position_id":99,"closed_ms":now-500,"gross":3.0,
             "commission":-0.50,"swap":-0.10,"fee":-0.05,"net":2.35,
             "closed_volume":0.10,"net_per_lot":23.5,
             "risk_money":5.0,"r_multiple":0.47,"reward":0.47_f64.tanh(),
@@ -1250,7 +1262,7 @@ mod tests {
                 params![source,i+1,now-1000,p.to_string()]).unwrap();
         }
         assert_eq!(broker_stats(&db,source,None,now).unwrap().samples,0);
-        assert_eq!(contextual_stats(&db,source,key,now).unwrap().0,0);
+        assert_eq!(contextual_stats(&db,&source,key,now).unwrap().0,0);
         let neutral=selected_weight(Stats::default(),Stats::default(),
             broker_stats(&db,source,None,now).unwrap(),Stats::default(),
             &IntelligenceContext::default());
@@ -1263,7 +1275,7 @@ mod tests {
         assert_eq!(valid.samples,1);
         assert!((valid.mean_net_per_lot-23.5).abs()<1e-9);
         assert!((valid.mean_reward-0.47_f64.tanh()).abs()<1e-9);
-        assert_eq!(contextual_stats(&db,source,key,now).unwrap().0,1);
+        assert_eq!(contextual_stats(&db,&source,key,now).unwrap().0,1);
         let positive=selected_weight(Stats::default(),Stats::default(),
             valid,Stats::default(),&IntelligenceContext::default());
         assert!(positive.weight()>1.0,"Only exact reward lineage can tune broker weights");
@@ -1297,34 +1309,38 @@ mod tests {
         let db=Connection::open_in_memory().unwrap();let _=Learner::new(&db).unwrap();
         let now=2_000_000_000_000u64;
         let ctx="trend_up_normal|london|tight";
-        let source="demo-account-1/trend";
-        let other="demo-account-2/trend";
-        let mut add=|source:&str,id:u64,age:u64,net:f64,attr:&str|{
+        let source=source_key("account",TradingMode::Expert,"trend","M1","").unwrap();
+        let other=source_key("account",TradingMode::Expert,"trend","M1","other").unwrap();
+        let add=|source:&str,id:u64,age:u64,net:f64,attr:&str|{
+            let report_id=if source==other.as_str() {"other"} else {""};
             let payload=json!({"evidence_source":"mt5_demo_broker","context_key":ctx,
+                "context":"account","brain":"trend","trading_mode":"expert",
+                "timeframe":"M1","report_id":report_id,"position_id":id,
+                "closed_ms":now-age,
                 "gross":net,"commission":0.0,"swap":0.0,"fee":0.0,"net":net,
                 "net_per_lot":net,"closed_volume":1.0,"risk_money":0.0,
                 "r_multiple":0.0,"reward":reward_v2(net,0.0).1,"attribution":attr});
             db.execute("INSERT INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,'account','trend',?3,?4)",
                 params![source,id,now-age,payload.to_string()]).unwrap();
         };
-        add(source,1,4000,-1.,"adverse_price_move");
-        add(source,2,3000,-1.,"costs_erased_gross_profit");
-        add(source,3,2000,-1.,"costs_erased_gross_profit");
-        let (count,_,_,streak,penalty)=contextual_stats(&db,source,ctx,now).unwrap();
+        add(&source,1,4000,-1.,"adverse_price_move");
+        add(&source,2,3000,-1.,"costs_erased_gross_profit");
+        add(&source,3,2000,-1.,"costs_erased_gross_profit");
+        let (count,_,_,streak,penalty)=contextual_stats(&db,&source,ctx,now).unwrap();
         assert_eq!(count,3);assert_eq!(streak,3);assert!(penalty>0.07 && penalty<=0.20);
-        assert_eq!(contextual_stats(&db,other,ctx,now).unwrap().3,0);
-        assert_eq!(contextual_stats(&db,source,"trend_down_normal|london|tight",now).unwrap().3,0);
-        add(source,4,1000,0.5,"positive_after_costs");
-        let (_,_,_,streak,penalty)=contextual_stats(&db,source,ctx,now).unwrap();
+        assert_eq!(contextual_stats(&db,&other,ctx,now).unwrap().3,0);
+        assert_eq!(contextual_stats(&db,&source,"trend_down_normal|london|tight",now).unwrap().3,0);
+        add(&source,4,1000,0.5,"positive_after_costs");
+        let (_,_,_,streak,penalty)=contextual_stats(&db,&source,ctx,now).unwrap();
         assert_eq!(streak,0);assert_eq!(penalty,0.);
         // Historical negative samples can inform long-term statistics, but
         // cannot keep a temporary 14-day repeated-error penalty alive.
         let later=now+15*24*60*60*1000;
-        assert_eq!(contextual_stats(&db,source,ctx,later).unwrap().4,0.);
+        assert_eq!(contextual_stats(&db,&source,ctx,later).unwrap().4,0.);
         // Three unbroken losses in a new isolated account do not affect the first.
-        for i in 0..3 {add(other,10+i,700-i*100,-1.,"adverse_price_move");}
+        for i in 0..3 {add(&other,10+i,700-i*100,-1.,"adverse_price_move");}
         assert!(contextual_stats(&db,other,ctx,now).unwrap().4>0.);
-        assert_eq!(contextual_stats(&db,source,ctx,now).unwrap().4,0.);
+        assert_eq!(contextual_stats(&db,&source,ctx,now).unwrap().4,0.);
     }
 
 
