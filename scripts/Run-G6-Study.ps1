@@ -1,5 +1,5 @@
 param(
-  [ValidateSet('List','Register','Paper','Executed','Learning','Frozen')][string]$Action='',
+  [ValidateSet('List','Register','Paper','Executed','Learning','Frozen','Admission')][string]$Action='',
   [string]$Db='',
   [string]$RunId='',
   [string]$Manifest='',
@@ -23,8 +23,9 @@ if(-not $Action){
   Write-Host '4 - Audit exact MT5 Demo booked Adaptive closes'
   Write-Host '5 - Audit causal member learning evidence, no OOS claim'
   Write-Host '6 - Check Frozen Expert policy weights against pre-freeze broker receipts'
-  $choice=Read-Host 'Choose 1/2/3/4/5/6'
-  $Action=switch($choice){'1'{'List'}'2'{'Register'}'3'{'Paper'}'4'{'Executed'}'5'{'Learning'}'6'{'Frozen'}default{throw 'Invalid selection'}}
+  Write-Host '7 - Audit first local MT5 Broker learner admission time and payload hash'
+  $choice=Read-Host 'Choose 1/2/3/4/5/6/7'
+  $Action=switch($choice){'1'{'List'}'2'{'Register'}'3'{'Paper'}'4'{'Executed'}'5'{'Learning'}'6'{'Frozen'}'7'{'Admission'}default{throw 'Invalid selection'}}
 }
 if(-not $Db){$Db=Read-Host 'Enter the path to the existing Core SQLite database'}
 if(-not(Test-Path -LiteralPath $Db -PathType Leaf)){throw "Core database file not found: $Db"}
@@ -51,7 +52,7 @@ if($Action -eq 'Register'){
   if(-not(Test-Path -LiteralPath $Manifest -PathType Leaf)){throw 'Existing study manifest is required'}
   $Manifest=(Resolve-Path -LiteralPath $Manifest).Path
   if(-not $Output){
-    $prefix=switch($Action){'Paper'{'G6A-paper'}'Executed'{'G6B-booked-Demo'}'Learning'{'G6D-learning-evidence'}'Frozen'{'G6E-frozen-cutoff'}}
+    $prefix=switch($Action){'Paper'{'G6A-paper'}'Executed'{'G6B-booked-Demo'}'Learning'{'G6D-learning-evidence'}'Frozen'{'G6E-frozen-cutoff'}'Admission'{'G6G-admission-clock'}}
     $Output=Join-Path $studies "$prefix-$stamp.json"
   }
   if(Test-Path -LiteralPath $Output){throw 'Report output already exists; refusing to overwrite it'}
@@ -64,8 +65,11 @@ if($Action -eq 'Register'){
   } elseif($Action -eq 'Learning'){
     $script=Join-Path $toolDir 'audit_v25_g6d_causal_learning_evidence.py'
     $arguments=@($script,'--db',$Db,'--manifest',$Manifest,'--output',$Output)
-  } else {
+  } elseif($Action -eq 'Frozen'){
     $script=Join-Path $toolDir 'audit_v25_g6e_frozen_policy_cutoff.py'
+    $arguments=@($script,'--db',$Db,'--manifest',$Manifest,'--output',$Output)
+  } else {
+    $script=Join-Path $toolDir 'audit_v25_g6g_broker_admission_clock.py'
     $arguments=@($script,'--db',$Db,'--manifest',$Manifest,'--output',$Output)
   }
 }

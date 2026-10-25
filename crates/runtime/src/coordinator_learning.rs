@@ -10,6 +10,7 @@ use braintrade_domain::{
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 pub fn context(t: &Telemetry) -> String {
@@ -472,7 +473,7 @@ fn position_deals(db: &Connection, key: &str, position_id: u64) -> Result<Vec<St
 
 /// Credit only complete closed broker positions. A partial history page or partial
 /// close is not a training label; no synthetic fills or opposing-member losses.
-fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
+fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry, observed_ms:u64) -> Result<()> {
     if !t.demo || t.account_trade_mode != Some(0) { return Ok(()); }
     if !table_exists(db,"broker_commands")? || !table_exists(db,"broker_deals")? { return Ok(()); }
     let key = context(t);
@@ -508,6 +509,10 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
                 _=>unreachable!("fully_closed_by_deals rejects other entry types"),
             }
         }
+        // Admission clock is the Core observation that first had the complete
+        // broker position, not the broker's earlier close timestamp. This is
+        // recorded in the SAME SQLite transaction as the learning sample.
+        if observed_ms<closed_ms {continue;}
         if closed_ms==0 || !entry_volume.is_finite() ||
             !exit_volume.is_finite() || exit_volume<=0. ||
             entry_volume+1e-8<result["volume"].as_f64().unwrap_or(0.) {continue;}
@@ -589,7 +594,29 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry) -> Result<()> {
                 "context_key":learning["context_key"],"selection":coordination["selection"],
                 "sniper_tp_preserved":sniper_tp_preserved,
                 "execution_quality":intel["execution_quality"],"costs":"exact booked MT5 deal profit + commission + swap + fee"});
-            tx.execute("INSERT OR IGNORE INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,?3,?4,?5,?6)",params![&source,position_id,&key,id,closed_ms,payload.to_string()])?;
+            let raw=payload.to_string();
+            let inserted=tx.execute(
+                "INSERT OR IGNORE INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,?3,?4,?5,?6)",
+                params![&source,position_id,&key,id,closed_ms,&raw])?;
+            if inserted==1 {
+                let hash=format!("{:x}",Sha256::digest(raw.as_bytes()));
+                let existing:Option<String>=tx.query_row(
+                    "SELECT payload_sha256 FROM coordinator_broker_admissions WHERE source=?1 AND position_id=?2",
+                    params![&source,position_id],|r|r.get(0)).optional()?;
+                if let Some(previous_hash)=existing {
+                    if previous_hash!=hash {
+                        // A reimport after missing history cannot silently
+                        // rewrite the first admitted payload and its clock.
+                        tx.execute("DELETE FROM coordinator_broker_samples WHERE source=?1 AND position_id=?2",
+                            params![&source,position_id])?;
+                        continue;
+                    }
+                } else {
+                    tx.execute(
+                        "INSERT INTO coordinator_broker_admissions(source,position_id,context,brain,closed_ms,admitted_ms,payload_sha256,protocol) VALUES(?1,?2,?3,?4,?5,?6,?7,'g6g-runtime-same-transaction-v1')",
+                        params![&source,position_id,&key,id,closed_ms,observed_ms,hash])?;
+                }
+            }
         }
         if let Some(id)=cmd["id"].as_str() {
             tx.execute("INSERT OR IGNORE INTO broker_learning_processed(context,command_id) VALUES(?1,?2)",params![key,id])?;
@@ -617,6 +644,14 @@ impl Learner {
              CREATE TABLE IF NOT EXISTS coordinator_samples(source TEXT NOT NULL,bar INTEGER NOT NULL,payload TEXT NOT NULL,outcome TEXT,PRIMARY KEY(source,bar));
              CREATE INDEX IF NOT EXISTS coordinator_pending ON coordinator_samples(source,outcome);
              CREATE TABLE IF NOT EXISTS coordinator_broker_samples(source TEXT NOT NULL,position_id INTEGER NOT NULL,context TEXT NOT NULL,brain TEXT NOT NULL,closed_ms INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(source,position_id));
+             CREATE TABLE IF NOT EXISTS coordinator_broker_admissions(
+                source TEXT NOT NULL,position_id INTEGER NOT NULL,context TEXT NOT NULL,
+                brain TEXT NOT NULL,closed_ms INTEGER NOT NULL,admitted_ms INTEGER NOT NULL,
+                payload_sha256 TEXT NOT NULL,protocol TEXT NOT NULL,
+                PRIMARY KEY(source,position_id),
+                FOREIGN KEY(source,position_id) REFERENCES coordinator_broker_samples(source,position_id));
+             CREATE INDEX IF NOT EXISTS broker_admissions_scope_clock
+                ON coordinator_broker_admissions(context,brain,admitted_ms);
              CREATE INDEX IF NOT EXISTS coordinator_broker_context ON coordinator_broker_samples(context,brain,closed_ms);
              CREATE TABLE IF NOT EXISTS coordinator_counterfactuals(source TEXT NOT NULL,bar INTEGER NOT NULL,context TEXT NOT NULL,brain TEXT NOT NULL,regime TEXT NOT NULL,side INTEGER NOT NULL,observed_ms INTEGER NOT NULL,outcome TEXT,executed_position_id INTEGER,executed_side INTEGER,supported_execution INTEGER,PRIMARY KEY(source,bar));
              CREATE INDEX IF NOT EXISTS coordinator_counterfactual_context ON coordinator_counterfactuals(context,brain,regime,bar);",
@@ -637,7 +672,7 @@ impl Learner {
         run: bool,
         now: u64,
     ) -> Result<BTreeMap<String, LearnedWeight>> {
-        sync_demo_broker_evidence(db, t)?;
+        sync_demo_broker_evidence(db, t, now)?;
         let mut out = BTreeMap::new();
         let key = context(t);
         let mut intelligence = execution::intelligence_context(t, frames, now);
@@ -1094,6 +1129,17 @@ mod tests {
         db.execute("UPDATE broker_deals SET payload=?1 WHERE context=?2 AND ticket=101",
             params![close.to_string(),key]).unwrap();
         let w = l.observe(&db, &t, &c, &[b], &f, false, now+1).unwrap();
+        // A previously closed position is only admitted to learning at the
+        // Core observation that actually saw the complete booked history.
+        let (receipt_source,stored_hash,admitted_ms):(String,String,u64)=db.query_row(
+            "SELECT source,payload_sha256,admitted_ms FROM coordinator_broker_admissions WHERE context=?1 AND position_id=900",
+            [&key],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+        let (stored_payload,stored_close):(String,u64)=db.query_row(
+            "SELECT payload,closed_ms FROM coordinator_broker_samples WHERE source=?1 AND position_id=900",
+            [&receipt_source],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(admitted_ms,now+1);
+        assert!(admitted_ms>=stored_close);
+        assert_eq!(stored_hash,format!("{:x}",Sha256::digest(stored_payload.as_bytes())));
         let trend = &w["trend"];
         assert_eq!(trend.broker_samples, 1);
         assert_eq!(trend.samples, 1);
@@ -1107,6 +1153,10 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM coordinator_broker_samples", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1);
+        let admissions:u64=db.query_row(
+            "SELECT COUNT(*) FROM coordinator_broker_admissions WHERE context=?1",
+            [&key],|r|r.get(0)).unwrap();
+        assert_eq!(admissions,1,"the same closed MT5 position is never admitted twice");
         l.observe(
             &db,
             &t,
@@ -1157,6 +1207,7 @@ mod tests {
             CREATE TABLE broker_deals(context TEXT,ticket INTEGER,position_id INTEGER,brain TEXT,payload TEXT,PRIMARY KEY(context,ticket));").unwrap();
         let t=Telemetry{demo:true,account_trade_mode:Some(0),login:17,server:"Demo".into(),symbol:"XAUUSD".into(),currency:"USD".into(),..Default::default()};
         let key=context(&t);
+        let now=2_000_u64;
         let cmd=json!({"id":"solo","brain":"trend","signal":{"side":1,"bar_time":12,"stop_distance":1.,"reason":"trend ready"},
             "learning":{"trading_mode":"expert","timeframe":"M1","report_id":"","tick_size":0.01,"tick_value_loss":1.,"weight_at_entry":1.}});
         db.execute("INSERT INTO broker_commands VALUES('solo',?1,'trend','open',1,'observed',?2,?3)",params![key,cmd.to_string(),json!({"deal":1,"request":{"price":2000.,"sl":1999.}}).to_string()]).unwrap();
@@ -1164,12 +1215,12 @@ mod tests {
             db.execute("INSERT INTO broker_deals VALUES(?1,?2,90,'trend',?3)",params![key,ticket,json!({"type":if entry==0 {0}else{1},"entry":entry,"volume":volume,"profit":profit,"commission":commission,"swap":0.,"fee":0.,"time_msc":1000+ticket,"reason":5}).to_string()]).unwrap();
         };
         insert(1,0,0.1,0.,-0.35);insert(2,1,0.04,0.2,-0.14);
-        sync_demo_broker_evidence(&db,&t).unwrap();assert!(broker_review(&db,&key).unwrap().is_empty());
+        sync_demo_broker_evidence(&db,&t,now).unwrap();assert!(broker_review(&db,&key).unwrap().is_empty());
         insert(3,1,0.06,0.3,-0.21);
         let mut live=t.clone();live.demo=false;live.account_trade_mode=Some(2);
-        sync_demo_broker_evidence(&db,&live).unwrap();assert!(broker_review(&db,&key).unwrap().is_empty());
-        sync_demo_broker_evidence(&db,&t).unwrap();
-        let _=Learner::new(&db).unwrap();sync_demo_broker_evidence(&db,&t).unwrap();
+        sync_demo_broker_evidence(&db,&live,now).unwrap();assert!(broker_review(&db,&key).unwrap().is_empty());
+        sync_demo_broker_evidence(&db,&t,now).unwrap();
+        let _=Learner::new(&db).unwrap();sync_demo_broker_evidence(&db,&t,now).unwrap();
         let rows=broker_review(&db,&key).unwrap();assert_eq!(rows.len(),1);
         assert_eq!(rows[0]["trade_owner"],"trend");assert_eq!(rows[0]["attribution"],"costs_erased_gross_profit");
         assert!((rows[0]["net"].as_f64().unwrap()+0.2).abs()<1e-9);
@@ -1589,7 +1640,7 @@ mod tests {
                 params![key,ticket,payload.to_string()]
             ).unwrap();
         }
-        for _ in 0..2 {sync_demo_broker_evidence(&db,&t).unwrap();}
+        for _ in 0..2 {sync_demo_broker_evidence(&db,&t,now).unwrap();}
         let rows:Vec<(String,String)> = db.prepare(
             "SELECT brain,payload FROM coordinator_broker_samples WHERE context=?1 ORDER BY brain"
         ).unwrap().query_map([&key],|r|Ok((r.get(0)?,r.get(1)?)))
@@ -1610,17 +1661,20 @@ mod tests {
         assert_eq!(targets[2].samples,1);
         assert!(targets.iter().enumerate().all(|(arm,p)|arm==2||p.samples==0));
         // Idempotent re-processing never increases samples.
-        sync_demo_broker_evidence(&db,&t).unwrap();
+        sync_demo_broker_evidence(&db,&t,now).unwrap();
         crate::sniper_learning::refresh(&mut engine,&db,&t,now).unwrap();
         assert_eq!(engine.target_models.values().next().unwrap()[2].samples,1);
-        // Migrating an older installation: the system outcome and processed
-        // marker already exist, but the specialist credit was absent.
+        // Simulate migrating a PRE-G6G installation where the specialist
+        // credit AND its local admission stamp were both absent. Current
+        // protected DBs cannot delete an admitted label while its admission
+        // row still exists (foreign key is intentionally enforced).
+        db.execute("DELETE FROM coordinator_broker_admissions WHERE brain='sniper_learner'",[]).unwrap();
         db.execute("DELETE FROM coordinator_broker_samples WHERE brain='sniper_learner'",[]).unwrap();
-        sync_demo_broker_evidence(&db,&t).unwrap();
+        sync_demo_broker_evidence(&db,&t,now).unwrap();
         assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_broker_samples WHERE brain='sniper_learner'",[],|r|r.get::<_,u64>(0)).unwrap(),1);
         crate::sniper_learning::refresh(&mut engine,&db,&t,now).unwrap();
         assert_eq!(engine.target_models.values().next().unwrap()[2].samples,1);
-        sync_demo_broker_evidence(&db,&t).unwrap();
+        sync_demo_broker_evidence(&db,&t,now).unwrap();
         assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_broker_samples WHERE brain='sniper_learner'",[],|r|r.get::<_,u64>(0)).unwrap(),1);
     }
 

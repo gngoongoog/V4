@@ -29,6 +29,8 @@ FILES = (
      "Tools/G6/audit_v25_g6d_causal_learning_evidence.py"),
     ("scripts/audit_v25_g6e_frozen_policy_cutoff.py",
      "Tools/G6/audit_v25_g6e_frozen_policy_cutoff.py"),
+    ("scripts/audit_v25_g6g_broker_admission_clock.py",
+     "Tools/G6/audit_v25_g6g_broker_admission_clock.py"),
     ("scripts/v25_g6c_list_frozen_runs.py",
      "Tools/G6/v25_g6c_list_frozen_runs.py"),
     ("scripts/Run-G6-Study.ps1", "Tools/Run-G6-Study.ps1"),
