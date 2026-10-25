@@ -522,8 +522,23 @@ class ExecutionTests(unittest.TestCase):
     def test_netting_and_hedging_ownership(self):
         self.mt.positions=[N(ticket=1,magic=999,symbol='XAUUSD')];self.mt.account.margin_mode=0;self.assertEqual(self.send()['state'],'rejected');self.mt.account.margin_mode=2;self.assertEqual(self.send()['state'],'filled')
     def test_close_only_owned_ticket_and_actual_partial_volume(self):
-        self.cmd.update(kind='close',position=1);self.mt.positions=[N(ticket=1,magic=999,symbol='XAUUSD',volume=.05,type=0)];self.assertEqual(self.send()['state'],'closed');self.assertFalse(self.mt.sends)
-        self.mt.positions[0].magic=self.cmd['magic'];self.assertEqual(self.send()['state'],'filled');req=self.mt.sends[0];self.assertEqual(req['volume'],.05);self.assertEqual(req['position'],1);self.assertEqual(req['type'],1)
+        self.cmd.update(kind='close',position=1)
+        self.mt.positions=[N(ticket=1,magic=999,symbol='XAUUSD',volume=.05,type=0)]
+        unrelated=self.send()
+        self.assertEqual(unrelated['state'],'cancelled',unrelated)
+        self.assertIn('no close order sent',unrelated['reason'])
+        self.assertFalse(self.mt.sends)
+        self.mt.positions.clear()
+        absent=self.send()
+        self.assertEqual(absent['state'],'cancelled',absent)
+        self.assertIn('Verify exit from broker Deal history',absent['reason'])
+        self.assertFalse(self.mt.sends)
+        self.mt.positions=[N(ticket=1,magic=self.cmd['magic'],symbol='XAUUSD',volume=.05,type=0)]
+        self.assertEqual(self.send()['state'],'filled')
+        req=self.mt.sends[0]
+        self.assertEqual(req['volume'],.05)
+        self.assertEqual(req['position'],1)
+        self.assertEqual(req['type'],1)
     def test_filling_policy_and_broker_rejection(self):
         self.mt.info.filling_mode=2;self.mt.code=10019;self.assertEqual(self.send()['state'],'rejected');self.assertEqual(self.mt.sends[0]['type_filling'],1)
     def test_missing_journal_unknown_never_becomes_new_order(self):
