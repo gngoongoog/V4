@@ -20,9 +20,45 @@ def _positive_number(value):
     return value if math.isfinite(value) and value > 0 else None
 
 
-def evaluate(status: dict, config: dict, now_ms: int | None = None) -> dict:
+
+def _execution_binding_status(t: dict, execution: dict | None) -> str:
+    """Read-only proof of the exact Demo execution binding, never broker authorization."""
+    if not isinstance(execution, dict):
+        return "UNAVAILABLE"
+    settings = execution.get("settings")
+    if not isinstance(settings, dict):
+        return "UNAVAILABLE"
+    if settings.get("target") != "demo":
+        return "TARGET_NOT_DEMO"
+    if execution.get("account_matches") is not True:
+        return "MISMATCH"
+    try:
+        context = json.loads(execution.get("context") or "")
+        if not isinstance(context, list) or len(context) != 4:
+            return "MISMATCH"
+        server, login, symbol, currency = context
+        if isinstance(login, bool) or not isinstance(login, (int, str)):
+            return "MISMATCH"
+        bound_login = int(login)
+        if bound_login <= 0 or str(login) != str(bound_login):
+            return "MISMATCH"
+        if not all(isinstance(x, str) and x for x in (server, symbol, currency)):
+            return "MISMATCH"
+    except (TypeError, ValueError, OverflowError, json.JSONDecodeError):
+        return "MISMATCH"
+    if ((t.get("login"), t.get("server"), t.get("symbol"), t.get("currency"))
+            != (bound_login, server, symbol, currency)):
+        return "MISMATCH"
+    if ((settings.get("login"), settings.get("server"), settings.get("currency"))
+            != (bound_login, server, currency)):
+        return "MISMATCH"
+    return "BOUND_DEMO"
+
+
+def evaluate(status: dict, config: dict, now_ms: int | None = None, *, execution: dict | None = None) -> dict:
     now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
-    telemetry = status.get("telemetry") if isinstance(status, dict) else None
+    status = status if isinstance(status, dict) else {}
+    telemetry = status.get("telemetry")
     t = telemetry if isinstance(telemetry, dict) else {}
     configured_symbol = (config.get("symbol") if isinstance(config, dict) else None)
     symbol = str(t.get("symbol") or "")[:80]
@@ -32,6 +68,7 @@ def evaluate(status: dict, config: dict, now_ms: int | None = None) -> dict:
             and type(t.get("account_trade_mode")) is int
             and t["account_trade_mode"] == 0)
     expected_symbol_matches = bool(symbol and configured and symbol == configured)
+    binding = _execution_binding_status(t, execution)
     bid, ask = _positive_number(t.get("bid")), _positive_number(t.get("ask"))
     price_ok = bid is not None and ask is not None and ask >= bid
     raw_age = t.get("tick_age_ms")
@@ -60,6 +97,12 @@ def evaluate(status: dict, config: dict, now_ms: int | None = None) -> dict:
         reason = "DEMO_ACCOUNT_NOT_VERIFIED"
     elif not expected_symbol_matches:
         reason = "CONFIGURED_SYMBOL_MISMATCH"
+    elif binding == "UNAVAILABLE":
+        reason = "EXECUTION_BINDING_UNAVAILABLE"
+    elif binding == "TARGET_NOT_DEMO":
+        reason = "EXECUTION_TARGET_NOT_DEMO"
+    elif binding != "BOUND_DEMO":
+        reason = "DEMO_EXECUTION_BINDING_MISMATCH"
     elif exact_missing:
         reason = "SELECTED_SYMBOL_UNAVAILABLE"
     elif not price_ok:
@@ -77,6 +120,8 @@ def evaluate(status: dict, config: dict, now_ms: int | None = None) -> dict:
         "schema": "v25-g2-demo-readiness-readonly-v1",
         "result": reason,
         "account_snapshot_status": "VERIFIED_DEMO" if demo else "NOT_VERIFIED",
+        "execution_binding_status": binding,
+        "preflight_ready_to_trade": False,
         "requested_run": bool(status.get("requested_run")),
         "execution_enabled": bool(status.get("execution_enabled")),
         "broker_connected": connected,
@@ -95,7 +140,7 @@ def evaluate(status: dict, config: dict, now_ms: int | None = None) -> dict:
         "broker_lifecycle_acceptance": "NOT_TESTED",
         "ea_metaeditor_acceptance": "NOT_TESTED",
         "windows_gui_acceptance": "NOT_TESTED",
-        "note": "Account/market telemetry is provided by running Core+Gateway, not independently verified against broker Deals. No orders were sent. No real-money trading authorization.",
+        "note": "Demo identity and execution binding are separate checks. No broker Deals verified; no orders sent; no real-money trading authorization.",
     }
 
 

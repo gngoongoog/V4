@@ -661,7 +661,12 @@ def readiness_cli(argv: list[str]) -> int:
     api = CoreApi(read_ipc_key(data_dir / "ipc.key"), args.base_url)
     status = api.get("/v1/status")
     config = api.get("/v1/config").get("config") or {}
-    report = evaluate(status, config)
+    try:
+        execution = api.get("/v1/execution")
+    except (RuntimeError, ValueError, TypeError):
+        # A missing execution endpoint is NOT a verified Demo binding.
+        execution = None
+    report = evaluate(status, config, execution=execution)
     json_path, html_path = save_report(report, args.output_dir)
     print(json.dumps({
         "result": report["result"], "quote_status": report["quote_status"],
