@@ -61,8 +61,10 @@ def gate(db: sqlite3.Connection, *, now_ms: int) -> dict:
 
     groups = defaultdict(list)
     runs = db.execute(
-        "SELECT run_id,context,mode,registered_ms,cohort_start_ms "
-        "FROM g7_pair_registrations ORDER BY context,mode,registered_ms,run_id"
+        "SELECT g.run_id,g.context,g.mode,g.registered_ms,g.cohort_start_ms, "
+        "f.active FROM g7_pair_registrations g "
+        "JOIN frozen_coordinator_runs f ON f.id=g.run_id "
+        "ORDER BY g.context,g.mode,g.registered_ms,g.run_id"
     ).fetchall()
     for reg in runs:
         if (type(reg["registered_ms"]) is not int
@@ -73,6 +75,8 @@ def gate(db: sqlite3.Connection, *, now_ms: int) -> dict:
 
     next_start = {}
     for (context,mode), ordered in groups.items():
+        if sum(r["active"] == 1 for r in ordered) > 1:
+            raise ValueError("g7d_multiple_active_frozen_studies_same_account_mode")
         for idx, run in enumerate(ordered):
             successor = ordered[idx+1] if idx+1 < len(ordered) else None
             if successor is not None:
@@ -157,9 +161,11 @@ def gate(db: sqlite3.Connection, *, now_ms: int) -> dict:
     tables = _tables(db)
     duplicate_positions = 0
     if "coordinator_broker_samples" in tables:
-        earliest = {ctx:min(r["cohort_start_ms"]
-                  for (c,_),runs_ in groups.items() if c == ctx for r in runs_)
-                  for ctx,_ in groups.keys()}
+        earliest = {}
+        for (ctx,_mode), cohort_runs in groups.items():
+            for cohort_run in cohort_runs:
+                start = cohort_run["cohort_start_ms"]
+                earliest[ctx] = min(earliest.get(ctx,start),start)
         for context,start in earliest.items():
             duplicates = db.execute(
                 "SELECT position_id,COUNT(*) AS n FROM coordinator_broker_samples "
