@@ -147,5 +147,48 @@ class BrokerReconciliationStrictTests(unittest.TestCase):
         self.assertEqual(len(self.broker.sends),1)
 
 
+    def test_close_recovery_needs_opposite_side_exit_not_opening_deal(self):
+        # Separate durable close intent with a verified owned BUY position.
+        # Tests use a fake MT5 broker, never a live account.
+        with tempfile.TemporaryDirectory() as home:
+            close_ex=BrokerExecutor(Path(home)/'close-journal.sqlite')
+            broker=Broker()
+            cmd=command()
+            cmd.update(id='close-specific-history-proof',kind='close',position=881)
+            broker.positions=[N(ticket=881,magic=cmd['magic'],symbol=cmd['symbol'],
+                                volume=.1,type=broker.POSITION_TYPE_BUY)]
+            broker.raise_send=True
+            try:
+                first=close_ex.execute(broker,cmd,lambda _:True)
+                self.assertEqual(first['state'],'unknown',first)
+                self.assertEqual(len(broker.sends),1)
+                broker.raise_send=False
+                tag='BT:'+cmd['id'][:20]
+                def exit_deal(*, deal_type,entry):
+                    return N(ticket=920,magic=cmd['magic'],symbol=cmd['symbol'],
+                             comment=tag,volume=.1,order=0,position_id=881,
+                             type=deal_type,entry=entry,price=2000.,time_msc=1200)
+                # A BUY exit direction is wrong for closing a BUY position.
+                # A SELL opening deal is not evidence of the CLOSE request.
+                for typ,entry in ((broker.DEAL_TYPE_BUY,broker.DEAL_ENTRY_OUT),
+                                  (broker.DEAL_TYPE_SELL,broker.DEAL_ENTRY_IN)):
+                    broker.deals=[exit_deal(deal_type=typ,entry=entry)]
+                    result=close_ex.execute(broker,cmd,lambda _:True)
+                    self.assertEqual(result['state'],'unknown',result)
+                    self.assertEqual(len(broker.sends),1)
+                close_ex.close()
+                close_ex=BrokerExecutor(Path(home)/'close-journal.sqlite')
+                broker.deals=[exit_deal(deal_type=broker.DEAL_TYPE_SELL,
+                                        entry=broker.DEAL_ENTRY_OUT)]
+                result=close_ex.execute(broker,cmd,lambda _:True)
+                self.assertEqual(result['state'],'filled',result)
+                self.assertEqual(result['position_id'],881)
+                self.assertTrue(result['recovered_from_history'])
+                self.assertEqual(len(broker.sends),1)
+            finally:
+                close_ex.close()
+
+
+
 if __name__ == '__main__':
     unittest.main()
