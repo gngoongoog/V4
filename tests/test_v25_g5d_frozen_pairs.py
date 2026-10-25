@@ -39,7 +39,9 @@ def sample(bar=BAR):
         net = gross - commission
         return {
             "side": side, "state": "closed", "entry": entry,
+            "stop_distance": 0.50, "target_distance": 0.50, "hold_ms": 10_000,
             "signal_key": f"{name}-{bar}", "last_quote_ms": closed,
+            "max_gap_ms": 5000,
             "result": {
                 "exit_ms": closed, "exit": exit_price, "reason": "time",
                 "gross": gross, "commission_assumed": commission,
@@ -108,9 +110,11 @@ class G5DTests(unittest.TestCase):
         self.add(BAR + 240, lambda d,p: p["adaptive"]["result"].update({"exit_ms": 9_000_000_000_000}))
         self.add(BAR + 300, lambda d,p: p["frozen"]["result"].update(
             {"provenance": "MT5 confirmed real booked net PnL"}))
+        self.add(BAR + 360, lambda d,p: p["adaptive"]["result"].update({"reason": "target"}))
+        self.add(BAR + 420, lambda d,p: p["frozen"].update({"max_gap_ms": 9000}))
         r = AUDIT.audit(self.db, "run-demo")
         self.assertEqual(r["eligible_pairs"], 0)
-        self.assertEqual(sum(r["rejected_by_reason"].values()), 6)
+        self.assertEqual(sum(r["rejected_by_reason"].values()), 8)
         self.assertIsNone(r["adaptive_minus_frozen_mean_paper_net_per_lot"])
 
     def test_incomplete_or_missing_ex_ante_decision_not_fabricated(self):
@@ -141,6 +145,21 @@ class G5DTests(unittest.TestCase):
         other = AUDIT.audit(self.db, "other-run")
         self.assertEqual(other["eligible_pairs"], 0)
         self.assertNotEqual(r["account_scope_hash"], other["account_scope_hash"])
+
+    def test_future_dated_completion_fails_even_with_matching_costs(self):
+        self.add()
+        r = AUDIT.audit(self.db, "run-demo", now_ms=(BAR + 60) * 1000 + 600)
+        self.assertEqual(r["eligible_pairs"], 0)
+        self.assertEqual(r["rejected_by_reason"]["missing_same_cycle_entry_proof"], 1)
+
+    def test_forged_early_time_exit_is_rejected(self):
+        self.add(BAR, lambda d,p: [
+            p["frozen"].update({"hold_ms": 100_000}),
+            p["adaptive"].update({"hold_ms": 100_000}),
+        ])
+        r = AUDIT.audit(self.db, "run-demo")
+        self.assertEqual(r["eligible_pairs"], 0)
+        self.assertEqual(r["rejected_by_reason"]["exit_policy_reason_mismatch"], 1)
 
     def test_invalid_snapshot_never_qualifies(self):
         self.db.execute("UPDATE frozen_coordinator_runs SET snapshot=? WHERE id='run-demo'",
