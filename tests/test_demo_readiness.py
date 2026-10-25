@@ -89,7 +89,8 @@ class Tests(unittest.TestCase):
         cli=(ROOT/"gateway/check_runtime.py").read_text("utf-8")
         self.assertIn("[switch]$PreflightOnly",ps)
         self.assertIn('"--demo-readiness"',ps)
-        self.assertIn('if $', 'if $') # keep assertions independent of Powershell interpolation
+        self.assertIn('if ($PreflightOnly) {',ps)
+        self.assertIn('if (-not $PreflightOnly -and -not $PSBoundParameters.ContainsKey("Source")) {',ps)
         self.assertIn('if len(sys.argv) > 1 and sys.argv[1] == "--demo-readiness":',cli)
         self.assertNotIn("order_send(",readiness.FILE.read_text("utf-8"))
 
