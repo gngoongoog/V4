@@ -1331,4 +1331,59 @@ mod tests {
         assert_eq!(view(&db,&key).unwrap()["closed_broker_trades"],0);
     }
 
+    #[test]
+    fn g6k_legacy_student_exit_aggregate_does_not_activate_trading_exit_policy(){
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let t=telemetry();
+        let ctx=crate::coordinator_learning::context(&t);
+        let mut prior=ExitStudy::expanded();
+        prior.active=ExitProfile::Protective;
+        prior.promotions=99;
+        prior.total_pairs=5000;
+        db.execute("INSERT INTO student_exit_studies(source,context,payload)
+            VALUES('unverifiable-legacy',?1,?2)",
+            params![ctx,serde_json::to_string(&prior).unwrap()]).unwrap();
+        let mut s=Student::new(&db).unwrap();
+        s.observe(&db,&t,5000).unwrap();
+        assert!(!s.policies.contains_key("unverifiable-legacy"),
+            "Prior unsigned aggregates cannot re-enable learned exit geometries");
+        let v=view(&db,&ctx).unwrap();
+        assert_eq!(v["usable_shadow_pairs"],0);
+        assert_eq!(v["studies"][0]["provenance"],"legacy_or_tampered_unverified");
+        assert!(v["studies"][0]["study"].is_null(),
+            "Old promotion counters must not look like proven training.");
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM student_exit_studies",[],|r|r.get::<_,u64>(0)).unwrap(),1,
+            "Raw study is preserved, not destroyed");
+    }
+
+    #[test]
+    fn g6k_student_study_hash_tracks_valid_broker_learning_and_rejects_changes(){
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let t=telemetry();
+        let ctx=seed_entry(&db,&t,json!({"deal":77}));
+        db.execute("INSERT INTO broker_deals VALUES(?1,77,55,'trend',?2)",
+            params![&ctx,json!({"entry":0,"position_id":55,"price":100.,
+                "volume":0.1,"time_msc":1000}).to_string()]).unwrap();
+        label(&db,&ctx,1200);
+        let mut student=Student::new(&db).unwrap();
+        student.observe(&db,&t,5000).unwrap();
+        let v=view(&db,&ctx).unwrap();
+        assert_eq!(v["studies"][0]["provenance"],"locally_admitted_g6k");
+        assert_eq!(v["studies"][0]["study"]["reviewed_losses"],1);
+        // This study has no paired quote experiment: do not forge one.
+        assert_eq!(v["usable_shadow_pairs"],0);
+        db.execute("UPDATE student_exit_studies
+            SET payload=json_set(payload,'$.promotions',999)",[]).unwrap();
+        let v=view(&db,&ctx).unwrap();
+        assert_eq!(v["usable_shadow_pairs"],0);
+        assert_eq!(v["studies"][0]["provenance"],"legacy_or_tampered_unverified");
+        assert!(v["studies"][0]["study"].is_null());
+        let mut restarted=Student::new(&db).unwrap();
+        restarted.observe(&db,&t,6000).unwrap();
+        assert!(restarted.policies.is_empty(),
+            "Restart must not apply mutated preloaded student policy");
+    }
+
 }
