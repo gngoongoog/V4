@@ -15,6 +15,7 @@ import {ScopedReadFence} from './scoped-read-fence';
 import {DashboardTradeFeed,DashboardExecutionQuality} from './dashboard-operations';
 import {TradeJournalOperations} from './trade-journal-operations';
 import {BrokerReportOperations} from './broker-report-operations';
+import {DailyRiskOperations} from './daily-risk-operations';
 import type {DashboardRead} from './dashboard-evidence';
 import {OperatorWriteFence} from './operator-write-fence';
 import type {OperatorWriteTicket} from './operator-write-fence';
@@ -780,6 +781,7 @@ export default function Terminal(){
       <div className="subpage-layout">
       <section className="panel subpage-primary"><div className="panel-title"><b>{pageMeta.title} — بيانات وتشغيل</b><button onClick={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}} disabled={!pageMeta.route||preview||page==='journal'||page==='reports'}>تحديث ↻</button></div>
         {page==='risk'?<div className="feature-zone">
+          <DailyRiskOperations status={!preview&&feed.broker?status:null} monitor={safeRiskSnapshot} preview={preview}/>
           <MicroCapitalOperations status={!preview&&feed.broker?status:null} key={contextKey} risk={safeConfig?unwrap(safeConfig.risk):null}
              monitor={safeRiskSnapshot} portfolio={unwrap(portfolioReport).portfolio} armed={status?.requested_run===true}
              disabled={busy||preview} onSavePortfolio={runSavePortfolio}/>
