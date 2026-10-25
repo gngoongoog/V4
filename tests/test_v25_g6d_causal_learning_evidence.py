@@ -140,6 +140,15 @@ class TestCausalMemberLearning(unittest.TestCase):
                          ["unverified_member_training_counter_or_weight"],1)
         self.assertFalse(result["training_evidence_consistency"])
 
+    def test_zero_expert_member_claims_are_not_proof_of_learning(self):
+        self.decision(member=[])
+        result=g6d.audit(self.db,self.manifest,now_ms=NOW)
+        self.assertEqual(result["member_claims_checked"],0)
+        self.assertEqual(result["status"],
+                         "insufficient_or_unverified_training_provenance")
+        self.assertFalse(result["training_evidence_consistency"])
+        self.assertFalse(result["model_promotion_allowed"])
+
     def test_missing_broker_ledger_not_mistaken_for_zero_training(self):
         self.db.execute("DROP TABLE coordinator_broker_samples")
         self.decision()
