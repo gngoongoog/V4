@@ -1,4 +1,20 @@
-# Current V25 continuation — 2026-10-24, P1-K1
+# Current V25 continuation — 2026-10-25, G3-B Windows UI acceptance
+
+Latest verified product: G3-A `54ee875c88be1be2b1f4d251e292841079b9b4cd` on
+`feature/v25-g3a-dashboard-verified-broker-panels-20261025`.
+Research 40157523353, Windows 40157523342, and Portable 40157520471 succeeded.
+G2-M implementation is complete with automated evidence; do not loop back without a new proven defect.
+
+Continue G3 on `feature/v25-g3b-webview2-ui-acceptance-20261025`.
+Read `docs/v25/G3B_ACTUAL_WEBVIEW2_ACCEPTANCE_AR.md` and its exact-head workflow result.
+The G3-B harness launches the immutable G3-A Portable through actual WebView2;
+it must not claim PASS until Windows executes it. No product code changed here.
+Next after verified G3-B: expand real GUI coverage; connected MT5 Demo/MetaEditor
+and every untested control state remain open. No main/V24 changes or REAL trades.
+
+All continuation text below is historical, not the current task state.
+
+# Historical V25 continuation — 2026-10-24, P1-K1
 
 For Enterprise V25 continue from `feature/v25-enterprise-validation-20261024`,
 not the historical main checkpoints below. P1-J base is

@@ -1,0 +1,8 @@
+{
+  "name": "braintrade-windows-webview2-acceptance",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"check": "node --check run.mjs"},
+  "dependencies": {"playwright-core": "1.56.1"}
+}

@@ -1,0 +1,51 @@
+name: V25 G3-B Actual Windows WebView2 Acceptance
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/v25-g3b-webview2-ui-acceptance-20261025]
+    paths: ['apps/windows-gui-tests/**', '.github/workflows/v25-g3b-webview2.yml']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  webview2:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify exact successful source of the application under test
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const r=await github.rest.actions.getWorkflowRun({owner:context.repo.owner,repo:context.repo.repo,run_id:40157520471});
+            if(r.data.conclusion!=='success'||r.data.head_sha!=='54ee875c88be1be2b1f4d251e292841079b9b4cd')
+              throw new Error('Unverified G3-A build; refusing substitute application');
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 40157520471
+          name: BRAINTRADE-V4-ENTERPRISE-V25-P0O
+          path: test-input/g3a
+      - name: Extract the verified Portable application
+        shell: pwsh
+        run: |
+          Expand-Archive -LiteralPath test-input/g3a/BRAINTRADE_V4_ENTERPRISE_V25_PORTABLE_Windows_x64.zip -DestinationPath test-input/app
+      - run: npm --prefix apps/windows-gui-tests ci --no-audit --no-fund
+      - run: npm --prefix apps/windows-gui-tests run check
+      - name: Real WebView2 clicks, native IPC, save and restart
+        shell: pwsh
+        run: |
+          node apps/windows-gui-tests/run.mjs --exe test-input/app/BRAINTRADE_V4_ENTERPRISE_V25/BrainTradeNext.exe --expected-source 54ee875c88be1be2b1f4d251e292841079b9b4cd --output test-output/v25/g3b
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: V25-G3B-Actual-WebView2-Evidence
+          path: test-output/v25/g3b
+          if-no-files-found: warn
+          retention-days: 30
