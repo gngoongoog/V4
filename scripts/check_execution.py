@@ -194,6 +194,20 @@ def check(exe=None):
             snapshot['login']=99;publish()
             assert not api('/v1/status')['execution_enabled']
             assert api('/v1/execution/gateway')['command'] is None
+            switched_dashboard=api('/v1/execution')
+            assert not switched_dashboard['account_matches'],switched_dashboard
+            assert not switched_dashboard['context'] and not switched_dashboard['commands']
+            assert all(b['stats']['deals']==0 and b['stats']['open_positions']==0
+                       and b['stats']['net_booked'] is None
+                       for b in switched_dashboard['brains']),switched_dashboard
+            # Re-selecting the exact originally bound MT5 Demo account
+            # restores its immutable booked history without resubmission.
+            snapshot['login']=17;publish()
+            rebound=api('/v1/execution')
+            assert rebound['account_matches'] and rebound['context']
+            assert next(b for b in rebound['brains']
+                        if b['config']['id']=='system')['stats']['deals']==2,rebound
+            snapshot['login']=99;publish()
             # Simulated Demo -> REAL operator promotion must require two
             # independent typed confirmations. There is NO real MT5 connection.
             snapshot.update(login=990024,server='Real-Test',account_trade_mode=2,demo=False)
