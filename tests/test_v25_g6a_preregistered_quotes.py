@@ -136,7 +136,8 @@ class PreRegisteredQuotes(unittest.TestCase):
                          "complete", json.dumps(p)))
         r=study.audit(self.db,m,now_ms=AUDIT_NOW)
         self.assertEqual(r["eligible_post_holdout_pairs"],0)
-        self.assertEqual(r["excluded_pre_holdout_pairs"],1)
+        self.assertEqual(r["excluded_pre_holdout_pairs"],0)
+        self.assertEqual(r["rejected_post_holdout_pairs"]["missing_pre_outcome_decision"],1)
 
 
 if __name__ == "__main__":
