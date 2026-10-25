@@ -7,6 +7,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import {inspect} from 'node:util';
 import {fileURLToPath} from 'node:url';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
@@ -51,7 +52,7 @@ async function launch(){
   if(child.exitCode!==null)throw new Error('Tauri exited early: '+appLogs);
   const r=await fetch(`http://127.0.0.1:${port}/json/version`,{signal:AbortSignal.timeout(1000)});
   return r.ok?(await r.json()).webSocketDebuggerUrl:false;
- },60000);
+ },60000).catch(error=>{throw new Error('WebView2 CDP unavailable: '+inspect(error,{depth:3}));});
  browser=await chromium.connectOverCDP(endpoint);
  page=await until(()=>browser.contexts()[0]?.pages().find(p=>!p.url().startsWith('devtools:')));
  page.on('pageerror',e=>report.console_errors.push(String(e)));
@@ -187,6 +188,11 @@ try{
  assert.deepEqual(report.console_errors,[],'WebView2 runtime exception');
  report.status='PASS';
 }catch(error){report.status='FAIL';report.error=String(error);
+ try{
+  const diagnostics=execFileSync('powershell',['-NoProfile','-Command',
+   "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'BrainTradeNext|msedgewebview2' } | Select-Object Name,ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Depth 3"],{encoding:'utf8'});
+  await fs.writeFile(path.join(output,'windows-processes.json'),diagnostics);
+ }catch{}
  if(page)await page.screenshot({path:path.join(output,'failure.png'),fullPage:true}).catch(()=>{});
  process.exitCode=1;
 }finally{

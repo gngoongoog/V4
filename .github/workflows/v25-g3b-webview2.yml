@@ -38,6 +38,14 @@ jobs:
           Expand-Archive -LiteralPath test-input/g3a/BRAINTRADE_V4_ENTERPRISE_V25_PORTABLE_Windows_x64.zip -DestinationPath test-input/app
       - run: npm --prefix apps/windows-gui-tests ci --no-audit --no-fund
       - run: npm --prefix apps/windows-gui-tests run check
+      - name: Inspect WebView2 runtime prerequisite
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force test-output/v25/g3b | Out-Null
+          $candidates=@("${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application\*\msedgewebview2.exe", "$env:ProgramFiles\Microsoft\EdgeWebView\Application\*\msedgewebview2.exe", "$env:LOCALAPPDATA\Microsoft\EdgeWebView\Application\*\msedgewebview2.exe")
+          $found=@(Get-Item $candidates -ErrorAction SilentlyContinue)
+          $found | Select-Object FullName,@{n='Version';e={$_.VersionInfo.FileVersion}} | ConvertTo-Json | Set-Content test-output/v25/g3b/webview-runtime.json
+          if($found.Count -eq 0){throw 'WebView2 runtime unavailable on this Windows image; GUI not tested'}
       - name: Real WebView2 clicks, native IPC, save and restart
         shell: pwsh
         run: |
