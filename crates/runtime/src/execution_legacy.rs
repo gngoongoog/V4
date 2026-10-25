@@ -886,9 +886,6 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         continue;
                     };
                     let pid = d["position_id"].as_u64().unwrap_or(0);
-                    if pid == 0 || d["symbol"] != t.symbol {
-                        continue;
-                    }
                     // A ticket is an immutable broker receipt, not an
                     // updatable cost estimate. INSERT OR IGNORE previously
                     // hid conflicts in commission, fee, volume or position and
@@ -909,6 +906,13 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         }
                         // Exact broker replay is idempotent. Do not rewrite
                         // the durable original or relabel its brain.
+                        continue;
+                    }
+                    // Check existing ticket *before* rejecting the wrong
+                    // symbol or zero/missing position. Otherwise a poisoned
+                    // replay can disappear from the chunk while the Core
+                    // advances its broker history cursor.
+                    if ticket == 0 || pid == 0 || d["symbol"] != t.symbol {
                         continue;
                     }
                     let owner:Option<String>=execution::brain_for_magic(d["magic"].as_u64().unwrap_or(0)).map(str::to_string).or(tx.query_row("SELECT brain FROM broker_observations WHERE context=?1 AND position_id=?2 UNION ALL SELECT brain FROM broker_deals WHERE context=?1 AND position_id=?2 LIMIT 1",params![key,pid],|r|r.get(0)).optional()?);
@@ -1154,7 +1158,8 @@ mod execution_persistence_tests {
             ("swap",json!(-0.20)), ("fee",json!(-0.01)),
             ("volume",json!(0.2)), ("price",json!(2001.0)),
             ("type",json!(1)), ("entry",json!(1)),
-            ("position_id",json!(202)), ("magic",json!(410602)),
+            ("position_id",json!(202)), ("position_id",json!(0)),
+            ("symbol",json!("EURUSD")), ("magic",json!(410602)),
             ("time_msc",json!(151))
         ] {
             let mut altered=deal.clone();
