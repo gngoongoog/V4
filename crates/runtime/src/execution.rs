@@ -1060,10 +1060,12 @@ impl Service {
                 (input["offset"].as_u64().unwrap_or(0), input["limit"].as_u64().unwrap_or(50))
             } else {(0,50)};
             anyhow::ensure!(offset<=1_000_000 && (1..=100).contains(&limit), "Invalid journal page");
-            let t = status.telemetry.as_ref().filter(|t|t.connected
-                && t.login == self.inner.settings.login
-                && t.server == self.inner.settings.server
-                && t.currency == self.inner.settings.currency);
+            // Historical positions are still readable offline, but a stale
+            // or wrong-mode snapshot must never certify a partial close as
+            // fully settled or be used as a source of floating PnL.
+            let t = status.telemetry.as_ref().filter(|t|
+                status.gateway_fresh && self.account_matches(status)
+                && t.connected && !t.symbol.is_empty());
             let mut key=t.map(|t|serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)))
                 .transpose()?.unwrap_or_default();
             if key.is_empty() && self.inner.settings.login>0 {

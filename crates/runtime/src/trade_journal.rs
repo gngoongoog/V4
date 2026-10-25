@@ -37,6 +37,30 @@ fn utc(ms:u64)->String {
 }
 fn kind(v: &Value) -> i64 { v["entry"].as_i64().unwrap_or(-1) }
 
+/// A physical position is closed only when its complete original MT5 entry
+/// volume is covered by actual exit deals. A flat position snapshot alone
+/// cannot prove that missing exit fees and late split fills are recorded.
+pub(crate) fn fully_closed_by_deals<'a>(deals: impl IntoIterator<Item = &'a Value>) -> bool {
+    let (mut opened,mut closed)=(0.0_f64,0.0_f64);
+    for deal in deals {
+        if !matches!(deal["type"].as_i64(),Some(0 | 1)) {
+            return false;
+        }
+        let Some(volume)=deal["volume"].as_f64().filter(|v|v.is_finite()&&*v>0.)
+            else{return false};
+        match kind(deal) {
+            0=>opened+=volume,
+            1|3=>closed+=volume,
+            // INOUT netting reversal and unknown classifications require
+            // separate position accounting proof.
+            _=>return false
+        }
+        if !opened.is_finite()||!closed.is_finite() {return false}
+    }
+    opened>0. && closed>0.
+        && (opened-closed).abs()<=opened.mul_add(1e-7,1e-8)
+}
+
 fn originating_command(db: &Connection, context: &str, pid: u64, deal: u64) -> Result<Option<Value>> {
     let result: Option<String> = db.query_row(
         "SELECT payload FROM broker_commands WHERE context=?1 AND kind='open' \
@@ -109,11 +133,9 @@ pub fn list(db: &Connection, context: &str, telemetry: Option<&Telemetry>, offse
         // especially when the terminal is offline or its history is delayed.
         // Require a fresh, authoritative zero-open-position snapshot or exact
         // covered open volume. INOUT netting reversals remain unverified offline.
-        let fully_covered=has_exit && open_volume>0.
-            && !parsed.iter().any(|d|kind(d)==2)
-            && close_volume+1e-8>=open_volume;
+        let fully_covered=fully_closed_by_deals(&parsed);
         let state=if position.is_some() {if has_exit {"PARTIAL / OPEN"}else{"OPEN"}}
-            else if has_exit && (fully_covered || telemetry.is_some()) {"CLOSED"}
+            else if has_exit && fully_covered {"CLOSED"}
             else if has_exit {"EXIT SEEN / CLOSE NOT VERIFIED"}
             else {"AWAITING CLOSE HISTORY"};
         let opening_ticket=first["ticket"].as_u64().unwrap_or(0);
@@ -215,6 +237,24 @@ mod tests {
         let v=list(&db,ctx,None,0,50).unwrap();
         assert_eq!(v["rows"][0]["status"],"EXIT SEEN / CLOSE NOT VERIFIED");
         assert!((v["rows"][0]["lots_closed"].as_f64().unwrap()-0.04).abs()<1e-10);
+        // MT5 may report a flat portfolio before all close deals have
+        // arrived in history. Flat is not proof of fully booked fees.
+        let t=Telemetry{connected:true,symbol:"XAUUSD".into(),positions:vec![],
+            ..Default::default()};
+        let with_flat=list(&db,ctx,Some(&t),0,50).unwrap();
+        assert_eq!(with_flat["rows"][0]["status"],"EXIT SEEN / CLOSE NOT VERIFIED");
+        assert_eq!(with_flat["closed_on_page"],0);
+    }
+
+    #[test]
+    fn matching_volume_is_required_even_when_exit_history_has_booked_profit() {
+        let mk=|entry,volume| json!({"type":0,"entry":entry,"volume":volume});
+        assert!(!fully_closed_by_deals(&[mk(0,0.1),mk(1,0.04)]));
+        assert!(!fully_closed_by_deals(&[mk(0,0.1),mk(1,0.2)]));
+        assert!(!fully_closed_by_deals(&[mk(0,0.1),mk(2,0.1)]));
+        assert!(!fully_closed_by_deals(&[mk(0,0.1),mk(1,"NaN")]));
+        assert!(!fully_closed_by_deals(&[mk(1,0.1)]));
+        assert!(fully_closed_by_deals(&[mk(0,0.1),mk(1,0.04),mk(3,0.06)]));
     }
 
     #[test]
