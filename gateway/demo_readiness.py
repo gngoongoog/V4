@@ -9,7 +9,6 @@ from __future__ import annotations
 import html
 import json
 import math
-import re
 import time
 from pathlib import Path
 
@@ -45,9 +44,11 @@ def evaluate(status: dict, config: dict, now_ms: int | None = None) -> dict:
     source_ms = t.get("source_quote_time_ms")
     if source_ms is None:
         source_ms = t.get("quote_time_ms")
+    logical_ms = t.get("quote_time_ms")
     clock_ok = (type(source_ms) is int and source_ms > 0
                 and source_ms <= now_ms + 2000
-                and source_ms <= int(t.get("quote_time_ms") or source_ms))
+                and (logical_ms is None or
+                     (type(logical_ms) is int and logical_ms >= source_ms)))
     fresh = bool(connected and price_ok and clock_ok and quote_age is not None
                  and quote_age <= 3000 and now_ms - source_ms <= 3000)
     symbol_error = str(t.get("error") or "")
@@ -87,7 +88,9 @@ def evaluate(status: dict, config: dict, now_ms: int | None = None) -> dict:
         "quote_age_ms": round(quote_age) if quote_age is not None else None,
         "observed_quote_clock_valid": clock_ok,
         "used_margin_reported": (_positive_number(t.get("margin")) is not None
-                                 or t.get("margin") == 0),
+                                 or (type(t.get("margin")) in (int, float)
+                                     and math.isfinite(t["margin"])
+                                     and t["margin"] == 0)),
         "no_orders_sent_by_this_tool": True,
         "broker_lifecycle_acceptance": "NOT_TESTED",
         "ea_metaeditor_acceptance": "NOT_TESTED",
