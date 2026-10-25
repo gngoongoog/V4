@@ -52,6 +52,7 @@ def _valid_broker_before_cutoff(db: sqlite3.Connection, *,
             p=json.loads(r["payload"])
             if (not isinstance(p,dict) or r["brain"]!=brain
                     or p.get("brain")!=brain or p.get("context")!=context
+                    or p.get("trading_mode")!="expert"
                     or type(r["position_id"]) is not int or r["position_id"]<=0
                     or p.get("position_id")!=r["position_id"]
                     or type(r["closed_ms"]) is not int or r["closed_ms"]<=0
