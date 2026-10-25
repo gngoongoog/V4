@@ -873,6 +873,26 @@ impl Learner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Synthetic test helper: stamp receipts as if Core inserted their first
+    // admission in the same SQLite transaction. Never used by production.
+    fn stamp_test_samples(db:&Connection,source:&str,now:u64) {
+        let mut st=db.prepare("SELECT position_id,context,brain,closed_ms,payload
+             FROM coordinator_broker_samples WHERE source=?1").unwrap();
+        let rows=st.query_map([source],|r|Ok((
+            r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,
+            r.get::<_,i64>(3)?,r.get::<_,String>(4)?
+        ))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+        drop(st);
+        for(pos,ctx,brain,close,raw) in rows {
+            if pos<=0||close<=0||close as u64>now {continue;}
+            let hash=format!("{:x}",Sha256::digest(raw.as_bytes()));
+            db.execute("INSERT OR IGNORE INTO coordinator_broker_admissions
+                (source,position_id,context,brain,closed_ms,admitted_ms,payload_sha256,protocol)
+                VALUES(?1,?2,?3,?4,?5,?6,?7,'g6g-runtime-same-transaction-v1')",
+                params![source,pos,ctx,brain,close,now,hash]).unwrap();
+        }
+    }
     use braintrade_domain::Candle;
 
     #[test]
@@ -990,6 +1010,8 @@ mod tests {
                     "risk_money":0.0,"r_multiple":0.0,
                     "reward":reward_v2(reward,0.0).1}).to_string()]).unwrap();
         }
+        stamp_test_samples(&db,&same,1000);
+        stamp_test_samples(&db,&other,1000);
         let (n,reward,confidence,streak,penalty)=contextual_stats(&db,&same,"trend_up_normal|london|tight",1000).unwrap();
         assert_eq!(n,1);assert_eq!(reward,0.25);assert!(confidence>0. && confidence<0.2);
         assert_eq!(streak,0);assert_eq!(penalty,0.);
@@ -1327,6 +1349,7 @@ mod tests {
                 (source,position_id,context,brain,closed_ms,payload)
                 VALUES(?1,10,'demo','trend',?2,?3)",
                 params![source,now-500,valid.to_string()]).unwrap();
+        stamp_test_samples(&db,source,now);
         let updated=broker_stats(&db,source,None,now).unwrap();
         assert_eq!(updated.samples,1);
         assert!((updated.mean_net_per_lot-15.0).abs()<1e-6);
@@ -1395,6 +1418,7 @@ mod tests {
             (source,position_id,context,brain,closed_ms,payload)
             VALUES(?1,90,'account-a','trend',?2,?3)",
             params![&source,now-500,real.to_string()]).unwrap();
+        stamp_test_samples(&db,&source,now);
         assert_eq!(broker_stats(&db,&source,None,now).unwrap().samples,1);
         assert_eq!(contextual_stats(&db,&source,ctx,now).unwrap().0,1);
         assert_eq!(broker_stats(&db,"legacy-not-a-canonical-source",None,now).unwrap().samples,0);
@@ -1439,6 +1463,7 @@ mod tests {
              (source,position_id,context,brain,closed_ms,payload)
              VALUES(?1,99,'demo','trend',?2,?3)",
             params![source,now-500,exact.to_string()]).unwrap();
+        stamp_test_samples(&db,source,now);
         let valid=broker_stats(&db,source,None,now).unwrap();
         assert_eq!(valid.samples,1);
         assert!((valid.mean_net_per_lot-23.5).abs()<1e-9);
@@ -1490,6 +1515,7 @@ mod tests {
                 "r_multiple":0.0,"reward":reward_v2(net,0.0).1,"attribution":attr});
             db.execute("INSERT INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,'account','trend',?3,?4)",
                 params![source,id,now-age,payload.to_string()]).unwrap();
+            stamp_test_samples(&db,source,now);
         };
         add(&source,1,4000,-1.,"adverse_price_move");
         add(&source,2,3000,-1.,"costs_erased_gross_profit");
