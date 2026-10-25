@@ -1233,6 +1233,60 @@ mod tests {
     }
 
     #[test]
+    fn g6f_broker_training_fails_closed_on_wrong_identity_and_malformed_json(){
+        let db=Connection::open_in_memory().unwrap();
+        let _=Learner::new(&db).unwrap();
+        let source=source_key("account-a",TradingMode::Expert,"trend","M1","").unwrap();
+        let now=2_000_000_000_000u64;
+        let ctx="trend_up_normal|london|tight";
+        let base=json!({
+            "evidence_source":"mt5_demo_broker","context":"account-a","brain":"trend",
+            "trading_mode":"expert","timeframe":"M1","report_id":"",
+            "position_id":1,"closed_ms":now-1000,
+            "gross":2.7,"commission":-0.7,"swap":0.0,"fee":0.0,
+            "net":2.0,"net_per_lot":20.0,"closed_volume":0.1,
+            "risk_money":5.0,"r_multiple":0.4,"reward":0.4_f64.tanh(),
+            "context_key":ctx,"regime":"trend_up_normal"
+        });
+        let mistakes=[
+            ("context",json!("account-b")),
+            ("brain",json!("other")),
+            ("trading_mode",json!("sniper")),
+            ("timeframe",json!("M5")),
+            ("report_id",json!("generated-fake")),
+            ("position_id",json!(999)),
+            ("closed_ms",json!(now+1000)),
+        ];
+        for (index,(field,value)) in mistakes.iter().enumerate(){
+            let pos=index as u64+1;
+            let mut receipt=base.clone();
+            receipt["position_id"]=json!(pos);
+            receipt["closed_ms"]=json!(now-pos*1000);
+            receipt[*field]=value.clone();
+            db.execute("INSERT INTO coordinator_broker_samples
+                (source,position_id,context,brain,closed_ms,payload)
+                VALUES(?1,?2,'account-a','trend',?3,?4)",
+                params![&source,pos,now-pos*1000,receipt.to_string()]).unwrap();
+        }
+        db.execute("INSERT INTO coordinator_broker_samples
+            (source,position_id,context,brain,closed_ms,payload)
+            VALUES(?1,80,'account-a','trend',?2,'{corrupt JSON')",
+            params![&source,now-700]).unwrap();
+        assert_eq!(broker_stats(&db,&source,None,now).unwrap().samples,0);
+        assert_eq!(contextual_stats(&db,&source,ctx,now).unwrap().0,0,
+            "Even correct net with wrong source, mode or account cannot train mistake memory");
+        let mut real=base.clone();real["position_id"]=json!(90);
+        real["closed_ms"]=json!(now-500);
+        db.execute("INSERT INTO coordinator_broker_samples
+            (source,position_id,context,brain,closed_ms,payload)
+            VALUES(?1,90,'account-a','trend',?2,?3)",
+            params![&source,now-500,real.to_string()]).unwrap();
+        assert_eq!(broker_stats(&db,&source,None,now).unwrap().samples,1);
+        assert_eq!(contextual_stats(&db,&source,ctx,now).unwrap().0,1);
+        assert_eq!(broker_stats(&db,"legacy-not-a-canonical-source",None,now).unwrap().samples,0);
+    }
+
+    #[test]
     fn g5e_forbid_manipulated_reward_and_r_multiple_with_valid_mt5_costs() {
         let db=Connection::open_in_memory().unwrap();
         let _=Learner::new(&db).unwrap();
