@@ -56,6 +56,62 @@ def _verify_booked(p: dict) -> tuple[float, float, float]:
     return net, per_lot, commission+swap+fee
 
 
+def _verified_full_broker_deals(db: sqlite3.Connection, context: str,
+                                position_id: int, open_deal: int,
+                                closed_ms: int, receipt: dict) -> None:
+    """Independently reconstruct all MT5 deal costs and exact full close.
+
+    Mirrors Rust trade_journal::booked_costs/fully_closed_by_deals. A
+    reconciled label alone is insufficient for a broker outcome claim.
+    """
+    records = db.execute(
+        "SELECT ticket,payload FROM broker_deals "
+        "WHERE context=? AND position_id=? ORDER BY ticket",
+        (context, position_id),
+    ).fetchall()
+    if not records:
+        raise ValueError("broker_deal_history_missing")
+    opened = closed = 0.0
+    sums = [0.0] * 4
+    latest_exit = 0
+    found_entry_ticket = False
+    for record in records:
+        try:
+            d = json.loads(record["payload"])
+        except (TypeError, json.JSONDecodeError):
+            raise ValueError("broker_deal_corrupt_json") from None
+        if (not isinstance(d, dict) or d.get("position_id") != position_id
+                or d.get("ticket") != record["ticket"]
+                or type(d.get("type")) is not int or d["type"] not in (0, 1)
+                or type(d.get("entry")) is not int or d["entry"] not in (0, 1, 3)):
+            raise ValueError("broker_deal_geometry_unknown")
+        volume = _finite(d.get("volume"))
+        timestamp = d.get("time_msc")
+        if volume <= 0 or type(timestamp) is not int or timestamp <= 0:
+            raise ValueError("incomplete_broker_deal_volume_or_time")
+        for i, field in enumerate(("profit", "commission", "swap", "fee")):
+            sums[i] += _finite(d.get(field))
+            if not math.isfinite(sums[i]):
+                raise ValueError("nonfinite_broker_booked_component")
+        if d["entry"] == 0:
+            opened += volume
+            if record["ticket"] == open_deal:
+                found_entry_ticket = True
+        else:
+            closed += volume
+            latest_exit = max(latest_exit, timestamp)
+    if (not found_entry_ticket or opened <= 0 or closed <= 0
+            or not _equal(opened, closed)
+            or not _equal(closed, _finite(receipt.get("closed_volume")))
+            or latest_exit != closed_ms):
+        raise ValueError("broker_entry_exit_not_fully_reconciled")
+    expected_net = sum(sums)
+    if (not _equal(expected_net, _finite(receipt.get("net")))
+            or any(not _equal(got, _finite(receipt.get(field))) for got,field
+                   in zip(sums, ("gross", "commission", "swap", "fee")))):
+        raise ValueError("broker_receipt_disagrees_with_mt5_deal_history")
+
+
 def _verified_position(db: sqlite3.Connection, row: sqlite3.Row,
                        doc: dict, context: str, now_ms: int) -> tuple[float, float, float, int]:
     pos = row["position_id"]
@@ -98,6 +154,7 @@ def _verified_position(db: sqlite3.Connection, row: sqlite3.Row,
     deal = result.get("deal")
     if type(deal) is not int or deal <= 0 or p.get("open_deal") != deal:
         raise ValueError("exact_broker_entry_deal_missing")
+    _verified_full_broker_deals(db, context, pos, deal, closed, p)
     signal = payload.get("signal")
     if not isinstance(signal, dict) or type(signal.get("bar_time")) is not int:
         raise ValueError("no_original_ex_ante_signal")
@@ -143,7 +200,7 @@ def audit(db: sqlite3.Connection, manifest: dict, *, now_ms: int) -> dict:
     if not all(
         db.execute("SELECT EXISTS(SELECT 1 FROM sqlite_master "
                    "WHERE type='table' AND name=?)", (t,)).fetchone()[0]
-        for t in ("broker_commands", "coordinator_broker_samples")
+        for t in ("broker_commands", "broker_deals", "coordinator_broker_samples")
     ):
         return _empty_report(doc, manifest, "broker_tables_unavailable")
     source = db.execute(
@@ -192,7 +249,7 @@ def audit(db: sqlite3.Connection, manifest: dict, *, now_ms: int) -> dict:
         "registration_independently_timestamped": False,
         "automatic_model_promotion": False,
         "live_execution_authorized": False,
-        "note": "Only verified booked MT5 DEMO outcomes matched to the original "
+        "note": "Only fully closed broker_deals reconciled to a system receipt and "
                 "pre-outcome Adaptive Expert signal and exact broker open deal. "
                 "Frozen is paper-only, and adaptive training is not locked. "
                 "This is NOT a paired broker A/B edge or an independent OOS study."
