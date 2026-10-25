@@ -90,7 +90,7 @@ fn label(cmd: Option<&Value>, fallback_brain: &str) -> Value {
 pub fn list(db: &Connection, context: &str, telemetry: Option<&Telemetry>, offset: u32, limit: u32) -> Result<Value> {
     anyhow::ensure!((1..=100).contains(&limit) && offset <= 1_000_000, "Trade journal pagination out of bounds");
     if context.is_empty() {
-        return Ok(json!({"total":0,"offset":offset,"limit":limit,"rows":[],
+        return Ok(json!({"context":context,"total":0,"offset":offset,"limit":limit,"rows":[],
             "notice":"اربط حساب MT5 وحدد الرمز لقراءة سجل الصفقات المحفوظ لذلك الحساب"}));
     }
     let total: u64 = db.query_row(
@@ -194,7 +194,7 @@ pub fn list(db: &Connection, context: &str, telemetry: Option<&Telemetry>, offse
     }
     let closed=rows.iter().filter(|r|r["status"]=="CLOSED").count();
     Ok(json!({
-        "total":total,"offset":offset,"limit":limit,"rows":rows,"closed_on_page":closed,
+        "context":context,"total":total,"offset":offset,"limit":limit,"rows":rows,"closed_on_page":closed,
         "notice":"سجل MT5 الفعلي فقط؛ الصفقات المفتوحة تُعرض من الوسيط، والصفقات المغلقة من سجل الصفقات المؤكد. إجمالي الصافي يشمل profit + commission + swap + fee المتاحة المرتبطة بـ position_id؛ الرسوم المنفصلة غير المرتبطة لا تُنسب تخميناً. سجلات قديمة قبل الربط أو خارج نافذة مزامنة الوسيط قد تكون ناقصة."
     }))
 }

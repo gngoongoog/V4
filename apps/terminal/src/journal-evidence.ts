@@ -26,7 +26,7 @@ export function journalEvidence(status:Status|null,execution:unknown,history:unk
    settings.login!==t.login||settings.server!==t.server||settings.currency!==t.currency||
    bound.context!==JSON.stringify([t.server,t.login,t.symbol,t.currency]))
   return no('يجب اتصال نفس حساب MT5 المربوط بالتنفيذ لعرض سجل الصفقات، ويمكنه استئناف التصفح بعد العودة',offset,limit);
- if(v.offset!==offset||v.limit!==limit||!validInt(v.total)||
+ if(v.context!==bound.context||v.offset!==offset||v.limit!==limit||!validInt(v.total)||
    !Array.isArray(v.rows)||v.rows.length>500)
   return no('استجابة Core لا تطابق الصفحة المطلوبة أو غير مكتملة',offset,limit);
  const rows:BrokerJournalRow[]=[];
