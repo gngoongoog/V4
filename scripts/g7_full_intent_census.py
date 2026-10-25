@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from g7_core_source_audit import check as verify_g7_source
 from g7_demo_broker_lineage import audit as verify_demo_labels
+from g7_cohort_overlap_gate import gate as verify_study_windows
 
 MODES = frozenset(("expert", "scalping", "swing"))
 MAX_INTENTS = 200_000
@@ -68,6 +69,9 @@ def audit(db: sqlite3.Connection, *, now_ms: int) -> dict:
         raise ValueError("invalid_audit_clock")
     db.row_factory = sqlite3.Row
     source = verify_g7_source(db)
+    # Block performance aggregation if a G7 pair falls into another run's
+    # future window or a command could be attributed to two cohorts.
+    cohort = verify_study_windows(db, now_ms=now_ms)
     booked = verify_demo_labels(db, now_ms=now_ms)
     empty = {
         "study": "G7-C", "status": "not_started",
@@ -254,6 +258,7 @@ def audit(db: sqlite3.Connection, *, now_ms: int) -> dict:
     # inference, no survivorship bias, verified third-party clock, or LIVE.
     return dict(empty,
         status="inconclusive",
+        overlap_gate=cohort["overlap_gate"],
         local_command_census_complete=bool(complete),
         all_open_intents_in_registered_accounts=counts["all_open_intents"],
         eligible_system_demo_open_intents=denominator,
