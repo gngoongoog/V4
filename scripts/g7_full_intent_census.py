@@ -47,6 +47,11 @@ def _identity_matches(cmd: dict, row: sqlite3.Row, context: str) -> bool:
         p = json.loads(context)
     except (ValueError, TypeError):
         return False
+    declared = cmd.get("trading_mode")
+    learner = cmd.get("learning")
+    learned_mode = learner.get("trading_mode") if isinstance(learner, dict) else None
+    if isinstance(declared, str) and isinstance(learned_mode, str) and declared != learned_mode:
+        return False
     return (isinstance(p, list) and len(p) == 4 and
             cmd.get("id") == row["id"] and
             cmd.get("context") == context and
