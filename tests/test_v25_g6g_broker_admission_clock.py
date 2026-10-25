@@ -39,6 +39,17 @@ class G6GAdmittedLearning(unittest.TestCase):
 
     def add(self,*,with_admission=True,admitted=None):
         self.fx.receipt(self.closed)
+        # Older G6-D arithmetic-only fixture omits three source fields.
+        # Real Rust G6-F/G6-G receipts contain all three and MUST match the
+        # canonical source tuple; keep the production audit strict.
+        row=self.db.execute(
+            "SELECT source,position_id,payload FROM coordinator_broker_samples").fetchone()
+        expanded=json.loads(row["payload"])
+        expanded.update({"trading_mode":"expert","timeframe":"M1","report_id":""})
+        self.db.execute(
+            "UPDATE coordinator_broker_samples SET payload=? "
+            "WHERE source=? AND position_id=?",
+            (json.dumps(expanded),row["source"],row["position_id"]))
         sample=self.db.execute(
             "SELECT source,position_id,context,brain,closed_ms,payload "
             "FROM coordinator_broker_samples").fetchone()
