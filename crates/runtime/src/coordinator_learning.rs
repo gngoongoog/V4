@@ -127,12 +127,112 @@ fn reward_v2(net:f64,risk:f64)->(f64,f64){
 fn finish_stats(samples:u64,wins:u64,weighted_wins:f64,weighted_net:f64,weighted_reward:f64,effective:f64)->Stats{
     Stats{samples,wins,mean_net_per_lot:if effective>0.{weighted_net/effective}else{0.},mean_reward:if effective>0.{weighted_reward/effective}else{0.},weighted_win_rate:if effective>0.{(weighted_wins/effective).clamp(0.,1.)}else{0.5},effective_samples:effective}
 }
-fn forward_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<Stats>{
-    let mut st=db.prepare("SELECT payload,outcome FROM coordinator_samples WHERE source=?1 AND json_extract(outcome,'$.state')='scored' ORDER BY bar DESC LIMIT 4000")?;
-    let rows=st.query_map([source],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    let(mut samples,mut wins,mut weighted_wins,mut weighted_net,mut weighted_reward,mut effective)=(0u64,0u64,0.,0.,0.,0.);
-    for(raw_p,raw_o)in rows{let p:Value=serde_json::from_str(&raw_p)?;let o:Value=serde_json::from_str(&raw_o)?;let sample_regime=p["regime"].as_str().unwrap_or("legacy");if regime.is_some_and(|wanted|wanted!=sample_regime){continue;}let net=o["net"].as_f64().unwrap_or(0.);let reward=o["reward"].as_f64().unwrap_or_else(||reward_v2(net,0.).1);let ts=o["scored_ms"].as_u64().or_else(||p["observed_ms"].as_u64()).unwrap_or(now);let w=decay_weight(ts,now,FORWARD_HALF_LIFE_MS);samples+=1;if net>0.{wins+=1;weighted_wins+=w;}weighted_net+=net*w;weighted_reward+=reward*w;effective+=w;}
-    Ok(finish_stats(samples,wins,weighted_wins,weighted_net,weighted_reward,effective))
+const FORWARD_HORIZON_BARS: u64 = 12;
+
+// A calendar gap is not twelve completed candles. Require the exact frozen
+// bar cadence before creating price-only prospective feedback.
+fn forward_timeframe_seconds(timeframe: &str) -> Option<u64> {
+    let (unit, count) = if let Some(v) = timeframe.strip_prefix('M') {
+        (60_u64, v)
+    } else if let Some(v) = timeframe.strip_prefix('H') {
+        (3_600_u64, v)
+    } else if let Some(v) = timeframe.strip_prefix('D') {
+        (86_400_u64, v)
+    } else if let Some(v) = timeframe.strip_prefix('W') {
+        (604_800_u64, v)
+    } else {
+        return None;
+    };
+    let count = count.parse::<u64>().ok().filter(|n| *n > 0 && *n <= 60)?;
+    unit.checked_mul(count)
+}
+
+fn contiguous_forward_horizon(bar: u64, future: &[&FrameBar], timeframe: &str) -> bool {
+    let Some(step) = forward_timeframe_seconds(timeframe) else { return false; };
+    future.len() == FORWARD_HORIZON_BARS as usize
+        && future.iter().enumerate().all(|(index, frame)| {
+            step.checked_mul(index as u64 + 1)
+                .and_then(|offset| bar.checked_add(offset))
+                == Some(frame.candle.time)
+        })
+}
+
+// Validate stored labels again AT READ TIME. Legacy/out-of-order and incomplete
+// records must never become artificial forward wins or weight changes.
+// This is a frozen price/cost estimate, NEVER an MT5 fill or booked broker PnL.
+fn verified_forward_feedback(
+    bar: u64, payload: &Value, outcome: &Value, now: u64,
+) -> Option<(f64, f64, u64)> {
+    if outcome["state"] != "scored"
+        || !matches!(payload["side"].as_i64(), Some(-1 | 1))
+        || outcome["horizon_bars"].as_u64() != Some(FORWARD_HORIZON_BARS)
+        || outcome["horizon_contiguous"] != true
+    {
+        return None;
+    }
+    let step = forward_timeframe_seconds(payload["timeframe"].as_str()?)?;
+    if outcome["horizon_seconds"].as_u64() != step.checked_mul(FORWARD_HORIZON_BARS) {
+        return None;
+    }
+    let earliest_exit = bar.checked_add(step.checked_mul(FORWARD_HORIZON_BARS)?)?;
+    let exit = outcome["exit_bar"].as_u64()?;
+    if exit != earliest_exit { return None; }
+    let observed = payload["observed_ms"].as_u64().filter(|v| *v > 0)?;
+    let scored = outcome["scored_ms"].as_u64().filter(|v| *v > 0 && *v <= now)?;
+    if observed < bar.checked_mul(1_000)? || observed > exit.checked_mul(1_000)?
+        || scored < exit.checked_add(step)?.checked_mul(1_000)?
+        || scored < observed
+    {
+        return None;
+    }
+    for (name, strictly_positive) in [
+        ("entry", true), ("tick", true), ("profit", true), ("loss", true),
+        ("spread", false), ("slippage", false), ("commission", false),
+    ] {
+        let v = payload[name].as_f64().filter(|v| v.is_finite())?;
+        if (strictly_positive && v <= 0.) || (!strictly_positive && v < 0.) { return None; }
+    }
+    let net = outcome["net"].as_f64().filter(|v| v.is_finite())?;
+    let risk = outcome["risk_per_lot"].as_f64().filter(|v| v.is_finite() && *v >= 0.)?;
+    let recorded_r = outcome["r_multiple"].as_f64().filter(|v| v.is_finite())?;
+    let reward = outcome["reward"].as_f64()
+        .filter(|v| v.is_finite() && (-1.0..=1.0).contains(v))?;
+    let (expected_r, expected_reward) = reward_v2(net, risk);
+    if !expected_r.is_finite() || !expected_reward.is_finite()
+        || (recorded_r - expected_r).abs() > 1e-7_f64.max(expected_r.abs() * 1e-8)
+        || (reward - expected_reward).abs() > 1e-8
+    {
+        return None;
+    }
+    Some((net, reward, scored))
+}
+
+fn forward_stats(db: &Connection, source: &str, regime: Option<&str>, now: u64) -> Result<Stats> {
+    let mut st = db.prepare(
+        "SELECT bar,payload,outcome FROM coordinator_samples
+         WHERE source=?1 AND outcome IS NOT NULL ORDER BY bar DESC LIMIT 4000"
+    )?;
+    let rows = st.query_map([source], |r| Ok((
+        r.get::<_, u64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?,
+    )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let (mut samples, mut wins, mut weighted_wins, mut weighted_net, mut weighted_reward, mut effective)
+        = (0_u64, 0_u64, 0., 0., 0., 0.);
+    for (bar, raw_p, raw_o) in rows {
+        let (Ok(p), Ok(o)) = (
+            serde_json::from_str::<Value>(&raw_p),
+            serde_json::from_str::<Value>(&raw_o),
+        ) else { continue; };
+        if regime.is_some_and(|wanted| p["regime"].as_str() != Some(wanted)) { continue; }
+        let Some((net, reward, scored)) = verified_forward_feedback(bar, &p, &o, now)
+            else { continue; };
+        let w = decay_weight(scored, now, FORWARD_HALF_LIFE_MS);
+        samples += 1;
+        if net > 0. { wins += 1; weighted_wins += w; }
+        weighted_net += net * w;
+        weighted_reward += reward * w;
+        effective += w;
+    }
+    Ok(finish_stats(samples, wins, weighted_wins, weighted_net, weighted_reward, effective))
 }
 // Broker training labels can predate G5-B. Validate again AT READ TIME:
 // upgrading the admission gate does not make legacy polluted rows trustworthy.
@@ -531,8 +631,13 @@ impl Learner {
                     let future: Vec<_> = bars.iter().filter(|b| b.candle.time > old).collect();
                     let result = if bars[0].candle.time > old {
                         Some(json!({"state":"expired","reason":"Forward horizon not retained"}))
-                    } else if future.len() >= 12 {
-                        let f = future[11];
+                    } else if future.len() >= FORWARD_HORIZON_BARS as usize
+                        && contiguous_forward_horizon(old, &future[..FORWARD_HORIZON_BARS as usize], &b.timeframe)
+                        && forward_timeframe_seconds(&b.timeframe)
+                            .is_some_and(|step| future[FORWARD_HORIZON_BARS as usize - 1]
+                                .candle.time.saturating_add(step) <= now / 1_000)
+                    {
+                        let f = future[FORWARD_HORIZON_BARS as usize - 1];
                         let side = p["side"].as_i64().unwrap() as f64;
                         let spread = if f.spread_points > 0 {
                             f.spread_points as f64 * p["point"].as_f64().unwrap()
@@ -556,7 +661,16 @@ impl Learner {
                         let commission=p["commission"].as_f64().unwrap_or(0.);
                         let risk=if tick>0.&&value>0.{stop/tick*value+commission.abs()}else{0.};
                         let(r_multiple,reward)=reward_v2(net,risk);
-                        Some(json!({"state":"scored","net":net,"risk_per_lot":risk,"r_multiple":r_multiple,"reward":reward,"exit_bar":f.candle.time,"scored_ms":now,"cost_model":"fixed contract; broker bar spread when positive, otherwise frozen entry spread; configured slippage and commission; no swaps"}))
+                        Some(json!({"state":"scored","net":net,"risk_per_lot":risk,"r_multiple":r_multiple,"reward":reward,"exit_bar":f.candle.time,"scored_ms":now,
+                            "horizon_bars":FORWARD_HORIZON_BARS,
+                            "horizon_seconds":forward_timeframe_seconds(&b.timeframe).unwrap() * FORWARD_HORIZON_BARS,
+                            "horizon_contiguous":true,"cost_model":"fixed contract; broker bar spread when positive, otherwise frozen entry spread; configured slippage and commission; no swaps"}))
+                    } else if future.len() >= FORWARD_HORIZON_BARS as usize
+                        && forward_timeframe_seconds(&b.timeframe).is_some_and(|step|
+                            future[FORWARD_HORIZON_BARS as usize - 1].candle.time
+                                .saturating_add(step) <= now / 1_000)
+                    {
+                        Some(json!({"state":"expired","reason":"Forward horizon missing ordered, contiguous completed bars"}))
                     } else {
                         None
                     };
@@ -637,6 +751,83 @@ impl Learner {
 mod tests {
     use super::*;
     use braintrade_domain::Candle;
+
+    #[test]
+    fn forward_labels_require_complete_causal_horizon_and_real_nondefaulted_math() {
+        let db = Connection::open_in_memory().unwrap();
+        let _learner = Learner::new(&db).unwrap();
+        let now = 1_800_000_000_000_u64;
+        let base = now / 1_000 - 30 * 60;
+        let source = "account-scoped-forward";
+        let make_p = |bar: u64| json!({
+            "side":1,"regime":"trend_up_normal","timeframe":"M1",
+            "observed_ms":(bar + 60) * 1_000,
+            "entry":2000.0,"tick":0.01,"profit":1.0,"loss":1.0,
+            "spread":0.02,"slippage":0.01,"commission":7.0
+        });
+        let make_o = |bar: u64| json!({
+            "state":"scored","net":2.0,"risk_per_lot":4.0,"r_multiple":0.5,
+            "reward":0.5_f64.tanh(),"exit_bar":bar+720,
+            "scored_ms":(bar+780)*1_000,
+            "horizon_bars":12,"horizon_seconds":720,"horizon_contiguous":true
+        });
+        let insert = |bar: u64, p: Value, o: Value| {
+            db.execute("INSERT INTO coordinator_samples(source,bar,payload,outcome) VALUES(?1,?2,?3,?4)",
+                params![source,bar,p.to_string(),o.to_string()]).unwrap();
+        };
+        insert(base,make_p(base),make_o(base));
+        for i in 1..=12_u64 {
+            let bar=base+i;
+            let mut p=make_p(bar);
+            let mut o=make_o(bar);
+            match i {
+                1=>o["net"]=Value::Null,
+                2=>o["reward"]=Value::Null,
+                3=>o["reward"]=json!(0.99),
+                4=>o["scored_ms"]=json!(now+1),
+                5=>o["exit_bar"]=json!(bar+11*60),
+                6=>o["horizon_contiguous"]=json!(false),
+                7=>p["observed_ms"]=json!(now+1),
+                8=>o["risk_per_lot"]=json!(-1.0),
+                9=>o["r_multiple"]=json!(999.0),
+                10=>p["side"]=json!(0),
+                11=>o["horizon_seconds"]=json!(0),
+                12=>{o.as_object_mut().unwrap().remove("horizon_bars");},
+                _=>unreachable!(),
+            }
+            insert(bar,p,o);
+        }
+        // A pre-upgrade row can look profitable, but cannot prove the
+        // contiguous 12-bar prospective observation from its old schema.
+        let legacy_bar=base+15;
+        let mut legacy=make_o(legacy_bar);
+        legacy.as_object_mut().unwrap().remove("horizon_contiguous");
+        insert(legacy_bar,make_p(legacy_bar),legacy);
+        let stats=forward_stats(&db,source,None,now).unwrap();
+        assert_eq!(stats.samples,1,"Only the complete forward record may change weights");
+        assert_eq!(stats.wins,1);
+        assert!((stats.mean_net_per_lot-2.0).abs()<1e-9);
+        let matched=forward_stats(&db,source,Some("trend_up_normal"),now).unwrap();
+        assert_eq!(matched.samples,1);
+        assert_eq!(forward_stats(&db,source,Some("flat"),now).unwrap().samples,0);
+        let prior=selected_weight(stats.clone(),stats,Stats::default(),Stats::default(),
+            &IntelligenceContext::default());
+        assert_eq!(prior.forward_samples,1);
+        assert_eq!(prior.broker_samples,0);
+        assert!(prior.evidence_source.starts_with("forward_bars"));
+    }
+
+    #[test]
+    fn gaps_cannot_generate_a_false_twelve_bar_forward_label() {
+        let mut frames=bars(1_800_000_000);
+        let bar=frames[100].candle.time;
+        let contiguous: Vec<_> = frames.iter().skip(101).take(12).collect();
+        assert!(contiguous_forward_horizon(bar,&contiguous,"M1"));
+        frames[107].candle.time+=60;
+        let gap: Vec<_> = frames.iter().skip(101).take(12).collect();
+        assert!(!contiguous_forward_horizon(bar,&gap,"M1"));
+        assert!(!contiguous_forward_horizon(bar,&contiguous,"MN1"));
+    }
 
     #[test]
     fn sniper_target_provenance_is_directional_and_rejects_broker_widening() {
