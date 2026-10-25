@@ -520,6 +520,20 @@ impl Student {
             };
             self.active.insert(id.into(), e);
         }
+        // Even while remaining in the same account/context, an on-disk
+        // broker receipt or its admission may become damaged between observe
+        // cycles. Cached actual losses must be revalidated before ANY further
+        // Student loss-memory/study learning, not only during restart/load.
+        for e in self.active.values_mut() {
+            if e.actual.is_some() && !cached_student_label_verified(db,&key,e,now)? {
+                e.actual=None;
+                e.trial.usable=false;
+                e.trial.exclusion_reason="broker_admission_unverified".into();
+                e.path_overflow=true;
+                e.loss_reviewed=false;
+                e.study_consumed=false;
+            }
+        }
         for e in self.active.values_mut() {
             if e.position_id == 0 {
                 e.position_id = db
@@ -1232,6 +1246,40 @@ mod tests {
         let mut s=signal(); adapt(&mut s,&t,&c,&b,&policies);
         assert_eq!(s.stop_distance,1.); assert!(s.ready);
         assert_eq!(s.coordination.unwrap()["student"]["fallback_reason"],"stop_inside_spread");
+    }
+
+    #[test]
+    fn g6j_student_never_credits_future_or_changed_broker_admissions(){
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let t=telemetry();
+        let key=seed_entry(&db,&t,json!({"deal":77}));
+        db.execute("INSERT INTO broker_deals VALUES(?1,77,55,'trend',?2)",
+            params![&key,json!({"entry":0,"position_id":55,"price":100.,
+                "volume":0.1,"time_msc":1000}).to_string()]).unwrap();
+        label(&db,&key,1200);
+        db.execute("UPDATE coordinator_broker_admissions
+            SET admitted_ms=6000 WHERE position_id=55",[]).unwrap();
+        let mut student=Student::new(&db).unwrap();
+        student.observe(&db,&t,5000).unwrap();
+        let v=view(&db,&key).unwrap();
+        assert_eq!(v["closed_broker_trades"],0,
+            "An MT5 close older than 5000 is not sufficient when Core first admitted at 6000");
+        assert!(v["experiences"][0]["actual"].is_null());
+        student.observe(&db,&t,6000).unwrap();
+        let v=view(&db,&key).unwrap();
+        assert_eq!(v["closed_broker_trades"],1);
+        assert_eq!(v["studies"][0]["study"]["reviewed_losses"],1);
+        // Changing the booked Broker payoff breaks the original SHA.
+        db.execute("UPDATE coordinator_broker_samples
+            SET payload=json_set(payload,'$.net',99)
+            WHERE position_id=55",[]).unwrap();
+        assert_eq!(view(&db,&key).unwrap()["closed_broker_trades"],0);
+        student.observe(&db,&t,6500).unwrap();
+        assert_eq!(view(&db,&key).unwrap()["closed_broker_trades"],0);
+        let mut restarted=Student::new(&db).unwrap();
+        restarted.observe(&db,&t,6600).unwrap();
+        assert_eq!(view(&db,&key).unwrap()["closed_broker_trades"],0);
     }
 
 }
