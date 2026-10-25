@@ -649,7 +649,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         .iter()
                         .filter(|(pid, _)| {
                             !positions.iter().any(|p| p.identifier == **pid || p.ticket == **pid)
-                                && receipts.get(pid).is_some_and(|group|
+                                && receipts.get(*pid).is_some_and(|group|
                                     crate::trade_journal::fully_closed_by_deals(group.iter().copied()))
 
                         })
