@@ -631,18 +631,20 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 for b in &self.brains {
                     let magic = execution::magic(&b.id).unwrap();
                     let own: Vec<_> = deals.iter().filter(|d| d["brain"] == b.id).collect();
-                    let mut groups: BTreeMap<u64, f64> = BTreeMap::new();
-                    let mut net = 0.;
+                    // Same strict cost provenance as /v1/execution/trades.
+                    // A corrupt historical broker fee must not become an
+                    // invented $0.00 and falsely improve a brain's win count.
+                    let net = crate::trade_journal::booked_costs(own.iter().copied())
+                        .map(|totals| totals[0]);
+                    let mut receipts: BTreeMap<u64, Vec<&Value>> = BTreeMap::new();
                     for d in &own {
-                        let pnl = d["profit"].as_f64().unwrap_or(0.)
-                            + d["commission"].as_f64().unwrap_or(0.)
-                            + d["swap"].as_f64().unwrap_or(0.)
-                            + d["fee"].as_f64().unwrap_or(0.);
-                        net += pnl;
-                        *groups
-                            .entry(d["position_id"].as_u64().unwrap_or(0))
-                            .or_default() += pnl;
+                        receipts.entry(d["position_id"].as_u64().unwrap_or(0))
+                            .or_default().push(*d);
                     }
+                    let groups: BTreeMap<u64, Option<f64>> = receipts.iter().map(|(pid, deals)| {
+                        (*pid, crate::trade_journal::booked_costs(deals.iter().copied())
+                            .map(|totals| totals[0]))
+                    }).collect();
                     let closed: Vec<_> = groups
                         .iter()
                         .filter(|(pid, _)| {
@@ -653,7 +655,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                                 })
                         })
                         .collect();
-                    brains.push(json!({"config":b,"name":BRAINS.iter().find(|v|v.0==b.id).unwrap().1,"magic":magic,"latest":self.signals.get(&b.id).filter(|v|t.is_some_and(|t|self.matches(t))&&now.saturating_sub(v["evaluated_ms"].as_u64().unwrap_or(0))<=3000),"learning":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))),"learned_weight":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))).map(|w|w.weight()),"stats":{"deals":own.len(),"closed_positions":closed.len(),"wins":closed.iter().filter(|(_,p)|**p>0.).count(),"net_booked":net,"floating":positions.iter().filter(|p|p.magic==magic).map(|p|p.profit).sum::<f64>(),"open_positions":positions.iter().filter(|p|p.magic==magic).count()}}));
+                    brains.push(json!({"config":b,"name":BRAINS.iter().find(|v|v.0==b.id).unwrap().1,"magic":magic,"latest":self.signals.get(&b.id).filter(|v|t.is_some_and(|t|self.matches(t))&&now.saturating_sub(v["evaluated_ms"].as_u64().unwrap_or(0))<=3000),"learning":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))),"learned_weight":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))).map(|w|w.weight()),"stats":{"deals":own.len(),"closed_positions":closed.len(),"wins":closed.iter().filter(|(_,p)|p.is_some_and(|amount| amount>0.)).count(),"net_booked":net,"booked_cost_evidence":if own.is_empty(){"NO_BROKER_DEALS"}else if net.is_some(){"BROKER_COMPONENTS_VERIFIED"}else{"MISSING_OR_INVALID_BROKER_COST"},"floating":positions.iter().filter(|p|p.magic==magic).map(|p|p.profit).sum::<f64>(),"open_positions":positions.iter().filter(|p|p.magic==magic).count()}}));
                 }
                 let commands=json_rows(db,"SELECT json_object('request',json(payload),'state',state,'result',json(result)) FROM broker_commands WHERE context=?1 ORDER BY created_ms DESC LIMIT 100",&key)?;
                 Ok(
@@ -1031,6 +1033,43 @@ mod execution_persistence_tests {
         let state:String=db.query_row("SELECT state FROM broker_commands WHERE id=?1",
             [open["id"].as_str().unwrap()],|r|r.get(0)).unwrap();
         assert_eq!(state,"cancelled");
+    }
+
+    #[test]
+    fn brain_summary_refuses_missing_historical_fee_as_verified_profit() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let key=ctx(&t);
+        let entry=json!({"ticket":710,"position_id":77,"symbol":"XAUUSD","brain":"system",
+            "type":0,"entry":0,"magic":410600,"volume":0.1,
+            "profit":0.,"commission":-0.35,"swap":0.,"fee":0.});
+        let mut exit=json!({"ticket":711,"position_id":77,"symbol":"XAUUSD","brain":"system",
+            "type":1,"entry":1,"magic":410600,"volume":0.1,
+            "profit":3.,"swap":-0.2,"fee":0.});
+        for (ticket,deal) in [(710,&entry),(711,&exit)] {
+            db.execute("INSERT INTO broker_deals VALUES(?1,?2,77,'system',?3)",
+                params![key,ticket,deal.to_string()]).unwrap();
+        }
+        let mut st=Status::default();
+        st.gateway_fresh=true;
+        st.telemetry=Some(t);
+        let first=svc.route("GET","/v1/execution",b"",&db,&st,200).unwrap();
+        let stats=&first["brains"].as_array().unwrap().iter()
+            .find(|v|v["config"]["id"]=="system").unwrap()["stats"];
+        assert!(stats["net_booked"].is_null());
+        assert_eq!(stats["booked_cost_evidence"],"MISSING_OR_INVALID_BROKER_COST");
+        assert_eq!(stats["wins"],0);
+        exit["commission"]=json!(-0.35);
+        db.execute("UPDATE broker_deals SET payload=?1 WHERE context=?2 AND ticket=711",
+            params![exit.to_string(),key]).unwrap();
+        let clean=svc.route("GET","/v1/execution",b"",&db,&st,201).unwrap();
+        let again=&clean["brains"].as_array().unwrap().iter()
+            .find(|v|v["config"]["id"]=="system").unwrap()["stats"];
+        assert_eq!(again["booked_cost_evidence"],"BROKER_COMPONENTS_VERIFIED");
+        assert!((again["net_booked"].as_f64().unwrap()-2.1).abs()<1e-9);
+        assert_eq!(again["wins"],1);
     }
 
     #[test]

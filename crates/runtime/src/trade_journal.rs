@@ -8,6 +8,28 @@ use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
 fn number(v: &Value, k: &str) -> f64 { v[k].as_f64().filter(|v|v.is_finite()).unwrap_or(0.) }
+
+/// Only exact, finite MT5 broker-booked values can enter a trade's net PnL.
+/// Historical SQLite rows might predate fee validation or have corrupted
+/// receipts: an absent component is *unknown*, never a zero-fee broker.
+pub(crate) fn booked_costs<'a>(deals: impl IntoIterator<Item = &'a Value>) -> Option<[f64; 5]> {
+    let mut parts = [0.0_f64; 4];
+    for d in deals {
+        // No attribution for balance adjustments or ambiguous deal types.
+        if !matches!(d["type"].as_i64(), Some(0 | 1)) {
+            return None;
+        }
+        for (i, name) in ["profit", "commission", "swap", "fee"].iter().enumerate() {
+            let amount = d[*name].as_f64().filter(|n| n.is_finite())?;
+            parts[i] += amount;
+            if !parts[i].is_finite() {
+                return None;
+            }
+        }
+    }
+    let net: f64 = parts.iter().sum();
+    net.is_finite().then_some([net, parts[0], parts[1], parts[2], parts[3]])
+}
 fn millis(v: &Value) -> u64 { v["time_msc"].as_u64().unwrap_or(0) }
 fn utc(ms:u64)->String {
     chrono::DateTime::from_timestamp_millis(ms as i64)
@@ -73,11 +95,14 @@ pub fn list(db: &Connection, context: &str, telemetry: Option<&Telemetry>, offse
         let first=opened.unwrap_or(&parsed[0]);
         let has_exit=parsed.iter().any(|d|matches!(kind(d),1|2|3));
         let position=telemetry.and_then(|t|t.positions.iter().find(|p|p.identifier==*pid||p.ticket==*pid));
-        let net: f64=parsed.iter().map(|d| number(d,"profit")+number(d,"commission")+number(d,"swap")+number(d,"fee")).sum();
-        let gross: f64=parsed.iter().map(|d|number(d,"profit")).sum();
-        let commission: f64=parsed.iter().map(|d|number(d,"commission")).sum();
-        let fee: f64=parsed.iter().map(|d|number(d,"fee")).sum();
-        let swap: f64=parsed.iter().map(|d|number(d,"swap")).sum();
+        let booked = booked_costs(&parsed);
+        // Option<f64> serializes as null when broker evidence is incomplete.
+        // This is intentionally different from an authentic 0.00 fee.
+        let net = booked.map(|v| v[0]);
+        let gross = booked.map(|v| v[1]);
+        let commission = booked.map(|v| v[2]);
+        let swap = booked.map(|v| v[3]);
+        let fee = booked.map(|v| v[4]);
         let open_volume:f64=parsed.iter().filter(|d|kind(d)==0).map(|d|number(d,"volume")).sum();
         let close_volume:f64=parsed.iter().filter(|d|matches!(kind(d),1|3)).map(|d|number(d,"volume")).sum();
         // A partial OUT deal does not prove the position was fully closed,
@@ -107,6 +132,11 @@ pub fn list(db: &Connection, context: &str, telemetry: Option<&Telemetry>, offse
             "remaining_lots":position.map(|p|p.volume),
             "broker_net_booked":net,"broker_gross":gross,
             "commission":commission,"swap":swap,"fee":fee,
+            "booked_cost_evidence":if booked.is_some() {
+                "BROKER_COMPONENTS_VERIFIED"
+            } else {
+                "MISSING_OR_INVALID_BROKER_COST"
+            },
             "floating_broker_pnl":position.map(|p|p.profit),
             "exit_deal_seen":has_exit,"deals":parsed.len(),
             "origin":origin
@@ -131,7 +161,9 @@ pub fn list(db: &Connection, context: &str, telemetry: Option<&Telemetry>, offse
                     "status":"OPEN / AWAITING DEAL SYNC","symbol":p.symbol,"side":p.side,
                     "opened_ms":p.opened_ms,"opened_utc":utc(p.opened_ms),"entry_price":p.price_open,
                     "remaining_lots":p.volume,"lots_opened":p.volume,
-                    "broker_net_booked":Value::Null,"floating_broker_pnl":p.profit,
+                    "broker_net_booked":Value::Null,
+                    "booked_cost_evidence":"AWAITING_BROKER_DEALS",
+                    "floating_broker_pnl":p.profit,
                     "origin":label(command.as_ref(),brain),"deals":0
                 }));
             }
@@ -183,6 +215,55 @@ mod tests {
         let v=list(&db,ctx,None,0,50).unwrap();
         assert_eq!(v["rows"][0]["status"],"EXIT SEEN / CLOSE NOT VERIFIED");
         assert!((v["rows"][0]["lots_closed"].as_f64().unwrap()-0.04).abs()<1e-10);
+    }
+
+    #[test]
+    fn historical_missing_cost_cannot_masquerade_as_zero_fee_or_profit() {
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let ctx="[\"Demo\",17,\"XAUUSD\",\"USD\"]";
+        let baseline=json!({
+            "ticket":10,"position_id":99,"symbol":"XAUUSD","type":0,"entry":0,
+            "time_msc":1000,"volume":0.1,"price":2000.,
+            "profit":0.,"commission":0.,"swap":0.,"fee":0.
+        });
+        let mut exit=json!({
+            "ticket":11,"position_id":99,"symbol":"XAUUSD","type":1,"entry":1,
+            "time_msc":2000,"volume":0.1,"price":2001.,
+            "profit":10.,"commission":0.,"swap":0.,"fee":0.
+        });
+        db.execute("INSERT INTO broker_deals VALUES(?1,10,99,'system',?2)",
+            params![ctx,baseline.to_string()]).unwrap();
+        db.execute("INSERT INTO broker_deals VALUES(?1,11,99,'system',?2)",
+            params![ctx,exit.to_string()]).unwrap();
+        let clean=list(&db,ctx,None,0,10).unwrap();
+        assert_eq!(clean["rows"][0]["broker_net_booked"],10.0);
+        assert_eq!(clean["rows"][0]["commission"],0.0);
+        assert_eq!(clean["rows"][0]["booked_cost_evidence"],"BROKER_COMPONENTS_VERIFIED");
+        for field in ["profit","commission","swap","fee","type"] {
+            let old=exit[field].clone();
+            exit.as_object_mut().unwrap().remove(field);
+            db.execute("UPDATE broker_deals SET payload=?1 WHERE context=?2 AND ticket=11",
+                params![exit.to_string(),ctx]).unwrap();
+            let dirty=list(&db,ctx,None,0,10).unwrap();
+            let row=&dirty["rows"][0];
+            assert_eq!(row["booked_cost_evidence"],"MISSING_OR_INVALID_BROKER_COST");
+            for field in ["broker_net_booked","broker_gross","commission","swap","fee"] {
+                assert!(row[field].is_null(),"{field} must be unknown");
+            }
+            exit[field]=old;
+        }
+    }
+
+    #[test]
+    fn nonfinite_broker_cost_does_not_enter_booked_pnl() {
+        // JSON cannot encode IEEE NaN, but a legacy import can contain
+        // non-numeric values and must never be silently counted as zero.
+        let deals=vec![json!({"type":0,"profit":1.,"commission":"NaN",
+            "swap":0.,"fee":0.})];
+        assert_eq!(booked_costs(&deals),None);
+        assert_eq!(booked_costs(&[json!({"type":0,"profit":1.,
+            "commission":0.,"swap":-0.2,"fee":0.})]),Some([0.8,1.,0.,-0.2,0.]));
     }
 
     #[test]

@@ -2,7 +2,7 @@ name: V25 P0-O canonical source and Windows Portable
 on:
   workflow_dispatch:
   push:
-    branches: [feature/v25-enterprise-validation-20261024, feature/v25-g2c-strict-deal-reconciliation-20261025]
+    branches: [feature/v25-enterprise-validation-20261024, feature/v25-g2c-strict-deal-reconciliation-20261025, feature/v25-g2d-exact-booked-cost-provenance-20261025]
     paths:
       - 'apps/**'
       - 'crates/**'
