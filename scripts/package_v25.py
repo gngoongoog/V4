@@ -41,6 +41,25 @@ def stage():
     shutil.copy2(ROOT/'scripts/Run-G6-Study.ps1',DEST/'Tools/Run-G6-Study.ps1')
     shutil.copy2(ROOT/'scripts/Run-G6-Study.cmd',DEST/'Run-G6-Study.cmd')
     shutil.copy2(ROOT/'docs/v25/G6C_PORTABLE_STUDY_OPERATOR_AR.md',DEST/'G6_STUDY_AR.md')
+    # G7-H: ship full source-auditing chain inside the actual Portable,
+    # including local G6-A/B dependencies. Nothing here executes MT5 orders.
+    study7=DEST/'Tools/G7'
+    study7.mkdir(parents=True,exist_ok=True)
+    for name in (
+        'g7_core_source_audit.py','g7_demo_broker_lineage.py',
+        'g7_full_intent_census.py','g7_cohort_overlap_gate.py',
+        'g7_holdout_report.py','g7f_sealed_candidate_audit.py',
+        'g7g_restart_continuity.py','g7_demo_acceptance_packet.py',
+        'audit_v25_g6a_preregistered_quotes.py',
+        'audit_v25_g6b_executed_demo_arm.py',
+    ):
+        shutil.copy2(ROOT/'scripts'/name,study7/name)
+    shutil.copy2(ROOT/'scripts/Run-G7-Acceptance.ps1',DEST/'Tools/Run-G7-Acceptance.ps1')
+    shutil.copy2(ROOT/'scripts/Run-G7-Acceptance.cmd',DEST/'Run-G7-Acceptance.cmd')
+    shutil.copy2(ROOT/'docs/v25/G7H_NATIVE_DEMO_ACCEPTANCE_AR.md',DEST/'G7_H_ACCEPTANCE_AR.md')
+    shutil.copy2(ROOT/'docs/v25/USER_MANUAL_V25_AR.md',DEST/'USER_MANUAL_V25_AR.md')
+    shutil.copy2(ROOT/'docs/v25/USER_MANUAL_V25_AR.md',DEST/'USER_MANUAL_V25_AR.txt')
+    # Redacted reports are written under Documents, outside the signed tree.
     # P0-E: ship source + a strictly explicit operator-side MetaEditor compile
     # path. Build CI has no installed MT5 and must never claim EA .ex5 passed.
     shutil.copy2(ROOT/'scripts/Compile-Sniper-EA.cmd',DEST/'Compile-Sniper-EA.cmd')
