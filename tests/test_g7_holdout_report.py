@@ -186,7 +186,9 @@ class HoldoutTests(unittest.TestCase):
         db,a,doc=preregister_fixture()
         with db:
             add_future_command(db,a)
-            r=audit(db,doc,now_ms=260000)
+            # The audit clock must already include the future bar observed
+            # at 301000; an earlier now would be a forged/inconsistent view.
+            r=audit(db,doc,now_ms=400000)
             self.assertEqual(r["status"],"holdout_in_progress")
             self.assertFalse(r["release_authorized"])
 
