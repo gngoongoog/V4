@@ -242,10 +242,30 @@ def audit(db: sqlite3.Connection, doc: dict, *, now_ms: int) -> dict:
     wins=sum(p["net"]>0 for p in accepted)
     distinct_days=len({p["closed_ms"]//MS_PER_DAY for p in accepted})
     days_ci=daily_bootstrap_ci(accepted,doc["manifest_sha256"])
-    sufficient=(len(accepted)>=MIN_TRADES and distinct_days>=MIN_DAYS
-                and admitted==0 and not out_of_scope
-                and population.get("local_command_census_complete") is True
-                and len(accepted)==denominator)
+    reasons=[]
+    if now_ms<end:
+        reasons.append("prespecified_holdout_not_finished")
+    if len(accepted)<MIN_TRADES:
+        reasons.append("too_few_verified_full_demo_closes")
+    if distinct_days<MIN_DAYS:
+        reasons.append("too_few_distinct_utc_days")
+    if denominator==0:
+        reasons.append("no_eligible_prospective_open_intents")
+    if len(accepted)!=denominator:
+        reasons.append("not_all_eligible_intents_fully_closed_and_attributed")
+    if population.get("local_command_census_complete") is not True:
+        reasons.append("whole_account_command_census_incomplete")
+    if admitted:
+        reasons.append("new_broker_training_labels_admitted_after_cutoff")
+    if out_of_scope:
+        reasons.append("out_of_cohort_booked_attribution")
+    sufficient=(not reasons)
+    # These are deliberately extreme intent-level bounds, NOT the win rate
+    # of executed positions: every unresolved command may be nonexecuted,
+    # a loss or a win, and no synthetic return is assigned to it.
+    intent_bounds=([wins/denominator,
+                    (wins+denominator-len(accepted))/denominator]
+                   if denominator else None)
     return {
         "study":"G7-E","status":"observational_descriptive_only" if sufficient
                  else "holdout_in_progress" if now_ms<end
@@ -265,6 +285,8 @@ def audit(db: sqlite3.Connection, doc: dict, *, now_ms: int) -> dict:
         "unverified_or_unmatched_eligible_open_intents":dict(sorted(unresolved.items())),
         "booked_out_of_cohort_position_claims":out_of_scope,
         "complete_broker_outcome_coverage":coverage,
+        "intent_level_win_fraction_extreme_bounds_not_execution_win_rate":intent_bounds,
+        "descriptive_qualification_blockers":reasons,
         "verified_closed_win_rate":wins/len(accepted) if accepted else None,
         "verified_closed_win_rate_wilson_95_descriptive":wilson95(wins,len(accepted)),
         "verified_closed_mean_net_r":statistics.mean(p["net_r"] for p in accepted)
