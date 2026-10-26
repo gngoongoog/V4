@@ -14,6 +14,11 @@ on:
       - 'tests/test_g7_demo_broker_lineage.py'
       - 'tests/test_g7_core_source_audit.py'
       - 'crates/runtime/src/g7_capture.rs'
+      - 'crates/runtime/src/g7_sealed_candidate.rs'
+      - 'scripts/g7f_sealed_candidate_audit.py'
+      - 'tests/test_g7f_sealed_candidate_audit.py'
+      - 'scripts/g7_holdout_report.py'
+      - 'crates/runtime/src/execution.rs'
       - 'crates/runtime/src/frozen_coordinator.rs'
       - 'crates/runtime/src/lib.rs'
       - 'tests/test_g7_prospective_audit.py'
@@ -41,8 +46,10 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_g7_cohort_overlap_gate.py' -v
       - name: Run G7-E preregistered holdout and uncertainty tests
         run: python -m unittest discover -s tests -p 'test_g7_holdout_report.py' -v
+      - name: Run G7-F sealed Candidate provenance integrity
+        run: python -m unittest discover -s tests -p 'test_g7f_sealed_candidate_audit.py' -v
       - name: Compile offline auditors
-        run: python -m py_compile scripts/g7_prospective_audit.py scripts/g7_core_source_audit.py scripts/g7_demo_broker_lineage.py scripts/g7_full_intent_census.py scripts/g7_cohort_overlap_gate.py scripts/g7_holdout_report.py
+        run: python -m py_compile scripts/g7_prospective_audit.py scripts/g7_core_source_audit.py scripts/g7_demo_broker_lineage.py scripts/g7_full_intent_census.py scripts/g7_cohort_overlap_gate.py scripts/g7_holdout_report.py scripts/g7f_sealed_candidate_audit.py
   rust-source:
     runs-on: ubuntu-latest
     permissions:
@@ -54,3 +61,5 @@ jobs:
         run: cargo test -p braintrade-runtime --lib g7_capture --locked
       - name: Test frozen coordinator integration
         run: cargo test -p braintrade-runtime --lib frozen_coordinator --locked
+      - name: Test G7-F sealed Candidate isolation in real Rust Core
+        run: cargo test -p braintrade-runtime --lib g7_sealed_candidate --locked

@@ -639,7 +639,10 @@ impl Service {
                     "mode":"sniper","read_only":true,"no_broker_orders":true,
                     "reason":"M1 frozen coordinator cannot represent Sniper Fast Pulse ticks"}));
             }
-            return crate::frozen_coordinator::report(db,&context(t),config.trading.mode);
+            let mut report=crate::frozen_coordinator::report(db,&context(t),config.trading.mode)?;
+            report["sealed_candidate"]=crate::g7_sealed_candidate::status(
+                db,&context(t),config.trading.mode)?;
+            return Ok(report);
         }
         anyhow::ensure!(method=="POST","Unknown frozen-coordinator method");
         anyhow::ensure!(!status.requested_run && !self.pending(db)?,
@@ -661,6 +664,11 @@ impl Service {
             "freeze"=>{
                 let controls=crate::brain_control::load(db,&req.context,req.mode)?;
                 crate::frozen_coordinator::freeze(db,t,config,&self.inner.brains,
+                    &self.inner.weights,&controls,&self.inner.student_policies,now)
+            },
+            "seal_candidate"=>{
+                let controls=crate::brain_control::load(db,&req.context,req.mode)?;
+                crate::g7_sealed_candidate::seal(db,t,config,&self.inner.brains,
                     &self.inner.weights,&controls,&self.inner.student_policies,now)
             },
             "stop"=>crate::frozen_coordinator::stop(db,&req.context,req.mode),

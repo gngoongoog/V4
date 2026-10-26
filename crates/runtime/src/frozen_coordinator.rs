@@ -28,6 +28,30 @@ fn policy(mode:TradingMode)->&'static str{
 fn context(t:&Telemetry)->String{
     crate::coordinator_learning::context(t)
 }
+
+/// Immutable research-only policy snapshot, also reused for opt-in sealed
+/// candidate replay. The live Coordinator continues learning separately.
+pub(crate) fn checkpoint(db:&Connection,t:&Telemetry,c:&Config,brains:&[BrainConfig],
+    weights:&BTreeMap<String,LearnedWeight>,
+    controls:&BTreeMap<String,crate::brain_control::Control>,
+    policies:&BTreeMap<String,ExitStudy>,now:u64)->Result<Value>{
+    let mut all=Vec::new();
+    for b in brains {
+        b.validate().map_err(anyhow::Error::msg)?;
+        let g=if b.id=="system" {None} else {
+            crate::coordinator_learning::genome(db,b,t)?
+        };
+        all.push(json!({"brain":b,"genome":g,"weight":weights.get(&b.id),
+            "advisor_enabled":controls.get(&b.id).is_none_or(|x|x.advisor)
+               && !b.enabled && b.id!="system"}));
+    }
+    Ok(json!({"policy":policy(c.trading.mode),"mode":mode_key(c.trading.mode),"config":c,
+        "members":all,"exit_studies":policies,
+        "created_ms":now,"weights_frozen":true,"broker_permission":false,
+        "included_layers":["Expert system base","frozen advisor signals",
+           "frozen learned weights","frozen contextual Demo selection",
+           "frozen adaptive exits"]}))
+}
 pub fn init(db:&Connection)->Result<()>{
     db.execute_batch("CREATE TABLE IF NOT EXISTS frozen_coordinator_runs(
         id TEXT PRIMARY KEY,context TEXT NOT NULL,mode TEXT NOT NULL,
@@ -42,6 +66,7 @@ pub fn init(db:&Connection)->Result<()>{
           FOREIGN KEY(run_id) REFERENCES frozen_coordinator_runs(id));")?;
     // Keep direct frozen_coordinator init, test fixtures and full Service init in sync.
     crate::g7_capture::init(db)?;
+    crate::g7_sealed_candidate::init(db)?;
     crate::coordinator_paper::init(db)?;
     Ok(())
 }
@@ -64,23 +89,8 @@ pub fn freeze(db:&Connection,t:&Telemetry,c:&Config,brains:&[BrainConfig],
          WHERE context=?1 AND mode=?2 AND active=1)",
         params![key,mode_key(c.trading.mode)],|r|r.get(0))?;
     ensure!(!active,"توجد نسخة منسق مجمدة نشطة لهذا الحساب والرمز");
-    let mut all=Vec::new();
-    for b in brains {
-        b.validate().map_err(anyhow::Error::msg)?;
-        let g=if b.id=="system" {None} else {
-            crate::coordinator_learning::genome(db,b,t)?
-        };
-        all.push(json!({"brain":b,"genome":g,"weight":weights.get(&b.id),
-            "advisor_enabled":controls.get(&b.id).is_none_or(|x|x.advisor)
-               && !b.enabled && b.id!="system"}));
-    }
     let id=uuid::Uuid::new_v4().simple().to_string();
-    let snapshot=json!({"policy":policy(c.trading.mode),"mode":mode_key(c.trading.mode),"config":c,
-        "members":all,"exit_studies":policies,
-        "created_ms":now,"weights_frozen":true,"broker_permission":false,
-        "included_layers":["Expert system base","frozen advisor signals",
-           "frozen learned weights","frozen contextual Demo selection",
-           "frozen adaptive exits"]});
+    let snapshot=checkpoint(db,t,c,brains,weights,controls,policies,now)?;
     let tx=db.unchecked_transaction()?;
     tx.execute(
         "INSERT INTO frozen_coordinator_runs VALUES(?1,?2,?3,?4,?5,1)",
@@ -102,30 +112,11 @@ pub fn stop(db:&Connection,key:&str,mode:TradingMode)->Result<Value>{
     Ok(json!({"ok":true,"stopped":count,
         "mode":mode_key(mode),"policy":policy(mode)}))
 }
-pub fn observe(db:&Connection,t:&Telemetry,c:&Config,adaptive:&Signal,
-    frames:&BTreeMap<String,Vec<FrameBar>>,now:u64)->Result<()>{
-    if !supported(c.trading.mode)||!t.demo||t.account_trade_mode!=Some(0)
-        ||!t.connected||t.symbol!=c.symbol
-        ||t.tick_age_ms.is_none_or(|ms|ms>3000){return Ok(())}
-    let key=context(t);
-    let found:Option<(String,u64,String)>=db.query_row(
-        "SELECT id,created_ms,snapshot FROM frozen_coordinator_runs
-         WHERE context=?1 AND mode=?2 AND active=1
-         ORDER BY created_ms DESC LIMIT 1",
-        params![key,mode_key(c.trading.mode)],
-        |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-    let Some((id,created,raw))=found else{return Ok(())};
-    let Some(last)=frames.get("M1").and_then(|v|v.last()) else{return Ok(())};
-    let bar=last.candle.time;
-    // Exactly one future COMPLETED one-minute bar, no historical backfill.
-    let Some(closed)=bar.checked_add(60)else{return Ok(())};
-    if bar.saturating_mul(1000)<=created || closed>now/1000
-        ||(now/1000).saturating_sub(closed)>80{return Ok(())}
-    let recorded:bool=db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM frozen_coordinator_decisions
-         WHERE run_id=?1 AND bar_time=?2)",params![id,bar],|r|r.get(0))?;
-    if recorded{return Ok(())}
-    let snap:Value=serde_json::from_str(&raw)?;
+/// Execute only a captured policy against future bars; no current learner
+/// weights, Student policies, trading commands, broker results or mutation.
+pub(crate) fn evaluate_checkpoint(raw:&str,t:&Telemetry,c:&Config,
+    frames:&BTreeMap<String,Vec<FrameBar>>,now:u64)->Result<Signal>{
+    let snap:Value=serde_json::from_str(raw)?;
     ensure!(snap["policy"]==policy(c.trading.mode),
         "frozen coordinator policy mismatch");
     let cfg:Config=serde_json::from_value(snap["config"].clone())?;
@@ -158,6 +149,32 @@ pub fn observe(db:&Connection,t:&Telemetry,c:&Config,adaptive:&Signal,
     let mut frozen=execution::coordinate_for_account(base,&cfg,t,votes);
     let studies:BTreeMap<String,ExitStudy>=serde_json::from_value(snap["exit_studies"].clone())?;
     crate::student_learning::adapt(&mut frozen,t,&cfg,&sys,&studies);
+    Ok(frozen)
+}
+pub fn observe(db:&Connection,t:&Telemetry,c:&Config,adaptive:&Signal,
+    frames:&BTreeMap<String,Vec<FrameBar>>,now:u64)->Result<()>{
+    if !supported(c.trading.mode)||!t.demo||t.account_trade_mode!=Some(0)
+        ||!t.connected||t.symbol!=c.symbol
+        ||t.tick_age_ms.is_none_or(|ms|ms>3000){return Ok(())}
+    let key=context(t);
+    let found:Option<(String,u64,String)>=db.query_row(
+        "SELECT id,created_ms,snapshot FROM frozen_coordinator_runs
+         WHERE context=?1 AND mode=?2 AND active=1
+         ORDER BY created_ms DESC LIMIT 1",
+        params![key,mode_key(c.trading.mode)],
+        |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+    let Some((id,created,raw))=found else{return Ok(())};
+    let Some(last)=frames.get("M1").and_then(|v|v.last()) else{return Ok(())};
+    let bar=last.candle.time;
+    // Exactly one future COMPLETED one-minute bar, no historical backfill.
+    let Some(closed)=bar.checked_add(60)else{return Ok(())};
+    if bar.saturating_mul(1000)<=created || closed>now/1000
+        ||(now/1000).saturating_sub(closed)>80{return Ok(())}
+    let recorded:bool=db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM frozen_coordinator_decisions
+         WHERE run_id=?1 AND bar_time=?2)",params![id,bar],|r|r.get(0))?;
+    if recorded{return Ok(())}
+    let frozen=evaluate_checkpoint(&raw,t,c,frames,now)?;
     // Record BEFORE any future simulated trade outcome. This table is neither
     // the broker-command ledger nor the adaptive learner's scored labels.
     let tx=db.unchecked_transaction()?;
@@ -175,6 +192,11 @@ pub fn observe(db:&Connection,t:&Telemetry,c:&Config,adaptive:&Signal,
             &raw,bar,now,t,&frozen,adaptive)?;
     }
     tx.commit()?;
+    // An optional sealed Candidate is evaluated on the SAME future M1 bar.
+    // A failed research replay cannot roll back accepted G7-A pair evidence or
+    // interfere with already handled broker positions.
+    crate::g7_sealed_candidate::observe(db,&id,&key,mode_key(c.trading.mode),
+        t,c,frames,bar,now)?;
     Ok(())
 }
 pub fn report(db:&Connection,key:&str,mode:TradingMode)->Result<Value>{
