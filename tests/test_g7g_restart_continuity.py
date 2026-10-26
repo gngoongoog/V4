@@ -56,6 +56,7 @@ def before_after():
     # it can keep retrying on the source's own uncommitted writer lock.
     left.commit()
     right=sqlite3.connect(":memory:")
+    right.row_factory=sqlite3.Row
     left.backup(right)
     return left,right
 
