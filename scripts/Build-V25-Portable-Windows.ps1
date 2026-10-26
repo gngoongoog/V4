@@ -36,8 +36,17 @@ try {
     '--output','test-output/v25/native-ea-package.json')
   Run python @('scripts/check_v25_g6c_study_package.py','--portable',$portable,
     '--output','test-output/v25/g6c-study-package.json')
+  Run python @('scripts/check_v25_g7h_package.py','--portable',$portable,
+    '--source',$root,'--output','test-output/v25/g7h-package.json')
   # Validate the actual shipped Windows study launcher syntax (not only
   # Python help/sha checks). No Core DB or MT5 is opened here.
+  # Verify the G7 operator tool parses on Windows; no MT5 command is sent.
+  $g7Tokens=$null
+  $g7Errors=$null
+  [System.Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path $portable 'Tools/Run-G7-Acceptance.ps1'),
+    [ref]$g7Tokens,[ref]$g7Errors) | Out-Null
+  if($g7Errors.Count -gt 0){throw ('G7 launcher PowerShell syntax invalid: '+$g7Errors[0].Message)}
   $studyTokens=$null
   $studyErrors=$null
   [System.Management.Automation.Language.Parser]::ParseFile(
@@ -47,6 +56,7 @@ try {
     throw ('G6 Portable PowerShell study launcher invalid: '+$studyErrors[0].Message)
   }
   Run (Join-Path $portable 'runtime/python/python.exe') @((Join-Path $portable 'runtime/gateway/check_runtime.py'))
+  Run (Join-Path $portable 'runtime/python/python.exe') @('-B',(Join-Path $portable 'Tools/G7/g7_demo_acceptance_packet.py'),'--help')
   Run python @('scripts/smoke_portable_core.py',$exe)
   Run python @('scripts/check_sniper_quote_clock.py','--exe',$exe)
   # Relocation and spaces must not make Core resolve Gateway relative to cwd.
@@ -59,6 +69,8 @@ try {
     '--output','test-output/v25/native-ea-relocated.json')
   Run python @('scripts/check_v25_g6c_study_package.py','--portable',$moved,
     '--output','test-output/v25/g6c-study-relocated.json')
+  Run python @('scripts/check_v25_g7h_package.py','--portable',$moved,
+    '--source',$root,'--output','test-output/v25/g7h-relocated.json')
   Run python @('scripts/smoke_portable_core.py',(Join-Path $moved 'BrainTradeNext.exe'))
   Move-Item $moved $portable
   & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $portable 'DESKTOP_SHORTCUT.ps1')
