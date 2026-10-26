@@ -28,6 +28,7 @@ mod shadow_paper;
 mod frozen_shadow;
 mod frozen_coordinator;
 mod g7_capture;
+mod g7_sealed_candidate;
 mod coordinator_paper;
 mod research_order_lifecycle;
 mod research_admission;
