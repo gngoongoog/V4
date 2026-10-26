@@ -31,7 +31,8 @@ def stage():
     study=DEST/'Tools/G6'
     study.mkdir(parents=True,exist_ok=True)
     for name in ('audit_v25_g5d_frozen_pairs.py',
-                 'audit_v25_g6a_preregistered_quotes.py',
+                 'audit_v25_g5d_frozen_pairs.py',
+        'audit_v25_g6a_preregistered_quotes.py',
                  'audit_v25_g6b_executed_demo_arm.py',
                  'audit_v25_g6d_causal_learning_evidence.py',
                  'audit_v25_g6e_frozen_policy_cutoff.py',
