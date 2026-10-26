@@ -59,9 +59,11 @@ def audit(db:sqlite3.Connection,*,now_ms:int):
         return dict(base,reason="no_explicit_candidate_seal_yet")
     if "g7f_sealed_decisions" not in tables:
         raise ValueError("g7f_candidate_receipt_table_missing")
+    per_run=[]
     counts={"registered_candidates":len(regs),"sealed_future_core_pairs":0,
             "matching_candidate_receipts":0,"not_in_candidate_epoch":0}
     for r in regs:
+        per_run_matched=0
         if (r["protocol"]!=PROTOCOL or type(r["sealed_ms"]) is not int
             or type(r["registered_ms"]) is not int
             or not r["registered_ms"]<r["sealed_ms"]<=now_ms
@@ -118,6 +120,11 @@ def audit(db:sqlite3.Connection,*,now_ms:int):
                 or sha(pair["adaptive"])!=receipt.get("online_adaptive_signal_sha256")):
                 raise ValueError("g7f_forged_or_inconsistent_candidate_decision")
             counts["matching_candidate_receipts"]+=1
+            per_run_matched+=1
+        per_run.append({"run_id":r["run_id"],"mode":r["mode"],
+                        "context_sha256":sha(r["context"]),
+                        "sealed_ms":r["sealed_ms"],
+                        "matching_candidate_receipts":per_run_matched})
     # Orphans are invalid even if correctly hashed.
     extra=db.execute(
         "SELECT COUNT(*) FROM g7f_sealed_decisions e "
@@ -126,7 +133,8 @@ def audit(db:sqlite3.Connection,*,now_ms:int):
     if extra:
         raise ValueError("g7f_orphan_candidate_decision")
     return dict(base,status="locally_consistent_candidate_only",
-                counters=counts,source_core_pairs=core["paired_decisions"],
+                counters=counts,runs=per_run,
+                source_core_pairs=core["paired_decisions"],
                 candidate_snapshot_read_only=True,
                 online_adaptive_learning_continues=True,
                 note="Verifies local candidate checkpoint and prospective M1 replay lineage. "
