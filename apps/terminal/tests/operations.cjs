@@ -36,7 +36,15 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  for(const btn of nodes(backup).filter(x=>x.type==='button'))await btn.props.onClick();
  assert.deepEqual(called,['create','export']);
  let saved=null;
+ for(const source of [null,{}, {config:{trading:{}}}]){
+  const empty=exportsObj.TradingSettingsOperations({source,disabled:false,armed:false,apply:async()=>{throw Error('Unavailable source must not save')}});
+  const label=nodes(empty).find(x=>x.type==='small');
+  assert(String(label.props.children).includes('غير متاح'),'Missing Core settings must not be labeled as loaded');
+  const action=nodes(empty).find(x=>x.type==='button'&&String(x.props.children).includes('حفظ الوضع'));
+  assert(action.props.disabled,'Cannot save absent Core configuration');
+ }
  const settings=exportsObj.TradingSettingsOperations({source:{config:{trading:{mode:'expert',priority_enabled:false,sniper_active:true,fallback_mode:'expert',sniper_style:'auto',sniper_brain:'classic'},risk:{slippage_ticks:2}},commission_editor:{amount:7,basis:'round_trip'}},disabled:false,armed:false,apply:async v=>{saved=v}});
+ assert(String(nodes(settings).find(x=>x.type==='small').props.children).includes('إعدادات Core'));
  const save=nodes(settings).filter(x=>x.type==='button').find(x=>String(x.props.children).includes('حفظ الوضع'));
  assert(save,'trading editor has Core save action');await save.props.onClick();
  assert(saved&&saved.commission_per_lot===7&&saved.commission_basis==='round_trip'&&saved.trading.mode==='expert');
