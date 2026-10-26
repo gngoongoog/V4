@@ -57,6 +57,8 @@ class SealedCandidateAuditTests(unittest.TestCase):
             r=audit(db,now_ms=300000)
             self.assertEqual(r["status"],"locally_consistent_candidate_only")
             self.assertEqual(r["counters"]["matching_candidate_receipts"],1)
+            self.assertEqual(r["runs"][0]["run_id"],RUN)
+            self.assertEqual(r["runs"][0]["matching_candidate_receipts"],1)
             self.assertFalse(r["online_adaptive_policy_sealed"])
             self.assertFalse(r["model_promotion_allowed"])
             self.assertIsNone(r["candidate_broker_result"])
