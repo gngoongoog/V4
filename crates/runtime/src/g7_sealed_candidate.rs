@@ -124,7 +124,7 @@ pub(crate) fn observe(db:&Connection,run:&str,context:&str,mode:&str,
         "online_adaptive_policy_sealed":false});
     let raw_packet=packet.to_string();
     db.execute(
-        "INSERT OR IGNORE INTO g7f_sealed_decisions
+        "INSERT INTO g7f_sealed_decisions
          (run_id,bar_time,observed_ms,payload,payload_sha256)
          VALUES (?1,?2,?3,?4,?5)",
         params![run,bar,now,raw_packet,sha(&raw_packet)])?;
@@ -145,9 +145,21 @@ pub(crate) fn status(db:&Connection,context:&str,mode:TradingMode)->Result<Value
     let count:i64=db.query_row(
         "SELECT COUNT(*) FROM g7f_sealed_decisions WHERE run_id=?1",
         [&run],|r|r.get(0))?;
-    Ok(json!({"status":if tampered {"seal_integrity_failed"}else{"sealed_candidate_research_only"},
+    let expected:i64=db.query_row(
+        "SELECT COUNT(*) FROM frozen_coordinator_decisions
+         WHERE run_id=?1 AND bar_time*1000 > ?2",
+        params![&run,sealed],|r|r.get(0))?;
+    let missing=expected.saturating_sub(count);
+    let status=if tampered {"seal_integrity_failed"}
+        else if missing>0 || count>expected {"candidate_receipts_incomplete"}
+        else {"sealed_candidate_research_only"};
+    Ok(json!({"status":status,
         "run_id":run,"sealed_ms":sealed,"checkpoint_sha256":hash,
-        "future_candidate_decisions":count,"candidate_policy_immutable_source":!tampered,
+        "future_candidate_decisions":count,
+        "expected_future_source_pairs":expected,
+        "missing_future_candidate_receipts":missing,
+        "candidate_policy_immutable_source":!tampered,
+        "research_evidence_complete":!tampered&&missing==0&&count==expected,
         "online_adaptive_policy_sealed":false,"broker_comparator_executed":false,
         "independent_oos":false,"real_authorized":false}))
 }
@@ -228,10 +240,104 @@ mod tests{
         assert!(crate::frozen_coordinator::observe(&db,&t,&c,&signal,&frames,241_000).is_err());
         let original:i64=db.query_row("SELECT COUNT(*) FROM frozen_coordinator_decisions",
             [],|r|r.get(0)).unwrap();
-        assert_eq!(original,1,"G7-A source must survive sealed-candidate rejection");
+        assert_eq!(original,0,"G7-G rejects partial original+Candidate commits");
         assert_eq!(status(&db,&crate::coordinator_learning::context(&t),
             c.trading.mode).unwrap()["status"],"seal_integrity_failed");
     }
+    #[test]
+    fn sealed_candidate_survives_sqlite_restart_without_duplicate_or_drift(){
+        let file=std::env::temp_dir().join(format!(
+            "braintrade-g7g-{}.sqlite",uuid::Uuid::new_v4().simple()));
+        let mut t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            tick_age_ms:Some(0),quote_time_ms:Some(241_000),
+            bid:Some(100.),ask:Some(100.1),
+            login:137,server:"RestartDemo".into(),symbol:"XAUUSD".into(),
+            currency:"USD".into(),..Default::default()};
+        let c=Config::default();
+        let brains=vec![BrainConfig{id:"system".into(),..Default::default()}];
+        let (run,checkpoint_hash)={
+            let db=Connection::open(&file).unwrap();
+            crate::frozen_coordinator::init(&db).unwrap();
+            let started=crate::frozen_coordinator::freeze(
+                &db,&t,&c,&brains,&BTreeMap::new(),&BTreeMap::new(),
+                &BTreeMap::new(),120_000).unwrap();
+            let sealed=seal(&db,&t,&c,&brains,&BTreeMap::new(),
+                &BTreeMap::new(),&BTreeMap::new(),123_000).unwrap();
+            (started["run_id"].as_str().unwrap().to_owned(),
+             sealed["checkpoint_sha256"].as_str().unwrap().to_owned())
+        };
+        let frames=BTreeMap::from([("M1".into(),vec![FrameBar{
+            candle:Candle{time:180,open:100.,high:101.,low:99.,close:100.5,
+                tick_volume:100},spread_points:10,real_volume:0
+        }])]);
+        let adaptive=Signal{brain:"system".into(),side:1,key:"bar:180".into(),
+            bar_time:180,stop_distance:1.,target_distance:2.,hold_ms:60_000,
+            reason:"restart test online".into(),ready:true,coordination:None};
+        let first_payload={
+            let db=Connection::open(&file).unwrap();
+            crate::frozen_coordinator::init(&db).unwrap();
+            let stored_hash:String=db.query_row(
+                "SELECT checkpoint_sha256 FROM g7f_sealed_candidates WHERE run_id=?1",
+                [&run],|r|r.get(0)).unwrap();
+            assert_eq!(stored_hash,checkpoint_hash);
+            crate::frozen_coordinator::observe(
+                &db,&t,&c,&adaptive,&frames,241_000).unwrap();
+            db.query_row(
+                "SELECT payload FROM g7f_sealed_decisions WHERE run_id=?1",
+                [&run],|r|r.get::<_,String>(0)).unwrap()
+        };
+        {
+            let db=Connection::open(&file).unwrap();
+            crate::frozen_coordinator::init(&db).unwrap();
+            t.quote_time_ms=Some(242_000);
+            crate::frozen_coordinator::observe(
+                &db,&t,&c,&adaptive,&frames,242_000).unwrap();
+            let count:i64=db.query_row(
+                "SELECT COUNT(*) FROM g7f_sealed_decisions WHERE run_id=?1",
+                [&run],|r|r.get(0)).unwrap();
+            assert_eq!(count,1,"restarting must not regenerate an earlier decision");
+            let same:String=db.query_row(
+                "SELECT payload FROM g7f_sealed_decisions WHERE run_id=?1",
+                [&run],|r|r.get(0)).unwrap();
+            assert_eq!(first_payload,same,"sealed decision changed after restart");
+            let status=status(&db,&crate::coordinator_learning::context(&t),
+                c.trading.mode).unwrap();
+            assert_eq!(status["research_evidence_complete"],true);
+            assert_eq!(status["expected_future_source_pairs"],1);
+        }
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
+    fn historical_missing_candidate_after_restart_is_visible_not_backfilled(){
+        let (db,t,c,brains,run)=fixture();
+        seal(&db,&t,&c,&brains,&BTreeMap::new(),
+            &BTreeMap::new(),&BTreeMap::new(),123_000).unwrap();
+        let frames=BTreeMap::from([("M1".into(),vec![FrameBar{
+            candle:Candle{time:180,open:100.,high:101.,low:99.,close:100.5,
+                tick_volume:100},spread_points:10,real_volume:0
+        }])]);
+        let signal=Signal{brain:"system".into(),side:1,key:"bar:180".into(),
+            bar_time:180,stop_distance:1.,target_distance:2.,hold_ms:60_000,
+            reason:"online".into(),ready:true,coordination:None};
+        crate::frozen_coordinator::observe(
+            &db,&t,&c,&signal,&frames,241_000).unwrap();
+        db.execute("DELETE FROM g7f_sealed_decisions WHERE run_id=?1",
+            [&run]).unwrap();
+        init(&db).unwrap(); // Same idempotent schema migration as process restart.
+        let current=status(&db,&crate::coordinator_learning::context(&t),
+            c.trading.mode).unwrap();
+        assert_eq!(current["status"],"candidate_receipts_incomplete");
+        assert_eq!(current["missing_future_candidate_receipts"],1);
+        // No opportunistic reconstruction after the original observed_ms.
+        crate::frozen_coordinator::observe(
+            &db,&t,&c,&signal,&frames,242_000).unwrap();
+        let n:i64=db.query_row(
+            "SELECT COUNT(*) FROM g7f_sealed_decisions WHERE run_id=?1",
+            [&run],|r|r.get(0)).unwrap();
+        assert_eq!(n,0);
+    }
+
     #[test]
     fn no_postdecision_registration(){
         let (db,t,c,brains,_)=fixture();
