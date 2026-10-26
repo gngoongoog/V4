@@ -17,6 +17,8 @@ on:
       - 'crates/runtime/src/g7_sealed_candidate.rs'
       - 'scripts/g7f_sealed_candidate_audit.py'
       - 'scripts/g7g_restart_continuity.py'
+      - 'scripts/g7_demo_acceptance_packet.py'
+      - 'tests/test_g7_demo_acceptance_packet.py'
       - 'tests/test_g7g_restart_continuity.py'
       - 'tests/test_g7f_sealed_candidate_audit.py'
       - 'scripts/g7_holdout_report.py'
@@ -52,8 +54,10 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_g7f_sealed_candidate_audit.py' -v
       - name: Test G7-G Core SQLite restart and immutability continuity
         run: python -m unittest discover -s tests -p 'test_g7g_restart_continuity.py' -v
+      - name: Test G7-H end-to-end Core Demo acceptance and rejection
+        run: python -m unittest discover -s tests -p 'test_g7_demo_acceptance_packet.py' -v
       - name: Compile offline auditors
-        run: python -m py_compile scripts/g7_prospective_audit.py scripts/g7_core_source_audit.py scripts/g7_demo_broker_lineage.py scripts/g7_full_intent_census.py scripts/g7_cohort_overlap_gate.py scripts/g7_holdout_report.py scripts/g7f_sealed_candidate_audit.py scripts/g7g_restart_continuity.py
+        run: python -m py_compile scripts/g7_prospective_audit.py scripts/g7_core_source_audit.py scripts/g7_demo_broker_lineage.py scripts/g7_full_intent_census.py scripts/g7_cohort_overlap_gate.py scripts/g7_holdout_report.py scripts/g7f_sealed_candidate_audit.py scripts/g7g_restart_continuity.py scripts/g7_demo_acceptance_packet.py
   rust-source:
     runs-on: ubuntu-latest
     permissions:
