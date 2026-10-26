@@ -16,6 +16,7 @@ assert.equal(process.env.RUNNER_ENVIRONMENT,'github-hosted','Never change a user
 assert.equal(path.basename(exe),'BrainTradeNext.exe');
 fs.mkdirSync(out,{recursive:true});
 const expected=JSON.parse(fs.readFileSync(path.join(path.dirname(exe),'release-evidence/build.json'),'utf8'));
+assert.equal(expected.source_commit,process.env.GITHUB_SHA,'Portable must come from this exact CI checkout');
 assert.equal(crypto.createHash('sha256').update(fs.readFileSync(exe)).digest('hex'),expected.exe_sha256);
 const home=fs.mkdtempSync(path.join(os.tmpdir(),'braintrade-rc2-gui-'));
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -72,7 +73,7 @@ async function navigate(title){
 }
 async function trading(){await navigate('مركز التداول');const p=page.getByRole('region',{name:'Coordinator and costs'});await p.waitFor();await until(async()=>await p.getByRole('button',{name:'حفظ الوضع والعمولة لدى Core',exact:true}).isEnabled());return p}
 async function readSettings(){const r=await invoke('read_panel',{route:'/v1/trading/settings'});return r.data||r}
-async function exitSafely(){await page.getByRole('button',{name:'خروج كامل آمن',exact:true}).click();await page.getByRole('dialog',{name:'خروج كامل آمن'}).getByRole('button',{name:'طلب الخروج الآمن'}).click();await until(()=>app.exitCode!==null);await until(async()=>!await portOpen(18741));browser=undefined;page=undefined}
+async function exitSafely(){await page.getByRole('button',{name:'خروج كامل آمن',exact:true}).click();await page.getByRole('dialog',{name:'خروج كامل آمن'}).getByRole('button',{name:'طلب الخروج الآمن'}).click();await until(()=>app.exitCode!==null);await until(async()=>!await portOpen(18741)&&!await portOpen(port));browser=undefined;page=undefined}
 
 try{
  // Elevated Windows runners ignore environment-only overrides. Policies are
@@ -125,8 +126,27 @@ try{
   await page.locator('.preview-banner').waitFor();assert(await page.locator('button.action-btn.start').isDisabled());
   await page.getByRole('button',{name:'عرض LIVE',exact:true}).click();await page.locator('.preview-banner').waitFor({state:'hidden'});await status();
  });
+ await check('native viewport has no dashboard overflow or overlapping quality labels',async()=>{
+  await navigate('نظرة عامة');
+  const metrics=await page.evaluate(()=>{
+   const c=document.querySelector('main.content');
+   const rows=[...document.querySelectorAll('.quality-row')].map(n=>{
+    const row=n.getBoundingClientRect(),label=n.querySelector('span').getBoundingClientRect();
+    return {top:row.top,bottom:row.bottom,labelTop:label.top,labelBottom:label.bottom};
+   });
+   return {width:innerWidth,height:innerHeight,contentWidth:c.clientWidth,scrollWidth:c.scrollWidth,rows};
+  });
+  report.native_layout=metrics;
+  await page.locator('.execution-quality').screenshot({path:path.join(out,'quality-layout.png')});
+  assert(metrics.scrollWidth<=metrics.contentWidth+1,'Dashboard extends beyond visible content');
+  assert.equal(metrics.rows.length,4);
+  for(let i=0;i<metrics.rows.length;i++){
+   const r=metrics.rows[i];assert(r.labelTop>=r.top-1&&r.labelBottom<=r.bottom+1,'Label escapes its row');
+   if(i)assert(r.top>=metrics.rows[i-1].bottom-1,'Quality rows overlap');
+  }
+ });
  for(const theme of ['Dark','Smoke','Light'])await check(theme+' theme renders',async()=>{
-  await page.getByTitle(theme+' theme',{exact:true}).click();await page.waitForFunction(t=>document.body.dataset.theme===t,theme.toLowerCase());await page.screenshot({path:path.join(out,'theme-'+theme+'.png')});
+  await page.getByTitle(theme+' theme',{exact:true}).click();await page.waitForFunction(t=>document.body.dataset.theme===t,theme.toLowerCase());await page.locator('main.content').evaluate(n=>n.scrollTop=0);await page.screenshot({path:path.join(out,'theme-'+theme+'.png')});
  });
  await check('safe full exit releases Core port',exitSafely);
  await check('restart preserves mode, learner and commission with STOPPED default',async()=>{
