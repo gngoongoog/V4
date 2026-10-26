@@ -136,6 +136,8 @@ pub(crate) fn status(db:&Connection,context:&str,mode:TradingMode)->Result<Value
         "SELECT c.run_id,c.sealed_ms,c.checkpoint,c.checkpoint_sha256
          FROM g7f_sealed_candidates c JOIN frozen_coordinator_runs f ON f.id=c.run_id
          WHERE c.context=?1 AND c.mode=?2
+           AND f.id=(SELECT id FROM frozen_coordinator_runs
+                     WHERE context=?1 AND mode=?2 ORDER BY created_ms DESC,id DESC LIMIT 1)
          ORDER BY c.sealed_ms DESC LIMIT 1",
         params![context,mode_key(mode)],
         |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
@@ -160,6 +162,7 @@ pub(crate) fn status(db:&Connection,context:&str,mode:TradingMode)->Result<Value
         "missing_future_candidate_receipts":missing,
         "candidate_policy_immutable_source":!tampered,
         "research_evidence_complete":!tampered&&missing==0&&count==expected,
+        "research_only":true,"candidate_broker_permission":false,
         "online_adaptive_policy_sealed":false,"broker_comparator_executed":false,
         "independent_oos":false,"real_authorized":false}))
 }
@@ -181,6 +184,24 @@ mod tests{
         let id=crate::frozen_coordinator::freeze(&db,&t,&c,&brains,&BTreeMap::new(),
             &BTreeMap::new(),&BTreeMap::new(),120_000).unwrap();
         (db,t,c,brains,id["run_id"].as_str().unwrap().into())
+    }
+    #[test]
+    fn new_study_does_not_inherit_previous_candidate_status(){
+        let (db,t,c,brains,old)=fixture();
+        let key=crate::coordinator_learning::context(&t);
+        seal(&db,&t,&c,&brains,&BTreeMap::new(),&BTreeMap::new(),&BTreeMap::new(),123_000).unwrap();
+        crate::frozen_coordinator::stop(&db,&key,c.trading.mode).unwrap();
+        let next=crate::frozen_coordinator::freeze(&db,&t,&c,&brains,&BTreeMap::new(),
+            &BTreeMap::new(),&BTreeMap::new(),130_000).unwrap();
+        assert_ne!(next["run_id"],old);
+        assert_eq!(status(&db,&key,c.trading.mode).unwrap()["status"],"not_sealed");
+        seal(&db,&t,&c,&brains,&BTreeMap::new(),&BTreeMap::new(),&BTreeMap::new(),131_000).unwrap();
+        let report=status(&db,&key,c.trading.mode).unwrap();
+        assert_eq!(report["run_id"],next["run_id"]);
+        assert_eq!(report["research_only"],true);
+        assert_eq!(report["candidate_broker_permission"],false);
+        let count:i64=db.query_row("SELECT COUNT(*) FROM g7f_sealed_candidates",[],|r|r.get(0)).unwrap();
+        assert_eq!(count,2,"prior evidence is retained");
     }
     #[test]
     fn sealed_candidate_is_one_time_and_never_creates_broker_commands(){

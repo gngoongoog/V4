@@ -18,6 +18,13 @@ pub mod oos;
 pub use research::{Analysis, Candle, MarketData, PaperSummary, RiskConfig};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const BUILD_ID: &str = env!("BRAINTRADE_BUILD_ID");
+pub fn build_identity() -> serde_json::Value {
+    serde_json::json!({"version":VERSION,"build_id":BUILD_ID,
+        "release":env!("BRAINTRADE_RELEASE_NAME"),"marker":env!("BRAINTRADE_RELEASE_MARKER"),
+        "channel":env!("BRAINTRADE_RELEASE_CHANNEL"),
+        "core_protocol":env!("BRAINTRADE_CORE_PROTOCOL").parse::<u32>().unwrap()})
+}
 pub const FRESH_MS: u64 = 8_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -247,6 +254,8 @@ impl Telemetry {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Status {
     pub version: String,
+    #[serde(default)]
+    pub build: serde_json::Value,
     pub state: RunState,
     pub requested_run: bool,
     pub execution_enabled: bool,
@@ -264,6 +273,7 @@ impl Default for Status {
     fn default() -> Self {
         Self {
             version: VERSION.into(),
+            build: build_identity(),
             state: RunState::Stopped,
             requested_run: false,
             execution_enabled: false,

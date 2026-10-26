@@ -602,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "braintrade-desktop"
-version = "0.7.4"
+version = "0.25.1"
 dependencies = [
  "anyhow",
  "braintrade-domain",
@@ -615,15 +615,16 @@ dependencies = [
 
 [[package]]
 name = "braintrade-domain"
-version = "0.7.4"
+version = "0.25.1"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
 name = "braintrade-runtime"
-version = "0.7.4"
+version = "0.25.1"
 dependencies = [
  "anyhow",
  "braintrade-domain",
@@ -643,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "braintrade-tauri"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "anyhow",
  "braintrade-domain",

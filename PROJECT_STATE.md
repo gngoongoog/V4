@@ -1,3 +1,5 @@
+Current development: **Enterprise V25 RC2 (0.25.1)** on `feature/v25-rc2-build-identity-g7-ui-20261026`. See `CONTINUE_HERE.md`; older entries below are historical.
+
 # Current continuation — 2026-10-22, Stage 3F-U (v0.7.4)
 
 Continue from latest `main`, preserving all newer changes. PR #109 (3F-T closed Demo Sniper policy quality) merged as `392a8143ae9cc2b58f52784db9f66f2cc39bfe9b` after exact-head Research `39779107057` and Windows/Linux `39779107116` succeeded on `ae7eb22ccb91edb7fd73f765e8a191fe4b5f6896`.

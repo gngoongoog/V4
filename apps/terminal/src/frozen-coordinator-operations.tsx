@@ -22,7 +22,7 @@ export function FrozenCoordinatorOperations({status,source,currentMode,brainCont
  disabled,onRefresh,onAction}:{
  status:Status|null;source:unknown;currentMode:unknown;brainContext:unknown;
  armed:boolean;disabled:boolean;onRefresh:()=>void;
- onAction:(action:'freeze'|'stop')=>Promise<void>;
+ onAction:(action:'freeze'|'seal_candidate'|'stop')=>Promise<void>;
 }){
  const eligible=frozenModeEligible(status,currentMode,brainContext);
  const data=record(source);
@@ -31,11 +31,16 @@ export function FrozenCoordinatorOperations({status,source,currentMode,brainCont
     &&data.no_broker_orders===true&&['not_started','active','stopped'].includes(state);
  const active=ready&&state==='active';
  const canMutate=ready&&!armed&&!disabled;
+ const rawCandidate=record(data.sealed_candidate);
+ const candidate=ready&&(rawCandidate.status==='not_sealed'||rawCandidate.run_id===data.run_id)?rawCandidate:{};
+ const canSeal=canMutate&&active&&data.bars_compared===0
+    &&candidate.status==='not_sealed'&&candidate.research_only===true
+    &&candidate.candidate_broker_permission===false;
  const expert=currentMode==='expert';
  const paper=expert?record(data.paired_quote_paper):{};
  const title=supportedFrozenMode(currentMode)?MODE_NAMES[currentMode]:'Sniper';
  return <section className="operator-card" aria-label="Frozen selected-mode coordinator forward decisions">
-  <h3>السياسة المجمدة لمنسق {title} — P1-J</h3>
+  <h3>السياسة المجمدة لمنسق {title} — G7</h3>
   <p>بحث Demo فقط: مقارنة قرار النظام المتكيّف مقابل أوزان وإعدادات مجمدة مسبقاً
      على شموع M1 المكتملة بعد تاريخ التجميد. لا يرسل أوامر MT5 ولا يدرّب العقول.</p>
   {!ready?<p className="safe-note" role="status">يتطلب حساب MT5 Demo متصلاً وحديثاً ووضع Expert أو Scalping أو Swing،
@@ -57,9 +62,22 @@ export function FrozenCoordinatorOperations({status,source,currentMode,brainCont
     'نتائج Expert الورقية مشروطة بتغطية الأسعار وفحص لوت وهامش تقريبي؛ حتى المرور لا يعني تنفيذ الوسيط أو اختبار OOS مستقلاً.':
     'Scalping/Swing: مقارنة قرارات مستقبلية فقط، لا توجد صفقات افتراضية أو أرباح محسوبة لهذا الوضع، ولا اختبارات تنفيذ وسيط.'}</p>
   </>}
+  {ready&&<div aria-label="Sealed G7 candidate" className="operator-grid">
+   <div>نسخة Candidate البحثية <strong>{candidate.status==='not_sealed'?'لم تُختم':
+    candidate.status==='sealed_candidate_research_only'?'مختومة':
+    candidate.status==='seal_integrity_failed'?'فشل سلامة الختم':
+    candidate.status==='candidate_receipts_incomplete'?'أدلة ناقصة':'غير متاحة لهذه الدراسة'}</strong></div>
+   <div>قرارات Candidate المحفوظة <strong>{counter(candidate.future_candidate_decisions)}</strong></div>
+   <div>سجلات مستقبلية مفقودة <strong>{counter(candidate.missing_future_candidate_receipts)}</strong></div>
+   {typeof candidate.checkpoint_sha256==='string'&&<div title={candidate.checkpoint_sha256}>بصمة السياسة <code>{candidate.checkpoint_sha256.slice(0,12)}</code></div>}
+  </div>}
+  <p className="safe-note">اختم Candidate بعد التجميد وقبل أول قرار مستقبلي. النسخة بحثية ثابتة؛ لا تنفذ صفقات ولا تُرقّى إلى REAL، والمتعلم الجاري يبقى منفصلاً.</p>
+  {ready&&active&&typeof data.bars_compared==='number'&&data.bars_compared>0&&candidate.status==='not_sealed'&&
+   <p role="status" className="safe-note">بدأ تسجيل القرارات؛ انتهت نافذة الختم. أوقف الدراسة وأنشئ دراسة جديدة لختم Candidate قبل الاختبار.</p>}
   <div className="quick-ops">
    <button type="button" disabled={disabled} onClick={onRefresh}>تحديث التجربة من Core</button>
    <button type="button" disabled={!canMutate||active} onClick={()=>void onAction('freeze')}>تجميد سياسة {title} على Demo</button>
+   <button type="button" disabled={!canSeal} onClick={()=>void onAction('seal_candidate')}>ختم نسخة Candidate البحثية</button>
    <button type="button" disabled={!canMutate||!active} onClick={()=>void onAction('stop')}>إيقاف التجربة البحثية</button>
   </div>
   <p className="safe-note">أزرار التجميد والإيقاف تحتاج STOP وأوامر وسيط مسوّاة في Rust Core.
