@@ -14,6 +14,8 @@ on:
       - 'tests/test_g7_demo_broker_lineage.py'
       - 'tests/test_g7_core_source_audit.py'
       - 'crates/runtime/src/g7_capture.rs'
+      - 'crates/runtime/src/g7_sealed_candidate.rs'
+      - 'crates/runtime/src/execution.rs'
       - 'crates/runtime/src/frozen_coordinator.rs'
       - 'crates/runtime/src/lib.rs'
       - 'tests/test_g7_prospective_audit.py'
@@ -54,3 +56,5 @@ jobs:
         run: cargo test -p braintrade-runtime --lib g7_capture --locked
       - name: Test frozen coordinator integration
         run: cargo test -p braintrade-runtime --lib frozen_coordinator --locked
+      - name: Test G7-F sealed Candidate isolation in real Rust Core
+        run: cargo test -p braintrade-runtime --lib g7_sealed_candidate --locked
