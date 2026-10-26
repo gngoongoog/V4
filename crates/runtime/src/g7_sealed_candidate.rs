@@ -106,11 +106,16 @@ pub(crate) fn observe(db:&Connection,run:&str,context:&str,mode:&str,
         anyhow::anyhow!("G7-F missing original same-bar Adaptive decision"))?;
     ensure!(observed==now,"G7-F candidate must share original decision observation time");
     let original:Value=serde_json::from_str(&adaptive)?;
+    // serde_json::Value normalizes key order. Hash exactly the JSON object
+    // stored inside the receipt; hashing the Signal struct directly would use
+    // struct-field order and break independent Python source replay.
+    let candidate_value=serde_json::to_value(&decision)?;
+    let candidate_digest=sha(&candidate_value.to_string());
     let packet=json!({"protocol":PROTOCOL,"run_id":run,"context":context,"mode":mode,
         "sealed_ms":sealed,"checkpoint_sha256":digest,
         "bar_time":bar,"observed_ms":now,
-        "sealed_candidate":decision,
-        "sealed_candidate_signal_sha256":sha(&serde_json::to_string(&decision)?),
+        "sealed_candidate":candidate_value,
+        "sealed_candidate_signal_sha256":candidate_digest,
         "online_adaptive":original,
         "online_adaptive_signal_sha256":sha(&adaptive),
         "source":"Core/frozen_coordinator.observe/g7f",
