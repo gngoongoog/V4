@@ -51,6 +51,10 @@ def saved_pair(db,bar):
 
 def before_after():
     left=setup()
+    # The fixture's INSERTs begin an implicit write transaction. SQLite's
+    # backup API must read from a fully committed source snapshot; otherwise
+    # it can keep retrying on the source's own uncommitted writer lock.
+    left.commit()
     right=sqlite3.connect(":memory:")
     left.backup(right)
     return left,right
