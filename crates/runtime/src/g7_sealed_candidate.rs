@@ -124,7 +124,7 @@ pub(crate) fn observe(db:&Connection,run:&str,context:&str,mode:&str,
         "online_adaptive_policy_sealed":false});
     let raw_packet=packet.to_string();
     db.execute(
-        "INSERT OR IGNORE INTO g7f_sealed_decisions
+        "INSERT INTO g7f_sealed_decisions
          (run_id,bar_time,observed_ms,payload,payload_sha256)
          VALUES (?1,?2,?3,?4,?5)",
         params![run,bar,now,raw_packet,sha(&raw_packet)])?;
@@ -145,9 +145,21 @@ pub(crate) fn status(db:&Connection,context:&str,mode:TradingMode)->Result<Value
     let count:i64=db.query_row(
         "SELECT COUNT(*) FROM g7f_sealed_decisions WHERE run_id=?1",
         [&run],|r|r.get(0))?;
-    Ok(json!({"status":if tampered {"seal_integrity_failed"}else{"sealed_candidate_research_only"},
+    let expected:i64=db.query_row(
+        "SELECT COUNT(*) FROM frozen_coordinator_decisions
+         WHERE run_id=?1 AND bar_time*1000 > ?2",
+        params![&run,sealed],|r|r.get(0))?;
+    let missing=expected.saturating_sub(count);
+    let status=if tampered {"seal_integrity_failed"}
+        else if missing>0 || count>expected {"candidate_receipts_incomplete"}
+        else {"sealed_candidate_research_only"};
+    Ok(json!({"status":status,
         "run_id":run,"sealed_ms":sealed,"checkpoint_sha256":hash,
-        "future_candidate_decisions":count,"candidate_policy_immutable_source":!tampered,
+        "future_candidate_decisions":count,
+        "expected_future_source_pairs":expected,
+        "missing_future_candidate_receipts":missing,
+        "candidate_policy_immutable_source":!tampered,
+        "research_evidence_complete":!tampered&&missing==0&&count==expected,
         "online_adaptive_policy_sealed":false,"broker_comparator_executed":false,
         "independent_oos":false,"real_authorized":false}))
 }
@@ -228,7 +240,7 @@ mod tests{
         assert!(crate::frozen_coordinator::observe(&db,&t,&c,&signal,&frames,241_000).is_err());
         let original:i64=db.query_row("SELECT COUNT(*) FROM frozen_coordinator_decisions",
             [],|r|r.get(0)).unwrap();
-        assert_eq!(original,1,"G7-A source must survive sealed-candidate rejection");
+        assert_eq!(original,0,"G7-G rejects partial original+Candidate commits");
         assert_eq!(status(&db,&crate::coordinator_learning::context(&t),
             c.trading.mode).unwrap()["status"],"seal_integrity_failed");
     }
