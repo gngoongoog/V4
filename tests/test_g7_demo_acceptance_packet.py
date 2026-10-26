@@ -3,6 +3,8 @@ import json
 import sqlite3
 import sys
 import unittest
+import subprocess
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -105,6 +107,49 @@ class G7HAcceptanceTests(unittest.TestCase):
             result=summarize(after,now_ms=450000,previous_db=before)
             self.assertEqual(result["paired_source_decisions"],2)
             self.assertEqual(result["counts"]["sealed_candidate_forward_receipts"],2)
+
+    def test_real_cli_creates_redacted_not_started_report_and_never_mutates_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home=Path(temp)
+            dbfile=home/"events.sqlite"
+            output=home/"acceptance.json"
+            with sqlite3.connect(dbfile) as db:
+                db.execute("CREATE TABLE untouched_marker(v TEXT NOT NULL)")
+                db.execute("INSERT INTO untouched_marker VALUES ('preserved')")
+            code=subprocess.run(
+                [sys.executable,str(Path(__file__).resolve().parents[1]/
+                                     "scripts/g7_demo_acceptance_packet.py"),
+                 "--db",str(dbfile),"--output",str(output)],
+                capture_output=True,text=True,timeout=15)
+            self.assertEqual(code.returncode,0,code.stderr)
+            data=json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(data["status"],"not_started")
+            self.assertFalse(data["release_authorized"])
+            with sqlite3.connect(dbfile) as db:
+                self.assertEqual(db.execute("SELECT v FROM untouched_marker").fetchone()[0],
+                                 "preserved")
+            second=subprocess.run(
+                [sys.executable,str(Path(__file__).resolve().parents[1]/
+                                     "scripts/g7_demo_acceptance_packet.py"),
+                 "--db",str(dbfile),"--output",str(output)],
+                capture_output=True,text=True,timeout=15)
+            self.assertNotEqual(second.returncode,0)
+            self.assertEqual(data,json.loads(output.read_text(encoding="utf-8")))
+
+    def test_cli_rejects_same_database_as_report_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            dbfile=Path(temp)/"events.sqlite"
+            with sqlite3.connect(dbfile) as db:
+                db.execute("CREATE TABLE preserve(v INTEGER)")
+                db.execute("INSERT INTO preserve VALUES (7)")
+            attempt=subprocess.run(
+                [sys.executable,str(Path(__file__).resolve().parents[1]/
+                                     "scripts/g7_demo_acceptance_packet.py"),
+                 "--db",str(dbfile),"--output",str(dbfile)],
+                capture_output=True,text=True,timeout=15)
+            self.assertNotEqual(attempt.returncode,0)
+            with sqlite3.connect(dbfile) as db:
+                self.assertEqual(db.execute("SELECT v FROM preserve").fetchone()[0],7)
 
     def test_historical_loss_or_pair_forgery_is_rejected(self):
         after=seeded(closed=True)
