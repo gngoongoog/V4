@@ -5,6 +5,7 @@ import sys
 import unittest
 import subprocess
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -113,7 +114,7 @@ class G7HAcceptanceTests(unittest.TestCase):
             home=Path(temp)
             dbfile=home/"events.sqlite"
             output=home/"acceptance.json"
-            with sqlite3.connect(dbfile) as db:
+            with closing(sqlite3.connect(dbfile)) as db, db:
                 db.execute("CREATE TABLE untouched_marker(v TEXT NOT NULL)")
                 db.execute("INSERT INTO untouched_marker VALUES ('preserved')")
             code=subprocess.run(
@@ -125,7 +126,7 @@ class G7HAcceptanceTests(unittest.TestCase):
             data=json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(data["status"],"not_started")
             self.assertFalse(data["release_authorized"])
-            with sqlite3.connect(dbfile) as db:
+            with closing(sqlite3.connect(dbfile)) as db, db:
                 self.assertEqual(db.execute("SELECT v FROM untouched_marker").fetchone()[0],
                                  "preserved")
             second=subprocess.run(
@@ -139,7 +140,7 @@ class G7HAcceptanceTests(unittest.TestCase):
     def test_cli_rejects_same_database_as_report_path(self):
         with tempfile.TemporaryDirectory() as temp:
             dbfile=Path(temp)/"events.sqlite"
-            with sqlite3.connect(dbfile) as db:
+            with closing(sqlite3.connect(dbfile)) as db, db:
                 db.execute("CREATE TABLE preserve(v INTEGER)")
                 db.execute("INSERT INTO preserve VALUES (7)")
             attempt=subprocess.run(
@@ -148,7 +149,7 @@ class G7HAcceptanceTests(unittest.TestCase):
                  "--db",str(dbfile),"--output",str(dbfile)],
                 capture_output=True,text=True,timeout=15)
             self.assertNotEqual(attempt.returncode,0)
-            with sqlite3.connect(dbfile) as db:
+            with closing(sqlite3.connect(dbfile)) as db, db:
                 self.assertEqual(db.execute("SELECT v FROM preserve").fetchone()[0],7)
 
     def test_historical_loss_or_pair_forgery_is_rejected(self):
