@@ -115,10 +115,35 @@ for(const needle of [
 assert(bridge.includes("invoke('frozen_coordinator_action'"));
 assert(bridge.includes('{action,context,mode}'));
 assert(tauri.includes('"/v1/execution/frozen-coordinator"'));
-assert(tauri.includes('matches!(action.as_str(),"freeze"|"stop")'));
+assert(tauri.includes('matches!(action.as_str(),"freeze"|"seal_candidate"|"stop")'));
 assert(core.includes('frozen_coordinator::freeze'));
 assert(core.includes('!status.requested_run && !self.pending(db)?'));
 assert(paper.includes('clean_feasible_complete_pairs'));
 assert(paper.includes('unknown_quote_gap_evidence_pairs'));
 assert(paper.includes('if clean_feasible<MIN_COMPLETE'));
 console.log('PASS: P1-J Expert/Scalping/Swing selected-mode future decisions, explicit Demo-only actions, source and account matching, Expert-only paper, Sniper excluded');
+
+const unsealed={status:'not_sealed',research_only:true,candidate_broker_permission:false};
+const study={status:'active',mode:'expert',context:ctx,no_broker_orders:true,
+ run_id:'new',bars_compared:0,sealed_candidate:unsealed};
+const sealButton=panel=>buttons(panel).find(x=>x.props.children==='ختم نسخة Candidate البحثية');
+for(const mode of ['expert','scalping','swing']){
+ const p=FrozenCoordinatorOperations({...options,currentMode:mode,source:{...study,mode}});
+ const b=sealButton(p);assert(b&&!b.props.disabled,mode+' eligible seal');b.props.onClick();
+}
+assert.deepEqual(actions.slice(-3),['seal_candidate','seal_candidate','seal_candidate']);
+for(const override of [
+ {armed:true},{disabled:true},{status:{...status,gateway_fresh:false}},
+ {status:{...status,telemetry:{...telemetry,demo:false,account_trade_mode:2}}},
+ {currentMode:'sniper'},{source:{...study,context:'wrong'}},
+ {source:{...study,bars_compared:1}},{source:{...study,bars_compared:undefined}},
+ {source:{...study,sealed_candidate:{...unsealed,research_only:false}}},
+ {source:{...study,sealed_candidate:{...unsealed,candidate_broker_permission:true}}},
+ {source:{...study,sealed_candidate:{status:'seal_integrity_failed',run_id:'new'}}},
+ {source:{...study,sealed_candidate:{status:'sealed_candidate_research_only',run_id:'old',checkpoint_sha256:'OLD_HASH_MUST_NOT_SHOW'}}},
+]){
+ const p=FrozenCoordinatorOperations({...options,source:study,...override});
+ assert(sealButton(p).props.disabled,'ineligible seal must be disabled');
+ assert(!JSON.stringify(p).includes('OLD_HASH_MUST_NOT_SHOW'),'prior study seal hidden');
+}
+console.log('PASS: G7 sealing modes, STOP/Demo guards, source ownership, old candidate hidden');

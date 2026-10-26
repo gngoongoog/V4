@@ -1,3 +1,17 @@
+# Current V25 RC2 continuation — 2026-10-26 (0.25.1)
+
+Continue from `feature/v25-rc2-build-identity-g7-ui-20261026`.
+Baseline Portable RC: `cbbd188620864fbcd86da5687167411c013dbe54` (PR #200), including G7-H.
+Do not resume older P1/G3 branches. RC2 unifies application versions, refuses a
+Core with a different source fingerprint, preserves compatible 0.7.4 backups,
+exposes research-only G7 sealing and scopes the candidate to the current study.
+
+Require exact-source Windows/Linux and Portable checks. Native Windows GUI and
+MT5 Demo/EA acceptance are separate gates. No REAL approval, profitability,
+measured broker latency or independent OOS claim. Preserve V24, main and user data.
+
+Everything below is historical context, not the current continuation instruction.
+
 # Current V25 continuation — 2026-10-24, P1-K1
 
 For Enterprise V25 continue from `feature/v25-enterprise-validation-20261024`,

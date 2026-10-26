@@ -657,7 +657,7 @@ export default function Terminal(){
   }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
   finally{finishWrite(mutation)}
  };
- const runFrozenCoordinator=async(action:'freeze'|'stop')=>{
+ const runFrozenCoordinator=async(action:'freeze'|'seal_candidate'|'stop')=>{
   const t=status?.telemetry;
   if(preview||!hasTauri()||status?.requested_run||!status?.gateway_fresh
     ||!t?.connected||!t.demo||t.account_trade_mode!==0
@@ -675,7 +675,7 @@ export default function Terminal(){
    const refreshed=unwrap(await readPanel('/v1/execution/frozen-coordinator'));
    if(!writeFresh(mutation))return;
    if(scopedGeneration.current.isCurrent(ticket))setFrozenSlot({scope:viewScope,report:refreshed});
-   sendNotice(action==='freeze'?('تم تثبيت تجربة '+chosenMode+' البحثية في Rust Core'):'تم إيقاف تجربة '+chosenMode+' البحثية وحفظ نتائجها في Core');
+   sendNotice(action==='seal_candidate'?'تم ختم Candidate للبحث فقط، دون صلاحية تداول':action==='freeze'?('تم تثبيت تجربة '+chosenMode+' البحثية في Rust Core'):'تم إيقاف تجربة '+chosenMode+' البحثية وحفظ نتائجها في Core');
   }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
   finally{finishWrite(mutation)}
  };
@@ -822,7 +822,7 @@ export default function Terminal(){
       </section></div>
     </section>}
    </main>
-   <footer className="bottom-status"><div><span className={'tiny-led '+(trustworthy?'lit':'')}></span>{preview?'DESIGN PREVIEW':trustworthy?'MT5 VERIFIED':'NO VERIFIED MARKET DATA'}　•　{display?.version||'V4'}</div><div>Updates: Tauri IPC Channel · Core authoritative</div><div className="footer-tools"><button onClick={changePreview}>{preview?'عرض LIVE':'معاينة التصميم'}</button><button title="Dark theme" onClick={()=>setTheme('dark')}><Moon size={15}/></button><button title="Smoke theme" onClick={()=>setTheme('smoke')}><Cloud size={15}/></button><button title="Light theme" onClick={()=>setTheme('light')}><Sun size={15}/></button>　{clock}</div></footer>
+   <footer className="bottom-status"><div><span className={'tiny-led '+(trustworthy?'lit':'')}></span>{preview?'DESIGN PREVIEW':trustworthy?'MT5 VERIFIED':'NO VERIFIED MARKET DATA'}　•　<span title={display?.build?.build_id}>{display?.build?.release||display?.version||'V4'}{display?.build?.build_id?' · '+display.build.build_id.slice(0,8):''}</span></div><div>Updates: Tauri IPC Channel · Core authoritative</div><div className="footer-tools"><button onClick={changePreview}>{preview?'عرض LIVE':'معاينة التصميم'}</button><button title="Dark theme" onClick={()=>setTheme('dark')}><Moon size={15}/></button><button title="Smoke theme" onClick={()=>setTheme('smoke')}><Cloud size={15}/></button><button title="Light theme" onClick={()=>setTheme('light')}><Sun size={15}/></button>　{clock}</div></footer>
  </section>
  {showStopConfirm&&<div className="confirm-overlay" role="dialog" aria-modal="true" aria-label="تأكيد وقف الدخول"><div className="confirm-dialog" ref={dialogRef}><div className="confirm-title"><PauseCircle size={23}/>وقف فتح الصفقات الجديدة فقط</div><p>هذا الإجراء لا يغلق أي مركز مفتوح ولا يلغي أوامر الوسيط القائمة. سيبقى Core يدير الخروج والتسوية وSL/TP للمراكز الموجودة.</p><div className="confirm-actions"><button onClick={()=>setApproval(null)}>إلغاء</button><button onClick={confirmStop}>تأكيد وقف الدخول الجديد</button></div></div></div>}
  {showExitConfirm&&<div className="confirm-overlay" role="dialog" aria-modal="true" aria-label="خروج كامل آمن"><div className="confirm-dialog" ref={dialogRef}><div className="confirm-title"><ShieldCheck size={23}/>الخروج الكامل الآمن</div><p>يطلب إطفاء Core والواجهة. سيُرفض إذا كان التشغيل مستمراً، أو إذا وُجد مركز مفتوح أو أمر معلّق أو كانت حالة MT5 غير موثوقة. إن أردت ترك المحرك يدير الصفقات، اضغط «إغلاق الواجهة فقط».</p><div className="confirm-actions"><button onClick={()=>setApproval(null)}>إلغاء</button><button disabled={busy} onClick={()=>void runFullExit()}>طلب الخروج الآمن</button></div></div></div>}

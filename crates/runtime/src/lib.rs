@@ -487,16 +487,36 @@ pub fn run_core()->Result<()>{
     while !engine.shutting_down{engine.tick();let Some(mut request)=server.recv_timeout(Duration::from_millis(250))? else{continue;};let authenticated=request.headers().iter().any(|h|h.field.equiv("Authorization")&&h.value.as_str()==format!("Bearer {key}"));let origin=request.headers().iter().any(|h|h.field.equiv("Origin"));if !authenticated||origin{let _=request.respond(tiny_http::Response::from_string("{\"error\":\"Unauthorized\"}").with_status_code(401));continue;}if request.body_length().is_none()&&request.method().as_str()=="POST"{let _=request.respond(tiny_http::Response::empty(411));continue;}if request.body_length().unwrap_or(0)>2_000_000{let _=request.respond(tiny_http::Response::empty(413));continue;}let mut body=Vec::new();if request.as_reader().read_to_end(&mut body).is_err(){continue;}let result=engine.route(request.method().as_str(),request.url(),&body);let(code,value)=match result{Ok(v)=>(200,v),Err(e)=>(400,json!({"error":e.to_string()}))};let response=tiny_http::Response::from_string(value.to_string()).with_status_code(code).with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());let _=request.respond(response);}
     engine.stop_gateway();engine.backtests.cancel();engine.evaluations.cancel();engine.event("core_stopped",json!({}))?;drop(lock);Ok(())
 }
+fn verify_core_identity(status:&Value)->Result<()> {
+    let expected=braintrade_domain::build_identity();
+    if status["version"]!=expected["version"] || ["version","build_id","core_protocol"].iter().any(|field|status["build"][*field]!=expected[*field]) {
+        bail!("المحرك الجاري لا يطابق إصدار وبصمة هذا التطبيق. أوقف الدخول من التطبيق القديم ثم استخدم خروج كامل بعد تسوية المراكز والأوامر، وأعد تشغيل هذه النسخة.");
+    }
+    Ok(())
+}
 pub fn ensure_core()->Result<Client>{
-    let dir=data_dir();if let Ok(client)=Client::new(&dir){if let Ok(status)=client.get("/v1/status"){if status["version"].as_str()!=Some(braintrade_domain::VERSION){bail!("An older Core is running. Open the old application, choose Full Exit / خروج كامل, then launch this version.");}return Ok(client);}}
+    let dir=data_dir();if let Ok(client)=Client::new(&dir){if let Ok(status)=client.get("/v1/status"){verify_core_identity(&status)?;return Ok(client);}}
     let mut command=Command::new(std::env::current_exe()?);fs::create_dir_all(&dir)?;command.arg("--core").stdin(Stdio::null()).stdout(Stdio::null()).stderr(OpenOptions::new().append(true).create(true).open(dir.join("core.log"))?);
     #[cfg(windows)] {use std::os::windows::process::CommandExt;command.creation_flags(0x08000008);}
-    command.spawn()?;for _ in 0..100{std::thread::sleep(Duration::from_millis(100));if let Ok(client)=Client::new(&dir){if client.get("/v1/status").is_ok(){return Ok(client);}}}bail!("Core did not become ready. See {}",dir.join("core.log").display())
+    command.spawn()?;for _ in 0..100{std::thread::sleep(Duration::from_millis(100));if let Ok(client)=Client::new(&dir){if let Ok(status)=client.get("/v1/status"){verify_core_identity(&status)?;return Ok(client);}}}bail!("Core did not become ready. See {}",dir.join("core.log").display())
 }
 
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn core_identity_rejects_other_build_even_with_same_version(){
+        let valid=serde_json::to_value(Status::default()).unwrap();
+        assert!(verify_core_identity(&valid).is_ok());
+        for field in ["version","build_id","core_protocol"] {
+            let mut changed=valid.clone();changed["build"][field]=json!("different");
+            assert!(verify_core_identity(&changed).is_err(),"{field}");
+        }
+        let mut legacy=valid.clone();legacy.as_object_mut().unwrap().remove("build");
+        assert!(verify_core_identity(&legacy).is_err());
+        let mut old=valid;old["version"]=json!("0.7.4");
+        assert!(verify_core_identity(&old).is_err());
+    }
     #[test]
     fn full_exit_is_blocked_if_monitoring_or_account_is_unverified(){
         let mut s=Status::default();

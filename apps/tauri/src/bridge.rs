@@ -160,7 +160,7 @@ fn frozen_classic_action(action:String,context:String)->Result<Value,String>{
 fn frozen_coordinator_action(action: String, context: String, mode: String) -> Result<Value, String> {
     // Research-only. The Rust Core independently requires STOPPED, no
     // pending broker intents and a fresh exact-bound MT5 DEMO Expert context.
-    if !matches!(action.as_str(),"freeze"|"stop")
+    if !matches!(action.as_str(),"freeze"|"seal_candidate"|"stop")
         || !matches!(mode.as_str(),"expert"|"scalping"|"swing")
         || context.len()>500 || context.trim().is_empty() {
         return Err("Frozen coordinator action or account context invalid".into());

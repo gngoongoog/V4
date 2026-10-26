@@ -1,7 +1,7 @@
 {
-  "version": "0.7.4",
+  "version": "0.25.1",
   "status": "pending-ci",
-  "source_state": "PR 74 snapshot before exact-source CI",
+  "source_state": "V25 RC2 identity and G7 UI; pending exact-source CI",
   "tested_commit": null,
   "tested_tree": null,
   "research_ci": null,
@@ -16,5 +16,5 @@
     "telegram_live_delivery": "not performed",
     "imported_ml_automatic_promotion": false
   },
-  "note": "0.7.4 introduces mandatory MT5 order_calc_profit-based stop risk lot reduction for fresh Core entries in Demo and REAL, using equity, exact rounded stop, full-roundtrip configured commission, and slippage allowance. CI status belongs only to the exact 0.7.4 commit. MT5 native broker acceptance and profitability are not certified."
+  "note": "Unified V25 RC2 version and source identity. Reject mismatched Core; preserve schema-compatible 0.7.4 backups. G7 remains research-only. Native MT5 and Windows GUI require separate evidence."
 }

@@ -93,7 +93,7 @@ export function TradingSettingsOperations({source,disabled,armed,apply}: {
   <p className="safe-note">إذا كانت العمولة 7 دولار لكل لوت ذهاباً وإياباً: حجم 0.01 = $0.07، و0.1 = $0.70، و1.0 = $7.00. هذا تقدير تكلفة، والخصم الفعلي من شركة الوساطة.</p>
   {error&&<div role="alert" className="operator-error">{error}</div>}
   <div className="quick-ops"><button disabled={disabled||armed||!Object.keys(stored).length} onClick={()=>void save()}>حفظ الوضع والعمولة لدى Core</button><button disabled={disabled} onClick={reset}>التراجع عن التعديلات</button></div>
-  <small>إصدار المصدر: {sourceId.length?'إعدادات Core':'غير متاح'}</small>
+  <small>إصدار المصدر: {Object.keys(stored).length?'إعدادات Core':'غير متاح'}</small>
  </section>;
 }
 

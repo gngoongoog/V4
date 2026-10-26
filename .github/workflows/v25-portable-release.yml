@@ -7,6 +7,10 @@ on:
       - '.github/workflows/v25-portable-release.yml'
       - 'scripts/Build-V25-Portable-Windows.ps1'
       - 'scripts/package_v25.py'
+      - 'scripts/release_identity.py'
+      - 'release.json'
+      - 'release-inputs.json'
+      - 'tools/windows-gui/**'
       - 'scripts/check_v25_g7h_package.py'
       - 'scripts/Run-G7-Acceptance.ps1'
       - 'scripts/Run-G7-Acceptance.cmd'
@@ -51,6 +55,7 @@ jobs:
           path: target/portable/BRAINTRADE_V4_ENTERPRISE_V25_PORTABLE_Windows_x64.zip
           if-no-files-found: error
           retention-days: 30
+
       - name: Upload native V25 build and validation evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -58,4 +63,33 @@ jobs:
           name: BRAINTRADE_V25_Portable_RC_Validation
           path: test-output/v25/
           if-no-files-found: warn
+          retention-days: 30
+
+  native-webview:
+    needs: portable-windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: BRAINTRADE_V4_V25_PORTABLE_Windows_x64_RC
+          path: test-output/download
+      - name: Extract the exact same-run portable
+        shell: pwsh
+        run: Expand-Archive test-output/download/BRAINTRADE_V4_ENTERPRISE_V25_PORTABLE_Windows_x64.zip -DestinationPath test-output/actual-portable
+      - run: npm --prefix tools/windows-gui ci --ignore-scripts --no-audit --no-fund
+      - name: Actual Tauri WebView2 controls, pages, settings and restart
+        shell: pwsh
+        run: node tools/windows-gui/acceptance.mjs test-output/actual-portable/BRAINTRADE_V4_ENTERPRISE_V25/BrainTradeNext.exe test-output/v25/native-webview
+      - name: Upload actual WebView2 evidence (including failures)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BRAINTRADE_V25_RC2_Native_WebView_Evidence
+          path: test-output/v25/native-webview/
+          if-no-files-found: error
           retention-days: 30

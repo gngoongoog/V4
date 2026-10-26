@@ -1,3 +1,5 @@
+Current development: **Enterprise V25 RC2 (0.25.1)** on `feature/v25-rc2-build-identity-g7-ui-20261026`. See `CONTINUE_HERE.md`; older entries below are historical.
+
 # Current v0.7.4 P0 stage 2 — verify before proceeding
 
 Stage 1 commission parity 7 USD per 1.0-lot roundtrip (or zero configurable) completed in v0.7.3. Stage 2 limits requested lots to broker-verified stop-loss budget using equity, commission and slippage, failing closed if broker minimum too expensive. Subsequent stages: portfolio-wide externally owned risk, daily loss circuit breaker, risk-engine independence, tick-level OOS. Actual MT5 Demo validation remains pending.

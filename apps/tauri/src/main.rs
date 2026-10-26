@@ -2,7 +2,7 @@
 mod bridge;
 fn main() {
     if std::env::args().any(|arg| arg == "--braintrade-build-id") {
-        eprintln!("BRAINTRADE_V4_ENTERPRISE_V25_P1K1_20261024");
+        println!("{}", braintrade_domain::build_identity());
         return;
     }
     if std::env::args().any(|arg| arg == "--core") {

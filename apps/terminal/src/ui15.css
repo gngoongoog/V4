@@ -222,3 +222,30 @@
 .terminal-v15 .operator-card[aria-label="MT5 broker trade journal"] .quick-ops select{
  display:block;margin-top:5px}
 @media (max-width:620px){.terminal-v15 .broker-journal-detail{max-width:245px}}
+
+/* RC2: actual WebView2 at 1028px exposed the legacy 1050px dashboard floor.
+   Keep all controls in the vertical flow, including high-DPI laptop windows. */
+.terminal-v15 .dashboard{min-width:0}
+.terminal-v15 .sidebar-footer{height:auto;flex:0 0 auto;padding:8px 12px;gap:6px}
+.terminal-v15 .bottom-grid{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.terminal-v15 .bottom-grid .panel{height:auto;min-height:190px}
+.terminal-v15 .quality-row{grid-template-columns:minmax(0,1fr) auto;min-height:28px;height:auto;line-height:1.5;align-items:start}
+.terminal-v15 .quality-row>span{min-width:0;overflow-wrap:anywhere}
+.terminal-v15 .quality-row small{white-space:nowrap}
+/* No measured normalized score exists: do not draw an empty decorative meter. */
+.terminal-v15 .quality-row .quality-meter{display:none}
+.terminal-v15 .execution-quality .safe-note{margin:8px;font-size:10px}
+@media(max-width:1250px){
+ .terminal-v15 .dashboard{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:auto}
+ .terminal-v15 .dashboard .kpi-row{grid-template-columns:repeat(3,minmax(0,1fr))}
+ .terminal-v15 .dashboard .hero-grid .chart-panel{grid-column:1/-1;grid-row:2}
+ .terminal-v15 .dashboard .hero-grid .ops-panel{grid-column:1/-1;grid-row:3;height:auto}
+ .terminal-v15 .dashboard .activity-grid .positions-panel{grid-column:1;grid-row:4}
+ .terminal-v15 .dashboard .activity-grid .trades-panel{grid-column:2;grid-row:4}
+ .terminal-v15 .dashboard .bottom-grid{grid-row:5;grid-template-columns:repeat(2,minmax(0,1fr))}
+ .terminal-v15 .subpage-layout{grid-template-columns:minmax(0,1fr)}
+ .terminal-v15 .risk-form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .terminal-v15 .account-strip{grid-template-columns:repeat(5,minmax(0,1fr));height:auto;flex-basis:auto}
+ .terminal-v15 .account-strip>*{min-height:44px}
+ .terminal-v15 .bottom-status{height:auto;min-height:28px;flex-basis:auto;flex-wrap:wrap;gap:4px}
+}

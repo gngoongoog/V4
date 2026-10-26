@@ -1,0 +1,13 @@
+[
+  "release.json", "release-inputs.json", "Cargo.toml", "Cargo.lock",
+  "crates/domain/Cargo.toml", "crates/domain/build.rs", "crates/domain/src",
+  "crates/runtime/Cargo.toml", "crates/runtime/src",
+  "crates/desktop/Cargo.toml", "crates/desktop/build.rs", "crates/desktop/src", "crates/desktop/ui",
+  "apps/tauri/Cargo.toml", "apps/tauri/build.rs", "apps/tauri/tauri.conf.json",
+  "apps/tauri/capabilities", "apps/tauri/src",
+  "apps/terminal/package.json", "apps/terminal/package-lock.json",
+  "apps/terminal/tsconfig.json", "apps/terminal/vite.config.ts",
+  "apps/terminal/index.html", "apps/terminal/src",
+  "gateway", "mt5/BrainTradeSniperBridge.mq5",
+  "scripts/release_identity.py", "scripts/prepare-tauri-runtime.py", "scripts/package-portable.py", "scripts/package_v25.py"
+]

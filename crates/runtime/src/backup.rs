@@ -72,7 +72,8 @@ fn validate(root:&Path,name:&str)->Result<Validated>{
     let mut members=Vec::new();for e in fs::read_dir(&dir)?{let e=e?;if !e.file_type()?.is_file(){bail!("Backup contains unsupported directory/member");}let n=e.file_name().to_string_lossy().to_ascii_lowercase();if !matches!(n.as_str(),"events.sqlite"|"config.json"|"manifest.json"){bail!("Unexpected backup member: {n}");}members.push(n);}members.sort();members.dedup();if members.len()!=3{bail!("Backup member coverage mismatch");}
     let mp=dir.join("manifest.json");let m:Value=serde_json::from_slice(&fs::read(&mp)?).context("Invalid backup manifest")?;
     if m["schema"].as_u64()!=Some(SCHEMA){bail!("Unsupported backup schema; expected {SCHEMA}");}
-    if m["version"].as_str()!=Some(braintrade_domain::VERSION){bail!("Backup application version does not match this build");}
+    // Preserve known schema-compatible 0.7.4 archives across the RC2 version rename.
+    if !matches!(m["version"].as_str(),Some(v) if v==braintrade_domain::VERSION || v=="0.7.4"){bail!("Backup application version does not match this build");}
     if m["hash_algorithm"].as_str()!=Some(HASH)||m["secrets_included"].as_bool()!=Some(false)||m["restore_implemented"].as_bool()!=Some(true){bail!("Backup manifest contract mismatch");}
     let files=m["files"].as_object().context("Backup files map missing")?;
     for n in ["events.sqlite","config.json"]{
@@ -183,6 +184,22 @@ pub fn apply_pending(root:&Path)->Result<Option<Value>>{
 
 #[cfg(test)] mod tests{
     use super::*;
+    #[test] fn rc2_restores_compatible_074_backup_but_rejects_unknown_version(){
+        let r=root();let d=db(&r);let c=Config::default();
+        crate::atomic_write(&r.join("config.json"),&serde_json::to_vec_pretty(&c).unwrap()).unwrap();
+        d.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(1,'legacy','{}')",[]).unwrap();
+        let b=create(&d,&r,&c,2).unwrap();let n=b["name"].as_str().unwrap();
+        let path=r.join("backups").join(n).join("manifest.json");
+        let mut m:Value=serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        m["version"]=json!("99.0.0");fs::write(&path,serde_json::to_vec(&m).unwrap()).unwrap();
+        assert!(validate(&r,n).is_err());
+        m["version"]=json!("0.7.4");fs::write(&path,serde_json::to_vec(&m).unwrap()).unwrap();
+        stage(&d,&r,&c,&serde_json::to_vec(&json!({"name":n})).unwrap(),3).unwrap();
+        drop(d);assert_eq!(apply_pending(&r).unwrap().unwrap()["status"],"applied");
+        let restored=Connection::open(r.join("events.sqlite")).unwrap();
+        assert_eq!(restored.query_row("SELECT COUNT(*) FROM events WHERE kind='legacy'",[],|x|x.get::<_,i64>(0)).unwrap(),1);
+        drop(restored);let _=fs::remove_dir_all(r);
+    }
     fn root()->PathBuf{let p=std::env::temp_dir().join(format!("braintrade-backup-test-{}",uuid::Uuid::new_v4().simple()));fs::create_dir_all(&p).unwrap();p}
     fn db(root:&Path)->Connection{let d=Connection::open(root.join("events.sqlite")).unwrap();d.execute_batch("PRAGMA foreign_keys=ON;CREATE TABLE events(id INTEGER PRIMARY KEY,timestamp_ms INTEGER NOT NULL,kind TEXT NOT NULL,detail TEXT NOT NULL);").unwrap();d}
     #[test] fn sealed_validation_is_read_only_and_rejects_sidecars(){

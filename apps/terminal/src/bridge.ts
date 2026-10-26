@@ -36,6 +36,6 @@ export async function frozenSniperAction(action:'freeze'|'stop',context:string):
 export async function frozenClassicAction(action:'freeze'|'stop',context:string):Promise<unknown>{
  return invoke('frozen_classic_action',{action,context});
 }
-export async function frozenCoordinatorAction(action:'freeze'|'stop',context:string,mode:'expert'|'scalping'|'swing'):Promise<unknown>{
+export async function frozenCoordinatorAction(action:'freeze'|'seal_candidate'|'stop',context:string,mode:'expert'|'scalping'|'swing'):Promise<unknown>{
  return invoke('frozen_coordinator_action',{action,context,mode});
 }
