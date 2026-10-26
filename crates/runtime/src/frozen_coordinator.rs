@@ -191,12 +191,16 @@ pub fn observe(db:&Connection,t:&Telemetry,c:&Config,adaptive:&Signal,
         crate::g7_capture::record_pair(&tx,&id,&key,mode_key(c.trading.mode),
             &raw,bar,now,t,&frozen,adaptive)?;
     }
+    // G7-G: source, G7-A provenance and optional sealed Candidate MUST share
+    // one durable transaction. Crash/tamper can never leave a seemingly
+    // accepted source pair without its future sealed-policy receipt.
+    // Any error rolls back research rows only; the caller isolates research
+    // failures from broker order reconciliation, entries and position exits.
+    if inserted==1 {
+        crate::g7_sealed_candidate::observe(&tx,&id,&key,mode_key(c.trading.mode),
+            t,c,frames,bar,now)?;
+    }
     tx.commit()?;
-    // An optional sealed Candidate is evaluated on the SAME future M1 bar.
-    // A failed research replay cannot roll back accepted G7-A pair evidence or
-    // interfere with already handled broker positions.
-    crate::g7_sealed_candidate::observe(db,&id,&key,mode_key(c.trading.mode),
-        t,c,frames,bar,now)?;
     Ok(())
 }
 pub fn report(db:&Connection,key:&str,mode:TradingMode)->Result<Value>{
