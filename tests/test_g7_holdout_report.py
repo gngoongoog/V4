@@ -123,6 +123,9 @@ class HoldoutTests(unittest.TestCase):
             self.assertEqual(report["matched_verified_fully_closed_demo_positions"],1)
             self.assertEqual(report["eligible_system_demo_open_intents"],1)
             self.assertEqual(report["complete_broker_outcome_coverage"],1)
+            self.assertEqual(report["intent_level_win_fraction_extreme_bounds_not_execution_win_rate"],[1.0,1.0])
+            self.assertIn("new_broker_training_labels_admitted_after_cutoff",
+                          report["descriptive_qualification_blockers"])
             self.assertAlmostEqual(report["verified_closed_mean_net_r"],9.93/5)
             self.assertEqual(report["status"],"inconclusive")
             self.assertFalse(report["independent_out_of_sample"])
@@ -142,6 +145,9 @@ class HoldoutTests(unittest.TestCase):
             self.assertEqual(r["unverified_or_unmatched_eligible_open_intents"],
                              {"unmatched_holdout_open_intent":1})
             self.assertEqual(r["complete_broker_outcome_coverage"],.5)
+            self.assertEqual(r["intent_level_win_fraction_extreme_bounds_not_execution_win_rate"],[.5,1.])
+            self.assertIn("not_all_eligible_intents_fully_closed_and_attributed",
+                          r["descriptive_qualification_blockers"])
 
     def test_censored_open_position_has_no_pnl(self):
         db,a,doc=preregister_fixture()
@@ -151,6 +157,7 @@ class HoldoutTests(unittest.TestCase):
             self.assertEqual(r["matched_verified_fully_closed_demo_positions"],0)
             self.assertIsNone(r["verified_closed_win_rate"])
             self.assertIsNone(r["verified_closed_win_rate_wilson_95_descriptive"])
+            self.assertEqual(r["intent_level_win_fraction_extreme_bounds_not_execution_win_rate"],[0.,1.])
             self.assertIsNone(r["daily_cluster_bootstrap_mean_net_r_95_descriptive"])
 
     def test_cutoff_admission_is_flagged_not_passed_as_independent(self):
