@@ -12,6 +12,7 @@ G7_AUDIT_FILES = (
     "g7_full_intent_census.py", "g7_cohort_overlap_gate.py",
     "g7_holdout_report.py", "g7f_sealed_candidate_audit.py",
     "g7g_restart_continuity.py", "g7_demo_acceptance_packet.py",
+    "audit_v25_g5d_frozen_pairs.py",
     "audit_v25_g6a_preregistered_quotes.py",
     "audit_v25_g6b_executed_demo_arm.py",
 )
