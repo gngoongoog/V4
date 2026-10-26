@@ -179,6 +179,14 @@ def audit(db: sqlite3.Connection, doc: dict, *, now_ms: int) -> dict:
     population=check_census(db,now_ms=now_ms)
     paired=check_booked(db,now_ms=now_ms)
     candidate_proof=verify_sealed_candidate(db,now_ms=now_ms)
+    candidate_runs=[candidate for candidate in candidate_proof.get("runs",[])
+                    if candidate["run_id"]==doc["run_id"]
+                    and candidate["context_sha256"]==doc["context_sha256"]
+                    and candidate["mode"]==doc["mode"]
+                    and candidate["sealed_ms"]<doc["holdout_start_ms"]]
+    sealed_scope_verified=(candidate_proof["status"]=="locally_consistent_candidate_only"
+                           and len(candidate_runs)==1
+                           and candidate_runs[0]["matching_candidate_receipts"]>0)
     start,end=doc["holdout_start_ms"],doc["holdout_end_ms"]
     # The manifest determines the account, mode, run and time before any
     # result is selected. A position closing later is NOT postdated as proof.
@@ -281,8 +289,8 @@ def audit(db: sqlite3.Connection, doc: dict, *, now_ms: int) -> dict:
         "frozen_policy_checkpoint_sha256":doc["frozen_snapshot_sha256"],
         "adaptive_policy_sealed":False,"adaptive_online_learning_possible":True,
         "sealed_candidate_replay_integrity":candidate_proof["status"],
-        "sealed_candidate_is_read_only_shadow":
-            candidate_proof["status"]=="locally_consistent_candidate_only",
+        "sealed_candidate_is_read_only_shadow":sealed_scope_verified,
+        "sealed_candidate_not_yet_verified_for_this_holdout":not sealed_scope_verified,
         "sealed_candidate_broker_execution":False,
         "new_broker_training_labels_admitted_after_cutoff":admitted,
         "all_account_open_intents_in_holdout":len(all_command_ids),
