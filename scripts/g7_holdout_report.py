@@ -26,6 +26,7 @@ from g7_core_source_audit import check as check_source
 from g7_cohort_overlap_gate import gate as check_epochs
 from g7_demo_broker_lineage import audit as check_booked
 from g7_full_intent_census import audit as check_census
+from g7f_sealed_candidate_audit import audit as verify_sealed_candidate
 
 PROTOCOL = "g7e-local-holdout-manifest-v1"
 MIN_TRADES = 30
@@ -177,6 +178,7 @@ def audit(db: sqlite3.Connection, doc: dict, *, now_ms: int) -> dict:
     check_epochs(db,now_ms=now_ms)
     population=check_census(db,now_ms=now_ms)
     paired=check_booked(db,now_ms=now_ms)
+    candidate_proof=verify_sealed_candidate(db,now_ms=now_ms)
     start,end=doc["holdout_start_ms"],doc["holdout_end_ms"]
     # The manifest determines the account, mode, run and time before any
     # result is selected. A position closing later is NOT postdated as proof.
@@ -278,6 +280,10 @@ def audit(db: sqlite3.Connection, doc: dict, *, now_ms: int) -> dict:
         "locally_preregistered":True,"external_preregistration_timestamp":False,
         "frozen_policy_checkpoint_sha256":doc["frozen_snapshot_sha256"],
         "adaptive_policy_sealed":False,"adaptive_online_learning_possible":True,
+        "sealed_candidate_replay_integrity":candidate_proof["status"],
+        "sealed_candidate_is_read_only_shadow":
+            candidate_proof["status"]=="locally_consistent_candidate_only",
+        "sealed_candidate_broker_execution":False,
         "new_broker_training_labels_admitted_after_cutoff":admitted,
         "all_account_open_intents_in_holdout":len(all_command_ids),
         "eligible_system_demo_open_intents":denominator,
