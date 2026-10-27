@@ -90,7 +90,7 @@ pub fn genome(
     b: &BrainConfig,
     t: &Telemetry,
 ) -> Result<Option<braintrade_domain::studio::Genome>> {
-    if b.id != "generated" || b.report_id.is_empty() {
+    if b.id != "generated" || b.report_id.is_empty() || !t.demo || t.account_trade_mode!=Some(0) {
         return Ok(None);
     }
     let raw: Option<String> = db
@@ -100,8 +100,33 @@ pub fn genome(
             |r| r.get(0),
         )
         .optional()?;
-    raw.map(|s| Ok(serde_json::from_str::<LabReport>(&s)?.selected))
-        .transpose()
+    let Some(raw)=raw else{return Ok(None)};
+    let Ok(report)=serde_json::from_str::<LabReport>(&raw) else{return Ok(None)};
+    if report.context!=context(t) || report.timeframe!=b.timeframe || !report.reviewable() {
+        return Ok(None);
+    }
+    let approved:Option<String>=db.query_row("SELECT report_hash FROM studio_demo_approvals WHERE context=?1 AND report_id=?2",params![context(t),b.report_id],|r|r.get(0)).optional()?;
+    let hash=format!("{:x}",Sha256::digest(raw.as_bytes()));
+    Ok((approved.as_deref()==Some(hash.as_str())).then_some(report.selected))
+}
+
+/// Explicit operator approval records the exact immutable report; no order is sent.
+pub fn approve_generated(db:&Connection,t:&Telemetry,id:&str,c:&Config,now:u64)->Result<LabReport>{
+    anyhow::ensure!(t.demo && t.account_trade_mode==Some(0),"الاستراتيجيات البحثية متاحة للمراجعة على Demo فقط");
+    let raw:String=db.query_row("SELECT payload FROM studio_runs WHERE id=?1 AND context=?2",params![id,context(t)],|r|r.get(0))?;
+    let r:LabReport=serde_json::from_str(&raw)?;
+    anyhow::ensure!(r.context==context(t) && r.reviewable() && r.captured_ms<=now,
+        "المرشح مرفوض: عينة غير كافية أو نتائج غير موجبة أو تقرير غير سليم");
+    anyhow::ensure!(r.risk.commission_per_lot==c.risk.commission_per_lot && r.risk.slippage_ticks==c.risk.slippage_ticks,
+        "تغيّرت العمولة أو الانزلاق منذ الاختبار؛ يلزم بحث جديد");
+    for (saved,current) in [(r.contract.point,t.point),(r.contract.tick_size,t.tick_size),
+        (r.contract.tick_profit,t.tick_value_profit),(r.contract.tick_loss,t.tick_value_loss)] {
+        anyhow::ensure!(current.is_some_and(|v|v.is_finite() && (saved-v).abs()<=saved*1e-8),
+            "مواصفات العقد لا تطابق الاختبار");
+    }
+    let hash=format!("{:x}",Sha256::digest(raw.as_bytes()));
+    db.execute("INSERT INTO studio_demo_approvals(context,report_id,report_hash,approved_ms) VALUES(?1,?2,?3,?4) ON CONFLICT(context,report_id) DO UPDATE SET report_hash=excluded.report_hash,approved_ms=excluded.approved_ms",params![context(t),id,hash,now])?;
+    Ok(r)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -698,6 +723,7 @@ pub struct Learner {
 
 impl Learner {
     pub fn new(db: &Connection) -> Result<Self> {
+        db.execute_batch("CREATE TABLE IF NOT EXISTS studio_demo_approvals(context TEXT NOT NULL,report_id TEXT NOT NULL,report_hash TEXT NOT NULL,approved_ms INTEGER NOT NULL,PRIMARY KEY(context,report_id));")?;
         db.execute_batch(
             "CREATE TABLE IF NOT EXISTS broker_learning_processed(context TEXT NOT NULL,command_id TEXT NOT NULL,PRIMARY KEY(context,command_id));
              CREATE TABLE IF NOT EXISTS coordinator_samples(source TEXT NOT NULL,bar INTEGER NOT NULL,payload TEXT NOT NULL,outcome TEXT,PRIMARY KEY(source,bar));
@@ -1782,6 +1808,33 @@ mod tests {
         assert_eq!(engine.target_models.values().next().unwrap()[2].samples,1);
         sync_demo_broker_evidence(&db,&t,now).unwrap();
         assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_broker_samples WHERE brain='sniper_learner'",[],|r|r.get::<_,u64>(0)).unwrap(),1);
+    }
+
+    #[test]
+    fn generated_strategy_broker_learning_changes_with_losses_and_survives_restart() {
+        let db=Connection::open_in_memory().unwrap();let _=Learner::new(&db).unwrap();let now=2_000_000_000_000;
+        let source=source_key("demo",TradingMode::Expert,"generated","M1","report-a").unwrap();
+        let weight=||selected_weight(Stats::default(),Stats::default(),broker_stats(&db,&source,None,now).unwrap(),Stats::default(),&IntelligenceContext::default()).weight();
+        assert_eq!(weight(),1.);
+        for i in 1..=13u64 {
+            let gross=if i==1 {3.0} else {-3.0};let net=gross-0.5;let r:f64=net/5.;
+            let receipt=json!({"evidence_source":"mt5_demo_broker","context":"demo","brain":"generated","trading_mode":"expert",
+                "timeframe":"M1","report_id":"report-a","position_id":i,"closed_ms":now-1000+i,
+                "gross":gross,"commission":-0.5,"swap":0.,"fee":0.,"net":net,"closed_volume":0.1,
+                "net_per_lot":net/0.1,"risk_money":5.,"r_multiple":r,"reward":r.tanh(),
+                "context_key":"range|london|tight","regime":"range"});
+            db.execute("INSERT OR IGNORE INTO coordinator_broker_samples(source,position_id,context,brain,closed_ms,payload) VALUES(?1,?2,'demo','generated',?3,?4)",params![source,i,now-1000+i,receipt.to_string()]).unwrap();
+            stamp_test_samples(&db,&source,now);
+            if i==1 {assert!(weight()>1.,"A verified win adjusts the weight");}
+        }
+        assert!(weight()<1.,"Subsequent verified losses must reduce influence");
+        let prior=weight();let _=Learner::new(&db).unwrap();stamp_test_samples(&db,&source,now);
+        assert_eq!(weight(),prior);assert_eq!(broker_stats(&db,&source,None,now).unwrap().samples,13);
+        for isolated in [source_key("other",TradingMode::Expert,"generated","M1","report-a").unwrap(),
+            source_key("demo",TradingMode::Scalping,"generated","M1","report-a").unwrap(),
+            source_key("demo",TradingMode::Expert,"generated","M1","report-b").unwrap()] {
+            assert_eq!(broker_stats(&db,&isolated,None,now).unwrap().samples,0);
+        }
     }
 
 }

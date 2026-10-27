@@ -89,6 +89,26 @@ fn backup_action(action: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
+fn strategy_studio_action(action:String,context:String,value:Option<String>)->Result<Value,String>{
+    if context.len()>1000{return Err("Invalid research context".into())}
+    let (route,body)=match action.as_str(){
+        "run"=>{
+            let tf=value.ok_or("Missing timeframe")?;
+            if tf!="ALL" && !braintrade_domain::studio::TIMEFRAMES.contains(&tf.as_str()){return Err("Unknown timeframe".into())}
+            ("/v1/studio/run",json!({"context":context,"timeframe":tf}))
+        },
+        "auto_on"|"auto_off"=>("/v1/studio/auto",json!({"context":context,"enabled":action=="auto_on"})),
+        "cancel"=>("/v1/studio/cancel",json!({})),
+        "adopt_demo"=>{
+            let id=value.filter(|v|!v.is_empty()&&v.len()<=100).ok_or("Missing report ID")?;
+            ("/v1/execution/generated-strategy",json!({"context":context,"report_id":id}))
+        },
+        _=>return Err("Unknown strategy action".into())
+    };
+    open_client()?.post(route,body).map_err(|e|e.to_string())
+}
+
+#[tauri::command]
 fn backtest_action(action: String, request: Option<Value>) -> Result<Value, String> {
     let (route,body)=match action.as_str(){
         "start"=>{
@@ -268,7 +288,7 @@ pub fn run() {
             get_status, read_panel, read_trade_history, execute_control,
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
-            backup_action, backtest_action, update_brain_control, bind_execution
+            backup_action, backtest_action, strategy_studio_action, update_brain_control, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");

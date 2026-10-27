@@ -1,3 +1,11 @@
+# Current development — Enterprise V25 RC4 (0.25.3), 2026-10-27
+
+Work on `feature/v25-rc4-strategy-learning-cycle-20261027`, based on RC3 `a42731abc3ecdb664675bae07bf6efc6eb5d3e2d` (PR #202). Main remains tested RC2 `63f00265e2fac2bcf1fe94c3119dbc5ce0ae916f`; do not merge automatically.
+
+Current scope: bounded training-only strategy evolution, persisted causal parent lineage, complete trial diagnostics, modern Studio controls, explicit exact-report Demo Expert advisor approval, and broker-feedback regression coverage. No automatic REAL research promotion. See `docs/v25/RC4_STRATEGY_LEARNING_AR.md`. Source is pending CI until evidence is recorded; native MT5, profitability and independent OOS remain unverified.
+
+Earlier sections below are historical.
+
 # Current review — Enterprise V25 RC3 (0.25.2), 2026-10-27
 
 Main baseline: `63f00265e2fac2bcf1fe94c3119dbc5ce0ae916f` (RC2), promoted by explicit user instruction. Post-promotion Windows/Linux run `40436758683` passed. Previous main is preserved at `archive/main-before-v25-rc2-20261027`.
