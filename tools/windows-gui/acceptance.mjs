@@ -154,6 +154,19 @@ try{
   assert.equal(s.config.trading.mode,'sniper');assert.equal(s.config.trading.sniper_brain,'learner');assert.equal(s.commission_editor.amount,7);
  });
  await check('final safe full exit',exitSafely);
+ await check('late IPC reads and controls cannot respawn an accepted shutdown',async()=>{
+  await launch();await status();
+  const result=await invoke('shutdown_core');assert.equal(result.safe,true);
+  await until(async()=>!await portOpen(18741));
+  // Keep the real renderer alive: delayed work must fail without ensure_core.
+  for(const [command,args] of [['get_status',{}],['read_panel',{route:'/v1/config'}],
+      ['execute_control',{action:'reconnect'}]]){
+   await assert.rejects(()=>invoke(command,args));
+   assert.equal(await portOpen(18741),false,'Late IPC restarted the closed Core');
+  }
+  await invoke('close_terminal');await until(()=>app.exitCode!==null);
+  await until(async()=>!await portOpen(port));browser=undefined;page=undefined;
+ });
  assert.deepEqual(report.page_errors,[],'Unhandled renderer errors');
 }catch(e){failed=true;report.error=String(e);console.error(e);
  if(page&&!page.isClosed()){

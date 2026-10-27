@@ -2,13 +2,14 @@
 //! a broker token or connects directly to the Core's HTTP port.
 use braintrade_runtime::{ensure_core, Client};
 use serde_json::{json, Value};
-use std::{thread, time::{Duration, Instant}, sync::{Arc,atomic::{AtomicBool,Ordering}}};
+use std::{thread, time::{Duration, Instant}};
 use tauri::ipc::Channel;
+use crate::lifecycle::CoreLifecycle;
 
-struct AppLifecycle { stopping: Arc<AtomicBool> }
+static CORE_LIFECYCLE:CoreLifecycle=CoreLifecycle::new();
 
 fn open_client() -> Result<Client, String> {
-    ensure_core().map_err(|err| err.to_string())
+    CORE_LIFECYCLE.connect(||ensure_core().map_err(|err| err.to_string()))
 }
 
 #[tauri::command]
@@ -62,14 +63,13 @@ fn execute_control(action: String, confirm_live_login: Option<String>) -> Result
 }
 
 #[tauri::command]
-fn shutdown_core(lifecycle: tauri::State<AppLifecycle>) -> Result<Value, String> {
+fn shutdown_core() -> Result<Value, String> {
     // Core checks STOPPED, broker freshness, empty positions and resolved intents.
     // A rejected shutdown must never exit the terminal or kill a gateway.
-    let result=open_client()?.post("/v1/shutdown", json!({})).map_err(|err|err.to_string())?;
-    // Prevent the live-status worker from automatically respawning Core while
-    // the shutdown response is handed back to the renderer.
-    lifecycle.stopping.store(true,Ordering::SeqCst);
-    Ok(result)
+    CORE_LIFECYCLE.shutdown(||{
+        ensure_core().map_err(|err|err.to_string())?
+            .post("/v1/shutdown",json!({})).map_err(|err|err.to_string())
+    })
 }
 
 #[tauri::command]
@@ -226,17 +226,16 @@ fn priority_handoff(sniper_active: bool) -> Result<Value, String> {
 /// depends on when the gateway actually supplies a completed snapshot.
 /// On disconnect, transmit unavailability instead of retaining stale metrics.
 #[tauri::command]
-fn subscribe_status(channel: Channel<Value>, lifecycle: tauri::State<AppLifecycle>) -> Result<(), String> {
-    let stopping=Arc::clone(&lifecycle.stopping);
+fn subscribe_status(channel: Channel<Value>) -> Result<(), String> {
     thread::Builder::new().name("mt5-status-stream".into()).spawn(move || {
         let mut last_payload = String::new();
         let mut client: Option<Client> = None;
         let mut failures: u32 = 0;
         let mut last_send: Option<Instant> = None;
         loop {
-            if stopping.load(Ordering::SeqCst) { break; }
-            if client.is_none() { client = ensure_core().ok(); }
-            if stopping.load(Ordering::SeqCst) { break; }
+            if CORE_LIFECYCLE.stopped() { break; }
+            if client.is_none() { client = open_client().ok(); }
+            if CORE_LIFECYCLE.stopped() { break; }
             let payload = client.as_ref().and_then(|c| c.get("/v1/status").ok());
             let next = match payload {
                 Some(status) => { failures = 0; json!({"ok":true,"status":status}) },
@@ -265,7 +264,6 @@ fn subscribe_status(channel: Channel<Value>, lifecycle: tauri::State<AppLifecycl
 
 pub fn run() {
     tauri::Builder::default()
-        .manage(AppLifecycle {stopping:Arc::new(AtomicBool::new(false))})
         .invoke_handler(tauri::generate_handler![
             get_status, read_panel, read_trade_history, execute_control,
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
