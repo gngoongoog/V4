@@ -53,7 +53,7 @@ def check(exe=None):
             try:api(path,payload)
             except urllib.error.HTTPError as error:
                 assert error.code==400,(path,error.code,error.read().decode())
-            else:raise AssertionError("Unsafe handoff unexpectedly accepted")
+            else:raise AssertionError(f"Unsafe request unexpectedly accepted: {path}")
 
         snap=empty_snapshot("")
         snap.update(connected=True,demo=True,account_trade_mode=0,
@@ -127,9 +127,13 @@ def check(exe=None):
             after=api("/v1/config")["config"]["trading"]
             assert after==before,(before,after)
             assert not api("/v1/status")["requested_run"]
-            print("PASS: exclusive Sniper priority, all 3 backups, live monitoring handoff, no positions/orders/stale quotes, persistence and restart STOPPED")
+            # A previously observed MT5 session is not assumed flat after a
+            # Core restart. This is an isolated synthetic snapshot, not MT5.
+            refuses("/v1/shutdown",{})
+            publish()
             api("/v1/shutdown",{})
             core.wait(timeout=8)
+            print("PASS: exclusive Sniper priority, all 3 backups, live monitoring handoff, no positions/orders/stale quotes, persistence, restart STOPPED and fresh-snapshot shutdown gate")
         finally:
             if core and core.poll() is None:
                 core.kill()
