@@ -55,9 +55,9 @@ def write_session_token(data_path: str | os.PathLike[str], token: str) -> Path:
     return path
 
 
-def parse_packet(raw: bytes | str, token: str, received_ms: int | None = None) -> dict:
+def parse_packet(raw: bytes | bytearray | str, token: str, received_ms: int | None = None) -> dict:
     """Validate BT2 or the backwards-compatible BT1 native quote packet."""
-    if isinstance(raw, bytes):
+    if isinstance(raw, (bytes, bytearray)):
         if len(raw) > MAX_PACKET_BYTES:
             raise ValueError("Native tick packet is too large")
         try:
@@ -305,7 +305,7 @@ class _WindowsPipeServer:
                         line, _, remainder = pending.partition(b"\n")
                         pending = bytearray(remainder)
                         try:
-                            self.mailbox.push(parse_packet(line, self.token))
+                            self.mailbox.push(parse_packet(bytes(line), self.token))
                         except ValueError:
                             continue
             finally:
