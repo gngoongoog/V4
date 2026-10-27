@@ -43,11 +43,17 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
   const action=nodes(empty).find(x=>x.type==='button'&&String(x.props.children).includes('حفظ الوضع'));
   assert(action.props.disabled,'Cannot save absent Core configuration');
  }
- const settings=exportsObj.TradingSettingsOperations({source:{config:{trading:{mode:'expert',priority_enabled:false,sniper_active:true,fallback_mode:'expert',sniper_style:'auto',sniper_brain:'classic'},risk:{slippage_ticks:2}},commission_editor:{amount:7,basis:'round_trip'}},disabled:false,armed:false,apply:async v=>{saved=v}});
+ const settings=exportsObj.TradingSettingsOperations({source:{config:{trading:{mode:'expert',priority_enabled:false,sniper_active:true,fallback_mode:'expert',sniper_style:'auto',sniper_brain:'classic',sniper_target_mode:'fixed',sniper_target_points:50,sniper_stop_points:80,pip_points:10,sniper_pip_price:0.1,sniper_cooldown_seconds:0,sniper_max_hold_seconds:120,sniper_min_target_pips:2,sniper_max_target_pips:10,max_cost_fraction:0.45,demo_flexible:true,adaptive_exits:true},risk:{slippage_ticks:2}},commission_editor:{amount:7,basis:'round_trip',account:{login:123,server:'Demo',symbol:'XAUUSD',currency:'USD'}}},disabled:false,armed:false,apply:async v=>{saved=v}});
  assert(String(nodes(settings).find(x=>x.type==='small').props.children).includes('إعدادات Core'));
  const save=nodes(settings).filter(x=>x.type==='button').find(x=>String(x.props.children).includes('حفظ الوضع'));
  assert(save,'trading editor has Core save action');await save.props.onClick();
  assert(saved&&saved.commission_per_lot===7&&saved.commission_basis==='round_trip'&&saved.trading.mode==='expert');
+ assert.equal(saved.trading.sniper_target_points,50);
+ assert.equal(saved.trading.sniper_stop_points,80);
+ assert.equal(saved.trading.max_cost_fraction,0.45);
+ assert.equal(saved.account.login,123,'explicit MT5 account must be sent for commission binding');
+ assert(nodes(settings).some(x=>x.props?.['aria-label']==='sniper fixed target pips'));
+ assert(nodes(settings).some(x=>x.props?.['aria-label']==='sniper cooldown seconds'));
  let brainState=null;
  const brains=exportsObj.BrainControlsOperations({source:{controls_available:true,brains:[{name:'system',config:{id:'system'}},{name:'Trend',config:{id:'trend'},control:{advisor:true,paper:false}}]},disabled:false,armed:false,onSave:async(...v)=>{brainState=v}});
  const brainButtons=nodes(brains).filter(x=>x.type==='button');assert.equal(brainButtons.length,2,'system control never toggled');

@@ -26,6 +26,7 @@ import {ModeEvidenceOperations} from './mode-evidence-operations';
 import {FrozenCoordinatorOperations,supportedFrozenMode} from './frozen-coordinator-operations';
 import {QuoteClockEvidence} from './quote-clock-evidence';
 import {SniperTickEvidence} from './sniper-tick-evidence';
+import {SniperDiagnosis} from './sniper-diagnosis';
 import {SniperFrozenOperations,eligibleFrozenSniper} from './sniper-frozen-operations';
 import {SniperClassicOperations,eligibleFrozenClassic} from './sniper-classic-operations';
 import {validatePortfolio} from './micro-capital';
@@ -591,22 +592,48 @@ export default function Terminal(){
   }finally{finishWrite(mutation)}
  };
  const runSaveTrading=async(input:Record<string,unknown>)=>{
-  if(preview||!hasTauri()||status?.requested_run){sendNotice('حفظ الوضع والتكاليف يحتاج STOP وCore الأصلي',true);return}
-  const mutation=beginWrite('trading');if(!mutation)return;
+  if(preview||!hasTauri()||status?.requested_run){
+   const error=new Error('حفظ الوضع والتكاليف يحتاج STOP وCore الأصلي');
+   sendNotice(error.message,true);throw error;
+  }
+  const mutation=beginWrite('trading');
+  if(!mutation)throw new Error('طلب حفظ آخر قيد التنفيذ، لم يتم التخلص من التعديلات');
   const serial=panelSerial();
   try{
    await saveTrading(input);
-   if(!writeFresh(mutation))return;
+   if(!writeFresh(mutation))throw new Error('تغير الحساب أو السياق أثناء حفظ الإعدادات');
    const latest=unwrap(await readPanel('/v1/trading/settings'));
-   if(!writeFresh(mutation))return;
+   if(!writeFresh(mutation))throw new Error('تغير الحساب أو السياق قبل تأكيد القيم المحفوظة');
    const full=unwrap(latest.config);
+   const confirmed=unwrap(full.trading);
+   const requested=unwrap(input.trading);
+   const equal=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
+   // Never claim success from an HTTP 200 alone: verify every submitted
+   // strategy parameter against the just-reloaded Core configuration.
+   if(Object.entries(requested).some(([key,value])=>!equal(confirmed[key],value)))
+    throw new Error('القيم التي أعادها Core تختلف عن الإعدادات المطلوبة');
+   const commission=unwrap(latest.commission_editor);
+   const accountExpected=unwrap(input.account);
+   const accountConfirmed=unwrap(commission.account);
+   if(Object.keys(accountExpected).length
+       &&Object.entries(accountExpected).some(([key,value])=>!equal(accountConfirmed[key],value)))
+    throw new Error('تغير ملف حساب MT5 أثناء حفظ القناص؛ أعد الربط والقراءة');
+   if(Object.keys(accountConfirmed).length
+      &&(!equal(commission.amount,input.commission_per_lot)
+       ||!equal(commission.basis,input.commission_basis)))
+    throw new Error('ملف عمولة MT5 المحفوظ لا يطابق القيمة المطلوبة');
+   const riskConfirmed=unwrap(full.risk);
+   const totalFee=Number(input.commission_per_lot)*(input.commission_basis==='per_side'?2:1);
+   if(!equal(riskConfirmed.commission_per_lot,totalFee)
+      ||!equal(riskConfirmed.slippage_ticks,input.slippage_ticks))
+    throw new Error('قيم التكلفة والانزلاق المحفوظة لا تطابق طلب الواجهة');
    publishPanel(serial,latest);
    if(viewGeneration.current.isCurrent(serial)){
     scopedGeneration.current.invalidate('config');scopedGeneration.current.invalidate('brains');
     setConfig(full);setConfigScope(contextKey);setBrainReport(null);void refreshBrainEvidence();
    }
-   sendNotice('تم تأكيد وحفظ وضع المنسق والعمولة من Rust Core');
-  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
+   sendNotice('تمت مطابقة وحفظ إعدادات القناص/المنسق والعمولة مع قراءة Rust Core');
+  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true);throw e}
   finally{finishWrite(mutation)}
  };
  const runFrozenSniper=async(action:'freeze'|'stop')=>{
@@ -799,7 +826,7 @@ export default function Terminal(){
            <label className="check-label"><input type="checkbox" disabled={!activeSettingsEdit||busy||preview} checked={activeClearTelegram} onChange={e=>{setTelegramDraftScope(contextKey);setClearTelegram(e.target.checked)}}/>حذف رمز Telegram المحفوظ</label>
            <button className="save-button" disabled={busy||preview||!activeSettingsEdit} onClick={()=>void saveGeneral()}>حفظ وإعادة ربط MT5</button>
           </div>:
-        page==='trading'||page==='sniper'?<div className="feature-zone"><div className="live-indicator"><strong>Sniper Priority</strong><span>{display?.analysis?.regime||'UNAVAILABLE'}</span><b>{display?.analysis?.action||'WAIT'}</b></div><p>العقل المنفّذ الوحيد يختاره Core، وأي تبديل أثناء التشغيل يحتاج أوامر MT5 مُسوّاة وعدم وجود مراكز مفتوحة.</p>{page==='sniper'&&<><QuoteClockEvidence status={status} preview={preview}/><SniperTickEvidence status={!preview&&feed.broker?status:null} report={activeSniperAudit} preview={preview} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperTickAudit');void readPanel('/v1/execution/sniper-tick-audit').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:null})})}}/><SniperFrozenOperations status={!preview&&feed.broker?status:null} page={pageData} report={activeSniperFrozen} preview={preview} disabled={busy} onAction={runFrozenSniper} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperFrozen');void readPanel('/v1/execution/frozen-sniper').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperFrozenSlot({scope:viewScope,report:null})})}}/><SniperClassicOperations status={!preview&&feed.broker?status:null} page={pageData} report={activeClassicFrozen} preview={preview} disabled={busy} onAction={runFrozenClassic} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('classicFrozen');void readPanel('/v1/execution/frozen-classic').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setClassicFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setClassicFrozenSlot({scope:viewScope,report:null})})}}/></>}<TradingSettingsOperations source={pageData} key={viewScope} disabled={busy||preview} armed={status?.requested_run===true} apply={runSaveTrading}/><div className="quick-ops"><button disabled={busy||preview} onClick={()=>void runHandoff(true)}>تفعيل أولوية القناص</button><button disabled={busy||preview} onClick={()=>void runHandoff(false)}>تحويل التنفيذ للبديل</button></div><div className="safe-note">هذه الأزرار تستدعي قواعد التحويل الفعلية في Rust؛ لا يوجد تجاوز لفحوصات المحرك.</div><EnterpriseSupervisor preview={preview} key={contextKey} armed={status?.requested_run===true} onSave={runSaveSupervisor}/><Table rows={rows}/></div>:
+        page==='trading'||page==='sniper'?<div className="feature-zone"><div className="live-indicator"><strong>Sniper Priority</strong><span>{display?.analysis?.regime||'UNAVAILABLE'}</span><b>{display?.analysis?.action||'WAIT'}</b></div><p>العقل المنفّذ الوحيد يختاره Core، وأي تبديل أثناء التشغيل يحتاج أوامر MT5 مُسوّاة وعدم وجود مراكز مفتوحة.</p>{page==='sniper'&&<><QuoteClockEvidence status={status} preview={preview}/><SniperDiagnosis key={viewScope} status={status} preview={preview}/><SniperTickEvidence status={!preview&&feed.broker?status:null} report={activeSniperAudit} preview={preview} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperTickAudit');void readPanel('/v1/execution/sniper-tick-audit').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:null})})}}/><SniperFrozenOperations status={!preview&&feed.broker?status:null} page={pageData} report={activeSniperFrozen} preview={preview} disabled={busy} onAction={runFrozenSniper} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperFrozen');void readPanel('/v1/execution/frozen-sniper').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperFrozenSlot({scope:viewScope,report:null})})}}/><SniperClassicOperations status={!preview&&feed.broker?status:null} page={pageData} report={activeClassicFrozen} preview={preview} disabled={busy} onAction={runFrozenClassic} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('classicFrozen');void readPanel('/v1/execution/frozen-classic').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setClassicFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setClassicFrozenSlot({scope:viewScope,report:null})})}}/></>}<TradingSettingsOperations source={pageData} key={viewScope} disabled={busy||preview} armed={status?.requested_run===true} apply={runSaveTrading}/><div className="quick-ops"><button disabled={busy||preview} onClick={()=>void runHandoff(true)}>تفعيل أولوية القناص</button><button disabled={busy||preview} onClick={()=>void runHandoff(false)}>تحويل التنفيذ للبديل</button></div><div className="safe-note">هذه الأزرار تستدعي قواعد التحويل الفعلية في Rust؛ لا يوجد تجاوز لفحوصات المحرك.</div><EnterpriseSupervisor preview={preview} key={contextKey} armed={status?.requested_run===true} onSave={runSaveSupervisor}/><Table rows={rows}/></div>:
         page==='execution'?<div className="feature-zone"><ExecutionBindingOperations source={pageData} key={viewScope} telemetry={status?.telemetry??null} ready={!preview&&trustworthy} armed={status?.requested_run===true} disabled={busy||preview} onBind={runBrokerBind}/>
         <ExecutionQualityOperations status={!preview&&feed.broker?status:null} report={executionQuality} disabled={preview||busy}
           onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('executionQuality');void readPanel('/v1/execution/quality').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setExecutionQuality(unwrap(v))}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setExecutionQuality(null)})}}/>
