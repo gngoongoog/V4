@@ -68,6 +68,26 @@ class NativeSniperLifecycleTests(unittest.TestCase):
         server._thread = worker
         self.assertFalse(server.running)
 
+    def test_gateway_periodically_recovers_a_dead_pipe_without_resetting_mt5(self):
+        source=(ROOT / "gateway" / "mt5_gateway.py").read_text(encoding="utf-8")
+        self.assertIn("next_native_rebind=0.0",source)
+        self.assertIn("if mono >= next_native_rebind:",source)
+        self.assertIn("if not native.available:",source)
+        self.assertIn("native.bind_terminal(mt5.terminal_info())",source)
+        server_source=(ROOT / "gateway" / "sniper_native.py").read_text(encoding="utf-8")
+        self.assertIn("def _serve(self)",server_source)
+        self.assertIn("Native Sniper pipe",server_source)
+        self.assertIn("_log_problem('CreateNamedPipeW'",server_source)
+
+    def test_ea_waiting_status_identifies_stage_and_windows_io_error_without_token(self):
+        ea=(ROOT / "mt5" / "BrainTradeSniperBridge.mq5").read_text(encoding="utf-8")
+        self.assertIn('Last I/O error: ',ea)
+        self.assertIn('Last I/O stage: ',ea)
+        self.assertIn('Token file: ',ea)
+        self.assertNotIn('\\nToken: ',ea)
+        self.assertIn('g_last_io_error = GetLastError()',ea)
+        self.assertNotIn('OrderSend(',ea)
+
     @unittest.skipUnless(os.name == "nt", "Windows named-pipe contract")
     def test_real_windows_blocking_connect_stops_and_same_name_rebinds(self):
         pipe_name = rf"\\.\pipe\BrainTradeSniperTest-{os.getpid()}-{id(self)}"
