@@ -591,22 +591,38 @@ export default function Terminal(){
   }finally{finishWrite(mutation)}
  };
  const runSaveTrading=async(input:Record<string,unknown>)=>{
-  if(preview||!hasTauri()||status?.requested_run){sendNotice('حفظ الوضع والتكاليف يحتاج STOP وCore الأصلي',true);return}
-  const mutation=beginWrite('trading');if(!mutation)return;
+  if(preview||!hasTauri()||status?.requested_run){
+   const error=new Error('حفظ الوضع والتكاليف يحتاج STOP وCore الأصلي');
+   sendNotice(error.message,true);throw error;
+  }
+  const mutation=beginWrite('trading');
+  if(!mutation)throw new Error('طلب حفظ آخر قيد التنفيذ، لم يتم التخلص من التعديلات');
   const serial=panelSerial();
   try{
    await saveTrading(input);
-   if(!writeFresh(mutation))return;
+   if(!writeFresh(mutation))throw new Error('تغير الحساب أو السياق أثناء حفظ الإعدادات');
    const latest=unwrap(await readPanel('/v1/trading/settings'));
-   if(!writeFresh(mutation))return;
+   if(!writeFresh(mutation))throw new Error('تغير الحساب أو السياق قبل تأكيد القيم المحفوظة');
    const full=unwrap(latest.config);
+   const confirmed=unwrap(full.trading);
+   const requested=unwrap(input.trading);
+   const equal=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
+   // Never claim success from an HTTP 200 alone: verify every submitted
+   // strategy parameter against the just-reloaded Core configuration.
+   if(Object.entries(requested).some(([key,value])=>!equal(confirmed[key],value)))
+    throw new Error('القيم التي أعادها Core تختلف عن الإعدادات المطلوبة');
+   const commission=unwrap(latest.commission_editor);
+   if(Object.keys(unwrap(commission.account)).length
+      &&(!equal(commission.amount,input.commission_per_lot)
+       ||!equal(commission.basis,input.commission_basis)))
+    throw new Error('ملف عمولة MT5 المحفوظ لا يطابق القيمة المطلوبة');
    publishPanel(serial,latest);
    if(viewGeneration.current.isCurrent(serial)){
     scopedGeneration.current.invalidate('config');scopedGeneration.current.invalidate('brains');
     setConfig(full);setConfigScope(contextKey);setBrainReport(null);void refreshBrainEvidence();
    }
-   sendNotice('تم تأكيد وحفظ وضع المنسق والعمولة من Rust Core');
-  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
+   sendNotice('تمت مطابقة وحفظ إعدادات القناص/المنسق والعمولة مع قراءة Rust Core');
+  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true);throw e}
   finally{finishWrite(mutation)}
  };
  const runFrozenSniper=async(action:'freeze'|'stop')=>{
