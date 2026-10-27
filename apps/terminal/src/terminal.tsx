@@ -613,10 +613,19 @@ export default function Terminal(){
    if(Object.entries(requested).some(([key,value])=>!equal(confirmed[key],value)))
     throw new Error('القيم التي أعادها Core تختلف عن الإعدادات المطلوبة');
    const commission=unwrap(latest.commission_editor);
-   if(Object.keys(unwrap(commission.account)).length
-      &&(!equal(commission.amount,input.commission_per_lot)
-       ||!equal(commission.basis,input.commission_basis)))
+   const accountExpected=unwrap(input.account);
+   const accountConfirmed=unwrap(commission.account);
+   if(Object.keys(accountExpected).length
+       &&Object.entries(accountExpected).some(([key,value])=>!equal(accountConfirmed[key],value)))
+    throw new Error('تغير ملف حساب MT5 أثناء حفظ القناص؛ أعد الربط والقراءة');
+   if(!equal(commission.amount,input.commission_per_lot)
+      ||!equal(commission.basis,input.commission_basis))
     throw new Error('ملف عمولة MT5 المحفوظ لا يطابق القيمة المطلوبة');
+   const riskConfirmed=unwrap(full.risk);
+   const totalFee=Number(input.commission_per_lot)*(input.commission_basis==='per_side'?2:1);
+   if(!equal(riskConfirmed.commission_per_lot,totalFee)
+      ||!equal(riskConfirmed.slippage_ticks,input.slippage_ticks))
+    throw new Error('قيم التكلفة والانزلاق المحفوظة لا تطابق طلب الواجهة');
    publishPanel(serial,latest);
    if(viewGeneration.current.isCurrent(serial)){
     scopedGeneration.current.invalidate('config');scopedGeneration.current.invalidate('brains');
