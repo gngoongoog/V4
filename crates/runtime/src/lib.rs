@@ -51,6 +51,7 @@ mod brain_integrity;
 mod mode_evidence;
 mod learning_forward_audit;
 mod trading_settings;
+mod reconciliation_audit;
 pub mod news;
 mod research;
 mod risk_monitor;
@@ -264,6 +265,10 @@ impl Engine{
                 "blockers":sniper_blocker_review::report(&self.db,&context,now_ms())?,
                 "read_only":true,"endpoint_submits_orders":false,
                 "note":"This is a sampled retrospective diagnostic, not every Fast Pulse or broker order."}));
+        }
+        if method=="GET" && path=="/v1/execution/reconciliation" {
+            let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
+            return reconciliation_audit::report(&self.db,status.telemetry.as_ref(),status.gateway_fresh,now_ms());
         }
         if path.starts_with("/v1/execution") {
             let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
