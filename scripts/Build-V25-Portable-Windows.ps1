@@ -19,6 +19,9 @@ try {
   Run npm @('--prefix','apps/terminal','test')
   Run npm @('--prefix','apps/terminal','run','build')
   Run python @('scripts/prepare-tauri-runtime.py')
+  # The Tauri shutdown regression launches an isolated debug Core and verifies
+  # its real Windows process handle; build that fixture before the test suite.
+  Run cargo @('build','--locked','-p','braintrade-runtime','--bin','braintrade-core')
   Run cargo @('test','--locked','-p','braintrade-domain','-p','braintrade-runtime','-p','braintrade-tauri')
   Run python @('-m','unittest','discover','-s','tests','-v')
   Run python @('scripts/audit_v25_windows_pages.py','--output','test-output/v25/windows-page-matrix.json')

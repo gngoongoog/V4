@@ -56,4 +56,5 @@ jobs:
       - run: npm --prefix apps/terminal ci --no-audit --no-fund
       - run: npm --prefix apps/terminal run build
       - run: python scripts/prepare-tauri-runtime.py
+      - run: cargo build --locked -p braintrade-runtime --bin braintrade-core
       - run: cargo test --locked -p braintrade-tauri --bin BrainTradeNext

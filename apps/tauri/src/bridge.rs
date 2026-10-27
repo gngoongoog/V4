@@ -400,6 +400,44 @@ mod tests {
         handle.wait().unwrap();
         assert!(child.wait().unwrap().success());
     }
+    #[cfg(windows)]
+    #[test]
+    fn tauri_full_exit_waits_for_a_real_isolated_core() {
+        use std::{fs,process::{Child,Command,Stdio},time::{SystemTime,UNIX_EPOCH}};
+        struct Fixture { dir:std::path::PathBuf, child:Option<Child>, old:Vec<(&'static str,Option<std::ffi::OsString>)> }
+        impl Drop for Fixture {
+            fn drop(&mut self){
+                if let Some(child)=self.child.as_mut(){if child.try_wait().ok().flatten().is_none(){let _=child.kill();let _=child.wait();}}
+                for (key,value) in &self.old {unsafe{match value {Some(v)=>std::env::set_var(key,v),None=>std::env::remove_var(key)}}}
+                let _=fs::remove_dir_all(&self.dir);
+            }
+        }
+        let suffix=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir=std::env::temp_dir().join(format!("braintrade-tauri-exit-{}-{suffix}",std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let keys=["BRAINTRADE_DATA_DIR","BRAINTRADE_GATEWAY_DISABLED","BRAINTRADE_NEWS_OFFLINE"];
+        let mut fixture=Fixture{dir:dir.clone(),child:None,old:keys.iter().map(|k|(*k,std::env::var_os(k))).collect()};
+        unsafe{std::env::set_var(keys[0],&dir);std::env::set_var(keys[1],"1");std::env::set_var(keys[2],"1");}
+        let binary=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/braintrade-core.exe");
+        fixture.child=Some(Command::new(binary).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap());
+        let pid=fixture.child.as_ref().unwrap().id();
+        let deadline=Instant::now()+Duration::from_secs(20);
+        loop {
+            if let Ok(client)=connect_existing_core(){
+                if let Ok(status)=client.get("/v1/status"){
+                    if process_identity(&status).is_ok_and(|(observed,_)|observed==pid){break;}
+                }
+            }
+            assert!(Instant::now()<deadline,"isolated Core did not become ready");
+            thread::sleep(Duration::from_millis(100));
+        }
+        let state=AppLifecycle::default();
+        let response=confirm_full_exit(&state).unwrap();
+        assert_eq!(response["gateway_stopped"],true);
+        assert!(state.stopping.load(Ordering::SeqCst));
+        assert!(fixture.child.as_mut().unwrap().wait().unwrap().success());
+        assert!(dir.join("full-exit.requested").exists());
+    }
     #[test]
     fn read_routes_are_strictly_scoped() {
         assert!(allowed_read_route("/v1/risk/monitor"));
