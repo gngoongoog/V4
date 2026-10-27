@@ -12,7 +12,7 @@ const core=fs.readFileSync(path.join(root,'../../crates/runtime/src/lib.rs'),'ut
 
 for(const name of ['src/sniper-diagnosis.tsx','src/operations.tsx']){
  const source=file(name);
- const result=ts.transpileModule(source,{fileName:name,compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJS},reportDiagnostics:true});
+ const result=ts.transpileModule(source,{fileName:name,compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX},reportDiagnostics:true});
  const errors=(result.diagnostics||[]).filter(d=>d.category===ts.DiagnosticCategory.Error);
  assert.equal(errors.length,0,errors.map(e=>ts.flattenDiagnosticMessageText(e.messageText,'\n')).join('\n'));
 }
