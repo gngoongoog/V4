@@ -20,7 +20,7 @@ assert.match(tauri,/"\/v1\/execution\/sniper-diagnosis"/,'Tauri read-only allowl
 assert.match(core,/sniper_opportunities::report\(&self\.db,&context\)/);
 assert.match(core,/sniper_blocker_review::report\(&self\.db,&context,now_ms\(\)\)/);
 assert.match(core,/t\.account_trade_mode==Some\(0\)/,'Demo must be verified');
-assert.match(core,/"broker_orders_submitted":false/);
+assert.match(core,/"endpoint_submits_orders":false/);
 assert.match(ui,/r\.context===identity/,'account scope must be verified in UI');
 assert.match(ui,/setInterval\(\(\)=>\{void read\(\)\},7000\)/);
 assert.match(ui,/setReport\(null\)/,'no stale diagnosis on failure');
