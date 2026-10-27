@@ -8,6 +8,7 @@ on:
       - 'apps/tauri/src/**'
       - 'apps/terminal/src/terminal.tsx'
       - 'crates/runtime/src/lib.rs'
+      - 'crates/runtime/src/lifecycle.rs'
       - 'gateway/mt5_gateway.py'
       - 'tests/test_full_exit_*.py'
       - '.github/workflows/v25-full-exit-regression.yml'
@@ -33,6 +34,7 @@ jobs:
         with:
           python-version: '3.13'
       - run: cargo test --locked -p braintrade-runtime full_exit_is_blocked_if_monitoring_or_account_is_unverified
+      - run: cargo test --locked -p braintrade-runtime lifecycle::tests
       - run: cargo build --locked -p braintrade-runtime --bin braintrade-core
       - run: python -B -m unittest discover -s tests -p 'test_full_exit_*.py' -v
 
@@ -48,6 +50,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - run: npm --prefix apps/terminal ci --no-audit --no-fund
       - run: npm --prefix apps/terminal run build
+      - run: python scripts/prepare-tauri-runtime.py
       - run: cargo test --locked -p braintrade-tauri --bin BrainTradeNext

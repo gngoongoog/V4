@@ -346,6 +346,9 @@ fn subscribe_status(channel: Channel<Value>, lifecycle: tauri::State<AppLifecycl
 }
 
 pub fn run() {
+    // Only a freshly launched UI clears a completed exit marker. Existing
+    // windows and background status workers must never clear it.
+    if let Err(error)=braintrade_runtime::prepare_user_start(){eprintln!("Could not prepare Core startup: {error}");}
     tauri::Builder::default()
         .manage(lifecycle().clone())
         .invoke_handler(tauri::generate_handler![

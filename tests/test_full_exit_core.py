@@ -16,7 +16,7 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = ROOT / "target" / "debug" / ("braintrade-core.exe" if os.name == "nt" else "braintrade-core")
 sys.path.insert(0, str(ROOT / "gateway"))
-from mt5_gateway import lock_gateway
+from mt5_gateway import empty_snapshot, lock_gateway
 
 
 def read_ipc_key(path):
@@ -90,6 +90,12 @@ class CoreFullExitTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 400)
         return json.loads(error.exception.read())["error"]
 
+    def flat_snapshot(self):
+        snapshot = empty_snapshot("OFFLINE TEST FIXTURE")
+        snapshot.update(connected=True, login=123, server="TEST ONLY", currency="USD",
+                        demo=True, account_trade_mode=0, balance=1000.0, equity=1000.0)
+        return snapshot
+
     def test_real_core_waits_for_gateway_cleanup_and_rejects_unsafe_or_wrong_session(self):
         script = self.root / "gateway_fixture.py"
         script.write_text(
@@ -111,6 +117,16 @@ class CoreFullExitTests(unittest.TestCase):
             time.sleep(0.05)
         self.assertTrue((self.root / "fixture-ready.json").exists(), "fixture gateway failed to start")
         self.rejected("wrong-instance")
+        self.rejected(instance)  # The running gateway has not supplied an account snapshot.
+        snapshot = self.flat_snapshot()
+        self.api("/v1/gateway/snapshot", snapshot)
+        snapshot["positions"] = [{"ticket": 1, "symbol": "XAUUSD", "side": "buy", "volume": 0.01,
+                                  "price_open": 2500.0, "price_current": 2500.0,
+                                  "profit": 0.0, "sl": 0.0, "tp": 0.0}]
+        self.api("/v1/gateway/snapshot", snapshot)
+        self.rejected(instance)
+        snapshot["positions"] = []
+        self.api("/v1/gateway/snapshot", snapshot)
         self.api("/v1/start", {})
         self.rejected(instance)
         self.assertIsNone(self.core.poll())
@@ -118,6 +134,7 @@ class CoreFullExitTests(unittest.TestCase):
         self.api("/v1/stop", {})
         result = self.api("/v1/shutdown", {"expected_core_instance": instance})
         self.assertTrue(result["gateway_stopped"])
+        self.assertTrue((self.root / "full-exit.requested").exists())
         self.assertEqual(result["core_process"], status["core_process"])
         self.assertTrue((self.root / "fixture-cleaned").exists(), "acknowledged before gateway cleanup")
         self.core.wait(timeout=10)
@@ -127,12 +144,28 @@ class CoreFullExitTests(unittest.TestCase):
         with lock_gateway(self.root):
             pass
 
+    def test_restart_needs_a_fresh_snapshot_after_a_prior_broker_session(self):
+        status = self.boot({"BRAINTRADE_GATEWAY_DISABLED": "1"})
+        self.api("/v1/gateway/snapshot", self.flat_snapshot())
+        self.core.kill()
+        self.core.wait(timeout=5)
+        status = self.boot({"BRAINTRADE_GATEWAY_DISABLED": "1"})
+        instance = status["core_process"]["instance_id"]
+        self.rejected(instance)
+        self.assertIsNone(self.core.poll())
+        self.api("/v1/gateway/snapshot", self.flat_snapshot())
+        result = self.api("/v1/shutdown", {"expected_core_instance": instance})
+        self.assertTrue(result["gateway_stopped"])
+        self.core.wait(timeout=10)
+        self.assertEqual(self.core.returncode, 0)
+
     def test_untracked_gateway_lock_prevents_false_full_exit(self):
         status = self.boot({"BRAINTRADE_GATEWAY_DISABLED": "1"})
         instance = status["core_process"]["instance_id"]
         with lock_gateway(self.root):
             self.rejected(instance)
             self.assertIsNone(self.core.poll())
+            self.assertFalse((self.root / "full-exit.requested").exists(), "rejected exit left the restart fence active")
         result = self.api("/v1/shutdown", {"expected_core_instance": instance})
         self.assertTrue(result["gateway_stopped"])
         self.core.wait(timeout=10)

@@ -1,4 +1,5 @@
 mod backup;
+mod lifecycle;
 mod execution;
 mod execution_quality;
 mod broker_quality_circuit;
@@ -141,7 +142,7 @@ impl Client{
     }
 }
 pub(crate) struct Shared{pub status:Status,pub config:Config,pub token:Option<String>}
-struct Engine{dir:PathBuf,shared:Arc<Mutex<Shared>>,db:Connection,gateway:Option<Child>,gateway_retry_ms:u64,shutting_down:bool,instance_id:String,research:research::Research,backtests:backtest::Service,evaluations:evaluation::Service,news:news::Service,learning:learning::Service,inference:learning_inference::Service,scoring:learning_scoring::Service,studio:studio::Service,execution:execution::Service}
+struct Engine{dir:PathBuf,shared:Arc<Mutex<Shared>>,db:Connection,gateway:Option<Child>,gateway_retry_ms:u64,shutting_down:bool,instance_id:String,shutdown_barrier:Option<lifecycle::ShutdownBarrier>,research:research::Research,backtests:backtest::Service,evaluations:evaluation::Service,news:news::Service,learning:learning::Service,inference:learning_inference::Service,scoring:learning_scoring::Service,studio:studio::Service,execution:execution::Service}
 #[derive(Deserialize)]
 struct ConfigRequest{config:Config,#[serde(default)]telegram_token:String,#[serde(default)]clear_telegram_token:bool}
 #[derive(Serialize)]
@@ -559,9 +560,23 @@ impl Engine{
                 }
                 let unresolved=self.execution.pending(&self.db)?;
                 let current={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
+                if current.telemetry.is_none() {
+                    // Status is initially empty after a restart. A previous
+                    // broker connection or a running gateway means that an
+                    // empty initial snapshot is not evidence of a flat account.
+                    let gateway_running=match self.gateway.as_mut(){Some(child)=>child.try_wait()?.is_none(),None=>false};
+                    let prior_session:bool=self.db.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE kind='gateway_connection' AND json_extract(detail,'$.connected')=1)",[],|row|row.get(0))?;
+                    anyhow::ensure!(!gateway_running && !prior_session,
+                        "تعذر الخروج الكامل: انتظر حالة حساب MT5 حديثة بعد بدء المحرك أو أعد الاتصال للتحقق من المراكز");
+                }
                 verify_safe_shutdown(&current,unresolved)?;
                 self.event("core_shutdown_requested",json!({"safe":true,"positions":0,"pending_orders":0}))?;
-                self.stop_gateway_for_full_exit()?;
+                let barrier=lifecycle::ShutdownBarrier::begin(&self.dir)?;
+                if let Err(error)=self.stop_gateway_for_full_exit(){
+                    barrier.cancel().context("تعذر إلغاء علامة الخروج بعد رفض إيقاف Gateway")?;
+                    return Err(error);
+                }
+                self.shutdown_barrier=Some(barrier);
                 self.backtests.cancel();self.evaluations.cancel();self.studio.cancel();
                 self.shutting_down=true;
                 Ok(json!({"ok":true,"safe":true,"gateway_stopped":true,"core_process":{"pid":std::process::id(),"instance_id":self.instance_id}}))
@@ -574,7 +589,7 @@ impl Engine{
 pub fn run_core()->Result<()>{
     let dir=data_dir();fs::create_dir_all(&dir)?;
     #[cfg(unix)] {use std::os::unix::fs::PermissionsExt;fs::set_permissions(&dir,fs::Permissions::from_mode(0o700))?;}
-    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;correlation::init(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let mut engine=Engine{dir,shared:shared.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,instance_id:uuid::Uuid::new_v4().to_string(),research,backtests,evaluations,news,learning,inference,scoring,studio,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
+    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;correlation::init(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let mut engine=Engine{dir,shared:shared.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,instance_id:uuid::Uuid::new_v4().to_string(),shutdown_barrier:None,research,backtests,evaluations,news,learning,inference,scoring,studio,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
     while !engine.shutting_down{engine.tick();let Some(mut request)=server.recv_timeout(Duration::from_millis(250))? else{continue;};let authenticated=request.headers().iter().any(|h|h.field.equiv("Authorization")&&h.value.as_str()==format!("Bearer {key}"));let origin=request.headers().iter().any(|h|h.field.equiv("Origin"));if !authenticated||origin{let _=request.respond(tiny_http::Response::from_string("{\"error\":\"Unauthorized\"}").with_status_code(401));continue;}if request.body_length().is_none()&&request.method().as_str()=="POST"{let _=request.respond(tiny_http::Response::empty(411));continue;}if request.body_length().unwrap_or(0)>2_000_000{let _=request.respond(tiny_http::Response::empty(413));continue;}let mut body=Vec::new();if request.as_reader().read_to_end(&mut body).is_err(){continue;}let result=engine.route(request.method().as_str(),request.url(),&body);let(code,value)=match result{Ok(v)=>(200,v),Err(e)=>(400,json!({"error":e.to_string()}))};let response=tiny_http::Response::from_string(value.to_string()).with_status_code(code).with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());let _=request.respond(response);}
     engine.stop_gateway();engine.backtests.cancel();engine.evaluations.cancel();engine.studio.cancel();engine.event("core_stopped",json!({}))?;drop(lock);Ok(())
 }
@@ -586,11 +601,14 @@ fn verify_core_identity(status:&Value)->Result<()> {
     Ok(())
 }
 pub fn ensure_core()->Result<Client>{
-    let dir=data_dir();if let Ok(client)=Client::new(&dir){if let Ok(status)=client.get("/v1/status"){verify_core_identity(&status)?;return Ok(client);}}
+    let dir=data_dir();let _start_guard=lifecycle::start_guard(&dir)?;
+    if let Ok(client)=Client::new(&dir){if let Ok(status)=client.get("/v1/status"){verify_core_identity(&status)?;return Ok(client);}}
     let mut command=Command::new(std::env::current_exe()?);fs::create_dir_all(&dir)?;command.arg("--core").stdin(Stdio::null()).stdout(Stdio::null()).stderr(OpenOptions::new().append(true).create(true).open(dir.join("core.log"))?);
     #[cfg(windows)] {use std::os::windows::process::CommandExt;command.creation_flags(0x08000008);}
     command.spawn()?;for _ in 0..100{std::thread::sleep(Duration::from_millis(100));if let Ok(client)=Client::new(&dir){if let Ok(status)=client.get("/v1/status"){verify_core_identity(&status)?;return Ok(client);}}}bail!("Core did not become ready. See {}",dir.join("core.log").display())
 }
+/// Called once for an explicitly launched UI, never by a status poller.
+pub fn prepare_user_start()->Result<()>{lifecycle::user_start(&data_dir())}
 /// Connect only to an already running and matching Core; never spawn one.
 pub fn connect_existing_core()->Result<Client>{
     let client=Client::new(&data_dir())?;
@@ -631,6 +649,9 @@ mod tests{
         s.telemetry.as_mut().unwrap().connected=true;
         assert!(verify_safe_shutdown(&s,false).is_ok());
         s.telemetry.as_mut().unwrap().pending_orders=1;
+        assert!(verify_safe_shutdown(&s,false).is_err());
+        s.telemetry.as_mut().unwrap().pending_orders=0;
+        s.telemetry.as_mut().unwrap().positions.push(braintrade_domain::Position::default());
         assert!(verify_safe_shutdown(&s,false).is_err());
     }
     #[test]
