@@ -5,12 +5,13 @@ const ts=require('typescript');
 const root=path.resolve(__dirname,'..');
 const file=p=>fs.readFileSync(path.join(root,p),'utf8');
 const ui=file('src/sniper-diagnosis.tsx');
+const reconciliation=file('src/reconciliation-diagnostics.tsx');
 const editor=file('src/operations.tsx');
 const terminal=file('src/terminal.tsx');
 const tauri=fs.readFileSync(path.join(root,'../tauri/src/bridge.rs'),'utf8');
 const core=fs.readFileSync(path.join(root,'../../crates/runtime/src/lib.rs'),'utf8');
 
-for(const name of ['src/sniper-diagnosis.tsx','src/operations.tsx']){
+for(const name of ['src/sniper-diagnosis.tsx','src/reconciliation-diagnostics.tsx','src/operations.tsx']){
  const source=file(name);
  const result=ts.transpileModule(source,{fileName:name,compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX},reportDiagnostics:true});
  const errors=(result.diagnostics||[]).filter(d=>d.category===ts.DiagnosticCategory.Error);
@@ -36,4 +37,13 @@ for(const field of ['sniper_target_points','sniper_stop_points','sniper_target_m
  'demo_flexible','adaptive_exits']){
  assert(editor.includes(field),'Missing editable Sniper parameter '+field);
 }
+assert(tauri.includes('"/v1/execution/reconciliation"'),'Tauri read-only allowlist');
+assert(core.includes('reconciliation_audit::report(&self.db,'),'Core uses read-only audit');
+assert(core.indexOf('if method=="GET" && path=="/v1/execution/reconciliation"')<
+ core.indexOf('if path.starts_with("/v1/execution")'));
+assert(reconciliation.includes("readPanel('/v1/execution/reconciliation')"));
+assert(reconciliation.includes('current_session_pending'));
+assert(reconciliation.includes('other_or_unverified_session_pending'));
+assert(!reconciliation.includes('readPanel("/v1/gateway/snapshot"'));
+assert(terminal.includes('<ReconciliationDiagnostics key={viewScope}'));
 console.log('PASS: Sniper save contract, account-scoped diagnostic, read-only enforcement and draft retention');

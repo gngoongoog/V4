@@ -494,6 +494,7 @@ def main():
     next_full_snapshot=0.0
     next_background=0.0
     next_config_refresh=0.0
+    next_native_rebind=0.0
     normal_poll_seconds=1.0
 
     def api(path, payload=None, method=None):
@@ -563,6 +564,13 @@ def main():
                         if initialized:
                             native.bind_terminal(mt5.terminal_info())
                     if initialized:
+                        # A worker can die after MT5 initialize() remains healthy.
+                        # Retrying once every two seconds recovers the Native EA pipe
+                        # without falsely claiming that ordinary MT5 polling is native.
+                        if mono >= next_native_rebind:
+                            next_native_rebind=mono+2.0
+                            if not native.available:
+                                native.bind_terminal(mt5.terminal_info())
                         # Drain authenticated quote events before slower account/candle work.
                         # Each distinct quote is evaluated through the execution-only pulse
                         # and any command is returned in that same localhost response.

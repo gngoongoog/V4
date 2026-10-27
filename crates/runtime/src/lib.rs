@@ -51,6 +51,7 @@ mod brain_integrity;
 mod mode_evidence;
 mod learning_forward_audit;
 mod trading_settings;
+mod reconciliation_audit;
 pub mod news;
 mod research;
 mod risk_monitor;
@@ -265,6 +266,10 @@ impl Engine{
                 "read_only":true,"endpoint_submits_orders":false,
                 "note":"This is a sampled retrospective diagnostic, not every Fast Pulse or broker order."}));
         }
+        if method=="GET" && path=="/v1/execution/reconciliation" {
+            let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
+            return reconciliation_audit::report(&self.db,status.telemetry.as_ref(),status.gateway_fresh,now_ms());
+        }
         if path.starts_with("/v1/execution") {
             let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
             let result=self.execution.route(method,path,body,&self.db,&status,now_ms())?;
@@ -353,10 +358,15 @@ impl Engine{
             if method=="POST" {
                 ensure_execution_mutation_stopped(&s.status,self.execution.pending(&self.db)?)?;
                 let c=trading_settings::update(&s.config,&s.status,body)?;
+                let detail=json!({"trading":c.trading,"commission_profiles":c.commission_profiles.len(),"default_commission_per_lot":c.risk.commission_per_lot});
+                // Audit failure before persistence rejects the request.
+                // After durable persistence, an optional audit insert must NEVER
+                // return a false 'save failed' or leave Core using old settings.
+                self.event("trading_mode_change_requested",detail.clone())?;
                 atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&c)?)?;
-                self.event("trading_mode_changed",json!({"trading":c.trading,"commission_profiles":c.commission_profiles.len(),"default_commission_per_lot":c.risk.commission_per_lot}))?;
                 self.execution.set_mode(c.trading.mode);
                 s.config=c;s.status.analysis=Default::default();
+                let _=self.event("trading_mode_changed",detail);
                 return Ok(trading_settings::view(&s.config,&s.status));
             }
         }
@@ -441,9 +451,12 @@ impl Engine{
                 let mut s=self.shared.lock().unwrap();
                 ensure_execution_mutation_stopped(&s.status,pending)?;
                 let mut updated=s.config.clone();updated.risk=risk;
+                let detail=json!({"risk":updated.risk,"scope":"research_and_optional_broker_execution_limits"});
+                self.event("risk_settings_change_requested",detail.clone())?;
                 atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&updated)?)?;
-                self.event("risk_settings_changed",json!({"risk":updated.risk,"scope":"research_and_optional_broker_execution_limits"}))?;
-                s.config=updated;Ok(json!({"ok":true}))
+                s.config=updated;
+                let _=self.event("risk_settings_changed",detail);
+                Ok(json!({"ok":true}))
             },
             ("POST","/v1/export")=>{
                 let name=format!("research-{}-{}",now_ms(),uuid::Uuid::new_v4());let staging=self.dir.join("exports").join(format!(".{name}.tmp"));fs::create_dir_all(&staging)?;
@@ -461,7 +474,9 @@ impl Engine{
                 self.execution.cancel_entries(&self.db)?;
                 if !token.is_empty(){secrets::write(&self.dir.join("telegram.sealed"),token)?;}atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&request.config)?)?;if request.clear_telegram_token&&self.dir.join("telegram.sealed").exists(){fs::remove_file(self.dir.join("telegram.sealed"))?;}
                 {let mut s=self.shared.lock().unwrap();s.config=request.config;s.token=effective;s.status.gateway_fresh=false;s.status.last_received_ms=None;s.status.telemetry=None;s.status.analysis=Default::default();s.status.paper=Default::default();s.status.message="Settings saved; reconnecting MT5".into();}
-                self.event("settings_changed",json!({"secrets":"redacted"}))?;if self.backtests.loading(){self.backtests.cancel();}self.stop_gateway();self.gateway_retry_ms=0;Ok(json!({"ok":true}))
+                // Config and sealed-token changes have already committed.
+                // Never skip gateway restart because a post-save audit insert failed.
+                let _=self.event("settings_changed",json!({"secrets":"redacted"}));if self.backtests.loading(){self.backtests.cancel();}self.stop_gateway();self.gateway_retry_ms=0;Ok(json!({"ok":true}))
             },
             ("POST","/v1/start")=>{
                 if self.backtests.loading(){bail!("جلب التاريخ قيد العمل؛ انتظر أو ألغِ الاختبار قبل تشغيل المحاكاة");}
