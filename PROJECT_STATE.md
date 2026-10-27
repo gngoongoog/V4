@@ -1,3 +1,11 @@
+# Current review — Enterprise V25 RC3 (0.25.2), 2026-10-27
+
+Main baseline: `63f00265e2fac2bcf1fe94c3119dbc5ce0ae916f` (RC2), promoted by explicit user instruction. Post-promotion Windows/Linux run `40436758683` passed. Previous main is preserved at `archive/main-before-v25-rc2-20261027`.
+
+Continue on `feature/v25-rc3-integrity-audit-20261027`. Do not merge this review into main until its checks and review are complete. RC3 fixes the Core/dashboard evidence contract and breakeven counts; it does not change trading permissions. See `docs/v25/RC3_INTEGRITY_AUDIT_AR.md` and the branch PR for actual test results. Native MT5 Demo, EA compilation, measured broker latency, independent OOS and private Telegram delivery remain unverified. No REAL trades or model promotion.
+
+All earlier continuation instructions below are historical.
+
 Current development: **Enterprise V25 RC2 (0.25.1)** on `feature/v25-rc2-build-identity-g7-ui-20261026`. See `CONTINUE_HERE.md`; older entries below are historical.
 
 # Current continuation — 2026-10-22, Stage 3F-U (v0.7.4)

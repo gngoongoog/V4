@@ -404,7 +404,7 @@ export component Dashboard inherits Window {
                 DeskNav {label:root.compact-sidebar ? (root.page == 2 ? "●" : "≡") : (root.page == 2 ? "●   سجل النظام" : "≡   سجل النظام");selected:root.page==2;theme-choice:root.theme-choice;pressed=>{root.nav-section=4;root.page=2;root.action("events");}}
                 DeskNav {label:root.compact-sidebar ? "⚙" : "⚙   الإعدادات";selected:root.page==1;theme-choice:root.theme-choice;pressed=>{root.nav-section=4;root.page=1;}}
                 Rectangle { vertical-stretch:1; background:transparent; }
-                Text { text: root.compact-sidebar ? "V4" : "Windows 0.25.1 • Rust / Slint"; color: root.theme-choice == 1 ? #7d8ba1 : #93a8bc; font-size:10px; horizontal-alignment:center; }
+                Text { text: root.compact-sidebar ? "V4" : "Windows 0.25.2 • Rust / Slint"; color: root.theme-choice == 1 ? #7d8ba1 : #93a8bc; font-size:10px; horizontal-alignment:center; }
                 Text { text: root.online ? (root.compact-sidebar ? "●" : "●  MT5 ONLINE") : (root.compact-sidebar ? "○" : "○  MT5 OFFLINE"); color: root.online ? #18c9a7 : #d99870; font-size:12px; horizontal-alignment:center; }
             }
         }
@@ -1465,7 +1465,7 @@ export component Dashboard inherits Window {
         }
         if root.page == 3: VerticalLayout {
             spacing: 16px; alignment: start; vertical-stretch: 1;
-            Text { text: "BRAINTRADE OS 0.25.1"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 24px; }
+            Text { text: "BRAINTRADE OS 0.25.2"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 24px; }
             Text { text: "عقول تحليلية، مختبر تاريخي، تقييم زمني وتعلم بحثي للمراقبة. تنفيذ Demo/Live مرتبط بالحساب؛ اختيار الاستراتيجيات المولّدة يدوي، وأوزان الأعضاء تتعلم من نتائج لاحقة."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
             Text { text: "Windows x64 • Core + Desktop + MT5 bootstrap"; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; }
             AboutSlint { max-height: 110px; }

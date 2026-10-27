@@ -1,12 +1,28 @@
 {
-  "version": "0.25.1",
-  "status": "pending-ci",
-  "source_state": "V25 RC2 identity and G7 UI; pending exact-source CI",
-  "tested_commit": null,
-  "tested_tree": null,
-  "research_ci": null,
-  "windows_ci": null,
-  "windows_artifacts": [],
+  "version": "0.25.2",
+  "status": "verified",
+  "source_state": "RC3 audited application source verified; later documentation does not change application fingerprint",
+  "tested_commit": "174c22f55277064fc4f01c0680f24a31ddf01213",
+  "tested_tree": "71e790a8d1670d317ba0f4a2053010e8e19b8491",
+  "research_ci": {
+    "run_id": 40466228787,
+    "conclusion": "success",
+    "url": "https://github.com/gngoongoog/V4/actions/runs/40466228787"
+  },
+  "windows_ci": {
+    "run_id": 40466228646,
+    "conclusion": "success",
+    "url": "https://github.com/gngoongoog/V4/actions/runs/40466228646"
+  },
+  "windows_artifacts": [
+    {
+      "id": 12716957735,
+      "name": "BRAINTRADE_V4_V25_PORTABLE_Windows_x64_RC",
+      "outer_zip_sha256": "09ce0a0c60a03dad2ae490e26c3dce490beac20662d4f5f3e0bcd2df76c4914d",
+      "inner_portable_zip_sha256": "08ad1b5366add19c6d2467fcde444329e8a3e7bb1a706abfd28f6eee854c687f",
+      "run_id": 40466228688
+    }
+  ],
   "release_evidence": "validation.json",
   "release_version": "0.6.0",
   "execution_boundary": {
@@ -16,5 +32,44 @@
     "telegram_live_delivery": "not performed",
     "imported_ml_automatic_promotion": false
   },
-  "note": "Unified V25 RC2 version and source identity. Reject mismatched Core; preserve schema-compatible 0.7.4 backups. G7 remains research-only. Native MT5 and Windows GUI require separate evidence."
+  "note": "Verified RC3 application source on PR #202. Main stays RC2; no automatic merge. 41 actual Windows WebView cases passed with gateway disabled. Native MT5, EA, Telegram and profitability remain unverified.",
+  "main_baseline": {
+    "sha": "63f00265e2fac2bcf1fe94c3119dbc5ce0ae916f",
+    "version": "0.25.1",
+    "windows_linux_run": 40436758683,
+    "conclusion": "success"
+  },
+  "build_id": "eeab6fa487a7ad83db8352646c6e631a5560cedcaf6bb90a8ae9d20ce736a8af",
+  "ci_checkout_commit": "6d6b1139674c2b379c5b3efa69d79ec907f10e2b",
+  "portable_ci": {
+    "run_id": 40466228688,
+    "conclusion": "success",
+    "url": "https://github.com/gngoongoog/V4/actions/runs/40466228688"
+  },
+  "g7_ci": {
+    "run_id": 40466228706,
+    "conclusion": "success",
+    "url": "https://github.com/gngoongoog/V4/actions/runs/40466228706"
+  },
+  "test_results": {
+    "linux_rust": {
+      "passed": 472,
+      "ignored": 1
+    },
+    "windows_portable_rust": {
+      "passed": 476,
+      "ignored": 1
+    },
+    "python_ci": {
+      "run": 516,
+      "passed": 515,
+      "skipped": 1
+    },
+    "native_webview": {
+      "passed": 41,
+      "broker_connected": false,
+      "all_controls_certified": false
+    },
+    "rust_to_typescript_contract": "PASS synthetic receipts, no orders"
+  }
 }

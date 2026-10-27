@@ -1,5 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod bridge;
+mod lifecycle;
 fn main() {
     if std::env::args().any(|arg| arg == "--braintrade-build-id") {
         println!("{}", braintrade_domain::build_identity());

@@ -72,7 +72,7 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  const core=fs.readFileSync(path.join(root,'../../crates/runtime/src/lib.rs'),'utf8');
  for(const route of ['/v1/shutdown','/v1/backup','/v1/backtest/start','/v1/execution/brain-control','/v1/execution/settings'])assert(rs.includes(route),'native allowlist missing '+route);
  assert(core.includes('verify_safe_shutdown(&current,unresolved)?'));
- assert(rs.includes('lifecycle.stopping.store(true,Ordering::SeqCst)'));
+ assert(rs.includes('CORE_LIFECYCLE.shutdown('));
  assert(!rs.includes('fn arbitrary_post'));
  console.log('PASS: actual JSX actions dispatch backtest/backup/modes/brains; system brain immutable; safe exit wired; explicit verified Demo/REAL broker account binding');
 })().catch(e=>{console.error(e);process.exitCode=1});
