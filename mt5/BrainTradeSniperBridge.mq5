@@ -3,7 +3,7 @@
 //| Native tick transport only. It never submits broker orders.     |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.11"
+#property version   "1.12"
 #property description "BrainTrade native Sniper tick bridge. Transport only; no trading calls."
 
 input string InpPipeName = "\\\\.\\pipe\\BrainTradeSniperV1";
@@ -27,6 +27,9 @@ string g_account_server = "";
 string g_account_currency = "";
 long   g_account_mode = -1;
 string g_connected_token = "";
+int    g_last_io_error = 0;
+string g_last_io_stage = "not connected";
+bool   g_token_ready = false;
 
 void ResetQuoteCursor()
   {
@@ -50,15 +53,26 @@ bool LoadSessionToken()
    ResetLastError();
    int token_file = FileOpen(TOKEN_FILE, FILE_READ|FILE_TXT|FILE_ANSI);
    if(token_file == INVALID_HANDLE)
+     {
+      g_last_io_stage = "token file unavailable";
+      g_last_io_error = GetLastError();
+      g_token_ready = false;
       return false;
+     }
 
    string token = FileReadString(token_file);
    FileClose(token_file);
    StringReplace(token, "\r", "");
    StringReplace(token, "\n", "");
    if(StringLen(token) < 16)
+     {
+      g_last_io_stage = "token invalid";
+      g_last_io_error = 0;
+      g_token_ready = false;
       return false;
+     }
    g_token = token;
+   g_token_ready = true;
    return true;
   }
 
@@ -70,6 +84,8 @@ bool EnsurePipe()
    string currency = AccountInfoString(ACCOUNT_CURRENCY);
    if(login <= 0 || server == "" || currency == "")
      {
+      g_last_io_stage = "MT5 account unavailable";
+      g_last_io_error = 0;
       ClosePipe();
       ResetQuoteCursor();
       g_account_login = 0;
@@ -109,7 +125,13 @@ bool EnsurePipe()
       ResetQuoteCursor();
    g_pipe = FileOpen(InpPipeName, FILE_READ|FILE_WRITE|FILE_BIN|FILE_ANSI);
    if(g_pipe == INVALID_HANDLE)
+     {
+      g_last_io_stage = "pipe open";
+      g_last_io_error = GetLastError();
       return false;
+     }
+   g_last_io_stage = "connected";
+   g_last_io_error = 0;
    g_account_login = login;
    g_account_server = server;
    g_account_currency = currency;
@@ -127,7 +149,11 @@ void UpdateStatus()
            "\nSymbol: ", _Symbol,
            "\nQuote ticks sent: ", (string)g_sent_ticks,
            "\nRecovered in batches: ", (string)g_recovered_ticks,
-           "\nSend failures: ", (string)g_failed_ticks);
+           "\nSend failures: ", (string)g_failed_ticks,
+           "\nToken file: ", (g_token_ready ? "LOADED" : "MISSING/INVALID"),
+           "\nLast I/O stage: ", g_last_io_stage,
+           "\nLast I/O error: ", IntegerToString(g_last_io_error),
+           "\nBridge source: 1.12");
   }
 
 ulong TickEventId(const long time_msc,const uint ordinal)
@@ -243,6 +269,8 @@ bool SendPendingQuoteTicks()
       uint written = FileWriteString(g_pipe,payload);
       if(written != expected)
         {
+         g_last_io_stage = "pipe write";
+         g_last_io_error = GetLastError();
          g_failed_ticks += forwarded;
          ClosePipe();
          return false;
