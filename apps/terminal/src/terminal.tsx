@@ -618,8 +618,9 @@ export default function Terminal(){
    if(Object.keys(accountExpected).length
        &&Object.entries(accountExpected).some(([key,value])=>!equal(accountConfirmed[key],value)))
     throw new Error('تغير ملف حساب MT5 أثناء حفظ القناص؛ أعد الربط والقراءة');
-   if(!equal(commission.amount,input.commission_per_lot)
-      ||!equal(commission.basis,input.commission_basis))
+   if(Object.keys(accountConfirmed).length
+      &&(!equal(commission.amount,input.commission_per_lot)
+       ||!equal(commission.basis,input.commission_basis)))
     throw new Error('ملف عمولة MT5 المحفوظ لا يطابق القيمة المطلوبة');
    const riskConfirmed=unwrap(full.risk);
    const totalFee=Number(input.commission_per_lot)*(input.commission_basis==='per_side'?2:1);
