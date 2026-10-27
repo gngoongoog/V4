@@ -334,7 +334,7 @@ impl Engine{
                     "requested_run":status.requested_run,
                     "execution_enabled":status.execution_enabled,
                     "mode":c.trading.mode,"read_only":true,
-                    "broker_orders_submitted":false}));
+                    "endpoint_submits_orders":false}));
             };
             let context=serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency))?;
             return Ok(json!({"schema":"sniper-diagnosis-v1",
@@ -344,7 +344,7 @@ impl Engine{
                 "execution_enabled":status.execution_enabled,
                 "observations":sniper_opportunities::report(&self.db,&context)?,
                 "blockers":sniper_blocker_review::report(&self.db,&context,now_ms())?,
-                "read_only":true,"broker_orders_submitted":false,
+                "read_only":true,"endpoint_submits_orders":false,
                 "note":"This is a sampled retrospective diagnostic, not every Fast Pulse or broker order."}));
         }
         if path=="/v1/trading/settings" {
