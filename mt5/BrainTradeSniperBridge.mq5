@@ -315,7 +315,8 @@ void OnTimer()
 
 void OnTick()
   {
-   if(!SendPendingQuoteTicks())
-      g_failed_ticks++;
+   // No cached quote / missing token / offline broker is not a failed SEND.
+   // Count only actual short pipe writes in SendPendingQuoteTicks().
+   SendPendingQuoteTicks();
    UpdateStatus();
   }
