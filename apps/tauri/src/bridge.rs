@@ -11,11 +11,14 @@ static LIFECYCLE: OnceLock<AppLifecycle> = OnceLock::new();
 
 fn lifecycle() -> &'static AppLifecycle { LIFECYCLE.get_or_init(AppLifecycle::default) }
 
-fn open_client() -> Result<Client, String> {
-    let state=lifecycle();
+fn with_start_permit<T>(state:&AppLifecycle, operation:impl FnOnce()->Result<T,String>)->Result<T,String>{
     let _guard=state.start_gate.lock().map_err(|_|"تعذر قفل حالة بدء Core".to_string())?;
     if state.stopping.load(Ordering::SeqCst) { return Err("طلب الخروج قيد التحقق؛ لن يُعاد تشغيل Core تلقائياً".into()); }
-    ensure_core().map_err(|err| err.to_string())
+    operation()
+}
+
+fn open_client() -> Result<Client, String> {
+    with_start_permit(lifecycle(),||ensure_core().map_err(|err| err.to_string()))
 }
 
 // Keep a Windows process HANDLE to the exact Core instance. A PID alone can
@@ -36,13 +39,15 @@ mod tracked_core {
             if handle==ptr::null_mut(){return Err(format!("تعذر فتح مقبض عملية Core: {}",io::Error::last_os_error()));}
             Ok(Self(handle))
         }
-        pub fn wait(&self)->Result<(),String>{
-            match unsafe{WaitForSingleObject(self.0,15_000)} {
+        fn wait_for(&self,millis:u32)->Result<(),String>{
+            match unsafe{WaitForSingleObject(self.0,millis)} {
                 0=>Ok(()),
                 258=>Err("انتهت مهلة انتظار عملية Core؛ لم يُؤكد الخروج".into()),
                 _=>Err(format!("تعذر التحقق من عملية Core: {}",io::Error::last_os_error())),
             }
         }
+        pub fn wait(&self)->Result<(),String>{self.wait_for(15_000)}
+        #[cfg(test)] pub fn is_running(&self)->bool{(unsafe{WaitForSingleObject(self.0,0)})==258}
     }
     impl Drop for Handle { fn drop(&mut self){unsafe{CloseHandle(self.0);}} }
 }
@@ -363,12 +368,31 @@ mod tests {
         assert!(process_identity(&json!({"core_process":{"pid":42,"instance_id":""}})).is_err());
         assert!(process_identity(&json!({})).is_err());
     }
+    #[test]
+    fn shutdown_gate_blocks_a_concurrent_automatic_start() {
+        use std::sync::mpsc;
+        let state=AppLifecycle::default();
+        let guard=state.start_gate.lock().unwrap();
+        state.stopping.store(true,Ordering::SeqCst);
+        let child=state.clone();
+        let (tx,rx)=mpsc::channel();
+        let worker=std::thread::spawn(move ||{
+            let result=with_start_permit(&child,||{tx.send(()).unwrap();Ok(())});
+            assert!(result.is_err());
+        });
+        drop(guard);
+        worker.join().unwrap();
+        assert!(rx.try_recv().is_err(),"start was called during shutdown");
+        state.stopping.store(false,Ordering::SeqCst);
+        assert_eq!(with_start_permit(&state,||Ok(7)).unwrap(),7);
+    }
     #[cfg(windows)]
     #[test]
     fn tracked_core_handle_waits_for_a_real_process_exit() {
         use std::process::{Command,Stdio};
         let mut child=Command::new("cmd.exe").args(["/C","pause >NUL"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
         let handle=tracked_core::Handle::open(child.id()).unwrap();
+        assert!(handle.is_running(),"Core-like process exited before its pipe was closed");
         drop(child.stdin.take());
         handle.wait().unwrap();
         assert!(child.wait().unwrap().success());

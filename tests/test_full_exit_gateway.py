@@ -12,10 +12,31 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "gateway"))
-from mt5_gateway import watch_parent_stdin
+from mt5_gateway import cleanup_gateway, watch_parent_stdin
 
 
 class ParentShutdownTests(unittest.TestCase):
+    def test_cleanup_attempts_all_steps_and_reports_a_stuck_pipe(self):
+        calls = []
+        class Item:
+            def __init__(self, name, result=None, fail=False):
+                self.name, self.result, self.fail = name, result, fail
+            def close(self):
+                calls.append(self.name)
+                if self.fail:
+                    raise OSError("fixture failure")
+                return self.result
+        class Terminal:
+            def shutdown(self):
+                calls.append("mt5")
+        class Book:
+            def release(self, _):
+                calls.append("book")
+        with self.assertRaisesRegex(RuntimeError, "transport, native pipe"):
+            cleanup_gateway(Item("transport", fail=True), Item("native", result=False),
+                            Item("journal"), Terminal(), Book(), Item("lock"))
+        self.assertEqual(calls, ["transport", "native", "journal", "book", "mt5", "lock"])
+
     def test_pipe_eof_requests_shutdown_and_wakes_main_loop(self):
         reader_fd, writer_fd = os.pipe()
         wake = threading.Event()

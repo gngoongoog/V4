@@ -483,6 +483,28 @@ def watch_parent_stdin(stream, wake):
     return stopped
 
 
+def cleanup_gateway(transport, native, executor, mt5, dom_cache, lock):
+    """Attempt every cleanup step, and report incomplete cleanup to Core."""
+    failures = []
+    def run(name, action, require_true=False):
+        try:
+            result = action()
+            if require_true and result is not True:
+                failures.append(name)
+        except Exception:
+            failures.append(name)
+    if transport is not None:
+        run("transport", transport.close)
+    run("native pipe", native.close, require_true=True)
+    run("broker journal", executor.close)
+    if mt5 is not None:
+        run("market book", lambda: dom_cache.release(mt5))
+        run("MT5", mt5.shutdown)
+    run("gateway lock", lock.close)
+    if failures:
+        raise RuntimeError("Gateway cleanup incomplete: " + ", ".join(failures))
+
+
 def main():
     directory = Path(os.environ["BRAINTRADE_DATA_DIR"])
     token = os.environ.pop("BRAINTRADE_IPC_TOKEN")
@@ -723,14 +745,7 @@ def main():
                 else:
                     stop_requested.wait(remaining)
     finally:
-        if transport is not None:
-            transport.close()
-        native.close()
-        executor.close()
-        if mt5 is not None:
-            dom_cache.release(mt5)
-            mt5.shutdown()
-        lock.close()
+        cleanup_gateway(transport, native, executor, mt5, dom_cache, lock)
 
 
 if __name__ == "__main__":
