@@ -80,7 +80,7 @@ try{
  // scoped to this executable, only in disposable CI, and removed in finally.
  registry('AdditionalBrowserArguments',flags);
  registry('UserDataFolder',path.join(home,'webview'));
- await check('packaged EXE starts actual Tauri/Core STOPPED',async()=>{await launch();await status();await page.locator('.bottom-status').getByText('Enterprise V25 RC2',{exact:false}).waitFor()});
+ await check('packaged EXE starts actual Tauri/Core STOPPED',async()=>{await launch();await status();await page.locator('.bottom-status').getByText(expected.release,{exact:false}).waitFor()});
  await check('offline START disabled and STOP dialog Escape',async()=>{
   await navigate('نظرة عامة');assert(await page.locator('button.action-btn.start').isDisabled());
   await page.locator('button.action-btn.stop').click();await page.getByRole('dialog',{name:'تأكيد وقف الدخول'}).waitFor();

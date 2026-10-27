@@ -1,7 +1,7 @@
 {
-  "version": "0.25.1",
+  "version": "0.25.2",
   "status": "pending-ci",
-  "source_state": "V25 RC2 identity and G7 UI; pending exact-source CI",
+  "source_state": "RC3 integrity review on separate branch; pending exact-source CI",
   "tested_commit": null,
   "tested_tree": null,
   "research_ci": null,
@@ -16,5 +16,11 @@
     "telegram_live_delivery": "not performed",
     "imported_ml_automatic_promotion": false
   },
-  "note": "Unified V25 RC2 version and source identity. Reject mismatched Core; preserve schema-compatible 0.7.4 backups. G7 remains research-only. Native MT5 and Windows GUI require separate evidence."
+  "note": "Core/dashboard evidence schema and breakeven correction. Main remains tested RC2. Native MT5, EA and profitability are not certified.",
+  "main_baseline": {
+    "sha": "63f00265e2fac2bcf1fe94c3119dbc5ce0ae916f",
+    "version": "0.25.1",
+    "windows_linux_run": 40436758683,
+    "conclusion": "success"
+  }
 }

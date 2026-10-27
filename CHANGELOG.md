@@ -1,3 +1,11 @@
+# 0.25.2 Enterprise V25 RC3 — integrity review
+
+- Stable schema for Core/dashboard closed Demo evidence, replacing brittle prose comparison.
+- Count profitable, losing and exactly breakeven outcomes separately after booked costs.
+- Exercise actual Rust report serialization through the production TypeScript decoder in the Windows Portable gate.
+- Correct the obsolete SOLO description without enabling independent execution.
+- Preserve RC2 on main and previous main in the archive branch. RC3 awaits CI and review; no native broker acceptance claim.
+
 # 0.5.0 Preview
 
 - Four materially distinct Shadow modes, frozen open-position rules and cost-aware Sniper gating.

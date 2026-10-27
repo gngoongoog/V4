@@ -8,10 +8,11 @@ const js=ts.transpileModule(src,{compilerOptions:{module:ts.ModuleKind.CommonJS,
 const loaded={};vm.runInNewContext(js.outputText,{exports:loaded});
 const fn=loaded.brokerEvidence;
 const status={gateway_fresh:true,telemetry:{connected:true,demo:true,account_trade_mode:0,login:17,server:'Demo',symbol:'XAUUSD',currency:'USD'}};
-const quality={source:'Closed MT5 DEMO deal records; net=gross+commission+swap+fee',
+const quality={schema:'closed-demo-learning-quality-v1',source:'Closed MT5 DEMO deal records with verified reward/risk and row identity; net=gross+commission+swap+fee',
+ learning_eligible_broker_samples_only:true,no_execution_change:true,
  policy:'read_only',paper_and_forward_excluded:true,no_auto_promotion:true,
  status:'monitor_only',broker_samples:32,
- all:{samples:32,wins_after_costs:19,win_rate:19/32,net_booked:24.50}};
+ all:{samples:32,wins_after_costs:19,losses_after_costs:10,breakeven_after_costs:3,win_rate:19/32,net_booked:24.50}};
 const evidence={source:'closed_costed_mt5_demo_deals_only',
  scope:'current_demo_account_symbol_mode_brain',no_auto_promotion:true,
  broker_execution_permission:false,status:'monitor_only',
@@ -29,7 +30,8 @@ const base={context:JSON.stringify(['Demo',17,'XAUUSD','USD']),account_matches:t
 const clone=x=>JSON.parse(JSON.stringify(x));
 function reject(label,mutate){const r=clone(base),s=clone(status);mutate(r,s);assert.equal(fn(r,s),null,label)}
 assert.equal(fn(base,status).samples,32);
-assert.equal(fn(base,status).losses,13);
+assert.equal(fn(base,status).losses,10);
+assert.equal(fn(base,status).breakeven,3);
 assert(Math.abs(fn(base,status).winRate-59.375)<1e-10);
 reject('no heartbeat',(_,s)=>{s.gateway_fresh=false});
 reject('lost connection',(_,s)=>{s.telemetry.connected=false});
@@ -44,12 +46,18 @@ reject('unverified Demo',r=>{r.brain_integrity.demo_account_verified=false});
 reject('missing Core integrity',r=>{delete r.brain_integrity});
 reject('cross mode report',r=>{r.trading_mode='expert'});
 reject('missing inventory',r=>{r.brains.pop()});
-reject('fake paper outcomes',r=>{r.brains[0].quality.source='paper'});
+reject('unknown quality schema',r=>{r.brains[0].quality.schema='paper'});
+reject('unverified learning evidence',r=>{r.brains[0].quality.learning_eligible_broker_samples_only=false});
+reject('missing loss count',r=>{delete r.brains[0].quality.all.losses_after_costs});
+reject('negative breakeven',r=>{r.brains[0].quality.all.breakeven_after_costs=-1});
+reject('inconsistent partition',r=>{r.brains[0].quality.all.breakeven_after_costs=4});
+const translated=clone(base);translated.brains[0].quality.source='نتائج Demo المغلقة بعد التكاليف';
+assert.equal(fn(translated,status).samples,32,'translated presentation must not invalidate evidence');
 reject('fake broker evidence',r=>{r.brains[0].integrity.broker_evidence.source='paper'});
 reject('under 30 trades',r=>{
  const e=r.brains[0].integrity.broker_evidence,q=r.brains[0].quality;
  e.sample_count=25;e.win_rate=14/25;e.net_booked=42;
- q.broker_samples=25;q.all={samples:25,wins_after_costs:14,win_rate:14/25,net_booked:42};
+ q.broker_samples=25;q.all={samples:25,wins_after_costs:14,losses_after_costs:11,breakeven_after_costs:0,win_rate:14/25,net_booked:42};
  e.status='insufficient_evidence';q.status='insufficient_evidence';
 });
 reject('mismatched count',r=>{r.brains[0].quality.broker_samples=42});
@@ -63,4 +71,4 @@ reject('automatic promotion',r=>{r.brain_integrity.automatic_promotion=true});
 reject('bad role',r=>{r.brains[0].integrity.role='advisor_or_research'});
 assert.equal(fn(base,null),null);
 assert.equal(fn({},status),null);
-console.log('PASS: P1-B dashboard Core-gated Demo KPI, 17-brain inventory, account/mode and 25 negative contracts');
+console.log('PASS: Core-gated Demo KPI, breakeven partition, inventory, account/mode and negative contracts');
