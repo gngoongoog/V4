@@ -1,12 +1,4 @@
 {
-  "version": "0.25.1",
-  "status": "pending-ci",
-  "source_state": "V25 RC2 identity and G7 UI; pending exact-source CI",
-  "tested_commit": null,
-  "tested_tree": null,
-  "research_ci": null,
-  "windows_ci": null,
-  "windows_artifacts": [],
   "release_evidence": "validation.json",
   "release_version": "0.6.0",
   "execution_boundary": {
@@ -16,5 +8,12 @@
     "telegram_live_delivery": "not performed",
     "imported_ml_automatic_promotion": false
   },
-  "note": "Unified V25 RC2 version and source identity. Reject mismatched Core; preserve schema-compatible 0.7.4 backups. G7 remains research-only. Native MT5 and Windows GUI require separate evidence."
+  "version": "0.25.3",
+  "status": "pending-ci",
+  "source_state": "RC4 bounded strategy evolution and explicit Demo advisor approval under development",
+  "tested_commit": null,
+  "tested_tree": null,
+  "research_ci": null,
+  "windows_ci": null,
+  "windows_artifacts": []
 }

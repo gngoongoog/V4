@@ -19,7 +19,13 @@ try {
   Run npm @('--prefix','apps/terminal','test')
   Run npm @('--prefix','apps/terminal','run','build')
   Run python @('scripts/prepare-tauri-runtime.py')
-  Run cargo @('test','--locked','-p','braintrade-domain','-p','braintrade-runtime','-p','braintrade-tauri')
+  $contractPath=Join-Path $root 'test-output/v25/core-dashboard-contract.json'
+  if(Test-Path $contractPath){Remove-Item $contractPath -Force}
+  $env:BRAINTRADE_TEST_CONTRACT_OUT=$contractPath
+  try {
+    Run cargo @('test','--locked','-p','braintrade-domain','-p','braintrade-runtime','-p','braintrade-tauri')
+  } finally {Remove-Item Env:BRAINTRADE_TEST_CONTRACT_OUT}
+  Run node @('apps/terminal/tests/core-dashboard-contract.cjs',$contractPath)
   Run python @('-m','unittest','discover','-s','tests','-v')
   Run python @('scripts/audit_v25_windows_pages.py','--output','test-output/v25/windows-page-matrix.json')
   # custom-protocol embeds the production frontend; no globally installed CLI.

@@ -39,3 +39,7 @@ export async function frozenClassicAction(action:'freeze'|'stop',context:string)
 export async function frozenCoordinatorAction(action:'freeze'|'seal_candidate'|'stop',context:string,mode:'expert'|'scalping'|'swing'):Promise<unknown>{
  return invoke('frozen_coordinator_action',{action,context,mode});
 }
+
+export async function strategyStudioAction(action:'run'|'auto_on'|'auto_off'|'cancel'|'adopt_demo',context:string,value?:string):Promise<unknown>{
+ return invoke('strategy_studio_action',{action,context,value:value??null});
+}

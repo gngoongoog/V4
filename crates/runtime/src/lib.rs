@@ -236,6 +236,13 @@ impl Engine{
             if method=="POST"{self.event("frozen_coordinator_policy_action",json!({"result":result}))?;}
             return Ok(result);
         }
+        if path=="/v1/execution/generated-strategy" {
+            let (cfg,status)={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());(s.config.clone(),s.status.clone())};
+            let per_account=status.telemetry.as_ref().map(|t|cfg.for_account(t)).unwrap_or(cfg);
+            let result=self.execution.generated_strategy_route(method,body,&self.db,&status,&per_account,now_ms())?;
+            self.event("generated_strategy_demo_approval",json!({"result":result}))?;
+            return Ok(result);
+        }
         if path.starts_with("/v1/execution") {
             let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
             let result=self.execution.route(method,path,body,&self.db,&status,now_ms())?;

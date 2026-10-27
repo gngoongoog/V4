@@ -1,3 +1,21 @@
+# Current development — Enterprise V25 RC4 (0.25.3), 2026-10-27
+
+Work on `feature/v25-rc4-strategy-learning-cycle-20261027`, based on RC3 `a42731abc3ecdb664675bae07bf6efc6eb5d3e2d` (PR #202). Main remains tested RC2 `63f00265e2fac2bcf1fe94c3119dbc5ce0ae916f`; do not merge automatically.
+
+Current scope: bounded training-only strategy evolution, persisted causal parent lineage, complete trial diagnostics, modern Studio controls, explicit exact-report Demo Expert advisor approval, and broker-feedback regression coverage. No automatic REAL research promotion. See `docs/v25/RC4_STRATEGY_LEARNING_AR.md`. Source is pending CI until evidence is recorded; native MT5, profitability and independent OOS remain unverified.
+
+Earlier sections below are historical.
+
+# Current review — Enterprise V25 RC3 (0.25.2), 2026-10-27
+
+Main baseline: `63f00265e2fac2bcf1fe94c3119dbc5ce0ae916f` (RC2), promoted by explicit user instruction. Post-promotion Windows/Linux run `40436758683` passed. Previous main is preserved at `archive/main-before-v25-rc2-20261027`.
+
+Continue on `feature/v25-rc3-integrity-audit-20261027`. Do not merge this review into main until its checks and review are complete. RC3 fixes the Core/dashboard evidence contract and breakeven counts; it does not change trading permissions. See `docs/v25/RC3_INTEGRITY_AUDIT_AR.md` and the branch PR for actual test results. Native MT5 Demo, EA compilation, measured broker latency, independent OOS and private Telegram delivery remain unverified. No REAL trades or model promotion.
+
+Verified RC3 source: `174c22f55277064fc4f01c0680f24a31ddf01213`, tree `71e790a8d1670d317ba0f4a2053010e8e19b8491`. Windows/Linux `40466228646`, Research `40466228787`, G7 `40466228706` and Portable/native WebView `40466228688` passed. Native WebView passed 41 cases; all controls/broker acceptance are NOT certified. Current report-only edits retain the tested application fingerprint. See `docs/development-validation.json` and PR #202. Next: review RC3 and collect native MT5 Demo/EA and learner evidence using the existing operator tools; do not invent new brains, profit numbers or remove correctness gates.
+
+All earlier continuation instructions below are historical.
+
 # Current V25 RC2 continuation — 2026-10-26 (0.25.1)
 
 Continue from `feature/v25-rc2-build-identity-g7-ui-20261026`.

@@ -40,15 +40,17 @@ def check():
             f=dict(login=1,server='S',symbol='XAUUSD',currency='USD',timeframe='M1',captured_ms=now,current_open=boundary,contract=contract,bars=[dict(b,spread_points=2,real_volume=0) for b in bars(600)],error='')
             rejects('/v1/gateway/research/frame',dict(f,login=2));api('/v1/gateway/research/frame',f)
             bad=json.loads(json.dumps(f));bad['bars'][-1]['time']=boundary;rejects('/v1/gateway/research/frame',bad)
+            rejects('/v1/studio/run',{'timeframe':'M1','context':'wrong-account'})
             assert api('/v1/studio/run',{'timeframe':'M1'})['queued']==1
             for _ in range(200):
                 v=api('/v1/studio')
                 if v['reports']:break
                 time.sleep(.1)
             assert v['reports'],v
-            report_id=v['reports'][0]['id'];r=api('/v1/studio/report',{'id':report_id});assert r['test_start']>r['validation_end']+24*60 and r['trials']==40
+            report_id=v['reports'][0]['id'];r=api('/v1/studio/report',{'id':report_id});assert r['test_start']>r['validation_end']+24*60 and 40<=r['trials']<=89 and r['evolution']['automatic_promotion'] is False
             snap['quote_time_ms']=int(time.time()*1000);api('/v1/gateway/snapshot',snap)
             assert api('/v1/studio/run',{'timeframe':'M1'})['queued']==0;assert len(api('/v1/studio')['frames'])==21
+            rejects('/v1/studio/auto',{'enabled':True,'context':'wrong-account'})
             api('/v1/studio/auto',{'enabled':True});assert api('/v1/studio')['auto'];api('/v1/studio/cancel',{})
             api('/v1/shutdown',{});process.wait(timeout=8)
             process=subprocess.Popen([str(binary)],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE);ready()

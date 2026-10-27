@@ -21,12 +21,30 @@ struct Worker {
     cancel: Arc<AtomicBool>,
     frame: Frame,
 }
+// The previous candidate is a starting point, not a winner chosen by final-test
+// profit. Its entire observed history must precede this run's validation data.
+fn previous_seed(db:&Connection,frame:&Frame)->Result<Option<(String,studio::Genome)>> {
+    if frame.bars.len()<400 {return Ok(None)}
+    let cutoff=frame.bars[frame.bars.len()*6/10-1].candle.time;
+    let mut q=db.prepare("SELECT id,payload FROM studio_runs WHERE context=?1 AND timeframe=?2 AND test_end<=?3 AND created_ms<=?4 ORDER BY created_ms DESC,id DESC")?;
+    for row in q.query_map(params![frame.context(),frame.timeframe,cutoff,frame.captured_ms],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))? {
+        let (id,raw)=row?;
+        if let Ok(r)=serde_json::from_str::<LabReport>(&raw) {
+            if r.context==frame.context() && r.timeframe==frame.timeframe && r.test_end<=cutoff
+                && r.last_bar<=cutoff && r.captured_ms<=frame.captured_ms && r.selected.valid() {
+                return Ok(Some((id,r.selected)));
+            }
+        }
+    }
+    Ok(None)
+}
 pub struct Service {
     frames: BTreeMap<(String, String), Frame>,
     queue: VecDeque<(Frame, RiskConfig)>,
     worker: Option<Worker>,
     last_error: String,
     auto: bool,
+    auto_context: Option<String>,
     next_request: u64,
     cursor: usize,
 }
@@ -35,6 +53,7 @@ impl Service {
         db.execute_batch("CREATE TABLE IF NOT EXISTS studio_frames(context TEXT NOT NULL,timeframe TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,timeframe));
 CREATE TABLE IF NOT EXISTS studio_runs(id TEXT PRIMARY KEY,context TEXT NOT NULL,timeframe TEXT NOT NULL,test_end INTEGER NOT NULL,created_ms INTEGER NOT NULL,payload TEXT NOT NULL,dataset TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS studio_settings(id INTEGER PRIMARY KEY CHECK(id=1),auto INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS studio_auto_scope(id INTEGER PRIMARY KEY CHECK(id=1),context TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS wyckoff_observations(context TEXT NOT NULL,timeframe TEXT NOT NULL,signal_time INTEGER NOT NULL,observed_ms INTEGER NOT NULL,payload TEXT NOT NULL,outcome TEXT,PRIMARY KEY(context,timeframe,signal_time));")?;
         let mut frames = BTreeMap::new();
         let mut q = db.prepare("SELECT context,timeframe,payload FROM studio_frames")?;
@@ -54,12 +73,14 @@ CREATE TABLE IF NOT EXISTS wyckoff_observations(context TEXT NOT NULL,timeframe 
             })
             .optional()?
             .unwrap_or(false);
+        let auto_context=db.query_row("SELECT context FROM studio_auto_scope WHERE id=1",[],|r|r.get::<_,String>(0)).optional()?;
         Ok(Self {
             frames,
             queue: VecDeque::new(),
             worker: None,
             last_error: String::new(),
-            auto,
+            auto: auto && auto_context.is_some(),
+            auto_context,
             next_request: 0,
             cursor: 0,
         })
@@ -146,9 +167,14 @@ CREATE TABLE IF NOT EXISTS wyckoff_observations(context TEXT NOT NULL,timeframe 
             let cancel = Arc::new(AtomicBool::new(false));
             let flag = cancel.clone();
             let input = frame.clone();
+            let seed=previous_seed(db,&frame)?;
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
-                let _ = tx.send(studio::learn(&input, &risk, &flag));
+                let result=studio::learn_seeded(&input, &risk, &flag,seed.as_ref().map(|(_,g)|g)).map(|mut r|{
+                    if let Some(e)=r.evolution.as_mut(){e.parent_run_id=seed.map(|(id,_)|id);}
+                    r
+                });
+                let _ = tx.send(result);
             });
             self.worker = Some(Worker { rx, cancel, frame });
         }
@@ -285,7 +311,7 @@ CREATE TABLE IF NOT EXISTS wyckoff_observations(context TEXT NOT NULL,timeframe 
                 }
                 self.observe(db, &f, t, c, now)?;
                 db.execute("INSERT INTO studio_frames(context,timeframe,payload) VALUES(?1,?2,?3) ON CONFLICT(context,timeframe) DO UPDATE SET payload=excluded.payload",params![f.context(),f.timeframe,serde_json::to_string(&f)?])?;
-                if self.auto {
+                if self.auto && self.auto_context.as_deref()==Some(f.context().as_str()) {
                     self.enqueue(db, &f, &c.risk)?;
                 }
                 self.frames.insert((f.context(), f.timeframe.clone()), f);
@@ -294,6 +320,9 @@ CREATE TABLE IF NOT EXISTS wyckoff_observations(context TEXT NOT NULL,timeframe 
             ("POST", "/v1/studio/run") => {
                 let t = t.context("Connect MT5 before research")?;
                 let v: Value = serde_json::from_slice(body)?;
+                if v.get("context").is_some() && v["context"].as_str()!=Some(context(t).as_str()) {
+                    bail!("تغيّر حساب البحث؛ حدّث الصفحة قبل المحاولة");
+                }
                 let tf = v["timeframe"].as_str().unwrap_or("ALL");
                 if tf != "ALL" && !studio::TIMEFRAMES.contains(&tf) {
                     bail!("Unknown timeframe");
@@ -322,7 +351,17 @@ CREATE TABLE IF NOT EXISTS wyckoff_observations(context TEXT NOT NULL,timeframe 
             }
             ("POST", "/v1/studio/auto") => {
                 let v: Value = serde_json::from_slice(body)?;
-                self.auto = v["enabled"].as_bool().context("enabled must be boolean")?;
+                let enabled=v["enabled"].as_bool().context("enabled must be boolean")?;
+                if enabled {
+                    let t=t.context("Connect MT5 before automatic research")?;
+                    let key=context(t);
+                    if v.get("context").is_some() && v["context"].as_str()!=Some(key.as_str()) {
+                        bail!("تغيّر حساب البحث؛ حدّث الصفحة قبل المحاولة");
+                    }
+                    db.execute("INSERT INTO studio_auto_scope(id,context) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET context=excluded.context",[&key])?;
+                    self.auto_context=Some(key);
+                    self.auto=true;
+                }else{self.cancel();}
                 db.execute("INSERT INTO studio_settings(id,auto) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET auto=excluded.auto",[self.auto])?;
                 Ok(json!({"auto":self.auto}))
             }
@@ -342,6 +381,11 @@ CREATE TABLE IF NOT EXISTS wyckoff_observations(context TEXT NOT NULL,timeframe 
             }
             ("GET", "/v1/studio") => {
                 let key = t.map(context);
+                let active_report_id=t.and_then(|t|{
+                    let raw:String=db.query_row("SELECT payload FROM brain_configs WHERE id='generated'",[],|r|r.get(0)).ok()?;
+                    let brain=serde_json::from_str::<braintrade_domain::execution::BrainConfig>(&raw).ok()?;
+                    crate::coordinator_learning::genome(db,&brain,t).ok().flatten().map(|_|brain.report_id)
+                });
                 let mut frames = vec![];
                 for tf in studio::TIMEFRAMES {
                     let f = key
@@ -354,7 +398,7 @@ CREATE TABLE IF NOT EXISTS wyckoff_observations(context TEXT NOT NULL,timeframe 
                 let mut q=db.prepare("SELECT timeframe,COUNT(*),SUM(CASE WHEN outcome IS NULL THEN 1 ELSE 0 END),SUM(CASE WHEN json_extract(outcome,'$.state')='scored' THEN 1 ELSE 0 END),SUM(CASE WHEN json_extract(outcome,'$.net_per_lot')>0 THEN 1 ELSE 0 END),AVG(json_extract(outcome,'$.net_per_lot')) FROM wyckoff_observations WHERE context=?1 GROUP BY timeframe")?;
                 let learning=q.query_map([key.as_deref().unwrap_or("")],|r|{let n:i64=r.get(3)?;let wins:i64=r.get(4)?;let mean:Option<f64>=r.get(5)?;Ok(json!({"timeframe":r.get::<_,String>(0)?,"observations":r.get::<_,i64>(1)?,"pending":r.get::<_,i64>(2)?,"scored":n,"wins":wins,"smoothed_win_rate":(wins+1) as f64/(n+2) as f64,"mean_net_per_lot":mean,"research_evidence_positive":n>=20&&mean.is_some_and(|v|v>0.),"note":"Prospective 12-bar outcomes; frequency is not calibrated confidence"}))})?.collect::<std::result::Result<Vec<_>,_>>()?;
                 Ok(
-                    json!({"context":key,"connected":t.is_some(),"auto":self.auto,"working":self.worker.as_ref().map(|w|&w.frame.timeframe),"queued":self.queue.len(),"last_error":self.last_error,"frames":frames,"reports":reports,"wyckoff_learning":learning}),
+                    json!({"context":key,"connected":t.is_some(),"trading_mode":c.trading.mode,"active_report_id":active_report_id,"auto":self.auto && key==self.auto_context,"working":self.worker.as_ref().filter(|w|Some(w.frame.context())==key).map(|w|&w.frame.timeframe),"queued":self.queue.iter().filter(|(f,_)|Some(f.context())==key).count(),"last_error":self.last_error,"frames":frames,"reports":reports,"wyckoff_learning":learning}),
                 )
             }
             _ => bail!("Unknown studio route"),
@@ -481,4 +525,38 @@ mod tests {
         assert_eq!(o["state"], "scored");
         assert!((o["net_per_lot"].as_f64().unwrap() - 137.).abs() < 1e-7);
     }
+    #[test]
+    fn evolutionary_seed_is_persisted_scoped_and_cannot_expose_validation() {
+        let db=Connection::open_in_memory().unwrap();let _=Service::new(&db).unwrap();
+        let (mut f,_,c)=fixture();let last=f.current_open;
+        f.bars=(0..600).map(|i|{let mut b=f.bars[i as usize%100].clone();b.candle.time=last-(600-i)*60;b}).collect();
+        let r=studio::learn(&f,&c.risk,&AtomicBool::new(false)).unwrap();
+        db.execute("INSERT INTO studio_runs VALUES('parent',?1,?2,?3,?4,?5,?6)",params![f.context(),f.timeframe,r.test_end,f.captured_ms,serde_json::to_string(&r).unwrap(),serde_json::to_string(&f).unwrap()]).unwrap();
+        assert!(previous_seed(&db,&f).unwrap().is_none(),"Same run cannot seed its own holdout");
+        let advance=|f:&mut Frame,n:u64|{for b in &mut f.bars {b.candle.time+=n*60;} f.current_open+=n*60;f.captured_ms+=n*60_000;};
+        advance(&mut f,100);
+        assert!(Service::unseen(&db,&f).unwrap());
+        assert!(previous_seed(&db,&f).unwrap().is_none(),"Old test inside new validation must not seed selection");
+        advance(&mut f,140);
+        assert_eq!(previous_seed(&db,&f).unwrap().unwrap().0,"parent");
+        let _restart=Service::new(&db).unwrap();
+        assert_eq!(previous_seed(&db,&f).unwrap().unwrap().1,r.selected);
+        f.login+=1;assert!(previous_seed(&db,&f).unwrap().is_none());f.login-=1;
+        f.timeframe="M5".into();assert!(previous_seed(&db,&f).unwrap().is_none());
+    }
+    #[test]
+    fn auto_research_scope_survives_restart_and_does_not_follow_account_switch() {
+        let db=Connection::open_in_memory().unwrap();let mut service=Service::new(&db).unwrap();
+        let (f,t,c)=fixture();let mut status=Status::default();status.gateway_fresh=true;status.telemetry=Some(t.clone());
+        let now=f.captured_ms;let request=json!({"enabled":true,"context":f.context()}).to_string();
+        service.route("POST","/v1/studio/auto",request.as_bytes(),&db,&c,&status,now).unwrap();
+        service=Service::new(&db).unwrap();
+        assert_eq!(service.route("GET","/v1/studio",b"",&db,&c,&status,now).unwrap()["auto"],true);
+        status.telemetry.as_mut().unwrap().login+=1;
+        assert_eq!(service.route("GET","/v1/studio",b"",&db,&c,&status,now).unwrap()["auto"],false);
+        assert!(service.route("POST","/v1/studio/auto",request.as_bytes(),&db,&c,&status,now).is_err());
+        service.route("POST","/v1/studio/cancel",b"{}",&db,&c,&status,now).unwrap();
+        assert!(!Service::new(&db).unwrap().auto);
+    }
+
 }

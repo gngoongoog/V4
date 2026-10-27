@@ -97,6 +97,47 @@ mod tests{
         s
     }
     #[test]
+    fn dashboard_contract_uses_actual_rust_reports_and_separates_breakeven(){
+        // Synthetic CLOSED receipts exercise serialization, not broker execution.
+        let db=Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE coordinator_broker_samples(source TEXT NOT NULL,position_id INTEGER NOT NULL,context TEXT NOT NULL,brain TEXT NOT NULL,closed_ms INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(source,position_id));").unwrap();
+        let mut data=view();
+        data["trading_mode"]=json!("expert");
+        let context=data["context"].as_str().unwrap().to_owned();
+        for id in 1..=34_u64 {
+            let net:f64=if id<=20{2.0}else if id<=29{-1.0}else{0.0};
+            let p=json!({"evidence_source":"mt5_demo_broker","context":context,
+                "trading_mode":"expert","brain":"system","position_id":id,
+                "closed_ms":id*1000,"gross":net+0.7,"commission":-0.7,
+                "swap":0.0,"fee":0.0,"net":net,"closed_volume":0.1,
+                "net_per_lot":net/0.1,"risk_money":5.0,"r_multiple":net/5.0,
+                "reward":(net/5.0).tanh()});
+            db.execute("INSERT INTO coordinator_broker_samples VALUES('fixture',?1,?2,'system',?3,?4)",
+                rusqlite::params![id,context,id*1000,p.to_string()]).unwrap();
+        }
+        for row in data["brains"].as_array_mut().unwrap(){
+            let id=row["config"]["id"].as_str().unwrap().to_owned();
+            row["quality"]=crate::learning_quality::audit(&db,&context,TradingMode::Expert,&id).unwrap();
+        }
+        let s=status(true,true);
+        enrich(&mut data,&db,&s,TradingMode::Expert).unwrap();
+        let quality=&data["brains"][0]["quality"];
+        assert_eq!(quality["schema"],"closed-demo-learning-quality-v1");
+        assert_eq!(quality["all"]["samples"],34);
+        assert_eq!(quality["all"]["wins_after_costs"],20);
+        assert_eq!(quality["all"]["losses_after_costs"],9);
+        assert_eq!(quality["all"]["breakeven_after_costs"],5);
+        assert_eq!(quality["all"]["net_booked"],31.0);
+        assert_eq!(data["brains"][1]["quality"]["all"]["losses_after_costs"],0);
+        assert!(data["brains"][1]["quality"]["all"]["win_rate"].is_null());
+        // CI hands the ACTUAL Rust response to the production TS decoder.
+        if let Some(path)=std::env::var_os("BRAINTRADE_TEST_CONTRACT_OUT"){
+            let packet=json!({"synthetic":true,"broker_orders":false,
+                "build":braintrade_domain::build_identity(),"status":s,"report":data});
+            std::fs::write(path,serde_json::to_vec_pretty(&packet).unwrap()).unwrap();
+        }
+    }
+    #[test]
     fn all_seventeen_brains_have_clear_roles_and_no_fictional_metrics(){
         let db=Connection::open_in_memory().unwrap();
         let mut data=view();

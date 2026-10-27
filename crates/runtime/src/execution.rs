@@ -623,8 +623,41 @@ impl Service {
         }
         value["learning_review"] = json!(crate::coordinator_learning::broker_review(db,&key)?);
         value["execution_model"] = json!("adaptive-member-coordinator-v1");
-        value["note"] = json!("العقل الرئيسي يعمل مع START. العقول الثانوية تشارك كمستشارين افتراضياً؛ تفعيل SOLO يفصل العقل المختار فقط، وإطفاؤه يعيده بعد تسوية صفقة SOLO المفتوحة. الصفقات المغلقة على الديمو تحدّث الوزن من أول نتيجة، بعد التكاليف؛ تقييم 12 شمعة يبقى دليلاً افتراضياً منفصلاً. START/STOP منفصلان عن زر العضوية.");
+        value["note"] = json!("منسق الوضع المختار وحده يرسل أوامر MT5 عند START. التداول المنفرد SOLO غير متاح؛ أزرار العقول تغيّر المشاركة الاستشارية والبحث الافتراضي فقط. نتائج Demo المغلقة المكتملة والمقبولة تحدّث أوزان المشاركين بعد التكاليف؛ تقييم الشموع يبقى دليلاً افتراضياً منفصلاً. STOP يمنع الدخول الجديد ويبقي إدارة المراكز والمصالحة.");
         Ok(value)
+    }
+
+    pub fn generated_strategy_route(&mut self,method:&str,body:&[u8],db:&Connection,status:&Status,config:&Config,now:u64)->Result<Value>{
+        anyhow::ensure!(method=="POST","Unsupported strategy action");
+        anyhow::ensure!(!status.requested_run && !self.pending(db)?,"أوقف النظام وسوِّ الأوامر قبل تغيير الاستراتيجية");
+        let t=status.telemetry.as_ref().filter(|t|status.gateway_fresh && t.connected && self.account_matches(status))
+            .context("اربط حساب Demo بقراءة حديثة أولاً")?;
+        anyhow::ensure!(t.demo && t.account_trade_mode==Some(0) && t.positions.is_empty() && t.pending_orders==0,
+            "اعتماد المرشح يتطلب Demo خالياً من المراكز والأوامر");
+        anyhow::ensure!(config.trading.mode==braintrade_domain::trading::TradingMode::Expert
+            && self.inner.active_mode==Some(config.trading.mode),"اختر Expert قبل اعتماد الاستراتيجية كمستشار");
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Request{context:String,report_id:String}
+        let req:Request=serde_json::from_slice(body)?;
+        anyhow::ensure!(req.context==context(t) && !req.report_id.is_empty() && req.report_id.len()<=100,"الحساب أو التقرير غير مطابق");
+        let mut brain=self.inner.brains.iter().find(|b|b.id=="generated").context("Missing generated brain")?.clone();
+        // Save approval, selected report and advisory controls atomically.
+        let tx=db.unchecked_transaction()?;
+        let report=crate::coordinator_learning::approve_generated(&tx,t,&req.report_id,config,now)?;
+        brain.report_id=req.report_id.clone();brain.timeframe=report.timeframe;brain.enabled=false;
+        brain.validate().map_err(anyhow::Error::msg)?;
+        let control=crate::brain_control::Control{advisor:true,paper:true};
+        crate::brain_control::save(&tx,&req.context,config.trading.mode,"generated",control)?;
+        let mut settings=self.inner.settings.clone();settings.revision+=1;
+        tx.execute("INSERT OR REPLACE INTO brain_configs VALUES(?1,?2)",params![brain.id,serde_json::to_string(&brain)?])?;
+        tx.execute("INSERT OR REPLACE INTO execution_settings VALUES(1,?1)",[serde_json::to_string(&settings)?])?;
+        tx.commit()?;
+        *self.inner.brains.iter_mut().find(|b|b.id=="generated").unwrap()=brain;
+        self.inner.settings=settings;self.inner.controls.insert("generated".into(),control);
+        self.inner.set_mode(config.trading.mode);self.fast=None;
+        Ok(json!({"ok":true,"report_id":req.report_id,"role":"expert_demo_advisor","orders_sent":0,
+            "note":"تم اعتماد المرشح كمستشار في Expert Demo؛ START قرار مستقل ولا يوجد ضمان دخول أو ربح"}))
     }
 
     /// Frozen Expert Demo *decision-policy* only; NOT a broker or risk-gate twin.
@@ -1563,6 +1596,52 @@ mod tests {
         assert!(!prior.entry_allowed(&t,true));
         // Demo is optional/advisory but does not bypass mandatory Gateway/broker rules.
         assert!(prior.entry_allowed(&t,false));
+    }
+
+    #[test]
+    fn generated_demo_approval_is_exact_persistent_and_never_sends_orders() {
+        let db=Connection::open_in_memory().unwrap();let mut svc=Service::new(&db).unwrap();
+        let _=crate::studio::Service::new(&db).unwrap();
+        let c=Config::default();let now=2_000_000_000_000;
+        let mut t=telemetry();t.demo=true;t.account_trade_mode=Some(0);t.point=Some(0.01);
+        svc.inner.settings.login=t.login;svc.inner.settings.server=t.server.clone();svc.inner.settings.currency=t.currency.clone();
+        svc.set_mode(braintrade_domain::trading::TradingMode::Expert);
+        let mut status=Status::default();status.gateway_fresh=true;status.telemetry=Some(t.clone());
+        // Synthetic positive report tests authorization, never evidence of profit.
+        let metric=json!({"trades":20,"wins":12,"net_r":2.0,"max_drawdown_r":1.0,"costs_per_lot":140.0});
+        let r=json!({"algorithm":"test-only","context":context(&t),"timeframe":"M1","captured_ms":now-1000,
+            "first_bar":1,"last_bar":600,"train_end":360,"validation_start":385,"validation_end":480,
+            "test_start":505,"test_end":600,"purge_bars":24,"trials":40,
+            "selected":{"family":"breakout","lookback":12,"stop_atr":1.0,"reward":2.0},
+            "training":metric,"validation":metric,"test":metric,"eligible_for_review":true,"note":"Synthetic test fixture",
+            "risk":c.risk,"contract":{"point":0.01,"tick_size":0.01,"tick_loss":1.,"tick_profit":1.,"volume_min":0.01,"volume_step":0.01,"volume_max":100.}});
+        let raw=r.to_string();
+        db.execute("INSERT INTO studio_runs VALUES('candidate',?1,'M1',600,?2,?3,'{}')",params![context(&t),now-1000,raw]).unwrap();
+        let brain=BrainConfig{id:"generated".into(),report_id:"candidate".into(),..Default::default()};
+        assert!(crate::coordinator_learning::genome(&db,&brain,&t).unwrap().is_none(),"Unapproved research cannot advise execution");
+        let request=json!({"context":context(&t),"report_id":"candidate"}).to_string();
+        status.requested_run=true;
+        assert!(svc.generated_strategy_route("POST",request.as_bytes(),&db,&status,&c,now).is_err());status.requested_run=false;
+        let mut costly=c.clone();costly.risk.commission_per_lot+=1.;
+        assert!(svc.generated_strategy_route("POST",request.as_bytes(),&db,&status,&costly,now).is_err());
+        status.telemetry.as_mut().unwrap().pending_orders=1;
+        assert!(svc.generated_strategy_route("POST",request.as_bytes(),&db,&status,&c,now).is_err());status.telemetry.as_mut().unwrap().pending_orders=0;
+        status.telemetry.as_mut().unwrap().demo=false;
+        assert!(svc.generated_strategy_route("POST",request.as_bytes(),&db,&status,&c,now).is_err());status.telemetry.as_mut().unwrap().demo=true;
+        let out=svc.generated_strategy_route("POST",request.as_bytes(),&db,&status,&c,now).unwrap();
+        assert_eq!(out["orders_sent"],0);assert!(crate::coordinator_learning::genome(&db,&brain,&t).unwrap().is_some());
+        let restarted=Service::new(&db).unwrap();
+        assert_eq!(restarted.inner.brains.iter().find(|b|b.id=="generated").unwrap().report_id,"candidate");
+        assert!(crate::coordinator_learning::genome(&db,&brain,&t).unwrap().is_some());
+        let count:u64=db.query_row("SELECT COUNT(*) FROM broker_commands",[],|r|r.get(0)).unwrap();assert_eq!(count,0);
+        let mut real=t.clone();real.demo=false;real.account_trade_mode=Some(2);
+        assert!(crate::coordinator_learning::genome(&db,&brain,&real).unwrap().is_none());
+        let mut other=t.clone();other.login+=1;
+        assert!(crate::coordinator_learning::genome(&db,&brain,&other).unwrap().is_none());
+        db.execute("UPDATE studio_runs SET payload=json_set(payload,'$.selected.reward',3)",[]).unwrap();
+        assert!(crate::coordinator_learning::genome(&db,&brain,&t).unwrap().is_none(),"Changed report invalidates approval");
+        db.execute("UPDATE studio_runs SET payload=json_set(payload,'$.test.net_r',-1)",[]).unwrap();
+        assert!(svc.generated_strategy_route("POST",request.as_bytes(),&db,&status,&c,now).is_err(),"Stored eligibility cannot override a losing holdout");
     }
 
 }

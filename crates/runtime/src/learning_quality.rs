@@ -34,8 +34,9 @@ fn wilson_lower(wins:usize,n:usize)->Option<f64>{
     Some(((p+z*z/(2.*n)-z*((p*(1.-p)+z*z/(4.*n))/n).sqrt())/denom).clamp(0.,1.))
 }
 fn summarize(rows:&[Sample])->Value {
-    if rows.is_empty(){return json!({"samples":0,"win_rate":null,"wilson_95_lower":null,"net_booked":0.,"mean_net_per_lot":null,"profit_factor":null,"mean_r_multiple":null,"cost_drag":0.,"gross_positive_but_net_nonpositive":0})}
+    if rows.is_empty(){return json!({"samples":0,"wins_after_costs":0,"losses_after_costs":0,"breakeven_after_costs":0,"win_rate":null,"wilson_95_lower":null,"net_booked":0.,"mean_net_per_lot":null,"profit_factor":null,"mean_r_multiple":null,"cost_drag":0.,"gross_positive_but_net_nonpositive":0})}
     let n=rows.len();let wins=rows.iter().filter(|r|r.net>0.).count();
+    let losses=rows.iter().filter(|r|r.net<0.).count();
     let booked:f64=rows.iter().map(|r|r.net).sum();
     let per_lot:f64=rows.iter().map(|r|r.net/r.volume).sum::<f64>()/n as f64;
     let gross_gain:f64=rows.iter().map(|r|r.net.max(0.)).sum();
@@ -45,6 +46,8 @@ fn summarize(rows:&[Sample])->Value {
     json!({
         "samples":n,
         "wins_after_costs":wins,
+        "losses_after_costs":losses,
+        "breakeven_after_costs":n-wins-losses,
         "win_rate":wins as f64/n as f64,
         "wilson_95_lower":wilson_lower(wins,n),
         "net_booked":booked,
@@ -136,6 +139,7 @@ pub fn audit(db:&Connection,context:&str,mode:TradingMode,brain:&str)->Result<Va
         else if new["mean_net_per_lot"].as_f64().is_some_and(|v|v<=0.){"recent_deterioration"}
         else{"monitor_only"};
     Ok(json!({
+       "schema":"closed-demo-learning-quality-v1",
        "status":status,"warnings":warnings,
        "policy":"read_only","broker_samples":total,
        "invalid_samples":invalid,"duplicate_position_samples":duplicates,
