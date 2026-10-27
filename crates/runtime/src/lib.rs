@@ -122,13 +122,26 @@ pub fn read_ipc_key(dir:&Path)->Result<String>{
 }
 #[derive(Clone)]
 pub struct Client{http:reqwest::blocking::Client,key:String}
+/// A rejected shutdown is known not to have been accepted. A transport
+/// failure is different: the request may have reached Core despite a lost
+/// response, so a caller must not automatically restart it.
+pub enum ShutdownError { Rejected(String), Uncertain(String) }
 impl Client{
     pub fn new(dir:&Path)->Result<Self>{Ok(Self{http:reqwest::blocking::Client::builder().no_proxy().timeout(Duration::from_secs(4)).build()?,key:read_ipc_key(dir)?})}
     pub fn get(&self,path:&str)->Result<Value>{Ok(self.http.get(format!("{BASE}{path}")).bearer_auth(&self.key).send()?.error_for_status()?.json()?)}
     pub fn post(&self,path:&str,body:Value)->Result<Value>{let response=self.http.post(format!("{BASE}{path}")).bearer_auth(&self.key).json(&body).send()?;let code=response.status();let value:Value=response.json()?;if !code.is_success(){bail!("{}",value["error"].as_str().unwrap_or("Request failed"));}Ok(value)}
+    pub fn shutdown(&self,instance:&str)->std::result::Result<Value,ShutdownError>{
+        let response=self.http.post(format!("{BASE}/v1/shutdown")).bearer_auth(&self.key)
+            .timeout(Duration::from_secs(30)).json(&json!({"expected_core_instance":instance})).send()
+            .map_err(|e|ShutdownError::Uncertain(e.to_string()))?;
+        let code=response.status();
+        let value:Value=response.json().map_err(|e|ShutdownError::Uncertain(e.to_string()))?;
+        if !code.is_success(){return Err(ShutdownError::Rejected(value["error"].as_str().unwrap_or("Shutdown rejected").to_string()));}
+        Ok(value)
+    }
 }
 pub(crate) struct Shared{pub status:Status,pub config:Config,pub token:Option<String>}
-struct Engine{dir:PathBuf,shared:Arc<Mutex<Shared>>,db:Connection,gateway:Option<Child>,gateway_retry_ms:u64,shutting_down:bool,research:research::Research,backtests:backtest::Service,evaluations:evaluation::Service,news:news::Service,learning:learning::Service,inference:learning_inference::Service,scoring:learning_scoring::Service,studio:studio::Service,execution:execution::Service}
+struct Engine{dir:PathBuf,shared:Arc<Mutex<Shared>>,db:Connection,gateway:Option<Child>,gateway_retry_ms:u64,shutting_down:bool,instance_id:String,research:research::Research,backtests:backtest::Service,evaluations:evaluation::Service,news:news::Service,learning:learning::Service,inference:learning_inference::Service,scoring:learning_scoring::Service,studio:studio::Service,execution:execution::Service}
 #[derive(Deserialize)]
 struct ConfigRequest{config:Config,#[serde(default)]telegram_token:String,#[serde(default)]clear_telegram_token:bool}
 #[derive(Serialize)]
@@ -199,11 +212,39 @@ impl Engine{
         command.env("PYTHONDONTWRITEBYTECODE","1");
         command.env("BRAINTRADE_DATA_DIR",&self.dir)
             .env("BRAINTRADE_IPC_TOKEN",read_ipc_key(&self.dir)?);
-        command.stdin(Stdio::null()).stdout(Stdio::null());let log=OpenOptions::new().append(true).create(true).open(self.dir.join("gateway.log"))?;command.stderr(log);
+        // Closing the parent end of stdin requests normal Python cleanup. The
+        // gateway opts into this protocol only when started by this Core.
+        command.env("BRAINTRADE_GATEWAY_PARENT_STDIN","1");
+        command.stdin(Stdio::piped()).stdout(Stdio::null());let log=OpenOptions::new().append(true).create(true).open(self.dir.join("gateway.log"))?;command.stderr(log);
         #[cfg(windows)] {use std::os::windows::process::CommandExt;command.creation_flags(0x08000000);}
         self.gateway=Some(command.spawn().context("Could not launch MT5 gateway")?);self.event("gateway_started",json!({}))?;Ok(())
     }
     fn stop_gateway(&mut self){if let Some(mut child)=self.gateway.take(){let _=child.kill();let _=child.wait();}}
+    fn stop_gateway_for_full_exit(&mut self)->Result<()> {
+        if let Some(child)=self.gateway.as_mut(){
+            drop(child.stdin.take());
+            let deadline=std::time::Instant::now()+Duration::from_secs(15);
+            loop {
+                if let Some(status)=child.try_wait().context("تعذر التحقق من انتهاء Gateway")? {
+                    anyhow::ensure!(status.success(),"تعذر تأكيد تنظيف Gateway؛ راجع gateway.log");
+                    break;
+                }
+                anyhow::ensure!(std::time::Instant::now()<deadline,
+                    "تعذر إيقاف Gateway طبيعياً ضمن المهلة؛ لم يُغلق Core");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            self.gateway=None;
+        }
+        // A gateway from an earlier Core may still own this account's lock.
+        // Never report complete shutdown while such an unknown owner exists.
+        let lock_path=self.dir.join("gateway.lock");
+        if lock_path.exists(){
+            let probe=OpenOptions::new().read(true).write(true).open(lock_path)?;
+            probe.try_lock_exclusive().context("تعذر تأكيد توقف Gateway سابق؛ ما زال قفل Gateway مشغولاً")?;
+            FileExt::unlock(&probe)?;
+        }
+        Ok(())
+    }
     fn tick(&mut self){let cfg=self.shared.lock().unwrap().config.clone();self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
     fn route(&mut self,method:&str,path:&str,body:&[u8])->Result<Value>{
         if path=="/v1/research/execution-lifecycle" && method=="POST" {
@@ -430,7 +471,7 @@ impl Engine{
             return Ok(result);
         }
         match(method,path){
-            ("GET","/v1/status")=>{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());Ok(serde_json::to_value(&s.status)?)},
+            ("GET","/v1/status")=>{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());let mut value=serde_json::to_value(&s.status)?;value["core_process"]=json!({"pid":std::process::id(),"instance_id":self.instance_id});Ok(value)},
             ("GET","/v1/config")=>{let s=self.shared.lock().unwrap();Ok(json!({"config":s.config,"token_saved":s.token.is_some()}))},
             ("GET","/v1/learning/account-evidence")=>{
                 let (telemetry,fresh)={
@@ -512,12 +553,18 @@ impl Engine{
             },
             ("GET","/v1/events")=>{let mut statement=self.db.prepare("SELECT id,timestamp_ms,kind,detail FROM events ORDER BY id DESC LIMIT 100")?;let events=statement.query_map([],|r|Ok(Event{id:r.get(0)?,timestamp_ms:r.get(1)?,kind:r.get(2)?,detail:serde_json::from_str(&r.get::<_,String>(3)?).unwrap_or(Value::Null)}))?.collect::<std::result::Result<Vec<_>,_>>()?;Ok(json!({"events":events}))},
             ("POST","/v1/shutdown")=>{
+                let request:Value=serde_json::from_slice(body)?;
+                if let Some(expected)=request.get("expected_core_instance") {
+                    anyhow::ensure!(expected.as_str()==Some(self.instance_id.as_str()),"تغيرت جلسة Core؛ أعد طلب الخروج");
+                }
                 let unresolved=self.execution.pending(&self.db)?;
                 let current={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
                 verify_safe_shutdown(&current,unresolved)?;
                 self.event("core_shutdown_requested",json!({"safe":true,"positions":0,"pending_orders":0}))?;
+                self.stop_gateway_for_full_exit()?;
+                self.backtests.cancel();self.evaluations.cancel();self.studio.cancel();
                 self.shutting_down=true;
-                Ok(json!({"ok":true,"safe":true}))
+                Ok(json!({"ok":true,"safe":true,"gateway_stopped":true,"core_process":{"pid":std::process::id(),"instance_id":self.instance_id}}))
             },
             _=>bail!("Unknown API route")
         }
@@ -527,9 +574,9 @@ impl Engine{
 pub fn run_core()->Result<()>{
     let dir=data_dir();fs::create_dir_all(&dir)?;
     #[cfg(unix)] {use std::os::unix::fs::PermissionsExt;fs::set_permissions(&dir,fs::Permissions::from_mode(0o700))?;}
-    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;correlation::init(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let mut engine=Engine{dir,shared:shared.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,research,backtests,evaluations,news,learning,inference,scoring,studio,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
+    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;correlation::init(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let mut engine=Engine{dir,shared:shared.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,instance_id:uuid::Uuid::new_v4().to_string(),research,backtests,evaluations,news,learning,inference,scoring,studio,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
     while !engine.shutting_down{engine.tick();let Some(mut request)=server.recv_timeout(Duration::from_millis(250))? else{continue;};let authenticated=request.headers().iter().any(|h|h.field.equiv("Authorization")&&h.value.as_str()==format!("Bearer {key}"));let origin=request.headers().iter().any(|h|h.field.equiv("Origin"));if !authenticated||origin{let _=request.respond(tiny_http::Response::from_string("{\"error\":\"Unauthorized\"}").with_status_code(401));continue;}if request.body_length().is_none()&&request.method().as_str()=="POST"{let _=request.respond(tiny_http::Response::empty(411));continue;}if request.body_length().unwrap_or(0)>2_000_000{let _=request.respond(tiny_http::Response::empty(413));continue;}let mut body=Vec::new();if request.as_reader().read_to_end(&mut body).is_err(){continue;}let result=engine.route(request.method().as_str(),request.url(),&body);let(code,value)=match result{Ok(v)=>(200,v),Err(e)=>(400,json!({"error":e.to_string()}))};let response=tiny_http::Response::from_string(value.to_string()).with_status_code(code).with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());let _=request.respond(response);}
-    engine.stop_gateway();engine.backtests.cancel();engine.evaluations.cancel();engine.event("core_stopped",json!({}))?;drop(lock);Ok(())
+    engine.stop_gateway();engine.backtests.cancel();engine.evaluations.cancel();engine.studio.cancel();engine.event("core_stopped",json!({}))?;drop(lock);Ok(())
 }
 fn verify_core_identity(status:&Value)->Result<()> {
     let expected=braintrade_domain::build_identity();
@@ -543,6 +590,13 @@ pub fn ensure_core()->Result<Client>{
     let mut command=Command::new(std::env::current_exe()?);fs::create_dir_all(&dir)?;command.arg("--core").stdin(Stdio::null()).stdout(Stdio::null()).stderr(OpenOptions::new().append(true).create(true).open(dir.join("core.log"))?);
     #[cfg(windows)] {use std::os::windows::process::CommandExt;command.creation_flags(0x08000008);}
     command.spawn()?;for _ in 0..100{std::thread::sleep(Duration::from_millis(100));if let Ok(client)=Client::new(&dir){if let Ok(status)=client.get("/v1/status"){verify_core_identity(&status)?;return Ok(client);}}}bail!("Core did not become ready. See {}",dir.join("core.log").display())
+}
+/// Connect only to an already running and matching Core; never spawn one.
+pub fn connect_existing_core()->Result<Client>{
+    let client=Client::new(&data_dir())?;
+    let status=client.get("/v1/status")?;
+    verify_core_identity(&status)?;
+    Ok(client)
 }
 
 #[cfg(test)]

@@ -158,7 +158,7 @@ class NativeSniperTests(unittest.TestCase):
         self.assertIn("refresh_fast_tick", source)
         self.assertIn("advance_quote_clock", source)
         self.assertLess(source.index("packets=native.drain"), source.index("full_due=latest_snapshot"))
-        self.assertLess(source.index("native.wait(remaining)"), source.index("time.sleep(remaining)"))
+        self.assertLess(source.index("native.wait(remaining)"), source.index("stop_requested.wait(remaining)"))
 
     def test_mql5_bridge_recovers_cached_quote_ticks_and_never_trades(self):
         source = (ROOT / "mt5" / "BrainTradeSniperBridge.mq5").read_text(encoding="utf-8")
