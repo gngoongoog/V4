@@ -87,6 +87,9 @@ class NativeSniperLifecycleTests(unittest.TestCase):
         self.assertNotIn('\\nToken: ',ea)
         self.assertIn('g_last_io_error = GetLastError()',ea)
         self.assertNotIn('OrderSend(',ea)
+        self.assertIn("SendPendingQuoteTicks();",ea)
+        self.assertNotIn("if(!SendPendingQuoteTicks())",ea)
+        self.assertIn("g_failed_ticks += forwarded;",ea)
 
     @unittest.skipUnless(os.name == "nt", "Windows named-pipe contract")
     def test_real_windows_blocking_connect_stops_and_same_name_rebinds(self):
