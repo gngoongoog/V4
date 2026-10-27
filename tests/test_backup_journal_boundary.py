@@ -16,6 +16,7 @@ BASE = "http://127.0.0.1:18741"
 
 
 @unittest.skipIf(os.name == "nt", "Linux CI fixture uses the development plaintext IPC key")
+@unittest.skipUnless(BINARY.is_file(), "Requires a built local Rust braintrade-core executable")
 class BackupJournalBoundaryTests(unittest.TestCase):
     """The durable broker send journal is transport state and must never roll back with Core backups."""
 

@@ -1,0 +1,78 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const vm=require('node:vm');
+const ts=require('typescript');
+const root=path.resolve(__dirname,'..');
+const source=fs.readFileSync(path.join(root,'src/operations.tsx'),'utf8');
+const output=ts.transpileModule(source,{fileName:'operations.tsx',compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX},reportDiagnostics:true});
+const errors=(output.diagnostics||[]).filter(x=>x.category===ts.DiagnosticCategory.Error);
+assert.equal(errors.length,0,errors.map(e=>ts.flattenDiagnosticMessageText(e.messageText,'\n')).join('\n'));
+const jsx=(type,props)=>({type,props:props||{}});
+const hooks={useState:initial=>[initial,()=>{}],useEffect:()=>{}};
+const exportsObj={};
+vm.runInNewContext(output.outputText,{exports:exportsObj,require:id=>{
+ if(id==='react')return hooks;
+ if(id==='react/jsx-runtime')return {jsx,jsxs:jsx};
+ if(id==='lucide-react')return Object.fromEntries(['Archive','CalendarClock','Download','Play','Square','ShieldAlert'].map(n=>[n,n]));
+ throw Error('untrusted module '+id);
+},Date,Number,String,JSON,console});
+function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
+ if(Array.isArray(node)){node.forEach(n=>nodes(n,out));return out;}
+ out.push(node);nodes(node.props?.children,out);return out;
+}
+(async()=>{
+ let started,stopped=0;
+ const backtest=exportsObj.BacktestOperations({onStart:async x=>{started=x},onCancel:async()=>{stopped++},disabled:false,active:false});
+ const form=nodes(backtest).find(x=>x.type==='form');
+ assert(form&&typeof form.props.onSubmit==='function','real backtest form present');
+ await form.props.onSubmit({preventDefault(){}});
+ await Promise.resolve();
+ assert(started&&started.from_date<started.to_date&&started.initial_equity===1000&&started.spread_floor===0.2);
+ const cancel=nodes(backtest).find(x=>x.type==='button'&&x.props.type==='button');
+ await cancel.props.onClick();assert.equal(stopped,1);
+ const called=[];
+ const backup=exportsObj.BackupOperations({create:async()=>called.push('create'),exportBrain:async()=>called.push('export'),disabled:false});
+ for(const btn of nodes(backup).filter(x=>x.type==='button'))await btn.props.onClick();
+ assert.deepEqual(called,['create','export']);
+ let saved=null;
+ for(const source of [null,{}, {config:{trading:{}}}]){
+  const empty=exportsObj.TradingSettingsOperations({source,disabled:false,armed:false,apply:async()=>{throw Error('Unavailable source must not save')}});
+  const label=nodes(empty).find(x=>x.type==='small');
+  assert(String(label.props.children).includes('غير متاح'),'Missing Core settings must not be labeled as loaded');
+  const action=nodes(empty).find(x=>x.type==='button'&&String(x.props.children).includes('حفظ الوضع'));
+  assert(action.props.disabled,'Cannot save absent Core configuration');
+ }
+ const settings=exportsObj.TradingSettingsOperations({source:{config:{trading:{mode:'expert',priority_enabled:false,sniper_active:true,fallback_mode:'expert',sniper_style:'auto',sniper_brain:'classic'},risk:{slippage_ticks:2}},commission_editor:{amount:7,basis:'round_trip'}},disabled:false,armed:false,apply:async v=>{saved=v}});
+ assert(String(nodes(settings).find(x=>x.type==='small').props.children).includes('إعدادات Core'));
+ const save=nodes(settings).filter(x=>x.type==='button').find(x=>String(x.props.children).includes('حفظ الوضع'));
+ assert(save,'trading editor has Core save action');await save.props.onClick();
+ assert(saved&&saved.commission_per_lot===7&&saved.commission_basis==='round_trip'&&saved.trading.mode==='expert');
+ let brainState=null;
+ const brains=exportsObj.BrainControlsOperations({source:{controls_available:true,brains:[{name:'system',config:{id:'system'}},{name:'Trend',config:{id:'trend'},control:{advisor:true,paper:false}}]},disabled:false,armed:false,onSave:async(...v)=>{brainState=v}});
+ const brainButtons=nodes(brains).filter(x=>x.type==='button');assert.equal(brainButtons.length,2,'system control never toggled');
+ await brainButtons[0].props.onClick();assert.deepEqual(brainState,['trend',false,false]);
+ await brainButtons[1].props.onClick();assert.deepEqual(brainState,['trend',true,true]);
+ let bound=null;
+ const broker=exportsObj.ExecutionBindingOperations({source:{settings:{target:'demo',login:0}},telemetry:{demo:true,account_trade_mode:0,login:12345,server:'Demo-Server',currency:'USD',symbol:'XAUUSD'},ready:true,armed:false,disabled:false,onBind:async(...v)=>bound=v});
+ await nodes(broker).find(x=>x.type==='form').props.onSubmit({preventDefault(){}});
+ assert.deepEqual(bound,['demo',20,''],'Demo account binding must use observed broker mode');
+ const priorState=hooks.useState;
+ hooks.useState=(()=>{const data=['live','20','wrong-login',''];let i=0;return initial=>[data[i++]??initial,()=>{}]})();
+ bound=null;
+ const badLive=exportsObj.ExecutionBindingOperations({source:{settings:{}},telemetry:{demo:false,account_trade_mode:2,login:982134,server:'REAL',currency:'USD',symbol:'XAUUSD'},ready:true,armed:false,disabled:false,onBind:async(...v)=>bound=v});
+ await nodes(badLive).find(x=>x.type==='form').props.onSubmit({preventDefault(){}});
+ assert.equal(bound,null,'REAL binding must reject incorrect login');
+ hooks.useState=(()=>{const data=['live','20','982134',''];let i=0;return initial=>[data[i++]??initial,()=>{}]})();
+ const goodLive=exportsObj.ExecutionBindingOperations({source:{settings:{}},telemetry:{demo:false,account_trade_mode:2,login:982134,server:'REAL',currency:'USD',symbol:'XAUUSD'},ready:true,armed:false,disabled:false,onBind:async(...v)=>bound=v});
+ await nodes(goodLive).find(x=>x.type==='form').props.onSubmit({preventDefault(){}});
+ assert.deepEqual(bound,['live',20,'982134'],'REAL bind requires exact observed MT5 login');
+ hooks.useState=priorState;
+ const rs=fs.readFileSync(path.join(root,'../tauri/src/bridge.rs'),'utf8');
+ const core=fs.readFileSync(path.join(root,'../../crates/runtime/src/lib.rs'),'utf8');
+ for(const route of ['/v1/shutdown','/v1/backup','/v1/backtest/start','/v1/execution/brain-control','/v1/execution/settings'])assert(rs.includes(route),'native allowlist missing '+route);
+ assert(core.includes('verify_safe_shutdown(&current,unresolved)?'));
+ assert(rs.includes('lifecycle.stopping.store(true,Ordering::SeqCst)'));
+ assert(!rs.includes('fn arbitrary_post'));
+ console.log('PASS: actual JSX actions dispatch backtest/backup/modes/brains; system brain immutable; safe exit wired; explicit verified Demo/REAL broker account binding');
+})().catch(e=>{console.error(e);process.exitCode=1});

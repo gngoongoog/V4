@@ -47,7 +47,7 @@ def check(exe=None):
             return [dict(time=end-(180-i)*seconds,open=2000+side*i*.3,high=2000+side*i*.3+.4,
                 low=2000+side*i*.3-.4,close=2000+side*i*.3+side*.1,tick_volume=100) for i in range(180)]
         snapshot = empty_snapshot('')
-        snapshot.update(connected=True, login=17, server='Demo', currency='USD', symbol='XAUUSD',
+        snapshot.update(connected=True, login=17, server='Demo', currency='USD', symbol='XAUUSD', demo=True,
             account_trade_mode=0,margin_mode=2,trade_allowed=True,trade_expert=True,balance=10000.,equity=10000.,
             today_net=0.,point=.01,tick_size=.01,tick_value_loss=1.,tick_value_profit=1.,
             volume_min=.01,volume_step=.01,volume_max=100.,bid=2053.8,ask=2053.9,
@@ -96,6 +96,18 @@ def check(exe=None):
                     if preview.get('costs'):
                         assert abs(preview['costs']['commission']-rate*lots)<1e-9,preview
             assert len(api('/v1/execution')['brains'])==17
+            # P1-A: do not let legacy/raw closed-position totals masquerade as
+            # validated Demo performance or a learned win probability.
+            integrity=api('/v1/execution/brains')
+            assert integrity['brain_integrity']['brains_accounted_for']==17
+            assert integrity['brain_integrity']['read_only'] is True
+            assert integrity['brain_integrity']['automatic_promotion'] is False
+            assert integrity['brain_integrity']['demo_account_verified'] is True
+            assert all(b['integrity']['broker_evidence']['status']=='insufficient_evidence'
+                       and b['integrity']['broker_evidence']['win_rate'] is None
+                       and b['integrity']['promotion_enabled'] is False
+                       for b in integrity['brains'])
+            assert integrity['brains'][0]['integrity']['role']=='selected_mode_coordinator'
             assert brain('system')['role']=='coordinator' and brain('trend')['role']=='advisor'
             assert brain('liquidity')['role']=='advisor' and not brain('liquidity')['solo_enabled']
             assert brain('trend_pullback')['role']=='advisor' and not brain('trend_pullback')['solo_enabled']
@@ -128,7 +140,9 @@ def check(exe=None):
             submit(cmd)
             assert len(broker.sends)==1
             broker.raise_send=False
-            broker.deals=[N(ticket=77,magic=410600,symbol='XAUUSD',volume=.01,comment='BT:'+cmd['id'][:20])]
+            broker.deals=[N(ticket=77,magic=410600,symbol='XAUUSD',volume=.01,
+                            type=broker.DEAL_TYPE_BUY,entry=broker.DEAL_ENTRY_IN,
+                            position_id=55,comment='BT:'+cmd['id'][:20])]
             result=submit(cmd)
             assert result['state']=='filled',result
             assert len(broker.sends)==1
@@ -140,7 +154,7 @@ def check(exe=None):
                        profit=0.,commission=-.35,swap=0.,fee=0.,reason=3)
             exit_deal=dict(entry,ticket=78,magic=0,entry=1,time_msc=now,
                            price=2055.,profit=10.,commission=-.35,swap=-.2)
-            sync=dict(login=17,server='Demo',currency='USD',until_ms=now,deals=[entry,exit_deal])
+            sync=dict(login=17,server='Demo',currency='USD',trade_mode=0,until_ms=now,deals=[entry,exit_deal])
             api('/v1/execution/sync',sync)
             api('/v1/execution/sync',sync)
             journal=api('/v1/execution/trades',dict(offset=0,limit=50))
@@ -151,6 +165,13 @@ def check(exe=None):
             assert trade['origin']['trading_mode']=='scalping',trade
             assert abs(trade['broker_net_booked']-9.1)<1e-7,trade
             assert 'shadow_paper' in api('/v1/execution')
+            # The close deals are journaled, but the original fill command
+            # is not broker-observed until another verified position snapshot.
+            # Never allow shutdown to strand an unreconciled fill.
+            try:api('/v1/shutdown',{})
+            except urllib.error.HTTPError as e:assert e.code==400
+            else:raise AssertionError('Core shut down before MT5 position reconciliation')
+            publish()  # Confirm the now-flat synthetic Demo portfolio.
             # Restart does not erase the real account journal or activate MT5.
             api('/v1/shutdown',{})
             process.wait(timeout=10)
@@ -160,10 +181,33 @@ def check(exe=None):
             restored=api('/v1/execution/trades',dict(offset=0,limit=50))
             assert restored['rows'][0]['origin']['trading_mode']=='scalping',restored
             assert abs(restored['rows'][0]['broker_net_booked']-9.1)<1e-7
+            # The new Rust process must recover the last completed broker
+            # history high-water mark, retaining only the intentional 120s
+            # overlap rather than replaying from the old account bind time.
+            resumed=api('/v1/execution/gateway')
+            expected_resume=max(0,now-120_000)
+            assert resumed['history_from_ms']==expected_resume, (resumed,expected_resume)
+            persisted=api('/v1/execution')
+            assert persisted['history_until_ms']==now,persisted
+            assert persisted['last_broker_sync_ms']>=now,persisted
             # Switching MT5 accounts never enables broker execution.
             snapshot['login']=99;publish()
             assert not api('/v1/status')['execution_enabled']
             assert api('/v1/execution/gateway')['command'] is None
+            switched_dashboard=api('/v1/execution')
+            assert not switched_dashboard['account_matches'],switched_dashboard
+            assert not switched_dashboard['context'] and not switched_dashboard['commands']
+            assert all(b['stats']['deals']==0 and b['stats']['open_positions']==0
+                       and b['stats']['net_booked'] is None
+                       for b in switched_dashboard['brains']),switched_dashboard
+            # Re-selecting the exact originally bound MT5 Demo account
+            # restores its immutable booked history without resubmission.
+            snapshot['login']=17;publish()
+            rebound=api('/v1/execution')
+            assert rebound['account_matches'] and rebound['context']
+            assert next(b for b in rebound['brains']
+                        if b['config']['id']=='system')['stats']['deals']==2,rebound
+            snapshot['login']=99;publish()
             # Simulated Demo -> REAL operator promotion must require two
             # independent typed confirmations. There is NO real MT5 connection.
             snapshot.update(login=990024,server='Real-Test',account_trade_mode=2,demo=False)

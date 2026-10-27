@@ -1,0 +1,30 @@
+name: V25 G6-A Preregistered Prospective Audit
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/v25-g6a-preregistered-prospective-coordinator-audit-20261025]
+    paths:
+      - 'scripts/audit_v25_g6a_preregistered_quotes.py'
+      - 'scripts/audit_v25_g5d_frozen_pairs.py'
+      - 'tests/test_v25_g6a_preregistered_quotes.py'
+      - 'tests/test_v25_g5d_frozen_pairs.py'
+      - '.github/workflows/v25-g6a-preregistered-audit.yml'
+  pull_request:
+    branches: [feature/v25-g5h-native-account-switch-scope-guard-20261025]
+permissions:
+  contents: read
+jobs:
+  prospective-research-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile preregistration and original G5-D paired audit
+        run: python3 -m compileall -q scripts/audit_v25_g6a_preregistered_quotes.py scripts/audit_v25_g5d_frozen_pairs.py tests/test_v25_g6a_preregistered_quotes.py
+      - name: Adversarial no-backfill, no-broker-profit, no-cherry-picking tests
+        run: python3 -m unittest discover -s tests -p 'test_v25_g6a_preregistered_quotes.py' -v
+      - name: Re-run source paired quote integrity tests
+        run: python3 -m unittest discover -s tests -p 'test_v25_g5d_frozen_pairs.py' -v

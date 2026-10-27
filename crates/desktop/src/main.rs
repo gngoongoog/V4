@@ -49,6 +49,7 @@ fn native_chart_candles(market: &braintrade_domain::MarketData, frame: i32) -> V
     let upper = high + padding;
     let denom = upper - lower;
     let at = |price: f64| ((upper - price) / denom).clamp(0.0, 1.0) as f32;
+    let max_tick_volume = subset.iter().map(|c| c.tick_volume).max().unwrap_or(0);
     subset.iter().enumerate().map(|(i, candle)| ChartCandle {
         x: (i as f32 + 0.5) / subset.len() as f32,
         high_y: at(candle.high),
@@ -56,10 +57,25 @@ fn native_chart_candles(market: &braintrade_domain::MarketData, frame: i32) -> V
         body_top: at(candle.open.max(candle.close)),
         body_bottom: at(candle.open.min(candle.close)),
         up: candle.close >= candle.open,
+        volume: if max_tick_volume == 0 { 0.0 } else {
+            (candle.tick_volume as f32 / max_tick_volume as f32).clamp(0.0, 1.0)
+        },
     }).collect()
 }
 
-fn paint(ui: &Dashboard, status: Status) {
+fn paint(ui: &Dashboard, status: Status, bound: &brain_monitor::BoundAccountScope) {
+    let current=brain_monitor::scope_for_status(&status);
+    let changed={
+        let mut previous=bound.lock().unwrap();
+        let changed=*previous!=current;
+        *previous=current;
+        changed
+    };
+    if changed {
+        // The independent Brain Monitor worker may still hold a response
+        // from the former account. Remove it as soon as primary status changes.
+        brain_monitor::invalidate_account_view(ui);
+    }
     // A fresh response from the gateway does not imply an authenticated MT5
     // account is connected. Both conditions must hold for an ONLINE display.
     let broker_online = status.gateway_fresh
@@ -217,8 +233,53 @@ fn main() {
         std::process::exit(1);
     }
 }
+/// Appearance preferences are local UI-only state. No broker/risk/core config is changed.
+fn parse_appearance(raw:&str)->(i32,bool,bool){
+    let Ok(v)=serde_json::from_str::<Value>(raw) else{return (2,false,false)};
+    let theme=v["theme"].as_i64().filter(|v|(0..=2).contains(v))
+        .map(|v|v as i32).unwrap_or(2);
+    (theme,
+        v["sidebar_collapsed"].as_bool().unwrap_or(false),
+        v["expanded_workspaces"].as_bool().unwrap_or(false))
+}
+
+fn appearance_path()->std::path::PathBuf{
+    data_dir().join("ui-appearance.json")
+}
+fn load_appearance()->(i32,bool,bool){
+    std::fs::read_to_string(appearance_path())
+        .ok().map(|s|parse_appearance(&s)).unwrap_or((2,false,false))
+}
+fn save_appearance(theme:i32,collapsed:bool,expanded:bool)->anyhow::Result<()>{
+    anyhow::ensure!((0..=2).contains(&theme),"Unsupported desktop theme");
+    let file=appearance_path();
+    if let Some(parent)=file.parent(){std::fs::create_dir_all(parent)?;}
+    std::fs::write(file,serde_json::to_vec(&json!({
+        "schema":1,"theme":theme,"sidebar_collapsed":collapsed,
+        "expanded_workspaces":expanded,
+    }))?)?;
+    Ok(())
+}
+#[cfg(test)]
+mod appearance_tests{
+    use super::*;
+    #[test]
+    fn no_invalid_theme_may_be_restored(){
+        assert_eq!(parse_appearance("{\"theme\":1,\"sidebar_collapsed\":true,\"expanded_workspaces\":true}"),(1,true,true));
+        assert_eq!(parse_appearance("{\"theme\":2}"),(2,false,false));
+        assert_eq!(parse_appearance("{\"theme\":-99,\"sidebar_collapsed\":true}"),(2,true,false));
+        assert_eq!(parse_appearance("{\"theme\":100,\"expanded_workspaces\":true}"),(2,false,true));
+        assert_eq!(parse_appearance("{\"theme\":1,\"expanded_workspaces\":\"yes\"}"),(1,false,false));
+        assert_eq!(parse_appearance("not json"),(2,false,false));
+    }
+}
+
 fn run_ui() -> anyhow::Result<()> {
     let ui = Dashboard::new()?;
+    let (initial_theme,initial_compact,initial_expanded)=load_appearance();
+    ui.set_theme_choice(initial_theme);
+    ui.set_compact_sidebar(initial_compact);
+    ui.set_expanded_workspaces(initial_expanded);
     backtest::setup(&ui);
     correlation::setup(&ui);
     backup::setup(&ui);
@@ -229,8 +290,18 @@ fn run_ui() -> anyhow::Result<()> {
     let _execution_timer=execution::setup(&ui);
     let _student_timer=student::setup(&ui);
     let _trade_journal_timer=trade_journal::setup(&ui);
-    let _brain_monitor_timer=brain_monitor::setup(&ui);
+    let bound_account:brain_monitor::BoundAccountScope=std::sync::Arc::new(
+        std::sync::Mutex::new(None));
+    let _brain_monitor_timer=brain_monitor::setup(&ui,bound_account.clone());
     let _risk_monitor_timer=risk_monitor::setup(&ui);
+    let weak = ui.as_weak();
+    ui.on_save_appearance(move |theme, collapsed, expanded| {
+        if let Err(err)=save_appearance(theme,collapsed,expanded){
+            if let Some(ui)=weak.upgrade(){
+                ui.set_feedback(format!("تعذر حفظ ثيم الواجهة محلياً: {err}").into());
+            }
+        }
+    });
     let (tx, rx) = mpsc::channel::<Task>();
     let sender = tx.clone();
     let weak = ui.as_weak();
@@ -476,10 +547,14 @@ fn run_ui() -> anyhow::Result<()> {
                 .and_then(|v| Ok(serde_json::from_value::<Status>(v)?))
             {
                 Ok(s) => {
-                    let _ = weak.upgrade_in_event_loop(move |ui| paint(&ui, s));
+                    let current_scope=bound_account.clone();
+                    let _ = weak.upgrade_in_event_loop(move |ui| paint(&ui, s, &current_scope));
                 }
                 Err(_) => {
+                    let current_scope=bound_account.clone();
                     let _ = weak.upgrade_in_event_loop(move |ui| {
+                        *current_scope.lock().unwrap()=None;
+                        brain_monitor::invalidate_account_view(&ui);
                         ui.set_online(false);
                         ui.set_state("CORE UNREACHABLE".into());
                         ui.set_connection(
@@ -523,6 +598,18 @@ mod institutional_dashboard_tests {
         assert_eq!(view.len(), 4);
         assert!(view.iter().all(|c| c.high_y <= c.body_top
             && c.body_top <= c.body_bottom && c.body_bottom <= c.low_y));
+        assert!(view.iter().all(|c| (c.volume - 1.0).abs() < f32::EPSILON));
+        m.m1[0].tick_volume = 0;
+        m.m1[1].tick_volume = 10;
+        m.m1[2].tick_volume = 30;
+        m.m1[3].tick_volume = 15;
+        let updated = native_chart_candles(&m, 0);
+        assert_eq!(updated[0].volume, 0.0);
+        assert!((updated[1].volume - (1.0 / 3.0)).abs() < 0.0001);
+        assert_eq!(updated[2].volume, 1.0);
+        assert_eq!(updated[3].volume, 0.5);
+        for candle in &mut m.m1 { candle.tick_volume = 0; }
+        assert!(native_chart_candles(&m, 0).iter().all(|c| c.volume == 0.0));
         assert!(native_chart_candles(&m, 2).is_empty());
     }
 }

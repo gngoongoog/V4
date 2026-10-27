@@ -1,0 +1,38 @@
+name: V25 G6-G Broker Admission Clock
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/v25-g6g-broker-training-admission-clock-20261025]
+    paths:
+      - 'crates/runtime/src/coordinator_learning.rs'
+      - 'scripts/audit_v25_g6g_broker_admission_clock.py'
+      - 'tests/test_v25_g6g_broker_admission_clock.py'
+      - 'scripts/package_v25.py'
+      - 'scripts/Run-G6-Study.ps1'
+      - '.github/workflows/v25-g6g-admission-clock.yml'
+  pull_request:
+    branches: [feature/v25-g6f-causal-broker-trainer-row-admission-20261025]
+permissions:
+  contents: read
+jobs:
+  local-admission-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile read-only local admission auditor
+        run: python3 -m compileall -q scripts/audit_v25_g6g_broker_admission_clock.py tests/test_v25_g6g_broker_admission_clock.py
+      - name: Reject backdated, tampered and unadmitted learning samples
+        run: python3 -m unittest discover -s tests -p 'test_v25_g6g_broker_admission_clock.py' -v
+      - name: Ensure original prospective learning research stays valid
+        run: |
+          python3 -m unittest discover -s tests -p 'test_v25_g6c_portable_studies.py' -v
+          python3 -m unittest discover -s tests -p 'test_v25_g6d_causal_learning_evidence.py' -v
+          python3 -m unittest discover -s tests -p 'test_v25_g6e_frozen_policy_cutoff.py' -v
+      - name: Verify real runtime's atomic broker admission tests
+        run: cargo test --locked -p braintrade-runtime coordinator_learning::tests -- --nocapture

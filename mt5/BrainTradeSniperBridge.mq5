@@ -3,7 +3,7 @@
 //| Native tick transport only. It never submits broker orders.     |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.10"
+#property version   "1.11"
 #property description "BrainTrade native Sniper tick bridge. Transport only; no trading calls."
 
 input string InpPipeName = "\\\\.\\pipe\\BrainTradeSniperV1";
@@ -22,6 +22,19 @@ ulong  g_recovered_ticks = 0;
 ulong  g_failed_ticks = 0;
 long   g_cursor_msc = 0;
 uint   g_cursor_count = 0;
+long   g_account_login = 0;
+string g_account_server = "";
+string g_account_currency = "";
+long   g_account_mode = -1;
+string g_connected_token = "";
+
+void ResetQuoteCursor()
+  {
+   // An event cursor is valid ONLY for the account/mode and native pipe token
+   // that generated it. Never borrow same-millisecond ordinals after a switch.
+   g_cursor_msc = 0;
+   g_cursor_count = 0;
+  }
 
 void ClosePipe()
   {
@@ -51,6 +64,30 @@ bool LoadSessionToken()
 
 bool EnsurePipe()
   {
+   long login = AccountInfoInteger(ACCOUNT_LOGIN);
+   long mode = AccountInfoInteger(ACCOUNT_TRADE_MODE);
+   string server = AccountInfoString(ACCOUNT_SERVER);
+   string currency = AccountInfoString(ACCOUNT_CURRENCY);
+   if(login <= 0 || server == "" || currency == "")
+     {
+      ClosePipe();
+      ResetQuoteCursor();
+      g_account_login = 0;
+      g_account_server = "";
+      g_account_currency = "";
+      g_account_mode = -1;
+      return false;
+     }
+   if(g_account_login > 0 && (login != g_account_login ||
+      server != g_account_server || currency != g_account_currency ||
+      mode != g_account_mode))
+     {
+      ClosePipe();
+      ResetQuoteCursor();
+      g_next_retry_ms = 0;
+     }
+   // This check runs on every OnTick AND OnTimer, not only on reconnect.
+   // No quote from a previous MT5 account is ever emitted on the old pipe.
    if(g_pipe != INVALID_HANDLE)
       return true;
 
@@ -66,9 +103,18 @@ bool EnsurePipe()
       return false;
 
    ResetLastError();
+   // The gateway rotates this file when the broker's session changes.
+   // A new token means a new event epoch, even with the same login/server.
+   if(g_connected_token != "" && g_connected_token != g_token)
+      ResetQuoteCursor();
    g_pipe = FileOpen(InpPipeName, FILE_READ|FILE_WRITE|FILE_BIN|FILE_ANSI);
    if(g_pipe == INVALID_HANDLE)
       return false;
+   g_account_login = login;
+   g_account_server = server;
+   g_account_currency = currency;
+   g_account_mode = mode;
+   g_connected_token = g_token;
    return true;
   }
 

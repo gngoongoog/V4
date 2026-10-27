@@ -1,0 +1,24 @@
+name: V25 G6-J Student Broker Admission Integrity
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/v25-g6j-student-admission-training-gate-20261025]
+    paths:
+      - 'crates/runtime/src/student_learning.rs'
+      - '.github/workflows/v25-g6j-student-admission.yml'
+  pull_request:
+    branches: [feature/v25-g6i-sniper-training-admission-parity-20261025]
+permissions:
+  contents: read
+jobs:
+  student-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test Student labels, cached restart memories and reports
+        run: cargo test --locked -p braintrade-runtime student_learning::tests -- --nocapture
+      - name: Verify Rust runtime and domain regressions
+        run: cargo test --locked -p braintrade-runtime -p braintrade-domain

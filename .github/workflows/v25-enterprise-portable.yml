@@ -1,0 +1,102 @@
+name: V25 P0-O canonical source and Windows Portable
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/v25-enterprise-validation-20261024, feature/v25-g2c-strict-deal-reconciliation-20261025, feature/v25-g2d-exact-booked-cost-provenance-20261025, feature/v25-g2e-immutable-broker-receipts-20261025, feature/v25-g2f-history-deal-geometry-20261025, feature/v25-g2g-history-cursor-monotonic-20261025, feature/v25-g2h-verified-closed-volume-20261025, feature/v25-g2i-exact-observed-broker-proof-20261025, feature/v25-g2j-durable-broker-cursor-20261025, feature/v25-g2k-dashboard-account-isolation-20261025, feature/v25-g2l-unsent-close-no-false-fill-20261025, feature/v25-g2m-no-journal-stale-intent-resend-20261025, feature/v25-g3a-dashboard-verified-broker-panels-20261025, feature/v25-g3b-paginated-native-trade-journal-20261025, feature/v25-g3c-costed-mt5-reports-20261025, feature/v25-g4a-risk-monitor-mode-attestation-20261025, feature/v25-g4b-daily-loss-breaker-operator-panel-20261025, feature/v25-g5a-account-scoped-learning-evidence-20261025, feature/v25-g5b-only-verified-costs-train-broker-brains-20261025, feature/v25-g5c-causal-forward-learning-evidence-20261025, feature/v25-g5d-frozen-adaptive-oos-audit-20261025, feature/v25-g5e-exact-broker-reward-lineage-20261025, feature/v25-g5f-student-exit-verified-broker-labels-20261025, feature/v25-g5g-learning-scorecards-admission-parity-20261025, feature/v25-g5h-native-account-switch-scope-guard-20261025, feature/v25-g6a-preregistered-prospective-coordinator-audit-20261025, feature/v25-g6b-exact-executed-demo-arm-audit-20261025, feature/v25-g6c-portable-demo-study-tools-20261025, feature/v25-g6d-causal-member-learning-attribution-20261025, feature/v25-g6e-frozen-policy-training-cutoff-audit-20261025, feature/v25-g6f-causal-broker-trainer-row-admission-20261025, feature/v25-g6g-broker-training-admission-clock-20261025, feature/v25-g6h-runtime-admission-causal-gate-20261025, feature/v25-g6i-sniper-training-admission-parity-20261025, feature/v25-g6j-student-admission-training-gate-20261025, feature/v25-g6k-student-study-provenance-gate-20261025, feature/v25-g6l-student-exit-event-replay-proof-20261025]
+    paths:
+      - 'apps/**'
+      - 'crates/**'
+      - 'gateway/**'
+      - 'mt5/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'VERIFY_SYSTEM.cmd'
+      - '.github/workflows/v25-enterprise-portable.yml'
+  pull_request:
+    branches: [main, feature/v25-enterprise-validation-20261024, feature/v25-p1k4-same-clock-sniper-quote-integrity-20261024, feature/v25-p1k5-classic-prospective-research-20261024, feature/v25-p1k5b-sniper-forward-direction-audit-20261024, feature/v25-p1k5c-learner-training-cutoff-provenance-20261024, feature/v25-p1k5d-immutable-research-checkpoint-20261024, feature/v25-p1k5e-prospective-event-journal-20261024, feature/v25-p1k5f-chronological-holdout-diagnostics-20261024, feature/v25-p1k5g-preregistered-costs-20261024, feature/v25-p1k5h-demo-broker-booked-evidence-20261024, feature/v25-p1k5i-demo-deal-replay-restart-20261024, feature/v25-p1k5j-demo-intent-recovery-audit-20261024, fix/v25-manifest-visible-diagnostics-20261024, fix/v25-display-demo-balance-without-fresh-tick-20261025, feature/v25-g5c-causal-forward-learning-evidence-20261025, feature/v25-g5d-frozen-adaptive-oos-audit-20261025, feature/v25-g5e-exact-broker-reward-lineage-20261025, feature/v25-g5f-student-exit-verified-broker-labels-20261025, feature/v25-g5g-learning-scorecards-admission-parity-20261025, feature/v25-g5h-native-account-switch-scope-guard-20261025, feature/v25-g6a-preregistered-prospective-coordinator-audit-20261025, feature/v25-g6b-exact-executed-demo-arm-audit-20261025, feature/v25-g6c-portable-demo-study-tools-20261025, feature/v25-g6d-causal-member-learning-attribution-20261025, feature/v25-g6e-frozen-policy-training-cutoff-audit-20261025, feature/v25-g6f-causal-broker-trainer-row-admission-20261025, feature/v25-g6g-broker-training-admission-clock-20261025, feature/v25-g6h-runtime-admission-causal-gate-20261025, feature/v25-g6i-sniper-training-admission-parity-20261025, feature/v25-g6j-student-admission-training-gate-20261025, feature/v25-g6k-student-study-provenance-gate-20261025, feature/v25-g5b-only-verified-costs-train-broker-brains-20261025, feature/v25-p0e2-quote-health-symbol-diagnosis-20261025, feature/v25-p0d3-broker-margin-visible-20261025]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.1'
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: cargo test --locked -p braintrade-domain -p braintrade-runtime
+      - run: cargo build --locked -p braintrade-runtime --bin braintrade-core
+      - run: python3 -m unittest discover -s tests -v
+      - run: npm --prefix apps/terminal ci --no-audit --no-fund
+      - run: npm --prefix apps/terminal test
+      - run: npm --prefix apps/terminal run build
+      - name: Isolated Core integrations, no broker connectivity
+        run: |
+          python3 scripts/smoke_core.py
+          python3 scripts/check_gateway_launch_env.py
+          python3 scripts/check_backup_restore.py
+          python3 scripts/check_studio.py
+          python3 scripts/check_execution.py
+          python3 scripts/check_priority_handoff.py
+          python3 scripts/check_flexible_demo.py
+          python3 scripts/check_sniper_learner.py
+          python3 scripts/check_sniper_quote_clock.py
+      - run: git diff --exit-code -- Cargo.lock apps/terminal/package-lock.json
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 115
+    env:
+      CARGO_INCREMENTAL: '0'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.1'
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - name: Build directly from locked source and verify actual Portable Core
+        shell: pwsh
+        run: ./scripts/Build-V25-Portable-Windows.ps1
+      - name: Exact source archive
+        shell: pwsh
+        run: git archive --format=zip --prefix=BRAINTRADE_V4_ENTERPRISE_V25/ -o target/portable/BRAINTRADE_V4_ENTERPRISE_V25_P0O_FULL_SOURCE.zip HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BRAINTRADE-V4-ENTERPRISE-V25-P0O
+          path: target/portable/*.zip
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: V25-P0O-Windows-validation-evidence
+          path: test-output/v25/
+          if-no-files-found: warn
+          retention-days: 30

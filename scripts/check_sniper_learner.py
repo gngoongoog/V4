@@ -121,10 +121,14 @@ def check(exe=None):
             submit(cmd);assert len(broker.sends)==1
             api('/v1/stop',{})
             now=clock_ms();volume=result['volume']
-            entry=dict(ticket=77,position_id=55,symbol='XAUUSD',magic=410600,entry=0,volume=volume,
+            entry=dict(ticket=77,position_id=55,symbol='XAUUSD',magic=410600,
+                type=broker.DEAL_TYPE_BUY,entry=broker.DEAL_ENTRY_IN,
+                volume=volume,price=2053.92,
                 time_msc=now-100,profit=0.,commission=-.035,swap=0.,fee=0.,reason=3)
-            partial=dict(entry,ticket=78,magic=0,entry=1,volume=volume/2,time_msc=now,profit=-.1,commission=-.0175)
-            sync=dict(login=17,server='Demo',currency='USD',until_ms=now,deals=[entry,partial])
+            partial=dict(entry,ticket=78,magic=0,type=broker.DEAL_TYPE_SELL,
+                entry=broker.DEAL_ENTRY_OUT,volume=volume/2,price=2053.86,
+                time_msc=now,profit=-.1,commission=-.0175)
+            sync=dict(login=17,server='Demo',currency='USD',trade_mode=0,until_ms=now,deals=[entry,partial])
             api('/v1/execution/sync',sync);publish()
             assert not api('/v1/execution')['learning_review']
             final=dict(partial,ticket=79,time_msc=now+1)

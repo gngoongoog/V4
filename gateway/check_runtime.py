@@ -24,6 +24,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 
 CORE_URL = "http://127.0.0.1:18741"
 FAST_QUEUE_TARGET_MS = 20.0
@@ -171,6 +172,59 @@ def _context(execution: dict):
         "currency": currency,
         "account_fingerprint": _fingerprint(server, login, symbol, currency),
     }
+
+
+def require_fresh_demo(status: dict, execution: dict) -> dict:
+    """Fail closed on a disconnected, stale or changed MT5 Demo snapshot.
+
+    The execution binding alone is not sufficient: it may survive a gateway
+    disconnect, account switch, or stale cached status.
+    """
+    identity = _context(execution)
+    telemetry = status.get("telemetry") if isinstance(status, dict) else None
+    if not isinstance(telemetry, dict) or status.get("gateway_fresh") is not True:
+        raise RuntimeError("Fresh MT5 Demo telemetry is required for acceptance")
+    if (telemetry.get("connected") is not True or telemetry.get("demo") is not True
+            or type(telemetry.get("account_trade_mode")) is not int
+            or telemetry["account_trade_mode"] != 0):
+        raise RuntimeError("Acceptance requires a connected MT5 Demo account; REAL and stale modes are refused")
+    if (telemetry.get("login"), telemetry.get("server"), telemetry.get("symbol"),
+            telemetry.get("currency")) != (
+            identity["login"], identity["server"], identity["symbol"],
+            identity["currency"]):
+        raise RuntimeError("Broker snapshot and bound execution identity differ; capture stopped")
+    return identity
+
+
+def validate_local_core_url(url: str) -> str:
+    """Never forward the locally decrypted IPC Bearer credential to remote sites."""
+    try:
+        parts = urlsplit(url)
+        accepted = parts.scheme == "http" and parts.hostname in (
+            "127.0.0.1", "::1", "localhost")
+        valid = (accepted and parts.port is not None and parts.port > 0
+                 and parts.username is None and parts.password is None
+                 and parts.path in ("", "/") and not parts.query and not parts.fragment)
+    except (TypeError, ValueError):
+        valid = False
+    if not valid:
+        raise RuntimeError("Core API URL must be a local HTTP loopback endpoint; refusing to disclose IPC token")
+    return url.rstrip("/")
+
+
+def validate_capture_scope(status: dict, execution: dict, config: dict,
+                           expected_identity: dict, expected_mode: str,
+                           expected_version) -> None:
+    """Check context before any sample merge or file write."""
+    current = require_fresh_demo(status, execution)
+    if current["account_fingerprint"] != expected_identity["account_fingerprint"]:
+        raise RuntimeError("Account/context changed during capture; stopped without mixing samples")
+    mode = str((config.get("trading") or {}).get("mode") or "")
+    if mode != expected_mode:
+        raise RuntimeError("Trading mode changed during capture; start a separate acceptance session")
+    if status.get("version") != expected_version:
+        raise RuntimeError("Core version changed during capture; start a separate acceptance session")
+
 
 
 def normalize_command(item: dict, identity: dict, source: str, existing: dict | None = None):
@@ -332,6 +386,33 @@ def build_report(metadata: dict, samples: dict, minimum_fast_samples: int):
         },
         "broker_result_states": _count(rows, "result_state"),
         "broker_retcodes": _count([row for row in rows if row.get("retcode") is not None], "retcode"),
+        # TARGET_MET below is *only* a local Sniper latency characterization;
+        # the G2 broker lifecycle gate is independent and requires authentic
+        # ticket/deal/fee/history evidence, not just a Gateway return code.
+        "broker_lifecycle_acceptance": {
+            "status": "NOT TESTED",
+            "read_only_collector": True,
+            "ready_for_real": False,
+            "observed_command_counts": {
+                "sent": len(sent),
+                "acknowledged_fill_or_partial": sum(
+                    row.get("result_state") in ("filled", "partial") for row in sent),
+                "broker_rejections_with_retcode": sum(
+                    row.get("result_state") == "rejected"
+                    and type(row.get("retcode")) is int for row in sent),
+                "unknown_requires_reconciliation": sum(
+                    row.get("result_state") == "unknown" for row in rows),
+                "close_command_results": sum(row.get("kind") == "close" for row in rows),
+            },
+            "unverified_requirements": [
+                "Exact Demo broker order and deal tickets linked to durable intent",
+                "Partial and timeout recovery without duplicate order_send",
+                "Position close and complete history_deals_get economics",
+                "Commission, swap, broker fees and net PnL from MT5 deal history",
+                "Restart, account switch and Native EA tick-source acceptance",
+            ],
+            "reason": "Core command/retcode and timing samples alone cannot certify an MT5 Demo send-fill-close-reconcile cycle.",
+        },
         "fast_path": {
             "timings": fast_timing,
             "sources": by_source,
@@ -450,11 +531,18 @@ def discover_data_dir(explicit: Path | None = None) -> Path:
     return max(unique.values(), key=lambda path: (path / "ipc.key").stat().st_mtime)
 
 
+class _NoCoreRedirect(urllib.request.HTTPRedirectHandler):
+    """A local HTTP redirect must NEVER carry the decrypted IPC key elsewhere."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise RuntimeError("BrainTrade Core redirected its authenticated API; refusing to follow")
+
+
 class CoreApi:
     def __init__(self, key: str, base_url: str = CORE_URL):
         self.key = key
-        self.base_url = base_url.rstrip("/")
-        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self.base_url = validate_local_core_url(base_url)
+        self.opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _NoCoreRedirect())
 
     def get(self, path: str):
         request = urllib.request.Request(
@@ -466,7 +554,7 @@ class CoreApi:
             with self.opener.open(request, timeout=5) as response:
                 return json.load(response)
         except urllib.error.URLError as error:
-            raise RuntimeError("BrainTrade Core is not reachable; open BrainTrade.exe first") from error
+            raise RuntimeError("BrainTrade Core is not reachable; open BrainTradeNext.exe first") from error
 
 
 def acceptance_cli(argv: list[str]) -> int:
@@ -490,7 +578,7 @@ def acceptance_cli(argv: list[str]) -> int:
     status = api.get("/v1/status")
     execution = api.get("/v1/execution")
     config = api.get("/v1/config").get("config") or {}
-    identity = _context(execution)
+    identity = require_fresh_demo(status, execution)
     mode = str((config.get("trading") or {}).get("mode") or "")
     metadata = {
         "version": status.get("version"),
@@ -531,9 +619,9 @@ def acceptance_cli(argv: list[str]) -> int:
         while True:
             status = api.get("/v1/status")
             execution = api.get("/v1/execution")
-            current = _context(execution)
-            if current["account_fingerprint"] != identity["account_fingerprint"]:
-                raise RuntimeError("Account/context changed during capture; stopped without mixing samples")
+            observed_config = api.get("/v1/config").get("config") or {}
+            validate_capture_scope(status, execution, observed_config,
+                                   identity, mode, metadata["version"])
             merge_execution(samples, execution, identity, label, started_ms)
             state["samples"] = samples
             save_state(state_path, state)
@@ -560,7 +648,41 @@ def acceptance_cli(argv: list[str]) -> int:
     return 1 if report["result"] == "CONTRACT_FAIL" else 0
 
 
+def readiness_cli(argv: list[str]) -> int:
+    """No MT5 initialize/order operation: GET read-only local Core data only."""
+    from demo_readiness import evaluate, save_report
+
+    parser = argparse.ArgumentParser(description="Read-only, redacted MT5 Demo readiness (NOT broker-cycle acceptance)")
+    parser.add_argument("--data-dir", type=Path)
+    parser.add_argument("--output-dir", type=Path, default=Path("acceptance-output"))
+    parser.add_argument("--base-url", default=CORE_URL)
+    args = parser.parse_args(argv)
+    data_dir = discover_data_dir(args.data_dir)
+    api = CoreApi(read_ipc_key(data_dir / "ipc.key"), args.base_url)
+    status = api.get("/v1/status")
+    config = api.get("/v1/config").get("config") or {}
+    try:
+        execution = api.get("/v1/execution")
+    except (RuntimeError, ValueError, TypeError):
+        # A missing execution endpoint is NOT a verified Demo binding.
+        execution = None
+    report = evaluate(status, config, execution=execution)
+    json_path, html_path = save_report(report, args.output_dir)
+    print(json.dumps({
+        "result": report["result"], "quote_status": report["quote_status"],
+        "demo_account": report["account_snapshot_status"],
+        "broker_cycle": report["broker_lifecycle_acceptance"],
+        "read_only": True,
+        "json": str(json_path), "html": str(html_path),
+    }, ensure_ascii=False, indent=2))
+    # A completed safe diagnostic is not equivalent to broker acceptance;
+    # callers MUST inspect result and NOT_TESTED fields.
+    return 0
+
+
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "--demo-readiness":
+        return readiness_cli(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] == "--demo-acceptance":
         return acceptance_cli(sys.argv[2:])
     output = sys.argv[1] if len(sys.argv) > 1 else None

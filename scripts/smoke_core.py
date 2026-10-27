@@ -55,7 +55,7 @@ def main():
             sys.path.insert(0,str(ROOT/'gateway'))
             from mt5_gateway import empty_snapshot
             snapshot=empty_snapshot('TEST FIXTURE')
-            snapshot.update(connected=True,login=123,currency='USD',balance=1000.0,equity=1005.0,server='TEST ONLY')
+            snapshot.update(connected=True,login=123,currency='USD',balance=1000.0,equity=1005.0,server='TEST ONLY',demo=True,account_trade_mode=0)
             api('/v1/gateway/snapshot',snapshot)
             assert api('/v1/status')['state']=='monitoring'
             # Stale snapshots must withdraw current account state availability.
@@ -69,6 +69,25 @@ def main():
             # A rejected config request must be side-effect free: it cannot silently STOP
             # a running/degraded system or cancel its current run state.
             assert api('/v1/status')['state']=='degraded'
+            # Broker state is stale: even an otherwise valid config save must
+            # fail closed. STOP blocks new entries but does not certify that
+            # outstanding live orders/positions can safely be abandoned.
+            try:api('/v1/config',{'config':config})
+            except urllib.error.HTTPError as e:assert e.code==400
+            else:raise AssertionError('Stale broker session allowed config save')
+            assert api('/v1/status')['state']=='degraded'
+            assert api('/v1/stop',{})['state']=='stopped'
+            try:api('/v1/config',{'config':config})
+            except urllib.error.HTTPError as e:assert e.code==400
+            else:raise AssertionError('STOP incorrectly made stale MT5 state safe')
+            # Explicit fresh flat-session evidence is required before changing
+            # account/terminal settings. This is a fabricated offline snapshot
+            # with no actual broker and no new-order permission.
+            snapshot['positions']=[]
+            snapshot['pending_orders']=0
+            api('/v1/gateway/snapshot',snapshot)
+            refreshed=api('/v1/status')
+            assert refreshed['gateway_fresh'] and not refreshed['requested_run']
             api('/v1/config',{'config':config})
             assert not api('/v1/status')['gateway_fresh']
             # A successful connection/config save intentionally disarms global START.

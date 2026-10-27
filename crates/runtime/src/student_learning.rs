@@ -9,7 +9,9 @@ use braintrade_domain::{
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn source(context: &str, mode: &Value, brain: &str, timeframe: &str, report: &str) -> String {
     json!([context, "student-exits-v2", mode, brain, timeframe, report]).to_string()
@@ -275,6 +277,12 @@ pub struct Student {
     context: String,
     active: BTreeMap<String, Experience>,
     pub policies: BTreeMap<String, ExitStudy>,
+    // No prior aggregate may masquerade as a new provenance-verified policy.
+    attested_studies:BTreeSet<String>,
+    // Every contributing event is inserted atomically with the experience
+    // and the policy. An aggregate digest without a replayable event trace is
+    // not sufficient to prove that Student ever learned the displayed counts.
+    pending_study_events:Vec<(String,String,String,Value)>,
     timing: timing::Learner,
 }
 #[path = "student_timing.rs"]
@@ -288,12 +296,23 @@ impl Student {
         db.execute_batch("CREATE TABLE IF NOT EXISTS student_experiences(context TEXT NOT NULL,command_id TEXT NOT NULL,source TEXT NOT NULL,opened_ms INTEGER NOT NULL,complete INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,command_id));
             CREATE INDEX IF NOT EXISTS student_pending ON student_experiences(context,complete,opened_ms);
             CREATE TABLE IF NOT EXISTS student_exit_studies(source TEXT PRIMARY KEY,context TEXT NOT NULL,payload TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS student_study_admissions(
+                source TEXT PRIMARY KEY,context TEXT NOT NULL,payload_sha256 TEXT NOT NULL,
+                first_stamped_ms INTEGER NOT NULL,protocol TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS student_study_events(
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                context TEXT NOT NULL, source TEXT NOT NULL,
+                command_id TEXT NOT NULL, kind TEXT NOT NULL,
+                event_ms INTEGER NOT NULL, payload TEXT NOT NULL,
+                UNIQUE(context,command_id,kind));
             CREATE TABLE IF NOT EXISTS student_opportunities(context TEXT NOT NULL,brain TEXT NOT NULL,minute INTEGER NOT NULL,reason TEXT NOT NULL,observations INTEGER NOT NULL,PRIMARY KEY(context,brain,minute,reason));
             CREATE INDEX IF NOT EXISTS student_opportunity_expiry ON student_opportunities(minute);")?;
         Ok(Self {
             context: String::new(),
             active: BTreeMap::new(),
             policies: BTreeMap::new(),
+            attested_studies:BTreeSet::new(),
+            pending_study_events:Vec::new(),
             timing: timing::Learner::new(db)?,
         })
     }
@@ -303,27 +322,63 @@ impl Student {
             tx.execute("INSERT INTO student_experiences VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(context,command_id) DO UPDATE SET complete=excluded.complete,payload=excluded.payload",
                 params![e.context,e.command_id,e.source,e.opened_ms,e.complete(),serde_json::to_string(e)?])?;
         }
+        for (source,cmd,kind,event) in &self.pending_study_events {
+            tx.execute("INSERT OR IGNORE INTO student_study_events
+                (context,source,command_id,kind,event_ms,payload)
+                VALUES(?1,?2,?3,?4,?5,?6)",
+                params![self.context,source,cmd,kind,
+                    event["event_ms"].as_u64().unwrap_or(0),
+                    serde_json::to_string(event)?])?;
+        }
         for (key, study) in &self.policies {
-            tx.execute(
-                "INSERT OR REPLACE INTO student_exit_studies VALUES(?1,?2,?3)",
-                params![key, self.context, serde_json::to_string(study)?],
-            )?;
+            let raw=serde_json::to_string(study)?;
+            tx.execute("INSERT OR REPLACE INTO student_exit_studies VALUES(?1,?2,?3)",
+                params![key, self.context,&raw])?;
+            // Only Student policies that were learned from G6-J admitted Demo
+            // outcomes, or loaded with a valid pre-existing study digest, can
+            // receive/update this local provenance stamp. Never sign legacy
+            // aggregates merely because they were parsed from SQLite.
+            if self.attested_studies.contains(key) &&
+                student_study_replay_verified(&tx,&self.context,key,&raw,
+                    u64::MAX)? {
+                let sha=format!("{:x}",Sha256::digest(raw.as_bytes()));
+                tx.execute("INSERT INTO student_study_admissions
+                    (source,context,payload_sha256,first_stamped_ms,protocol)
+                    VALUES(?1,?2,?3,CAST(strftime('%s','now') AS INTEGER)*1000,
+                        'g6k-student-admitted-study-v1')
+                    ON CONFLICT(source) DO UPDATE SET
+                        payload_sha256=excluded.payload_sha256",
+                    params![key,self.context,sha])?;
+            }
         }
         tx.commit()?;
         Ok(())
     }
-    fn load(&mut self, db: &Connection, key: &str) -> Result<()> {
+    fn load(&mut self, db: &Connection, key: &str, now:u64) -> Result<()> {
         if self.context == key {
             return Ok(());
         }
         self.flush(db)?;
         self.active.clear();
         self.policies.clear();
+        self.attested_studies.clear();
+        self.pending_study_events.clear();
         self.context = key.into();
         self.timing.load(db, key)?;
         let mut st=db.prepare("SELECT payload FROM student_experiences WHERE context=?1 AND complete=0 ORDER BY opened_ms")?;
         for raw in st.query_map([key], |r| r.get::<_, String>(0))? {
-            let e: Experience = serde_json::from_str(&raw?)?;
+            let mut e: Experience = serde_json::from_str(&raw?)?;
+            // Old cached student experiences may contain accepted broker labels
+            // from before G5-E. Recheck them on EVERY load, not only fresh
+            // coordinator_broker_samples, before any further exit learning.
+            if e.actual.is_some() && !cached_student_label_verified(db,key,&e,now)? {
+                e.actual=None;
+                e.trial.usable=false;
+                e.trial.exclusion_reason="broker_label_unverified".into();
+                e.path_overflow=true;
+                e.loss_reviewed=false;
+                e.study_consumed=false;
+            }
             self.active.insert(e.command_id.clone(), e);
         }
         let mut st =
@@ -332,7 +387,14 @@ impl Student {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })? {
             let (k, raw) = row?;
-            self.policies.insert(k, serde_json::from_str(&raw)?);
+            if !study_aggregate_attested(db,key,&k,&raw,now)? {
+                // Preserve old aggregates in DB for historical audit but do
+                // not apply or continue training an unverifiable exit policy.
+                continue;
+            }
+            let study=serde_json::from_str::<ExitStudy>(&raw)?;
+            self.attested_studies.insert(k.clone());
+            self.policies.insert(k,study);
         }
         Ok(())
     }
@@ -369,7 +431,22 @@ impl Student {
             return Ok(());
         }
         let key = crate::coordinator_learning::context(t);
-        self.load(db, &key)?;
+        self.load(db, &key, now)?;
+        // A policy attested on a previous pulse must not keep controlling
+        // exits if any of its original Broker/paired events were edited while
+        // Core stayed connected to this same account. Recheck the full replay
+        // before it can be used on the next decision; baseline remains.
+        let mut revoked=Vec::new();
+        for (source,study) in &self.policies {
+            let raw=serde_json::to_string(study)?;
+            if !study_aggregate_attested(db,&key,source,&raw,now)? {
+                revoked.push(source.clone());
+            }
+        }
+        for source in revoked {
+            self.policies.remove(&source);
+            self.attested_studies.remove(&source);
+        }
         self.timing.restore(db, &key, now)?;
         // Register from acknowledged fills immediately, without waiting five seconds for history.
         let mut st=db.prepare("SELECT c.payload,c.result FROM broker_commands c WHERE c.context=?1 AND c.kind='open' AND CAST(json_extract(c.result,'$.deal') AS INTEGER)>0 AND json_extract(c.payload,'$.signal.coordination.student.version')=1 AND NOT EXISTS(SELECT 1 FROM student_experiences e WHERE e.context=c.context AND e.command_id=c.id) ORDER BY c.created_ms,c.id")?;
@@ -507,6 +584,20 @@ impl Student {
             };
             self.active.insert(id.into(), e);
         }
+        // Even while remaining in the same account/context, an on-disk
+        // broker receipt or its admission may become damaged between observe
+        // cycles. Cached actual losses must be revalidated before ANY further
+        // Student loss-memory/study learning, not only during restart/load.
+        for e in self.active.values_mut() {
+            if e.actual.is_some() && !cached_student_label_verified(db,&key,e,now)? {
+                e.actual=None;
+                e.trial.usable=false;
+                e.trial.exclusion_reason="broker_admission_unverified".into();
+                e.path_overflow=true;
+                e.loss_reviewed=false;
+                e.study_consumed=false;
+            }
+        }
         for e in self.active.values_mut() {
             if e.position_id == 0 {
                 e.position_id = db
@@ -518,10 +609,9 @@ impl Student {
                     .optional()?
                     .unwrap_or(0);
             }
-            if e.actual.is_none() {
-                let actual:Option<String>=db.query_row("SELECT payload FROM coordinator_broker_samples WHERE context=?1 AND json_extract(payload,'$.open_command_id')=?2 AND brain=?3 LIMIT 1",params![key,e.command_id,e.owner],|r|r.get(0)).optional()?;
-                if let Some(raw) = actual {
-                    let label: Value = serde_json::from_str(&raw)?;
+            if e.actual.is_none() && e.position_id>0 {
+                if let Some(label)=verified_student_accepted_label(
+                    db,&key,&e.owner,&e.command_id,e.position_id,now)? {
                     if label["closed_volume"]
                         .as_f64()
                         .is_some_and(|volume| (volume - e.volume).abs() > 1e-8)
@@ -553,6 +643,11 @@ impl Student {
                         .entry(e.source.clone())
                         .or_insert_with(|| if e.trial.outcomes.len() == 5 { ExitStudy::expanded() } else { ExitStudy::default() })
                         .record_loss(&patterns);
+                    self.attested_studies.insert(e.source.clone());
+                    self.pending_study_events.push((
+                        e.source.clone(),e.command_id.clone(),"loss".into(),
+                        json!({"event_ms":now,"patterns":patterns})
+                    ));
                 }
                 e.loss_reviewed = true;
             }
@@ -569,7 +664,16 @@ impl Student {
             if (e.trial.complete() || e.shadow_expired) && e.actual.is_some() && !e.study_consumed {
                 let study = self.policies.entry(e.source.clone()).or_insert_with(|| if e.trial.outcomes.len() == 5 { ExitStudy::expanded() } else { ExitStudy::default() });
                 if let Some(rewards) = e.trial.paired_rewards() {
-                    e.admitted = Some(study.observe(e.opened_ms, now, rewards));
+                    let accepted=study.observe(e.opened_ms, now, &rewards);
+                    e.admitted=Some(accepted);
+                    if accepted {
+                        self.attested_studies.insert(e.source.clone());
+                        self.pending_study_events.push((
+                            e.source.clone(),e.command_id.clone(),"paired".into(),
+                            json!({"event_ms":now,"opened_ms":e.opened_ms,
+                                   "rewards":rewards})
+                        ));
+                    }
                 } else if e.trial.usable && e.trial.samples < 2 {
                     e.trial.usable = false;
                     e.trial.exclusion_reason = "too_few_quotes".into();
@@ -579,6 +683,7 @@ impl Student {
         }
         self.timing.finish(db, now)?;
         self.flush(db)?;
+        self.pending_study_events.clear();
         self.active.retain(|_, e| !e.complete());
         Ok(())
     }
@@ -620,7 +725,156 @@ pub fn log_opportunities(
     Ok(())
 }
 
+fn verified_student_broker_label(p:&Value,position_id:u64)->bool{
+    position_id>0
+        &&p["position_id"].as_u64()==Some(position_id)
+        &&crate::coordinator_learning::verified_broker_feedback(p).is_some()
+}
+
+// G6-J: Student is a separate learning engine. The original broker close
+// timestamp only says when MT5 booked the outcome; it is NOT proof that the
+// Student had seen it then. A legitimate current label needs the exact
+// G6-G first-Core-admission receipt stamped in the same SQLite transaction.
+// Legacy unadmitted rows remain in the ledger but are not training evidence.
+fn verified_student_accepted_label(db:&Connection,ctx:&str,owner:&str,
+    cmd:&str,position_id:u64,now:u64)->Result<Option<Value>>{
+    if position_id==0 || cmd.is_empty() || owner.is_empty(){return Ok(None);}
+    let mut st=db.prepare(
+        "SELECT s.source,s.position_id,s.context,s.brain,s.closed_ms,s.payload,
+                a.context,a.brain,a.closed_ms,a.admitted_ms,a.payload_sha256,a.protocol
+         FROM coordinator_broker_samples s
+         LEFT JOIN coordinator_broker_admissions a
+             ON a.source=s.source AND a.position_id=s.position_id
+         WHERE s.context=?1 AND s.brain=?2 AND s.position_id=?3
+         ORDER BY s.closed_ms DESC LIMIT 30")?;
+    let rows=st.query_map(params![ctx,owner,position_id],|r|Ok((
+        r.get::<_,String>(0)?,r.get::<_,i64>(1).unwrap_or(-1),
+        r.get::<_,String>(2)?,r.get::<_,String>(3)?,
+        r.get::<_,i64>(4).unwrap_or(-1),r.get::<_,String>(5)?,
+        r.get::<_,Option<String>>(6).unwrap_or(None),
+        r.get::<_,Option<String>>(7).unwrap_or(None),
+        r.get::<_,Option<i64>>(8).unwrap_or(None),
+        r.get::<_,Option<i64>>(9).unwrap_or(None),
+        r.get::<_,Option<String>>(10).unwrap_or(None),
+        r.get::<_,Option<String>>(11).unwrap_or(None)
+    )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut accepted:Option<Value>=None;
+    for(source,pos,stored_ctx,stored_brain,closed,raw,actx,abrain,
+        aclosed,admitted,hash,protocol)in rows{
+        let (Ok(pos),Ok(closed),Some(admitted))=(
+            u64::try_from(pos),u64::try_from(closed),
+            admitted.and_then(|v|u64::try_from(v).ok()))else{continue;};
+        if pos!=position_id||closed==0||admitted<closed||admitted>now
+            ||actx.as_deref()!=Some(ctx)||abrain.as_deref()!=Some(owner)
+            ||aclosed!=i64::try_from(closed).ok()
+            ||protocol.as_deref()!=Some("g6g-runtime-same-transaction-v1")
+            ||hash.as_deref()!=Some(format!("{:x}",Sha256::digest(raw.as_bytes())).as_str())
+            ||stored_ctx!=ctx||stored_brain!=owner
+        {continue;}
+        let Ok(p)=serde_json::from_str::<Value>(&raw)else{continue;};
+        if p["context"]!=ctx||p["brain"]!=owner
+            ||p["open_command_id"]!=cmd
+            ||p["closed_ms"].as_u64()!=Some(closed)
+            ||!verified_student_broker_label(&p,pos){continue;}
+        let Ok(source_value)=serde_json::from_str::<Value>(&source)else{continue;};
+        let Some(parts)=source_value.as_array().filter(|p|p.len()==6)else{continue;};
+        if parts[0]!=ctx||parts[1]!="adaptive-member-v1"
+            ||parts[3]!=owner||p["trading_mode"]!=parts[2]
+            ||p["timeframe"]!=parts[4]||p["report_id"]!=parts[5]
+        {continue;}
+        // Multiple apparently valid same-position labels are ambiguous.
+        // Never choose the first by SQL order and invent Student credit.
+        if accepted.is_some(){return Ok(None);}
+        accepted=Some(p);
+    }
+    Ok(accepted)
+}
+
+fn cached_student_label_verified(db:&Connection,ctx:&str,e:&Experience,now:u64)->Result<bool>{
+    let Some(saved)=e.actual.as_ref()else{return Ok(false);};
+    Ok(verified_student_accepted_label(db,ctx,&e.owner,&e.command_id,e.position_id,now)?
+        .as_ref().is_some_and(|current|current==saved))
+}
+
+// A G6-K aggregate SHA is only self-consistent; it cannot establish its
+// original per-trade inputs. G6-L verifies the actual immutable broker label
+// and exact paired quote rewards for EVERY contributing event, then rebuilds
+// ExitStudy deterministically in its original observation order. No event
+// evidence => old G6-K counters are not considered trainable.
+fn student_study_replay_verified(db:&Connection,ctx:&str,source:&str,
+    raw:&str,now:u64)->Result<bool>{
+    let mut st=db.prepare(
+        "SELECT command_id,kind,event_ms,payload FROM student_study_events
+         WHERE context=?1 AND source=?2 ORDER BY seq")?;
+    let rows=st.query_map(params![ctx,source],|r|Ok((
+        r.get::<_,String>(0)?,r.get::<_,String>(1)?,
+        r.get::<_,i64>(2).unwrap_or(-1),r.get::<_,String>(3)?
+    )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    if rows.is_empty(){return Ok(false);}
+    let mut replay:Option<ExitStudy>=None;
+    let mut seen=BTreeSet::new();
+    for(cmd,kind,event_time,content)in rows {
+        let Ok(at)=u64::try_from(event_time)else{return Ok(false);};
+        if at==0 || at>now || !seen.insert((cmd.clone(),kind.clone())){
+            return Ok(false);
+        }
+        let Some(payload):Option<String>=db.query_row(
+            "SELECT payload FROM student_experiences
+             WHERE context=?1 AND command_id=?2",
+            params![ctx,&cmd],|r|r.get(0)).optional()? else{return Ok(false);};
+        let Ok(e)=serde_json::from_str::<Experience>(&payload)else{return Ok(false);};
+        if e.source!=source || e.context!=ctx || e.command_id!=cmd
+            || !cached_student_label_verified(db,ctx,&e,at)? {
+            return Ok(false);
+        }
+        let Ok(ev)=serde_json::from_str::<Value>(&content)else{return Ok(false);};
+        if ev["event_ms"].as_u64()!=Some(at) {return Ok(false);}
+        let study=replay.get_or_insert_with(||if e.trial.outcomes.len()==5 {
+            ExitStudy::expanded()
+        }else{ExitStudy::default()});
+        match kind.as_str(){
+            "loss"=>{
+                if !e.loss_reviewed ||
+                    !e.actual.as_ref().and_then(|a|a["net"].as_f64()).is_some_and(|n|n<0.)
+                {return Ok(false);}
+                let patterns=e.review()["patterns"].as_array().cloned().unwrap_or_default();
+                if ev["patterns"]!=json!(patterns){return Ok(false);}
+                let Some(patterns)=patterns.iter().map(|v|v.as_str().map(str::to_owned))
+                    .collect::<Option<Vec<_>>>()else{return Ok(false);};
+                study.record_loss(&patterns);
+            },
+            "paired"=>{
+                if !e.study_consumed || e.admitted!=Some(true)
+                    || at<e.opened_ms {return Ok(false);}
+                let Some(rewards)=e.trial.paired_rewards()else{return Ok(false);};
+                if ev["opened_ms"].as_u64()!=Some(e.opened_ms)
+                    || ev["rewards"]!=json!(rewards){return Ok(false);}
+                if !study.observe(e.opened_ms,at,rewards){return Ok(false);}
+            },
+            _=>return Ok(false)
+        }
+    }
+    let Some(replay)=replay else{return Ok(false);};
+    let Ok(expected)=serde_json::from_str::<Value>(raw)else{return Ok(false);};
+    Ok(serde_json::to_value(replay)?==expected)
+}
+
+fn study_aggregate_attested(db:&Connection,ctx:&str,source:&str,raw:&str,now:u64)->Result<bool>{
+    let r:Option<(String,String,String)>=db.query_row(
+        "SELECT context,payload_sha256,protocol FROM student_study_admissions
+         WHERE source=?1",[source],
+        |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+    Ok(r.is_some_and(|(stored_ctx,hash,protocol)|
+        stored_ctx==ctx && protocol=="g6k-student-admitted-study-v1"
+        && hash==format!("{:x}",Sha256::digest(raw.as_bytes())))
+        && student_study_replay_verified(db,ctx,source,raw,now)?)
+}
+
 pub fn view(db: &Connection, key: &str) -> Result<Value> {
+    // Dashboard read time is NOT the MT5 close time. Future local admissions
+    // must not make cached losses/learning appear settled before they arrive.
+    let observed_now=SystemTime::now().duration_since(UNIX_EPOCH)
+        .map(|d|u64::try_from(d.as_millis()).unwrap_or(u64::MAX)).unwrap_or(0);
     let mut st=db.prepare("SELECT payload FROM student_experiences WHERE context=?1 ORDER BY opened_ms DESC LIMIT 100")?;
     let mut experiences = Vec::new();
     let mut patterns: BTreeMap<String, u64> = BTreeMap::new();
@@ -628,7 +882,14 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
     let mut recent_net = 0.;
     let mut recent_closed = 0;
     for raw in st.query_map([key], |r| r.get::<_, String>(0))? {
-        let e: Experience = serde_json::from_str(&raw?)?;
+        let mut e: Experience = serde_json::from_str(&raw?)?;
+        if e.actual.is_some()&&!cached_student_label_verified(db,key,&e,observed_now)?{
+            // Read-only revalidation for old persisted experiences: never
+            // paint invalid broker PnL, win/loss patterns or training progress.
+            e.actual=None;
+            e.trial.usable=false;
+            e.trial.exclusion_reason="broker_label_unverified".into();
+        }
         let v = e.review();
         if let Some(net) = e.actual.as_ref().and_then(|v| v["net"].as_f64()) {
             recent_net += net;
@@ -653,7 +914,20 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
         }
         experiences.push(v);
     }
-    let (total,closed):(u64,u64)=db.query_row("SELECT COUNT(*),COALESCE(SUM(json_type(payload,'$.actual')='object'),0) FROM student_experiences WHERE context=?1",[key],|r|Ok((r.get(0)?,r.get(1)?)))?;
+    let total:u64=db.query_row("SELECT COUNT(*) FROM student_experiences WHERE context=?1",
+        [key],|r|r.get(0))?;
+    // Do not count arbitrary legacy JSON actual blobs as MT5 closes.
+    // This is read-only; underlying SQLite records remain available for audit.
+    let mut counted=db.prepare("SELECT payload FROM student_experiences
+        WHERE context=?1 AND json_type(payload,'$.actual')='object'")?;
+    let candidates=counted.query_map([key],|r|r.get::<_,String>(0))?;
+    let mut closed=0u64;
+    for raw in candidates {
+        let Ok(e)=serde_json::from_str::<Experience>(&raw?) else{continue;};
+        if cached_student_label_verified(db,key,&e,observed_now)? {
+            closed+=1;
+        }
+    }
     let mut st = db.prepare(
         "SELECT source,payload FROM student_exit_studies WHERE context=?1 ORDER BY source",
     )?;
@@ -663,7 +937,16 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
         })?
         .map(|r| {
             let (source, raw) = r?;
-            Ok(json!({"source":source,"study":serde_json::from_str::<Value>(&raw)?}))
+            let attested=study_aggregate_attested(db,key,&source,&raw,observed_now)?;
+            Ok(if attested {
+                json!({"source":source,"provenance":"locally_replayed_g6l",
+                       "study":serde_json::from_str::<Value>(&raw)?})
+            } else {
+                // Never display a forged old promotion, learned profile or
+                // aggregate shadow wins as verified training performance.
+                json!({"source":source,"provenance":"legacy_or_tampered_unverified",
+                       "study":Value::Null})
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     let admitted: u64 = studies
@@ -687,6 +970,36 @@ pub fn view(db: &Connection, key: &str) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Test-only: convert old synthetic source='fixture' to a receipt that
+    // matches Rust's actual canonical member key, then stamp an original
+    // first-Core-admission SHA. Production cannot backdate legacy rows.
+    fn stamp_student_fixture(db:&Connection,ctx:&str,admitted:u64){
+        let mut st=db.prepare("SELECT source,position_id,closed_ms,payload
+          FROM coordinator_broker_samples WHERE context=?1 AND brain='trend'").unwrap();
+        let rows=st.query_map([ctx],|r|Ok((
+            r.get::<_,String>(0)?,r.get::<_,i64>(1)?,
+            r.get::<_,i64>(2)?,r.get::<_,String>(3)?
+        ))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+        drop(st);
+        for(source,pos,closed,raw)in rows{
+            if pos<=0||closed<=0||u64::try_from(closed).unwrap()>admitted {continue;}
+            let Ok(mut label)=serde_json::from_str::<Value>(&raw)else{continue;};
+            label["context"]=json!(ctx);label["brain"]=json!("trend");
+            label["trading_mode"]=json!("expert");
+            label["timeframe"]=json!("M1");label["report_id"]=json!("");
+            let new_source=json!([ctx,"adaptive-member-v1","expert","trend","M1",""]).to_string();
+            let normalized=label.to_string();
+            db.execute("UPDATE coordinator_broker_samples SET source=?1,payload=?2
+                WHERE source=?3 AND position_id=?4",
+                params![&new_source,&normalized,&source,pos]).unwrap();
+            let hash=format!("{:x}",Sha256::digest(normalized.as_bytes()));
+            db.execute("INSERT OR IGNORE INTO coordinator_broker_admissions
+                (source,position_id,context,brain,closed_ms,admitted_ms,payload_sha256,protocol)
+                VALUES(?1,?2,?3,'trend',?4,?5,?6,'g6g-runtime-same-transaction-v1')",
+                params![&new_source,pos,ctx,closed,admitted,hash]).unwrap();
+        }
+    }
     use braintrade_domain::Position;
     fn telemetry() -> Telemetry {
         Telemetry {
@@ -894,12 +1207,17 @@ mod tests {
                 .unwrap(),
             0
         );
-        let label = json!({"open_command_id":"one","closed_ms":2100,"closed_volume":0.1,"net":-0.5,"attribution":"costs_erased_gross_profit"});
+        let label = json!({"open_command_id":"one","position_id":55,"closed_ms":2100,
+            "evidence_source":"mt5_demo_broker","gross":-0.5,"commission":0.0,
+            "swap":0.0,"fee":0.0,"net":-0.5,"net_per_lot":-5.0,
+            "closed_volume":0.1,"risk_money":0.0,"r_multiple":0.0,"reward":-0.25,
+            "attribution":"costs_erased_gross_profit"});
         db.execute(
             "INSERT INTO coordinator_broker_samples VALUES('fixture',55,?1,'trend',2100,?2)",
             params![key, label.to_string()],
         )
         .unwrap();
+        stamp_student_fixture(&db,&key,2100);
         t.positions.clear();
         t.quote_time_ms = Some(2250);
         student.observe(&db, &t, 2250).unwrap();
@@ -918,7 +1236,11 @@ mod tests {
         db.execute("UPDATE student_experiences SET payload=json_remove(payload,'$.admitted') WHERE context=?1",[&key]).unwrap();
         let legacy = view(&db, &key).unwrap();
         assert!(legacy["experiences"][0]["admitted"].is_null());
-        assert_eq!(legacy["usable_shadow_pairs"], 1);
+        // Legacy missing admission cannot preserve a supposedly replayable
+        // quote-pair counter. The raw record remains for forensic review.
+        assert_eq!(legacy["usable_shadow_pairs"], 0);
+        assert_eq!(legacy["studies"][0]["provenance"],
+            "legacy_or_tampered_unverified");
         t.login = 99;
         student.observe(&db, &t, 2500).unwrap();
         assert!(student.policies.is_empty());
@@ -946,8 +1268,52 @@ mod tests {
         key
     }
     fn label(db: &Connection, key: &str, closed: u64) {
-        db.execute("INSERT INTO coordinator_broker_samples VALUES('fixture',55,?1,'trend',?2,?3)",params![key,closed,json!({"open_command_id":"repair","closed_ms":closed,"closed_volume":0.1,"net":-0.5,"attribution":"costs_erased_gross_profit"}).to_string()]).unwrap();
+        db.execute("INSERT INTO coordinator_broker_samples VALUES('fixture',55,?1,'trend',?2,?3)",params![key,closed,json!({"open_command_id":"repair","position_id":55,"closed_ms":closed,
+            "evidence_source":"mt5_demo_broker","gross":-0.5,"commission":0.0,
+            "swap":0.0,"fee":0.0,"net":-0.5,"net_per_lot":-5.0,
+            "closed_volume":0.1,"risk_money":0.0,"r_multiple":0.0,"reward":-0.25,
+            "attribution":"costs_erased_gross_profit"}).to_string()]).unwrap();
+        stamp_student_fixture(db,key,closed);
     }
+    #[test]
+    fn g5f_student_never_converts_fake_mt5_reward_into_real_loss_memory() {
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let t=telemetry();
+        let key=seed_entry(&db,&t,json!({"deal":77}));
+        db.execute("INSERT INTO broker_deals VALUES(?1,77,55,'trend',?2)",
+            params![key,json!({"entry":0,"position_id":55,"price":100.,
+                "volume":0.1,"time_msc":1000}).to_string()]).unwrap();
+        label(&db,&key,1200);
+        db.execute("UPDATE coordinator_broker_samples SET
+            payload=json_set(payload,'$.reward',0.99) WHERE position_id=55",[]).unwrap();
+        let mut student=Student::new(&db).unwrap();
+        student.observe(&db,&t,5000).unwrap();
+        let v=view(&db,&key).unwrap();
+        assert_eq!(v["closed_broker_trades"],0,
+            "Even a correct booked net cannot be credited with a forged reward");
+        assert_eq!(v["usable_shadow_pairs"],0);
+        assert_eq!(v["experiences"][0]["actual"],Value::Null);
+        db.execute("UPDATE coordinator_broker_samples SET
+            payload=json_set(payload,'$.reward',-0.25) WHERE position_id=55",[]).unwrap();
+        let mut restarted=Student::new(&db).unwrap();
+        restarted.observe(&db,&t,5500).unwrap();
+        let v=view(&db,&key).unwrap();
+        assert_eq!(v["closed_broker_trades"],1,
+            "After exact MT5 feedback is restored, matching broker evidence can be read");
+        assert_eq!(v["usable_shadow_pairs"],0,
+            "Unverified earlier sampled path cannot be promoted after restoration");
+        // Emulate an old persisted Experience.actual corrupted after the
+        // actual broker ledger was accepted. Reports must not count it.
+        db.execute("UPDATE student_experiences SET
+            payload=json_set(payload,'$.actual.reward',0.99) WHERE context=?1",
+            [&key]).unwrap();
+        let archived=view(&db,&key).unwrap();
+        assert_eq!(archived["closed_broker_trades"],0);
+        assert_eq!(archived["recent_closed"],0);
+        assert_eq!(archived["experiences"][0]["actual"],Value::Null);
+    }
+
     #[test]
     fn recovered_old_fill_is_journaled_but_never_invents_a_shadow_path() {
         let db = Connection::open_in_memory().unwrap();
@@ -998,8 +1364,13 @@ mod tests {
             t.quote_time_ms = Some(ms);
             student.quote(&t, ms);
         }
-        // No position snapshot or deal mapping was needed to capture these prices.
+        // Capturing quote extrema did not need a position snapshot. Final
+        // broker attribution DOES require the immutable Deal->Position link;
+        // it may arrive after the quotes and even after the close.
         label(&db, &key, 1400);
+        db.execute("INSERT INTO broker_deals VALUES(?1,77,55,'trend',?2)",
+            params![key,json!({"entry":0,"position_id":55,"price":100.0,
+                "volume":0.1,"time_msc":1000}).to_string()]).unwrap();
         student.observe(&db, &t, 1800).unwrap();
         let v = view(&db, &key).unwrap();
         let e = &v["experiences"][0];
@@ -1041,6 +1412,154 @@ mod tests {
         let mut s=signal(); adapt(&mut s,&t,&c,&b,&policies);
         assert_eq!(s.stop_distance,1.); assert!(s.ready);
         assert_eq!(s.coordination.unwrap()["student"]["fallback_reason"],"stop_inside_spread");
+    }
+
+    #[test]
+    fn g6j_student_never_credits_future_or_changed_broker_admissions(){
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let t=telemetry();
+        let key=seed_entry(&db,&t,json!({"deal":77}));
+        db.execute("INSERT INTO broker_deals VALUES(?1,77,55,'trend',?2)",
+            params![&key,json!({"entry":0,"position_id":55,"price":100.,
+                "volume":0.1,"time_msc":1000}).to_string()]).unwrap();
+        label(&db,&key,1200);
+        db.execute("UPDATE coordinator_broker_admissions
+            SET admitted_ms=6000 WHERE position_id=55",[]).unwrap();
+        let mut student=Student::new(&db).unwrap();
+        student.observe(&db,&t,5000).unwrap();
+        let v=view(&db,&key).unwrap();
+        assert_eq!(v["closed_broker_trades"],0,
+            "An MT5 close older than 5000 is not sufficient when Core first admitted at 6000");
+        assert!(v["experiences"][0]["actual"].is_null());
+        student.observe(&db,&t,6000).unwrap();
+        let v=view(&db,&key).unwrap();
+        assert_eq!(v["closed_broker_trades"],1);
+        assert_eq!(v["studies"][0]["study"]["reviewed_losses"],1);
+        // Changing the booked Broker payoff breaks the original SHA.
+        db.execute("UPDATE coordinator_broker_samples
+            SET payload=json_set(payload,'$.net',99)
+            WHERE position_id=55",[]).unwrap();
+        assert_eq!(view(&db,&key).unwrap()["closed_broker_trades"],0);
+        student.observe(&db,&t,6500).unwrap();
+        assert_eq!(view(&db,&key).unwrap()["closed_broker_trades"],0);
+        let mut restarted=Student::new(&db).unwrap();
+        restarted.observe(&db,&t,6600).unwrap();
+        assert_eq!(view(&db,&key).unwrap()["closed_broker_trades"],0);
+    }
+
+    #[test]
+    fn g6l_signed_aggregate_without_original_trade_events_stays_quarantined(){
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let t=telemetry();
+        let key=crate::coordinator_learning::context(&t);
+        let mut legacy=ExitStudy::expanded();
+        legacy.active=ExitProfile::Protective;
+        legacy.promotions=500;
+        legacy.total_pairs=600;
+        let raw=serde_json::to_string(&legacy).unwrap();
+        db.execute("INSERT INTO student_exit_studies VALUES('unsigned-history',?1,?2)",
+            params![&key,&raw]).unwrap();
+        db.execute("INSERT INTO student_study_admissions VALUES(
+            'unsigned-history',?1,?2,10,'g6k-student-admitted-study-v1')",
+            params![&key,format!("{:x}",Sha256::digest(raw.as_bytes()))]).unwrap();
+        assert_eq!(view(&db,&key).unwrap()["usable_shadow_pairs"],0,
+            "A valid aggregate SHA alone is not proof of individual MT5 trades");
+        let mut student=Student::new(&db).unwrap();
+        student.observe(&db,&t,5000).unwrap();
+        assert!(student.policies.is_empty());
+        assert_eq!(view(&db,&key).unwrap()["studies"][0]["provenance"],
+            "legacy_or_tampered_unverified");
+    }
+
+    #[test]
+    fn g6l_loss_event_journal_matches_broker_and_rejects_corrupt_input(){
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let t=telemetry();
+        let ctx=seed_entry(&db,&t,json!({"deal":77}));
+        db.execute("INSERT INTO broker_deals VALUES(?1,77,55,'trend',?2)",
+            params![&ctx,json!({"entry":0,"position_id":55,"price":100.,
+                "volume":0.1,"time_msc":1000}).to_string()]).unwrap();
+        label(&db,&ctx,1200);
+        let mut student=Student::new(&db).unwrap();
+        student.observe(&db,&t,5000).unwrap();
+        let v=view(&db,&ctx).unwrap();
+        assert_eq!(v["studies"][0]["study"]["reviewed_losses"],1);
+        assert_eq!(v["studies"][0]["provenance"],"locally_replayed_g6l");
+        let events:u64=db.query_row("SELECT COUNT(*) FROM student_study_events
+            WHERE context=?1 AND kind='loss'",[&ctx],|r|r.get(0)).unwrap();
+        assert_eq!(events,1);
+        // Corrupt even one input while leaving aggregate and SHA untouched:
+        // replay MUST detect the forgery and remove policy from future trading.
+        db.execute("UPDATE student_study_events
+            SET payload=json_set(payload,'$.patterns',json('[]'))
+            WHERE context=?1",[&ctx]).unwrap();
+        let v=view(&db,&ctx).unwrap();
+        assert_eq!(v["usable_shadow_pairs"],0);
+        assert!(v["studies"][0]["study"].is_null());
+        student.observe(&db,&t,5500).unwrap();
+        assert!(student.policies.is_empty(),
+            "An already-running Student must immediately revoke learned exit geometry");
+        let mut restarted=Student::new(&db).unwrap();
+        restarted.observe(&db,&t,6000).unwrap();
+        assert!(restarted.policies.is_empty());
+    }
+
+    #[test]
+    fn g6k_legacy_student_exit_aggregate_does_not_activate_trading_exit_policy(){
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let t=telemetry();
+        let ctx=crate::coordinator_learning::context(&t);
+        let mut prior=ExitStudy::expanded();
+        prior.active=ExitProfile::Protective;
+        prior.promotions=99;
+        prior.total_pairs=5000;
+        db.execute("INSERT INTO student_exit_studies(source,context,payload)
+            VALUES('unverifiable-legacy',?1,?2)",
+            params![ctx,serde_json::to_string(&prior).unwrap()]).unwrap();
+        let mut s=Student::new(&db).unwrap();
+        s.observe(&db,&t,5000).unwrap();
+        assert!(!s.policies.contains_key("unverifiable-legacy"),
+            "Prior unsigned aggregates cannot re-enable learned exit geometries");
+        let v=view(&db,&ctx).unwrap();
+        assert_eq!(v["usable_shadow_pairs"],0);
+        assert_eq!(v["studies"][0]["provenance"],"legacy_or_tampered_unverified");
+        assert!(v["studies"][0]["study"].is_null(),
+            "Old promotion counters must not look like proven training.");
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM student_exit_studies",[],|r|r.get::<_,u64>(0)).unwrap(),1,
+            "Raw study is preserved, not destroyed");
+    }
+
+    #[test]
+    fn g6k_student_study_hash_tracks_valid_broker_learning_and_rejects_changes(){
+        let db=Connection::open_in_memory().unwrap();
+        let _=crate::execution::Service::new(&db).unwrap();
+        let t=telemetry();
+        let ctx=seed_entry(&db,&t,json!({"deal":77}));
+        db.execute("INSERT INTO broker_deals VALUES(?1,77,55,'trend',?2)",
+            params![&ctx,json!({"entry":0,"position_id":55,"price":100.,
+                "volume":0.1,"time_msc":1000}).to_string()]).unwrap();
+        label(&db,&ctx,1200);
+        let mut student=Student::new(&db).unwrap();
+        student.observe(&db,&t,5000).unwrap();
+        let v=view(&db,&ctx).unwrap();
+        assert_eq!(v["studies"][0]["provenance"],"locally_replayed_g6l");
+        assert_eq!(v["studies"][0]["study"]["reviewed_losses"],1);
+        // This study has no paired quote experiment: do not forge one.
+        assert_eq!(v["usable_shadow_pairs"],0);
+        db.execute("UPDATE student_exit_studies
+            SET payload=json_set(payload,'$.promotions',999)",[]).unwrap();
+        let v=view(&db,&ctx).unwrap();
+        assert_eq!(v["usable_shadow_pairs"],0);
+        assert_eq!(v["studies"][0]["provenance"],"legacy_or_tampered_unverified");
+        assert!(v["studies"][0]["study"].is_null());
+        let mut restarted=Student::new(&db).unwrap();
+        restarted.observe(&db,&t,6000).unwrap();
+        assert!(restarted.policies.is_empty(),
+            "Restart must not apply mutated preloaded student policy");
     }
 
 }

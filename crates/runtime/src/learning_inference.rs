@@ -33,9 +33,8 @@ struct Challenger {
     review_record_id: String,
 }
 
-fn context(t: &Telemetry) -> String {
-    serde_json::to_string(&(&t.server, t.login, &t.symbol, &t.currency)).unwrap_or_default()
-}
+// Use precisely the same broker-mode-scoped dataset key as learning.rs.
+// A legacy mode-ambiguous snapshot may never become challenger evidence.
 
 fn finite(value: Option<&Value>, default: f64) -> f64 {
     let parsed = match value {
@@ -570,7 +569,7 @@ impl Service {
             if !analysis.current || analysis.bar_time == 0 || analysis.symbol != telemetry.symbol {
                 return Ok(());
             }
-            let key = context(telemetry);
+            let Some(key) = crate::learning::context(telemetry) else { return Ok(()); };
             let raw: Option<String> = db
                 .query_row(
                     "SELECT features FROM learning_snapshots WHERE context=?1 AND bar_time=?2",

@@ -89,7 +89,9 @@ function Load-AcceptanceReport {
         $Hotspot = $Report.fast_path.largest_local_pre_send_component_p95
         $Warnings = @($Report.warnings)
         $Lines = New-Object System.Collections.Generic.List[string]
-        $Lines.Add("النتيجة: $Result")
+        $Lines.Add("تقييم سرعة القناص المحلي: $Result")
+        $BrokerGate = if ($null -ne $Report.broker_lifecycle_acceptance) { [string]$Report.broker_lifecycle_acceptance.status } else { "NOT TESTED" }
+        $Lines.Add("قبول دورة MT5 Demo الكاملة (G2): $BrokerGate — يحتاج Send/Fill/Close/Deals موثقة")
         $Lines.Add("أكبر مكوّن محلي قبل الإرسال: " + $(if ($null -eq $Hotspot) { "غير متاح" } else { [string]$Hotspot }))
         if (($null -ne $Report.fast_path.sources.native.timings.queue_to_send_ms.p95) -and ($null -ne $Report.fast_path.sources.poll.timings.queue_to_send_ms.p95)) {
             $NativeP95 = [double]$Report.fast_path.sources.native.timings.queue_to_send_ms.p95
@@ -127,10 +129,11 @@ function Export-ShareBundle {
     $Staging = Join-Path $OutputDir ("share-staging-" + [Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $Staging -Force | Out-Null
     try {
+        # Share only aggregate/diagnostic reports. The local CSV and state
+        # store durable intent IDs, raw broker comments and command details.
+        # Never include them in a shareable ZIP without operator redaction.
         $AllowedFiles = @(
             "demo-acceptance-latest.json",
-            "demo-acceptance-latest.csv",
-            "demo-acceptance-state.json",
             "runtime-import-check.json"
         )
         foreach ($Name in $AllowedFiles) {
@@ -162,6 +165,7 @@ function Export-ShareBundle {
             poll = $Report.fast_path.sources.poll
             largest_local_pre_send_component_p95 = $Report.fast_path.largest_local_pre_send_component_p95
             contracts = $Report.contracts
+            broker_lifecycle_acceptance = $Report.broker_lifecycle_acceptance
             warnings = $Report.warnings
         }
         $SummaryPath = Join-Path $Staging "share-summary.json"
@@ -173,6 +177,7 @@ function Export-ShareBundle {
             "This bundle is intended for diagnosis of the target-machine Demo acceptance run.",
             "It does not contain the raw MT5 login, ipc.key, broker databases/journals, Telegram credentials, or GUI stdout/stderr logs.",
             "The account_fingerprint is a short one-way fingerprint used only to keep samples from different accounts separate.",
+            "Raw CSV and demo-acceptance-state.json are intentionally EXCLUDED because they may contain intent IDs and broker comments.",
             "queue_to_send_ms is BrainTrade-local timing; it is not broker fill latency or a profitability guarantee."
         ) -join [Environment]::NewLine
         Set-Content -LiteralPath (Join-Path $Staging "SHARE_README.txt") -Value $Readme -Encoding UTF8

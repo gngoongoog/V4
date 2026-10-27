@@ -1,0 +1,29 @@
+name: V25 P0-N Certified Offline Learning Replay
+on:
+  push:
+    branches: [feature/v25-enterprise-validation-20261024]
+    paths:
+      - 'scripts/train_linear_baseline.py'
+      - 'tests/test_p0n_certified_training_export.py'
+      - 'ci/v25_p0n_train_manifest_overlay.py'
+      - '.github/workflows/v25-p0n-training-regression.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  certified-trainer:
+    name: Certified trainer (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify Demo/REAL identity and export manifest fail-closed
+        run: python -B -m unittest discover -s tests -p test_p0n_certified_training_export.py -v
+      - name: Preserve offline synthetic ablation research
+        run: python -B -m unittest discover -s tests -p test_feature_ablation.py -v

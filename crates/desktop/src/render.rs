@@ -18,6 +18,35 @@ pub fn render() -> anyhow::Result<()> {
         window: window.clone(),
     }))?;
     let ui = Dashboard::new()?;
+    // Synthetic render-only candles demonstrate layout fidelity in CI.
+    // This function is never executed during the real dashboard loop.
+    ui.set_render_fixture(true);
+    // Deliberately show the priority console on CI screenshots while the
+    // Core remains disconnected: visuals only, never a broker connection.
+    ui.set_priority_enabled(true);
+    ui.set_sniper_active(true);
+    ui.set_fallback_mode(1); // Swing is the preview standby.
+    ui.set_trade_mode(3);
+    let visual_bars: Vec<ChartCandle> = (0..66).map(|i| {
+        let t = i as f32;
+        let wave = (t * 0.22).sin() * 0.13 + (t * 0.07).sin() * 0.08;
+        let middle = (0.54 - wave).clamp(0.26, 0.78);
+        let up = i % 7 != 0 && i % 11 != 0 && i % 3 != 0;
+        let open = (middle + if up {0.027} else {-0.016}).clamp(0.17,0.88);
+        let close = (middle + if up {-0.021} else {0.029}).clamp(0.16,0.89);
+        let top = open.min(close);
+        let bottom = open.max(close);
+        ChartCandle {
+            x: (t + 0.5) / 66.0,
+            high_y: (top - 0.025).max(0.03),
+            low_y: (bottom + 0.026).min(0.98),
+            body_top: top,
+            body_bottom: bottom,
+            up,
+            volume: ((i * 19 % 49) as f32 + 8.0) / 65.0,
+        }
+    }).collect();
+    ui.set_chart_bars(slint::ModelRc::new(slint::VecModel::from(visual_bars)));
     ui.set_state("STOPPED".into());
     ui.set_connection("MT5 is not connected / بانتظار الاتصال".into());
     ui.set_diagnostics(
@@ -129,9 +158,14 @@ pub fn render() -> anyhow::Result<()> {
 الدخول المنسوب: 4 / تعبئة مؤكدة 3".into());
     ui.set_brain_monitor_overview("القناص | إشارات 30 | دخول منسوب 4 / تعبئة مؤكدة 3
 وايكوف | إشارات 10 | تدريب مغلق 7 / رابح 4".into());
-    for (width, height, suffix) in [(1120, 820, ""), (880, 700, "-small")] {
-        window.set_size(slint::PhysicalSize::new(width, height));
-        for page in 0..22 {
+    // Exercise ALL 22 pages under each institutional palette and both viewport
+    // sizes. Keep the original dark-mode full screenshots and save comparison
+    // screenshots for seven operationally sensitive pages in Light/Smoke.
+    for (theme,name) in [(0,"dark"),(1,"white"),(2,"smoke")] {
+        ui.set_theme_choice(theme);
+        for (width, height, suffix) in [(1120, 820, ""), (880, 700, "-small")] {
+            window.set_size(slint::PhysicalSize::new(width, height));
+            for page in 0..22 {
             ui.set_page(page);
             if [6,14,17,19,20].contains(&page) {ui.set_nav_section(1);}
             if page==21 {ui.set_nav_section(2);}
@@ -148,13 +182,61 @@ pub fn render() -> anyhow::Result<()> {
             window.draw_if_needed(|renderer| {
                 renderer.render(&mut pixels, width as usize);
             });
-            let path = output.join(format!("dashboard-page-{page}{suffix}.ppm"));
-            let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
-            write!(file, "P6\n{width} {height}\n255\n")?;
-            for pixel in pixels {
-                file.write_all(&[pixel.r, pixel.g, pixel.b])?;
+            // Render every combination; retain screenshots for comprehensive
+            // dark regression and representative palette accessibility checks.
+            if theme == 0 || [0,6,14,17,18,19,21].contains(&page) {
+                let path = output.join(if theme == 0 {format!("dashboard-page-{page}{suffix}.ppm")} else {format!("dashboard-page-{page}{suffix}-{name}.ppm")});
+                let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
+                write!(file, "P6\n{width} {height}\n255\n")?;
+                for pixel in pixels {
+                    file.write_all(&[pixel.r, pixel.g, pixel.b])?;
+                }
+                file.flush()?;
             }
-            file.flush()?;
+            }
+        }
+    }
+    // Fidelity previews at the native 1540x920 target window size, rather than
+    // forcing the user to judge the institutional layout from tiny 880px shots.
+    // These screenshots are synthetic fixtures (see overlay), never live MT5.
+    let reference_dir = std::path::Path::new("test-output").join("reference-preview");
+    std::fs::create_dir_all(&reference_dir)?;
+    for (theme, name) in [(0,"dark"),(1,"white"),(2,"smoke")] {
+        ui.set_theme_choice(theme);
+        ui.set_page(0);
+        window.set_size(slint::PhysicalSize::new(1540, 920));
+        slint::platform::update_timers_and_animations();
+        ui.window().request_redraw();
+        let mut pixels=vec![Rgb8Pixel::default();1540*920];
+        window.draw_if_needed(|renderer| {renderer.render(&mut pixels,1540);});
+        let file=reference_dir.join(format!("reference-command-center-{name}.ppm"));
+        let mut writer=std::io::BufWriter::new(std::fs::File::create(file)?);
+        write!(writer,"P6\n1540 920\n255\n")?;
+        for pixel in pixels {writer.write_all(&[pixel.r,pixel.g,pixel.b])?;}
+        writer.flush()?;
+    }
+    // More native real pixels for laptop and desktop breakpoints; no image
+    // resizing, CSS mockups, or sample values from a real broker are involved.
+    // All viewports use the same interactive Dashboard component and theme.
+    let responsive_dir=std::path::Path::new("test-output").join("responsive-preview");
+    std::fs::create_dir_all(&responsive_dir)?;
+    for (width,height) in [(1024,768),(1280,800),(1366,768),(1600,900),(1920,1080)] {
+        window.set_size(slint::PhysicalSize::new(width,height));
+        for (theme,name) in [(0,"dark"),(1,"white"),(2,"smoke")] {
+            ui.set_theme_choice(theme);
+            ui.set_page(0);
+            slint::platform::update_timers_and_animations();
+            ui.window().request_redraw();
+            let mut pixels=vec![Rgb8Pixel::default();(width*height) as usize];
+            window.draw_if_needed(|renderer|{
+                renderer.render(&mut pixels,width as usize);
+            });
+            let file=responsive_dir.join(format!(
+                "dashboard-{width}x{height}-{name}.ppm"));
+            let mut writer=std::io::BufWriter::new(std::fs::File::create(file)?);
+            write!(writer,"P6\n{width} {height}\n255\n")?;
+            for pixel in pixels {writer.write_all(&[pixel.r,pixel.g,pixel.b])?;}
+            writer.flush()?;
         }
     }
     ui.hide()?;

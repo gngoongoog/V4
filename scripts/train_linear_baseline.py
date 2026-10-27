@@ -159,9 +159,48 @@ def target_from_label(label, minutes):
     raise ValueError(f"target horizon {minutes}m missing")
 
 
-def load_dataset(path, minutes):
+def verified_broker_context(raw):
+    """Research training requires a broker-mode-scoped identity, not legacy four fields."""
+    try:
+        items = json.loads(raw)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(items, list) or len(items) != 6:
+        return False
+    server, login, symbol, currency, trade_mode, demo = items
+    return (
+        isinstance(server, str) and bool(server)
+        and type(login) is int and login > 0
+        and isinstance(symbol, str) and bool(symbol)
+        and isinstance(currency, str) and bool(currency)
+        and type(demo) is bool and type(trade_mode) is int
+        and (trade_mode, demo) in ((0, True), (2, False))
+    )
+
+
+def certified_manifest(dataset):
+    """Reject incomplete or inconsistent research exports before model training."""
+    path = dataset.with_name("manifest.json")
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError) as exc:
+        raise ValueError("training requires a valid adjacent learning export manifest") from exc
+    if not isinstance(manifest, dict) or any((
+        manifest.get("version") != "learning-foundation-v1",
+        manifest.get("feature_schema") != FEATURE_SCHEMA,
+        manifest.get("label_schema") != LABEL_SCHEMA,
+        manifest.get("trained_model_included") is not False,
+        type(manifest.get("rows")) is not int,
+        type(manifest.get("rows")) is int and manifest["rows"] < 1,
+    )):
+        raise ValueError("invalid training export manifest schema, row count or provenance")
+    return manifest
+
+
+def load_dataset(path, minutes, *, certified=False):
     dataset = path / "dataset.jsonl" if path.is_dir() else path
     raw = dataset.read_bytes()
+    manifest = certified_manifest(dataset) if certified else None
     sha = hashlib.sha256(raw).hexdigest()
     rows = []
     for line_number, line in enumerate(raw.splitlines(), 1):
@@ -171,6 +210,11 @@ def load_dataset(path, minutes):
             row = json.loads(line)
             if row.get("feature_schema") != FEATURE_SCHEMA or row.get("label_schema") != LABEL_SCHEMA:
                 raise ValueError("schema mismatch")
+            if certified and not verified_broker_context(row.get("context")):
+                raise ValueError("unverified broker Demo/REAL context")
+            if certified and (type(row.get("bar_time")) is not int or row["bar_time"] <= 0
+                              or type(row.get("snapshot_id")) is not int or row["snapshot_id"] <= 0):
+                raise ValueError("invalid snapshot or bar timestamp")
             rows.append({
                 "context": str(row["context"]),
                 "bar_time": int(row["bar_time"]),
@@ -182,6 +226,8 @@ def load_dataset(path, minutes):
             raise ValueError(f"dataset line {line_number}: {exc}") from exc
     if not rows:
         raise ValueError("dataset has no matured rows")
+    if certified and len(rows) != manifest["rows"]:
+        raise ValueError("manifest row count differs from dataset")
     return dataset, sha, rows
 
 
@@ -364,7 +410,7 @@ def main():
     parser.add_argument("--min-rows", type=int, default=600)
     args = parser.parse_args()
 
-    dataset, dataset_sha, rows = load_dataset(args.dataset, args.target_minutes)
+    dataset, dataset_sha, rows = load_dataset(args.dataset, args.target_minutes, certified=True)
     train, validation, holdout, split_metadata = split_purged(rows, args.min_rows)
     feature_names = sorted({name for row in train for name in row["x"]})
     if not feature_names:

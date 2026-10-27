@@ -1,0 +1,34 @@
+name: V25 P1-B Dashboard Broker Evidence
+on:
+  push:
+    branches: [feature/v25-enterprise-validation-20261024]
+    paths:
+      - 'apps/terminal/src/brain-evidence.ts'
+      - 'apps/terminal/src/terminal.tsx'
+      - 'apps/terminal/tests/brain-evidence.cjs'
+      - '.github/workflows/v25-p1b-ui-evidence.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    name: P1-B account and mode evidence (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/terminal/package-lock.json
+      - name: Install exact frontend dependencies
+        run: npm --prefix apps/terminal ci --no-audit --no-fund
+      - name: Check all dashboard interaction contracts
+        run: npm --prefix apps/terminal test
+      - name: TypeScript and production bundle
+        run: npm --prefix apps/terminal run build

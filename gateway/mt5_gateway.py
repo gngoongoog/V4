@@ -17,12 +17,13 @@ from __future__ import annotations
 import json
 import math
 import os
+import urllib.request
 from pathlib import Path
 import time
-import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from sniper_native import NativeTickBridge
+from transport import LoopbackCore
 
 BASE = "http://127.0.0.1:18741"
 BAGHDAD = timezone(timedelta(hours=3))
@@ -127,7 +128,7 @@ def empty_snapshot(error: str) -> dict:
                 today_net=None, today_deals=None, report_day="", bid=None, ask=None,
                 tick_age_ms=None, quote_time_ms=None, source_quote_time_ms=None,
                 native_event_id=None, symbol="", leverage=None, margin_free=None,
-                minimum_lot_margin=None, volume_min=None, volume_step=None,
+                minimum_lot_margin=None, margin=None, volume_min=None, volume_step=None,
                 tick_size=None, dom_available=False,dom=[],volume_max=None,
                 tick_value_loss=None,tick_value_profit=None,market=None,point=None)
 
@@ -142,7 +143,26 @@ def deal_summary(deals, mt5):
     if deals is None:
         return None, None
     trading = [d for d in deals if d.type in (mt5.DEAL_TYPE_BUY, mt5.DEAL_TYPE_SELL)]
-    net = sum(d.profit + d.commission + d.swap + getattr(d, "fee", 0.0) for d in trading)
+    # A missing broker-reported cost is unknown, never equivalent to a
+    # zero-commission account. Likewise, NaN/Inf must not reach Core/UI as PnL.
+    booked = []
+    for deal in trading:
+        components = []
+        for key in ('profit', 'commission', 'swap', 'fee'):
+            value = getattr(deal, key, None)
+            if isinstance(value, bool):
+                return None, None
+            try:
+                amount = float(value)
+            except (ValueError, TypeError, OverflowError):
+                return None, None
+            if not math.isfinite(amount):
+                return None, None
+            components.append(amount)
+        booked.append(math.fsum(components))
+    net = math.fsum(booked)
+    if not math.isfinite(net):
+        return None, None
     return net, len(trading)
 
 
@@ -164,17 +184,22 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
         mt5.symbol_select(symbol, True)
         info = mt5.symbol_info(symbol)
     tick = mt5.symbol_info_tick(symbol) if info is not None else None
-    key=(account.login,account.server,symbol)
+    key=(account.login,account.server,symbol,account.currency,account.trade_mode)
     market=market_cache.read(mt5,key,now) if market_cache is not None and info is not None else None
     dom_available,dom=dom_cache.read(mt5,key) if dom_cache is not None and info is not None else (False,[])
     current = mt5.account_info()
-    if current is None or (current.login, current.server) != (account.login, account.server):
+    identity_fields=('login','server','currency','trade_mode')
+    if (current is None or
+        tuple(getattr(current,k,None) for k in identity_fields) !=
+        tuple(getattr(account,k,None) for k in identity_fields)):
         return empty_snapshot("Account changed during snapshot; waiting for reconciliation.")
     errors = []
     if info is None:
         errors.append(f"Symbol {symbol} is unavailable; choose its exact broker name in Settings.")
     if deals is None:
         errors.append("Deal history unavailable; daily PnL is unknown.")
+    elif net is None:
+        errors.append("Broker deal cost fields missing or invalid; daily PnL is unknown.")
     # Actual account leverage is broker-owned; scenario leverage never enters trading.
     raw_leverage = getattr(account, "leverage", None)
     try:
@@ -190,6 +215,15 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
             margin_free = None
     except (ValueError, TypeError, OverflowError):
         margin_free = None
+    # Used Margin is a broker-reported account field, not equity - free margin
+    # or a simulated value. Preserve explicit zero; reject missing/invalid.
+    try:
+        raw_margin = getattr(account, "margin", None)
+        margin = float(raw_margin) if raw_margin is not None else None
+        if margin is not None and (not math.isfinite(margin) or margin < 0):
+            margin = None
+    except (ValueError, TypeError, OverflowError):
+        margin = None
     minimum_lot_margin = None
     if (info is not None and tick is not None
             and hasattr(mt5, "order_calc_margin") and hasattr(mt5, "ORDER_TYPE_BUY")):
@@ -207,7 +241,7 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
                   account_trade_mode=int(account.trade_mode),margin_mode=getattr(account,"margin_mode",None),
                   trade_allowed=bool(getattr(account,"trade_allowed",False) and getattr(terminal,"trade_allowed",False) and not getattr(terminal,"tradeapi_disabled",False)),trade_expert=bool(getattr(account,"trade_expert",False)),
                   balance=account.balance, equity=account.equity,
-                  leverage=leverage, margin_free=margin_free,
+                  leverage=leverage, margin=margin, margin_free=margin_free,
                   minimum_lot_margin=minimum_lot_margin,
                   positions=[dict(ticket=p.ticket, symbol=p.symbol,magic=getattr(p,"magic",0),identifier=getattr(p,"identifier",p.ticket),opened_ms=getattr(p,"time_msc",0),
                                   side="BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL",
@@ -230,11 +264,26 @@ def sniper_enabled(config: dict) -> bool:
     return str(trading.get('mode', '')).strip().lower() == 'sniper'
 
 
-def pulse_payload(snapshot: dict) -> dict:
+def pulse_payload(snapshot: dict, *, quote_source: str | None = None,
+                  native_dropped_total: int | None = None) -> dict:
     """Minimal quote-only payload; reconciled account state stays cached in Core."""
-    return {key:snapshot.get(key) for key in (
+    payload = {key:snapshot.get(key) for key in (
         'login','server','currency','symbol','bid','ask','quote_time_ms','tick_age_ms'
     )}
+    # Event ordering and broker time are different clocks during a dense burst.
+    if snapshot.get('source_quote_time_ms') is not None:
+        payload['source_quote_time_ms'] = snapshot['source_quote_time_ms']
+    # Only the local Gateway supplies this provenance. These are statistics
+    # about accepted pulses, NOT about the entire broker/exchange tick stream.
+    if quote_source is not None:
+        if quote_source not in ('native', 'poll'):
+            raise ValueError("Unrecognized Sniper quote provenance")
+        payload['quote_source'] = quote_source
+    if native_dropped_total is not None:
+        if type(native_dropped_total) is not int or native_dropped_total < 0:
+            raise ValueError("Native mailbox overflow counter must be nonnegative integer")
+        payload['native_dropped_total'] = native_dropped_total
+    return payload
 
 
 def quote_signature(snapshot: dict):
@@ -248,16 +297,35 @@ def advance_quote_clock(previous: dict | None, current: dict):
     MT5 can report multiple quote changes with the same millisecond. Rust/Core's
     existing Sniper contract keys decisions by quote_time_ms, so we preserve the
     real broker millisecond separately and advance only the event clock by one
-    when necessary. This avoids a schema change while keeping freshness based on
-    the real source timestamp in tick_age_ms.
+    when necessary. Core receives both clocks; freshness must use source time,
+    while idempotency continues to use the strictly increasing event clock.
     """
     source_ms=current.get('source_quote_time_ms',current.get('quote_time_ms'))
     if source_ms is None:
         return current, False
     current['source_quote_time_ms']=int(source_ms)
-    if not previous or not previous.get('connected'):
+    account_fields=('login','server','currency','account_trade_mode','symbol')
+    account_changed=(previous and previous.get('connected') and
+        any(previous.get(k) != current.get(k) for k in account_fields
+            if k in previous and k in current))
+    if not previous or not previous.get('connected') or account_changed:
+        # Synthetic event IDs and monotonic quote clocks belong to one broker
+        # account+symbol. A mode/login switch must not reuse the old epoch.
         current['quote_time_ms']=int(source_ms)
+        if account_changed:
+            current['native_event_id']=None
         return current, True
+    previous_source=previous.get('source_quote_time_ms',previous.get('quote_time_ms'))
+    if previous_source is not None and int(source_ms) < int(previous_source):
+        # Preserve NEW reconciliation fields, without replaying an old Poll/EA
+        # price as a new event. Conservative age never freshens a cached quote.
+        for field in ('bid','ask','quote_time_ms','source_quote_time_ms','native_event_id'):
+            if field in previous:
+                current[field]=previous[field]
+        current['source_quote_time_ms']=int(previous_source)
+        current['tick_age_ms']=max(int(previous.get('tick_age_ms') or 0),
+                                   int(current.get('tick_age_ms') or 0))
+        return current, False
     changed=quote_signature(previous)!=quote_signature(current)
     previous_clock=int(previous.get('quote_time_ms') or 0)
     if changed:
@@ -287,6 +355,27 @@ def refresh_fast_tick(snapshot: dict, mt5, symbol: str, now_ms: int | None = Non
     candidate.update(bid=bid,ask=ask,source_quote_time_ms=tms,tick_age_ms=max(0,now_ms-tms))
     updated,changed=advance_quote_clock(snapshot,candidate)
     return updated,changed,signature
+
+
+def broker_snapshot_identity_is_current(mt5, snapshot: dict) -> bool:
+    """Prevent hot pulses from using a cached identity after an MT5 account switch.
+
+    This is a fast-path admission check only when new quotes actually arrive;
+    Core and the durable BrokerExecutor still own final authorization.
+    """
+    if not snapshot or snapshot.get("connected") is not True:
+        return False
+    try:
+        a = mt5.account_info()
+        terminal = mt5.terminal_info()
+        return (a is not None and terminal is not None
+                and getattr(terminal, "connected", False) is True
+                and getattr(a, "login", None) == snapshot.get("login")
+                and getattr(a, "server", None) == snapshot.get("server")
+                and getattr(a, "currency", None) == snapshot.get("currency")
+                and getattr(a, "trade_mode", None) == snapshot.get("account_trade_mode"))
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        return False
 
 
 def apply_native_tick(snapshot: dict, packet: dict, now_ms: int | None = None):
@@ -383,7 +472,14 @@ def main():
     runtime_config = json.loads(config_path.read_text("utf-8")) if config_path.exists() else {}
     path = runtime_config.get("mt5_path", "")
     symbol = runtime_config.get("symbol", "XAUUSD")
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    # HTTP/1.1 connection reuse reduces loopback TCP setup on hot quote paths.
+    # A dropped connection is NEVER replayed automatically (POST ambiguity).
+    # Exact broker order_send remains exclusively in BrokerExecutor.
+    # Kill switch for emergency compatibility: set BRAINTRADE_PERSISTENT_HTTP=0
+    # in the launcher environment to restore the prior urllib transport.
+    persistent_http = os.environ.get('BRAINTRADE_PERSISTENT_HTTP', '1') == '1'
+    transport = LoopbackCore(token) if persistent_http else None
+    legacy_opener = urllib.request.build_opener(urllib.request.ProxyHandler({})) if not persistent_http else None
     try:
         import MetaTrader5 as mt5
     except ImportError:
@@ -401,18 +497,22 @@ def main():
     normal_poll_seconds=1.0
 
     def api(path, payload=None, method=None):
+        if transport is not None:
+            return transport.api(path, payload, method)
         request = urllib.request.Request(BASE+path,
-            data=json.dumps(payload, allow_nan=False).encode('utf-8') if payload is not None else None,
-            headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'},
-            method=method)
-        with opener.open(request,timeout=4) as response:
+            data=json.dumps(payload,allow_nan=False).encode('utf-8') if payload is not None else None,
+            headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'}, method=method)
+        with legacy_opener.open(request,timeout=4) as response:
             return json.load(response)
 
     def publish(snapshot):
-        body = json.dumps(snapshot, allow_nan=False).encode("utf-8")
-        request = urllib.request.Request(BASE + "/v1/gateway/snapshot", data=body,
-                  headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
-        with opener.open(request, timeout=4) as response:
+        if transport is not None:
+            transport.publish(snapshot)
+            return
+        request=urllib.request.Request(BASE+'/v1/gateway/snapshot',
+            data=json.dumps(snapshot,allow_nan=False).encode('utf-8'),
+            headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+        with legacy_opener.open(request,timeout=4) as response:
             response.read()
 
     def background_work():
@@ -468,13 +568,22 @@ def main():
                         # and any command is returned in that same localhost response.
                         if sniper and latest_snapshot and latest_snapshot.get('connected'):
                             packets=native.drain(int(latest_snapshot.get('login') or 0),symbol,NATIVE_BATCH_MAX)
+                            if packets and not broker_snapshot_identity_is_current(mt5,latest_snapshot):
+                                # Cached Core snapshot is now another MT5 session.
+                                # Clear buffered native evidence without sending
+                                # even one old-context pulse.
+                                native.close()
+                                next_full_snapshot=0.0
+                                packets=[]
                             for packet in packets:
                                 native_snapshot,changed,_=apply_native_tick(latest_snapshot,packet)
                                 if not changed:
                                     continue
                                 latest_snapshot=native_snapshot
                                 try:
-                                    work=api('/v1/execution/pulse',pulse_payload(latest_snapshot),method='PUT')
+                                    work=api('/v1/execution/pulse',pulse_payload(latest_snapshot,
+                                        quote_source='native',
+                                        native_dropped_total=native.mailbox.dropped),method='PUT')
                                     normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api,work=work)))
                                     command_polled=True
                                     core_failures=0
@@ -490,20 +599,37 @@ def main():
                         full_due=latest_snapshot is None or mono >= next_full_snapshot
                         if full_due:
                             fresh_snapshot=collect(mt5,symbol,market_cache=market_cache,dom_cache=dom_cache)
+                            if (fresh_snapshot.get('connected') and latest_snapshot and
+                                    latest_snapshot.get('connected') and
+                                    any(latest_snapshot.get(k)!=fresh_snapshot.get(k)
+                                        for k in ('login','server','currency','account_trade_mode','symbol'))):
+                                # MT5 can switch accounts inside the same data directory.
+                                # Revoke the prior EA token and reject buffered old ticks.
+                                native.close()
+                                native.bind_terminal(mt5.terminal_info())
                             fresh_snapshot,_=advance_quote_clock(latest_snapshot,fresh_snapshot)
                             latest_snapshot=fresh_snapshot
                             next_full_snapshot=mono+full_interval
                             publish(latest_snapshot)
                             core_failures=0
-                        elif sniper and latest_snapshot.get('connected') and not native.recent(maximum_age_ms=NATIVE_RECENT_MS):
+                        elif sniper and latest_snapshot.get('connected') and not native.recent(login=int(latest_snapshot.get('login') or 0),symbol=symbol,
+                                maximum_age_ms=NATIVE_RECENT_MS):
                             # Native EA is optional. If it is absent/stale the exact
                             # v0.7 5 ms polling source remains active, but quote handling
                             # now uses the same execution-only pulse as the native source.
                             fast_snapshot,changed,_=refresh_fast_tick(latest_snapshot,mt5,symbol)
                             if changed:
+                                if not broker_snapshot_identity_is_current(mt5,latest_snapshot):
+                                    # Poll fallback can also see a new account
+                                    # before the 250 ms reconciled snapshot.
+                                    native.close()
+                                    next_full_snapshot=0.0
+                                    continue
                                 latest_snapshot=fast_snapshot
                                 try:
-                                    work=api('/v1/execution/pulse',pulse_payload(latest_snapshot),method='PUT')
+                                    work=api('/v1/execution/pulse',pulse_payload(latest_snapshot,
+                                        quote_source='poll',
+                                        native_dropped_total=native.mailbox.dropped),method='PUT')
                                     normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api,work=work)))
                                     command_polled=True
                                     core_failures=0
@@ -513,6 +639,7 @@ def main():
                                     except (OSError,ValueError):
                                         core_failures+=1
                         if initialized and latest_snapshot and not latest_snapshot.get('connected'):
+                            native.close()
                             dom_cache.release(mt5);mt5.shutdown();initialized=False
                     elif mono >= next_full_snapshot:
                         latest_snapshot=empty_snapshot("MT5 connection failed. Set terminal64.exe path and sign in inside MT5.")
@@ -520,6 +647,7 @@ def main():
                         publish(latest_snapshot)
                 except Exception:
                     latest_snapshot=empty_snapshot("MT5 read failed; retrying connection.")
+                    native.close()
                     dom_cache.release(mt5)
                     try:
                         mt5.shutdown()
@@ -559,6 +687,8 @@ def main():
                 else:
                     time.sleep(remaining)
     finally:
+        if transport is not None:
+            transport.close()
         native.close()
         executor.close()
         if mt5 is not None:

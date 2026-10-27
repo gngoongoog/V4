@@ -1,0 +1,56 @@
+name: V25 P0 Broker Journal Regression
+on:
+  push:
+    branches:
+      - feature/v25-enterprise-validation-20261024
+    paths:
+      - 'gateway/execution.py'
+      - 'gateway/mt5_gateway.py'
+      - 'gateway/sniper_native.py'
+      - 'tests/test_p0e_native_lifecycle.py'
+      - 'tests/test_p0f_history_sync_identity.py'
+      - 'tests/test_p0d_financial_integrity.py'
+      - 'tests/test_execution_journal_race.py'
+      - 'tests/test_broker_reconciliation_strict.py'
+      - 'tests/test_broker_intent_identity.py'
+      - '.github/workflows/v25-p0-journal-regression.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  broker-journal:
+    name: No-double-send contract (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Prove same-intent race never sends twice
+        run: python -m unittest discover -s tests -p test_execution_journal_race.py -v
+      - name: Protect existing broker execution contracts
+        run: python -m unittest discover -s tests -p test_broker_execution.py -v
+      - name: Protect interrupted-order recovery contracts
+        run: python -m unittest discover -s tests -p test_execution_recovery.py -v
+      - name: Validate partial fill reconciliation and account-scoped history
+        run: python -m unittest discover -s tests -p test_broker_reconciliation_strict.py -v
+      - name: Enforce durable intent economic identity on retry
+        run: python -m unittest discover -s tests -p test_broker_intent_identity.py -v
+      - name: Preserve broker net PnL truth and account-mode scope
+        run: python -m unittest discover -s tests -p test_p0d_financial_integrity.py -v
+      - name: Preserve dashboard snapshot financial contracts
+        run: python -m unittest discover -s tests -p test_gateway.py -v
+      - name: Validate Sniper EA reconnect and identity-scoped cache
+        run: python -m unittest discover -s tests -p test_p0e_native_lifecycle.py -v
+      - name: Validate native EA packet and real Windows pipe shutdown
+        run: python -m unittest discover -s tests -p test_sniper_native.py -v
+      - name: Validate Windows pipe worker lifetime
+        run: python -m unittest discover -s tests -p test_sniper_native_lifecycle.py -v
+      - name: Protect broker history Demo REAL attribution and exact fees
+        run: python -m unittest discover -s tests -p test_p0f_history_sync_identity.py -v

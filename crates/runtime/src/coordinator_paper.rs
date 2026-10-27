@@ -294,6 +294,12 @@ pub fn summary(db:&Connection,id:&str)->Result<Value>{
     let (mut stop_f,mut stop_a,mut target_f,mut target_a)=(0usize,0usize,0usize,0usize);
     let (mut contract_pass,mut contract_fail,mut contract_unknown)=(0usize,0usize,0usize);
     let (mut pass_f,mut pass_a)=(0.0,0.0);
+    // Acceptance-quality prospective evidence requires BOTH an indicative
+    // entry-time contract PASS and no sampled quote gap on EITHER exit leg.
+    // A PASS remains a heuristic: never call it an MT5 broker approval.
+    let (mut clean,mut dirty,mut unknown_gap,mut clean_feasible)=(0usize,0usize,0usize,0usize);
+    let (mut feasible_f,mut feasible_a,mut feasible_wins_f,mut feasible_wins_a)=
+        (0.,0.,0usize,0usize);
     for(state,raw)in rows{
         if state=="open"{pending+=1;continue}
         if state!="complete"{continue}
@@ -304,10 +310,32 @@ pub fn summary(db:&Connection,id:&str)->Result<Value>{
         )else{continue};
         if !f.is_finite()||!a.is_finite(){continue}
         completed+=1;sum_f+=f;sum_a+=a;
-        match p["indicative_contract"]["status"].as_str().unwrap_or("unknown"){
+        let contract=p["indicative_contract"]["status"].as_str().unwrap_or("unknown");
+        match contract{
             "pass"=>{contract_pass+=1;pass_f+=f;pass_a+=a;},
             "fail"=>contract_fail+=1,
             _=>contract_unknown+=1
+        }
+        // Unknown/corrupt historical gap metadata must not turn into
+        // 'clean' evidence. The stored flag and recorded maximum must agree.
+        let fgap=p["frozen"]["result"]["max_quote_gap_ms"].as_u64();
+        let agap=p["adaptive"]["result"]["max_quote_gap_ms"].as_u64();
+        let fflag=p["frozen"]["result"]["gap_risk"].as_bool();
+        let aflag=p["adaptive"]["result"]["gap_risk"].as_bool();
+        match (fgap,agap,fflag,aflag){
+            (Some(fg),Some(ag),Some(ff),Some(af))
+                if ff==(fg>GAP_WARNING_MS) && af==(ag>GAP_WARNING_MS)=>{
+                if ff||af{dirty+=1}
+                else{
+                    clean+=1;
+                    if contract=="pass"{
+                        clean_feasible+=1;feasible_f+=f;feasible_a+=a;
+                        if f>0.{feasible_wins_f+=1}
+                        if a>0.{feasible_wins_a+=1}
+                    }
+                }
+            }
+            _=>unknown_gap+=1
         }
         if f>0.{won_f+=1};if a>0.{won_a+=1}
         if f>a+1e-8{better_f+=1}else if (f-a).abs()<=1e-8{ties+=1}
@@ -318,12 +346,30 @@ pub fn summary(db:&Connection,id:&str)->Result<Value>{
         if p["adaptive"]["result"]["reason"]=="target"{target_a+=1}
     }
     Ok(json!({
-        "status":if completed<MIN_COMPLETE{"insufficient_complete_pairs"}else{"descriptive_only"},
+        "status":if completed<MIN_COMPLETE{"insufficient_complete_pairs"}
+            else if clean_feasible<MIN_COMPLETE{"insufficient_clean_feasible_pairs"}
+            else{"descriptive_only"},
         "policy":POLICY,"completed_pairs":completed,"open_pairs":pending,
         "frozen_wins_after_costs":won_f,"adaptive_wins_after_costs":won_a,
         "indicative_contract_pass_pairs":contract_pass,
         "indicative_contract_fail_pairs":contract_fail,
         "indicative_contract_unknown_pairs":contract_unknown,
+        "quote_clean_complete_pairs":clean,
+        "quote_gap_affected_pairs":dirty,
+        "unknown_quote_gap_evidence_pairs":unknown_gap,
+        "clean_feasible_complete_pairs":clean_feasible,
+        "clean_feasible_frozen_wins_after_costs":feasible_wins_f,
+        "clean_feasible_adaptive_wins_after_costs":feasible_wins_a,
+        "clean_feasible_frozen_mean_net_per_lot":
+            if clean_feasible>0{Some(feasible_f/clean_feasible as f64)}else{None},
+        "clean_feasible_adaptive_mean_net_per_lot":
+            if clean_feasible>0{Some(feasible_a/clean_feasible as f64)}else{None},
+        "clean_feasible_frozen_minus_adaptive_mean_net_per_lot":
+            if clean_feasible>0{Some((feasible_f-feasible_a)/clean_feasible as f64)}else{None},
+        "minimum_clean_feasible_pairs":MIN_COMPLETE,
+        "coverage_gate":"both_arms_max_gap_le_15000ms AND consistent_flags AND indicative_contract_pass",
+        // Backward-compatible legacy contract-PASS means deliberately still
+        // include pairs with quote gaps; it must not be used for qualification.
         "indicative_pass_frozen_mean_net_per_lot":
           if contract_pass>0{Some(pass_f/contract_pass as f64)}else{None},
         "indicative_pass_adaptive_mean_net_per_lot":
@@ -339,7 +385,7 @@ pub fn summary(db:&Connection,id:&str)->Result<Value>{
             if completed>0{Some((sum_f-sum_a)/completed as f64)}else{None},
         "minimum_descriptive_pairs":MIN_COMPLETE,
         "broker_effect":false,"learning_effect":false,
-        "caveat":"Expert coordinator paired quote-sampled paper with independent SL/TP/hold and the same assumed costs. NO portfolio gates, broker fills, latency, partials, swaps or complete system PnL; both-ready-only cohort and missed intratick events can bias results."
+        "caveat":"Expert coordinator paired quote-sampled PAPER with independent SL/TP/hold, both-ready-only selection and assumed costs. Clean+feasible excludes >15s/unknown quote gaps and entry hints failing or unknown; PASS is NOT order_check or broker approval. Even clean sampled quotes miss intratick SL/TP paths, broker fills, latency, partials, swaps and full system PnL. NOT Sniper, Scalping or Swing."
     }))
 }
 #[cfg(test)]
@@ -391,6 +437,119 @@ mod tests{
         let p:Value=serde_json::from_str(&raw).unwrap();
         assert_eq!(p["frozen"]["result"]["commission_assumed"],0.07);
         assert_eq!(p["adaptive"]["result"]["commission_assumed"],0.07);
+    }
+    fn synthetic_complete(db:&Connection,bar:u64,contract:&str,
+        gap:Option<u64>,frozen_net:f64,adaptive_net:f64){
+        let leg=|net:f64|{
+            let mut result=json!({"net_per_lot":net,"reason":"target"});
+            if let Some(ms)=gap{
+                result["max_quote_gap_ms"]=json!(ms);
+                result["gap_risk"]=json!(ms>GAP_WARNING_MS);
+            }
+            json!({"state":"closed","result":result})
+        };
+        let payload=json!({
+            "frozen":leg(frozen_net),"adaptive":leg(adaptive_net),
+            "indicative_contract":{"status":contract}
+        });
+        db.execute(
+            "INSERT INTO frozen_coordinator_trade_pairs
+             (run_id,bar_time,opened_ms,closed_ms,state,payload)
+             VALUES('r1',?1,1000,2000,'complete',?2)",
+            params![bar,payload.to_string()]).unwrap();
+    }
+
+    #[test]
+    fn thirty_paper_winners_during_quote_blackouts_cannot_pass_prospective_gate(){
+        let db=db();
+        // All historical pairs show unrealistic +100 per lot and a contract
+        // indication of PASS. A 25-second sampled quote gap on BOTH sides
+        // makes the claimed SL/TP path unknowable.
+        for id in 1..=30u64{
+            synthetic_complete(&db,id,"pass",Some(25_000),100.,50.);
+        }
+        let r=summary(&db,"r1").unwrap();
+        assert_eq!(r["completed_pairs"],30);
+        assert_eq!(r["indicative_contract_pass_pairs"],30);
+        assert_eq!(r["quote_gap_affected_pairs"],30);
+        assert_eq!(r["quote_clean_complete_pairs"],0);
+        assert_eq!(r["clean_feasible_complete_pairs"],0);
+        assert_eq!(r["clean_feasible_frozen_mean_net_per_lot"],Value::Null);
+        assert_eq!(r["status"],"insufficient_clean_feasible_pairs");
+        assert_eq!(r["mean_frozen_net_per_lot"],100.,
+            "Legacy all-pairs figures stay visible but cannot qualify a model");
+        assert_eq!(r["contract_hints_are_not_broker_approvals"],true);
+        assert_eq!(r["broker_effect"],false);
+
+        // A clean quote path, but one failing the indicative minimum lot or
+        // margin check, is still not evidence for an executable strategy.
+        for id in 31..=60u64{
+            synthetic_complete(&db,id,"fail",Some(1000),500.,500.);
+        }
+        let r=summary(&db,"r1").unwrap();
+        assert_eq!(r["quote_clean_complete_pairs"],30);
+        assert_eq!(r["indicative_contract_fail_pairs"],30);
+        assert_eq!(r["clean_feasible_complete_pairs"],0);
+        assert_eq!(r["status"],"insufficient_clean_feasible_pairs");
+
+        // Only the separate clean+feasible descriptive cohort qualifies.
+        for id in 61..=90u64{
+            synthetic_complete(&db,id,"pass",Some(1000),-2.,-1.);
+        }
+        let r=summary(&db,"r1").unwrap();
+        assert_eq!(r["completed_pairs"],90);
+        assert_eq!(r["clean_feasible_complete_pairs"],30);
+        assert_eq!(r["clean_feasible_frozen_mean_net_per_lot"],-2.);
+        assert_eq!(r["clean_feasible_adaptive_mean_net_per_lot"],-1.);
+        assert_eq!(r["clean_feasible_frozen_minus_adaptive_mean_net_per_lot"],-1.);
+        assert_eq!(r["clean_feasible_frozen_wins_after_costs"],0);
+        assert_eq!(r["status"],"descriptive_only");
+    }
+
+    #[test]
+    fn incomplete_or_contradictory_coverage_and_unknown_margin_never_qualify(){
+        let db=db();
+        for id in 1..=30u64 {
+            synthetic_complete(&db,id,"pass",None,10.,20.);
+        }
+        for id in 31..=60u64 {
+            synthetic_complete(&db,id,"unknown",Some(500),10.,20.);
+        }
+        let p=json!({
+            "frozen":{"result":{"net_per_lot":10.,"gap_risk":false,
+                "max_quote_gap_ms":40_000}},
+            "adaptive":{"result":{"net_per_lot":20.,"gap_risk":false,
+                "max_quote_gap_ms":40_000}},
+            "indicative_contract":{"status":"pass"}
+        });
+        db.execute(
+            "INSERT INTO frozen_coordinator_trade_pairs
+             (run_id,bar_time,opened_ms,closed_ms,state,payload)
+             VALUES('r1',61,1000,2000,'complete',?1)",
+            [p.to_string()]).unwrap();
+        let r=summary(&db,"r1").unwrap();
+        assert_eq!(r["unknown_quote_gap_evidence_pairs"],31);
+        assert_eq!(r["quote_clean_complete_pairs"],30);
+        assert_eq!(r["indicative_contract_unknown_pairs"],30);
+        assert_eq!(r["clean_feasible_complete_pairs"],0);
+        assert_eq!(r["clean_feasible_frozen_mean_net_per_lot"],Value::Null);
+        assert_eq!(r["status"],"insufficient_clean_feasible_pairs");
+    }
+
+    #[test]
+    fn actual_coordinator_paper_observe_marks_blackout_as_unqualified(){
+        let db=db();let c=Config::default();
+        let opened=1_000_100_000u64;let bar=1_000_001u64;let created=1_000_000_000u64;
+        let signal=sig(1,bar,0.5,0.5,60_000);
+        observe_trial(&db,"r1",created,true,bar,&signal,&signal,
+            &q(opened,100.,100.2),&c,opened).unwrap();
+        observe_trial(&db,"r1",created,false,bar,&signal,&signal,
+            &q(opened+25_000,101.,101.2),&c,opened+25_000).unwrap();
+        let r=summary(&db,"r1").unwrap();
+        assert_eq!(r["completed_pairs"],1);
+        assert_eq!(r["quote_gap_affected_pairs"],1);
+        assert_eq!(r["clean_feasible_complete_pairs"],0);
+        assert_eq!(r["clean_feasible_frozen_mean_net_per_lot"],Value::Null);
     }
     #[test]
     fn stop_long_and_take_profit_short_are_independent(){

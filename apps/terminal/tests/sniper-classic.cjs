@@ -1,0 +1,36 @@
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const root=require('node:path').join(__dirname,'../src');
+const file=name=>fs.readFileSync(require('node:path').join(root,name),'utf8');
+test('Classic P1-K5 route and UI stay separate from Learner tick comparison',()=>{
+ const ui=file('sniper-classic-operations.tsx');
+ const learner=file('sniper-frozen-operations.tsx');
+ const main=file('terminal.tsx');
+ const bridge=file('bridge.ts');
+ assert.match(ui,/sniper_brain==='classic'/);
+ assert.match(ui,/p1k5-classic-forward-v1/);
+ assert.match(ui,/view\.broker_pnl===null&&view\.paper_pnl===null/);
+ assert.match(ui,/view\.no_broker_orders===true&&view\.independent_oos===false/);
+ assert.match(ui,/status\?\.requested_run===false/);
+ assert.match(ui,/disabled=\{!ready\|\|active\}/);
+ assert.match(ui,/disabled=\{!ready\|\|!active\}/);
+ assert.match(learner,/sniper_brain==='learner'/);
+ assert.match(main,/SniperClassicOperations/);
+ assert.match(main,/scopedGeneration\.current\.beginRead\('classicFrozen'\)/);
+ assert.match(main,/setClassicFrozenSlot\(\{scope:viewScope,report:null\}\)/);
+ assert.match(bridge,/invoke\('frozen_classic_action'/);
+ assert.match(bridge,/invoke\('frozen_sniper_action'/);
+});
+test('Core Classic P1-K5 never claims market-tick coverage, OOS or booked profit',()=>{
+ const runtime=fs.readFileSync(require('node:path').join(__dirname,'../../../crates/runtime/src/sniper_classic_forward.rs'),'utf8');
+ const execution=fs.readFileSync(require('node:path').join(__dirname,'../../../crates/runtime/src/execution.rs'),'utf8');
+ assert.match(runtime,/no_broker_orders":true/);
+ assert.match(runtime,/independent_oos":false/);
+ assert.match(runtime,/market_tick_complete":false/);
+ assert.match(runtime,/broker_pnl":Value::Null/);
+ assert.match(runtime,/frames\.get\("M1"\)/);
+ assert.match(runtime,/source_quote_time_ms/);
+ assert.match(execution,/self\.sniper_classic_forward\.observe\(telemetry,config,frames,now\)/);
+ assert.match(execution,/STOP and reconcile broker intents before Classic research/);
+});

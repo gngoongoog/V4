@@ -1,0 +1,38 @@
+name: V25 P1-C Core Dashboard Read Integrity
+on:
+  push:
+    branches: [feature/v25-enterprise-validation-20261024]
+    paths:
+      - 'apps/terminal/src/**'
+      - 'apps/terminal/tests/**'
+      - 'apps/terminal/package.json'
+      - 'apps/terminal/package-lock.json'
+      - 'apps/tauri/src/bridge.rs'
+      - '.github/workflows/v25-p1c-dashboard-read-integrity.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ui_core_contract:
+    name: P1-C Core-to-UI contract (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/terminal/package-lock.json
+      - name: Install locked dependencies
+        run: npm --prefix apps/terminal ci --no-audit --no-fund
+      - name: Verify all UI/Core contracts and replay background response races
+        run: npm --prefix apps/terminal test
+      - name: Build typed production frontend
+        run: npm --prefix apps/terminal run build
+      - name: Refuse generated lockfile drift
+        run: git diff --exit-code -- apps/terminal/package-lock.json

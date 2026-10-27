@@ -1,0 +1,43 @@
+name: V25 P0-O Offline Core Lifecycle and Learning Replay
+on:
+  push:
+    branches: [feature/v25-enterprise-validation-20261024]
+    paths:
+      - 'scripts/smoke_core.py'
+      - 'scripts/check_learning.py'
+      - 'crates/runtime/src/learning_review.rs'
+      - 'scripts/check_execution.py'
+      - 'scripts/check_flexible_demo.py'
+      - 'scripts/check_sniper_learner.py'
+      - '.github/workflows/v25-p0o-core-smoke.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  core-lifecycle:
+    name: Brokerless Core + Research Learning Restart
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      BRAINTRADE_NEWS_OFFLINE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.1'
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build exact Rust Core from repository sources
+        run: cargo build --locked -p braintrade-runtime --bin braintrade-core
+      - name: Verify offline lifecycle, execution reconciliation and restart without broker
+        run: |
+          python3 scripts/smoke_core.py
+          python3 scripts/check_backup_restore.py
+          python3 scripts/check_studio.py
+          python3 scripts/check_execution.py
+          python3 scripts/check_priority_handoff.py
+          python3 scripts/check_flexible_demo.py
+          python3 scripts/check_sniper_learner.py

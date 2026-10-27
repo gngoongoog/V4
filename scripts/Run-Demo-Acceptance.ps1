@@ -9,7 +9,8 @@ param(
     [double]$PollSeconds = 1.0,
     [string]$OutputDir = "acceptance-output",
     [switch]$Reset,
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+    [switch]$PreflightOnly
 )
 
 Set-StrictMode -Version Latest
@@ -60,7 +61,7 @@ if ((Test-Path $PackagedPython) -and (Test-Path $PackagedCollector)) {
     Stop-WithError "BrainTrade runtime collector was not found. Keep this launcher inside the BrainTrade Tools folder."
 }
 
-if (-not $PSBoundParameters.ContainsKey("Source")) {
+if (-not $PreflightOnly -and -not $PSBoundParameters.ContainsKey("Source")) {
     if ($NonInteractive) {
         $Source = "auto"
     } else {
@@ -96,13 +97,23 @@ New-Item -ItemType Directory -Path $ResolvedOutput -Force | Out-Null
 
 Write-Section "Runtime preflight"
 $ImportReport = Join-Path $ResolvedOutput "runtime-import-check.json"
-& $Python $Collector $ImportReport
+& $Python -B $Collector $ImportReport
 if ($LASTEXITCODE -ne 0) {
     Stop-WithError "Embedded Python/NumPy/MetaTrader5 import check failed. See $ImportReport" $LASTEXITCODE
 }
 Write-Host "Runtime imports: PASS ($RuntimeKind)"
 Write-Host "Collector: $Collector"
 Write-Host "Output:    $ResolvedOutput"
+
+if ($PreflightOnly) {
+    Write-Section "MT5 Demo account/quote preflight — ZERO orders"
+    Write-Host "Works while the market is closed; does NOT verify any broker order lifecycle."
+    & $Python -B $Collector "--demo-readiness" "--output-dir" $ResolvedOutput
+    $PreflightExit = $LASTEXITCODE
+    Write-Host ("Read-only JSON: " + (Join-Path $ResolvedOutput "demo-readiness-latest.json"))
+    Write-Host ("Read-only HTML: " + (Join-Path $ResolvedOutput "demo-readiness-latest.html"))
+    exit $PreflightExit
+}
 
 $CollectorArgs = @(
     $Collector,
@@ -118,9 +129,9 @@ if ($Reset) {
 }
 
 Write-Section "Read-only Demo capture"
-Write-Host "Open BrainTrade.exe first and bind the currently connected MT5 account as DEMO."
+Write-Host "Open BrainTradeNext.exe first and bind the currently connected MT5 account as DEMO."
 Write-Host "The normal BrainTrade runtime may trade only if YOU already armed it; this launcher never arms execution."
-& $Python @CollectorArgs
+& $Python -B @CollectorArgs
 $CollectorExit = $LASTEXITCODE
 
 $ReportPath = Join-Path $ResolvedOutput "demo-acceptance-latest.json"
@@ -136,6 +147,8 @@ $Poll = $Report.fast_path.sources.poll
 
 Write-Section "Acceptance summary"
 Write-Host ("Result:                {0}" -f $Report.result)
+$BrokerGate = if ($null -ne $Report.broker_lifecycle_acceptance) { $Report.broker_lifecycle_acceptance.status } else { "NOT TESTED" }
+Write-Host ("MT5 Broker G2 cycle:    {0} (needs broker deal/history proof, not local timing)" -f $BrokerGate)
 Write-Host ("Sent Sniper opens:    {0}/{1}" -f $Report.sample_counts.sent_sniper_opens, $Report.sample_counts.minimum_fast_samples)
 Write-Host ("Queue-to-send P95:    {0}" -f (Format-Ms $Queue.p95))
 Write-Host ("Queue-to-send P99:    {0}" -f (Format-Ms $Queue.p99))

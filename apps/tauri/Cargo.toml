@@ -1,0 +1,25 @@
+[package]
+name = "braintrade-tauri"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "BrainTradeNext"
+path = "src/main.rs"
+
+[dependencies]
+tauri = { version = "2", features = ["wry"] }
+braintrade-runtime = { path = "../../crates/runtime" }
+braintrade-domain = { path = "../../crates/domain" }
+serde_json.workspace = true
+serde.workspace = true
+anyhow.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

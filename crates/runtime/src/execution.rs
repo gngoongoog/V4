@@ -297,8 +297,14 @@ pub struct Service {
     learner: crate::coordinator_learning::Learner,
     student: crate::student_learning::Student,
     sniper_opportunities: crate::sniper_opportunities::Recorder,
+    sniper_tick_audit: crate::sniper_tick_audit::Audit,
+    sniper_frozen_tick: crate::sniper_frozen_tick::Study,
+    sniper_classic_forward: crate::sniper_classic_forward::Study,
     portfolio: PortfolioLimits,
     portfolio_state: Value,
+    supervisor: crate::enterprise_supervisor::Settings,
+    supervisor_policy_valid: bool,
+    quality_circuit: crate::broker_quality_circuit::Snapshot,
     fast: Option<pulse::FastContext>,
 }
 
@@ -338,20 +344,56 @@ impl Service {
             ..Default::default()
         }
         .json(&portfolio, 0.0);
+        let (supervisor,supervisor_policy_valid)=Self::load_supervisor_fail_closed(db);
         Ok(Self {
             inner,
             learner: crate::coordinator_learning::Learner::new(db)?,
             student: crate::student_learning::Student::new(db)?,
             sniper_opportunities: crate::sniper_opportunities::Recorder::default(),
+            sniper_tick_audit: crate::sniper_tick_audit::Audit::default(),
+            sniper_frozen_tick: crate::sniper_frozen_tick::Study::default(),
+            sniper_classic_forward: crate::sniper_classic_forward::Study::default(),
             portfolio,
             portfolio_state,
+            // Cache policy once; never query/CREATE a SQLite table per Sniper tick.
+            // A corrupt policy fails closed for entries without disabling Core.
+            supervisor,
+            supervisor_policy_valid,
+            quality_circuit: crate::broker_quality_circuit::Snapshot::default(),
             fast: None,
         })
+    }
+
+    fn load_supervisor_fail_closed(db:&Connection)->(crate::enterprise_supervisor::Settings,bool) {
+        match crate::enterprise_supervisor::load(db) {
+            Ok(settings)=>(settings,true),
+            Err(_)=>{
+                // A malformed policy cannot be made safe by merely enabling
+                // default checks: a valid market could otherwise pass those
+                // defaults, silently allowing new broker orders.
+                let mut settings=crate::enterprise_supervisor::Settings::default();
+                settings.enforce_entry_gate=true;
+                (settings,false)
+            }
+        }
+    }
+    fn supervisor_permits_entry(&self, assessed: bool)->bool {
+        self.supervisor_policy_valid && (!self.supervisor.enforce_entry_gate || assessed)
+    }
+    pub fn refresh_supervisor(&mut self,db:&Connection) {
+        // Cache coherence is updated synchronously in Core after persisted POST.
+        // Invalid stored JSON always keeps a separate hard-block sentinel.
+        let (settings,valid)=Self::load_supervisor_fail_closed(db);
+        self.supervisor=settings;
+        self.supervisor_policy_valid=valid;
     }
 
     pub fn set_mode(&mut self, mode: braintrade_domain::trading::TradingMode) {
         self.inner.set_mode(mode);
         self.fast = None; // Never execute a new selection using a previous cached config.
+        self.sniper_tick_audit=crate::sniper_tick_audit::Audit::default();
+        self.sniper_frozen_tick.clear_on_mode_change();
+        self.sniper_classic_forward.clear_on_mode_change();
     }
 
     fn save_portfolio(db: &Connection, candidate: &PortfolioLimits) -> Result<()> {
@@ -362,7 +404,7 @@ impl Service {
         Ok(())
     }
 
-    fn account_matches(&self, status: &Status) -> bool {
+    pub(crate) fn account_matches(&self, status: &Status) -> bool {
         status.telemetry.as_ref().is_some_and(|t| {
             t.connected
                 && t.login == self.inner.settings.login
@@ -418,6 +460,18 @@ impl Service {
         self.inner.cancel_entries(db)
     }
 
+    // Refresh only on a reconciled snapshot or persisted broker result;
+    // Sniper tick hot path reads the cached, account-scoped state.
+    fn refresh_quality_circuit(&mut self,db:&Connection,t:&Telemetry,now:u64) {
+        let key=crate::broker_quality_circuit::context(t);
+        self.quality_circuit=if self.inner.matches_bound_telemetry(t) {
+            crate::broker_quality_circuit::inspect(db,t,now)
+                .unwrap_or_else(|_|crate::broker_quality_circuit::Snapshot::unavailable(key,now))
+        } else {
+            crate::broker_quality_circuit::Snapshot::unavailable(key,now)
+        };
+    }
+
     pub fn observe(
         &mut self,
         db: &Connection,
@@ -446,8 +500,36 @@ impl Service {
         self.inner.student_policies=self.student.policies.clone();
         // Legacy engine still owns durable broker intents/reconciliation. With `system`
         // forced on, it represents coordinated execution; every other `enabled` flag means SOLO.
+        // V20 institutional admission: never prevent already-open position exits
+        // or broker reconciliation. The gate is explicit opt-in, persisted in
+        // SQLite, and cannot transfer execution ownership to another brain.
+        // A damaged supervisor settings row must never suspend broker exit
+        // management. Fail closed for fresh opens while reconciliation proceeds.
+        // This check reads the durable Core journal only on reconciled snapshots.
+        self.refresh_quality_circuit(db,telemetry,now);
+        let quality_allows=self.quality_circuit.entry_allowed(telemetry,self.is_live_target());
+        let entries_allowed=if run && quality_allows && self.supervisor_policy_valid {
+            if !self.supervisor.enforce_entry_gate {true}
+            else {
+                let candle_frames: BTreeMap<String,Vec<braintrade_domain::Candle>>=frames.iter().map(|(tf,bars)|
+                    (tf.clone(),bars.iter().map(|bar|bar.candle.clone()).collect())).collect();
+                self.supervisor_permits_entry(
+                    crate::enterprise_supervisor::assess(&self.supervisor,Some(telemetry),config,&candle_frames,now).entry_allowed)
+            }
+        } else {false};
+        self.sniper_tick_audit.clear_on_identity_change(telemetry);
+        // The reconciled path may deliver quotes the Fast Pulse did not see.
+        // Detect that before the adaptive Sniper consumes this snapshot,
+        // and invalidate comparability until a new all-future warmup.
+        self.sniper_frozen_tick.reconcile(telemetry,config);
+        // A slower full broker reconciliation flushes bounded research-only
+        // events; no SQLite write or failure propagation on Fast Pulse Tick.
+        self.sniper_frozen_tick.flush_research_events(db,telemetry);
         self.inner
-            .observe(db, telemetry, config, run, frames, now)?;
+            .observe(db, telemetry, config, entries_allowed, frames, now)?;
+        // Separate read-only Classic forward cohort uses full M1 snapshots.
+        // It never consumes or contaminates Learner Fast Pulse comparisons.
+        self.sniper_classic_forward.observe(telemetry,config,frames,now);
         // Immutable Demo coordinator policy is a separate prospective study.
         // An audit failure cannot interfere with LIVE broker execution or exits.
         if let Some(active_signal)=self.inner.last_system_signal(){
@@ -552,15 +634,26 @@ impl Service {
             .filter(|t|status.gateway_fresh && t.connected && self.account_matches(status));
         if method=="GET"{
             let Some(t)=current else{return Ok(json!({"status":"unbound","broker_effect":false}))};
-            return crate::frozen_coordinator::report(db,&context(t));
+            if config.trading.mode==braintrade_domain::trading::TradingMode::Sniper{
+                return Ok(json!({"status":"tick_native_research_not_implemented",
+                    "mode":"sniper","read_only":true,"no_broker_orders":true,
+                    "reason":"M1 frozen coordinator cannot represent Sniper Fast Pulse ticks"}));
+            }
+            let mut report=crate::frozen_coordinator::report(db,&context(t),config.trading.mode)?;
+            report["sealed_candidate"]=crate::g7_sealed_candidate::status(
+                db,&context(t),config.trading.mode)?;
+            return Ok(report);
         }
         anyhow::ensure!(method=="POST","Unknown frozen-coordinator method");
         anyhow::ensure!(!status.requested_run && !self.pending(db)?,
             "أوقف التداول وسوِّ جميع الأوامر قبل تجميد سياسة المنسق");
         let t=current.context("اربط MT5 Demo بقراءة حديثة أولاً")?;
         anyhow::ensure!(t.demo&&t.account_trade_mode==Some(0)
-            &&config.trading.mode==braintrade_domain::trading::TradingMode::Expert,
-            "اختبار منسق Expert مسموح في Demo فقط");
+            &&matches!(config.trading.mode,
+                braintrade_domain::trading::TradingMode::Expert|
+                braintrade_domain::trading::TradingMode::Scalping|
+                braintrade_domain::trading::TradingMode::Swing),
+            "البحث المجمّد لـ Expert/Scalping/Swing مسموح في Demo فقط؛ Sniper يحتاج بيانات Tick");
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Request {action:String,context:String,mode:braintrade_domain::trading::TradingMode}
@@ -573,7 +666,12 @@ impl Service {
                 crate::frozen_coordinator::freeze(db,t,config,&self.inner.brains,
                     &self.inner.weights,&controls,&self.inner.student_policies,now)
             },
-            "stop"=>crate::frozen_coordinator::stop(db,&req.context),
+            "seal_candidate"=>{
+                let controls=crate::brain_control::load(db,&req.context,req.mode)?;
+                crate::g7_sealed_candidate::seal(db,t,config,&self.inner.brains,
+                    &self.inner.weights,&controls,&self.inner.student_policies,now)
+            },
+            "stop"=>crate::frozen_coordinator::stop(db,&req.context,req.mode),
             _=>anyhow::bail!("Unknown frozen coordinator action")
         }
     }
@@ -628,6 +726,170 @@ impl Service {
         status: &Status,
         now: u64,
     ) -> Result<Value> {
+        if path=="/v1/execution/frozen-classic" {
+            let t=status.telemetry.as_ref().filter(|t|
+                status.gateway_fresh && self.account_matches(status)
+                &&self.inner.active_mode==Some(braintrade_domain::trading::TradingMode::Sniper)
+                &&t.demo&&t.account_trade_mode==Some(0));
+            if method=="GET" {return Ok(self.sniper_classic_forward.report(t,now));}
+            anyhow::ensure!(method=="POST","Unsupported Classic forward research method");
+            anyhow::ensure!(!status.requested_run && !self.pending(db)?,
+                "STOP and reconcile broker intents before Classic research");
+            let t=t.context("Fresh bound MT5 Demo Sniper Classic account required")?;
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct ClassicRequest{action:String,context:String}
+            let request:ClassicRequest=serde_json::from_slice(body)?;
+            anyhow::ensure!(request.context==context(t),
+                "Classic research account/session drift");
+            return match request.action.as_str(){
+                "freeze"=>{
+                    let fast=self.fast.as_ref()
+                        .filter(|f|f.config.trading.mode==braintrade_domain::trading::TradingMode::Sniper
+                            &&f.config.trading.sniper_brain==braintrade_domain::trading::SniperBrain::Classic
+                            &&f.telemetry.login==t.login &&f.telemetry.server==t.server
+                            &&f.telemetry.symbol==t.symbol &&f.telemetry.currency==t.currency)
+                        .context("Classic research quote cache not ready")?;
+                    self.sniper_classic_forward.freeze(t,&fast.config,now)
+                },
+                "stop"=>self.sniper_classic_forward.stop(t),
+                _=>anyhow::bail!("Unknown Classic forward research action")
+            };
+        }
+        if path=="/v1/execution/frozen-sniper" {
+            let t=status.telemetry.as_ref().filter(|t|
+                status.gateway_fresh&&self.account_matches(status)
+                &&self.inner.active_mode==Some(braintrade_domain::trading::TradingMode::Sniper)
+                &&t.demo&&t.account_trade_mode==Some(0));
+            if method=="GET" {
+                let mut view=self.sniper_frozen_tick.report(t,now);
+                // Account-verified, read-only history survives Core restart.
+                // Never fetch another Demo account's archived research.
+                if let Some(t)=t {
+                    let account=crate::coordinator_learning::context(t);
+                    view["research_artifact_history"]=
+                        crate::sniper_research_artifact::recent(db,&account)?;
+                    // Also expose one archived journal when the Core restarts
+                    // and the in-memory trial no longer exists. Never infer
+                    // missing future ticks from an older persisted sample.
+                    let latest=view["research_artifact_history"]["artifacts"]
+                        .as_array().and_then(|items|items.first()).cloned();
+                    if let Some(item)=latest.filter(|item|item["integrity"]=="verified") {
+                        if let (Some(id),Some(hash))=(item["id"].as_str(),item["sha256"].as_str()){
+                            view["last_archived_forward_journal"]=
+                                match crate::sniper_forward_journal::report(db,&account,id,hash){
+                                    Ok(report)=>report,
+                                    Err(_)=>json!({"integrity":"warning",
+                                        "historical_oos":false,"broker_pnl":null})
+                                };
+                            view["last_archived_holdout_diagnostic"]=
+                                crate::sniper_forward_holdout::from_journal(
+                                    db,&account,id,hash)
+                                .unwrap_or_else(|_|json!({"status":"unverified",
+                                    "independent_oos":false,"broker_pnl":null}));
+                            view["last_archived_preregistered_costs"]=
+                                crate::sniper_forward_costs::from_journal(
+                                    db,&account,id,hash)
+                                .unwrap_or_else(|_|json!({"status":"unverified",
+                                    "independent_oos":false,"broker_pnl":null}));
+                            view["last_archived_demo_booked_evidence"]=
+                                crate::sniper_demo_booked_audit::inspect(
+                                    db,&account,id,hash)
+                                .unwrap_or_else(|_|json!({"status":"unverified",
+                                    "independent_oos":false,
+                                    "matched_with_frozen_markouts":false,
+                                    "net_demo_account_currency":null}));
+                            view["last_archived_demo_recovery_audit"]=
+                                crate::sniper_demo_recovery_audit::inspect(
+                                    db,t,id,hash)
+                                .unwrap_or_else(|_|json!({"status":"not_verified",
+                                    "requires_live_broker_reconciliation":true,
+                                    "new_orders_authorized":false}));
+                        }
+                    }
+                    if let Some(id)=view["research_artifact_id"].as_str().map(str::to_owned) {
+                        let expected=view["research_artifact_sha256"].as_str().map(str::to_owned);
+                        match crate::sniper_research_artifact::verify(db,&account,&id,expected.as_deref()){
+                            Ok(verified)=>{
+                                view["research_artifact"]=verified;
+                                view["prospective_event_journal"]=
+                                    match crate::sniper_forward_journal::report(db,&account,
+                                        &id,expected.as_deref().unwrap_or("")){
+                                        Ok(report)=>report,
+                                        Err(_)=>json!({"integrity":"warning",
+                                            "historical_oos":false,"broker_pnl":null})
+                                    };
+                                view["chronological_holdout_diagnostic"]=
+                                    crate::sniper_forward_holdout::from_journal(
+                                        db,&account,&id,expected.as_deref().unwrap_or(""))
+                                    .unwrap_or_else(|_|json!({"status":"unverified",
+                                        "independent_oos":false,"broker_pnl":null}));
+                                view["preregistered_cost_evidence"]=
+                                    crate::sniper_forward_costs::from_journal(
+                                        db,&account,&id,expected.as_deref().unwrap_or(""))
+                                    .unwrap_or_else(|_|json!({"status":"unverified",
+                                        "independent_oos":false,"broker_pnl":null}));
+                                // Actual MT5 Demo booked trades belong to the executing
+                                // coordinator, NOT the zero-order frozen study.
+                                // Never pair hypothetical five-second markouts.
+                                view["demo_booked_execution_audit"]=
+                                    crate::sniper_demo_booked_audit::inspect(
+                                        db,&account,&id,expected.as_deref().unwrap_or(""))
+                                    .unwrap_or_else(|_|json!({"status":"unverified",
+                                        "independent_oos":false,
+                                        "matched_with_frozen_markouts":false,
+                                        "net_demo_account_currency":null}));
+                                view["demo_recovery_intent_audit"]=
+                                    crate::sniper_demo_recovery_audit::inspect(
+                                        db,t,&id,expected.as_deref().unwrap_or(""))
+                                    .unwrap_or_else(|_|json!({"status":"not_verified",
+                                        "requires_live_broker_reconciliation":true,
+                                        "new_orders_authorized":false}));
+                            },
+                            Err(_)=>{
+                                // Never present tampered research samples as verified.
+                                view["status"]=json!("integrity_failure");
+                                view["training_checkpoint"]=serde_json::Value::Null;
+                                view["forward_direction_audit"]=serde_json::Value::Null;
+                                view["research_artifact"]=json!({"integrity":"failed",
+                                    "independent_oos":false,"broker_pnl":null});
+                            }
+                        }
+                    }
+                }
+                return Ok(view);
+            }
+            anyhow::ensure!(method=="POST","Unsupported frozen Sniper method");
+            anyhow::ensure!(!status.requested_run && !self.pending(db)?,
+                "STOP and reconcile broker intents before freezing Sniper");
+            let t=t.context("Fresh bound MT5 Demo Sniper account required")?;
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request{action:String,context:String}
+            let request:Request=serde_json::from_slice(body)?;
+            anyhow::ensure!(request.context==context(t),
+                "Sniper frozen research account/session drift");
+            return match request.action.as_str(){
+                "freeze"=>{
+                    let fast=self.fast.as_ref()
+                        .filter(|f|f.config.trading.mode==braintrade_domain::trading::TradingMode::Sniper
+                            &&f.telemetry.login==t.login &&f.telemetry.server==t.server
+                            &&f.telemetry.symbol==t.symbol&&f.telemetry.currency==t.currency)
+                        .context("Sniper reconciled quote cache not ready")?;
+                    {
+                        // Freeze is a stopped operator action, never a Tick path.
+                        // Reconcile the actual cached Learner replay weights to
+                        // the current account's completed Demo broker ledger.
+                        let checkpoint=crate::sniper_learning::frozen_training_checkpoint(
+                            db,t,&self.inner.sniper,now)?;
+                        self.sniper_frozen_tick.freeze_durable(db,t,&fast.config,
+                            &self.inner.sniper,checkpoint,now)
+                    }
+                },
+                "stop"=>self.sniper_frozen_tick.stop_with_research_flush(db,t),
+                _=>anyhow::bail!("Unknown Sniper frozen study action")
+            }
+        }
         if method=="POST" && path=="/v1/execution/brain-control" {
             anyhow::ensure!(!status.requested_run && !self.pending(db)?, "أوقف النظام وانتظر تسوية الأوامر قبل تعديل مشاركة العقول");
             anyhow::ensure!(status.gateway_fresh && self.account_matches(status), "اربط الحساب الحالي وانتظر اتصالاً حديثاً");
@@ -644,10 +906,45 @@ impl Service {
             self.inner.set_mode(request.mode);
             return Ok(json!({"ok":true}));
         }
+        // P0-B: broker-journal diagnostics, not an order or an admission gate.
+        // Never return any history for a stale, unbound or mismatched account.
+        if method=="GET" && path=="/v1/execution/quality" {
+            let t=status.telemetry.as_ref().filter(|t|
+                status.gateway_fresh && self.account_matches(status)
+                && !t.symbol.is_empty() && !t.currency.is_empty());
+            let mut quality=crate::execution_quality::report(db,t,now)?;
+            if let Some(t)=t {
+                let key=crate::broker_quality_circuit::context(t);
+                let state=crate::broker_quality_circuit::inspect(db,t,now)
+                    .unwrap_or_else(|_|crate::broker_quality_circuit::Snapshot::unavailable(key,now));
+                quality["entry_circuit"]=state.as_json(self.is_live_target());
+            }
+            return Ok(quality);
+        }
+        if method=="GET" && path=="/v1/execution/sniper-tick-audit" {
+            let scoped=status.telemetry.as_ref().filter(|t|
+                status.gateway_fresh && self.account_matches(status)
+                && t.connected && t.demo && t.account_trade_mode==Some(0)
+                && self.inner.active_mode==Some(braintrade_domain::trading::TradingMode::Sniper)
+                && self.fast.as_ref().is_some_and(|f|
+                    f.config.trading.mode==braintrade_domain::trading::TradingMode::Sniper
+                    && f.telemetry.login==t.login && f.telemetry.server==t.server
+                    && f.telemetry.currency==t.currency && f.telemetry.symbol==t.symbol));
+            return Ok(self.sniper_tick_audit.report(scoped,now));
+        }
+        if method=="GET" && path=="/v1/execution/mode-evidence" {
+            // No REAL, stale or cross-bound data may be used as evidence
+            // for any of the four coordinators' Demo results.
+            let t=status.telemetry.as_ref().filter(|t|
+                status.gateway_fresh && self.account_matches(status)
+                && t.demo && t.account_trade_mode==Some(0));
+            return crate::mode_evidence::report(db,t,now);
+        }
         if method=="GET" && path=="/v1/execution/brains" {
             let mut value=self.route("GET","/v1/execution",&[],db,status,now)?;
             let key=if status.gateway_fresh && self.account_matches(status) {context(status.telemetry.as_ref().unwrap())}else{String::new()};
             crate::brain_control::enrich(&mut value,db,&key,self.inner.active_mode.unwrap_or_default())?;
+            crate::brain_integrity::enrich(&mut value,db,status,self.inner.active_mode.unwrap_or_default())?;
             value["controls_available"]=json!(!key.is_empty());
             return Ok(value);
         }
@@ -676,14 +973,28 @@ impl Service {
                 system.enabled = true;
             }
             self.student.quote(&next.telemetry, now);
+            // Fast Pulse MUST obey the exact same optional V20 entry guard.
+            // No re-sending an unknown command, no bypass on lower latency.
+            // Cached reconciled candles are reused; fresh pulse quote is overlaid.
+            let quality_allows=self.quality_circuit.entry_allowed(&next.telemetry,self.is_live_target());
+            let enter=if status.requested_run && quality_allows && self.supervisor_policy_valid {
+                if !self.supervisor.enforce_entry_gate {true}
+                else {self.supervisor_permits_entry(crate::enterprise_supervisor::assess(&self.supervisor,Some(&next.telemetry),
+                    &next.config,&BTreeMap::new(),now).entry_allowed)}
+            } else {false};
             self.inner.observe(
                 db,
                 &next.telemetry,
                 &next.config,
-                status.requested_run,
+                enter,
                 next.frames.as_ref(),
                 now,
             )?;
+            // Independent frozen learner observes the actual raw adaptive
+            // Sniper decision on this same accepted quote before later
+            // execution/portfolio gates. Research never creates a broker intent.
+            self.sniper_frozen_tick.observe(&next.telemetry,&next.config,
+                self.inner.last_sniper_raw.as_ref(),body,now);
             self.student.capture_entries(self.inner.take_entries(), now);
             let current = enforce_portfolio(db, &next.telemetry, &next.config, &self.portfolio)?;
             self.portfolio_state = current.json(&self.portfolio, next.telemetry.equity);
@@ -703,6 +1014,9 @@ impl Service {
                 &pulse_status,
                 now,
             )?;
+            // No SQLite writes on Sniper hot path; this is bounded in-memory
+            // accepted-pulse observation only. A failed Core pulse is not counted.
+            self.sniper_tick_audit.observe(pulse_status.telemetry.as_ref().unwrap(),body,now);
             work["pulse_fast_path"] = json!(true);
             work["pulse_to_work_us"] = json!(started.elapsed().as_micros() as u64);
             return Ok(work);
@@ -754,10 +1068,12 @@ impl Service {
                 (input["offset"].as_u64().unwrap_or(0), input["limit"].as_u64().unwrap_or(50))
             } else {(0,50)};
             anyhow::ensure!(offset<=1_000_000 && (1..=100).contains(&limit), "Invalid journal page");
-            let t = status.telemetry.as_ref().filter(|t|t.connected
-                && t.login == self.inner.settings.login
-                && t.server == self.inner.settings.server
-                && t.currency == self.inner.settings.currency);
+            // Historical positions are still readable offline, but a stale
+            // or wrong-mode snapshot must never certify a partial close as
+            // fully settled or be used as a source of floating PnL.
+            let t = status.telemetry.as_ref().filter(|t|
+                status.gateway_fresh && self.account_matches(status)
+                && t.connected && !t.symbol.is_empty());
             let mut key=t.map(|t|serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)))
                 .transpose()?.unwrap_or_default();
             if key.is_empty() && self.inner.settings.login>0 {
@@ -796,10 +1112,38 @@ impl Service {
         }
 
         let value = self.inner.route(method, path, body, db, status, now)?;
+        // Final authorization is the last Core gate before Gateway calls MT5.
+        // Read the committed journal independently here; never trust only a
+        // previous tick's cached snapshot. Existing close/reconciliation intents
+        // must not be denied by the quality circuit.
+        if method=="POST" && path=="/v1/execution/authorize"
+            && value["authorized"]==true {
+            let request:Value=serde_json::from_slice(body)?;
+            let id=request["id"].as_str().context("Authorization id required")?;
+            let (kind,cmd_context):(String,String)=db.query_row(
+                "SELECT kind,context FROM broker_commands WHERE id=?1",
+                [id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+            if kind=="open" && self.is_live_target() {
+                let authorized_quality=status.telemetry.as_ref()
+                    .filter(|t|status.gateway_fresh&&self.account_matches(status)
+                        && crate::broker_quality_circuit::context(t)==cmd_context)
+                    .and_then(|t|crate::broker_quality_circuit::inspect(db,t,now).ok()
+                        .map(|quality|quality.entry_allowed(t,true)))
+                    .unwrap_or(false);
+                if !authorized_quality {
+                    return Ok(json!({"authorized":false,"reason":"core_broker_quality_entry_circuit"}));
+                }
+            }
+        }
         if method == "POST" && path == "/v1/execution/result" {
-            if let Some(t) = status.telemetry.as_ref().filter(|t| status.gateway_fresh && t.connected) {
-                // Register the acknowledged fill now, before the next quote pulse.
+            if let Some(t) = status.telemetry.as_ref().filter(|t| status.gateway_fresh && self.account_matches(status)) {
+                // Result was persisted before refreshing the cache. Next Sniper
+                // Tick cannot race back into a just-breached quality circuit.
+                self.refresh_quality_circuit(db,t,now);
+                // Register acknowledged fill before the next quote pulse.
                 self.student.observe(db, t, now)?;
+            } else {
+                self.quality_circuit=crate::broker_quality_circuit::Snapshot::default();
             }
         }
         if method == "GET" && path == "/v1/execution" {
@@ -863,6 +1207,26 @@ mod tests {
             |row| row.get(0),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn corrupt_policy_cannot_open_trades_even_if_market_assessment_would_pass() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        assert!(service.supervisor_policy_valid);
+        crate::enterprise_supervisor::load(&db).unwrap();
+        db.execute("INSERT INTO enterprise_supervisor_config(id,settings) VALUES(1,?1)",
+            [r#"{"enforce_entry_gate":"invalid"}"#]).unwrap();
+        service.refresh_supervisor(&db);
+        assert!(!service.supervisor_policy_valid);
+        assert!(service.supervisor.enforce_entry_gate);
+        assert!(!service.supervisor_permits_entry(true), "Corrupt policy must never permit entries");
+        assert!(!service.supervisor_permits_entry(false));
+        db.execute("UPDATE enterprise_supervisor_config SET settings=?1 WHERE id=1",
+            [r#"{"enforce_entry_gate":false}"#]).unwrap();
+        service.refresh_supervisor(&db);
+        assert!(service.supervisor_policy_valid);
+        assert!(service.supervisor_permits_entry(true));
     }
 
     #[test]
@@ -1047,6 +1411,60 @@ mod tests {
     }
 
     #[test]
+    fn stale_or_wrong_mode_mt5_snapshot_does_not_override_booked_history() {
+        let db=setup();
+        let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();
+        t.demo=true;
+        t.account_trade_mode=Some(0);
+        service.inner.settings.login=t.login;
+        service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();
+        service.inner.settings.target="demo".into();
+        let key=context(&t);
+        for (ticket,entry) in [(50,0),(51,1)] {
+            let deal=json!({"ticket":ticket,"position_id":99,"symbol":"XAUUSD",
+                "type":0,"entry":entry,"volume":0.10,
+                "time_msc":ticket*1000,"price":2000.,
+                "profit":0.,"commission":0.,"swap":0.,"fee":0.});
+            db.execute("INSERT INTO broker_deals VALUES(?1,?2,99,'system',?3)",
+                params![key,ticket,deal.to_string()]).unwrap();
+        }
+        // This terminal image claims a live position even though its last
+        // observation is stale. Never let it relabel an independently
+        // covered closed MT5 deal history as OPEN.
+        t.positions.push(Position{
+            identifier:99,ticket:99,magic:410_600,symbol:"XAUUSD".into(),
+            side:"BUY".into(),volume:0.10,profit:500.,
+            ..Default::default()
+        });
+        let stale=Status{telemetry:Some(t.clone()),gateway_fresh:false,
+            ..Default::default()};
+        let saved=service.route("GET","/v1/execution/trades",b"",
+            &db,&stale,600).unwrap();
+        assert_eq!(saved["rows"][0]["status"],"CLOSED");
+        assert_eq!(saved["rows"][0]["floating_broker_pnl"],Value::Null);
+        assert_eq!(saved["rows"][0]["broker_net_booked"],0.0);
+        let mut wrong=t.clone();
+        wrong.account_trade_mode=Some(2);
+        wrong.demo=false;
+        let mode_switched=Status{telemetry:Some(wrong),gateway_fresh:true,
+            ..Default::default()};
+        let view=service.route("GET","/v1/execution/trades",b"",
+            &db,&mode_switched,610).unwrap();
+        assert_eq!(view["rows"][0]["status"],"CLOSED");
+        assert_eq!(view["rows"][0]["floating_broker_pnl"],Value::Null);
+        // A *fresh* matching account may legitimately supersede stale
+        // book history for current open-position status.
+        let current=Status{telemetry:Some(t),gateway_fresh:true,
+            ..Default::default()};
+        let latest=service.route("GET","/v1/execution/trades",b"",
+            &db,&current,620).unwrap();
+        assert_eq!(latest["rows"][0]["status"],"PARTIAL / OPEN");
+        assert_eq!(latest["rows"][0]["floating_broker_pnl"],500.0);
+    }
+
+    #[test]
     fn position_count_includes_unresolved_open_intents() {
         let db = setup();
         let t = telemetry();
@@ -1064,4 +1482,87 @@ mod tests {
         assert_eq!(state(&db, "a"), "unknown");
         assert_eq!(state(&db, "b"), "cancelled");
     }
+    #[test]
+    fn p0c_final_authorization_blocks_unresolved_and_three_rejects_but_allows_close() {
+        let db=setup();
+        let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();
+        t.demo=false;t.account_trade_mode=Some(2);
+        t.trade_allowed=true;t.trade_expert=true;
+        // Synthetic 1970 timestamp requires a matching, complete daily PnL
+        // snapshot; otherwise the independent REAL daily breaker correctly
+        // denies authorization before the new quality circuit is exercised.
+        t.report_day="1970-01-01".into();
+        t.today_net=Some(0.);
+        service.inner.settings.target="live".into();
+        service.inner.settings.login=t.login;
+        service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();
+        service.inner.set_mode(braintrade_domain::trading::TradingMode::Sniper);
+        let status=Status{requested_run:true,gateway_fresh:true,
+            telemetry:Some(t.clone()),..Default::default()};
+        let key=context(&t);
+        let revision=service.inner.settings.revision;
+        let insert=|id:&str,kind:&str,state:&str,created:u64,result:&str|{
+            let payload=json!({"id":id,"kind":kind,"brain":"system",
+                "trading_mode":"sniper","context":key,
+                "revision":revision,
+                "created_ms":created,"expires_ms":1_000_000_u64});
+            db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload,result)
+                VALUES(?1,?2,'system',?3,?4,?5,?6,?7)",
+                params![id,key,kind,created,state,payload.to_string(),result]).unwrap();
+        };
+        insert("p0c-entry","open","dispatched",100,"{}");
+        let authorize=|svc:&mut Service,id:&str,now:u64|->Value{
+            svc.route("POST","/v1/execution/authorize",
+                json!({"id":id}).to_string().as_bytes(),&db,&status,now).unwrap()
+        };
+        assert_eq!(authorize(&mut service,"p0c-entry",200)["authorized"],true);
+        insert("p0c-unknown","open","unknown",101,r#"{"reason":"send interrupted"}"#);
+        assert_eq!(authorize(&mut service,"p0c-entry",202)["authorized"],false);
+        // Quality circuit must never gate owned-position close/reconciliation.
+        insert("p0c-close","close","dispatched",102,"{}");
+        assert_eq!(authorize(&mut service,"p0c-close",202)["authorized"],true);
+        db.execute("UPDATE broker_commands SET state='observed' WHERE id='p0c-unknown'",[]).unwrap();
+        assert_eq!(authorize(&mut service,"p0c-entry",203)["authorized"],true);
+        for n in 0..3 {
+            insert(&format!("p0c-reject-{n}"),"open","rejected",300+n,
+                r#"{"retcode":10019,"reason":"broker margin"}"#);
+        }
+        assert_eq!(authorize(&mut service,"p0c-entry",400)["authorized"],false);
+        assert_eq!(authorize(&mut service,"p0c-close",401)["authorized"],true);
+        let quality=service.route("GET","/v1/execution/quality",&[],&db,&status,402).unwrap();
+        assert_eq!(quality["entry_circuit"]["state"],"blocked");
+        assert_eq!(quality["entry_circuit"]["recent_broker_rejections"],3);
+        assert_eq!(quality["entry_circuit"]["never_blocks_close_or_reconcile"],true);
+        // Failed final authorization never changes durable intent to another state.
+        assert_eq!(state(&db,"p0c-entry"),"dispatched");
+    }
+
+    #[test]
+    fn p0c_fast_cache_is_account_bound_and_missing_data_never_authorizes_real() {
+        let db=setup();
+        let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();
+        t.demo=false;t.account_trade_mode=Some(2);
+        service.inner.settings.target="live".into();
+        service.inner.settings.login=t.login;
+        service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();
+        assert!(!service.quality_circuit.entry_allowed(&t,true));
+        service.refresh_quality_circuit(&db,&t,100);
+        assert!(service.quality_circuit.entry_allowed(&t,true));
+        let mut next=t.clone();next.symbol="EURUSD".into();
+        assert!(!service.quality_circuit.entry_allowed(&next,true));
+        queue(&db,&t,"p0c-pending","system",0.01,1.,101);
+        db.execute("UPDATE broker_commands SET state='unknown' WHERE id='p0c-pending'",[]).unwrap();
+        service.refresh_quality_circuit(&db,&t,102);
+        assert!(!service.quality_circuit.entry_allowed(&t,true));
+        let prior=service.quality_circuit.clone();
+        assert_eq!(prior.reason,"unresolved_broker_submission");
+        assert!(!prior.entry_allowed(&t,true));
+        // Demo is optional/advisory but does not bypass mandatory Gateway/broker rules.
+        assert!(prior.entry_allowed(&t,false));
+    }
+
 }

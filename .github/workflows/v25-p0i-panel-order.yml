@@ -1,0 +1,28 @@
+name: V25 P0-I Async Dashboard Replay Regression
+on:
+  push:
+    branches:
+      - feature/v25-enterprise-validation-20261024
+    paths:
+      - 'ci/v25_p0i_panel_guard.ts'
+      - 'ci/v25_p0i_panel_guard.test.mjs'
+      - 'ci/v25_p0i_panel_order_overlay.py'
+      - '.github/workflows/v25-p0i-panel-order.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  async-read-race:
+    name: UI request ordering (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Deterministically replay stale IPC responses and account switches
+        run: node --experimental-strip-types --test ci/v25_p0i_panel_guard.test.mjs

@@ -16,6 +16,10 @@ import json
 import math
 import sqlite3
 import time
+from institutional_controls import (
+    calendar_entry_blocked, initialise_quality_table, quality_entry_blocked,
+    record_execution_quality,
+)
 
 MAGIC_MIN, MAGIC_MAX = 410600, 410617
 # Reserved 410616 belongs to the unmerged Adaptive Learner, not this build.
@@ -232,7 +236,7 @@ class BrokerExecutor:
         self.db.execute('CREATE TABLE IF NOT EXISTS sends(id TEXT PRIMARY KEY, request TEXT NOT NULL, result TEXT, created_ms INTEGER NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS micro_real_recovered(account_key TEXT PRIMARY KEY, reached_ms INTEGER NOT NULL, reached_equity REAL NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS daily_loss_locks(account_key TEXT NOT NULL, report_day TEXT NOT NULL, reached_ms INTEGER NOT NULL, loss_amount REAL NOT NULL, PRIMARY KEY(account_key,report_day))')
-        self.db.commit()
+        initialise_quality_table(self.db)
         self.next_history = 0.0
 
     def _daily_loss_blocked(self, mt5, cmd, account):
@@ -273,10 +277,23 @@ class BrokerExecutor:
         for d in deals:
             if d.type not in trading:
                 continue
-            value=sum(float(getattr(d,k,0.0)) for k in ('profit','commission','swap','fee'))
-            if not math.isfinite(value):
+            # No guessed zero commission / swap / fee in REAL risk decisions.
+            # Unknown cost data blocks NEW entries but never position closure.
+            components=[]
+            for k in ('profit','commission','swap','fee'):
+                raw=getattr(d,k,None)
+                if isinstance(raw,bool):
+                    raise ValueError('Daily breaker: invalid broker deal costs')
+                try:
+                    component=float(raw)
+                except (ValueError,TypeError,OverflowError) as exc:
+                    raise ValueError('Daily breaker: invalid broker deal costs') from exc
+                if not math.isfinite(component):
+                    raise ValueError('Daily breaker: invalid broker deal costs')
+                components.append(component)
+            net+=math.fsum(components)
+            if not math.isfinite(net):
                 raise ValueError('Daily breaker: invalid broker deal costs')
-            net+=value
         baseline=balance-net
         if not math.isfinite(baseline) or baseline<=0:
             raise ValueError('Daily breaker: invalid start-of-day trading balance estimate')
@@ -317,15 +334,40 @@ class BrokerExecutor:
         self.db.close()
 
     def _save(self, cmd, result):
+        # Persist broker result FIRST. Quality telemetry is independent and
+        # must never swallow/transform a real send acknowledgment.
         self.db.execute('UPDATE sends SET result=? WHERE id=?', (json.dumps(result, allow_nan=False), cmd['id']))
         self.db.commit()
+        try:
+            record_execution_quality(self.db, cmd, result, clock_ms())
+        except (sqlite3.Error, KeyError, TypeError, ValueError):
+            # This is observable by the read-only quality report (missing
+            # sample). It must never make a successful broker send 'unknown'.
+            pass
         return result
+
+    def _institutional_entry_guard(self, cmd):
+        if cmd.get('kind') != 'open':
+            return
+        from pathlib import Path
+        reason = calendar_entry_blocked(Path(self.db.execute('PRAGMA database_list').fetchone()[2]).parent / 'event_calendar.json',
+                                        cmd['symbol'], clock_ms())
+        if reason:
+            raise ValueError(reason)
+        reason = quality_entry_blocked(self.db, cmd, clock_ms())
+        if reason:
+            raise ValueError(reason)
 
     def _reconcile(self, mt5, cmd, previous):
         result = previous or dict(id=cmd['id'], state='unknown', reason='Send was interrupted; no automatic retry')
-        if result['state'] not in ('unknown', 'placed'):
+        if result['state'] not in ('unknown', 'placed', 'partial'):
             return result
-        if account_identity(mt5.account_info()) != expected(cmd):
+        # A journal is scoped to both broker identity and Demo/REAL mode.
+        # A matching login tuple alone must never authorize cross-mode recovery.
+        target_mode = 0 if cmd.get('target') == 'demo' else 2 if cmd.get('target') == 'live' else -1
+        current_account = mt5.account_info()
+        if (account_identity(current_account) != expected(cmd)
+                or getattr(current_account, 'trade_mode', None) != target_mode):
             return result
         start = datetime.fromtimestamp(max(0, cmd['created_ms']-60000)/1000, timezone.utc)
         deals = mt5.history_deals_get(start, datetime.now(timezone.utc))
@@ -349,16 +391,68 @@ class BrokerExecutor:
             return getattr(item, 'comment', '')==tag
         matches = [d for d in deals if matches_identity(d)]
         pending = any(matches_identity(o) for o in orders)
-        if account_identity(mt5.account_info()) != expected(cmd):
+        # A journal is scoped to both broker identity and Demo/REAL mode.
+        # A matching login tuple alone must never authorize cross-mode recovery.
+        target_mode = 0 if cmd.get('target') == 'demo' else 2 if cmd.get('target') == 'live' else -1
+        current_account = mt5.account_info()
+        if (account_identity(current_account) != expected(cmd)
+                or getattr(current_account, 'trade_mode', None) != target_mode):
             return result
         if matches and not pending:
             submitted = result.get('request') or cmd.get('broker_request')
             if not submitted:
                 return dict(result, reason='Fill found but submitted volume unavailable; reconciliation remains pending')
-            volume = sum(float(getattr(d, 'volume', 0)) for d in matches)
-            if not math.isfinite(volume) or volume <= 0:
-                return result
-            state = 'partial' if volume + 1e-8 < submitted['volume'] else 'filled'
+            # MT5 deals represent individual immutable fills. Never invent
+            # filled volume from corrupt history, duplicate deal IDs, or a
+            # volume greater than the durable submitted request.
+            try:
+                tickets = [int(getattr(d, 'ticket', 0)) for d in matches]
+                volumes = [float(getattr(d, 'volume', 0)) for d in matches]
+                submitted_volume = float(submitted['volume'])
+            except (TypeError, ValueError, KeyError, OverflowError):
+                return dict(result, reason='Invalid broker history deal geometry; reconciliation pending')
+            if any(t <= 0 for t in tickets) or len(set(tickets)) != len(tickets):
+                return dict(result, reason='Duplicate or invalid broker deal tickets; reconciliation pending')
+            if not (math.isfinite(submitted_volume) and submitted_volume > 0
+                    and all(math.isfinite(v) and v > 0 for v in volumes)):
+                return dict(result, reason='Invalid broker history deal volumes; reconciliation pending')
+            volume = sum(volumes)
+            if not math.isfinite(volume) or volume > submitted_volume + max(1e-8, submitted_volume * 1e-7):
+                return dict(result, reason='Broker fill volume exceeds submitted volume; reconciliation pending')
+            # A broker deal with the same magic, symbol, comment or order ticket
+            # is not necessarily a fill of THIS market request. A close/reversal
+            # must never make a pending open look filled (or vice versa).
+            # MT5 history deals expose type, entry and position_id; refuse to
+            # infer economic outcomes if any of this evidence is missing.
+            try:
+                requested_type = int(submitted['type'])
+                deal_types = [int(d.type) for d in matches]
+                entries = [int(d.entry) for d in matches]
+                positions = [int(d.position_id) for d in matches]
+            except (KeyError, AttributeError, TypeError, ValueError, OverflowError):
+                return dict(result, reason='Broker deal type/entry/position evidence unavailable; reconciliation pending')
+            buy = getattr(mt5, 'DEAL_TYPE_BUY', 0)
+            sell = getattr(mt5, 'DEAL_TYPE_SELL', 1)
+            open_entry = getattr(mt5, 'DEAL_ENTRY_IN', 0)
+            close_entries = (getattr(mt5, 'DEAL_ENTRY_OUT', 1),
+                             getattr(mt5, 'DEAL_ENTRY_OUT_BY', 3))
+            expected_types = (getattr(mt5, 'ORDER_TYPE_BUY', 0),
+                              getattr(mt5, 'ORDER_TYPE_SELL', 1))
+            if requested_type not in expected_types or any(
+                    typ != (buy if requested_type == expected_types[0] else sell)
+                    for typ in deal_types):
+                return dict(result, reason='Broker deal direction conflicts with submitted order; reconciliation pending')
+            if cmd['kind'] == 'open':
+                valid_entries = (open_entry,)
+            elif cmd['kind'] == 'close':
+                valid_entries = close_entries
+            else:
+                return dict(result, reason='Unknown broker intent kind; reconciliation pending')
+            if any(entry not in valid_entries for entry in entries):
+                return dict(result, reason='Broker deal entry/exit classification conflicts with intent; reconciliation pending')
+            if any(pos <= 0 for pos in positions) or len(set(positions)) != 1:
+                return dict(result, reason='Broker fills have missing or conflicting physical position IDs; reconciliation pending')
+            state = 'partial' if volume + 1e-8 < submitted_volume else 'filled'
             result = dict(result, state=state, reason='Broker history confirms fill; await Core position reconciliation; no resend',
                           request=submitted, deal=int(matches[0].ticket), deals=[int(d.ticket) for d in matches],
                           volume=volume, recovered_from_history=True)
@@ -368,9 +462,7 @@ class BrokerExecutor:
             times = [int(getattr(d, 'time_msc', 0)) for d in matches]
             if all(t > 0 for t in times):
                 result['fill_time_ms'] = min(times)
-            positions = {int(getattr(d, 'position_id', 0)) for d in matches}
-            if len(positions) == 1 and next(iter(positions)) > 0:
-                result['position_id'] = next(iter(positions))
+            result['position_id'] = positions[0]
             # Recovery can restore booked evidence, never the unobserved quote path.
             result['reconciled_ms'] = clock_ms()
             return self._save(cmd, result)
@@ -380,11 +472,31 @@ class BrokerExecutor:
         row = self.db.execute('SELECT request,result FROM sends WHERE id=?', (cmd['id'],)).fetchone()
         if row:
             saved = json.loads(row[0])
-            if any(saved.get(k)!=cmd.get(k) for k in ('login','server','currency','symbol','magic','kind','position')):
+            # Durable intent IDs bind the entire economic decision, not only
+            # the broker account. Never reinterpret a saved order with new lot,
+            # side, expiry, fees, risk permissions or Demo/REAL destination.
+            # Mutable polling state and timing metadata are deliberately omitted.
+            immutable=('login','server','currency','target','symbol','magic',
+                       'kind','position','lots','signal','revision',
+                       'deviation_points','created_ms','expires_ms',
+                       'commission_per_lot','slippage_ticks','risk_percent',
+                       'demo_flexible','micro_demo_risk_opt_in',
+                       'micro_real_temporary','micro_real_cap_percent',
+                       'micro_real_recovery_equity','daily_breaker_enabled',
+                       'daily_breaker_limit_percent','max_quote_age_ms')
+            if any(saved.get(k)!=cmd.get(k) for k in immutable):
                 return dict(id=cmd['id'], state='unknown', reason='Intent identity differs from durable journal')
             return self._reconcile(mt5, saved, json.loads(row[1]) if row[1] else None)
-        if cmd.get('state') in ('unknown', 'placed'):
-            return dict(id=cmd['id'], state='unknown', reason='Missing gateway journal; inspect broker history')
+        # The Core gateway response may still carry 'queued' from the
+        # same poll that durably moves it to 'dispatched'; final Core
+        # authorization independently rejects anything not dispatched.
+        # An old callback/queue item can survive Core or Gateway restart.
+        # With no matching durable send journal, a previously accepted,
+        # filled, partial, observed or terminal command must NEVER be
+        # treated as a fresh order_send opportunity.
+        if cmd.get('state') not in ('queued', 'dispatched'):
+            return dict(id=cmd['id'], state='unknown',
+                        reason='Non-new broker intent without durable Gateway journal; never resend. Reconcile exact MT5 history')
 
         started = time.perf_counter()
         fast_path = is_fast_path(cmd)
@@ -405,6 +517,9 @@ class BrokerExecutor:
             target_mode = 0 if cmd['target']=='demo' else 2 if cmd['target']=='live' else -1
             if account_identity(a)!=expected(cmd) or a.trade_mode!=target_mode:
                 raise ValueError('Bound account or Demo/Live mode changed')
+            # Economic-event and measured-broker-quality gate. Closing an
+            # owned position never waits on these optional external controls.
+            self._institutional_entry_guard(cmd)
             if cmd.get('kind')=='open' and self._daily_loss_blocked(mt5,cmd,a):
                 raise ValueError('Daily breaker: account daily loss limit reached or locked; new entries blocked')
             if (cmd.get('kind')=='open' and cmd.get('micro_real_temporary') is True
@@ -431,7 +546,10 @@ class BrokerExecutor:
             if closing:
                 owned=[p for p in positions if p.ticket==cmd['position'] and p.magic==cmd['magic'] and p.symbol==symbol]
                 if not owned:
-                    return dict(result,state='closed',reason='Owned ticket is already absent; no order sent')
+                    # No close was sent. A flat or foreign-owned position
+                    # is not proof of booked MT5 exit or settled costs.
+                    return dict(result,state='cancelled',
+                                reason='Exact owned MT5 position absent; no close order sent. Verify exit from broker Deal history.')
                 p=owned[0]; lots=float(p.volume); side=-1 if p.type==mt5.POSITION_TYPE_BUY else 1
             else:
                 if any(p.magic==cmd['magic'] for p in positions) or any(o.magic==cmd['magic'] for o in orders):
@@ -546,8 +664,21 @@ class BrokerExecutor:
                 raise ValueError('Account changed or intent expired during validation')
 
             journal_start=time.perf_counter()
-            self.db.execute('INSERT INTO sends(id,request,result,created_ms) VALUES(?,?,NULL,?)',(cmd['id'],json.dumps(dict(cmd,broker_request=request),allow_nan=False),clock_ms()))
-            self.db.commit()
+            try:
+                self.db.execute('INSERT INTO sends(id,request,result,created_ms) VALUES(?,?,NULL,?)',
+                                (cmd['id'],json.dumps(dict(cmd,broker_request=request),allow_nan=False),clock_ms()))
+                self.db.commit()
+            except sqlite3.IntegrityError:
+                # Another gateway worker already committed the same intent.
+                # No second order_send is allowed.
+                self.db.rollback()
+                return self.execute(mt5,cmd,authorize)
+            except sqlite3.OperationalError:
+                # A locked/unwritable journal cannot guarantee idempotency.
+                self.db.rollback()
+                result.update(state='unknown',reason='Durable broker journal unavailable; order was not sent')
+                result['total_ms']=(time.perf_counter()-started)*1000
+                return result
             result['journal_ms']=(time.perf_counter()-journal_start)*1000
             result['request']=request
 
@@ -583,6 +714,13 @@ class BrokerExecutor:
                     reason='Daily breaker reached/locked after validation; new entry not sent')
                 result['total_ms']=(time.perf_counter()-started)*1000
                 return self._save(cmd,result)
+            if not closing:
+                try:
+                    self._institutional_entry_guard(cmd)
+                except ValueError as exc:
+                    result.update(state='cancelled', reason=str(exc)+'; entry not sent')
+                    result['total_ms']=(time.perf_counter()-started)*1000
+                    return self._save(cmd,result)
             if not closing and 'real_margin_check' in result:
                 current_free=float(getattr(final_account,'margin_free',float('nan')))
                 if (not math.isfinite(current_free)
@@ -668,12 +806,40 @@ class BrokerExecutor:
         start=work.get('history_from_ms',0);identity=work.get('account')
         if start and identity and time.monotonic()>=self.next_history:
             self.next_history=time.monotonic()+5
-            wanted=(identity['login'],identity['server'],identity['currency'])
+            # Broker sync is an attribution/learning input. Binding by login
+            # and server alone permits Demo/REAL switch in the middle of a read.
+            # Older Core responses without trade_mode are not safe to sync.
+            wanted=(identity.get('login'),identity.get('server'),identity.get('currency'))
+            mode=identity.get('trade_mode')
             until=min(clock_ms(),start+86_400_000)
-            if account_identity(mt5.account_info())==wanted:
+            def same_broker_mode():
+                account=mt5.account_info()
+                return (account is not None and type(mode) is int and mode in (0,2)
+                        and account_identity(account)==wanted
+                        and getattr(account,'trade_mode',None)==mode)
+            if same_broker_mode():
                 rows=mt5.history_deals_get(datetime.fromtimestamp(start/1000,timezone.utc),datetime.fromtimestamp(until/1000,timezone.utc))
-                if rows is not None and account_identity(mt5.account_info())==wanted:
+                if rows is not None and same_broker_mode():
                     fields=('ticket','position_id','magic','symbol','entry','type','time_msc','volume','price','profit','commission','swap','fee','reason')
-                    deals=[{k:getattr(d,k,0) for k in fields} for d in rows]
-                    api('/v1/execution/sync',dict(identity,deals=deals,until_ms=until))
+                    deals=[]
+                    reliable=True
+                    for d in rows:
+                        row={k:getattr(d,k,None) for k in fields}
+                        if row['type'] in (mt5.DEAL_TYPE_BUY,mt5.DEAL_TYPE_SELL):
+                            # Never synthesize missing fee/swap/commission as 0:
+                            # it can corrupt booked PnL and brain training data.
+                            for key in ('profit','commission','swap','fee'):
+                                value=row[key]
+                                if isinstance(value,bool):
+                                    reliable=False;break
+                                try:
+                                    valid=math.isfinite(float(value))
+                                except (TypeError,ValueError,OverflowError):
+                                    valid=False
+                                if value is None or not valid:
+                                    reliable=False;break
+                        if not reliable:break
+                        deals.append(row)
+                    if reliable and same_broker_mode():
+                        api('/v1/execution/sync',dict(identity,deals=deals,until_ms=until))
         return work.get('poll_ms',250)/1000

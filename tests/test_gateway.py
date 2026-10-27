@@ -28,6 +28,26 @@ class FakeMT5:
     def symbol_info_tick(self,*args):return NS(bid=2000.0,ask=2000.2,time_msc=100)
 
 class Tests(unittest.TestCase):
+    def test_p0d3_account_margin_is_broker_owned_and_zero_is_not_missing(self):
+        mt5=FakeMT5()
+        mt5.account.margin=0.0
+        fresh=gateway.collect(mt5,"XAUUSD")
+        self.assertTrue(fresh["connected"])
+        self.assertEqual(fresh["margin"],0.0)
+        self.assertEqual(fresh["balance"],1000.0)
+        # Even if no symbol is available during a closed market, a valid
+        # broker snapshot must not fabricate or suppress used margin.
+        mt5.symbol_info=lambda symbol:None
+        no_symbol=gateway.collect(mt5,"XAUUSDr")
+        self.assertTrue(no_symbol["connected"])
+        self.assertEqual(no_symbol["margin"],0.0)
+        self.assertIsNone(no_symbol["bid"])
+        for bad in (-1.,float("nan"),float("inf")):
+            mt5.account.margin=bad
+            self.assertIsNone(gateway.collect(mt5,"XAUUSDr")["margin"])
+        del mt5.account.margin
+        self.assertIsNone(gateway.collect(mt5,"XAUUSDr")["margin"])
+
     def history_fixture(self):
         start=int(datetime(2024,10,1,tzinfo=timezone.utc).timestamp())
         job=dict(id='fixture',**{'from':start,'to':start+86400},login=123,server='Test',currency='USD',symbol='X',point=.01)

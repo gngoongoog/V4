@@ -32,6 +32,12 @@ impl SniperStyle {
 #[serde(default, deny_unknown_fields)]
 pub struct TradingConfig {
     pub mode: TradingMode,
+    /// Opt-in priority router. Legacy saved accounts remain manual by default.
+    pub priority_enabled: bool,
+    /// Only Sniper OR the selected fallback is allowed to own new entries.
+    pub sniper_active: bool,
+    /// Secondary entry coordinator when the operator pauses the Sniper.
+    pub fallback_mode: TradingMode,
     pub sniper_brain: SniperBrain,
     pub sniper_style: SniperStyle,
     pub sniper_target_mode: SniperTargetMode,
@@ -55,6 +61,9 @@ impl Default for TradingConfig {
     fn default() -> Self {
         Self {
             mode: TradingMode::Expert,
+            priority_enabled: false,
+            sniper_active: true,
+            fallback_mode: TradingMode::Expert,
             sniper_brain: SniperBrain::Classic,
             sniper_style: SniperStyle::Auto,
             sniper_target_mode: SniperTargetMode::Fixed,
@@ -73,7 +82,21 @@ impl Default for TradingConfig {
     }
 }
 impl TradingConfig {
+    pub fn priority_mode(&self) -> TradingMode {
+        if !self.priority_enabled { self.mode }
+        else if self.sniper_active { TradingMode::Sniper }
+        else { self.fallback_mode }
+    }
+    pub fn select_priority_owner(&mut self) {
+        if self.priority_enabled {self.mode=self.priority_mode();}
+    }
     pub fn validate(&self) -> Result<(), String> {
+        if self.fallback_mode == TradingMode::Sniper {
+            return Err("Secondary mode must be Scalping, Swing or Expert; never Sniper".into());
+        }
+        if self.priority_enabled && self.mode != self.priority_mode() {
+            return Err("Trading priority has conflicting execution owners".into());
+        }
         for (name, v, min, max) in [
             ("Target points", self.sniper_target_points, 1., 100_000.),
             ("Stop points", self.sniper_stop_points, 1., 100_000.),
@@ -152,8 +175,9 @@ pub fn costs(t: &Telemetry, c: &Config, lots: f64, now: u64) -> Result<CostPrevi
         return Err("Lots must be positive and at most 100".into());
     }
     if !t.connected
+        || (t.source_quote_time_ms.is_some() && t.broker_quote_time_ms().is_none())
         || t.tick_age_ms.is_none_or(|v| v > 3000)
-        || t.quote_time_ms
+        || t.broker_quote_time_ms()
             .is_some_and(|v| v > now + 2000 || now.saturating_sub(v) > 3000)
     {
         return Err("Current MT5 quote required".into());
@@ -264,11 +288,20 @@ pub fn direction(b: &[Candle]) -> i8 {
         0
     }
 }
+/// This waiver applies ONLY to an unrelated M15 history diagnostic.
+pub fn missing_unrequired_m15_only(error: &str) -> bool {
+    let mut seen = false;
+    for warning in error.split(';').map(str::trim).filter(|v| !v.is_empty()) {
+        if !warning.starts_with("M15: ") { return false; }
+        seen = true;
+    }
+    seen
+}
 /// Validate the two frames actually used by Scalping/Sniper when full research
 /// was unavailable solely because its separate M15 requirement did not mature.
 /// Do not waive current snapshots, completed bars or gaps to force a trade.
 fn short_mode_frames_current(m: &crate::MarketData, now: u64) -> bool {
-    if !m.error.is_empty() || m.captured_ms > now
+    if (!m.error.is_empty() && !missing_unrequired_m15_only(&m.error)) || m.captured_ms > now
         || now.saturating_sub(m.captured_ms) > 15_000 { return false; }
     for (series, seconds) in [(&m.m1, 60u64), (&m.m5, 300u64)] {
         if series.len() < 100 || series.len() > 300
@@ -358,7 +391,7 @@ pub fn select(
     }
     if c.trading.mode == TradingMode::Sniper
         && (t.tick_age_ms.is_none_or(|v| v > 1000)
-            || t.quote_time_ms
+            || t.broker_quote_time_ms()
                 .is_none_or(|v| v > now + 2000 || now.saturating_sub(v) > 1000))
     {
         a.gates
@@ -368,6 +401,37 @@ pub fn select(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn priority_router_maintains_one_execution_owner_and_preserves_legacy() {
+        let legacy: TradingConfig=serde_json::from_str(r#"{"mode":"expert"}"#).unwrap();
+        assert!(!legacy.priority_enabled);
+        assert_eq!(legacy.priority_mode(),TradingMode::Expert);
+        let mut cfg=TradingConfig::default();
+        cfg.priority_enabled=true;
+        cfg.fallback_mode=TradingMode::Swing;
+        cfg.select_priority_owner();
+        assert_eq!(cfg.mode,TradingMode::Sniper);
+        cfg.validate().unwrap();
+        cfg.sniper_active=false;
+        assert!(cfg.validate().is_err(),"stale Sniper owner must not be accepted");
+        cfg.select_priority_owner();
+        assert_eq!(cfg.mode,TradingMode::Swing);
+        cfg.validate().unwrap();
+        for mode in [TradingMode::Expert,TradingMode::Scalping,TradingMode::Swing] {
+            cfg.fallback_mode=mode; cfg.select_priority_owner();
+            assert_eq!(cfg.mode,mode); cfg.validate().unwrap();
+        }
+        cfg.fallback_mode=TradingMode::Sniper;
+        assert!(cfg.validate().is_err(),"fallback cannot become the primary owner");
+        cfg.fallback_mode=TradingMode::Expert;
+        cfg.sniper_active=true;
+        cfg.select_priority_owner();
+        assert_eq!(cfg.mode,TradingMode::Sniper);
+        let reloaded:TradingConfig=serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        reloaded.validate().unwrap();
+        assert_eq!(reloaded.mode,TradingMode::Sniper);
+    }
+
     use super::*;
     #[test]
     fn sniper_reacts_to_live_quote_without_a_new_bar() {
@@ -407,6 +471,27 @@ mod tests {
         let mut expert=Config::default();expert.trading.mode=TradingMode::Expert;
         assert!(!select(base,&t,&expert,&BTreeMap::new(),now).current,
                 "Expert research still requires its original M15 evidence");
+    }
+    #[test]
+    fn missing_m15_error_is_not_an_unrelated_m1_m5_veto() {
+        let now=1_800_000_000_000u64;
+        let mut m=crate::MarketData{captured_ms:now,m1:complete_bars(now,60),
+            m5:complete_bars(now,300),m15:Vec::new(),
+            error:"M15: waiting for 100 closed candles".into()};
+        let mut t=Telemetry{connected:true,symbol:"XAUUSD".into(),
+            bid:Some(124.),ask:Some(124.01),tick_age_ms:Some(0),
+            quote_time_ms:Some(now),market:Some(m.clone()),..Default::default()};
+        for mode in [TradingMode::Sniper,TradingMode::Scalping] {
+            let mut c=Config::default();c.trading.mode=mode;
+            assert!(select(Analysis::default(),&t,&c,&BTreeMap::new(),now).current);
+        }
+        for warning in ["", "M1: old", "M5: old", "M15: old; M1: old", "bad history"] {
+            assert!(!missing_unrequired_m15_only(warning));
+        }
+        m.error="M15: missing; M5: stale".into();
+        t.market=Some(m);
+        let mut c=Config::default();c.trading.mode=TradingMode::Scalping;
+        assert!(!select(Analysis::default(),&t,&c,&BTreeMap::new(),now).current);
     }
     #[test]
     fn short_mode_m1_m5_fallback_never_accepts_stale_incomplete_or_gapped_bars() {

@@ -1,0 +1,73 @@
+name: V25 G7 Prospective Audit
+on:
+  pull_request:
+    paths:
+      - 'scripts/g7_prospective_audit.py'
+      - 'scripts/g7_core_source_audit.py'
+      - 'scripts/g7_demo_broker_lineage.py'
+      - 'scripts/g7_full_intent_census.py'
+      - 'scripts/g7_cohort_overlap_gate.py'
+      - 'scripts/g7_holdout_report.py'
+      - 'tests/test_g7_holdout_report.py'
+      - 'tests/test_g7_cohort_overlap_gate.py'
+      - 'tests/test_g7_full_intent_census.py'
+      - 'tests/test_g7_demo_broker_lineage.py'
+      - 'tests/test_g7_core_source_audit.py'
+      - 'crates/runtime/src/g7_capture.rs'
+      - 'crates/runtime/src/g7_sealed_candidate.rs'
+      - 'scripts/g7f_sealed_candidate_audit.py'
+      - 'scripts/g7g_restart_continuity.py'
+      - 'scripts/g7_demo_acceptance_packet.py'
+      - 'tests/test_g7_demo_acceptance_packet.py'
+      - 'tests/test_g7g_restart_continuity.py'
+      - 'tests/test_g7f_sealed_candidate_audit.py'
+      - 'scripts/g7_holdout_report.py'
+      - 'crates/runtime/src/execution.rs'
+      - 'crates/runtime/src/frozen_coordinator.rs'
+      - 'crates/runtime/src/lib.rs'
+      - 'tests/test_g7_prospective_audit.py'
+      - '.github/workflows/v25-g7-prospective-audit.yml'
+  workflow_dispatch:
+jobs:
+  offline-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Run adversarial offline audit tests
+        run: python -m unittest discover -s tests -p 'test_g7_prospective_audit.py' -v
+      - name: Run Core SQLite source audit regression tests
+        run: python -m unittest discover -s tests -p 'test_g7_core_source_audit.py' -v
+      - name: Run G7-B real-execution lineage adversarial tests
+        run: python -m unittest discover -s tests -p 'test_g7_demo_broker_lineage.py' -v
+      - name: Run G7-C whole-population intent census tests
+        run: python -m unittest discover -s tests -p 'test_g7_full_intent_census.py' -v
+      - name: Run G7-D study overlap and attribution integrity tests
+        run: python -m unittest discover -s tests -p 'test_g7_cohort_overlap_gate.py' -v
+      - name: Run G7-E preregistered holdout and uncertainty tests
+        run: python -m unittest discover -s tests -p 'test_g7_holdout_report.py' -v
+      - name: Run G7-F sealed Candidate provenance integrity
+        run: python -m unittest discover -s tests -p 'test_g7f_sealed_candidate_audit.py' -v
+      - name: Test G7-G Core SQLite restart and immutability continuity
+        run: python -m unittest discover -s tests -p 'test_g7g_restart_continuity.py' -v
+      - name: Test G7-H end-to-end Core Demo acceptance and rejection
+        run: python -m unittest discover -s tests -p 'test_g7_demo_acceptance_packet.py' -v
+      - name: Compile offline auditors
+        run: python -m py_compile scripts/g7_prospective_audit.py scripts/g7_core_source_audit.py scripts/g7_demo_broker_lineage.py scripts/g7_full_intent_census.py scripts/g7_cohort_overlap_gate.py scripts/g7_holdout_report.py scripts/g7f_sealed_candidate_audit.py scripts/g7g_restart_continuity.py scripts/g7_demo_acceptance_packet.py
+  rust-source:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test G7 runtime with locked dependencies
+        run: cargo test -p braintrade-runtime --lib g7_capture --locked
+      - name: Test frozen coordinator integration
+        run: cargo test -p braintrade-runtime --lib frozen_coordinator --locked
+      - name: Test G7-F sealed Candidate isolation in real Rust Core
+        run: cargo test -p braintrade-runtime --lib g7_sealed_candidate --locked

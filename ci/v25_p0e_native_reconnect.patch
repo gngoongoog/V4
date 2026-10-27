@@ -1,0 +1,167 @@
+--- a/gateway/sniper_native.py
++++ b/gateway/sniper_native.py
+@@ -124,7 +124,19 @@
+         self.connected = False
+         self.dropped = 0
+         self.last_received_ms = 0
++        self.last_login: int | None = None
++        self.last_symbol: str | None = None
+ 
++    def reset(self) -> None:
++        """Discard quote evidence across MT5 disconnects and account switches."""
++        with self._lock:
++            self._items.clear()
++            self.connected = False
++            self.last_received_ms = 0
++            self.last_login = None
++            self.last_symbol = None
++        self._wake.set()
++
+     def set_connected(self, value: bool) -> None:
+         with self._lock:
+             self.connected = bool(value)
+@@ -137,6 +149,8 @@
+                 self.dropped += 1
+             self._items.append(packet)
+             self.last_received_ms = int(packet.get("received_ms", clock_ms()))
++            self.last_login = packet.get("login")
++            self.last_symbol = packet.get("symbol")
+         self._wake.set()
+ 
+     def drain(self, login: int, symbol: str, maximum: int = 256) -> list[dict]:
+@@ -151,10 +165,14 @@
+                 self._wake.clear()
+         return selected
+ 
+-    def recent(self, now_ms: int | None = None, maximum_age_ms: int = 500) -> bool:
++    def recent(self, now_ms: int | None = None, maximum_age_ms: int = 500,
++               *, login: int | None = None, symbol: str | None = None) -> bool:
+         now_ms = clock_ms() if now_ms is None else int(now_ms)
+         with self._lock:
+-            return self.connected and self.last_received_ms > 0 and 0 <= now_ms - self.last_received_ms <= maximum_age_ms
++            return (self.connected and self.last_received_ms > 0
++                    and (login is None or self.last_login == login)
++                    and (symbol is None or self.last_symbol == symbol)
++                    and 0 <= now_ms - self.last_received_ms <= maximum_age_ms)
+ 
+     def wait(self, timeout: float) -> None:
+         self._wake.wait(max(0.0, float(timeout)))
+@@ -307,10 +325,11 @@
+         self.token_path: Path | None = None
+         self.data_path: Path | None = None
+         self.server: _WindowsPipeServer | None = None
++        self.blocked = False  # A worker that did not stop may still carry old session ticks.
+ 
+     @property
+     def available(self) -> bool:
+-        return os.name == "nt" and self.server is not None and self.server.running
++        return os.name == "nt" and not self.blocked and self.server is not None and self.server.running
+ 
+     @property
+     def connected(self) -> bool:
+@@ -322,7 +341,7 @@
+         data_path = Path(str(getattr(terminal_info, "data_path", "") or ""))
+         if not str(data_path) or str(data_path) == ".":
+             return False
+-        if self.server is not None and self.data_path == data_path and self.server.running:
++        if self.server is not None and self.data_path == data_path and self.server.running and not self.blocked:
+             return True
+         if not self.close():
+             return False
+@@ -334,10 +353,11 @@
+         return self.server.running
+ 
+     def drain(self, login: int, symbol: str, maximum: int = 256) -> list[dict]:
+-        return self.mailbox.drain(int(login), symbol, maximum)
++        return [] if self.blocked else self.mailbox.drain(int(login), symbol, maximum)
+ 
+-    def recent(self, now_ms: int | None = None, maximum_age_ms: int = 500) -> bool:
+-        return self.mailbox.recent(now_ms, maximum_age_ms)
++    def recent(self, now_ms: int | None = None, maximum_age_ms: int = 500,
++               *, login: int | None = None, symbol: str | None = None) -> bool:
++        return not self.blocked and self.mailbox.recent(now_ms, maximum_age_ms, login=login, symbol=symbol)
+ 
+     def wait(self, timeout: float) -> None:
+         self.mailbox.wait(timeout)
+@@ -348,7 +368,13 @@
+         if server is not None:
+             stopped = server.stop()
+         if not stopped:
++            # Keep old server/token attached so a new pipe cannot acquire the
++            # same name, but never consider its quotes evidence for new decisions.
++            self.blocked = True
++            self.mailbox.reset()
+             return False
++        self.blocked = False
++        self.mailbox.reset()
+         self.server = None
+         self.token_path = None
+         self.data_path = None
+--- a/gateway/mt5_gateway.py
++++ b/gateway/mt5_gateway.py
+@@ -183,7 +183,7 @@
+         mt5.symbol_select(symbol, True)
+         info = mt5.symbol_info(symbol)
+     tick = mt5.symbol_info_tick(symbol) if info is not None else None
+-    key=(account.login,account.server,symbol)
++    key=(account.login,account.server,symbol,account.currency,account.trade_mode)
+     market=market_cache.read(mt5,key,now) if market_cache is not None and info is not None else None
+     dom_available,dom=dom_cache.read(mt5,key) if dom_cache is not None and info is not None else (False,[])
+     current = mt5.account_info()
+@@ -279,8 +279,16 @@
+     if source_ms is None:
+         return current, False
+     current['source_quote_time_ms']=int(source_ms)
+-    if not previous or not previous.get('connected'):
++    account_fields=('login','server','currency','account_trade_mode','symbol')
++    account_changed=(previous and previous.get('connected') and
++        any(previous.get(k) != current.get(k) for k in account_fields
++            if k in previous and k in current))
++    if not previous or not previous.get('connected') or account_changed:
++        # Synthetic event IDs and monotonic quote clocks belong to one broker
++        # account+symbol. A mode/login switch must not reuse the old epoch.
+         current['quote_time_ms']=int(source_ms)
++        if account_changed:
++            current['native_event_id']=None
+         return current, True
+     changed=quote_signature(previous)!=quote_signature(current)
+     previous_clock=int(previous.get('quote_time_ms') or 0)
+@@ -514,12 +522,21 @@
+                         full_due=latest_snapshot is None or mono >= next_full_snapshot
+                         if full_due:
+                             fresh_snapshot=collect(mt5,symbol,market_cache=market_cache,dom_cache=dom_cache)
++                            if (fresh_snapshot.get('connected') and latest_snapshot and
++                                    latest_snapshot.get('connected') and
++                                    any(latest_snapshot.get(k)!=fresh_snapshot.get(k)
++                                        for k in ('login','server','currency','account_trade_mode','symbol'))):
++                                # MT5 can switch accounts inside the same data directory.
++                                # Revoke the prior EA token and reject buffered old ticks.
++                                native.close()
++                                native.bind_terminal(mt5.terminal_info())
+                             fresh_snapshot,_=advance_quote_clock(latest_snapshot,fresh_snapshot)
+                             latest_snapshot=fresh_snapshot
+                             next_full_snapshot=mono+full_interval
+                             publish(latest_snapshot)
+                             core_failures=0
+-                        elif sniper and latest_snapshot.get('connected') and not native.recent(maximum_age_ms=NATIVE_RECENT_MS):
++                        elif sniper and latest_snapshot.get('connected') and not native.recent(login=int(latest_snapshot.get('login') or 0),symbol=symbol,
++                                maximum_age_ms=NATIVE_RECENT_MS):
+                             # Native EA is optional. If it is absent/stale the exact
+                             # v0.7 5 ms polling source remains active, but quote handling
+                             # now uses the same execution-only pulse as the native source.
+@@ -537,6 +554,7 @@
+                                     except (OSError,ValueError):
+                                         core_failures+=1
+                         if initialized and latest_snapshot and not latest_snapshot.get('connected'):
++                            native.close()
+                             dom_cache.release(mt5);mt5.shutdown();initialized=False
+                     elif mono >= next_full_snapshot:
+                         latest_snapshot=empty_snapshot("MT5 connection failed. Set terminal64.exe path and sign in inside MT5.")
+@@ -544,6 +562,7 @@
+                         publish(latest_snapshot)
+                 except Exception:
+                     latest_snapshot=empty_snapshot("MT5 read failed; retrying connection.")
++                    native.close()
+                     dom_cache.release(mt5)
+                     try:
+                         mt5.shutdown()

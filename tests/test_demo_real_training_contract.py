@@ -54,12 +54,16 @@ class DemoRealTrainingContractTests(unittest.TestCase):
         compact = "".join(source.split())
         self.assertIn("coordinator_broker_samples", source)
         self.assertIn('"mt5_demo_broker"', source)
-        # A booked Demo outcome is usable only after every financial field
-        # is explicitly present and finite; a missing fee is NOT zero.
-        self.assertIn("fn audited_demo_deal(d: &Value)", source)
+        # Coordinator delegates exact broker-cost attestation to the same
+        # journal validator used by the operator's true MT5 trade history.
+        # Literal inline field sums allowed missing fees to turn into $0.
+        receipts = self.text("crates/runtime/src/trade_journal.rs")
+        self.assertIn('crate::trade_journal::booked_costs(deals.iter())', source)
+        self.assertIn('crate::trade_journal::fully_closed_by_deals(deals.iter())', source)
         for field in ('"profit"', '"commission"', '"swap"', '"fee"'):
-            self.assertIn(f'amount({field})?', source)
-        self.assertIn("let Some((p,c,s,f,volume,stamp,entry))=audited_demo_deal(&d)", source)
+            self.assertIn(field, receipts)
+        self.assertIn('d[*name].as_f64().filter(|n| n.is_finite())?', receipts)
+        self.assertIn("if closed_ms==0", source)
         self.assertNotIn('d["commission"].as_f64().unwrap_or(0.)', source)
         self.assertNotIn('d["fee"].as_f64().unwrap_or(0.)', source)
         self.assertIn("!t.demo||t.account_trade_mode!=Some(0)", compact)

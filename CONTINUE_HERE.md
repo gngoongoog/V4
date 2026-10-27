@@ -1,4 +1,33 @@
-# Current continuation — 2026-10-22, Stage 3F-U (v0.7.4)
+# Current V25 RC2 continuation — 2026-10-26 (0.25.1)
+
+Continue from `feature/v25-rc2-build-identity-g7-ui-20261026`.
+Baseline Portable RC: `cbbd188620864fbcd86da5687167411c013dbe54` (PR #200), including G7-H.
+Do not resume older P1/G3 branches. RC2 unifies application versions, refuses a
+Core with a different source fingerprint, preserves compatible 0.7.4 backups,
+exposes research-only G7 sealing and scopes the candidate to the current study.
+
+Require exact-source Windows/Linux and Portable checks. Native Windows GUI and
+MT5 Demo/EA acceptance are separate gates. No REAL approval, profitability,
+measured broker latency or independent OOS claim. Preserve V24, main and user data.
+
+Everything below is historical context, not the current continuation instruction.
+
+# Current V25 continuation — 2026-10-24, P1-K1
+
+For Enterprise V25 continue from `feature/v25-enterprise-validation-20261024`,
+not the historical main checkpoints below. P1-J base is
+`c8dc4d1fe26779d7c73aafc8a4e0474952233cc4` with successful Windows/Linux build
+`40099354764`. P1-K1 fixes broker-time versus logical-tick ordering and source
+rollback; see `docs/v25/P1K1_SNIPER_BROKER_CLOCK_AR.md` for defects, tests, and gates.
+Require exact-head Windows/Linux success for each new package. P1-K2 remains
+the independent Sniper tick-coverage/frozen-policy study; do not rebrand the
+existing M1 or sampled Paper study as tick-complete forward performance.
+Windows interactive GUI, MetaEditor and actual MT5 Demo acceptance are still
+NOT TESTED. Preserve V24, main, all broker journals, and user data; no REAL trades.
+
+The continuation instructions below describe historical releases only.
+
+# Historical continuation — 2026-10-22, Stage 3F-U (v0.7.4)
 
 Continue from latest `main`, preserving all newer changes. PR #109 (3F-T closed Demo Sniper policy quality) merged as `392a8143ae9cc2b58f52784db9f66f2cc39bfe9b` after exact-head Research `39779107057` and Windows/Linux `39779107116` succeeded on `ae7eb22ccb91edb7fd73f765e8a191fe4b5f6896`.
 

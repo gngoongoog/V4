@@ -9,7 +9,7 @@ use braintrade_domain::{
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -37,6 +37,9 @@ impl Default for Settings {
 }
 pub struct Service {
     pub sniper: braintrade_domain::sniper::Engine,
+    /// Raw learner signal BEFORE coordinator participation/position/risk gates.
+    /// Observation-only, for the matched future-Tick frozen policy study.
+    pub last_sniper_raw: Option<Signal>,
     pub settings: Settings,
     pub brains: Vec<BrainConfig>,
     pub weights:BTreeMap<String,braintrade_domain::execution::LearnedWeight>,
@@ -61,6 +64,16 @@ fn micro_account_key(t: &Telemetry) -> String {
 fn daily_account_key(t: &Telemetry) -> String {
     serde_json::to_string(&(&t.server, t.login, &t.currency, t.account_trade_mode)).unwrap()
 }
+/// Durable, account/mode/symbol-scoped high-water mark. The DB row is only
+/// advanced inside the same transaction that writes verified broker Deal
+/// receipts, so a crash or a rejected receipt cannot claim unrecorded history.
+fn broker_sync_watermark(db: &Connection, context: &str, target: &str) -> Result<(u64,u64)> {
+    Ok(db.query_row(
+        "SELECT until_ms,synced_ms FROM broker_history_sync WHERE context=?1 AND target=?2",
+        params![context,target],|row|Ok((row.get(0)?,row.get(1)?))
+    ).optional()?.unwrap_or((0,0)))
+}
+
 fn json_rows(db: &Connection, sql: &str, key: &str) -> Result<Vec<Value>> {
     let mut st = db.prepare(sql)?;
     let rows = st
@@ -68,6 +81,136 @@ fn json_rows(db: &Connection, sql: &str, key: &str) -> Result<Vec<Value>> {
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.iter().map(|r| Ok(serde_json::from_str(r)?)).collect()
 }
+/// Only monotonic, broker-history-proven split fills can supersede a partial
+/// acknowledgement. This is a result journal update, NEVER a new send intent.
+fn valid_recovered_partial_progress(previous: &Value, next: &Value) -> bool {
+    if previous["state"] != "partial"
+        || next["recovered_from_history"] != true
+        || !matches!(next["state"].as_str(), Some("partial" | "filled"))
+        || previous["request"] != next["request"]
+    {
+        return false;
+    }
+    let Some(requested) = next["request"]["volume"].as_f64() else { return false; };
+    let Some(volume) = next["volume"].as_f64() else { return false; };
+    let previous_volume = if previous["recovered_from_history"] == true {
+        previous["volume"].as_f64().unwrap_or(f64::NAN)
+    } else { 0.0 };
+    if !requested.is_finite() || !volume.is_finite() || !previous_volume.is_finite()
+        || requested <= 0.0 || volume <= 0.0 || previous_volume < 0.0
+        || volume + 1e-8 < previous_volume
+        || volume > requested + requested.mul_add(1e-7, 1e-8)
+    { return false; }
+    if next["state"] == "filled" && (volume - requested).abs() > requested.mul_add(1e-7, 1e-8) {
+        return false;
+    }
+    if next["state"] == "partial" && volume + 1e-8 >= requested {
+        return false;
+    }
+    let Some(deals) = next["deals"].as_array() else { return false; };
+    if deals.is_empty() { return false; }
+    let mut unique = BTreeSet::new();
+    for deal in deals {
+        let Some(ticket) = deal.as_u64().filter(|ticket| *ticket > 0) else { return false; };
+        if !unique.insert(ticket) { return false; }
+    }
+    if previous["recovered_from_history"] == true {
+        let Some(prior) = previous["deals"].as_array() else { return false; };
+        if !prior.iter().all(|d| d.as_u64().is_some_and(|ticket| unique.contains(&ticket))) {
+            return false;
+        }
+    }
+    true
+}
+
+/// A broker ACK never certifies observation by itself. Match the exact
+/// immutable MT5 Deal ticket to a physical position before releasing this
+/// intent's per-brain reconciliation gate. A flat position list is not proof
+/// of complete exit receipts.
+fn broker_command_observed(
+    db:&Connection, context:&str, t:&Telemetry, command:&Value, result:&Value
+) -> Result<bool> {
+    let Some(ticket)=result["deal"].as_u64().filter(|v|*v>0)
+        else{return Ok(false)};
+    let Some(magic)=command["magic"].as_u64() else{return Ok(false)};
+    if command["symbol"]!=t.symbol {return Ok(false)}
+    let stored:Option<(u64,String)>=db.query_row(
+        "SELECT position_id,payload FROM broker_deals WHERE context=?1 AND ticket=?2",
+        params![context,ticket],|r|Ok((r.get(0)?,r.get(1)?))
+    ).optional()?;
+    let Some((pid,raw))=stored else{return Ok(false)};
+    if pid==0 {return Ok(false)}
+    let deal:Value=serde_json::from_str(&raw)
+        .context("Corrupt booked MT5 Deal receipt; cannot observe command")?;
+    if deal["ticket"].as_u64()!=Some(ticket)
+        || deal["position_id"].as_u64()!=Some(pid)
+        || deal["symbol"]!=t.symbol
+        || !matches!(deal["type"].as_i64(),Some(0|1))
+        || result["position_id"].as_u64().is_some_and(|v|v!=pid)
+    {return Ok(false)}
+    let position=t.positions.iter().find(|p|
+        (p.identifier==pid || p.identifier==0 && p.ticket==pid)
+        && p.symbol==t.symbol && p.magic==magic);
+    if command["kind"]=="open" {
+        if deal["entry"]!=0 || deal["magic"].as_u64()!=Some(magic) {
+            return Ok(false)
+        }
+        let created=command["created_ms"].as_u64().unwrap_or(0);
+        let filled=deal["time_msc"].as_u64().unwrap_or(0);
+        if created>0 && filled>0 && filled.saturating_add(60_000)<created {
+            return Ok(false)
+        }
+        if position.is_some() {return Ok(true)}
+    } else if command["kind"]=="close" {
+        if !matches!(deal["entry"].as_i64(),Some(1|3)) {
+            return Ok(false)
+        }
+        let Some(target)=command["position"].as_u64().filter(|v|*v>0)
+            else{return Ok(false)};
+        // MT5 position ticket can differ from immutable position identifier.
+        // Match the current ticket or a previously observed, account-scoped
+        // physical-position snapshot, never a different brain's close.
+        let recorded:Option<String>=db.query_row(
+            "SELECT payload FROM broker_observations WHERE context=?1 AND position_id=?2",
+            params![context,pid],|r|r.get(0)
+        ).optional()?;
+        let historical_target=recorded
+            .and_then(|s|serde_json::from_str::<Value>(&s).ok())
+            .is_some_and(|p|p["ticket"].as_u64()==Some(target)
+                && p["magic"].as_u64()==Some(magic) && p["symbol"]==t.symbol);
+        let current_target=position.is_some_and(|p|p.ticket==target);
+        if pid!=target && !current_target && !historical_target {
+            return Ok(false)
+        }
+        if result["state"]=="partial" && current_target {
+            let requested=result["request"]["volume"].as_f64()
+                .filter(|v|v.is_finite()&&*v>0.);
+            if let Some(requested)=requested {
+                if position.is_some_and(|p|p.volume.is_finite()
+                    && p.volume>0. && p.volume+1e-8<requested) {
+                    return Ok(true)
+                }
+            }
+        }
+    } else {
+        return Ok(false)
+    }
+    // An older ACK can coexist with a late partial exit. Only an entirely
+    // covered physical position, absent from the fresh broker snapshot,
+    // proves final observation without keeping a stale pending command.
+    if t.positions.iter().any(|p|p.identifier==pid || p.ticket==pid) {
+        return Ok(false)
+    }
+    let mut stmt=db.prepare(
+        "SELECT payload FROM broker_deals WHERE context=?1 AND position_id=?2 ORDER BY ticket"
+    )?;
+    let raw=stmt.query_map(params![context,pid],|r|r.get::<_,String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let receipts=raw.iter().map(|s|serde_json::from_str::<Value>(s))
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    Ok(crate::trade_journal::fully_closed_by_deals(&receipts))
+}
+
 impl Service {
     pub fn take_entries(&mut self) -> Vec<Value> { std::mem::take(&mut self.new_entries) }
     /// Entry execution is reserved to the coordinator of the selected trading
@@ -82,6 +225,7 @@ impl Service {
     pub fn set_mode(&mut self, mode: TradingMode) {
         self.active_mode = Some(mode);
         self.sniper.reset_quotes();
+        self.last_sniper_raw=None;
         self.signals.clear();
     }
 
@@ -106,6 +250,7 @@ CREATE TABLE IF NOT EXISTS broker_commands(id TEXT PRIMARY KEY,context TEXT NOT 
 CREATE INDEX IF NOT EXISTS broker_commands_context ON broker_commands(context,brain,created_ms);
 CREATE TABLE IF NOT EXISTS broker_seen(context TEXT NOT NULL,brain TEXT NOT NULL,signal TEXT NOT NULL,PRIMARY KEY(context,brain,signal));
 CREATE TABLE IF NOT EXISTS broker_deals(context TEXT NOT NULL,ticket INTEGER NOT NULL,position_id INTEGER NOT NULL,brain TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,ticket));
+CREATE TABLE IF NOT EXISTS broker_history_sync(context TEXT NOT NULL,target TEXT NOT NULL CHECK(target IN ('demo','live')),until_ms INTEGER NOT NULL CHECK(until_ms>=0),synced_ms INTEGER NOT NULL CHECK(synced_ms>=0),PRIMARY KEY(context,target));
 CREATE TABLE IF NOT EXISTS broker_observations(context TEXT NOT NULL,position_id INTEGER NOT NULL,brain TEXT NOT NULL,opened_ms INTEGER NOT NULL,hold_ms INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,position_id));
 CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT NOT NULL,brain TEXT NOT NULL,timestamp_ms INTEGER NOT NULL,payload TEXT NOT NULL);")?;
         let raw: Option<String> = db
@@ -138,6 +283,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         }
         Ok(Self {
             sniper: Default::default(),
+            last_sniper_raw:None,
             settings,
             brains,
             signals: BTreeMap::new(),
@@ -330,22 +476,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         for item in acknowledged {
             let q = &item["request"];
             let r = &item["result"];
-            let magic = q["magic"].as_u64().unwrap_or(0);
-            let is_open = q["kind"] == "open";
-            let visible = if is_open {
-                t.positions.iter().any(|p| {
-                    p.magic == magic
-                        && p.symbol == t.symbol
-                        && p.opened_ms + 5000 >= q["created_ms"].as_u64().unwrap_or(u64::MAX)
-                })
-            } else {
-                !t.positions
-                    .iter()
-                    .any(|p| p.ticket == q["position"].as_u64().unwrap_or(0))
-            };
-            let confirmed_closed:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_deals d JOIN broker_deals e ON e.context=d.context AND e.position_id=d.position_id WHERE d.context=?1 AND d.ticket=?2 AND CAST(json_extract(e.payload,'$.entry') AS INTEGER) IN (1,3))",params![key,r["deal"].as_u64().unwrap_or(0)],|r|r.get(0))?;
-            let partial_close_seen=!is_open&&r["state"]=="partial"&&t.positions.iter().find(|p|p.ticket==q["position"].as_u64().unwrap_or(0)).is_some_and(|p|p.volume+1e-8<r["request"]["volume"].as_f64().unwrap_or(0.));
-            if visible||(is_open&&confirmed_closed)||partial_close_seen {
+            if broker_command_observed(db,&key,t,q,r)? {
                 db.execute(
                     "UPDATE broker_commands SET state='observed' WHERE id=?1",
                     [q["id"].as_str().unwrap()],
@@ -357,6 +488,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         if paper_due {self.last_paper_sample_ms=now;}
         let mut activity_samples=Vec::new();
         let sniper_signal = self.sniper.evaluate(t,c,now);
+        self.last_sniper_raw=Some(sniper_signal.clone());
         let available=crate::coordinator_learning::available_frames(t,frames,now);
         for b in self.brains.clone() {
             let magic = execution::magic(&b.id).unwrap();
@@ -573,43 +705,59 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         let key = t.map(ctx).unwrap_or_default();
         match (method, path) {
             ("GET", "/v1/execution") => {
+                // The connected terminal can switch accounts or Demo/REAL
+                // mode while the Core remains bound to its prior identity.
+                // Never use the new terminal context for private commands,
+                // broker PnL, floating positions, or learning statistics.
+                let scoped = t.filter(|t| self.matches(t));
+                let bound_key = scoped.map(ctx).unwrap_or_default();
                 let deals = json_rows(
                     db,
                     "SELECT payload FROM broker_deals WHERE context=?1 ORDER BY ticket DESC",
-                    &key,
+                    &bound_key,
                 )?;
-                let positions = t.map(|t| t.positions.clone()).unwrap_or_default();
+                let positions = scoped.map(|t| t.positions.clone()).unwrap_or_default();
                 let mut brains = vec![];
                 for b in &self.brains {
                     let magic = execution::magic(&b.id).unwrap();
                     let own: Vec<_> = deals.iter().filter(|d| d["brain"] == b.id).collect();
-                    let mut groups: BTreeMap<u64, f64> = BTreeMap::new();
-                    let mut net = 0.;
+                    // Same strict cost provenance as /v1/execution/trades.
+                    // A corrupt historical broker fee must not become an
+                    // invented $0.00 and falsely improve a brain's win count.
+                    // No broker receipts is unknown trading PnL, not
+                    // a verified 0.00 profit or an implicitly zero fee.
+                    // In particular, a switched/unbound MT5 account must
+                    // never display fabricated performance statistics.
+                    let net = if own.is_empty() { None } else {
+                        crate::trade_journal::booked_costs(own.iter().copied())
+                            .map(|totals| totals[0])
+                    };
+                    let mut receipts: BTreeMap<u64, Vec<&Value>> = BTreeMap::new();
                     for d in &own {
-                        let pnl = d["profit"].as_f64().unwrap_or(0.)
-                            + d["commission"].as_f64().unwrap_or(0.)
-                            + d["swap"].as_f64().unwrap_or(0.)
-                            + d["fee"].as_f64().unwrap_or(0.);
-                        net += pnl;
-                        *groups
-                            .entry(d["position_id"].as_u64().unwrap_or(0))
-                            .or_default() += pnl;
+                        receipts.entry(d["position_id"].as_u64().unwrap_or(0))
+                            .or_default().push(*d);
                     }
+                    let groups: BTreeMap<u64, Option<f64>> = receipts.iter().map(|(pid, deals)| {
+                        (*pid, crate::trade_journal::booked_costs(deals.iter().copied())
+                            .map(|totals| totals[0]))
+                    }).collect();
                     let closed: Vec<_> = groups
                         .iter()
                         .filter(|(pid, _)| {
-                            !positions.iter().any(|p| p.identifier == **pid)
-                                && own.iter().any(|d| {
-                                    d["position_id"].as_u64() == Some(**pid)
-                                        && matches!(d["entry"].as_i64(), Some(1 | 3))
-                                })
+                            !positions.iter().any(|p| p.identifier == **pid || p.ticket == **pid)
+                                && receipts.get(*pid).is_some_and(|group|
+                                    crate::trade_journal::fully_closed_by_deals(group.iter().copied()))
+
                         })
                         .collect();
-                    brains.push(json!({"config":b,"name":BRAINS.iter().find(|v|v.0==b.id).unwrap().1,"magic":magic,"latest":self.signals.get(&b.id).filter(|v|t.is_some_and(|t|self.matches(t))&&now.saturating_sub(v["evaluated_ms"].as_u64().unwrap_or(0))<=3000),"learning":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))),"learned_weight":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))).map(|w|w.weight()),"stats":{"deals":own.len(),"closed_positions":closed.len(),"wins":closed.iter().filter(|(_,p)|**p>0.).count(),"net_booked":net,"floating":positions.iter().filter(|p|p.magic==magic).map(|p|p.profit).sum::<f64>(),"open_positions":positions.iter().filter(|p|p.magic==magic).count()}}));
+                    brains.push(json!({"config":b,"name":BRAINS.iter().find(|v|v.0==b.id).unwrap().1,"magic":magic,"latest":self.signals.get(&b.id).filter(|v|t.is_some_and(|t|self.matches(t))&&now.saturating_sub(v["evaluated_ms"].as_u64().unwrap_or(0))<=3000),"learning":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))),"learned_weight":self.weights.get(&b.id).filter(|_|t.is_some_and(|t|self.matches(t))).map(|w|w.weight()),"stats":{"deals":own.len(),"closed_positions":closed.len(),"wins":closed.iter().filter(|(_,p)|p.is_some_and(|amount| amount>0.)).count(),"net_booked":net,"booked_cost_evidence":if own.is_empty(){"NO_BROKER_DEALS"}else if net.is_some(){"BROKER_COMPONENTS_VERIFIED"}else{"MISSING_OR_INVALID_BROKER_COST"},"floating":positions.iter().filter(|p|p.magic==magic).map(|p|p.profit).sum::<f64>(),"open_positions":positions.iter().filter(|p|p.magic==magic).count()}}));
                 }
-                let commands=json_rows(db,"SELECT json_object('request',json(payload),'state',state,'result',json(result)) FROM broker_commands WHERE context=?1 ORDER BY created_ms DESC LIMIT 100",&key)?;
+                let commands=json_rows(db,"SELECT json_object('request',json(payload),'state',state,'result',json(result)) FROM broker_commands WHERE context=?1 ORDER BY created_ms DESC LIMIT 100",&bound_key)?;
+                let (history_until,last_sync)=if scoped.is_some() {
+                    broker_sync_watermark(db,&bound_key,&self.settings.target)?
+                }else{(0,0)};
                 Ok(
-                    json!({"settings":self.settings,"armed":self.enabled(status),"account_matches":t.is_some_and(|t|self.matches(t)),"context":key,"brains":brains,"commands":commands,"last_broker_sync_ms":self.last_sync_ms,"history_until_ms":self.history_until_ms,"note":"أرباح محققة من سجل الوسيط؛ العمولات المنفصلة التي لا تحمل position_id لا تنسب تلقائياً لعقل. STOP يمنع دخولاً جديداً، وإدارة خروج الصفقات المملوكة تستمر."}),
+                    json!({"settings":self.settings,"armed":self.enabled(status),"account_matches":scoped.is_some(),"context":bound_key,"brains":brains,"commands":commands,"last_broker_sync_ms":last_sync,"history_until_ms":history_until,"note":"أرباح محققة من سجل الوسيط؛ العمولات المنفصلة التي لا تحمل position_id لا تنسب تلقائياً لعقل. STOP يمنع دخولاً جديداً، وإدارة خروج الصفقات المملوكة تستمر."}),
                 )
             }
             ("POST", "/v1/execution/settings") => {
@@ -731,8 +879,11 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         }
                     }
                 }
+                // Crash-safe cursor recovery: never resume from a different
+                // symbol/account/target's in-memory watermark.
+                let (persisted_until,_)=broker_sync_watermark(db,&key,&self.settings.target)?;
                 Ok(
-                    json!({"command":command,"history_from_ms":self.history_until_ms.max(self.settings.bound_ms).saturating_sub(120_000),"account":{"login":t.login,"server":t.server,"currency":t.currency},"poll_ms":if self.brains.iter().any(|b|b.enabled){100}else{250}}),
+                    json!({"command":command,"history_from_ms":persisted_until.max(self.settings.bound_ms).saturating_sub(120_000),"account":{"login":t.login,"server":t.server,"currency":t.currency,"trade_mode":t.account_trade_mode},"poll_ms":if self.brains.iter().any(|b|b.enabled){100}else{250}}),
                 )
             }
             ("POST", "/v1/execution/authorize") => {
@@ -770,21 +921,39 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         | "rejected"
                         | "unknown"
                         | "placed"
-                        | "closed"
-                        | "observed"
+                        // 'closed' cannot be claimed by Gateway without
+                        // booked exit proof. An unsent close is cancelled.
+                        // 'observed' is reserved for Core's exact Deal and
+                        // physical-position reconciler; never accept it from
+                        // a Gateway /result packet, even after restart.
                         | "cancelled"
                 ) {
                     bail!("Invalid broker state");
                 }
-                let old: String =
-                    db.query_row("SELECT state FROM broker_commands WHERE id=?1", [id], |r| {
-                        r.get(0)
-                    })?;
+                let (old, previous_json): (String, String) = db.query_row(
+                    "SELECT state,result FROM broker_commands WHERE id=?1", [id],
+                    |r| Ok((r.get(0)?,r.get(1)?)),
+                )?;
                 if matches!(old.as_str(), "dispatched" | "unknown" | "placed") {
                     db.execute(
                         "UPDATE broker_commands SET state=?2,result=?3 WHERE id=?1",
                         params![id, state, v.to_string()],
                     )?;
+                } else if matches!(old.as_str(), "partial" | "observed") {
+                    let previous: Value = serde_json::from_str(&previous_json)?;
+                    if valid_recovered_partial_progress(&previous, &v) {
+                        if old == "observed" {
+                            // Position stays observed; only broker-verified fill
+                            // evidence advances for cost and learning attribution.
+                            db.execute("UPDATE broker_commands SET result=?2 WHERE id=?1",
+                                params![id,v.to_string()])?;
+                        } else {
+                            db.execute(
+                                "UPDATE broker_commands SET state=?2,result=?3 WHERE id=?1",
+                                params![id,state,v.to_string()],
+                            )?;
+                        }
+                    }
                 }
                 Ok(json!({"ok":true}))
             }
@@ -793,12 +962,61 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 let t = t
                     .filter(|t| self.matches(t))
                     .context("Bound account unavailable")?;
-                if v["login"] != t.login || v["server"] != t.server || v["currency"] != t.currency {
-                    bail!("Broker history account mismatch");
+                if v["login"] != t.login || v["server"] != t.server || v["currency"] != t.currency
+                    || t.account_trade_mode.is_none() || v["trade_mode"] != json!(t.account_trade_mode) {
+                    bail!("Broker history account or Demo/REAL mode mismatch");
                 }
                 let ds = v["deals"].as_array().context("Deals required")?;
                 if ds.len() > 100_000 {
                     bail!("History chunk too large");
+                }
+                let until_ms=v["until_ms"].as_u64()
+                    .filter(|boundary| *boundary <= now + 2_000)
+                    .context("Invalid history boundary")?;
+                // Verify every booked broker cost BEFORE committing any deals.
+                // The learner must never consume a 0 invented for a missing fee.
+                for d in ds {
+                    // The broker history cursor is a completeness claim.
+                    // Refuse selected-symbol trading receipts whose mandatory
+                    // execution geometry was omitted or malformed. Otherwise
+                    // the cursor would skip that deal permanently and later
+                    // PnL, partial volumes or learner history become fictitious.
+                    // BALANCE/CREDIT/non-trading entries and other symbols are
+                    // not coerced into strategy positions.
+                    if d["symbol"] == t.symbol && d["type"].as_i64().is_none() {
+                        bail!("MT5 deal type missing for selected symbol; history sync refused");
+                    }
+                    if matches!(d["type"].as_i64(), Some(0 | 1)) {
+                        if d["symbol"] == t.symbol {
+                            let valid_magic=d["magic"].as_u64().is_some();
+                            let valid_entry=matches!(d["entry"].as_i64(),Some(0 | 1 | 2 | 3));
+                            let valid_time=d["time_msc"].as_u64()
+                                .is_some_and(|ms| ms>0 && ms<=until_ms.saturating_add(2_000));
+                            let valid_volume=d["volume"].as_f64()
+                                .is_some_and(|v| v.is_finite() && v>0.);
+                            let valid_price=d["price"].as_f64()
+                                .is_some_and(|v| v.is_finite() && v>0.);
+                            if !(valid_magic && valid_entry && valid_time
+                                && valid_volume && valid_price) {
+                                bail!("MT5 trading Deal has missing/invalid type, entry, time, volume, price or magic; sync refused");
+                            }
+                        }
+                        for field in ["profit","commission","swap","fee"] {
+                            if !d[field].as_f64().is_some_and(f64::is_finite) {
+                                bail!("Trading deal has missing/invalid booked cost: {field}");
+                            }
+                        }
+                        // No trade can be accounted against the selected
+                        // symbol after advancing the cursor without a durable
+                        // positive Deal ticket AND physical position ID.
+                        // Balance/credit transfers and other symbols are not
+                        // attributed to this account+symbol broker journal.
+                        if d["symbol"] == t.symbol
+                            && (d["ticket"].as_u64().is_none_or(|v|v==0)
+                                || d["position_id"].as_u64().is_none_or(|v|v==0)) {
+                            bail!("Trading broker deal lacks a valid ticket or position ID; sync refused");
+                        }
+                    }
                 }
                 let tx = db.unchecked_transaction()?;
                 for d in ds {
@@ -806,7 +1024,33 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         continue;
                     };
                     let pid = d["position_id"].as_u64().unwrap_or(0);
-                    if pid == 0 || d["symbol"] != t.symbol {
+                    // A ticket is an immutable broker receipt, not an
+                    // updatable cost estimate. INSERT OR IGNORE previously
+                    // hid conflicts in commission, fee, volume or position and
+                    // still advanced history_until_ms, leaving false net PnL.
+                    // Inspect existing tickets *before* the magic/owner lookup:
+                    // changing position IDs or attribution cannot bypass this.
+                    let stored:Option<(u64,String)>=tx.query_row(
+                        "SELECT position_id,payload FROM broker_deals WHERE context=?1 AND ticket=?2",
+                        params![key,ticket],|r|Ok((r.get(0)?,r.get(1)?))
+                    ).optional()?;
+                    if let Some((stored_pid,raw))=stored {
+                        let saved:Value=serde_json::from_str(&raw)
+                            .context("Corrupt saved broker deal receipt; sync blocked")?;
+                        let immutable=["ticket","position_id","magic","symbol","entry","type",
+                            "time_msc","volume","price","profit","commission","swap","fee"];
+                        if stored_pid!=pid || immutable.iter().any(|k|saved[*k]!=d[*k]) {
+                            bail!("Conflicting MT5 receipt for already-booked Deal ticket; history sync refused");
+                        }
+                        // Exact broker replay is idempotent. Do not rewrite
+                        // the durable original or relabel its brain.
+                        continue;
+                    }
+                    // Check existing ticket *before* rejecting the wrong
+                    // symbol or zero/missing position. Otherwise a poisoned
+                    // replay can disappear from the chunk while the Core
+                    // advances its broker history cursor.
+                    if ticket == 0 || pid == 0 || d["symbol"] != t.symbol {
                         continue;
                     }
                     let owner:Option<String>=execution::brain_for_magic(d["magic"].as_u64().unwrap_or(0)).map(str::to_string).or(tx.query_row("SELECT brain FROM broker_observations WHERE context=?1 AND position_id=?2 UNION ALL SELECT brain FROM broker_deals WHERE context=?1 AND position_id=?2 LIMIT 1",params![key,pid],|r|r.get(0)).optional()?);
@@ -814,17 +1058,26 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         let mut d = d.clone();
                         d["brain"] = json!(owner);
                         tx.execute(
-                            "INSERT OR IGNORE INTO broker_deals VALUES(?1,?2,?3,?4,?5)",
+                            "INSERT INTO broker_deals VALUES(?1,?2,?3,?4,?5)",
                             params![key, ticket, pid, owner, d.to_string()],
                         )?;
                     }
                 }
+                // The receipt batch and its high-water mark are ONE atomic
+                // SQLite transaction. A failed insertion or conflicting
+                // immutable ticket rolls both back; stale overlapping reads
+                // can add late fills but cannot rewind an existing cursor.
+                tx.execute(
+                    "INSERT INTO broker_history_sync(context,target,until_ms,synced_ms)
+                     VALUES(?1,?2,?3,?4)
+                     ON CONFLICT(context,target) DO UPDATE SET
+                     until_ms=MAX(broker_history_sync.until_ms,excluded.until_ms),
+                     synced_ms=MAX(broker_history_sync.synced_ms,excluded.synced_ms)",
+                    params![key,self.settings.target,until_ms,now],
+                )?;
                 tx.commit()?;
                 self.last_sync_ms = now;
-                self.history_until_ms = v["until_ms"]
-                    .as_u64()
-                    .filter(|v| *v <= now + 2000)
-                    .context("Invalid history boundary")?;
+                self.history_until_ms = self.history_until_ms.max(until_ms);
                 Ok(json!({"ok":true}))
             }
             _ => bail!("Unknown execution route"),
@@ -842,6 +1095,202 @@ mod execution_persistence_tests {
             login: 17, server: "Demo-Test".into(), currency: "USD".into(),
             symbol: "XAUUSD".into(), ..Default::default()
         }
+    }
+
+    fn receipt(ticket:u64,pid:u64,magic:u64,entry:u64,volume:f64)->Value {
+        json!({"ticket":ticket,"position_id":pid,"symbol":"XAUUSD",
+            "magic":magic,"type":if entry==0 {0}else{1},
+            "entry":entry,"time_msc":250,"volume":volume,
+            "price":2000.0,"profit":0.0,"commission":0.0,"swap":0.0,"fee":0.0})
+    }
+    fn save_deal(db:&Connection,context:&str,d:&Value) {
+        db.execute("INSERT INTO broker_deals VALUES (?1,?2,?3,'system',?4)",
+            params![context,d["ticket"].as_u64().unwrap(),
+                d["position_id"].as_u64().unwrap(),d.to_string()]).unwrap();
+    }
+
+    #[test]
+    fn close_result_cannot_claim_broker_exit_without_a_verified_deal() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let context=ctx(&t);
+        db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload)
+            VALUES ('no-send',?1,'system','close',100,'dispatched',?2)",
+            params![context,json!({"id":"no-send","kind":"close","magic":410600,
+                "position":99}).to_string()]).unwrap();
+        let st=Status{gateway_fresh:true,telemetry:Some(t),..Default::default()};
+        let false_exit=json!({"id":"no-send","state":"closed",
+            "reason":"Position was absent"});
+        assert!(svc.route("POST","/v1/execution/result",
+            false_exit.to_string().as_bytes(),&db,&st,150).is_err());
+        assert_eq!(db.query_row(
+            "SELECT state FROM broker_commands WHERE id='no-send'",
+            [],|r|r.get::<_,String>(0)).unwrap(),"dispatched");
+        let no_send=json!({"id":"no-send","state":"cancelled",
+            "reason":"No exact owned ticket and no close order sent"});
+        svc.route("POST","/v1/execution/result",
+            no_send.to_string().as_bytes(),&db,&st,160).unwrap();
+        assert_eq!(db.query_row("SELECT state FROM broker_commands WHERE id='no-send'",
+            [],|r|r.get::<_,String>(0)).unwrap(),"cancelled");
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",[],
+            |r|r.get::<_,u64>(0)).unwrap(),0);
+    }
+
+    #[test]
+    fn external_gateway_result_cannot_force_observed_without_mt5_proof() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        service.bind(&db,&t,100).unwrap();
+        let context=ctx(&t);
+        db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload)
+            VALUES('unverified',?1,'system','open',100,'dispatched',?2)",
+            params![context,json!({"id":"unverified","kind":"open",
+                "symbol":"XAUUSD","magic":410600}).to_string()]).unwrap();
+        let status=Status{gateway_fresh:true,telemetry:Some(t),..Default::default()};
+        let forged=json!({"id":"unverified","state":"observed",
+            "deal":123,"reason":"no proof"});
+        assert!(service.route("POST","/v1/execution/result",
+            forged.to_string().as_bytes(),&db,&status,200).is_err());
+        let (state,result):(String,String)=db.query_row(
+            "SELECT state,result FROM broker_commands WHERE id='unverified'",
+            [],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(state,"dispatched");
+        assert_eq!(result,"{}");
+        // A standard fill ACK remains eligible for eventual Core-only
+        // reconciliation but does not itself become observed.
+        let filled=json!({"id":"unverified","state":"filled","deal":123});
+        service.route("POST","/v1/execution/result",
+            filled.to_string().as_bytes(),&db,&status,201).unwrap();
+        let stored:String=db.query_row(
+            "SELECT state FROM broker_commands WHERE id='unverified'",
+            [],|r|r.get(0)).unwrap();
+        assert_eq!(stored,"filled");
+    }
+
+    #[test]
+    fn open_observation_requires_exact_deal_position_and_not_just_same_magic() {
+        let db=Connection::open_in_memory().unwrap();
+        let _=Service::new(&db).unwrap();
+        let mut t=demo();
+        let context=ctx(&t);
+        t.positions.push(braintrade_domain::Position{
+            ticket:999,identifier:999,magic:410600,symbol:"XAUUSD".into(),
+            volume:0.1,..Default::default()
+        });
+        let q=json!({"kind":"open","id":"intent-1","symbol":"XAUUSD",
+            "magic":410600,"created_ms":200});
+        let r=json!({"state":"filled","deal":700,"volume":0.1});
+        assert!(!broker_command_observed(&db,&context,&t,&q,&r).unwrap());
+        let own=receipt(700,55,410600,0,0.1);
+        save_deal(&db,&context,&own);
+        assert!(!broker_command_observed(&db,&context,&t,&q,&r).unwrap(),
+            "Unrelated same-magic position must never mark command observed");
+        t.positions.push(braintrade_domain::Position{
+            ticket:55,identifier:55,magic:410600,symbol:"XAUUSD".into(),
+            volume:0.1,..Default::default()
+        });
+        assert!(broker_command_observed(&db,&context,&t,&q,&r).unwrap());
+        t.positions.clear();
+        let close=receipt(701,55,0,1,0.04);
+        save_deal(&db,&context,&close);
+        assert!(!broker_command_observed(&db,&context,&t,&q,&r).unwrap(),
+            "Partially closed history does not release full-open intent");
+        save_deal(&db,&context,&receipt(702,55,0,1,0.06));
+        assert!(broker_command_observed(&db,&context,&t,&q,&r).unwrap());
+        assert!(!broker_command_observed(&db,&context,&t,&q,
+            &json!({"state":"filled","deal":701})).unwrap(),
+            "An EXIT receipt cannot stand in for an opening ticket");
+    }
+
+    #[test]
+    fn close_observation_requires_own_exit_ticket_and_broker_covered_exit() {
+        let db=Connection::open_in_memory().unwrap();
+        let _=Service::new(&db).unwrap();
+        let mut t=demo();
+        let context=ctx(&t);
+        let q=json!({"kind":"close","id":"close-1","symbol":"XAUUSD",
+            "magic":410600,"position":55});
+        let r=json!({"state":"filled","deal":801,
+            "request":{"volume":0.1}});
+        assert!(!broker_command_observed(&db,&context,&t,&q,&r).unwrap(),
+            "Missing position is NOT proof of broker close execution");
+        save_deal(&db,&context,&receipt(800,55,410600,0,0.1));
+        save_deal(&db,&context,&receipt(801,55,0,1,0.04));
+        assert!(!broker_command_observed(&db,&context,&t,&q,&r).unwrap(),
+            "Exit receipt must cover entire position before final observation");
+        t.positions.push(braintrade_domain::Position{
+            ticket:55,identifier:55,magic:410600,symbol:"XAUUSD".into(),
+            volume:0.06,..Default::default()
+        });
+        let partial=json!({"state":"partial","deal":801,
+            "request":{"volume":0.1}});
+        assert!(broker_command_observed(&db,&context,&t,&q,&partial).unwrap(),
+            "Broker-proven partial close can be observed with reduced volume");
+        assert!(!broker_command_observed(&db,&context,&t,&q,&r).unwrap(),
+            "Filled close may not be marked complete while position remains");
+        t.positions.clear();
+        save_deal(&db,&context,&receipt(802,55,0,1,0.06));
+        assert!(broker_command_observed(&db,&context,&t,&q,&r).unwrap());
+        let wrong=json!({"kind":"close","symbol":"XAUUSD",
+            "magic":410600,"position":77});
+        assert!(!broker_command_observed(&db,&context,&t,&wrong,&r).unwrap(),
+            "A different physical ticket cannot claim another position's close");
+    }
+
+    #[test]
+    fn recovered_partial_progress_requires_exact_volume_and_new_broker_deals() {
+        let request=json!({"volume":0.10,"price":2000.1});
+        let first=json!({"state":"partial","request":request,"volume":0.04,
+            "deals":[801],"recovered_from_history":true});
+        let upgraded=json!({"state":"filled","request":request,"volume":0.10,
+            "deals":[801,802],"recovered_from_history":true});
+        assert!(valid_recovered_partial_progress(&first,&upgraded));
+        let too_large=json!({"state":"filled","request":request,"volume":0.12,
+            "deals":[801,802],"recovered_from_history":true});
+        assert!(!valid_recovered_partial_progress(&first,&too_large));
+        let duplicated=json!({"state":"filled","request":request,"volume":0.10,
+            "deals":[801,801],"recovered_from_history":true});
+        assert!(!valid_recovered_partial_progress(&first,&duplicated));
+        let regressed=json!({"state":"partial","request":request,"volume":0.03,
+            "deals":[801],"recovered_from_history":true});
+        assert!(!valid_recovered_partial_progress(&first,&regressed));
+        let switched=json!({"state":"filled","request":{"volume":0.20,"price":2000.1},
+            "volume":0.20,"deals":[801,802],"recovered_from_history":true});
+        assert!(!valid_recovered_partial_progress(&first,&switched));
+    }
+
+    #[test]
+    fn late_split_fill_updates_core_result_without_reopening_observed_order() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let st=Status::default();
+        let req=json!({"volume":0.10,"price":2000.10});
+        let first=json!({"id":"p0b-1","state":"partial","request":req,
+            "volume":0.04,"deals":[801],"recovered_from_history":true});
+        let payload=json!({"id":"p0b-1","kind":"open"});
+        db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload,result)
+            VALUES (?1,?2,'system','open',100,'partial',?3,?4)",
+            params!["p0b-1","ctx-demo",payload.to_string(),first.to_string()]).unwrap();
+        let second=json!({"id":"p0b-1","state":"filled","request":req,
+            "volume":0.10,"deals":[801,802],"recovered_from_history":true});
+        svc.route("POST","/v1/execution/result",second.to_string().as_bytes(),&db,&st,200).unwrap();
+        let row: (String,String)=db.query_row("SELECT state,result FROM broker_commands WHERE id='p0b-1'",
+            [],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(row.0,"filled");
+        assert_eq!(serde_json::from_str::<Value>(&row.1).unwrap()["volume"],0.10);
+        db.execute("UPDATE broker_commands SET state='observed',result=?1 WHERE id='p0b-1'",
+            [first.to_string()]).unwrap();
+        svc.route("POST","/v1/execution/result",second.to_string().as_bytes(),&db,&st,201).unwrap();
+        let observed:(String,String)=db.query_row("SELECT state,result FROM broker_commands WHERE id='p0b-1'",
+            [],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(observed.0,"observed");
+        assert_eq!(serde_json::from_str::<Value>(&observed.1).unwrap()["volume"],0.10);
+        svc.route("POST","/v1/execution/result",first.to_string().as_bytes(),&db,&st,202).unwrap();
+        let last:String=db.query_row("SELECT result FROM broker_commands WHERE id='p0b-1'",[],|r|r.get(0)).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&last).unwrap()["state"],"filled");
     }
 
     #[test]
@@ -871,6 +1320,500 @@ mod execution_persistence_tests {
         let reloaded=Service::new(&db).unwrap();
         t.report_day=stamp.with_timezone(&zone).format("%Y-%m-%d").to_string();
         assert!(reloaded.daily_breaker_blocked(&db,&t,now,true,2.).unwrap());
+    }
+
+    #[test]
+    fn stop_keeps_owned_close_authorized_but_cancels_new_open() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        service.bind(&db,&t,100).unwrap();
+        service.set_mode(TradingMode::Sniper);
+        let b=service.brains.iter().find(|b|b.id=="system").unwrap().clone();
+        let close=service.queue(&db,&t,&b,"close",None,101,200,None).unwrap();
+        let signal=Signal{brain:"system".into(),side:1,key:"before-stop".into(),bar_time:100,
+            stop_distance:1.,target_distance:2.,hold_ms:60_000,
+            reason:"stop test".into(),ready:true,coordination:None};
+        let open=service.queue(&db,&t,&b,"open",Some(&signal),0,201,Some(&Config::default())).unwrap();
+        let mut status=Status::default();
+        status.telemetry=Some(t);
+        status.gateway_fresh=true;
+        status.requested_run=false;
+        let close_work=service.route("GET","/v1/execution/gateway",b"",&db,&status,250).unwrap();
+        assert_eq!(close_work["command"]["id"],close["id"]);
+        let id=close["id"].as_str().unwrap();
+        let auth=service.route("POST","/v1/execution/authorize",
+            json!({"id":id}).to_string().as_bytes(),&db,&status,251).unwrap();
+        assert_eq!(auth["authorized"],true);
+        service.route("POST","/v1/execution/result",
+            json!({"id":id,"state":"cancelled",
+                "reason":"No owned broker position; no order sent"})
+                .to_string().as_bytes(),&db,&status,252).unwrap();
+        let open_work=service.route("GET","/v1/execution/gateway",b"",&db,&status,253).unwrap();
+        assert!(open_work["command"].is_null());
+        let state:String=db.query_row("SELECT state FROM broker_commands WHERE id=?1",
+            [open["id"].as_str().unwrap()],|r|r.get(0)).unwrap();
+        assert_eq!(state,"cancelled");
+    }
+
+    #[test]
+    fn brain_summary_refuses_missing_historical_fee_as_verified_profit() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let key=ctx(&t);
+        let entry=json!({"ticket":710,"position_id":77,"symbol":"XAUUSD","brain":"system",
+            "type":0,"entry":0,"magic":410600,"volume":0.1,
+            "profit":0.,"commission":-0.35,"swap":0.,"fee":0.});
+        let mut exit=json!({"ticket":711,"position_id":77,"symbol":"XAUUSD","brain":"system",
+            "type":1,"entry":1,"magic":410600,"volume":0.1,
+            "profit":3.,"swap":-0.2,"fee":0.});
+        for (ticket,deal) in [(710,&entry),(711,&exit)] {
+            db.execute("INSERT INTO broker_deals VALUES(?1,?2,77,'system',?3)",
+                params![key,ticket,deal.to_string()]).unwrap();
+        }
+        let mut st=Status::default();
+        st.gateway_fresh=true;
+        st.telemetry=Some(t);
+        let first=svc.route("GET","/v1/execution",b"",&db,&st,200).unwrap();
+        let stats=&first["brains"].as_array().unwrap().iter()
+            .find(|v|v["config"]["id"]=="system").unwrap()["stats"];
+        assert!(stats["net_booked"].is_null());
+        assert_eq!(stats["booked_cost_evidence"],"MISSING_OR_INVALID_BROKER_COST");
+        assert_eq!(stats["wins"],0);
+        exit["commission"]=json!(-0.35);
+        db.execute("UPDATE broker_deals SET payload=?1 WHERE context=?2 AND ticket=711",
+            params![exit.to_string(),key]).unwrap();
+        let clean=svc.route("GET","/v1/execution",b"",&db,&st,201).unwrap();
+        let again=&clean["brains"].as_array().unwrap().iter()
+            .find(|v|v["config"]["id"]=="system").unwrap()["stats"];
+        assert_eq!(again["booked_cost_evidence"],"BROKER_COMPONENTS_VERIFIED");
+        assert!((again["net_booked"].as_f64().unwrap()-2.1).abs()<1e-9);
+        assert_eq!(again["wins"],1);
+    }
+
+    #[test]
+    fn dashboard_stats_never_read_other_accounts_or_other_demo_real_mode() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let a=ctx(&t);
+        let other=Telemetry{login:99,..t.clone()};
+        let b=ctx(&other);
+        // Simulate already-persisted broker history from both accounts.
+        // The switch from one MT5 login to another must never cause a
+        // previously-bound dashboard to show the other user's PnL.
+        for (key,ticket,profit) in [(a.clone(),701,3.),(b.clone(),702,500.)] {
+            let deal=json!({"ticket":ticket,"position_id":ticket,
+                "symbol":"XAUUSD","brain":"system","magic":410600,
+                "type":0,"entry":0,"time_msc":150,"volume":0.1,
+                "price":2000.0,"profit":profit,"commission":0.0,
+                "swap":0.0,"fee":0.0});
+            db.execute("INSERT INTO broker_deals VALUES(?1,?2,?3,'system',?4)",
+                params![key,ticket,ticket,deal.to_string()]).unwrap();
+            db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload)
+                VALUES(?1,?2,'system','open',100,'observed',?3)",
+                params![format!("order-{ticket}"),key,
+                    json!({"id":format!("order-{ticket}")}).to_string()]).unwrap();
+        }
+        let status=|tel:Telemetry,fresh:bool|Status{
+            gateway_fresh:fresh,telemetry:Some(tel),..Default::default()
+        };
+        let bound=svc.route("GET","/v1/execution",b"",
+            &db,&status(t.clone(),true),300).unwrap();
+        assert_eq!(bound["account_matches"],true);
+        assert_eq!(bound["context"],a);
+        assert_eq!(bound["commands"].as_array().unwrap().len(),1);
+        let net=&bound["brains"].as_array().unwrap().iter()
+            .find(|v|v["config"]["id"]=="system").unwrap()["stats"];
+        assert_eq!(net["deals"],1);
+        assert_eq!(net["net_booked"],3.0);
+        let switched=svc.route("GET","/v1/execution",b"",
+            &db,&status(other.clone(),true),301).unwrap();
+        assert_eq!(switched["account_matches"],false);
+        assert_eq!(switched["context"],"");
+        assert!(switched["commands"].as_array().unwrap().is_empty());
+        let masked=&switched["brains"].as_array().unwrap().iter()
+            .find(|v|v["config"]["id"]=="system").unwrap()["stats"];
+        assert_eq!(masked["deals"],0);
+        assert!(masked["net_booked"].is_null());
+        assert_eq!(masked["floating"],0.0);
+        // Same login/server/currency is insufficient when MT5 changes
+        // between Demo and REAL: the existing bound target is still Demo.
+        let real=Telemetry{account_trade_mode:Some(2),demo:false,..t.clone()};
+        let wrong_mode=svc.route("GET","/v1/execution",b"",
+            &db,&status(real,true),302).unwrap();
+        assert_eq!(wrong_mode["account_matches"],false);
+        assert_eq!(wrong_mode["context"],"");
+        let stale=svc.route("GET","/v1/execution",b"",
+            &db,&status(t.clone(),false),303).unwrap();
+        assert_eq!(stale["context"],"");
+        let recovered=svc.route("GET","/v1/execution",b"",
+            &db,&status(t,true),304).unwrap();
+        assert_eq!(recovered["context"],a);
+        assert_eq!(recovered["commands"].as_array().unwrap().len(),1);
+    }
+
+    #[test]
+    fn incomplete_exit_is_not_a_closed_brain_win_even_with_flat_snapshot() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let key=ctx(&t);
+        for (ticket,entry,volume,profit) in [
+            (710,0,0.1,0.0),(711,1,0.04,3.0)
+        ] {
+            let deal=json!({"ticket":ticket,"position_id":77,"symbol":"XAUUSD",
+                "brain":"system","type":0,"entry":entry,"volume":volume,
+                "price":2000.,"time_msc":ticket,"profit":profit,
+                "commission":0.,"swap":0.,"fee":0.});
+            db.execute("INSERT INTO broker_deals VALUES(?1,?2,77,'system',?3)",
+                params![key,ticket,deal.to_string()]).unwrap();
+        }
+        let st=Status{gateway_fresh:true,telemetry:Some(t),..Default::default()};
+        let view=svc.route("GET","/v1/execution",b"",&db,&st,800).unwrap();
+        let stats=&view["brains"].as_array().unwrap().iter()
+            .find(|v|v["config"]["id"]=="system").unwrap()["stats"];
+        assert_eq!(stats["closed_positions"],0);
+        assert_eq!(stats["wins"],0);
+        assert_eq!(stats["net_booked"],3.0,
+            "Already booked partial PnL remains visible but not a closed win");
+        let final_deal=json!({"ticket":712,"position_id":77,"symbol":"XAUUSD",
+            "brain":"system","type":1,"entry":3,"volume":0.06,
+            "price":2001.,"time_msc":712,"profit":1.,
+            "commission":0.,"swap":0.,"fee":0.});
+        db.execute("INSERT INTO broker_deals VALUES(?1,712,77,'system',?2)",
+            params![key,final_deal.to_string()]).unwrap();
+        let full=svc.route("GET","/v1/execution",b"",&db,&st,801).unwrap();
+        let complete=&full["brains"].as_array().unwrap().iter()
+            .find(|v|v["config"]["id"]=="system").unwrap()["stats"];
+        assert_eq!(complete["closed_positions"],1);
+        assert_eq!(complete["wins"],1);
+        assert_eq!(complete["net_booked"],4.0);
+    }
+
+    #[test]
+    fn core_history_sync_fails_closed_for_wrong_mode_cost_or_boundary() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        service.bind(&db,&t,100).unwrap();
+        let mut status=Status::default();
+        status.telemetry=Some(t);
+        status.gateway_fresh=true;
+        let deal=json!({"ticket":890,"position_id":201,"magic":410601,
+            "symbol":"XAUUSD","type":0,"entry":0,"time_msc":150,
+            "volume":0.1,"price":2000.,"profit":1.,
+            "commission":-0.07,"swap":0.,"fee":0.});
+        let mut request=json!({"login":17,"server":"Demo-Test","currency":"USD",
+            "trade_mode":2,"until_ms":200,"deals":[deal.clone()]});
+        assert!(service.route("POST","/v1/execution/sync",request.to_string().as_bytes(),&db,&status,300).is_err());
+        request.as_object_mut().unwrap().remove("trade_mode");
+        assert!(service.route("POST","/v1/execution/sync",request.to_string().as_bytes(),&db,&status,300).is_err());
+        request["trade_mode"]=json!(0);
+        request["deals"][0].as_object_mut().unwrap().remove("fee");
+        assert!(service.route("POST","/v1/execution/sync",request.to_string().as_bytes(),&db,&status,300).is_err());
+        request["deals"]=json!([deal]);
+        request["until_ms"]=json!(99999);
+        assert!(service.route("POST","/v1/execution/sync",request.to_string().as_bytes(),&db,&status,300).is_err());
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        request["until_ms"]=json!(200);
+        service.route("POST","/v1/execution/sync",request.to_string().as_bytes(),&db,&status,300).unwrap();
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    }
+
+    #[test]
+    fn sync_cannot_skip_trading_deal_with_missing_ticket_or_position() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        service.bind(&db,&t,100).unwrap();
+        let mut status=Status::default();
+        status.telemetry=Some(t);
+        status.gateway_fresh=true;
+        let original=json!({"ticket":809,"position_id":99,"magic":410601,
+            "symbol":"XAUUSD","type":0,"entry":0,"time_msc":150,
+            "volume":0.1,"price":2000.0,"profit":0.0,
+            "commission":0.0,"swap":0.0,"fee":0.0});
+        let mut req=json!({"login":17,"server":"Demo-Test","currency":"USD",
+            "trade_mode":0,"until_ms":220,"deals":[]});
+        for (field,value) in [
+            ("ticket",Value::Null),("ticket",json!(0)),
+            ("position_id",Value::Null),("position_id",json!(0))
+        ] {
+            let mut damaged=original.clone();
+            damaged[field]=value;
+            req["deals"]=json!([damaged]);
+            assert!(service.route("POST","/v1/execution/sync",
+                req.to_string().as_bytes(),&db,&status,300).is_err(),
+                "Missing broker {field} advanced history");
+            assert_eq!(service.history_until_ms,100);
+            let count:u64=db.query_row("SELECT COUNT(*) FROM broker_deals",
+                [],|r|r.get(0)).unwrap();
+            assert_eq!(count,0);
+        }
+        // A different broker symbol is not silently assigned to XAUUSD.
+        let mut foreign=original.clone();
+        foreign["symbol"]=json!("EURUSD");
+        foreign["position_id"]=Value::Null;
+        req["deals"]=json!([foreign]);
+        service.route("POST","/v1/execution/sync",
+            req.to_string().as_bytes(),&db,&status,300).unwrap();
+        assert_eq!(service.history_until_ms,220);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
+            [],|r|r.get::<_,u64>(0)).unwrap(),0);
+    }
+
+    #[test]
+    fn strict_broker_deal_geometry_blocks_cursor_and_bad_strategy_metrics() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let mut st=Status::default();
+        st.gateway_fresh=true;
+        st.telemetry=Some(t);
+        let original=json!({"ticket":800,"position_id":88,"symbol":"XAUUSD",
+            "magic":410601,"type":0,"entry":0,"time_msc":150,
+            "volume":0.1,"price":2000.1,"profit":2.,"commission":0.,
+            "fee":0.,"swap":0.});
+        let mut req=json!({"login":17,"server":"Demo-Test","currency":"USD",
+            "trade_mode":0,"until_ms":210,"deals":[]});
+        for (field,replacement) in [
+            ("type",Value::Null),("type",json!("BUY")),
+            ("entry",Value::Null),("entry",json!(9)),
+            ("time_msc",Value::Null),("time_msc",json!(0)),
+            ("time_msc",json!(100_000)),
+            ("volume",Value::Null),("volume",json!(0.)),
+            ("volume",json!(-0.2)),("volume",json!("NaN")),
+            ("price",Value::Null),("price",json!(0.)),
+            ("price",json!(-2000.)),("price",json!("Infinity")),
+            ("magic",Value::Null),("magic",json!(-3))
+        ] {
+            let mut damaged=original.clone();
+            damaged[field]=replacement;
+            req["deals"]=json!([damaged]);
+            assert!(svc.route("POST","/v1/execution/sync",
+                req.to_string().as_bytes(),&db,&st,300).is_err(),
+                "Corrupt broker {field} must not advance history");
+            assert_eq!(svc.history_until_ms,100,"History cursor moved despite invalid {field}");
+            assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
+                [],|r|r.get::<_,u64>(0)).unwrap(),0);
+        }
+        // MT5 netting/close-by classifications can exist in the broker
+        // ledger. They are kept for accounting, but not reinterpreted as a
+        // filled new opening order by Gateway's stricter intent reconciler.
+        for entry in [0,1,2,3] {
+            let mut valid=original.clone();
+            valid["entry"]=json!(entry);
+            valid["ticket"]=json!(800+entry);
+            req["deals"]=json!([valid]);
+            svc.route("POST","/v1/execution/sync",
+                req.to_string().as_bytes(),&db,&st,300).unwrap();
+        }
+        assert_eq!(svc.history_until_ms,210);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
+            [],|r|r.get::<_,u64>(0)).unwrap(),4);
+    }
+
+    #[test]
+    fn durable_history_watermark_survives_core_restart_and_isolates_broker_contexts() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100_000).unwrap();
+        let status=Status{gateway_fresh:true,telemetry:Some(t.clone()),..Default::default()};
+        let mut request=json!({"login":t.login,"server":t.server,"currency":t.currency,
+            "trade_mode":0,"until_ms":500_000,"deals":[]});
+        svc.route("POST","/v1/execution/sync",
+            request.to_string().as_bytes(),&db,&status,650_000).unwrap();
+        assert_eq!(broker_sync_watermark(&db,&ctx(&t),"demo").unwrap(),(500_000,650_000));
+        let work=svc.route("GET","/v1/execution/gateway",b"",&db,&status,660_000).unwrap();
+        assert_eq!(work["history_from_ms"],380_000);
+        let view=svc.route("GET","/v1/execution",b"",&db,&status,660_000).unwrap();
+        assert_eq!(view["history_until_ms"],500_000);
+        assert_eq!(view["last_broker_sync_ms"],650_000);
+        // The rebuilt Rust Core must read committed cursor from SQLite,
+        // never replay from the original bind time.
+        let mut restored=Service::new(&db).unwrap();
+        assert_eq!(restored.history_until_ms,0);
+        let work=restored.route("GET","/v1/execution/gateway",
+            b"",&db,&status,670_000).unwrap();
+        assert_eq!(work["history_from_ms"],380_000);
+        // An overlapping older read is allowed to carry delayed broker
+        // tickets, but cannot rewind a successful newer watermark.
+        request["until_ms"]=json!(450_000);
+        request["deals"]=json!([{"ticket":900,"position_id":42,
+            "magic":410600,"symbol":"XAUUSD","entry":0,"type":0,
+            "time_msc":400_000,"volume":0.1,"price":2000.,
+            "profit":0.,"commission":0.,"swap":0.,"fee":0.}]);
+        restored.route("POST","/v1/execution/sync",
+            request.to_string().as_bytes(),&db,&status,680_000).unwrap();
+        assert_eq!(broker_sync_watermark(&db,&ctx(&t),"demo").unwrap(),(500_000,680_000));
+        let trades:u64=db.query_row("SELECT COUNT(*) FROM broker_deals",[],
+            |r|r.get(0)).unwrap();
+        assert_eq!(trades,1);
+        // Failure in the next batch cannot claim that 700ms of history
+        // was settled. SQLite cursor and booked financial evidence agree.
+        request["until_ms"]=json!(700_000);
+        request["deals"][0]["commission"]=json!(-100.);
+        assert!(restored.route("POST","/v1/execution/sync",
+            request.to_string().as_bytes(),&db,&status,710_000).is_err());
+        assert_eq!(broker_sync_watermark(&db,&ctx(&t),"demo").unwrap(),(500_000,680_000));
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",[],
+            |r|r.get::<_,u64>(0)).unwrap(),1);
+        let other=Telemetry{login:99,..t.clone()};
+        restored.bind(&db,&other,800_000).unwrap();
+        let other_status=Status{gateway_fresh:true,telemetry:Some(other.clone()),..Default::default()};
+        let other_work=restored.route("GET","/v1/execution/gateway",
+            b"",&db,&other_status,810_000).unwrap();
+        assert_eq!(other_work["history_from_ms"],680_000);
+        assert_eq!(broker_sync_watermark(&db,&ctx(&other),"demo").unwrap(),(0,0));
+        let mut other_symbol=other.clone();
+        other_symbol.symbol="EURUSD".into();
+        let other_symbol_status=Status{gateway_fresh:true,telemetry:Some(other_symbol.clone()),..Default::default()};
+        let changed=restored.route("GET","/v1/execution/gateway",
+            b"",&db,&other_symbol_status,820_000).unwrap();
+        assert_eq!(changed["history_from_ms"],680_000);
+        assert_eq!(broker_sync_watermark(&db,&ctx(&other_symbol),"demo").unwrap(),(0,0));
+        // No automatic promotion between Demo and REAL historical cursors.
+        assert_eq!(broker_sync_watermark(&db,&ctx(&t),"live").unwrap(),(0,0));
+    }
+
+    #[test]
+    fn older_overlapping_broker_sync_keeps_cursor_and_accepts_late_deal() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        service.bind(&db,&t,100).unwrap();
+        let mut status=Status::default();
+        status.telemetry=Some(t);
+        status.gateway_fresh=true;
+        let first=json!({"ticket":710,"position_id":55,"magic":410600,
+            "symbol":"XAUUSD","type":0,"entry":0,"time_msc":150,
+            "volume":0.1,"price":2000.0,"profit":0.0,
+            "commission":-0.35,"swap":0.0,"fee":0.0});
+        let mut req=json!({"login":17,"server":"Demo-Test","currency":"USD",
+            "trade_mode":0,"until_ms":220,"deals":[first.clone()]});
+        service.route("POST","/v1/execution/sync",
+            req.to_string().as_bytes(),&db,&status,300).unwrap();
+        assert_eq!(service.history_until_ms,220);
+        // The broker disclosed a delayed fill in an older overlap window.
+        let mut late=first.clone();
+        late["ticket"]=json!(711);
+        late["time_msc"]=json!(180);
+        late["volume"]=json!(0.04);
+        late["commission"]=json!(-0.14);
+        req["until_ms"]=json!(190);
+        req["deals"]=json!([first.clone(),late.clone()]);
+        service.route("POST","/v1/execution/sync",
+            req.to_string().as_bytes(),&db,&status,310).unwrap();
+        assert_eq!(service.history_until_ms,220,
+            "Overlapping history must not rewind the most recent cursor");
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
+            [],|r|r.get::<_,u64>(0)).unwrap(),2,
+            "Previously-unseen late receipt must be recorded");
+        req["deals"]=json!([first,late]);
+        service.route("POST","/v1/execution/sync",
+            req.to_string().as_bytes(),&db,&status,320).unwrap();
+        assert_eq!(service.history_until_ms,220);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
+            [],|r|r.get::<_,u64>(0)).unwrap(),2);
+    }
+
+    #[test]
+    fn broker_deal_receipt_replays_exactly_but_refuses_changed_booked_costs() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let t=demo();
+        service.bind(&db,&t,100).unwrap();
+        let mut status=Status::default();
+        status.telemetry=Some(t);
+        status.gateway_fresh=true;
+        let deal=json!({"ticket":890,"position_id":201,"magic":410601,
+            "symbol":"XAUUSD","type":0,"entry":0,"time_msc":150,
+            "volume":0.1,"price":2000.0,"profit":1.25,
+            "commission":-0.07,"swap":0.0,"fee":0.0,"reason":3});
+        let mut req=json!({"login":17,"server":"Demo-Test","currency":"USD",
+            "trade_mode":0,"until_ms":200,"deals":[deal.clone()]});
+        service.route("POST","/v1/execution/sync",req.to_string().as_bytes(),
+            &db,&status,300).unwrap();
+        let original:String=db.query_row(
+            "SELECT payload FROM broker_deals WHERE ticket=890",[],|r|r.get(0)).unwrap();
+        req["until_ms"]=json!(220);
+        req["deals"]=json!([deal.clone(),deal.clone()]);
+        service.route("POST","/v1/execution/sync",req.to_string().as_bytes(),
+            &db,&status,320).unwrap();
+        assert_eq!(service.history_until_ms,220);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
+            [],|r|r.get::<_,u64>(0)).unwrap(),1);
+        for (field, value) in [
+            ("profit",json!(1.30)), ("commission",json!(-0.70)),
+            ("swap",json!(-0.20)), ("fee",json!(-0.01)),
+            ("volume",json!(0.2)), ("price",json!(2001.0)),
+            ("type",json!(1)), ("entry",json!(1)),
+            ("position_id",json!(202)), ("position_id",json!(0)),
+            ("symbol",json!("EURUSD")), ("magic",json!(410602)),
+            ("time_msc",json!(151))
+        ] {
+            let mut altered=deal.clone();
+            altered[field]=value;
+            req["deals"]=json!([altered]);
+            req["until_ms"]=json!(230);
+            let rejected=service.route("POST","/v1/execution/sync",
+                req.to_string().as_bytes(),&db,&status,330);
+            assert!(rejected.is_err(),"Changed broker {field} was accepted");
+            let saved:String=db.query_row(
+                "SELECT payload FROM broker_deals WHERE ticket=890",[],|r|r.get(0)).unwrap();
+            assert_eq!(saved,original,"Replayed ticket must remain immutable");
+            assert_eq!(service.history_until_ms,220,
+                "A broker receipt conflict must not advance history cursor");
+        }
+    }
+
+    #[test]
+    fn conflicted_history_batch_is_atomic_and_does_not_save_new_deals() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let mut st=Status::default();
+        st.telemetry=Some(t);
+        st.gateway_fresh=true;
+        let first=json!({"ticket":900,"position_id":301,"magic":410601,
+            "symbol":"XAUUSD","type":0,"entry":0,"time_msc":150,
+            "volume":0.1,"price":2000.0,"profit":0.0,
+            "commission":-0.07,"swap":0.0,"fee":0.0});
+        let mut req=json!({"login":17,"server":"Demo-Test","currency":"USD",
+            "trade_mode":0,"until_ms":200,"deals":[first.clone()]});
+        svc.route("POST","/v1/execution/sync",req.to_string().as_bytes(),
+            &db,&st,300).unwrap();
+        let mut newer=first.clone();
+        newer["ticket"]=json!(901);
+        newer["position_id"]=json!(302);
+        let mut conflicting=first.clone();
+        conflicting["fee"]=json!(-99.0);
+        req["deals"]=json!([newer,conflicting]);
+        req["until_ms"]=json!(240);
+        assert!(svc.route("POST","/v1/execution/sync",req.to_string().as_bytes(),
+            &db,&st,320).is_err());
+        assert_eq!(svc.history_until_ms,200);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
+            [],|r|r.get::<_,u64>(0)).unwrap(),1,
+            "Insert of ticket 901 must rollback with ticket 900 conflict");
+        // Two contradictory receipts in one new sync batch are also rejected.
+        let mut variant=first.clone();
+        variant["ticket"]=json!(902);
+        let mut altered=variant.clone();
+        altered["commission"]=json!(-7.0);
+        req["deals"]=json!([variant,altered]);
+        assert!(svc.route("POST","/v1/execution/sync",req.to_string().as_bytes(),
+            &db,&st,321).is_err());
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_deals",
+            [],|r|r.get::<_,u64>(0)).unwrap(),1);
     }
 
     #[test]

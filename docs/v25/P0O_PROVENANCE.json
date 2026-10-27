@@ -1,0 +1,11 @@
+{
+  "source_branch": "feature/v25-enterprise-validation-20261024",
+  "baseline_commit": "b9cd47fb10218ec4ab8c9c3055d579f8aca2c2bf",
+  "baseline_build_commit": "1e8337a200827960175acdba39eda36075afd742",
+  "baseline_windows_build": 40054540255,
+  "p0n_exe_sha256": "e08efc5607e56be74b919e789414d60543283752c4c8eccd7d4467501d354ef8",
+  "p0n_verified_files": 956,
+  "source_method": "Exact CI source replay; import compiled locks; add Tauri workspace member; no trading strategy change",
+  "v24_rollback_branch": "feature/v24-shortmode-history-gate-20261023",
+  "acceptance_complete": false
+}

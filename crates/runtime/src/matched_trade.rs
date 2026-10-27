@@ -173,6 +173,13 @@ pub fn summary(db:&Connection,id:&str)->Result<Value>{
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let (mut completed,mut pending,mut won_f,mut won_a,mut better_f,mut ties)=(0usize,0usize,0usize,0usize,0usize,0usize);
     let (mut sum_f,mut sum_a,mut gaps)=(0.,0.,0usize);
+    // A sampled SL/TP can be crossed during a quote gap. Preserve legacy
+    // all-pairs descriptive figures, but NEVER treat gap-affected/unknown
+    // coverage as clean evidence of a strategy edge.
+    let (mut clean,mut unknown_coverage)=(0usize,0usize);
+    let (mut clean_sum_f,mut clean_sum_a)=(0.,0.);
+    let (mut clean_won_f,mut clean_won_a,mut clean_better,mut clean_ties)=
+        (0usize,0usize,0usize,0usize);
     let (mut stop_f,mut stop_a,mut target_f,mut target_a)=(0usize,0usize,0usize,0usize);
     for(state,raw)in rows{
         if state=="open"{pending+=1;continue}
@@ -186,27 +193,66 @@ pub fn summary(db:&Connection,id:&str)->Result<Value>{
         completed+=1;sum_f+=f;sum_a+=a;
         if f>0.{won_f+=1};if a>0.{won_a+=1}
         if f>a+1e-8{better_f+=1}else if (f-a).abs()<=1e-8{ties+=1}
-        if p["frozen"]["result"]["gap_risk"]==true||p["adaptive"]["result"]["gap_risk"]==true{gaps+=1}
+        // Older/malformed payloads without explicit gap evidence cannot be
+        // classified as clean. Avoid making absent telemetry look like zero gap.
+        let fgap=p["frozen"]["result"]["max_quote_gap_ms"].as_u64();
+        let agap=p["adaptive"]["result"]["max_quote_gap_ms"].as_u64();
+        let fflag=p["frozen"]["result"]["gap_risk"].as_bool();
+        let aflag=p["adaptive"]["result"]["gap_risk"].as_bool();
+        match (fgap,agap,fflag,aflag) {
+            (Some(fg),Some(ag),Some(false),Some(false))
+                if fg<=GAP_WARNING_MS && ag<=GAP_WARNING_MS=>{
+                clean+=1;clean_sum_f+=f;clean_sum_a+=a;
+                if f>0.{clean_won_f+=1};if a>0.{clean_won_a+=1}
+                if f>a+1e-8{clean_better+=1}
+                else if (f-a).abs()<=1e-8{clean_ties+=1}
+            }
+            (Some(fg),Some(ag),Some(ff),Some(af))
+                if (ff== (fg>GAP_WARNING_MS))
+                    &&(af== (ag>GAP_WARNING_MS))
+                    &&(ff||af)=>{gaps+=1}
+            _=>{unknown_coverage+=1}
+        }
         if p["frozen"]["result"]["reason"]=="stop"{stop_f+=1}
         if p["adaptive"]["result"]["reason"]=="stop"{stop_a+=1}
         if p["frozen"]["result"]["reason"]=="target"{target_f+=1}
         if p["adaptive"]["result"]["reason"]=="target"{target_a+=1}
     }
     Ok(json!({
-        "status":if completed<MIN_COMPLETE{"insufficient_complete_pairs"}else{"descriptive_only"},
+        // Even 100 completed pairs do not establish adequate quote coverage
+        // when fewer than 30 have verified <=15-second gaps on BOTH legs.
+        "status":if completed<MIN_COMPLETE{"insufficient_complete_pairs"}
+            else if clean<MIN_COMPLETE{"insufficient_clean_pairs"}
+            else{"descriptive_only"},
+        "coverage_status":if unknown_coverage>0{"unverified_quote_coverage"}
+            else if gaps>0{"mixed_clean_and_gap_affected"}
+            else{"fully_observed_within_sampling_threshold"},
         "policy":POLICY,"completed_pairs":completed,"open_pairs":pending,
         "frozen_wins_after_costs":won_f,"adaptive_wins_after_costs":won_a,
         "frozen_stops":stop_f,"adaptive_stops":stop_a,
         "frozen_targets":target_f,"adaptive_targets":target_a,
         "frozen_outperforms_pairs":better_f,"exact_ties":ties,
-        "pairs_with_observation_gaps":gaps,"gap_warning_ms":GAP_WARNING_MS,
+        "pairs_with_observation_gaps":gaps,
+        "pairs_with_unknown_gap_evidence":unknown_coverage,
+        "clean_completed_pairs":clean,
+        "clean_coverage_fraction":if completed>0{Some(clean as f64/completed as f64)}else{None},
+        "clean_frozen_wins_after_costs":clean_won_f,
+        "clean_adaptive_wins_after_costs":clean_won_a,
+        "clean_frozen_outperforms_pairs":clean_better,"clean_exact_ties":clean_ties,
+        "clean_mean_frozen_net_per_lot":if clean>0{Some(clean_sum_f/clean as f64)}else{None},
+        "clean_mean_adaptive_net_per_lot":if clean>0{Some(clean_sum_a/clean as f64)}else{None},
+        "clean_mean_difference_frozen_minus_adaptive_per_lot":
+            if clean>0{Some((clean_sum_f-clean_sum_a)/clean as f64)}else{None},
+        "gap_warning_ms":GAP_WARNING_MS,
+        // Legacy all-pairs aggregates remain for transparency ONLY; they are
+        // NOT used to establish sufficient prospective observational evidence.
         "mean_frozen_net_per_lot":if completed>0{Some(sum_f/completed as f64)}else{None},
         "mean_adaptive_net_per_lot":if completed>0{Some(sum_a/completed as f64)}else{None},
         "mean_difference_frozen_minus_adaptive_per_lot":
             if completed>0{Some((sum_f-sum_a)/completed as f64)}else{None},
         "minimum_descriptive_pairs":MIN_COMPLETE,
         "broker_effect":false,"learning_effect":false,
-        "caveat":"Paired paper quotes, individually applied SL/TP/hold and same simulated costs; unobserved intratick events, fills, partials, swaps, bid/ask changes can make real outcomes different; not the global system/coordinator."
+        "caveat":"Paired paper quotes, individually applied SL/TP/hold and same simulated costs; clean means exclude >15s or unknown coverage gaps. Even clean sampled quotes cannot prove intratick SL/TP ordering, broker fills, partials, swaps, or profitability; not the global system/coordinator."
     }))
 }
 #[cfg(test)]
@@ -247,6 +293,8 @@ mod tests{
         let total=summary(&db,"r1").unwrap();
         assert_eq!(total["completed_pairs"],1);
         assert_eq!(total["frozen_targets"],1);
+        assert_eq!(total["clean_completed_pairs"],1);
+        assert_eq!(total["pairs_with_unknown_gap_evidence"],0);
         assert_eq!(total["adaptive_targets"],1);
         assert_eq!(total["open_pairs"],0);
         assert!(total["mean_frozen_net_per_lot"].as_f64().unwrap()<0.,
@@ -272,6 +320,101 @@ mod tests{
         assert_eq!(total["frozen_stops"],1);
         assert_eq!(total["adaptive_targets"],1);
     }
+    #[test]
+    fn actual_observe_detects_twenty_five_second_quote_blackout(){
+        let db=db();let c=Config::default();
+        let opened=1_000_100_000u64;let bar=1_000_001u64;
+        let long=sig(1,bar,0.5,0.5,60_000);
+        observe(&db,"r1",1_000_000_000,true,&long,&long,
+            &q(opened,100.,100.2),&c,opened).unwrap();
+        // First observed exit quote may have skipped a stop before the target.
+        observe(&db,"r1",1_000_000_000,false,&long,&long,
+            &q(opened+25_000,101.,101.2),&c,opened+25_000).unwrap();
+        let report=summary(&db,"r1").unwrap();
+        assert_eq!(report["completed_pairs"],1);
+        assert_eq!(report["pairs_with_observation_gaps"],1);
+        assert_eq!(report["clean_completed_pairs"],0);
+        assert_eq!(report["clean_mean_frozen_net_per_lot"],Value::Null);
+        assert_eq!(report["coverage_status"],"mixed_clean_and_gap_affected");
+    }
+    #[test]
+    fn gap_contaminated_winners_cannot_masquerade_as_clean_forward_evidence(){
+        let db=db();
+        // A highly profitable-looking sampled return after a 25-second quote
+        // blackout cannot be used to validate the frozen/adaptive policy.
+        for i in 0..30u64 {
+            let p=json!({
+                "frozen":{"result":{"net_per_lot":100.,"gap_risk":true,
+                    "max_quote_gap_ms":25_000,"reason":"target"}},
+                "adaptive":{"result":{"net_per_lot":0.,"gap_risk":true,
+                    "max_quote_gap_ms":25_000,"reason":"time"}}
+            });
+            db.execute(
+                "INSERT INTO frozen_shadow_trade_pairs
+                 (run_id,bar_time,opened_ms,closed_ms,state,payload)
+                 VALUES('r1',?1,1000,2000,'complete',?2)",
+                params![i+1,p.to_string()]).unwrap();
+        }
+        let dirty=summary(&db,"r1").unwrap();
+        assert_eq!(dirty["completed_pairs"],30);
+        assert_eq!(dirty["pairs_with_observation_gaps"],30);
+        assert_eq!(dirty["clean_completed_pairs"],0);
+        assert_eq!(dirty["clean_mean_frozen_net_per_lot"],Value::Null);
+        assert_eq!(dirty["status"],"insufficient_clean_pairs");
+        assert_eq!(dirty["coverage_status"],"mixed_clean_and_gap_affected");
+        assert_eq!(dirty["frozen_wins_after_costs"],30);
+        assert_eq!(dirty["clean_frozen_wins_after_costs"],0);
+        // The original all-pairs mean is kept but cannot qualify the policy.
+        assert_eq!(dirty["mean_frozen_net_per_lot"],100.);
+
+        for i in 30..60u64 {
+            let p=json!({
+                "frozen":{"result":{"net_per_lot":-2.,"gap_risk":false,
+                    "max_quote_gap_ms":1000,"reason":"stop"}},
+                "adaptive":{"result":{"net_per_lot":-1.,"gap_risk":false,
+                    "max_quote_gap_ms":1000,"reason":"stop"}}
+            });
+            db.execute(
+                "INSERT INTO frozen_shadow_trade_pairs
+                 (run_id,bar_time,opened_ms,closed_ms,state,payload)
+                 VALUES('r1',?1,1000,2000,'complete',?2)",
+                params![i+1,p.to_string()]).unwrap();
+        }
+        let clean=summary(&db,"r1").unwrap();
+        assert_eq!(clean["completed_pairs"],60);
+        assert_eq!(clean["clean_completed_pairs"],30);
+        assert_eq!(clean["status"],"descriptive_only");
+        assert_eq!(clean["clean_mean_frozen_net_per_lot"],-2.);
+        assert_eq!(clean["clean_mean_adaptive_net_per_lot"],-1.);
+        assert_eq!(clean["clean_mean_difference_frozen_minus_adaptive_per_lot"],-1.);
+        assert_eq!(clean["clean_frozen_wins_after_costs"],0);
+        assert_eq!(clean["clean_adaptive_wins_after_costs"],0);
+        assert_eq!(clean["clean_coverage_fraction"],0.5);
+    }
+    #[test]
+    fn old_or_contradictory_gap_metadata_is_unverified_not_assumed_clean(){
+        let db=db();
+        // Old records may have paper outcomes without auditable quote gaps.
+        let unknown=json!({"frozen":{"result":{"net_per_lot":10.}},
+            "adaptive":{"result":{"net_per_lot":2.}}});
+        let contradictory=json!({"frozen":{"result":{"net_per_lot":10.,
+                "gap_risk":false,"max_quote_gap_ms":80_000}},
+            "adaptive":{"result":{"net_per_lot":2.,
+                "gap_risk":false,"max_quote_gap_ms":80_000}}});
+        for (i,p) in [unknown,contradictory].into_iter().enumerate(){
+            db.execute(
+                "INSERT INTO frozen_shadow_trade_pairs
+                 (run_id,bar_time,opened_ms,closed_ms,state,payload)
+                 VALUES('r1',?1,1000,2000,'complete',?2)",
+                params![(i+1) as u64,p.to_string()]).unwrap();
+        }
+        let report=summary(&db,"r1").unwrap();
+        assert_eq!(report["pairs_with_unknown_gap_evidence"],2);
+        assert_eq!(report["clean_completed_pairs"],0);
+        assert_eq!(report["coverage_status"],"unverified_quote_coverage");
+        assert_eq!(report["clean_mean_frozen_net_per_lot"],Value::Null);
+    }
+
     #[test]
     fn stale_quote_or_different_signal_bars_cannot_backfill_pair(){
         let db=db();let c=Config::default();

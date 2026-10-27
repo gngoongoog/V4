@@ -18,6 +18,13 @@ pub mod oos;
 pub use research::{Analysis, Candle, MarketData, PaperSummary, RiskConfig};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const BUILD_ID: &str = env!("BRAINTRADE_BUILD_ID");
+pub fn build_identity() -> serde_json::Value {
+    serde_json::json!({"version":VERSION,"build_id":BUILD_ID,
+        "release":env!("BRAINTRADE_RELEASE_NAME"),"marker":env!("BRAINTRADE_RELEASE_MARKER"),
+        "channel":env!("BRAINTRADE_RELEASE_CHANNEL"),
+        "core_protocol":env!("BRAINTRADE_CORE_PROTOCOL").parse::<u32>().unwrap()})
+}
 pub const FRESH_MS: u64 = 8_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -146,6 +153,8 @@ pub struct Telemetry {
     pub balance: f64,
     pub equity: f64,
     #[serde(default)] pub leverage: Option<u32>,
+    /// Broker-reported used margin only; never synthesize from account equity.
+    #[serde(default)] pub margin: Option<f64>,
     #[serde(default)] pub margin_free: Option<f64>,
     #[serde(default)] pub minimum_lot_margin: Option<f64>,
     pub positions: Vec<Position>,
@@ -158,6 +167,9 @@ pub struct Telemetry {
     pub tick_age_ms: Option<u64>,
     #[serde(default)]
     pub quote_time_ms: Option<u64>,
+    /// Real MT5 time_msc; quote_time_ms remains the logical event ordering key.
+    #[serde(default)]
+    pub source_quote_time_ms: Option<u64>,
     pub symbol: String,
     pub volume_min: Option<f64>,
     pub volume_step: Option<f64>,
@@ -177,8 +189,24 @@ pub struct Telemetry {
     pub point: Option<f64>,
 }
 impl Telemetry {
+    pub fn broker_quote_time_ms(&self) -> Option<u64> {
+        let event = self.quote_time_ms.filter(|v| *v > 0)?;
+        match self.source_quote_time_ms {
+            Some(source) if source > 0 && source <= event => Some(source),
+            Some(_) => None,
+            None => Some(event), // Legacy snapshots lack verified source time.
+        }
+    }
+
+    pub fn quote_is_fresh(&self, now: u64, maximum_age_ms: u64) -> bool {
+        self.tick_age_ms.is_some_and(|v| v <= maximum_age_ms)
+            && self.broker_quote_time_ms().is_some_and(|v|
+                v <= now.saturating_add(2000) && now.saturating_sub(v) <= maximum_age_ms)
+    }
+
     pub fn validate(&self) -> bool {
         [self.balance, self.equity].iter().all(|v| v.is_finite())
+            && (self.source_quote_time_ms.is_none() || self.broker_quote_time_ms().is_some())
             && [
                 self.bid,
                 self.ask,
@@ -190,12 +218,14 @@ impl Telemetry {
                 self.tick_value_loss,
                 self.tick_value_profit,
                 self.point,
+                self.margin,
                 self.margin_free,
                 self.minimum_lot_margin,
             ]
             .iter()
             .flatten()
             .all(|v| v.is_finite())
+            && self.margin.is_none_or(|v| v >= 0.0)
             && self.market.as_ref().is_none_or(MarketData::valid)
             && self.positions.len() <= 10_000
             && self.positions.iter().all(|p| {
@@ -224,6 +254,8 @@ impl Telemetry {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Status {
     pub version: String,
+    #[serde(default)]
+    pub build: serde_json::Value,
     pub state: RunState,
     pub requested_run: bool,
     pub execution_enabled: bool,
@@ -241,6 +273,7 @@ impl Default for Status {
     fn default() -> Self {
         Self {
             version: VERSION.into(),
+            build: build_identity(),
             state: RunState::Stopped,
             requested_run: false,
             execution_enabled: false,
@@ -374,6 +407,22 @@ mod tests {
     }
 
     use super::*;
+    #[test]
+    fn p0d3_broker_used_margin_accepts_explicit_zero_and_refuses_negative_or_nan() {
+        let mut t=Telemetry::default();
+        t.margin=Some(0.0);
+        assert!(t.validate());
+        let mut value=serde_json::to_value(&t).unwrap();
+        assert_eq!(value["margin"],0.0);
+        t.margin=Some(-1.0);
+        assert!(!t.validate());
+        t.margin=Some(f64::NAN);
+        assert!(!t.validate());
+        value.as_object_mut().unwrap().remove("margin");
+        let legacy:Telemetry=serde_json::from_value(value).unwrap();
+        assert!(legacy.margin.is_none());
+        assert!(legacy.validate(),"Old snapshots lacking Margin remain readable");
+    }
     #[test]
     fn lifecycle_fails_closed_and_never_enables_execution() {
         let mut s = Status {

@@ -30,6 +30,187 @@ class NativeUiContract(unittest.TestCase):
         for section in range(5):
             self.assertRegex(self.dashboard, rf"root\.nav-section\s*==\s*{section}")
 
+    def test_all_native_form_controls_have_real_two_way_bindings(self):
+        # Beyond clickable buttons: verify each input persists into a property
+        # or invokes a selection callback. This is source wiring, not a
+        # replacement for interacting with native widgets on Windows.
+        def controls(source, kind):
+            pattern=re.compile(r"\b"+kind+r"\s*\{")
+            for match in pattern.finditer(source):
+                start=source.index("{",match.start())
+                depth=0
+                quoted=False
+                escaped=False
+                for offset in range(start,len(source)):
+                    ch=source[offset]
+                    if quoted:
+                        if escaped:
+                            escaped=False
+                        elif ch=="\\":
+                            escaped=True
+                        elif ch=='"':
+                            quoted=False
+                    elif ch=='"':
+                        quoted=True
+                    elif ch=="{":
+                        depth+=1
+                    elif ch=="}":
+                        depth-=1
+                        if depth==0:
+                            yield source[match.start():offset+1]
+                            break
+                else:
+                    self.fail(f"Unclosed Slint {kind} control")
+        all_sources=(self.dashboard,CORRELATION.read_text(encoding="utf-8"))
+        total={"Button":0,"ComboBox":0,"LineEdit":0,"CheckBox":0}
+        for code in all_sources:
+            for kind in total:
+                for element in controls(code,kind):
+                    total[kind]+=1
+                    if kind=="Button":
+                        self.assertRegex(element,r"\bclicked\s*=>")
+                    elif kind=="ComboBox":
+                        self.assertRegex(element,r"(current-index\s*<=>|selected\s*(?:\([^)]*\))?\s*=>)")
+                    elif kind=="LineEdit":
+                        self.assertRegex(element,r"\btext\s*<=>")
+                    else:
+                        self.assertRegex(element,r"\bchecked\s*<=>")
+        # Catch missing fields silently disappearing from nested layouts.
+        self.assertEqual(total,{"Button":112,"ComboBox":30,"LineEdit":49,"CheckBox":14})
+
+    def test_premium_native_dashboard_keeps_real_market_provenance(self):
+        main=(RUST / "main.rs").read_text(encoding="utf-8")
+        self.assertIn("COMMAND CENTER  /  مركز القيادة",self.dashboard)
+        self.assertIn("PROFESSIONAL CHART",self.dashboard)
+        self.assertIn("CORE INTELLIGENCE  /  حالة العقل الرئيسي",self.dashboard)
+        self.assertIn("MT5 TICK ACTIVITY",self.dashboard)
+        self.assertIn("volume:float",self.dashboard)
+        self.assertIn("bar.volume",self.dashboard)
+        self.assertIn("max_tick_volume = subset.iter().map(|c| c.tick_volume).max()",main)
+        self.assertIn("if max_tick_volume == 0",main)
+        self.assertIn("market.valid()",main)
+        self.assertIn("captured_ms <= 120_000",main) if "captured_ms <= 120_000" in main else self.assertIn("now_ms.saturating_sub(market.captured_ms) <= 120_000",main)
+
+    def test_full_width_scroll_view_is_explicit_and_chart_console_stretch(self):
+        home=self.dashboard.split("if root.page == 0: ScrollView {",1)[1].split("if root.page == 1: ScrollView",1)[0]
+        self.assertIn("viewport-width: self.width;",home)
+        # Alignment.start keeps the row itself wide but packs chart/panels
+        # into their intrinsic widths, recreating 400px of dead space.
+        desk_row="HorizontalLayout {width: root.width - (root.compact-sidebar ? 70px : 178px) - 24px;"
+        self.assertEqual(home.count(desk_row),3)
+        self.assertNotIn(desk_row + "spacing:9px;alignment:start;",home)
+        self.assertNotIn(desk_row + "spacing: 11px; alignment: start;",home)
+        self.assertIn("horizontal-stretch: 3;",home)
+        self.assertIn("horizontal-stretch: 1; min-width: 305px; max-width: 450px;",home)
+        self.assertIn("height: 264px; clip: true;",home)
+        self.assertNotIn("width:parent.width;spacing:",home)
+        self.assertNotIn("height: 304px; clip: true;",home)
+
+    def test_native_six_resolutions_and_hidden_kpi_layout_removed(self):
+        renderer=(RUST/"render.rs").read_text(encoding="utf-8")
+        checker=(ROOT/"scripts/check_native_ui_visuals.py").read_text(encoding="utf-8")
+        self.assertIn("if root.width >= 1280px: HorizontalLayout",self.dashboard)
+        self.assertIn("if root.width < 1280px: VerticalLayout",self.dashboard)
+        self.assertIn("root.compact-sidebar ? 70px : 178px",self.dashboard)
+        self.assertIn("min-width: 880px",self.dashboard)
+        self.assertEqual(self.dashboard.count("HorizontalLayout {width: root.width - (root.compact-sidebar ? 70px : 178px) - 24px;spacing"),3)
+        self.assertNotIn("HorizontalLayout {width:parent.width;",self.dashboard)
+        self.assertNotIn("HorizontalLayout {visible:root.width >= 1280px",self.dashboard)
+        self.assertNotIn("VerticalLayout {visible:root.width < 1280px",self.dashboard)
+        for w,h in [(1024,768),(1280,800),(1366,768),(1540,920),(1600,900),(1920,1080)]:
+            self.assertIn(str(w),renderer)
+            self.assertIn(str(w),checker) if w!=1540 else self.assertIn("1540, 920",checker)
+        self.assertIn("dashboard-{width}x{height}-{name}.ppm",renderer)
+
+    def test_original_reference_has_full_size_three_palette_screenshots(self):
+        renderer=(RUST / "render.rs").read_text(encoding="utf-8")
+        checker=(ROOT / "scripts/check_native_ui_visuals.py").read_text(encoding="utf-8")
+        self.assertIn("reference-command-center-{name}.ppm",renderer)
+        self.assertIn("reference-command-center-{palette}.ppm",checker)
+        self.assertIn("1540, 920",checker)
+        self.assertIn("Synthetic",renderer) if "Synthetic" in renderer else self.assertIn("synthetic",renderer)
+
+    def test_render_only_example_market_chart_is_never_live_trading_data(self):
+        runtime=(RUST / "main.rs").read_text(encoding="utf-8")
+        render=(RUST / "render.rs").read_text(encoding="utf-8")
+        self.assertIn("in property <bool> render-fixture: false;",self.dashboard)
+        self.assertIn("RENDER FIXTURE • NOT LIVE MT5",self.dashboard)
+        self.assertIn("ui.set_render_fixture(true)",render)
+        self.assertIn("ui.set_chart_bars",render)
+        self.assertNotIn("set_render_fixture(true)",runtime)
+        self.assertIn("native_chart_candles",runtime)
+
+    def test_priority_preview_is_fixture_only_and_displays_backup_mode_name(self):
+        render=(RUST/"render.rs").read_text(encoding="utf-8")
+        running=(RUST/"main.rs").read_text(encoding="utf-8")
+        self.assertIn("ui.set_priority_enabled(true)",render)
+        self.assertIn("ui.set_fallback_mode(1)",render)
+        self.assertNotIn("ui.set_priority_enabled(true)",running)
+        self.assertIn("SCALPING",self.dashboard)
+        self.assertIn("SWING",self.dashboard)
+        self.assertIn("EXPERT",self.dashboard)
+
+    def test_sniper_priority_routes_have_core_ownership_and_no_phantom_fallback(self):
+        domain=(ROOT/"crates/domain/src/trading.rs").read_text(encoding="utf-8")
+        core=(ROOT/"crates/runtime/src/lib.rs").read_text(encoding="utf-8")
+        studio=(RUST/"studio.rs").read_text(encoding="utf-8")
+        for key in ("priority-enabled", "sniper-active", "fallback-mode"):
+            self.assertIn(key,self.dashboard)
+        self.assertIn('root.studio-action("handoff_pause")',self.dashboard)
+        self.assertIn('root.studio-action("handoff_resume")',self.dashboard)
+        self.assertIn("one_entry_coordinator", (ROOT/"crates/runtime/src/trading_settings.rs").read_text(encoding="utf-8"))
+        self.assertIn("pub fn priority_mode(&self)",domain)
+        self.assertIn("Trading priority has conflicting execution owners",domain)
+        self.assertIn('path=="/v1/trading/priority/handoff"',core)
+        self.assertIn("telemetry.positions.is_empty()",core)
+        self.assertIn("self.execution.pending(&self.db)?",core)
+        self.assertIn("self.execution.is_live_target()",core)
+        self.assertIn("self.execution.validate_start(&current,body)?",core)
+        self.assertIn("self.execution.set_mode(next.trading.mode)",core)
+        self.assertIn('"sniper_active":action=="handoff_resume"',studio)
+        self.assertIn('"/v1/trading/priority/handoff"',studio)
+
+    def test_reference_mockup_navigation_and_actions_are_all_wired(self):
+        self.assertEqual(len(re.findall(r"\bDeskNav\s*\{",self.dashboard)), 12)
+        self.assertEqual(len(re.findall(r"\bDeskAction\s*\{",self.dashboard)), 10)
+        self.assertEqual(len(re.findall(r"\bDeskMetric\s*\{",self.dashboard)), 12)
+        self.assertIn("if root.width >= 1280px: HorizontalLayout",self.dashboard)
+        self.assertIn("if root.width < 1280px: VerticalLayout",self.dashboard)
+        self.assertEqual(sum(self.dashboard.count(name) for name in
+            ("nav-hit := TouchArea", "metric-hit := TouchArea", "action-hit := TouchArea", "frame-hit := TouchArea")),4)
+        self.assertEqual(self.dashboard.count("DeskFrame {label:"),3)
+        self.assertEqual(self.dashboard.count("metric-hit := TouchArea"),1)
+        self.assertEqual(self.dashboard.count("chart-crosshair := TouchArea"),1)
+        self.assertIn("root.pressed();",self.dashboard)
+        self.assertIn("root.trade-journal-rows[0]",self.dashboard)
+        self.assertIn("root.brain-monitor-overview",self.dashboard)
+        self.assertIn("root.risk-monitor-text",self.dashboard)
+        self.assertIn("root.online && root.state==\"STOPPED\"",self.dashboard)
+        self.assertIn('root.action("start")',self.dashboard)
+        self.assertIn('root.action("stop")',self.dashboard)
+
+
+    def test_ui12_hover_keyboard_safe_navigation_and_chart_provenance(self):
+        # Static interaction contract; real mouse QA still requires Windows.
+        self.assertIn("animate background, border-color",self.dashboard)
+        for control in ("nav-hit := TouchArea", "metric-hit := TouchArea",
+                        "action-hit := TouchArea", "frame-hit := TouchArea"):
+            self.assertEqual(self.dashboard.count(control),1)
+        self.assertEqual(self.dashboard.count("DeskFrame {label:"),3)
+        self.assertIn("selected:root.chart-frame==0",self.dashboard)
+        self.assertIn("selected:root.chart-frame==1",self.dashboard)
+        self.assertIn("selected:root.chart-frame==2",self.dashboard)
+        self.assertIn("enabled: root.chart-bars.length > 0;",self.dashboard)
+        self.assertIn("chart-crosshair.mouse-x",self.dashboard)
+        self.assertIn("chart-crosshair.mouse-y",self.dashboard)
+        # All twelve responsive metric instances must navigate to a
+        # real page/refresh callback, never directly place trades.
+        metric_instances=[line for line in self.dashboard.splitlines()
+                          if "footer:" in line and "pressed=>{" in line]
+        self.assertEqual(len(metric_instances),12)
+        self.assertTrue(all("root.page=" in action for action in metric_instances))
+        self.assertTrue(all('root.action("start")' not in action for action in metric_instances))
+
     def test_no_button_is_rendered_without_a_click_handler(self):
         for path in (SLINT, CORRELATION):
             src = path.read_text(encoding="utf-8")
@@ -37,11 +218,15 @@ class NativeUiContract(unittest.TestCase):
             # decorative buttons are not accepted into the Windows release.
             count = len(re.findall(r"\bButton\s*\{", src))
             wired = len(re.findall(r"\bclicked\s*=>", src))
+            # UI-07 uses 2 custom Rectangle+TouchArea components for
+            # interactive sidebar entries and premium order buttons.
+            touch = sum(src.count(name) for name in ("nav-hit := TouchArea", "metric-hit := TouchArea", "action-hit := TouchArea", "frame-hit := TouchArea"))
             self.assertGreater(count, 0)
-            self.assertEqual(count, wired, f"Found inert control in {path.name}")
+            self.assertEqual(count, wired-touch, f"Found inert control in {path.name}")
 
     def test_every_declared_callback_is_registered_in_the_desktop(self):
-        callbacks = set(re.findall(r"(?m)^\s*callback\s+([a-z0-9-]+)\s*\(", self.dashboard))
+        dashboard_root=self.dashboard.split("export component Dashboard inherits Window {",1)[1]
+        callbacks = set(re.findall(r"(?m)^\s*callback\s+([a-z0-9-]+)\s*\(", dashboard_root))
         callbacks.update(re.findall(r"(?m)^\s*callback\s+([a-z0-9-]+)\s*\(", CORRELATION.read_text(encoding="utf-8")))
         # Correlation callback is forwarded to Dashboard; not a Rust callback itself.
         handlers = set(re.findall(r"\bui\.on_([a-z0-9_]+)\s*\(", self.rust))
@@ -86,13 +271,160 @@ class NativeUiContract(unittest.TestCase):
         self.assertIn("BRAINTRADE OS "+version,self.dashboard)
         self.assertNotIn("Windows 0.7.1",self.dashboard)
 
+    def test_compact_navigation_preserves_all_22_real_page_actions(self):
+        self.assertIn("current-index <=> root.page",self.dashboard)
+        self.assertIn("visible: root.expanded-workspaces",self.dashboard)
+        self.assertIn('if root.account-mode-label == "REAL": HorizontalLayout',self.dashboard)
+        self.assertIn("text <=> root.live-start-login",self.dashboard)
+        self.assertIn("root.expanded-workspaces = !root.expanded-workspaces",self.dashboard)
+        for action in ('root.studio-action("config")',
+                       'root.execution-action("refresh")',
+                       'root.trade-journal-action("refresh")',
+                       'root.brain-monitor-action("refresh")',
+                       'root.risk-monitor-refresh()',
+                       'root.correlation-action("refresh")',
+                       'root.action("events")'):
+            self.assertIn(action,self.dashboard)
+    def test_institutional_risk_brain_and_execution_cards_reuse_real_state(self):
+        checks = (
+            'label:"MODE / الوضع الحالي"',
+            'value:root.trade-mode == 3 ? "SNIPER"',
+            'label:"BROKER / نوع الحساب"',
+            'value:root.account-mode-label',
+            'label:"BRAIN MONITOR / حالة البيانات"',
+            'value:root.brain-monitor-busy',
+            'label:"EXECUTION / الحالة"',
+            'value:root.exec-busy',
+            'label:"RISK MONITOR / تحديث"',
+            'value:root.risk-monitor-busy',
+            'text: root.brain-monitor-detail',
+            'text: root.risk-monitor-text',
+            'root.brain-monitor-action("save")',
+            'root.execution-action("bind")',
+            'root.save-risk()'
+        )
+        for expression in checks:
+            self.assertIn(expression, self.dashboard, expression)
+        for index in range(22):
+            self.assertIn(f'root.page == {index} ?',self.dashboard,
+                          f"Missing per-page live breadcrumb for page {index}")
+
+    def test_windows_gui_render_process_is_synchronous_before_screenshot_check(self):
+        script=(ROOT / "scripts/build-windows.ps1").read_text(encoding="utf-8")
+        self.assertIn("Start-Process -FilePath",script)
+        self.assertIn("-PassThru -Wait",script)
+        self.assertIn("-WorkingDirectory $PWD.Path",script)
+        self.assertIn("$NativeRenderer.ExitCode -ne 0",script)
+        self.assertLess(script.index("Start-Process -FilePath"),script.index("scripts\\check_native_ui_visuals.py"))
+
+    def test_packaged_windows_visual_contract_accepts_all_three_palettes(self):
+        portable=(ROOT / "scripts/check_windows_portable.py").read_text(encoding="utf-8")
+        self.assertIn("review_pages = {0, 6, 14, 17, 18, 19, 21}",portable)
+        self.assertIn('for palette in ("white", "smoke")',portable)
+        self.assertIn('all 72 saved native theme frames',portable)
+        self.assertNotIn('all 44 complete native frames',portable)
+
+    def test_standalone_app_uses_smoke_as_default_without_overwriting_saved_theme(self):
+        main=(RUST / "main.rs").read_text(encoding="utf-8")
+        self.assertIn("else{return (2,false,false)}",main)
+        self.assertIn(".unwrap_or((2,false,false))",main)
+        self.assertIn("ui.set_theme_choice(initial_theme)",main)
+
+    def test_active_sidebar_highlights_current_workspace(self):
+        for page, title in ((0,"نظرة عامة"),(14,"مركز التداول"),(21,"العقول"),
+                            (6,"إدارة المخاطر"),(17,"التنفيذ MT5"),
+                            (20,"سجل الصفقات"),(19,"تقدّم التعلّم")):
+            self.assertIn(f'(root.page == {page} ? "●   {title}"',self.dashboard)
+
+    def test_visual_qa_is_enforced_in_research_and_windows_package(self):
+        research=(ROOT / ".github/workflows/research.yml").read_text(encoding="utf-8")
+        windows=(ROOT / "scripts/build-windows.ps1").read_text(encoding="utf-8")
+        checker=(ROOT / "scripts/check_native_ui_visuals.py").read_text(encoding="utf-8")
+        self.assertEqual(research.count("run: python3 scripts/check_native_ui_visuals.py"), 2)
+        self.assertIn("scripts\\check_native_ui_visuals.py",windows)
+        self.assertIn("for page in range(22)",checker)
+        self.assertIn("if validated != 72",checker)
+        self.assertIn("if len({dark, white, smoke}) != 3",checker)
+
+    def test_canceling_studio_blocks_new_studio_actions_until_ack(self):
+        src=(RUST / "studio.rs").read_text(encoding="utf-8")
+        self.assertIn('if ui.get_studio_busy() || ui.get_studio_cancel_busy(){return;}',src)
+        # At least all the buttons bound to the ordinary studio-busy guard
+        # must also be disabled during cancellation; never replace the actual
+        # Cancel button's separate busy state.
+        self.assertNotIn('enabled: !root.studio-busy;',self.dashboard)
+        self.assertIn('enabled: !root.studio-busy && !root.studio-cancel-busy',self.dashboard)
+        self.assertIn('enabled: !root.studio-cancel-busy; clicked => { root.studio-action("cancel"); }',self.dashboard)
+
+    def test_studio_cancel_really_works_while_studio_is_busy(self):
+        src=(RUST / "studio.rs").read_text(encoding="utf-8")
+        self.assertIn('if action=="cancel"',src)
+        self.assertIn('ui.set_studio_cancel_busy(true)',src)
+        self.assertIn('ui.set_studio_cancel_busy(false)',src)
+        self.assertIn('"/v1/studio/cancel"',src)
+        self.assertLess(src.index('if action=="cancel"'), src.index('if ui.get_studio_busy() || ui.get_studio_cancel_busy(){return;}'))
+        self.assertIn('enabled: !root.studio-cancel-busy; clicked => { root.studio-action("cancel"); }',self.dashboard)
+        self.assertIn('in property <bool> studio-cancel-busy: false;',self.dashboard)
+
+    def test_status_strip_responsive_and_white_theme_legible(self):
+        self.assertIn('visible: root.width >= 1100px;', self.dashboard)
+        self.assertIn('visible: root.width >= 1250px;', self.dashboard)
+        self.assertIn('visible: root.width >= 1400px;', self.dashboard)
+        self.assertIn('#e9eff6', self.dashboard)
+        self.assertIn('#dff5ee', self.dashboard)
+
+    def test_global_page_refresh_is_only_wired_to_real_supported_handlers(self):
+        for page, callback in (
+            (2, 'root.action("events")'),
+            (6, 'root.risk-monitor-refresh()'),
+            (7, 'root.backtest-action("refresh")'),
+            (8, 'root.news-action("refresh")'),
+            (9, 'root.evaluation-action("refresh")'),
+            (11, 'root.learning-action("refresh")'),
+            (13, 'root.backup-action("refresh")'),
+            (14, 'root.studio-action("config")'),
+            (17, 'root.execution-action("refresh")'),
+            (18, 'root.correlation-action("refresh")'),
+            (20, 'root.trade-journal-action("refresh")'),
+            (21, 'root.brain-monitor-action("refresh")'),
+        ):
+            self.assertIn(f"root.page == {page}", self.dashboard)
+            self.assertIn(callback, self.dashboard)
+        self.assertIn('text: "↻ تحديث الصفحة"', self.dashboard)
+        self.assertIn("!root.news-refreshing", self.dashboard)
+        self.assertIn("!root.brain-monitor-busy", self.dashboard)
+        self.assertIn('root.page == 15 || root.page == 16', self.dashboard)
+        self.assertIn("root.save-appearance(root.theme-choice,root.compact-sidebar,root.expanded-workspaces)", self.dashboard)
+
+    def test_entire_22_page_windows_dashboard_supports_saved_appearance(self):
+        main = (RUST / "main.rs").read_text(encoding="utf-8")
+        render = (RUST / "render.rs").read_text(encoding="utf-8")
+        correlation = CORRELATION.read_text(encoding="utf-8")
+        for token in ("callback save-appearance(int, bool, bool)", "root.save-appearance(",
+                      "changed theme-choice =>", "root.compact-sidebar"):
+            self.assertIn(token, self.dashboard)
+        self.assertIn("ui.on_save_appearance", main)
+        self.assertIn('data_dir().join("ui-appearance.json")', main)
+        self.assertIn("ui.set_theme_choice(initial_theme)", main)
+        self.assertIn("ui.set_compact_sidebar(initial_compact)", main)
+        self.assertIn("ui.set_expanded_workspaces(initial_expanded)", main)
+        self.assertIn('"expanded_workspaces":expanded', main)
+        self.assertIn("theme-choice: root.theme-choice", self.dashboard)
+        self.assertIn("in property <int> theme-choice: 0;", correlation)
+        for marker in ('[(0,"dark"),(1,"white"),(2,"smoke")]', "for page in 0..22",
+                       "if theme == 0 || [0,6,14,17,18,19,21].contains(&page)"):
+            self.assertIn(marker, render)
+        # Zero-connection monitoring is explicitly unknown, not a fabricated score.
+        self.assertIn("نسبة نجاح أو تعلّم: غير محسوبة", self.dashboard)
+
     def test_three_institutional_themes_and_real_market_chart_are_explicit(self):
         for mode, palette in (("داكن","ColorScheme.dark"),
-                              ("أبيض","ColorScheme.light"),
+                              ("أبيض","ColorScheme.dark"),
                               ("رمادي","ColorScheme.dark")):
             self.assertIn(f'text:"{mode}"',self.dashboard)
             self.assertIn(palette,self.dashboard)
         self.assertIn("theme-choice: 0",self.dashboard)
+        self.assertIn("changed theme-choice => { Palette.color-scheme = ColorScheme.dark; }",self.dashboard)
         self.assertIn("root.chart-bars",self.dashboard)
         self.assertIn("بانتظار شموع MT5",self.dashboard)
         self.assertIn("QUOTE AGE / عمر السعر",self.dashboard)

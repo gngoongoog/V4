@@ -24,10 +24,27 @@ Invoke-Checked -Program py -Arguments @('-3.13','-m','venv','.build-venv')
 $Python = Join-Path $PWD '.build-venv\Scripts\python.exe'
 Invoke-Checked -Program $Python -Arguments @('-m','pip','install','pefile==2024.8.26')
 if (-not $SkipTests) {
-    Invoke-Checked -Program cargo -Arguments @('test','--workspace','--locked')
+    # This is the legacy Slint/BrainTrade.exe Windows validation route.
+    # Tauri V25 has mandatory staged runtime/ and mt5/ resources and is tested
+    # end-to-end by Build-V25-Portable-Windows.ps1 instead; including it in
+    # unstaged cargo --workspace here incorrectly fails its build.rs.
+    Invoke-Checked -Program cargo -Arguments @('test','--locked','-p','braintrade-domain','-p','braintrade-runtime','-p','braintrade-desktop')
     Invoke-Checked -Program $Python -Arguments @('-m','unittest','discover','-s','tests','-v')
 }
 Invoke-Checked -Program cargo -Arguments @('build','--release','--locked','-p','braintrade-desktop')
+if (-not $SkipTests) {
+    # Native software rendering works without a broker; assert all 22 pages
+    # render in three themes and two viewport sizes before packaging the exe.
+    $NativeScreenshots = Join-Path $PWD 'test-output\native-ui'
+    if (Test-Path $NativeScreenshots) { Remove-Item -LiteralPath $NativeScreenshots -Recurse -Force }
+    # BrainTrade.exe is compiled as a Windows GUI subsystem application.
+    # A plain '& BrainTrade.exe --render-check' returns before the GUI child
+    # finishes its Slint software-render pass; use Start-Process -Wait.
+    $NativeRenderer = Start-Process -FilePath (Join-Path $PWD 'target\release\BrainTrade.exe') `
+        -ArgumentList @('--render-check') -WorkingDirectory $PWD.Path -PassThru -Wait
+    if ($NativeRenderer.ExitCode -ne 0) { throw "Native Windows render failed ($($NativeRenderer.ExitCode))" }
+    Invoke-Checked -Program $Python -Arguments @('scripts\check_native_ui_visuals.py')
+}
 Invoke-Checked -Program $Python -Arguments @('scripts\package-portable.py','--exe','target\release\BrainTrade.exe')
 $PackagedOperator = Join-Path $PWD 'release\BrainTrade\Tools\Run-Demo-Acceptance.ps1'
 $PackagedGui = Join-Path $PWD 'release\BrainTrade\Tools\Run-Demo-Acceptance-GUI.ps1'
@@ -38,6 +55,7 @@ $Check = Join-Path $PWD 'release\BrainTrade\runtime\gateway\check_runtime.py'
 Invoke-Checked -Program $EmbeddedPython -Arguments @($Check)
 Invoke-Checked -Program $Python -Arguments @('scripts\check_windows_portable.py','--exe','release\BrainTrade\BrainTrade.exe')
 Invoke-Checked -Program $Python -Arguments @('scripts\check_execution.py','--exe','release\BrainTrade\BrainTrade.exe')
+Invoke-Checked -Program $Python -Arguments @('scripts\check_priority_handoff.py','--exe','release\BrainTrade\BrainTrade.exe')
 Invoke-Checked -Program $Python -Arguments @('scripts\check_flexible_demo.py','--exe','release\BrainTrade\BrainTrade.exe')
 Invoke-Checked -Program $Python -Arguments @('scripts\check_sniper_learner.py','--exe','release\BrainTrade\BrainTrade.exe')
 Write-Host 'Portable package created. End users launch BrainTrade.exe; no separate Python/Rust installation.'
