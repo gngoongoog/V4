@@ -212,4 +212,53 @@ mod tests {
         assert_eq!(saved.commission_profiles[0].amount, 5.25);
         assert_eq!(saved.risk.commission_per_lot, 5.25);
     }
+    #[test]
+    fn sniper_parameters_survive_core_save_reload_and_are_account_scoped() {
+        use braintrade_domain::trading::{TradingMode, SniperBrain, SniperStyle, SniperTargetMode};
+        let mut status = connected();
+        let original = Config::default();
+        let mut modified = original.trading.clone();
+        modified.priority_enabled = true;
+        modified.sniper_active = true;
+        modified.fallback_mode = TradingMode::Scalping;
+        modified.select_priority_owner();
+        modified.sniper_brain = SniperBrain::Learner;
+        modified.sniper_style = SniperStyle::Confirmed;
+        modified.sniper_target_mode = SniperTargetMode::Adaptive;
+        modified.sniper_min_target_pips = 3.5;
+        modified.sniper_max_target_pips = 9.5;
+        modified.sniper_target_points = 150.0;
+        modified.pip_points = 20.0;
+        modified.sniper_stop_points = 130.0;
+        modified.sniper_cooldown_seconds = 3;
+        modified.sniper_max_hold_seconds = 23;
+        modified.sniper_pip_price = 0.10;
+        modified.max_cost_fraction = 0.30;
+        modified.demo_flexible = false;
+        modified.adaptive_exits = false;
+        let body = json!({
+            "trading":modified,
+            "commission_per_lot":3.50,
+            "commission_basis":"per_side",
+            "account":Account::from_telemetry(status.telemetry.as_ref().unwrap())
+        }).to_string();
+        let saved = update(&original, &status, body.as_bytes()).unwrap();
+        let reloaded:Config=serde_json::from_slice(
+            &serde_json::to_vec(&saved).unwrap()
+        ).unwrap();
+        let readback=view(&reloaded,&status);
+        assert_eq!(readback["config"]["trading"],json!(modified));
+        assert_eq!(readback["config"]["trading"]["sniper_target_points"],150.0);
+        assert_eq!(readback["config"]["trading"]["pip_points"],20.0);
+        assert_eq!(readback["commission_editor"]["amount"],3.50);
+        assert_eq!(readback["commission_editor"]["basis"],"per_side");
+        assert_eq!(readback["commission_editor"]["round_trip_per_lot"],7.0);
+        assert_eq!(original.trading.sniper_target_points,50.0,
+            "Saving changes must not mutate previously observed Core config");
+        status.requested_run=true;
+        assert!(update(&reloaded,&status,body.as_bytes()).is_err(),
+            "No strategy reconfiguration while entry execution is active");
+    }
+
+
 }
