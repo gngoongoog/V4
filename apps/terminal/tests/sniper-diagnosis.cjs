@@ -37,13 +37,13 @@ for(const field of ['sniper_target_points','sniper_stop_points','sniper_target_m
  'demo_flexible','adaptive_exits']){
  assert(editor.includes(field),'Missing editable Sniper parameter '+field);
 }
-assert.match(tauri,/"\\/v1\\/execution\\/reconciliation"/,'Tauri read-only allowlist');
+assert(tauri.includes('"/v1/execution/reconciliation"'),'Tauri read-only allowlist');
 assert(core.includes('reconciliation_audit::report(&self.db,'),'Core uses read-only audit');
 assert(core.indexOf('if method=="GET" && path=="/v1/execution/reconciliation"')<
  core.indexOf('if path.starts_with("/v1/execution")'));
-assert.match(reconciliation,/readPanel\\('\\/v1\\/execution\\/reconciliation'\\)/);
-assert.match(reconciliation,/current_session_pending/);
-assert.match(reconciliation,/other_or_unverified_session_pending/);
+assert(reconciliation.includes("readPanel('/v1/execution/reconciliation')"));
+assert(reconciliation.includes('current_session_pending'));
+assert(reconciliation.includes('other_or_unverified_session_pending'));
 assert(!reconciliation.includes('readPanel("/v1/gateway/snapshot"'));
-assert.match(terminal,/<ReconciliationDiagnostics key=\\{viewScope\\}/);
+assert(terminal.includes('<ReconciliationDiagnostics key={viewScope}'));
 console.log('PASS: Sniper save contract, account-scoped diagnostic, read-only enforcement and draft retention');
