@@ -18,6 +18,7 @@ for(const name of ['src/sniper-diagnosis.tsx','src/operations.tsx']){
 }
 assert.match(tauri,/"\/v1\/execution\/sniper-diagnosis"/,'Tauri read-only allowlist');
 assert.match(core,/sniper_opportunities::report\(&self\.db,&context\)/);
+assert(core.indexOf('if method=="GET" && path=="/v1/execution/sniper-diagnosis"')<core.indexOf('if path.starts_with("/v1/execution")'),'Diagnostic route must precede generic execution router');
 assert.match(core,/sniper_blocker_review::report\(&self\.db,&context,now_ms\(\)\)/);
 assert.match(core,/t\.account_trade_mode==Some\(0\)/,'Demo must be verified');
 assert.match(core,/"endpoint_submits_orders":false/);
