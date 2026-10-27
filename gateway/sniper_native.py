@@ -16,6 +16,7 @@ import math
 import os
 from pathlib import Path
 import secrets
+import sys
 import threading
 import time
 
@@ -198,6 +199,8 @@ class _WindowsPipeServer:
         self.pipe_name = pipe_name
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._last_problem: tuple[str, int] | None = None
+        self._last_problem_logged_at = 0.0
 
     @property
     def running(self) -> bool:
@@ -270,13 +273,33 @@ class _WindowsPipeServer:
         kernel.CloseHandle.restype = wintypes.BOOL
         return kernel, wintypes
 
+    def _log_problem(self, stage: str, error: int = 0) -> None:
+        # Never log packets, account tokens or secret pipe payloads.
+        now = time.monotonic()
+        issue = (stage, int(error))
+        if issue != self._last_problem or now - self._last_problem_logged_at >= 15.0:
+            print(f"Native Sniper pipe {stage}: WinError={int(error)}", file=sys.stderr, flush=True)
+            self._last_problem = issue
+            self._last_problem_logged_at = now
+
     def _run(self) -> None:
+        try:
+            self._serve()
+        except Exception as exc:
+            self._log_problem(type(exc).__name__, ctypes.get_last_error())
+            # Worker failure must not crash the whole MT5 gateway; its main loop
+            # supervises this thread and safely regenerates the session token.
+        finally:
+            self.mailbox.set_connected(False)
+
+    def _serve(self) -> None:
         kernel, wintypes = self._kernel()
         mode = self.PIPE_TYPE_BYTE | self.PIPE_READMODE_BYTE | self.PIPE_WAIT | self.PIPE_REJECT_REMOTE_CLIENTS
         while not self._stop.is_set():
             handle = kernel.CreateNamedPipeW(self.pipe_name, self.PIPE_ACCESS_DUPLEX, mode,
                                              1, 4096, 4096, 0, None)
             if handle == self.INVALID_HANDLE_VALUE:
+                self._log_problem('CreateNamedPipeW', ctypes.get_last_error())
                 if self._stop.wait(0.25):
                     break
                 continue
@@ -285,6 +308,9 @@ class _WindowsPipeServer:
                     continue
                 connected = bool(kernel.ConnectNamedPipe(handle, None))
                 if not connected and ctypes.get_last_error() != self.ERROR_PIPE_CONNECTED:
+                    error = ctypes.get_last_error()
+                    if not self._stop.is_set() and error not in (109, 232, 995):
+                        self._log_problem('ConnectNamedPipe', error)
                     continue
                 if self._stop.is_set():
                     continue
@@ -306,7 +332,8 @@ class _WindowsPipeServer:
                         pending = bytearray(remainder)
                         try:
                             self.mailbox.push(parse_packet(bytes(line), self.token))
-                        except ValueError:
+                        except ValueError as exc:
+                            self._log_problem('RejectedPacket'+type(exc).__name__)
                             continue
             finally:
                 self.mailbox.set_connected(False)
