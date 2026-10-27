@@ -243,9 +243,17 @@ mod tests {
             "account":Account::from_telemetry(status.telemetry.as_ref().unwrap())
         }).to_string();
         let saved = update(&original, &status, body.as_bytes()).unwrap();
+        // Exercise the same durable atomic-write path as POST /v1/trading/settings,
+        // then construct a new Config by reading the actual on-disk bytes.
+        let directory = std::env::temp_dir()
+            .join(format!("braintrade-sniper-save-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("config.json");
+        crate::atomic_write(&path,&serde_json::to_vec_pretty(&saved).unwrap()).unwrap();
         let reloaded:Config=serde_json::from_slice(
-            &serde_json::to_vec(&saved).unwrap()
+            &std::fs::read(&path).unwrap()
         ).unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
         let readback=view(&reloaded,&status);
         assert_eq!(readback["config"]["trading"],json!(modified));
         assert_eq!(readback["config"]["trading"]["sniper_target_points"],150.0);
