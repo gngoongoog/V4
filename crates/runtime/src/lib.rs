@@ -236,6 +236,35 @@ impl Engine{
             if method=="POST"{self.event("frozen_coordinator_policy_action",json!({"result":result}))?;}
             return Ok(result);
         }
+        // Read-only MT5 Demo Sniper diagnostics. Connectivity alone does not
+        // authorize entry; show actual sampled signal and execution blockers.
+        if method=="GET" && path=="/v1/execution/sniper-diagnosis" {
+            let (c,status)={let mut shared=self.shared.lock().unwrap();
+                shared.status.refresh(now_ms());
+                (shared.config.clone(),shared.status.clone())};
+            let t=status.telemetry.as_ref().filter(|t|status.gateway_fresh
+                &&t.connected&&t.demo&&t.account_trade_mode==Some(0)
+                &&t.login>0&&!t.server.is_empty()&&!t.symbol.is_empty()
+                &&!t.currency.is_empty()&&t.symbol==c.symbol);
+            let Some(t)=t else {
+                return Ok(json!({"schema":"sniper-diagnosis-v1",
+                    "status":"no_verified_demo_account",
+                    "requested_run":status.requested_run,
+                    "execution_enabled":status.execution_enabled,
+                    "mode":c.trading.mode,"read_only":true,
+                    "endpoint_submits_orders":false}));
+            };
+            let context=serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency))?;
+            return Ok(json!({"schema":"sniper-diagnosis-v1",
+                "status":"sampled_demo_only","context":context,
+                "mode":c.trading.mode,"priority_owner":c.trading.priority_mode(),
+                "requested_run":status.requested_run,
+                "execution_enabled":status.execution_enabled,
+                "observations":sniper_opportunities::report(&self.db,&context)?,
+                "blockers":sniper_blocker_review::report(&self.db,&context,now_ms())?,
+                "read_only":true,"endpoint_submits_orders":false,
+                "note":"This is a sampled retrospective diagnostic, not every Fast Pulse or broker order."}));
+        }
         if path.starts_with("/v1/execution") {
             let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
             let result=self.execution.route(method,path,body,&self.db,&status,now_ms())?;
@@ -317,35 +346,6 @@ impl Engine{
             self.execution.refresh_supervisor(&self.db);
             self.event("enterprise_supervisor_settings_changed",json!({"settings":result["settings"],"scope":"entry_only","mode_handoff":false}))?;
             return Ok(result);
-        }
-        // Read-only MT5 Demo Sniper diagnostics. Connectivity alone does not
-        // authorize entry; show actual sampled signal and execution blockers.
-        if method=="GET" && path=="/v1/execution/sniper-diagnosis" {
-            let (c,status)={let mut shared=self.shared.lock().unwrap();
-                shared.status.refresh(now_ms());
-                (shared.config.clone(),shared.status.clone())};
-            let t=status.telemetry.as_ref().filter(|t|status.gateway_fresh
-                &&t.connected&&t.demo&&t.account_trade_mode==Some(0)
-                &&t.login>0&&!t.server.is_empty()&&!t.symbol.is_empty()
-                &&!t.currency.is_empty()&&t.symbol==c.symbol);
-            let Some(t)=t else {
-                return Ok(json!({"schema":"sniper-diagnosis-v1",
-                    "status":"no_verified_demo_account",
-                    "requested_run":status.requested_run,
-                    "execution_enabled":status.execution_enabled,
-                    "mode":c.trading.mode,"read_only":true,
-                    "endpoint_submits_orders":false}));
-            };
-            let context=serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency))?;
-            return Ok(json!({"schema":"sniper-diagnosis-v1",
-                "status":"sampled_demo_only","context":context,
-                "mode":c.trading.mode,"priority_owner":c.trading.priority_mode(),
-                "requested_run":status.requested_run,
-                "execution_enabled":status.execution_enabled,
-                "observations":sniper_opportunities::report(&self.db,&context)?,
-                "blockers":sniper_blocker_review::report(&self.db,&context,now_ms())?,
-                "read_only":true,"endpoint_submits_orders":false,
-                "note":"This is a sampled retrospective diagnostic, not every Fast Pulse or broker order."}));
         }
         if path=="/v1/trading/settings" {
             let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());
