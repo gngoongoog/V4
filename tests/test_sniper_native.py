@@ -52,11 +52,11 @@ class NativeSniperTests(unittest.TestCase):
         # the braintrade-sniper-pipe thread, leaving the EA in WAITING.
         token = "session-token-0123456789"
         event_id = 2_000 * native.EVENT_FACTOR + 7
-        wire = f"BT2|{token}|77|XAUUSDr|2000|{event_id}|2500.10|2500.30\\n"
+        wire = f"BT2|{token}|77|XAUUSDr|2000|{event_id}|2500.10|2500.30\n"
         pending = bytearray(wire.encode("ascii"))
-        line, separator, remainder = pending.partition(b"\\n")
+        line, separator, remainder = pending.partition(b"\n")
         self.assertIsInstance(line, bytearray)
-        self.assertEqual(separator, bytearray(b"\\n"))
+        self.assertEqual(separator, bytearray(b"\n"))
         self.assertEqual(remainder, bytearray())
         parsed = native.parse_packet(line, token, received_ms=2004)
         self.assertEqual(parsed["login"], 77)
