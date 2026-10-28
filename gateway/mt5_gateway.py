@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import sys
+import threading
 import urllib.request
 from pathlib import Path
 import time
@@ -461,6 +463,48 @@ def lock_gateway(directory: Path):
     return handle
 
 
+def watch_parent_stdin(stream, wake):
+    """Ask the main loop to finish after the Core closes its private pipe.
+
+    EOF is a shutdown request, not a broker command. Only Core-launched
+    gateways opt in; no shared file can accidentally request an exit.
+    """
+    stopped = threading.Event()
+    def watch():
+        try:
+            while stream.read(1):
+                pass
+        except (OSError, ValueError):
+            pass
+        finally:
+            stopped.set()
+            wake()
+    threading.Thread(target=watch, name="braintrade-parent-watch", daemon=True).start()
+    return stopped
+
+
+def cleanup_gateway(transport, native, executor, mt5, dom_cache, lock):
+    """Attempt every cleanup step, and report incomplete cleanup to Core."""
+    failures = []
+    def run(name, action, require_true=False):
+        try:
+            result = action()
+            if require_true and result is not True:
+                failures.append(name)
+        except Exception:
+            failures.append(name)
+    if transport is not None:
+        run("transport", transport.close)
+    run("native pipe", native.close, require_true=True)
+    run("broker journal", executor.close)
+    if mt5 is not None:
+        run("market book", lambda: dom_cache.release(mt5))
+        run("MT5", mt5.shutdown)
+    run("gateway lock", lock.close)
+    if failures:
+        raise RuntimeError("Gateway cleanup incomplete: " + ", ".join(failures))
+
+
 def main():
     directory = Path(os.environ["BRAINTRADE_DATA_DIR"])
     token = os.environ.pop("BRAINTRADE_IPC_TOKEN")
@@ -490,6 +534,12 @@ def main():
     market_cache=MarketCache()
     dom_cache=DomCache()
     native=NativeTickBridge()
+    if os.environ.get("BRAINTRADE_GATEWAY_PARENT_STDIN") == "1":
+        if sys.stdin is None or not hasattr(sys.stdin, "buffer"):
+            raise RuntimeError("Parent shutdown pipe is unavailable")
+        stop_requested=watch_parent_stdin(sys.stdin.buffer,native.mailbox.wake)
+    else:
+        stop_requested=threading.Event()
     latest_snapshot=None
     next_full_snapshot=0.0
     next_background=0.0
@@ -532,7 +582,7 @@ def main():
     from execution import BrokerExecutor
     executor=BrokerExecutor(directory / 'broker-journal.sqlite')
     try:
-        while True:
+        while not stop_requested.is_set():
             loop_started=time.perf_counter()
             mono=time.monotonic()
             command_polled=False
@@ -693,16 +743,9 @@ def main():
                     # the maximum fallback polling interval, not a mandatory sleep.
                     native.wait(remaining)
                 else:
-                    time.sleep(remaining)
+                    stop_requested.wait(remaining)
     finally:
-        if transport is not None:
-            transport.close()
-        native.close()
-        executor.close()
-        if mt5 is not None:
-            dom_cache.release(mt5)
-            mt5.shutdown()
-        lock.close()
+        cleanup_gateway(transport, native, executor, mt5, dom_cache, lock)
 
 
 if __name__ == "__main__":

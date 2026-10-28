@@ -1,14 +1,100 @@
 //! V4 engine remains authoritative. The browser NEVER reads ipc.key, obtains
 //! a broker token or connects directly to the Core's HTTP port.
-use braintrade_runtime::{ensure_core, Client};
+use braintrade_runtime::{connect_existing_core, ensure_core, Client, ShutdownError};
 use serde_json::{json, Value};
-use std::{thread, time::{Duration, Instant}, sync::{Arc,atomic::{AtomicBool,Ordering}}};
+use std::{thread, time::{Duration, Instant}, sync::{Arc,Mutex,OnceLock,atomic::{AtomicBool,Ordering}}};
 use tauri::ipc::Channel;
 
-struct AppLifecycle { stopping: Arc<AtomicBool> }
+#[derive(Clone,Default)]
+struct AppLifecycle { stopping: Arc<AtomicBool>, start_gate: Arc<Mutex<()>> }
+static LIFECYCLE: OnceLock<AppLifecycle> = OnceLock::new();
+
+fn lifecycle() -> &'static AppLifecycle { LIFECYCLE.get_or_init(AppLifecycle::default) }
+
+fn with_start_permit<T>(state:&AppLifecycle, operation:impl FnOnce()->Result<T,String>)->Result<T,String>{
+    let _guard=state.start_gate.lock().map_err(|_|"تعذر قفل حالة بدء Core".to_string())?;
+    if state.stopping.load(Ordering::SeqCst) { return Err("طلب الخروج قيد التحقق؛ لن يُعاد تشغيل Core تلقائياً".into()); }
+    operation()
+}
 
 fn open_client() -> Result<Client, String> {
-    ensure_core().map_err(|err| err.to_string())
+    with_start_permit(lifecycle(),||ensure_core().map_err(|err| err.to_string()))
+}
+
+// Keep a Windows process HANDLE to the exact Core instance. A PID alone can
+// be recycled, and a closed HTTP port or released lock does not prove exit.
+#[cfg(windows)]
+mod tracked_core {
+    use std::{ffi::c_void, io, ptr};
+    #[link(name="kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(access:u32,inherit:i32,pid:u32)->*mut c_void;
+        fn WaitForSingleObject(handle:*mut c_void,millis:u32)->u32;
+        fn CloseHandle(handle:*mut c_void)->i32;
+    }
+    pub struct Handle(*mut c_void);
+    impl Handle {
+        pub fn open(pid:u32)->Result<Self,String>{
+            let handle=unsafe{OpenProcess(0x0010_0000,0,pid)}; // SYNCHRONIZE
+            if handle==ptr::null_mut(){return Err(format!("تعذر فتح مقبض عملية Core: {}",io::Error::last_os_error()));}
+            Ok(Self(handle))
+        }
+        fn wait_for(&self,millis:u32)->Result<(),String>{
+            match unsafe{WaitForSingleObject(self.0,millis)} {
+                0=>Ok(()),
+                258=>Err("انتهت مهلة انتظار عملية Core؛ لم يُؤكد الخروج".into()),
+                _=>Err(format!("تعذر التحقق من عملية Core: {}",io::Error::last_os_error())),
+            }
+        }
+        pub fn wait(&self)->Result<(),String>{self.wait_for(15_000)}
+        #[cfg(test)] pub fn is_running(&self)->bool{(unsafe{WaitForSingleObject(self.0,0)})==258}
+    }
+    impl Drop for Handle { fn drop(&mut self){unsafe{CloseHandle(self.0);}} }
+}
+
+#[cfg(not(windows))]
+mod tracked_core {
+    pub struct Handle;
+    impl Handle {
+        pub fn open(_:u32)->Result<Self,String>{Err("التحقق من عملية الخروج الكامل متاح على Windows فقط".into())}
+        pub fn wait(&self)->Result<(),String>{Err("التحقق من عملية الخروج الكامل متاح على Windows فقط".into())}
+    }
+}
+
+fn process_identity(status:&Value)->Result<(u32,String),String>{
+    let process=&status["core_process"];
+    let pid=process["pid"].as_u64().and_then(|v|u32::try_from(v).ok()).filter(|v|*v>0)
+        .ok_or("تعذر تحديد عملية Core الحالية")?;
+    let instance=process["instance_id"].as_str().filter(|v|!v.is_empty())
+        .ok_or("تعذر تحديد جلسة Core الحالية")?.to_string();
+    Ok((pid,instance))
+}
+
+fn confirm_full_exit(state:&AppLifecycle)->Result<Value,String>{
+    let _guard=state.start_gate.lock().map_err(|_|"تعذر قفل حالة بدء Core".to_string())?;
+    if state.stopping.load(Ordering::SeqCst) {return Err("طلب خروج سابق غير محسوم؛ تحقق من العمليات قبل إعادة فتح التطبيق".into());}
+    let client=connect_existing_core().map_err(|e|format!("تعذر الوصول إلى Core الحالي: {e}"))?;
+    let first=client.get("/v1/status").map_err(|e|e.to_string())?;
+    let (pid,instance)=process_identity(&first)?;
+    let process=tracked_core::Handle::open(pid)?;
+    let second=client.get("/v1/status").map_err(|e|e.to_string())?;
+    if process_identity(&second)?!=(pid,instance.clone()) {return Err("تغيرت جلسة Core؛ أعد طلب الخروج".into());}
+    // All auto-start paths acquire this same gate. Set the flag before the
+    // request, not after the acknowledgement, to close the respawn race.
+    state.stopping.store(true,Ordering::SeqCst);
+    let result=match client.shutdown(&instance){
+        Ok(value)=>value,
+        Err(ShutdownError::Rejected(reason))=>{
+            state.stopping.store(false,Ordering::SeqCst);
+            return Err(reason);
+        }
+        Err(ShutdownError::Uncertain(reason))=>return Err(format!("تعذر تأكيد نتيجة طلب الإغلاق؛ لن نعيد تشغيل Core تلقائياً: {reason}")),
+    };
+    if result["ok"]!=true || result["gateway_stopped"]!=true || process_identity(&result)?!=(pid,instance) {
+        return Err("رد الإغلاق لا يثبت إيقاف Gateway أو هوية Core؛ لم يُؤكد الخروج".into());
+    }
+    process.wait()?;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -62,14 +148,10 @@ fn execute_control(action: String, confirm_live_login: Option<String>) -> Result
 }
 
 #[tauri::command]
-fn shutdown_core(lifecycle: tauri::State<AppLifecycle>) -> Result<Value, String> {
-    // Core checks STOPPED, broker freshness, empty positions and resolved intents.
-    // A rejected shutdown must never exit the terminal or kill a gateway.
-    let result=open_client()?.post("/v1/shutdown", json!({})).map_err(|err|err.to_string())?;
-    // Prevent the live-status worker from automatically respawning Core while
-    // the shutdown response is handed back to the renderer.
-    lifecycle.stopping.store(true,Ordering::SeqCst);
-    Ok(result)
+async fn shutdown_core(lifecycle: tauri::State<'_,AppLifecycle>) -> Result<Value, String> {
+    let state=lifecycle.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || confirm_full_exit(&state)).await
+        .map_err(|e|format!("تعذر إكمال تحقق الخروج: {e}"))?
 }
 
 #[tauri::command]
@@ -234,9 +316,9 @@ fn subscribe_status(channel: Channel<Value>, lifecycle: tauri::State<AppLifecycl
         let mut failures: u32 = 0;
         let mut last_send: Option<Instant> = None;
         loop {
-            if stopping.load(Ordering::SeqCst) { break; }
-            if client.is_none() { client = ensure_core().ok(); }
-            if stopping.load(Ordering::SeqCst) { break; }
+            if stopping.load(Ordering::SeqCst) { thread::sleep(Duration::from_millis(250)); continue; }
+            if client.is_none() { client = open_client().ok(); }
+            if stopping.load(Ordering::SeqCst) { continue; }
             let payload = client.as_ref().and_then(|c| c.get("/v1/status").ok());
             let next = match payload {
                 Some(status) => { failures = 0; json!({"ok":true,"status":status}) },
@@ -264,8 +346,11 @@ fn subscribe_status(channel: Channel<Value>, lifecycle: tauri::State<AppLifecycl
 }
 
 pub fn run() {
+    // Only a freshly launched UI clears a completed exit marker. Existing
+    // windows and background status workers must never clear it.
+    if let Err(error)=braintrade_runtime::prepare_user_start(){eprintln!("Could not prepare Core startup: {error}");}
     tauri::Builder::default()
-        .manage(AppLifecycle {stopping:Arc::new(AtomicBool::new(false))})
+        .manage(lifecycle().clone())
         .invoke_handler(tauri::generate_handler![
             get_status, read_panel, read_trade_history, execute_control,
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
@@ -279,6 +364,80 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn full_exit_requires_a_valid_core_process_identity() {
+        assert_eq!(process_identity(&json!({"core_process":{"pid":42,"instance_id":"session-a"}})).unwrap(),(42,"session-a".to_string()));
+        assert!(process_identity(&json!({"core_process":{"pid":0,"instance_id":"session-a"}})).is_err());
+        assert!(process_identity(&json!({"core_process":{"pid":42,"instance_id":""}})).is_err());
+        assert!(process_identity(&json!({})).is_err());
+    }
+    #[test]
+    fn shutdown_gate_blocks_a_concurrent_automatic_start() {
+        use std::sync::mpsc;
+        let state=AppLifecycle::default();
+        let guard=state.start_gate.lock().unwrap();
+        state.stopping.store(true,Ordering::SeqCst);
+        let child=state.clone();
+        let (tx,rx)=mpsc::channel();
+        let worker=std::thread::spawn(move ||{
+            let result=with_start_permit(&child,||{tx.send(()).unwrap();Ok(())});
+            assert!(result.is_err());
+        });
+        drop(guard);
+        worker.join().unwrap();
+        assert!(rx.try_recv().is_err(),"start was called during shutdown");
+        state.stopping.store(false,Ordering::SeqCst);
+        assert_eq!(with_start_permit(&state,||Ok(7)).unwrap(),7);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn tracked_core_handle_waits_for_a_real_process_exit() {
+        use std::process::{Command,Stdio};
+        let mut child=Command::new("cmd.exe").args(["/C","pause >NUL"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        let handle=tracked_core::Handle::open(child.id()).unwrap();
+        assert!(handle.is_running(),"Core-like process exited before its pipe was closed");
+        drop(child.stdin.take());
+        handle.wait().unwrap();
+        assert!(child.wait().unwrap().success());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn tauri_full_exit_waits_for_a_real_isolated_core() {
+        use std::{fs,process::{Child,Command,Stdio},time::{SystemTime,UNIX_EPOCH}};
+        struct Fixture { dir:std::path::PathBuf, child:Option<Child>, old:Vec<(&'static str,Option<std::ffi::OsString>)> }
+        impl Drop for Fixture {
+            fn drop(&mut self){
+                if let Some(child)=self.child.as_mut(){if child.try_wait().ok().flatten().is_none(){let _=child.kill();let _=child.wait();}}
+                for (key,value) in &self.old {unsafe{match value {Some(v)=>std::env::set_var(key,v),None=>std::env::remove_var(key)}}}
+                let _=fs::remove_dir_all(&self.dir);
+            }
+        }
+        let suffix=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir=std::env::temp_dir().join(format!("braintrade-tauri-exit-{}-{suffix}",std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let keys=["BRAINTRADE_DATA_DIR","BRAINTRADE_GATEWAY_DISABLED","BRAINTRADE_NEWS_OFFLINE"];
+        let mut fixture=Fixture{dir:dir.clone(),child:None,old:keys.iter().map(|k|(*k,std::env::var_os(k))).collect()};
+        unsafe{std::env::set_var(keys[0],&dir);std::env::set_var(keys[1],"1");std::env::set_var(keys[2],"1");}
+        let binary=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/braintrade-core.exe");
+        fixture.child=Some(Command::new(binary).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap());
+        let pid=fixture.child.as_ref().unwrap().id();
+        let deadline=Instant::now()+Duration::from_secs(20);
+        loop {
+            if let Ok(client)=connect_existing_core(){
+                if let Ok(status)=client.get("/v1/status"){
+                    if process_identity(&status).is_ok_and(|(observed,_)|observed==pid){break;}
+                }
+            }
+            assert!(Instant::now()<deadline,"isolated Core did not become ready");
+            thread::sleep(Duration::from_millis(100));
+        }
+        let state=AppLifecycle::default();
+        let response=confirm_full_exit(&state).unwrap();
+        assert_eq!(response["gateway_stopped"],true);
+        assert!(state.stopping.load(Ordering::SeqCst));
+        assert!(fixture.child.as_mut().unwrap().wait().unwrap().success());
+        assert!(dir.join("full-exit.requested").exists());
+    }
     #[test]
     fn read_routes_are_strictly_scoped() {
         assert!(allowed_read_route("/v1/risk/monitor"));
