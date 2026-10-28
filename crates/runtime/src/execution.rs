@@ -95,7 +95,7 @@ impl Exposure {
             "estimated_stop_risk":if self.risk_known { Value::from(self.estimated_risk) } else { Value::Null },
             "estimated_stop_risk_percent_equity":risk_percent,
             "risk_known":self.risk_known,
-            "note":"Portfolio limits block new entries only. Existing positions, broker SL/TP, timed exits and reconciliation remain active."
+            "note":"Portfolio limits block new entries only. Broker SL/TP and reconciliation remain active; a timed close can be deferred while an order is unresolved."
         })
     }
 }

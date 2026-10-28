@@ -67,6 +67,6 @@ export function ReconciliationDiagnostics({preview}:{preview:boolean}){
      </div>)}
     </div>:null}
    </>}
-  <p className="safe-note">تسوية أمر `unknown` أو `filled` تحتاج إثباتاً من سجل صفقات MT5، وليس زر تجاهل أو تصفير.</p>
+  <p className="safe-note">تسوية أمر `unknown` أو `partial` تحتاج إثباتاً من سجل MT5، وليس زر تجاهل أو تصفير. أثناء بقاء أمر جزئي بلا نتيجة مؤكدة قد يتأخر الإغلاق الزمني؛ راقب المركز وأوامر الوسيط وتأكد من وقف الخسارة في MT5.</p>
  </section>;
 }
