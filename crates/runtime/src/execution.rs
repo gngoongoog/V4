@@ -149,13 +149,10 @@ fn intent_risk(t: &Telemetry, c: &Config, request: &Value) -> Option<f64> {
 }
 
 fn command_values(db: &Connection, key: &str, include_queued: bool) -> Result<Vec<Value>> {
-    let states = if include_queued {
-        "('queued','dispatched','unknown','placed','filled','partial')"
-    } else {
-        "('dispatched','unknown','placed','filled','partial')"
-    };
+    let queued = if include_queued { "" } else { "AND state<>'queued'" };
     let sql = format!(
-        "SELECT json(payload) FROM broker_commands WHERE context=?1 AND kind='open' AND state IN {states} ORDER BY created_ms,id"
+        "SELECT json(payload) FROM broker_commands WHERE context=?1 AND kind='open' AND {} {queued} ORDER BY created_ms,id",
+        crate::execution_legacy::PENDING_BROKER_SQL
     );
     let mut statement = db.prepare(&sql)?;
     let rows = statement
@@ -593,8 +590,9 @@ impl Service {
                     .unwrap_or_default()
                     .to_owned();
                 let solo = false; // all non-system brains are paper/shadow only
+                let sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND {})",crate::execution_legacy::PENDING_BROKER_SQL);
                 let in_flight: bool = db.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",
+                    &sql,
                     params![key, id],
                     |row| row.get(0),
                 )?;

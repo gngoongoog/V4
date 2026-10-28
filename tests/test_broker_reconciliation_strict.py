@@ -126,6 +126,47 @@ class BrokerReconciliationStrictTests(unittest.TestCase):
         self.assertEqual(self.result()['state'], 'filled')
         self.assertEqual(len(self.broker.sends), 1)
 
+    def test_partial_needs_exact_terminal_order_history_to_prove_remainder_ended(self):
+        row = self.exe.db.execute('SELECT result FROM sends WHERE id=?', (self.cmd['id'],)).fetchone()
+        recorded = dict(json.loads(row[0]), order=42)
+        self.exe.db.execute('UPDATE sends SET result=? WHERE id=?',
+                            (json.dumps(recorded), self.cmd['id']))
+        self.exe.db.commit()
+        self.broker.deals = [self.deal(825, .04, order=42)]
+        self.broker.ORDER_STATE_CANCELED = 2
+        self.broker.ORDER_STATE_REJECTED = 5
+        self.broker.ORDER_STATE_EXPIRED = 6
+        terminal = N(ticket=42, magic=self.cmd['magic'], symbol=self.cmd['symbol'],
+                     state=2, volume_initial=.1, volume_current=.06)
+        self.broker.history_orders_get = lambda **kw: None
+        first = self.result()
+        self.assertEqual(first['state'], 'partial')
+        self.assertNotIn('terminal_order', first, 'Missing order history is not terminal proof')
+        for changed in (dict(ticket=43), dict(state=3), dict(magic=99),
+                        dict(symbol='EURUSD'), dict(volume_initial=.2)):
+            self.broker.history_orders_get = lambda **kw: [N(**(vars(terminal) | changed))]
+            result = self.result()
+            self.assertNotIn('terminal_order', result, changed)
+        # Even apparently terminal history is not used while the exact order
+        # remains active or when the broker switches mode during the read.
+        self.broker.history_orders_get = lambda **kw: [terminal]
+        self.broker.orders = [N(ticket=42, magic=self.cmd['magic'], symbol=self.cmd['symbol'], comment='')]
+        self.assertNotIn('terminal_order', self.result())
+        self.broker.orders = []
+        def switched_account(**kw):
+            self.broker.account.trade_mode = 2
+            return [terminal]
+        self.broker.history_orders_get = switched_account
+        self.assertNotIn('terminal_order', self.result())
+        self.broker.account.trade_mode = 0
+        self.broker.history_orders_get = lambda **kw: [terminal]
+        result = self.result()
+        self.assertEqual(result['state'], 'partial')
+        self.assertEqual(result['terminal_order']['ticket'], 42)
+        self.assertEqual(result['terminal_order']['state'], 'canceled')
+        self.assertTrue(result['terminal_order']['confirmed'])
+        self.assertEqual(len(self.broker.sends), 1)
+
 
     def test_wrong_direction_history_cannot_resolve_unknown_intent(self):
         self.broker.deals = [self.deal(810, .1, type=self.broker.DEAL_TYPE_SELL)]

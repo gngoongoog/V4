@@ -358,6 +358,45 @@ class BrokerExecutor:
         if reason:
             raise ValueError(reason)
 
+    def _terminal_partial_order(self, mt5, cmd, order, submitted_volume):
+        """Return exact broker history evidence that an unfilled remainder ended.
+
+        No missing history, live-order snapshot or deal alone certifies this.
+        The saved evidence is diagnostic; it never sends or cancels an order.
+        """
+        if order <= 0 or not callable(getattr(mt5, 'history_orders_get', None)):
+            return None
+        terminal = {getattr(mt5, name, None): label for name, label in (
+            ('ORDER_STATE_CANCELED', 'canceled'), ('ORDER_STATE_REJECTED', 'rejected'),
+            ('ORDER_STATE_EXPIRED', 'expired')) if getattr(mt5, name, None) is not None}
+        if not terminal:
+            return None
+        mode = 0 if cmd.get('target') == 'demo' else 2 if cmd.get('target') == 'live' else -1
+        def same_account():
+            account = mt5.account_info()
+            return account_identity(account) == expected(cmd) and getattr(account, 'trade_mode', None) == mode
+        try:
+            if not same_account():
+                return None
+            rows = mt5.history_orders_get(ticket=order)
+            if rows is None or len(rows) != 1 or not same_account():
+                return None
+            item = rows[0]
+            ticket = int(item.ticket)
+            initial = float(item.volume_initial)
+            remaining = float(item.volume_current)
+            state = terminal.get(item.state)
+            if (ticket != order or getattr(item, 'magic', None) != cmd['magic']
+                    or getattr(item, 'symbol', None) != cmd['symbol'] or state is None
+                    or not all(math.isfinite(v) for v in (initial, remaining, submitted_volume))
+                    or initial <= 0 or remaining < 0 or remaining > initial + 1e-8
+                    or abs(initial-submitted_volume) > max(1e-8, submitted_volume*1e-7)):
+                return None
+            return dict(confirmed=True, ticket=ticket, state=state,
+                        volume_initial=initial, volume_current=remaining)
+        except (AttributeError, TypeError, ValueError, OverflowError, OSError):
+            return None
+
     def _reconcile(self, mt5, cmd, previous):
         result = previous or dict(id=cmd['id'], state='unknown', reason='Send was interrupted; no automatic retry')
         if result['state'] not in ('unknown', 'placed', 'partial'):
@@ -478,6 +517,12 @@ class BrokerExecutor:
             result = dict(result, state=state, reason='Broker history confirms fill; await Core position reconciliation; no resend',
                           request=submitted, deal=int(matches[0].ticket), deals=[int(d.ticket) for d in matches],
                           volume=volume, recovered_from_history=True)
+            if state == 'partial':
+                terminal = self._terminal_partial_order(mt5, cmd, acknowledged_order, submitted_volume)
+                if terminal is not None:
+                    result['terminal_order'] = terminal
+            else:
+                result.pop('terminal_order', None)
             prices = [float(getattr(d, 'price', 0)) for d in matches]
             if all(math.isfinite(p) and p > 0 for p in prices):
                 result['price'] = sum(p * float(d.volume) for p, d in zip(prices, matches)) / volume
@@ -487,6 +532,10 @@ class BrokerExecutor:
             result['position_id'] = positions[0]
             # Recovery can restore booked evidence, never the unobserved quote path.
             result['reconciled_ms'] = clock_ms()
+            final_account = mt5.account_info()
+            if (account_identity(final_account) != expected(cmd)
+                    or getattr(final_account, 'trade_mode', None) != target_mode):
+                return previous or dict(id=cmd['id'], state='unknown', reason='Broker account changed during recovery')
             return self._save(cmd, result)
         return result
 

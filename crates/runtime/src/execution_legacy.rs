@@ -11,6 +11,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
+// Older versions could mark a visible partial fill observed while the order's
+// remainder was still active. Keep those rows intact and treat them as
+// unsettled until Gateway supplies exact terminal broker-order history.
+pub(crate) const PENDING_BROKER_SQL:&str = "(state IN ('queued','dispatched','unknown','placed','filled','partial') OR (state='observed' AND json_extract(result,'$.state')='partial' AND COALESCE(json_extract(result,'$.terminal_order.confirmed'),0)<>1))";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
@@ -125,6 +130,28 @@ fn valid_recovered_partial_progress(previous: &Value, next: &Value) -> bool {
     true
 }
 
+fn terminal_partial_proven(result:&Value)->bool {
+    let terminal=&result["terminal_order"];
+    let Some(order)=result["order"].as_u64().filter(|n|*n>0) else{return false};
+    let Some(deal)=result["deal"].as_u64().filter(|n|*n>0) else{return false};
+    let Some(deals)=result["deals"].as_array() else{return false};
+    let mut tickets=BTreeSet::new();
+    if deals.is_empty() || deals.iter().any(|v|v.as_u64().filter(|n|*n>0)
+        .is_none_or(|n|!tickets.insert(n))) || !tickets.contains(&deal) {return false}
+    let (Some(requested),Some(filled),Some(initial),Some(remaining))=(
+        result["request"]["volume"].as_f64(),result["volume"].as_f64(),
+        terminal["volume_initial"].as_f64(),terminal["volume_current"].as_f64()
+    ) else{return false};
+    let tolerance=1e-8_f64.max(requested*1e-7);
+    result["state"]=="partial" && result["recovered_from_history"]==true
+        && terminal["confirmed"]==true && terminal["ticket"].as_u64()==Some(order)
+        && matches!(terminal["state"].as_str(),Some("canceled"|"rejected"|"expired"))
+        && [requested,filled,initial,remaining].into_iter().all(f64::is_finite)
+        && requested>0. && filled>0. && filled+tolerance<requested
+        && (initial-requested).abs()<=tolerance
+        && remaining>=0. && remaining<=initial+tolerance
+}
+
 /// A broker ACK never certifies observation by itself. Match the exact
 /// immutable MT5 Deal ticket to a physical position before releasing this
 /// intent's per-brain reconciliation gate. A flat position list is not proof
@@ -132,6 +159,7 @@ fn valid_recovered_partial_progress(previous: &Value, next: &Value) -> bool {
 fn broker_command_observed(
     db:&Connection, context:&str, t:&Telemetry, command:&Value, result:&Value
 ) -> Result<bool> {
+    if result["state"]=="partial" && !terminal_partial_proven(result) {return Ok(false)}
     let Some(ticket)=result["deal"].as_u64().filter(|v|*v>0)
         else{return Ok(false)};
     let Some(magic)=command["magic"].as_u64() else{return Ok(false)};
@@ -400,7 +428,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         self.bind_with_settings(db, t, now, self.settings.clone())
     }
     pub fn pending(&self, db: &Connection) -> Result<bool> {
-        Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE state IN ('queued','dispatched','unknown','placed','filled','partial'))",[],|r|r.get(0))?)
+        let sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE {PENDING_BROKER_SQL})");
+        Ok(db.query_row(&sql,[],|r|r.get(0))?)
     }
     pub fn cancel_entries(&self, db: &Connection) -> Result<()> {
         db.execute(
@@ -495,7 +524,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         let available=crate::coordinator_learning::available_frames(t,frames,now);
         for b in self.brains.clone() {
             let magic = execution::magic(&b.id).unwrap();
-            let active:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,b.id],|r|r.get(0))?;
+            let active_sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND {PENDING_BROKER_SQL})");
+            let active:bool=db.query_row(&active_sql,params![key,b.id],|r|r.get(0))?;
             let positions: Vec<_> = t
                 .positions
                 .iter()
@@ -539,7 +569,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 else {execution::evaluate(&b,t,c,&available,genome.as_ref(),now)};
             let mut signal=if b.id=="system" && braintrade_domain::sniper::selected(c) {
                 let member=self.brains.iter().find(|m|m.id==braintrade_domain::sniper::ID).unwrap();
-                let pending:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain='sniper_learner' AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",[&key],|r|r.get(0))?;
+                let sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain='sniper_learner' AND {PENDING_BROKER_SQL})");
+                let pending:bool=db.query_row(&sql,[&key],|r|r.get(0))?;
                 let occupied=t.positions.iter().any(|p|p.magic==410_617 && p.symbol==t.symbol);
                 let mut selected=sniper_signal.clone(); selected.brain="system".into();
                 if !self.controls.get(braintrade_domain::sniper::ID).is_none_or(|c|c.advisor) || member.enabled || pending || occupied {
@@ -551,7 +582,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 let mut votes=vec![];
                 for member in self.brains.iter().filter(|m|m.id!="system" && self.controls.get(&m.id).is_none_or(|c|c.advisor)) {
                     // Returning SOLO positions finish under their original owner before rejoining.
-                    let in_flight:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,member.id],|r|r.get(0))?;
+                    let sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND {PENDING_BROKER_SQL})");
+                    let in_flight:bool=db.query_row(&sql,params![key,member.id],|r|r.get(0))?;
                     if in_flight||t.positions.iter().any(|p|p.magic==execution::magic(&member.id).unwrap()&&p.symbol==t.symbol){continue;}
                     let g=crate::coordinator_learning::genome(db,member,t)?;
                     let vote=execution::evaluate(member,t,c,&available,g.as_ref(),now);
@@ -588,7 +620,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             }
             let decision_us = started.elapsed().as_micros() as u64;
             let mut gates = vec![];
-            if t.margin_mode!=Some(2)&&db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain<>?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,b.id],|r|r.get::<_,bool>(0))?{gates.push("Netting: أمر لعقل آخر لم تتم تسويته");}
+            let netting_sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain<>?2 AND {PENDING_BROKER_SQL})");
+            if t.margin_mode!=Some(2)&&db.query_row(&netting_sql,params![key,b.id],|r|r.get::<_,bool>(0))?{gates.push("Netting: أمر لعقل آخر لم تتم تسويته");}
 
             if !run {
                 gates.push("النظام متوقف");
@@ -846,7 +879,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 let t = t
                     .filter(|t| self.matches(t))
                     .context("Bound account required")?;
-                if db.query_row("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",params![key,id],|r|r.get::<_,bool>(0))?{bail!("انتظر نتيجة الأمر الحالي أو المصالحة");}
+                let sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND {PENDING_BROKER_SQL})");
+                if db.query_row(&sql,params![key,id],|r|r.get::<_,bool>(0))?{bail!("انتظر نتيجة الأمر الحالي أو المصالحة");}
                 for p in t
                     .positions
                     .iter()
@@ -938,6 +972,9 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 let v: Value = serde_json::from_slice(body)?;
                 let id = v["id"].as_str().context("ID required")?;
                 let state = v["state"].as_str().context("State required")?;
+                if !v["terminal_order"].is_null() && !terminal_partial_proven(&v) {
+                    bail!("Invalid broker terminal-order evidence");
+                }
                 if !matches!(
                     state,
                     "filled"
@@ -1251,8 +1288,16 @@ mod execution_persistence_tests {
         });
         let partial=json!({"state":"partial","deal":801,
             "request":{"volume":0.1}});
-        assert!(broker_command_observed(&db,&context,&t,&q,&partial).unwrap(),
-            "Broker-proven partial close can be observed with reduced volume");
+        assert!(!broker_command_observed(&db,&context,&t,&q,&partial).unwrap(),
+            "A reduced position alone cannot prove the remainder is terminal");
+        let terminal=json!({"state":"partial","order":42,"deal":801,"deals":[801],
+            "volume":0.04,"recovered_from_history":true,"request":{"volume":0.1},
+            "terminal_order":{"confirmed":true,"ticket":42,"state":"canceled",
+                "volume_initial":0.1,"volume_current":0.06}});
+        assert!(broker_command_observed(&db,&context,&t,&q,&terminal).unwrap(),
+            "Exact terminal broker history and partial exit permit observation");
+        let mut wrong_order=terminal.clone();wrong_order["terminal_order"]["ticket"]=json!(43);
+        assert!(!broker_command_observed(&db,&context,&t,&q,&wrong_order).unwrap());
         assert!(!broker_command_observed(&db,&context,&t,&q,&r).unwrap(),
             "Filled close may not be marked complete while position remains");
         t.positions.clear();
@@ -1347,6 +1392,35 @@ mod execution_persistence_tests {
         let work=restored.route("GET","/v1/execution/gateway",b"",&db,&status,201).unwrap();
         assert_eq!(work["command"]["id"],"old-unknown");
         assert_eq!(work["command"]["state"],"unknown");
+    }
+
+    #[test]
+    fn old_observed_partial_stays_blocked_until_exact_terminal_order_evidence() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();svc.bind(&db,&t,100).unwrap();
+        let request=json!({"volume":0.1});
+        let previous=json!({"id":"legacy-partial","state":"partial","order":42,
+            "deal":801,"deals":[801],"volume":0.04,"request":request,
+            "recovered_from_history":true});
+        db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload,result)
+            VALUES ('legacy-partial',?1,'system','open',100,'observed',?2,?3)",
+            params![ctx(&t),json!({"id":"legacy-partial","kind":"open"}).to_string(),previous.to_string()]).unwrap();
+        assert!(svc.pending(&db).unwrap());
+        let audit=crate::reconciliation_audit::report(&db,Some(&t),true,200).unwrap();
+        assert_eq!(audit["by_state"]["partial"],1);
+        let status=Status{gateway_fresh:true,telemetry:Some(t),..Default::default()};
+        let mut terminal=previous.clone();
+        terminal["terminal_order"]=json!({"confirmed":true,"ticket":42,"state":"canceled",
+            "volume_initial":0.1,"volume_current":0.06});
+        let mut forged=terminal.clone();forged["terminal_order"]["ticket"]=json!(43);
+        assert!(svc.route("POST","/v1/execution/result",forged.to_string().as_bytes(),&db,&status,201).is_err());
+        assert!(svc.pending(&db).unwrap());
+        svc.route("POST","/v1/execution/result",terminal.to_string().as_bytes(),&db,&status,202).unwrap();
+        assert!(!svc.pending(&db).unwrap());
+        let state:String=db.query_row("SELECT state FROM broker_commands WHERE id='legacy-partial'",[],|r|r.get(0)).unwrap();
+        assert_eq!(state,"observed","No manual status rewrite or resubmission");
+        assert_eq!(crate::reconciliation_audit::report(&db,status.telemetry.as_ref(),true,203).unwrap()["pending_total"],0);
     }
 
     #[test]
