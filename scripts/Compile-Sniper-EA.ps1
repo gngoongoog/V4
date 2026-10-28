@@ -68,11 +68,19 @@ try {
     }
   }
   Copy-Item -LiteralPath $source -Destination $dest -Force -ErrorAction Stop
-  $log=Join-Path $reportDir 'metaeditor.log'
+  # Use a new log for each attempt; an old successful log is not proof of a
+  # fresh compile. MetaEditor is a GUI executable, so invoking it with `&`
+  # does not reliably wait or populate $LASTEXITCODE in PowerShell.
+  $log=Join-Path $reportDir ('metaeditor-' + [DateTime]::UtcNow.ToString('yyyyMMddHHmmssfff') + '.log')
   $started=[DateTime]::UtcNow
   # A stale EX5 from a prior compilation is not proof of success.
-  & $editor ("/compile:" + $dest) ("/log:" + $log)
-  $exitCode=$LASTEXITCODE
+  $arguments=@(('/compile:"' + $dest + '"'),('/log:"' + $log + '"'))
+  $compiler=Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
+  if (-not $compiler.WaitForExit(120000)) {
+    Stop-Process -Id $compiler.Id -Force -ErrorAction SilentlyContinue
+    throw 'MetaEditor compile timed out'
+  }
+  $exitCode=$compiler.ExitCode
   $compiled=(Test-Path -LiteralPath $exe -PathType Leaf)
   $file=if ($compiled) { Get-Item -LiteralPath $exe } else { $null }
   $fresh=($null -ne $file -and $file.Length -gt 1024 -and
@@ -87,14 +95,14 @@ try {
   $report.reason=if ($okay) {
     'Fresh nonempty EX5 compiled by supplied MetaEditor; OnTick/Gateway still require MT5 Demo validation'
   }else{
-    'MetaEditor failed or EX5 is stale/missing; inspect metaeditor.log'
+    'MetaEditor failed or EX5 is stale/missing; inspect this attempt log: ' + $log
   }
   $report['ex5_sha256']=if ($okay) {(Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash}else{$null}
   $report['ex5_size_bytes']=if ($okay) {$file.Length}else{$null}
   Save-Report
   if (-not $okay) { exit 1 }
   Write-Host 'MetaEditor compile PASS. Attach the generated Expert to an XAUUSD DEMO chart.'
-  Write-Host 'CONNECTED + Native/Poll acceptance remain NOT TESTED on this device.'
+  Write-Host 'Native/Poll delivery and MT5 Demo acceptance remain NOT TESTED on this device.'
   exit 0
 } catch {
   $report.metaeditor_compiled='FAIL'

@@ -8,6 +8,7 @@ on:
       - 'mt5/**'
       - 'tests/test_sniper_native*.py'
       - 'tests/test_p0e_native*.py'
+      - 'tests/test_ea_copyticks_cursor.py'
       - 'scripts/ci-compile-sniper-ea.ps1'
       - '.github/workflows/v25-native-ea-integration.yml'
   workflow_dispatch:
@@ -25,7 +26,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Actual Windows named pipe, authentication and reconnect
-        run: python -B -m unittest tests.test_sniper_native_lifecycle tests.test_p0e_native_lifecycle tests.test_sniper_native -v
+        run: python -B -m unittest tests.test_sniper_native_lifecycle tests.test_p0e_native_lifecycle tests.test_sniper_native tests.test_ea_copyticks_cursor -v
 
   metaeditor-compile:
     runs-on: windows-latest
