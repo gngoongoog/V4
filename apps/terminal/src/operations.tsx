@@ -1,4 +1,4 @@
-import {useEffect,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import type {FormEvent} from 'react';
 import {Archive,CalendarClock,Download,Play,Square,ShieldAlert} from 'lucide-react';
 
@@ -58,10 +58,16 @@ export function TradingSettingsOperations({source,disabled,armed,apply}: {
  const [fixedPips,setFixedPips]=useState<string|null>(null);
  const [fee,setFee]=useState('7');const [basis,setBasis]=useState('round_trip');const [error,setError]=useState('');
  const [editedFee,setEditedFee]=useState(false);const [editedBasis,setEditedBasis]=useState(false);
- const sourceId=JSON.stringify([stored,commission.amount,commission.basis]);
- useEffect(()=>{setDraft({});setEditedFee(false);setEditedBasis(false);setFixedPips(null)},[sourceId]);
- const edit=Object.keys(draft).length?draft:stored;
- const patch=(key:string,value:unknown)=>setDraft(old=>({...stored,...old,[key]:value}));
+ // A draft belongs to the exact settings, fees, account and slippage that the
+ // operator reviewed. Background refreshes must neither discard the draft nor
+ // permit it to overwrite a newer revision without an explicit reset.
+ const sourceId=JSON.stringify([stored,commission.amount,commission.basis,commission.account,
+   safeObject(safeObject(view.config).risk).slippage_ticks]);
+ const editSource=useRef<string|null>(null);
+ const markEditing=()=>{if(editSource.current===null)editSource.current=sourceId};
+ const stale=editSource.current!==null&&editSource.current!==sourceId;
+ const edit={...stored,...draft};
+ const patch=(key:string,value:unknown)=>{markEditing();setDraft(old=>({...old,[key]:value}))};
  const mode=String(edit.mode||'expert'),priority=edit.priority_enabled===true;
  const fallback=String(edit.fallback_mode||'expert');
  const sniper=edit.sniper_active===true;
@@ -71,6 +77,7 @@ export function TradingSettingsOperations({source,disabled,armed,apply}: {
  const numericInput=(key:string,fallback:number)=>String(edit[key]??fallback);
  const locked=disabled||armed||saving;
  const save=async()=>{
+  if(stale){setError('تغيّرت إعدادات Core أو الحساب أثناء التعديل. المسودة محفوظة؛ راجع قيمك ثم تراجع عن التعديلات وأعد إدخالها قبل الحفظ.');return}
   const updated={...stored,...draft};
   if(updated.priority_enabled===true){updated.mode=updated.sniper_active===true?'sniper':String(updated.fallback_mode||'expert');}
   if(updated.fallback_mode==='sniper'){setError('الوضع البديل لا يمكن أن يكون قناصاً');return}
@@ -110,25 +117,25 @@ export function TradingSettingsOperations({source,disabled,armed,apply}: {
   try{
    await apply(payload);
    // Only discard the draft after Core has re-read and confirmed persistence.
-   setDraft({});setEditedFee(false);setEditedBasis(false);setFixedPips(null);
+   editSource.current=null;setDraft({});setEditedFee(false);setEditedBasis(false);setFixedPips(null);
   }catch(e){setError('فشل الحفظ؛ تم الاحتفاظ بالتعديلات: '+String(e))}
   finally{setSaving(false)}
  };
  // The editor retains the user's typing; a new Core revision is not silently
  // applied on top of unsaved fields. Clicking reset re-reads the current scope.
- const reset=()=>{setDraft({});setEditedFee(false);setEditedBasis(false);setFixedPips(null)};
+ const reset=()=>{editSource.current=null;setDraft({});setEditedFee(false);setEditedBasis(false);setFixedPips(null);setError('')};
  return <section className="operator-card" aria-label="Coordinator and costs">
   <h3><ShieldAlert size={18}/> منسق التداول وتكاليف الوسيط</h3>
   <p>يوجد منسق واحد فقط لإرسال صفقات MT5. العقول الأخرى تحليلية. لا يمكن تعديل هذه الإعدادات أثناء START.</p>
   <div className="operator-grid">
    <label>وضع تنفيذ الصفقات<select value={mode} disabled={priority||locked} onChange={e=>patch('mode',e.target.value)}>{MODES.map(([v,label])=><option key={v} value={v}>{label}</option>)}</select></label>
    <label>الوضع البديل للقناص<select value={fallback} disabled={locked} onChange={e=>patch('fallback_mode',e.target.value)}>{MODES.filter(([v])=>v!=='sniper').map(([v,label])=><option key={v} value={v}>{label}</option>)}</select></label>
-   <label className="operator-toggle"><input type="checkbox" checked={priority} disabled={locked} onChange={e=>{setDraft(old=>({...stored,...old,priority_enabled:e.target.checked,mode:e.target.checked?(sniper?'sniper':fallback):mode}))}}/> تفعيل أولوية القناص</label>
-   <label className="operator-toggle"><input type="checkbox" checked={sniper} disabled={!priority||locked} onChange={e=>setDraft(old=>({...stored,...old,sniper_active:e.target.checked,mode:e.target.checked?'sniper':fallback}))}/> القناص هو المنسق النشط</label>
+   <label className="operator-toggle"><input type="checkbox" checked={priority} disabled={locked} onChange={e=>{markEditing();setDraft(old=>({...old,priority_enabled:e.target.checked,mode:e.target.checked?(sniper?'sniper':fallback):mode}))}}/> تفعيل أولوية القناص</label>
+   <label className="operator-toggle"><input type="checkbox" checked={sniper} disabled={!priority||locked} onChange={e=>{markEditing();setDraft(old=>({...old,sniper_active:e.target.checked,mode:e.target.checked?'sniper':fallback}))}}/> القناص هو المنسق النشط</label>
    <label>أسلوب القناص<select value={String(edit.sniper_style||'auto')} disabled={locked} onChange={e=>patch('sniper_style',e.target.value)}>{STYLES.map(s=><option key={s} value={s}>{s}</option>)}</select></label>
    <label>عقل القناص<select value={String(edit.sniper_brain||'classic')} disabled={locked} onChange={e=>patch('sniper_brain',e.target.value)}><option value="classic">Classic</option><option value="learner">Learner</option></select></label>
-   <label>العمولة لكل 1 لوت<input aria-label="commission per lot" type="number" min="0" step="0.01" disabled={locked} value={editedFee?fee:String(commission.amount??7)} onChange={e=>{setEditedFee(true);setFee(e.target.value)}}/></label>
-   <label>طريقة احتساب العمولة<select aria-label="commission basis" disabled={locked} value={editedBasis?basis:String(commission.basis||'round_trip')} onChange={e=>{setEditedBasis(true);setBasis(e.target.value)}}><option value="round_trip">دخول وخروج معاً</option><option value="per_side">لكل جهة (مرتين)</option></select></label>
+   <label>العمولة لكل 1 لوت<input aria-label="commission per lot" type="number" min="0" step="0.01" disabled={locked} value={editedFee?fee:String(commission.amount??7)} onChange={e=>{markEditing();setEditedFee(true);setFee(e.target.value)}}/></label>
+   <label>طريقة احتساب العمولة<select aria-label="commission basis" disabled={locked} value={editedBasis?basis:String(commission.basis||'round_trip')} onChange={e=>{markEditing();setEditedBasis(true);setBasis(e.target.value)}}><option value="round_trip">دخول وخروج معاً</option><option value="per_side">لكل جهة (مرتين)</option></select></label>
   </div>
   <h4>إعدادات القناص المنفّذة لدى Rust Core</h4>
   <p className="safe-note">تُحفظ القيم الفعلية للقناص مع وضع التداول. الهدف الثابت يُعرض بوحدة pip (المحرك يحفظه كنقاط داخلياً)؛ وقف الخسارة بوحدة نقاط تسعير MT5.</p>
@@ -140,7 +147,7 @@ export function TradingSettingsOperations({source,disabled,armed,apply}: {
    <label>أعلى هدف متكيّف (pip)<input aria-label="sniper adaptive maximum pips" type="number" min="0.1" step="0.1" value={numericInput('sniper_max_target_pips',10)} disabled={locked} onChange={e=>numericPatch('sniper_max_target_pips',e.target.value)}/></label>
    <label>الفاصل بين دخولين (ثانية)<input aria-label="sniper cooldown seconds" type="number" min="0" max="3600" step="1" value={numericInput('sniper_cooldown_seconds',0)} disabled={locked} onChange={e=>numericPatch('sniper_cooldown_seconds',e.target.value)}/></label>
    <label>أقصى احتفاظ بالصفقة (ثانية)<input aria-label="sniper max hold seconds" type="number" min="1" max="3600" step="1" value={numericInput('sniper_max_hold_seconds',120)} disabled={locked} onChange={e=>numericPatch('sniper_max_hold_seconds',e.target.value)}/></label>
-   <label>عدد نقاط MT5 لكل pip<input aria-label="sniper points per pip" type="number" min="1" max="1000" step="any" value={numericInput('pip_points',10)} disabled={locked} onChange={e=>{const value=e.target.value;const pips=fixedPips??String(numeric('sniper_target_points',50)/numeric('pip_points',10));setFixedPips(pips);setDraft(old=>({...stored,...old,pip_points:value,sniper_target_points:value===''||pips===''?'':String(Number(value)*Number(pips))}))}}/></label>
+   <label>عدد نقاط MT5 لكل pip<input aria-label="sniper points per pip" type="number" min="1" max="1000" step="any" value={numericInput('pip_points',10)} disabled={locked} onChange={e=>{markEditing();const value=e.target.value;const pips=fixedPips??String(numeric('sniper_target_points',50)/numeric('pip_points',10));setFixedPips(pips);setDraft(old=>({...old,pip_points:value,sniper_target_points:value===''||pips===''?'':String(Number(value)*Number(pips))}))}}/></label>
    <label>حجم pip بسعر الذهب<input aria-label="sniper pip price" type="number" min="0.00001" step="0.01" value={numericInput('sniper_pip_price',0.1)} disabled={locked} onChange={e=>numericPatch('sniper_pip_price',e.target.value)}/></label>
    <label>حصة التكلفة القصوى من الهدف (0.01–0.9)<input aria-label="sniper maximum cost fraction" type="number" min="0.01" max="0.9" step="0.01" value={numericInput('max_cost_fraction',0.45)} disabled={locked} onChange={e=>numericPatch('max_cost_fraction',e.target.value)}/></label>
    <label className="operator-toggle"><input type="checkbox" checked={edit.demo_flexible===true} disabled={locked} onChange={e=>patch('demo_flexible',e.target.checked)}/> مرونة تنفيذ Demo</label>
@@ -148,6 +155,7 @@ export function TradingSettingsOperations({source,disabled,armed,apply}: {
   </div>
   <p className="safe-note">إذا كانت العمولة 7 دولار لكل لوت ذهاباً وإياباً: حجم 0.01 = $0.07، و0.1 = $0.70، و1.0 = $7.00. هذا تقدير تكلفة، والخصم الفعلي من شركة الوساطة.</p>
   {error&&<div role="alert" className="operator-error">{error}</div>}
+  {stale&&<div role="alert" className="operator-error">تغيّرت إعدادات Core أو الحساب؛ المسودة محفوظة لكن الحفظ متوقف حتى مراجعتها وإعادة إدخالها.</div>}
   <div className="quick-ops"><button disabled={locked||!Object.keys(stored).length} onClick={()=>void save()}>حفظ الوضع والعمولة لدى Core</button><button disabled={disabled||saving} onClick={reset}>التراجع عن التعديلات</button></div>
   <small>إصدار المصدر: {Object.keys(stored).length?'إعدادات Core':'غير متاح'}</small>
  </section>;

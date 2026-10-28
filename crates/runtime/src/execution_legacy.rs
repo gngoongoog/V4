@@ -51,6 +51,8 @@ pub struct Service {
     history_until_ms: u64,
     pub active_mode: Option<TradingMode>,
     last_paper_sample_ms: u64,
+    // Read-only round-robin cursor; it never changes an order's durable state.
+    recovery_cursor: Option<(String, u64, String)>,
 }
 fn ctx(t: &Telemetry) -> String {
     serde_json::to_string(&(&t.server, t.login, &t.symbol, &t.currency)).unwrap()
@@ -295,6 +297,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             history_until_ms: 0,
             active_mode: None,
             last_paper_sample_ms: 0,
+            recovery_cursor: None,
         })
     }
     fn micro_real_active(&self, db: &Connection, t: &Telemetry, c: &Config) -> Result<bool> {
@@ -858,8 +861,29 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     return Ok(json!({"command":null,"history_from_ms":0}));
                 };
                 db.execute("UPDATE broker_commands SET state='expired' WHERE state='queued' AND CAST(json_extract(payload,'$.expires_ms') AS INTEGER)<?1",[now])?;
-                let commands=json_rows(db,"SELECT json_set(payload,'$.state',state) FROM broker_commands WHERE context=?1 AND state IN ('queued','dispatched','unknown','placed') ORDER BY CASE WHEN state IN ('queued','dispatched') THEN 0 ELSE 1 END,CASE kind WHEN 'close' THEN 0 ELSE 1 END,created_ms LIMIT 1",&key)?;
+                // New and interrupted dispatches keep priority. Recovery work
+                // rotates without changing stored states, so an old unknown
+                // cannot permanently starve later partial/placed commands.
+                let commands=json_rows(db,"SELECT json_set(payload,'$.state',state) FROM broker_commands WHERE context=?1 AND state IN ('queued','dispatched') ORDER BY CASE kind WHEN 'close' THEN 0 ELSE 1 END,created_ms,id LIMIT 1",&key)?;
                 let mut command = commands.first().cloned();
+                if command.is_none() {
+                    let scope=format!("{}:{}",self.settings.target,key);
+                    let (after_ms,after_id)=self.recovery_cursor.as_ref()
+                        .filter(|(previous,_,_)|*previous==scope)
+                        .map(|(_,ms,id)|(*ms,id.as_str())).unwrap_or((0,""));
+                    let recovery:Option<(String,u64,String)>=db.query_row(
+                        "SELECT json_set(payload,'$.state',state),created_ms,id FROM broker_commands
+                         WHERE context=?1 AND (state IN ('unknown','placed','partial')
+                         OR (state='observed' AND json_extract(result,'$.state')='partial'))
+                         ORDER BY CASE WHEN created_ms>?2 OR (created_ms=?2 AND id>?3)
+                         THEN 0 ELSE 1 END,created_ms,id LIMIT 1",
+                        params![key,after_ms,after_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))
+                    ).optional()?;
+                    if let Some((raw,created,id))=recovery {
+                        command=Some(serde_json::from_str(&raw)?);
+                        self.recovery_cursor=Some((scope,created,id));
+                    }
+                }
                 if let Some(cmd) = &command {
                     let id = cmd["id"].as_str().unwrap();
                     if cmd["state"] == "queued" {
@@ -1291,6 +1315,38 @@ mod execution_persistence_tests {
         svc.route("POST","/v1/execution/result",first.to_string().as_bytes(),&db,&st,202).unwrap();
         let last:String=db.query_row("SELECT result FROM broker_commands WHERE id='p0b-1'",[],|r|r.get(0)).unwrap();
         assert_eq!(serde_json::from_str::<Value>(&last).unwrap()["state"],"filled");
+    }
+
+    #[test]
+    fn gateway_rotates_recovery_including_observed_partial_without_mutating_states() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let context=ctx(&t);
+        for (id,state,created,result) in [
+            ("old-unknown","unknown",101,json!({"state":"unknown"})),
+            ("partial","partial",102,json!({"state":"partial"})),
+            ("observed-partial","observed",103,json!({"state":"partial"})),
+            ("observed-filled","observed",104,json!({"state":"filled"})),
+        ] {
+            db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload,result)
+                VALUES (?1,?2,'system','open',?3,?4,?5,?6)",
+                params![id,context,created,state,json!({"id":id,"kind":"open"}).to_string(),result.to_string()]).unwrap();
+        }
+        let status=Status{gateway_fresh:true,telemetry:Some(t),..Default::default()};
+        for expected in ["old-unknown","partial","observed-partial","old-unknown"] {
+            let work=svc.route("GET","/v1/execution/gateway",b"",&db,&status,200).unwrap();
+            assert_eq!(work["command"]["id"],expected);
+        }
+        let states:String=db.query_row("SELECT group_concat(state,',') FROM
+            (SELECT state FROM broker_commands ORDER BY created_ms)",[],|r|r.get(0)).unwrap();
+        assert_eq!(states,"unknown,partial,observed,observed");
+        // Reconstructing the cursor after restart does not authorize a resend.
+        let mut restored=Service::new(&db).unwrap();
+        let work=restored.route("GET","/v1/execution/gateway",b"",&db,&status,201).unwrap();
+        assert_eq!(work["command"]["id"],"old-unknown");
+        assert_eq!(work["command"]["state"],"unknown");
     }
 
     #[test]

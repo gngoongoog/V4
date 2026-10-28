@@ -379,18 +379,40 @@ class BrokerExecutor:
         # positive MT5 order ticket from the durable acknowledgement is a
         # stronger exact link than the comment. Keep magic/symbol/account checks
         # and never guess based solely on timing or trade direction.
-        acknowledged_order = int(result.get('order') or 0)
-        def matches_identity(item):
+        try:
+            acknowledged_order = int(result.get('order') or 0)
+        except (TypeError, ValueError, OverflowError):
+            return dict(result, reason='Invalid acknowledged order ticket; reconciliation pending')
+        if acknowledged_order < 0:
+            return dict(result, reason='Invalid acknowledged order ticket; reconciliation pending')
+        def matches_deal(item):
             if getattr(item, 'magic', 0)!=cmd['magic'] or getattr(item, 'symbol', '')!=cmd['symbol']:
                 return False
-            item_order = int(getattr(item, 'order', 0) or 0)
+            try:
+                item_order = int(getattr(item, 'order', 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                return False
             # If both sides expose an order ID, it must agree. A copied or
             # broker-reused comment must never override a conflicting ticket.
             if acknowledged_order>0 and item_order>0:
                 return item_order==acknowledged_order
             return getattr(item, 'comment', '')==tag
-        matches = [d for d in deals if matches_identity(d)]
-        pending = any(matches_identity(o) for o in orders)
+        def may_be_active_order(item):
+            if getattr(item, 'magic', 0)!=cmd['magic'] or getattr(item, 'symbol', '')!=cmd['symbol']:
+                return False
+            # Active MT5 orders carry their identity in `ticket`, whereas a
+            # Deal links back to its order in `order`. A broker may strip the
+            # comment. An unidentifiable same-owner active order must therefore
+            # block finalizing rather than being mistaken for an absent order.
+            try:
+                ticket = int(getattr(item, 'ticket', 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                ticket = 0
+            if acknowledged_order>0 and ticket>0:
+                return ticket==acknowledged_order
+            return True
+        matches = [d for d in deals if matches_deal(d)]
+        pending = any(may_be_active_order(o) for o in orders)
         # A journal is scoped to both broker identity and Demo/REAL mode.
         # A matching login tuple alone must never authorize cross-mode recovery.
         target_mode = 0 if cmd.get('target') == 'demo' else 2 if cmd.get('target') == 'live' else -1

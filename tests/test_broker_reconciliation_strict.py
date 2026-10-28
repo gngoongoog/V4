@@ -96,6 +96,36 @@ class BrokerReconciliationStrictTests(unittest.TestCase):
         self.assertEqual(result['state'], 'partial', result)
         self.assertAlmostEqual(result['volume'], .04)
 
+    def test_active_order_ticket_blocks_fill_when_broker_strips_comment(self):
+        # MT5 active orders expose `ticket`, not the Deal's `order` field.
+        row = self.exe.db.execute('SELECT result FROM sends WHERE id=?', (self.cmd['id'],)).fetchone()
+        recorded = dict(json.loads(row[0]), order=42)
+        self.exe.db.execute('UPDATE sends SET result=? WHERE id=?',
+                            (json.dumps(recorded), self.cmd['id']))
+        self.exe.db.commit()
+        self.broker.deals = [self.deal(820, .1, order=42)]
+        self.broker.orders = [N(ticket=42, magic=self.cmd['magic'],
+                                symbol=self.cmd['symbol'], comment='broker changed comment')]
+        self.assertEqual(self.result()['state'], 'unknown')
+        # Missing identity is also insufficient evidence that the order ended.
+        self.broker.orders = [N(magic=self.cmd['magic'], symbol=self.cmd['symbol'], comment='')]
+        self.assertEqual(self.result()['state'], 'unknown')
+        self.broker.orders = []
+        self.assertEqual(self.result()['state'], 'filled')
+        self.assertEqual(len(self.broker.sends), 1)
+
+    def test_conflicting_active_ticket_is_not_matched_by_reused_comment(self):
+        row = self.exe.db.execute('SELECT result FROM sends WHERE id=?', (self.cmd['id'],)).fetchone()
+        recorded = dict(json.loads(row[0]), order=42)
+        self.exe.db.execute('UPDATE sends SET result=? WHERE id=?',
+                            (json.dumps(recorded), self.cmd['id']))
+        self.exe.db.commit()
+        self.broker.deals = [self.deal(821, .1, order=42)]
+        self.broker.orders = [N(ticket=43, magic=self.cmd['magic'],
+                                symbol=self.cmd['symbol'], comment='BT:' + self.cmd['id'][:20])]
+        self.assertEqual(self.result()['state'], 'filled')
+        self.assertEqual(len(self.broker.sends), 1)
+
 
     def test_wrong_direction_history_cannot_resolve_unknown_intent(self):
         self.broker.deals = [self.deal(810, .1, type=self.broker.DEAL_TYPE_SELL)]
