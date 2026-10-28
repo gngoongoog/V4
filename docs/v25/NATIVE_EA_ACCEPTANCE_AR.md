@@ -8,6 +8,8 @@
 
 وأصبح Python Gateway، قبل أي Pulse ناتج من Native **أو** fallback Poll، يقرأ هوية حساب MT5 الفعلية ويقارنها بلقطة Core الموثقة. عند اختلافها يمنع إرسال Pulse من بيانات قديمة ويطلب تحديث Snapshot كامل. ويبقى تحقق Core النهائي وGateway Send Once لازماً.
 
+عند وصول دفعة ممتلئة من تيكات بنفس ملي ثانية الوسيط، يطلب الجسر مساحة إضافية للتيكات المستهلكة سابقاً حتى يتقدم المؤشر، ويستكمل الدفعات المحتملة من المؤقت حتى دون OnTick جديد. الطلب محدود بـ65536 تيك؛ وصول عداد `Saturated source milliseconds` يعني وجود تشبع واحتمال فقد جزء من ذلك الزمن، وليس عدداً مؤكداً للتيكات المفقودة. لا تعتبر العدادات دليلاً على اكتمال كل تيكات السوق.
+
 ## محتويات V25 Portable
 - `mt5/Experts/BrainTradeSniperBridge.mq5`: مصدر EA فقط.
 - `Compile-Sniper-EA.cmd`: فحص افتراضي؛ لا ينسخ أو يترجم دون اختيار المسارات.
@@ -25,9 +27,9 @@
 ```
 
 4. يحتفظ السكربت بنسخة احتياطية من مصدر MQ5 مختلف قبل استبداله، ويطلب MetaEditor ترجمة `MQL5\Experts\BrainTradeSniperBridge.mq5`. ثم يتأكد من ظهور `BrainTradeSniperBridge.ex5` **جديد الحجم والتاريخ** ويحفظ SHA-256.
-5. إذا ظهر `FAIL` راجع `acceptance-output/native-ea/metaeditor.log`، ولا تعتبر الـEA جاهزاً. MetaEditor ليس ضمن Portable ولا يمكن تعويضه بمحاكاة.
-6. بعد `PASS`، من MT5 > Navigator > Expert Advisors قم بإضافة EA إلى شارت رمز الذهب المطابق لإعداد BrainTrade. تأكد أن `CONNECTED` يظهر على الشارت. هذا يعني اتصال Pipe فقط، لا يعني وجود صفقة أو تشغيل START.
-7. افتح BrainTradeNext.exe، اربط Demo الصحيح، وجمّع نتائج Native وPoll بشكل منفصل من `Run-Demo-Acceptance.cmd`. وضع Poll يتطلب فصل EA، أما Native يتطلب ثبوت `CONNECTED`.
+5. إذا ظهر `FAIL` راجع أحدث ملف `metaeditor-*.log` داخل `acceptance-output/native-ea`، ولا تعتبر الـEA جاهزاً. MetaEditor ليس ضمن Portable ولا يمكن تعويضه بمحاكاة.
+6. بعد `PASS`، من MT5 > Navigator > Expert Advisors قم بإضافة EA إلى شارت رمز الذهب المطابق لإعداد BrainTrade. حالة `PIPE OPEN (UNVERIFIED)` تعني فتح مقبض Pipe فقط ولا تثبت وصول تيك إلى Core.
+7. افتح BrainTradeNext.exe، اربط Demo الصحيح، وافحص تزايد عداد Native المقبول وحداثته من صفحة القناص. اجمع نتائج Native وPoll بشكل منفصل من `Run-Demo-Acceptance.cmd`. وضع Poll يتطلب فصل EA، ولا يُعتمد Native على مجرد حالة فتح الـPipe.
 8. اختبر تبديل حساب Demo ثم الرجوع أثناء عدم وجود أوامر غير محسومة، وراقب رفض Tick قديم. لا تُجر هذا التغيير أثناء وجود صفقات حقيقية أو أوامر Pending.
 
 ## معايير قبول P0-E
