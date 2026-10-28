@@ -62,6 +62,12 @@ if (Test-Path -LiteralPath $helperEvidence) {
 }
 $compiled = Join-Path $data 'MQL5/Experts/BrainTradeSniperBridge.ex5'
 $helperReport = Join-Path $helperEvidence 'metaeditor-compile.json'
+if (Test-Path -LiteralPath $compiled -PathType Leaf) {
+  Copy-Item -LiteralPath $compiled -Destination $evidence -Force
+}
+if (Test-Path -LiteralPath $helperReport -PathType Leaf) {
+  Get-Content -LiteralPath $helperReport -Raw | Write-Host
+}
 if ($runner.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $compiled -PathType Leaf) -or
     -not (Test-Path -LiteralPath $helperReport -PathType Leaf)) {
   throw ('Portable helper failed to compile EA; exit=' + $runner.ExitCode)
