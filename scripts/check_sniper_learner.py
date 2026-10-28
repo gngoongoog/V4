@@ -6,17 +6,40 @@ from types import SimpleNamespace as N
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = tomllib.loads((ROOT/'Cargo.toml').read_text(encoding='utf-8'))['workspace']['package']['version']
 sys.path[:0] = [str(ROOT/'gateway'), str(ROOT/'tests'), str(ROOT/'scripts')]
-from mt5_gateway import empty_snapshot
+from mt5_gateway import apply_native_tick, empty_snapshot, pulse_payload
 from execution import BrokerExecutor, clock_ms
+from sniper_native import EVENT_FACTOR, NativeTickMailbox, _WindowsPipeServer
 from test_broker_execution import Broker
 
-def check(exe=None):
+def check(exe=None, native_pipe=False):
+    if native_pipe and os.name != 'nt':
+        raise RuntimeError('Real named-pipe integration requires Windows')
     binary = Path(exe or ROOT/'target/debug/braintrade-core').resolve()
     args = [str(binary)] + (['--core'] if exe else [])
     with tempfile.TemporaryDirectory(prefix='braintrade-execution-') as directory:
         env = dict(os.environ, BRAINTRADE_DATA_DIR=directory, BRAINTRADE_GATEWAY_DISABLED='1', BRAINTRADE_NEWS_OFFLINE='1')
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         key = ''; process = None; log = open(Path(directory)/'core.log', 'w+b')
+        native = dict(server=None, writer=None, mailbox=None)
+        def wait_until(predicate, description):
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                value = predicate()
+                if value: return value
+                time.sleep(.01)
+            raise AssertionError('Timed out waiting for ' + description)
+        def start_native_pipe():
+            name = rf'\\.\pipe\BrainTradePipelineTest-{os.getpid()}-{time.time_ns()}'
+            token = 'synthetic-test-token-' + str(time.time_ns())
+            mailbox = NativeTickMailbox()
+            server = _WindowsPipeServer(token, mailbox, name)
+            native.update(server=server, mailbox=mailbox, token=token)
+            server.start()
+            def connect():
+                try: return open(name, 'wb', buffering=0)
+                except OSError: return None
+            native['writer'] = wait_until(connect, 'test pipe connection')
+            wait_until(lambda: mailbox.connected, 'test pipe server')
         def api(path, body=None):
             request = urllib.request.Request('http://127.0.0.1:18741'+path,
                 data=None if body is None else json.dumps(body).encode(),
@@ -72,12 +95,25 @@ def check(exe=None):
         def pulse(value):
             time.sleep(.01)
             broker.tick.bid=value;broker.tick.ask=value+.01
-            body=dict(login=17,server='Demo',currency='USD',symbol='XAUUSD',bid=value,ask=value+.01,
-                quote_time_ms=clock_ms(),tick_age_ms=0)
+            if native_pipe:
+                now=clock_ms()
+                wire=(f"BT2|{native['token']}|17|XAUUSD|{now}|{now*EVENT_FACTOR+1}|"
+                      f"{value:.10f}|{value+.01:.10f}\n").encode('ascii')
+                native['writer'].write(wire)
+                mailbox=native['mailbox']
+                packets=wait_until(lambda: mailbox.drain(17,'XAUUSD'), 'authenticated synthetic tick')
+                assert len(packets)==1
+                updated,changed,_=apply_native_tick(snapshot,packets[0],now_ms=clock_ms())
+                assert changed, 'Native synthetic tick was rejected by the actual Gateway'
+                body=pulse_payload(updated,quote_source='native',native_dropped_total=mailbox.dropped)
+            else:
+                body=dict(login=17,server='Demo',currency='USD',symbol='XAUUSD',bid=value,ask=value+.01,
+                    quote_time_ms=clock_ms(),tick_age_ms=0)
             request=urllib.request.Request('http://127.0.0.1:18741/v1/execution/pulse',method='PUT',
                 data=json.dumps(body).encode(),headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})
             with opener.open(request,timeout=8) as response:return json.load(response)
         try:
+            if native_pipe: start_native_pipe()
             boot()
             config=api('/v1/config')['config'];config['trading'].update(mode='sniper',sniper_brain='learner')
             api('/v1/trading/settings',dict(trading=config['trading'],commission_per_lot=7.))
@@ -183,7 +219,8 @@ def check(exe=None):
             prices([2054.20,2054.24,2054.28])
             assert not brain('sniper_learner')['latest']['signal']['ready']
             snapshot['login']=99;publish();assert api('/v1/execution/gateway')['command'] is None
-            report=dict(result='PASS',version=VERSION,broker='simulated; no native MT5 acceptance',checks=[
+            report=dict(result='PASS',version=VERSION,broker='simulated; no native MT5 acceptance',
+                windows_native_pipe_synthetic=native_pipe,checks=[
                 'explicit Sniper learner selector; STOP never submits','Fast Pulse tick engine reaches authorized order_send',
                 'duplicate never resends; partial close never trains','net fees credited only to specialist and owner',
                 'restart restores policy history and STOP','SOLO blocked: only selected mode coordinator executes',
@@ -192,9 +229,14 @@ def check(exe=None):
             out=ROOT/'test-output/sniper-learner-integration.json';out.parent.mkdir(exist_ok=True);out.write_text(json.dumps(report,indent=2))
             print(json.dumps(report))
         finally:
+            if native['writer'] is not None: native['writer'].close()
+            if native['server'] is not None and not native['server'].stop():
+                print('Windows test pipe did not stop cleanly',file=sys.stderr)
             executor.close()
             if process and process.poll() is None:process.terminate();process.wait(timeout=10)
             if sys.exc_info()[0]:log.seek(0);print(log.read().decode(errors='replace'),file=sys.stderr)
             log.close()
 if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('--exe');check(parser.parse_args().exe)
+    parser=argparse.ArgumentParser();parser.add_argument('--exe')
+    parser.add_argument('--native-pipe',action='store_true',help='Use an actual Windows pipe with synthetic quotes')
+    arguments=parser.parse_args();check(arguments.exe,arguments.native_pipe)

@@ -3,7 +3,7 @@
 //| Native tick transport only. It never submits broker orders.     |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.13"
+#property version   "1.14"
 #property description "BrainTrade native Sniper tick bridge. Transport only; no trading calls."
 
 input string InpPipeName = "\\\\.\\pipe\\BrainTradeSniperV1";
@@ -13,6 +13,7 @@ input bool   InpShowStatus = true;
 
 #define TOKEN_FILE "BrainTrade\\sniper.token"
 #define EVENT_FACTOR 1000000
+#define MAX_COPY_REQUEST 65536
 
 int    g_pipe = INVALID_HANDLE;
 string g_token = "";
@@ -22,6 +23,8 @@ ulong  g_recovered_ticks = 0;
 ulong  g_failed_ticks = 0;
 long   g_cursor_msc = 0;
 uint   g_cursor_count = 0;
+bool   g_pending_batch = false;
+ulong  g_saturated_milliseconds = 0;
 long   g_account_login = 0;
 string g_account_server = "";
 string g_account_currency = "";
@@ -37,6 +40,7 @@ void ResetQuoteCursor()
    // that generated it. Never borrow same-millisecond ordinals after a switch.
    g_cursor_msc = 0;
    g_cursor_count = 0;
+   g_pending_batch = false;
   }
 
 void ClosePipe()
@@ -137,6 +141,9 @@ bool EnsurePipe()
    g_account_currency = currency;
    g_account_mode = mode;
    g_connected_token = g_token;
+   // OnTick can be coalesced while the pipe is disconnected. One timer pass
+   // attempts the current quote after reconnect, even without a later tick.
+   g_pending_batch = true;
    return true;
   }
 
@@ -151,12 +158,13 @@ void UpdateStatus()
            "\nSymbol: ", _Symbol,
            "\nQuote ticks sent: ", (string)g_sent_ticks,
            "\nRecovered in batches: ", (string)g_recovered_ticks,
+           "\nSaturated source milliseconds: ", (string)g_saturated_milliseconds,
            "\nSend failures: ", (string)g_failed_ticks,
            "\nToken file: ", (g_token_ready ? "LOADED" : "MISSING/INVALID"),
            "\nLast I/O stage: ", g_last_io_stage,
            "\nLast I/O error: ", IntegerToString(g_last_io_error),
            "\nVerify fresh native ticks in BrainTrade",
-           "\nBridge source: 1.13");
+           "\nBridge source: 1.14");
   }
 
 ulong TickEventId(const long time_msc,const uint ordinal)
@@ -190,7 +198,10 @@ bool SendPendingQuoteTicks()
 
    MqlTick current;
    if(!SymbolInfoTick(_Symbol,current) || current.time_msc <= 0)
+     {
+      g_pending_batch = false;
       return false;
+     }
 
    // Never replay old market history into a live decision engine. On first
    // attach, or after a gap longer than the Core's 1s Sniper freshness window,
@@ -209,11 +220,39 @@ bool SendPendingQuoteTicks()
       from_msc = (ulong)old_msc;
 
    int batch = (int)MathMax(32,MathMin(4096,InpMaxBatch));
+   bool saturated_recovery = false;
+   // CopyTicks counts forward from the inclusive millisecond. Reserve room
+   // for ticks already consumed at that same millisecond, otherwise a full
+   // batch at one timestamp is fetched and skipped forever on every call.
+   if(old_msc > 0 && old_count >= MAX_COPY_REQUEST)
+     {
+      if(current.time_msc <= old_msc)
+        {
+         g_pending_batch = false;
+         g_last_io_stage = "tick timestamp saturated";
+         return false;
+        }
+      // At the hard memory bound the rest of this millisecond is uncertain.
+      // Report the saturation and move forward without replaying old IDs.
+      saturated_recovery = true;
+      from_msc = (ulong)old_msc + 1;
+      old_msc = 0;
+      old_count = 0;
+     }
+   uint request_count = (uint)MathMin(MAX_COPY_REQUEST,(double)batch+(double)old_count);
    MqlTick ticks[];
    ResetLastError();
-   int copied = CopyTicks(_Symbol,ticks,COPY_TICKS_ALL,from_msc,(uint)batch);
+   int copied = CopyTicks(_Symbol,ticks,COPY_TICKS_ALL,from_msc,request_count);
    if(copied <= 0)
+     {
+      g_pending_batch = false;
+      if(copied < 0)
+        {
+         g_last_io_stage = "CopyTicks";
+         g_last_io_error = GetLastError();
+        }
       return false;
+     }
 
    long login = AccountInfoInteger(ACCOUNT_LOGIN);
    if(login <= 0)
@@ -290,7 +329,15 @@ bool SendPendingQuoteTicks()
      {
       g_cursor_msc = new_msc;
       g_cursor_count = new_count;
+      if(saturated_recovery)
+         g_saturated_milliseconds++;
      }
+   // A full batch or a cursor behind the current quote means coalesced ticks
+   // may remain. The timer continues draining without waiting for a new OnTick.
+   bool progressed = new_msc > old_msc || (new_msc == old_msc && new_count > old_count);
+   g_pending_batch = progressed && ((uint)copied == request_count || current.time_msc > new_msc);
+   g_last_io_stage = "connected";
+   g_last_io_error = 0;
    return true;
   }
 
@@ -312,7 +359,8 @@ void OnDeinit(const int reason)
 
 void OnTimer()
   {
-   EnsurePipe();
+   if(EnsurePipe() && g_pending_batch)
+      SendPendingQuoteTicks();
    UpdateStatus();
   }
 

@@ -61,6 +61,10 @@ class NativePortablePackageTests(unittest.TestCase):
         self.assertIn("if ($old -ne $new)",src)
         self.assertIn("LastWriteTimeUtc -ge $started.AddSeconds(-2)",src)
         self.assertIn("$file.Length -gt 1024",src)
+        self.assertIn("Start-Process -FilePath $editor -ArgumentList $arguments -PassThru",src)
+        self.assertIn("$compiler.WaitForExit(120000)",src)
+        self.assertIn("$exitCode=$compiler.ExitCode",src)
+        self.assertNotIn('& $editor ("/compile:"',src)
         self.assertIn("ready_for_real = $false",src)
         self.assertIn("metaeditor_compiled = 'NOT TESTED'",src)
         self.assertNotIn("MetaTrader5.initialize",src)
@@ -75,6 +79,14 @@ class NativePortablePackageTests(unittest.TestCase):
         self.assertIn("scripts/check_v25_native_ea_package.py",build)
         self.assertIn("native-ea-package.json",build)
         self.assertIn("native-ea-relocated.json",build)
+
+    def test_portable_ci_is_triggered_when_runtime_or_ea_source_changes(self):
+        workflow=(ROOT/'.github/workflows/v25-portable-release.yml').read_text('utf-8')
+        pull_request_paths=workflow.split('pull_request:',1)[1].split('\npermissions:',1)[0]
+        for pattern in ("'gateway/**'", "'mt5/**'", "'docs/**'", "'scripts/**'", "'tests/**'",
+                        "'VERIFY_SYSTEM.cmd'", "'V25_P0_DIAGNOSTICS_README_AR.txt'"):
+            self.assertIn(pattern,pull_request_paths,
+                          'Portable CI must rebuild when packaged inputs or checks change')
 
 
 if __name__=="__main__":unittest.main()
