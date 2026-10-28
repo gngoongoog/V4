@@ -83,9 +83,10 @@ class NativePortablePackageTests(unittest.TestCase):
     def test_portable_ci_is_triggered_when_runtime_or_ea_source_changes(self):
         workflow=(ROOT/'.github/workflows/v25-portable-release.yml').read_text('utf-8')
         pull_request_paths=workflow.split('pull_request:',1)[1].split('\npermissions:',1)[0]
-        for pattern in ("'gateway/**'", "'mt5/**'", "'scripts/**'", "'tests/**'"):
+        for pattern in ("'gateway/**'", "'mt5/**'", "'docs/**'", "'scripts/**'", "'tests/**'",
+                        "'VERIFY_SYSTEM.cmd'", "'V25_P0_DIAGNOSTICS_README_AR.txt'"):
             self.assertIn(pattern,pull_request_paths,
-                          'Portable CI must rebuild when its runtime, EA or checks change')
+                          'Portable CI must rebuild when packaged inputs or checks change')
 
 
 if __name__=="__main__":unittest.main()

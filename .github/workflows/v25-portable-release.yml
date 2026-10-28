@@ -9,8 +9,11 @@ on:
       # A change to any of them must produce a new portable, not an old ZIP.
       - 'gateway/**'
       - 'mt5/**'
+      - 'docs/**'
       - 'scripts/**'
       - 'tests/**'
+      - 'VERIFY_SYSTEM.cmd'
+      - 'V25_P0_DIAGNOSTICS_README_AR.txt'
       - 'scripts/Build-V25-Portable-Windows.ps1'
       - 'scripts/package_v25.py'
       - 'scripts/release_identity.py'
