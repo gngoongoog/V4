@@ -19,7 +19,7 @@ pub fn report(db:&Connection, t:Option<&Telemetry>, fresh:bool, now_ms:u64)->Res
          FROM broker_commands
          WHERE {}
          GROUP BY context,kind,visible_state
-         ORDER BY MAX(created_ms) DESC",crate::execution_legacy::PENDING_BROKER_SQL
+         ORDER BY MAX(created_ms) DESC",crate::execution::PENDING_BROKER_SQL
     );
     let mut statement=db.prepare(&sql)?;
     let rows=statement.query_map([],|r|{

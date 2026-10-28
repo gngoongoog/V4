@@ -3,6 +3,7 @@
 //! The previous 0.6 engine is preserved in execution_legacy.rs and still owns durable broker intents.
 #[path = "execution_legacy.rs"]
 mod legacy;
+pub(crate) use legacy::PENDING_BROKER_SQL;
 #[path = "execution_pulse.rs"]
 mod pulse;
 
@@ -152,7 +153,7 @@ fn command_values(db: &Connection, key: &str, include_queued: bool) -> Result<Ve
     let queued = if include_queued { "" } else { "AND state<>'queued'" };
     let sql = format!(
         "SELECT json(payload) FROM broker_commands WHERE context=?1 AND kind='open' AND {} {queued} ORDER BY created_ms,id",
-        crate::execution_legacy::PENDING_BROKER_SQL
+        PENDING_BROKER_SQL
     );
     let mut statement = db.prepare(&sql)?;
     let rows = statement
@@ -590,7 +591,7 @@ impl Service {
                     .unwrap_or_default()
                     .to_owned();
                 let solo = false; // all non-system brains are paper/shadow only
-                let sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND {})",crate::execution_legacy::PENDING_BROKER_SQL);
+                let sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND {})",PENDING_BROKER_SQL);
                 let in_flight: bool = db.query_row(
                     &sql,
                     params![key, id],
