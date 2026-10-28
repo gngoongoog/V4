@@ -61,6 +61,19 @@ class BrokerReconciliationStrictTests(unittest.TestCase):
         self.assertAlmostEqual(second['volume'], .1)
         self.assertEqual(self.result(), second)
 
+    def test_unchanged_partial_history_does_not_rewrite_journal_on_every_poll(self):
+        self.broker.deals = [self.deal(819, .04)]
+        first = self.result()
+        self.assertEqual(first['state'], 'partial')
+        statements = []
+        self.exe.db.set_trace_callback(statements.append)
+        for _ in range(10):
+            self.assertEqual(self.result(), first)
+        self.exe.db.set_trace_callback(None)
+        updates = [s for s in statements if s.lstrip().upper().startswith('UPDATE SENDS')]
+        self.assertEqual(updates, [], 'Unchanged evidence must not cause repeated durable writes')
+        self.assertEqual(len(self.broker.sends), 1)
+
     def test_excess_history_fill_is_never_booked_as_valid_exact_volume(self):
         self.broker.deals = [self.deal(803, .12)]
         result = self.result()

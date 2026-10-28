@@ -1002,7 +1002,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     )?;
                 } else if matches!(old.as_str(), "partial" | "observed") {
                     let previous: Value = serde_json::from_str(&previous_json)?;
-                    if valid_recovered_partial_progress(&previous, &v) {
+                    if previous != v && valid_recovered_partial_progress(&previous, &v) {
                         if old == "observed" {
                             // Position stays observed; only broker-verified fill
                             // evidence advances for cost and learning attribution.
@@ -1410,6 +1410,8 @@ mod execution_persistence_tests {
         let audit=crate::reconciliation_audit::report(&db,Some(&t),true,200).unwrap();
         assert_eq!(audit["by_state"]["partial"],1);
         let status=Status{gateway_fresh:true,telemetry:Some(t),..Default::default()};
+        db.execute_batch("CREATE TABLE test_updates(n INTEGER); CREATE TRIGGER test_result_update
+            AFTER UPDATE ON broker_commands BEGIN INSERT INTO test_updates VALUES(1); END;").unwrap();
         let mut terminal=previous.clone();
         terminal["terminal_order"]=json!({"confirmed":true,"ticket":42,"state":"canceled",
             "volume_initial":0.1,"volume_current":0.06});
@@ -1417,6 +1419,9 @@ mod execution_persistence_tests {
         assert!(svc.route("POST","/v1/execution/result",forged.to_string().as_bytes(),&db,&status,201).is_err());
         assert!(svc.pending(&db).unwrap());
         svc.route("POST","/v1/execution/result",terminal.to_string().as_bytes(),&db,&status,202).unwrap();
+        svc.route("POST","/v1/execution/result",terminal.to_string().as_bytes(),&db,&status,203).unwrap();
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM test_updates",[],|r|r.get::<_,u64>(0)).unwrap(),1,
+            "Identical recovery evidence must not repeatedly rewrite Core SQLite");
         assert!(!svc.pending(&db).unwrap());
         let state:String=db.query_row("SELECT state FROM broker_commands WHERE id='legacy-partial'",[],|r|r.get(0)).unwrap();
         assert_eq!(state,"observed","No manual status rewrite or resubmission");

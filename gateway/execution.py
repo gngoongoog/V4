@@ -394,7 +394,7 @@ class BrokerExecutor:
                 return None
             return dict(confirmed=True, ticket=ticket, state=state,
                         volume_initial=initial, volume_current=remaining)
-        except (AttributeError, TypeError, ValueError, OverflowError, OSError):
+        except (AttributeError, TypeError, ValueError, OverflowError, OSError, RuntimeError):
             return None
 
     def _reconcile(self, mt5, cmd, previous):
@@ -536,6 +536,13 @@ class BrokerExecutor:
             if (account_identity(final_account) != expected(cmd)
                     or getattr(final_account, 'trade_mode', None) != target_mode):
                 return previous or dict(id=cmd['id'], state='unknown', reason='Broker account changed during recovery')
+            # The same partial history can be polled repeatedly on the tick
+            # path. Do not rewrite the durable journal for a timestamp-only
+            # change; persist every new deal, terminal proof or other evidence.
+            if previous is not None:
+                comparable = lambda value: {k:v for k,v in value.items() if k != 'reconciled_ms'}
+                if comparable(result) == comparable(previous):
+                    return previous
             return self._save(cmd, result)
         return result
 
