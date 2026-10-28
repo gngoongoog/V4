@@ -61,6 +61,19 @@ class BrokerReconciliationStrictTests(unittest.TestCase):
         self.assertAlmostEqual(second['volume'], .1)
         self.assertEqual(self.result(), second)
 
+    def test_unchanged_partial_history_does_not_rewrite_journal_on_every_poll(self):
+        self.broker.deals = [self.deal(819, .04)]
+        first = self.result()
+        self.assertEqual(first['state'], 'partial')
+        statements = []
+        self.exe.db.set_trace_callback(statements.append)
+        for _ in range(10):
+            self.assertEqual(self.result(), first)
+        self.exe.db.set_trace_callback(None)
+        updates = [s for s in statements if s.lstrip().upper().startswith('UPDATE SENDS')]
+        self.assertEqual(updates, [], 'Unchanged evidence must not cause repeated durable writes')
+        self.assertEqual(len(self.broker.sends), 1)
+
     def test_excess_history_fill_is_never_booked_as_valid_exact_volume(self):
         self.broker.deals = [self.deal(803, .12)]
         result = self.result()
@@ -95,6 +108,79 @@ class BrokerReconciliationStrictTests(unittest.TestCase):
         result = self.result()
         self.assertEqual(result['state'], 'partial', result)
         self.assertAlmostEqual(result['volume'], .04)
+
+    def test_active_order_ticket_blocks_fill_when_broker_strips_comment(self):
+        # MT5 active orders expose `ticket`, not the Deal's `order` field.
+        row = self.exe.db.execute('SELECT result FROM sends WHERE id=?', (self.cmd['id'],)).fetchone()
+        recorded = dict(json.loads(row[0]), order=42)
+        self.exe.db.execute('UPDATE sends SET result=? WHERE id=?',
+                            (json.dumps(recorded), self.cmd['id']))
+        self.exe.db.commit()
+        self.broker.deals = [self.deal(820, .1, order=42)]
+        self.broker.orders = [N(ticket=42, magic=self.cmd['magic'],
+                                symbol=self.cmd['symbol'], comment='broker changed comment')]
+        self.assertEqual(self.result()['state'], 'unknown')
+        # Missing identity is also insufficient evidence that the order ended.
+        self.broker.orders = [N(magic=self.cmd['magic'], symbol=self.cmd['symbol'], comment='')]
+        self.assertEqual(self.result()['state'], 'unknown')
+        self.broker.orders = [N(ticket=42, magic=None, symbol=self.cmd['symbol'], comment='')]
+        self.assertEqual(self.result()['state'], 'unknown', 'Exact active ticket must block even with damaged metadata')
+        self.broker.orders = []
+        self.assertEqual(self.result()['state'], 'filled')
+        self.assertEqual(len(self.broker.sends), 1)
+
+    def test_conflicting_active_ticket_is_not_matched_by_reused_comment(self):
+        row = self.exe.db.execute('SELECT result FROM sends WHERE id=?', (self.cmd['id'],)).fetchone()
+        recorded = dict(json.loads(row[0]), order=42)
+        self.exe.db.execute('UPDATE sends SET result=? WHERE id=?',
+                            (json.dumps(recorded), self.cmd['id']))
+        self.exe.db.commit()
+        self.broker.deals = [self.deal(821, .1, order=42)]
+        self.broker.orders = [N(ticket=43, magic=self.cmd['magic'],
+                                symbol=self.cmd['symbol'], comment='BT:' + self.cmd['id'][:20])]
+        self.assertEqual(self.result()['state'], 'filled')
+        self.assertEqual(len(self.broker.sends), 1)
+
+    def test_partial_needs_exact_terminal_order_history_to_prove_remainder_ended(self):
+        row = self.exe.db.execute('SELECT result FROM sends WHERE id=?', (self.cmd['id'],)).fetchone()
+        recorded = dict(json.loads(row[0]), order=42)
+        self.exe.db.execute('UPDATE sends SET result=? WHERE id=?',
+                            (json.dumps(recorded), self.cmd['id']))
+        self.exe.db.commit()
+        self.broker.deals = [self.deal(825, .04, order=42)]
+        self.broker.ORDER_STATE_CANCELED = 2
+        self.broker.ORDER_STATE_REJECTED = 5
+        self.broker.ORDER_STATE_EXPIRED = 6
+        terminal = N(ticket=42, magic=self.cmd['magic'], symbol=self.cmd['symbol'],
+                     state=2, volume_initial=.1, volume_current=.06)
+        self.broker.history_orders_get = lambda **kw: None
+        first = self.result()
+        self.assertEqual(first['state'], 'partial')
+        self.assertNotIn('terminal_order', first, 'Missing order history is not terminal proof')
+        for changed in (dict(ticket=43), dict(state=3), dict(magic=99),
+                        dict(symbol='EURUSD'), dict(volume_initial=.2)):
+            self.broker.history_orders_get = lambda **kw: [N(**(vars(terminal) | changed))]
+            result = self.result()
+            self.assertNotIn('terminal_order', result, changed)
+        # Even apparently terminal history is not used while the exact order
+        # remains active or when the broker switches mode during the read.
+        self.broker.history_orders_get = lambda **kw: [terminal]
+        self.broker.orders = [N(ticket=42, magic=self.cmd['magic'], symbol=self.cmd['symbol'], comment='')]
+        self.assertNotIn('terminal_order', self.result())
+        self.broker.orders = []
+        def switched_account(**kw):
+            self.broker.account.trade_mode = 2
+            return [terminal]
+        self.broker.history_orders_get = switched_account
+        self.assertNotIn('terminal_order', self.result())
+        self.broker.account.trade_mode = 0
+        self.broker.history_orders_get = lambda **kw: [terminal]
+        result = self.result()
+        self.assertEqual(result['state'], 'partial')
+        self.assertEqual(result['terminal_order']['ticket'], 42)
+        self.assertEqual(result['terminal_order']['state'], 'canceled')
+        self.assertTrue(result['terminal_order']['confirmed'])
+        self.assertEqual(len(self.broker.sends), 1)
 
 
     def test_wrong_direction_history_cannot_resolve_unknown_intent(self):

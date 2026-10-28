@@ -32,10 +32,23 @@ BAGHDAD = timezone(timedelta(hours=3))
 SNIPER_LOOP_SECONDS = 0.005
 SNIPER_FULL_SNAPSHOT_SECONDS = 0.250
 SNIPER_BACKGROUND_SECONDS = 0.500
+BROKER_HISTORY_POLL_SECONDS = 5.0
 CONFIG_REFRESH_SECONDS = 0.500
 NORMAL_MIN_LOOP_SECONDS = 0.050
 NATIVE_RECENT_MS = 500
 NATIVE_BATCH_MAX = 512
+
+
+class BrokerHistoryScheduler:
+    """Keep normal broker work alive even when every loop handles a tick."""
+    def __init__(self):
+        self.next_poll = 0.0
+
+    def should_poll(self, command_polled: bool, now: float) -> bool:
+        if command_polled and now < self.next_poll:
+            return False
+        self.next_poll = now + BROKER_HISTORY_POLL_SECONDS
+        return True
 
 
 class MarketCache:
@@ -545,6 +558,7 @@ def main():
     next_background=0.0
     next_config_refresh=0.0
     next_native_rebind=0.0
+    broker_history_schedule=BrokerHistoryScheduler()
     normal_poll_seconds=1.0
 
     def api(path, payload=None, method=None):
@@ -717,7 +731,10 @@ def main():
 
             try:
                 if initialized and latest_snapshot and latest_snapshot.get('connected'):
-                    if not command_polled:
+                    # Pulse work deliberately skips history. During a sustained
+                    # tick stream there might never be an idle loop, so force
+                    # an occasional normal cycle for durable broker history.
+                    if broker_history_schedule.should_poll(command_polled,time.monotonic()):
                         try:
                             normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api)))
                         except (OSError,ValueError,RuntimeError):

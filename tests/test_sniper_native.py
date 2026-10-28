@@ -176,6 +176,13 @@ class NativeSniperTests(unittest.TestCase):
         self.assertNotIn("trade.Buy", source)
         self.assertNotIn("trade.Sell", source)
 
+    def test_ea_pipe_handle_is_not_presented_as_verified_tick_delivery(self):
+        source = (ROOT / "mt5" / "BrainTradeSniperBridge.mq5").read_text(encoding="utf-8")
+        status = source[source.index("void UpdateStatus()"):source.index("ulong TickEventId")]
+        self.assertIn('PIPE OPEN (UNVERIFIED)', status)
+        self.assertIn('Verify fresh native ticks in BrainTrade', status)
+        self.assertNotIn('"CONNECTED"', status)
+
     def test_windows_package_places_native_bridge_next_to_runtime(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "source"

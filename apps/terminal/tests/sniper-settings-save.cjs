@@ -18,6 +18,11 @@ const hooks={
   if(!(i in state))state[i]=typeof initial==='function'?initial():initial;
   return [state[i],next=>{state[i]=typeof next==='function'?next(state[i]):next;}];
  },
+ useRef(initial){
+  const i=index++;
+  if(!(i in state))state[i]={current:initial};
+  return state[i];
+ },
  useEffect(fn,deps){
   const i=index++;
   if(!dependencies[i]||deps.some((v,n)=>!Object.is(v,dependencies[i][n]))){
@@ -110,5 +115,23 @@ const flush=async()=>{await new Promise(resolve=>setImmediate(resolve));};
  assert.equal(Number(findInput(view,'sniper fixed target pips').props.value),7.5);
  assert.equal(findInput(view,'sniper cooldown seconds').props.value,'3');
  assert.equal(findInput(view,'commission per lot').props.value,'0');
- console.log('PASS: edit, preserve pip geometry, reject blank, Core failure retains draft, accepted save/re-read');
+ // A background Core revision, account or risk change must not erase edits or
+ // allow an older draft to overwrite settings the operator has not reviewed.
+ findInput(view,'sniper cooldown seconds').props.onChange({target:{value:'9'}});
+ view=render();
+ sourceData={...sourceData,config:{...sourceData.config,risk:{slippage_ticks:3}}};
+ view=render();
+ assert.equal(findInput(view,'sniper cooldown seconds').props.value,'9','Refresh must retain the draft');
+ saveButton(view).props.onClick();await flush();
+ assert.equal(calls,2,'Stale draft must not call Core');
+ assert(nodes(render()).some(n=>n.props?.role==='alert'),'Stale draft must explain the conflict');
+ const reset=nodes(render()).find(n=>n.type==='button'&&String(n.props.children).includes('التراجع'));
+ assert(reset,'Missing reset button');reset.props.onClick();
+ view=render();
+ assert.equal(findInput(view,'sniper cooldown seconds').props.value,'3','Reset must show the current Core settings');
+ findInput(view,'sniper cooldown seconds').props.onChange({target:{value:'9'}});
+ view=render();saveButton(view).props.onClick();await flush();
+ assert.equal(calls,3);assert.equal(latest.slippage_ticks,3);
+ assert.equal(latest.trading.sniper_cooldown_seconds,9);
+ console.log('PASS: edits, pip geometry, rejection, reread and stale draft conflict');
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -14,13 +14,14 @@ pub fn report(db:&Connection, t:Option<&Telemetry>, fresh:bool, now_ms:u64)->Res
             .map(|t|serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)))
             .transpose()?
     }else{None};
-    let mut statement=db.prepare(
-        "SELECT context,kind,state,COUNT(*),MIN(created_ms),MAX(created_ms)
+    let sql=format!(
+        "SELECT context,kind,CASE WHEN state='observed' THEN 'partial' ELSE state END AS visible_state,COUNT(*),MIN(created_ms),MAX(created_ms)
          FROM broker_commands
-         WHERE state IN ('queued','dispatched','unknown','placed','filled','partial')
-         GROUP BY context,kind,state
-         ORDER BY MAX(created_ms) DESC"
-    )?;
+         WHERE {}
+         GROUP BY context,kind,visible_state
+         ORDER BY MAX(created_ms) DESC",crate::execution::PENDING_BROKER_SQL
+    );
+    let mut statement=db.prepare(&sql)?;
     let rows=statement.query_map([],|r|{
         Ok((
             r.get::<_,String>(0)?,r.get::<_,String>(1)?,

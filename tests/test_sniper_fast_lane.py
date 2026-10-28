@@ -4,9 +4,12 @@ from types import SimpleNamespace as NS
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT / "gateway"))
+sys.path.insert(0, str(ROOT / "tests"))
+from test_broker_execution import Broker
 
 
 def load(name, path):
@@ -146,6 +149,37 @@ class SniperFastLaneTests(unittest.TestCase):
                 })
                 self.assertEqual(calls, [])
                 self.assertAlmostEqual(delay, 0.1)
+            finally:
+                executor.close()
+
+    def test_continuous_pulses_still_schedule_broker_history_without_sending(self):
+        with tempfile.TemporaryDirectory() as directory:
+            executor = execution.BrokerExecutor(Path(directory) / 'journal.sqlite')
+            broker = Broker()
+            start = execution.clock_ms()-10000
+            broker.deals = [NS(ticket=909, position_id=700, magic=410601,
+                symbol='XAUUSD', entry=0, type=0, time_msc=start+1000,
+                volume=.1, price=2000., profit=0., commission=0., swap=0., fee=0., reason=0)]
+            work = {'command':None, 'history_from_ms':start,
+                    'account':{'login':17,'server':'Demo','currency':'USD','trade_mode':0},'poll_ms':100}
+            synced=[]
+            def api(path, payload=None):
+                if path == '/v1/execution/gateway': return work
+                if path == '/v1/execution/sync': synced.append(payload); return {'ok':True}
+                raise AssertionError(path)
+            schedule = gateway.BrokerHistoryScheduler()
+            try:
+                # Simulate a tick on every 5ms iteration for ten seconds.
+                for i in range(2001):
+                    now=i/200
+                    if schedule.should_poll(True, now):
+                        with mock.patch.object(execution.time, 'monotonic', return_value=now):
+                            executor.cycle(broker, api)
+                self.assertEqual(len(synced),3)
+                self.assertTrue(all(x['deals'][0]['ticket']==909 for x in synced))
+                self.assertEqual(broker.sends,[], 'History polling must never create a broker order')
+                # Quiet loops retain the original normal-poll behavior.
+                self.assertTrue(schedule.should_poll(False,10.001))
             finally:
                 executor.close()
 

@@ -358,6 +358,45 @@ class BrokerExecutor:
         if reason:
             raise ValueError(reason)
 
+    def _terminal_partial_order(self, mt5, cmd, order, submitted_volume):
+        """Return exact broker history evidence that an unfilled remainder ended.
+
+        No missing history, live-order snapshot or deal alone certifies this.
+        The saved evidence is diagnostic; it never sends or cancels an order.
+        """
+        if order <= 0 or not callable(getattr(mt5, 'history_orders_get', None)):
+            return None
+        terminal = {getattr(mt5, name, None): label for name, label in (
+            ('ORDER_STATE_CANCELED', 'canceled'), ('ORDER_STATE_REJECTED', 'rejected'),
+            ('ORDER_STATE_EXPIRED', 'expired')) if getattr(mt5, name, None) is not None}
+        if not terminal:
+            return None
+        mode = 0 if cmd.get('target') == 'demo' else 2 if cmd.get('target') == 'live' else -1
+        def same_account():
+            account = mt5.account_info()
+            return account_identity(account) == expected(cmd) and getattr(account, 'trade_mode', None) == mode
+        try:
+            if not same_account():
+                return None
+            rows = mt5.history_orders_get(ticket=order)
+            if rows is None or len(rows) != 1 or not same_account():
+                return None
+            item = rows[0]
+            ticket = int(item.ticket)
+            initial = float(item.volume_initial)
+            remaining = float(item.volume_current)
+            state = terminal.get(item.state)
+            if (ticket != order or getattr(item, 'magic', None) != cmd['magic']
+                    or getattr(item, 'symbol', None) != cmd['symbol'] or state is None
+                    or not all(math.isfinite(v) for v in (initial, remaining, submitted_volume))
+                    or initial <= 0 or remaining < 0 or remaining > initial + 1e-8
+                    or abs(initial-submitted_volume) > max(1e-8, submitted_volume*1e-7)):
+                return None
+            return dict(confirmed=True, ticket=ticket, state=state,
+                        volume_initial=initial, volume_current=remaining)
+        except (AttributeError, TypeError, ValueError, OverflowError, OSError, RuntimeError):
+            return None
+
     def _reconcile(self, mt5, cmd, previous):
         result = previous or dict(id=cmd['id'], state='unknown', reason='Send was interrupted; no automatic retry')
         if result['state'] not in ('unknown', 'placed', 'partial'):
@@ -379,18 +418,50 @@ class BrokerExecutor:
         # positive MT5 order ticket from the durable acknowledgement is a
         # stronger exact link than the comment. Keep magic/symbol/account checks
         # and never guess based solely on timing or trade direction.
-        acknowledged_order = int(result.get('order') or 0)
-        def matches_identity(item):
+        try:
+            acknowledged_order = int(result.get('order') or 0)
+        except (TypeError, ValueError, OverflowError):
+            return dict(result, reason='Invalid acknowledged order ticket; reconciliation pending')
+        if acknowledged_order < 0:
+            return dict(result, reason='Invalid acknowledged order ticket; reconciliation pending')
+        def matches_deal(item):
             if getattr(item, 'magic', 0)!=cmd['magic'] or getattr(item, 'symbol', '')!=cmd['symbol']:
                 return False
-            item_order = int(getattr(item, 'order', 0) or 0)
+            try:
+                item_order = int(getattr(item, 'order', 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                return False
             # If both sides expose an order ID, it must agree. A copied or
             # broker-reused comment must never override a conflicting ticket.
             if acknowledged_order>0 and item_order>0:
                 return item_order==acknowledged_order
             return getattr(item, 'comment', '')==tag
-        matches = [d for d in deals if matches_identity(d)]
-        pending = any(matches_identity(o) for o in orders)
+        def may_be_active_order(item):
+            # Active MT5 orders carry their identity in `ticket`, whereas a
+            # Deal links back to its order in `order`. A broker may strip the
+            # comment. An unidentifiable same-owner active order must therefore
+            # block finalizing rather than being mistaken for an absent order.
+            try:
+                ticket = int(getattr(item, 'ticket', 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                ticket = 0
+            if acknowledged_order>0 and ticket>0:
+                # An exact ticket is a blocker even if other returned fields
+                # are missing or inconsistent; never finalize on corruption.
+                return ticket==acknowledged_order
+            symbol = getattr(item, 'symbol', '')
+            if symbol and symbol!=cmd['symbol']:
+                return False
+            # With no usable ticket, missing/mismatched metadata is not proof
+            # that an acknowledged same-symbol order has disappeared.
+            if acknowledged_order>0:
+                return True
+            magic = getattr(item, 'magic', None)
+            if magic is not None and magic!=cmd['magic']:
+                return False
+            return True
+        matches = [d for d in deals if matches_deal(d)]
+        pending = any(may_be_active_order(o) for o in orders)
         # A journal is scoped to both broker identity and Demo/REAL mode.
         # A matching login tuple alone must never authorize cross-mode recovery.
         target_mode = 0 if cmd.get('target') == 'demo' else 2 if cmd.get('target') == 'live' else -1
@@ -456,6 +527,12 @@ class BrokerExecutor:
             result = dict(result, state=state, reason='Broker history confirms fill; await Core position reconciliation; no resend',
                           request=submitted, deal=int(matches[0].ticket), deals=[int(d.ticket) for d in matches],
                           volume=volume, recovered_from_history=True)
+            if state == 'partial':
+                terminal = self._terminal_partial_order(mt5, cmd, acknowledged_order, submitted_volume)
+                if terminal is not None:
+                    result['terminal_order'] = terminal
+            else:
+                result.pop('terminal_order', None)
             prices = [float(getattr(d, 'price', 0)) for d in matches]
             if all(math.isfinite(p) and p > 0 for p in prices):
                 result['price'] = sum(p * float(d.volume) for p, d in zip(prices, matches)) / volume
@@ -465,6 +542,17 @@ class BrokerExecutor:
             result['position_id'] = positions[0]
             # Recovery can restore booked evidence, never the unobserved quote path.
             result['reconciled_ms'] = clock_ms()
+            final_account = mt5.account_info()
+            if (account_identity(final_account) != expected(cmd)
+                    or getattr(final_account, 'trade_mode', None) != target_mode):
+                return previous or dict(id=cmd['id'], state='unknown', reason='Broker account changed during recovery')
+            # The same partial history can be polled repeatedly on the tick
+            # path. Do not rewrite the durable journal for a timestamp-only
+            # change; persist every new deal, terminal proof or other evidence.
+            if previous is not None:
+                comparable = lambda value: {k:v for k,v in value.items() if k != 'reconciled_ms'}
+                if comparable(result) == comparable(previous):
+                    return previous
             return self._save(cmd, result)
         return result
 

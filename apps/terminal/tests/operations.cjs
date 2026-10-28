@@ -9,7 +9,7 @@ const output=ts.transpileModule(source,{fileName:'operations.tsx',compilerOption
 const errors=(output.diagnostics||[]).filter(x=>x.category===ts.DiagnosticCategory.Error);
 assert.equal(errors.length,0,errors.map(e=>ts.flattenDiagnosticMessageText(e.messageText,'\n')).join('\n'));
 const jsx=(type,props)=>({type,props:props||{}});
-const hooks={useState:initial=>[initial,()=>{}],useEffect:()=>{}};
+const hooks={useState:initial=>[initial,()=>{}],useEffect:()=>{},useRef:initial=>({current:initial})};
 const exportsObj={};
 vm.runInNewContext(output.outputText,{exports:exportsObj,require:id=>{
  if(id==='react')return hooks;
