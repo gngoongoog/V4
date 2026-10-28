@@ -62,6 +62,10 @@ try {
   Run (Join-Path $portable 'runtime/python/python.exe') @('-B',(Join-Path $portable 'Tools/G7/g7_demo_acceptance_packet.py'),'--help')
   Run python @('scripts/smoke_portable_core.py',$exe)
   Run python @('scripts/check_sniper_quote_clock.py','--exe',$exe)
+  # Exercise the real Windows pipe + Gateway quote overlay + packaged Core
+  # with synthetic ticks and a simulated broker; no MT5 account is touched.
+  Run python @('scripts/check_sniper_learner.py','--exe',$exe,'--native-pipe')
+  Copy-Item 'test-output/sniper-learner-integration.json' 'test-output/v25/sniper-native-pipeline.json' -Force
   # Relocation and spaces must not make Core resolve Gateway relative to cwd.
   $moved=Join-Path $root 'target/portable/Relocated V25 Space'
   if(Test-Path $moved){Remove-Item $moved -Recurse -Force}

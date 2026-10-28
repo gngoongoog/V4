@@ -99,4 +99,21 @@ $report = [ordered]@{
   ready_for_real = $false
 }
 $report | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $evidence 'compile-result.json') -Encoding UTF8
+# Reuse the same operator helper with deliberately invalid test-only source.
+# The prior successful EX5 must never turn this failure into a reported PASS.
+Set-Content -LiteralPath $source -Value 'this is deliberately invalid MQL5 source' -Encoding ASCII
+$negativeOut = Join-Path $evidence 'invalid-source-output.txt'
+$negativeErr = Join-Path $evidence 'invalid-source-errors.txt'
+$negative = Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') -ArgumentList $arguments -PassThru `
+  -RedirectStandardOutput $negativeOut -RedirectStandardError $negativeErr
+if (-not $negative.WaitForExit(150000)) {
+  Stop-Process -Id $negative.Id -Force -ErrorAction SilentlyContinue
+  throw 'Invalid-source compile check timed out'
+}
+$negativeReport = Get-Content -LiteralPath $helperReport -Raw | ConvertFrom-Json
+$negativeReport | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $evidence 'invalid-source-result.json') -Encoding UTF8
+if ($negative.ExitCode -eq 0 -or $negativeReport.metaeditor_compiled -ne 'FAIL') {
+  throw 'Portable helper incorrectly accepted invalid source with an existing EX5'
+}
+Write-Host 'PASS: deliberately invalid source rejected even with an earlier successful EX5.'
 Write-Host 'PASS: signed official MetaEditor compiled current MQ5; MT5 Demo remains NOT TESTED.'

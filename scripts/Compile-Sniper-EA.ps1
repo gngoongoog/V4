@@ -92,10 +92,12 @@ try {
   $logClean=$false
   if ($logFound) {
     $raw=Get-Content -LiteralPath $log -Raw -ErrorAction Stop
-    $logClean=($raw -match '(?i)\b0\s+errors?\b' -and
+    $logClean=($raw -match '(?im)^\s*Result:\s*0\s+errors?\b' -and
       $raw -notmatch '(?i)\b[1-9][0-9]*\s+errors?\b')
   }
-  $okay=($exitCode -eq 0 -and $fresh -and $logClean)
+  # MetaEditor can exit with code 1 even after a successful compile. Trust the
+  # new explicit result log AND a fresh EX5, and record the code for diagnosis.
+  $okay=($fresh -and $logClean)
   $report['compiler_exit_code']=$exitCode
   $report['ex5_found']=$compiled
   $report['ex5_fresh']=$fresh
