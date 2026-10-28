@@ -149,18 +149,18 @@ fn intent_risk(t: &Telemetry, c: &Config, request: &Value) -> Option<f64> {
     Some(stop / tick * tick_value * lots + braintrade_domain::commission::round_trip_charge(c.risk.commission_per_lot,lots).ok()?)
 }
 
-fn command_values(db: &Connection, key: &str, include_queued: bool) -> Result<Vec<Value>> {
+fn command_values(db: &Connection, key: &str, include_queued: bool) -> Result<Vec<(Value,String,Value)>> {
     let queued = if include_queued { "" } else { "AND state<>'queued'" };
     let sql = format!(
-        "SELECT json(payload) FROM broker_commands WHERE context=?1 AND kind='open' AND {} {queued} ORDER BY created_ms,id",
+        "SELECT payload,state,result FROM broker_commands WHERE context=?1 AND kind='open' AND {} {queued} ORDER BY created_ms,id",
         PENDING_BROKER_SQL
     );
     let mut statement = db.prepare(&sql)?;
     let rows = statement
-        .query_map([key], |row| row.get::<_, String>(0))?
+        .query_map([key], |row| Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?,row.get::<_, String>(2)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|row| Ok(serde_json::from_str(&row)?))
+        .map(|(payload,state,result)| Ok((serde_json::from_str(&payload)?,state,serde_json::from_str(&result)?)))
         .collect()
 }
 
@@ -178,7 +178,7 @@ fn exposure(db: &Connection, t: &Telemetry, c: &Config, include_queued: bool) ->
         })
         .collect();
     let visible_magics: BTreeSet<u64> = owned.iter().map(|position| position.magic).collect();
-    for position in owned {
+    for position in &owned {
         result.open_positions = result.open_positions.saturating_add(1);
         result.lots += position.volume.max(0.0);
         match owned_position_risk(t, c, position) {
@@ -186,14 +186,41 @@ fn exposure(db: &Connection, t: &Telemetry, c: &Config, include_queued: bool) ->
             None => result.risk_known = false,
         }
     }
-    for request in command_values(db, &key, include_queued)? {
+    // An exact broker-history link may account for a visible filled slice once;
+    // the possible unfilled remainder still contributes lots and stop risk.
+    let mut credited_by_position=BTreeMap::<u64,f64>::new();
+    for (request,state,broker_result) in command_values(db, &key, include_queued)? {
         let magic = request["magic"].as_u64().unwrap_or(0);
-        // A filled/partial intent and its now-visible position are one exposure, not two.
-        if visible_magics.contains(&magic) {
+        if state=="filled" && visible_magics.contains(&magic) {
             continue;
         }
-        result.open_intents = result.open_intents.saturating_add(1);
         let lots = request["lots"].as_f64().unwrap_or(0.0);
+        let linked_position=broker_result["position_id"].as_u64().filter(|id|*id>0)
+            .and_then(|id|owned.iter().find(|p|p.magic==magic
+                && (p.identifier==id || p.identifier==0 && p.ticket==id)).map(|p|(id,*p)));
+        if matches!(state.as_str(),"partial"|"observed") && broker_result["recovered_from_history"]==true {
+            if let Some((id,position))=linked_position {
+                let filled=broker_result["volume"].as_f64().unwrap_or(f64::NAN);
+                if lots.is_finite() && lots>0. && filled.is_finite() && filled>0.
+                    && position.volume.is_finite() && position.volume>0. {
+                    let already=*credited_by_position.get(&id).unwrap_or(&0.);
+                    let credit=filled.min((position.volume-already).max(0.)).min(lots);
+                    *credited_by_position.entry(id).or_default()+=credit;
+                    let remainder=(lots-credit).max(0.);
+                    result.lots+=remainder;
+                    if remainder>0. {
+                        match intent_risk(t,c,&request) {
+                            Some(risk)=>result.estimated_risk+=risk*remainder/lots,
+                            None=>result.risk_known=false,
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
+        // Without an exact position/deal link, an unresolved command may be an
+        // additional exposure even when another position shares its magic.
+        result.open_intents = result.open_intents.saturating_add(1);
         if !lots.is_finite() || lots <= 0.0 {
             result.risk_known = false;
         } else {
@@ -1282,6 +1309,31 @@ mod tests {
         assert_eq!(view.open_positions, 1);
         assert_eq!(view.open_intents, 0);
         assert!((view.lots - 0.10).abs() < 1e-9);
+    }
+
+    #[test]
+    fn partial_exposure_reserves_unfilled_remainder_without_inventing_position_links() {
+        let db=setup();
+        let mut t=telemetry();
+        t.positions.push(Position {magic:execution::magic("trend").unwrap(),
+            identifier:55,ticket:55,symbol:"XAUUSD".into(),side:"BUY".into(),
+            volume:0.04,price_open:2000.,price_current:2000.1,sl:1999.9,tp:2000.2,
+            ..Default::default()});
+        queue(&db,&t,"partial-a","trend",0.10,0.10,1);
+        let linked=json!({"state":"partial","recovered_from_history":true,
+            "position_id":55,"volume":0.04,"deal":801,"deals":[801]});
+        db.execute("UPDATE broker_commands SET state='partial',result=?1 WHERE id='partial-a'",
+            [linked.to_string()]).unwrap();
+        let view=exposure(&db,&t,&Config::default(),true).unwrap();
+        assert_eq!(view.open_positions,1);assert_eq!(view.open_intents,0);
+        assert!((view.lots-0.10).abs()<1e-9,"Visible 0.04 plus possible remaining 0.06");
+        let mut unlinked=linked;unlinked["position_id"]=json!(99);
+        db.execute("UPDATE broker_commands SET result=?1 WHERE id='partial-a'",
+            [unlinked.to_string()]).unwrap();
+        let conservative=exposure(&db,&t,&Config::default(),true).unwrap();
+        assert_eq!(conservative.open_intents,1);
+        assert!((conservative.lots-0.14).abs()<1e-9,
+            "Unlinked position cannot remove the command's possible exposure");
     }
 
     #[test]
