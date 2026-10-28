@@ -123,6 +123,8 @@ class BrokerReconciliationStrictTests(unittest.TestCase):
         # Missing identity is also insufficient evidence that the order ended.
         self.broker.orders = [N(magic=self.cmd['magic'], symbol=self.cmd['symbol'], comment='')]
         self.assertEqual(self.result()['state'], 'unknown')
+        self.broker.orders = [N(ticket=42, magic=None, symbol=self.cmd['symbol'], comment='')]
+        self.assertEqual(self.result()['state'], 'unknown', 'Exact active ticket must block even with damaged metadata')
         self.broker.orders = []
         self.assertEqual(self.result()['state'], 'filled')
         self.assertEqual(len(self.broker.sends), 1)

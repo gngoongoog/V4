@@ -437,8 +437,6 @@ class BrokerExecutor:
                 return item_order==acknowledged_order
             return getattr(item, 'comment', '')==tag
         def may_be_active_order(item):
-            if getattr(item, 'magic', 0)!=cmd['magic'] or getattr(item, 'symbol', '')!=cmd['symbol']:
-                return False
             # Active MT5 orders carry their identity in `ticket`, whereas a
             # Deal links back to its order in `order`. A broker may strip the
             # comment. An unidentifiable same-owner active order must therefore
@@ -448,7 +446,19 @@ class BrokerExecutor:
             except (TypeError, ValueError, OverflowError):
                 ticket = 0
             if acknowledged_order>0 and ticket>0:
+                # An exact ticket is a blocker even if other returned fields
+                # are missing or inconsistent; never finalize on corruption.
                 return ticket==acknowledged_order
+            symbol = getattr(item, 'symbol', '')
+            if symbol and symbol!=cmd['symbol']:
+                return False
+            # With no usable ticket, missing/mismatched metadata is not proof
+            # that an acknowledged same-symbol order has disappeared.
+            if acknowledged_order>0:
+                return True
+            magic = getattr(item, 'magic', None)
+            if magic is not None and magic!=cmd['magic']:
+                return False
             return True
         matches = [d for d in deals if matches_deal(d)]
         pending = any(may_be_active_order(o) for o in orders)
