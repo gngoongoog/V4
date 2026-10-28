@@ -32,6 +32,28 @@ class P0ENativeLifecycle(TestCase):
         self.assertFalse(box.recent(now_ms=1005,login=17,symbol='EURUSD'))
         self.assertFalse(box.recent(now_ms=2000,login=17,symbol='XAUUSD'))
 
+    def test_recent_pipe_traffic_cannot_hide_an_old_or_future_broker_quote(self):
+        box=native.NativeTickMailbox(limit=3)
+        box.set_connected(True)
+        delayed=self.packet(ms=1000)
+        delayed['received_ms']=10_000
+        box.push(delayed)
+        self.assertFalse(box.recent(now_ms=10_010,login=17,symbol='XAUUSD'),
+            'Late Native traffic must not suppress fresh Poll fallback')
+        future=self.packet(ms=13_001)
+        future['received_ms']=10_000
+        box.push(future)
+        self.assertFalse(box.recent(now_ms=10_010,login=17,symbol='XAUUSD'),
+            'A broker quote more than 2 seconds ahead cannot certify Native freshness')
+        fresh=self.packet(ms=9950)
+        fresh['received_ms']=10_000
+        box.push(fresh)
+        self.assertTrue(box.recent(now_ms=10_010,login=17,symbol='XAUUSD'))
+        box.set_connected(False)
+        box.set_connected(True)
+        self.assertFalse(box.recent(now_ms=10_010,login=17,symbol='XAUUSD'),
+            'A new pipe connection needs its own fresh authenticated quote')
+
     def test_native_disconnect_revokes_freshness_and_pending_packets(self):
         box=native.NativeTickMailbox(limit=2)
         box.set_connected(True)

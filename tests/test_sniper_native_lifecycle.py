@@ -106,6 +106,64 @@ class NativeSniperLifecycleTests(unittest.TestCase):
         self.assertTrue(second.running)
         self.assertTrue(second.stop())
 
+    @unittest.skipUnless(os.name == "nt", "Windows named-pipe integration")
+    def test_real_pipe_fragmented_authenticated_ticks_and_reconnect_freshness(self):
+        pipe_name = rf"\\.\pipe\BrainTradeSniperIO-{os.getpid()}-{id(self)}"
+        token = "native-integration-token-123456789"
+        mailbox = native.NativeTickMailbox()
+        server = native._WindowsPipeServer(token, mailbox, pipe_name)
+        def wait_until(predicate, timeout=5.0):
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                value = predicate()
+                if value:
+                    return value
+                time.sleep(.01)
+            self.fail("Timed out waiting for Windows pipe integration")
+        def connect():
+            def attempt():
+                try:
+                    return open(pipe_name, "wb", buffering=0)
+                except OSError:
+                    return None
+            return wait_until(attempt)
+        def wire(tms, supplied_token=token):
+            return (f"BT2|{supplied_token}|17|XAUUSD|{tms}|"
+                    f"{tms*native.EVENT_FACTOR+1}|2000.10|2000.20\n").encode("ascii")
+        server.start()
+        try:
+            with connect() as pipe:
+                wait_until(lambda: mailbox.connected)
+                now = native.clock_ms()
+                payload = wire(now, "wrong-session-token") + wire(now)
+                # Force a valid packet to span several independent writes.
+                for chunk in (payload[:11],payload[11:37],payload[37:]):
+                    pipe.write(chunk)
+                packets = wait_until(lambda: mailbox.drain(17, "XAUUSD"))
+                self.assertEqual(len(packets), 1, "Wrong token is never admitted")
+                self.assertEqual(packets[0]["time_msc"], now)
+                self.assertTrue(mailbox.recent(now_ms=native.clock_ms(),maximum_age_ms=2000,
+                                               login=17,symbol="XAUUSD"))
+            wait_until(lambda: not mailbox.connected)
+            with connect() as pipe:
+                wait_until(lambda: mailbox.connected)
+                self.assertFalse(mailbox.recent(now_ms=native.clock_ms(),maximum_age_ms=2000,
+                                                login=17,symbol="XAUUSD"),
+                                 "New connection requires new quote evidence")
+                fresh = native.clock_ms()
+                pipe.write(wire(fresh-5000))
+                packets = wait_until(lambda: mailbox.drain(17, "XAUUSD"))
+                self.assertEqual(packets[0]["time_msc"],fresh-5000)
+                self.assertFalse(mailbox.recent(now_ms=native.clock_ms(),maximum_age_ms=2000,
+                                                login=17,symbol="XAUUSD"),
+                                 "Delayed native packet cannot disable polling")
+                pipe.write(wire(fresh))
+                wait_until(lambda: mailbox.drain(17, "XAUUSD"))
+                self.assertTrue(mailbox.recent(now_ms=native.clock_ms(),maximum_age_ms=2000,
+                                               login=17,symbol="XAUUSD"))
+        finally:
+            self.assertTrue(server.stop())
+
 
 if __name__ == "__main__":
     unittest.main()

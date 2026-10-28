@@ -125,6 +125,7 @@ class NativeTickMailbox:
         self.connected = False
         self.dropped = 0
         self.last_received_ms = 0
+        self.last_quote_time_ms = 0
         self.last_login: int | None = None
         self.last_symbol: str | None = None
 
@@ -134,12 +135,20 @@ class NativeTickMailbox:
             self._items.clear()
             self.connected = False
             self.last_received_ms = 0
+            self.last_quote_time_ms = 0
             self.last_login = None
             self.last_symbol = None
         self._wake.set()
 
     def set_connected(self, value: bool) -> None:
         with self._lock:
+            # An open handle after a disconnect is not evidence that this
+            # connection has delivered an authenticated, fresh market quote.
+            if not value or not self.connected:
+                self.last_received_ms = 0
+                self.last_quote_time_ms = 0
+                self.last_login = None
+                self.last_symbol = None
             self.connected = bool(value)
         self._wake.set()
 
@@ -150,6 +159,7 @@ class NativeTickMailbox:
                 self.dropped += 1
             self._items.append(packet)
             self.last_received_ms = int(packet.get("received_ms", clock_ms()))
+            self.last_quote_time_ms = int(packet.get("time_msc", 0) or 0)
             self.last_login = packet.get("login")
             self.last_symbol = packet.get("symbol")
         self._wake.set()
@@ -171,9 +181,14 @@ class NativeTickMailbox:
         now_ms = clock_ms() if now_ms is None else int(now_ms)
         with self._lock:
             return (self.connected and self.last_received_ms > 0
+                    and self.last_quote_time_ms > 0
                     and (login is None or self.last_login == login)
                     and (symbol is None or self.last_symbol == symbol)
-                    and 0 <= now_ms - self.last_received_ms <= maximum_age_ms)
+                    and 0 <= now_ms - self.last_received_ms <= maximum_age_ms
+                    # The receipt clock alone can be fresh while its broker
+                    # quote is stale. Match the gateway's 2-second future-skew
+                    # limit and otherwise allow polling to resume promptly.
+                    and -2000 <= now_ms - self.last_quote_time_ms <= maximum_age_ms)
 
     def wait(self, timeout: float) -> None:
         self._wake.wait(max(0.0, float(timeout)))

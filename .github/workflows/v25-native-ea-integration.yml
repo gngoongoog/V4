@@ -1,0 +1,45 @@
+name: V25 Native EA compile and Windows pipe integration
+
+on:
+  pull_request:
+    paths:
+      - 'gateway/sniper_native.py'
+      - 'gateway/mt5_gateway.py'
+      - 'mt5/**'
+      - 'tests/test_sniper_native*.py'
+      - 'tests/test_p0e_native*.py'
+      - 'scripts/ci-compile-sniper-ea.ps1'
+      - '.github/workflows/v25-native-ea-integration.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actual-windows-pipe:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Actual Windows named pipe, authentication and reconnect
+        run: python -B -m unittest tests.test_sniper_native_lifecycle tests.test_p0e_native_lifecycle tests.test_sniper_native -v
+
+  metaeditor-compile:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install signed official MetaEditor and compile current EA
+        shell: pwsh
+        run: ./scripts/ci-compile-sniper-ea.ps1
+      - name: Upload EA compile evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: V25-native-ea-compile-evidence
+          path: test-output/native-ea-compile/
+          if-no-files-found: warn
+          retention-days: 30
