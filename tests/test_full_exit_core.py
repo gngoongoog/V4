@@ -5,6 +5,7 @@ import ctypes
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -49,6 +50,11 @@ class CoreFullExitTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="braintrade-full-exit-")
         self.root = Path(self.temporary.name)
+        # Packaging jobs stage runtime/ beside target/debug/braintrade-core.
+        # Copy the binary to an isolated directory so Core cannot discover a
+        # real bundled Gateway instead of the explicit no-broker fixture.
+        self.binary = self.root / BINARY.name
+        shutil.copy2(BINARY, self.binary)
         self.core = None
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         self.key = ""
@@ -57,11 +63,26 @@ class CoreFullExitTests(unittest.TestCase):
         if self.core is not None and self.core.poll() is None:
             self.core.kill()
             self.core.wait(timeout=5)
+        # A failed test can terminate its disposable Core before its child has
+        # finished reacting to EOF. Let that child release its journal/lock.
+        if (self.root / "gateway.lock").exists():
+            deadline = time.monotonic() + 10
+            while True:
+                try:
+                    with lock_gateway(self.root):
+                        break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.05)
         self.temporary.cleanup()
 
     def boot(self, extra):
-        env = dict(os.environ, BRAINTRADE_DATA_DIR=str(self.root), BRAINTRADE_NEWS_OFFLINE="1", **extra)
-        self.core = subprocess.Popen([str(BINARY)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        env = dict(os.environ)
+        for name in ("BRAINTRADE_GATEWAY_DISABLED", "BRAINTRADE_GATEWAY_SCRIPT", "BRAINTRADE_PYTHON"):
+            env.pop(name, None)
+        env.update(BRAINTRADE_DATA_DIR=str(self.root), BRAINTRADE_NEWS_OFFLINE="1", **extra)
+        self.core = subprocess.Popen([str(self.binary)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             if self.core.poll() is not None:
@@ -115,7 +136,9 @@ class CoreFullExitTests(unittest.TestCase):
         deadline = time.monotonic() + 10
         while not (self.root / "fixture-ready.json").exists() and time.monotonic() < deadline:
             time.sleep(0.05)
-        self.assertTrue((self.root / "fixture-ready.json").exists(), "fixture gateway failed to start")
+        gateway_log = self.root / "gateway.log"
+        detail = gateway_log.read_text(errors="replace")[-1000:] if gateway_log.exists() else "no gateway log"
+        self.assertTrue((self.root / "fixture-ready.json").exists(), "fixture gateway failed to start: " + detail)
         self.rejected("wrong-instance")
         self.rejected(instance)  # The running gateway has not supplied an account snapshot.
         snapshot = self.flat_snapshot()
