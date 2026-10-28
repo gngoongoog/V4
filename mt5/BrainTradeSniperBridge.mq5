@@ -3,7 +3,7 @@
 //| Native tick transport only. It never submits broker orders.     |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.12"
+#property version   "1.13"
 #property description "BrainTrade native Sniper tick bridge. Transport only; no trading calls."
 
 input string InpPipeName = "\\\\.\\pipe\\BrainTradeSniperV1";
@@ -144,7 +144,9 @@ void UpdateStatus()
   {
    if(!InpShowStatus)
       return;
-   string state = (g_pipe != INVALID_HANDLE ? "CONNECTED" : "WAITING");
+   // FileOpen only establishes a local pipe handle. It does not prove that
+   // Gateway accepted the token or that Core received a fresh quote.
+   string state = (g_pipe != INVALID_HANDLE ? "PIPE OPEN (UNVERIFIED)" : "WAITING");
    Comment("BrainTrade Sniper Native: ", state,
            "\nSymbol: ", _Symbol,
            "\nQuote ticks sent: ", (string)g_sent_ticks,
@@ -153,7 +155,8 @@ void UpdateStatus()
            "\nToken file: ", (g_token_ready ? "LOADED" : "MISSING/INVALID"),
            "\nLast I/O stage: ", g_last_io_stage,
            "\nLast I/O error: ", IntegerToString(g_last_io_error),
-           "\nBridge source: 1.12");
+           "\nVerify fresh native ticks in BrainTrade",
+           "\nBridge source: 1.13");
   }
 
 ulong TickEventId(const long time_msc,const uint ordinal)
