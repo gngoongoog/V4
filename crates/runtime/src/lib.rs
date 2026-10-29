@@ -91,6 +91,88 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Err(e) = fs::rename(&tmp, path) { let _ = fs::remove_file(&tmp); return Err(e.into()); }
     Ok(())
 }
+
+#[derive(Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SettingsRollback { config:Option<Vec<u8>>, token:Option<Vec<u8>> }
+fn optional_file(path:&Path)->Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes)=>Ok(Some(bytes)),
+        Err(e) if e.kind()==std::io::ErrorKind::NotFound=>Ok(None),
+        Err(e)=>Err(e.into()),
+    }
+}
+fn restore_optional(path:&Path,bytes:&Option<Vec<u8>>)->Result<()> {
+    if let Some(bytes)=bytes { atomic_write(path,bytes)?; }
+    else if let Err(e)=fs::remove_file(path) {
+        if e.kind()!=std::io::ErrorKind::NotFound {return Err(e.into());}
+    }
+    Ok(())
+}
+/// An interrupted two-file save is rolled back before either file is read.
+/// The journal contains only the already-protected token bytes, never plaintext.
+fn recover_settings_transaction(dir:&Path)->Result<()> {
+    let marker=dir.join("settings-rollback.json");
+    let Some(raw)=optional_file(&marker)? else {return Ok(())};
+    let previous:SettingsRollback=serde_json::from_slice(&raw).context("Invalid settings rollback journal; refusing partial settings")?;
+    restore_optional(&dir.join("config.json"),&previous.config)?;
+    restore_optional(&dir.join("telegram.sealed"),&previous.token)?;
+    fs::remove_file(marker)?;
+    Ok(())
+}
+fn persist_settings_transaction(dir:&Path,config:&Config,token:&str,clear:bool)->Result<()> {
+    recover_settings_transaction(dir)?;
+    let marker=dir.join("settings-rollback.json");
+    let previous=SettingsRollback{config:optional_file(&dir.join("config.json"))?,token:optional_file(&dir.join("telegram.sealed"))?};
+    atomic_write(&marker,&serde_json::to_vec(&previous)?)?;
+    let operation=(||->Result<()>{
+        if !token.is_empty(){secrets::write(&dir.join("telegram.sealed"),token)?;}
+        atomic_write(&dir.join("config.json"),&serde_json::to_vec_pretty(config)?)?;
+        if clear {
+            match fs::remove_file(dir.join("telegram.sealed")) {
+                Ok(())=>{},Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},Err(e)=>return Err(e.into()),
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error)=operation {
+        recover_settings_transaction(dir).context("Settings failed and rollback is pending; restart is required")?;
+        return Err(error);
+    }
+    if let Err(error)=fs::remove_file(&marker) {
+        recover_settings_transaction(dir).context("Settings commit failed and rollback is pending")?;
+        return Err(error.into());
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod settings_transaction_tests {
+    use super::*;
+    #[test]
+    fn interrupted_two_file_save_restores_both_originals() {
+        let dir=std::env::temp_dir().join(format!("bt-settings-{}",uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let old=SettingsRollback{config:Some(b"original-config".to_vec()),token:Some(b"protected-token".to_vec())};
+        atomic_write(&dir.join("settings-rollback.json"),&serde_json::to_vec(&old).unwrap()).unwrap();
+        atomic_write(&dir.join("config.json"),b"new-config").unwrap();
+        atomic_write(&dir.join("telegram.sealed"),b"new-protected-token").unwrap();
+        recover_settings_transaction(&dir).unwrap();
+        assert_eq!(fs::read(dir.join("config.json")).unwrap(),b"original-config");
+        assert_eq!(fs::read(dir.join("telegram.sealed")).unwrap(),b"protected-token");
+        assert!(!dir.join("settings-rollback.json").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn corrupt_rollback_journal_never_silently_overwrites_settings() {
+        let dir=std::env::temp_dir().join(format!("bt-settings-{}",uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        atomic_write(&dir.join("settings-rollback.json"),b"broken").unwrap();
+        atomic_write(&dir.join("config.json"),b"keep").unwrap();
+        assert!(recover_settings_transaction(&dir).is_err());
+        assert_eq!(fs::read(dir.join("config.json")).unwrap(),b"keep");
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
 fn configure_database(db: &Connection) -> Result<()> {
     db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, timestamp_ms INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT NOT NULL); PRAGMA user_version=1;")?;
     let foreign_keys: i64 = db.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
@@ -514,7 +596,7 @@ impl Engine{
                 let current={let mut state=self.shared.lock().unwrap();state.status.refresh(now_ms());state.status.clone()};
                 verify_safe_reconfiguration(&current,pending)?;
                 self.execution.cancel_entries(&self.db)?;
-                if !token.is_empty(){secrets::write(&self.dir.join("telegram.sealed"),token)?;}atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&request.config)?)?;if request.clear_telegram_token&&self.dir.join("telegram.sealed").exists(){fs::remove_file(self.dir.join("telegram.sealed"))?;}
+                persist_settings_transaction(&self.dir,&request.config,token,request.clear_telegram_token)?;
                 {let mut s=self.shared.lock().unwrap();s.config=request.config;s.token=effective;s.status.gateway_fresh=false;s.status.last_received_ms=None;s.status.telemetry=None;s.status.analysis=Default::default();s.status.paper=Default::default();s.status.message="Settings saved; reconnecting MT5".into();}
                 // Config and sealed-token changes have already committed.
                 // Never skip gateway restart because a post-save audit insert failed.
@@ -589,7 +671,7 @@ impl Engine{
 pub fn run_core()->Result<()>{
     let dir=data_dir();fs::create_dir_all(&dir)?;
     #[cfg(unix)] {use std::os::unix::fs::PermissionsExt;fs::set_permissions(&dir,fs::Permissions::from_mode(0o700))?;}
-    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;correlation::init(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let mut engine=Engine{dir,shared:shared.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,instance_id:uuid::Uuid::new_v4().to_string(),shutdown_barrier:None,research,backtests,evaluations,news,learning,inference,scoring,studio,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
+    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}recover_settings_transaction(&dir)?;let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;correlation::init(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let mut engine=Engine{dir,shared:shared.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,instance_id:uuid::Uuid::new_v4().to_string(),shutdown_barrier:None,research,backtests,evaluations,news,learning,inference,scoring,studio,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
     while !engine.shutting_down{engine.tick();let Some(mut request)=server.recv_timeout(Duration::from_millis(250))? else{continue;};let authenticated=request.headers().iter().any(|h|h.field.equiv("Authorization")&&h.value.as_str()==format!("Bearer {key}"));let origin=request.headers().iter().any(|h|h.field.equiv("Origin"));if !authenticated||origin{let _=request.respond(tiny_http::Response::from_string("{\"error\":\"Unauthorized\"}").with_status_code(401));continue;}if request.body_length().is_none()&&request.method().as_str()=="POST"{let _=request.respond(tiny_http::Response::empty(411));continue;}if request.body_length().unwrap_or(0)>2_000_000{let _=request.respond(tiny_http::Response::empty(413));continue;}let mut body=Vec::new();if request.as_reader().read_to_end(&mut body).is_err(){continue;}let result=engine.route(request.method().as_str(),request.url(),&body);let(code,value)=match result{Ok(v)=>(200,v),Err(e)=>(400,json!({"error":e.to_string()}))};let response=tiny_http::Response::from_string(value.to_string()).with_status_code(code).with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());let _=request.respond(response);}
     engine.stop_gateway();engine.backtests.cancel();engine.evaluations.cancel();engine.studio.cancel();engine.event("core_stopped",json!({}))?;drop(lock);Ok(())
 }

@@ -105,7 +105,7 @@ class Tests(unittest.TestCase):
         m=FakeMT5();m.deals=[NS(type=0,profit=10,commission=-2,swap=-1,fee=-0.5),NS(type=2,profit=500,commission=0,swap=0,fee=0)]
         s=gateway.collect(m,"XAUUSD");self.assertEqual(s["today_net"],6.5);self.assertEqual(s["today_deals"],1)
     def test_actual_broker_leverage_and_micro_margin_snapshot(self):
-        m=FakeMT5();m.ORDER_TYPE_BUY=0
+        m=FakeMT5();m.ORDER_TYPE_BUY=0;m.ORDER_TYPE_SELL=1
         m.order_calc_margin=lambda side,symbol,lots,price:25.0
         snapshot=gateway.collect(m,"XAUUSD")
         self.assertEqual(snapshot["leverage"],500)

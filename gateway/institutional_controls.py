@@ -100,9 +100,15 @@ def record_execution_quality(db: sqlite3.Connection, cmd: dict, result: dict, no
     code = int(code) if isinstance(code, int) else None
     def finite_nonnegative(value):
         return float(value) if isinstance(value,(int,float)) and math.isfinite(float(value)) and value >= 0 else None
-    db.execute('''INSERT OR IGNORE INTO execution_quality
+    db.execute('''INSERT INTO execution_quality
       (id,account_key,symbol,kind,state,recorded_ms,send_ms,queue_ms,retcode)
-      VALUES(?,?,?,?,?,?,?,?,?)''',(
+      VALUES(?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET state=excluded.state,
+        retcode=COALESCE(excluded.retcode,execution_quality.retcode)
+      WHERE execution_quality.account_key=excluded.account_key
+        AND execution_quality.symbol=excluded.symbol AND execution_quality.kind=excluded.kind
+        AND ((execution_quality.state='unknown' AND excluded.state IN ('placed','partial','filled','cancelled','rejected'))
+          OR (execution_quality.state IN ('placed','partial') AND excluded.state IN ('filled','cancelled','rejected')))''',(
         cmd['id'], quality_account_key(cmd), cmd['symbol'], cmd['kind'],
         result['state'], int(now_ms), finite_nonnegative(result.get('send_ms')),
         finite_nonnegative(result.get('queue_to_send_ms')), code))

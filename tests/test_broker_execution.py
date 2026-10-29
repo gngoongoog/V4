@@ -409,7 +409,7 @@ class ExecutionTests(unittest.TestCase):
     def test_timeout_never_retries_and_later_history_reconciles(self):
         self.mt.raise_send=True;self.assertEqual(self.send()['state'],'unknown');self.mt.raise_send=False;self.assertEqual(self.send()['state'],'unknown');self.assertEqual(len(self.mt.sends),1)
         self.mt.deals=[N(ticket=77,magic=self.cmd['magic'],symbol='XAUUSD',volume=.1,
-                         type=0,entry=0,position_id=700,comment='BT:'+self.cmd['id'][:20])];self.assertEqual(self.send()['state'],'filled');self.assertEqual(len(self.mt.sends),1)
+                         type=0,entry=0,position_id=700,price=2000.10,time_msc=clock_ms(),comment='BT:'+self.cmd['id'][:20])];self.assertEqual(self.send()['state'],'filled');self.assertEqual(len(self.mt.sends),1)
     def test_broker_done_without_deal_ticket_is_not_falsely_booked_as_filled(self):
         self.mt.reply_deal=0
         first=self.send()
@@ -465,7 +465,7 @@ class ExecutionTests(unittest.TestCase):
         self.ex.db.execute('UPDATE sends SET result=NULL');self.ex.db.commit()
         self.ex.close();self.ex=BrokerExecutor(self.path)
         self.mt.deals=[N(ticket=77,magic=self.cmd['magic'],symbol='XAUUSD',volume=.04,
-                         type=1,entry=1,position_id=700,comment='BT:'+self.cmd['id'][:20])]
+                         type=1,entry=1,position_id=700,price=2000.,time_msc=clock_ms(),comment='BT:'+self.cmd['id'][:20])]
         result=self.send();self.assertEqual(result['state'],'partial');self.assertEqual(result['request']['volume'],.1)
         self.assertEqual(result['deal'],77);self.assertEqual(len(self.mt.sends),1)
     def test_crash_between_journal_and_send_stays_unknown(self):

@@ -56,6 +56,9 @@ pub struct Service {
     history_until_ms: u64,
     pub active_mode: Option<TradingMode>,
     last_paper_sample_ms: u64,
+    // Bounded in-memory cache prevents scanning command history on every Tick.
+    hold_checks: BTreeMap<(String,Option<i32>,u64),(u64,Option<u64>)>,
+    history_floor_cache: BTreeMap<(String,String,u64),u64>,
     // Read-only round-robin cursor; it never changes an order's durable state.
     recovery_cursor: Option<(String, u64, String)>,
 }
@@ -79,6 +82,34 @@ fn broker_sync_watermark(db: &Connection, context: &str, target: &str) -> Result
         "SELECT until_ms,synced_ms FROM broker_history_sync WHERE context=?1 AND target=?2",
         params![context,target],|row|Ok((row.get(0)?,row.get(1)?))
     ).optional()?.unwrap_or((0,0)))
+}
+fn broker_history_floor(db:&Connection,context:&str,target:&str,bound:u64)->Result<u64> {
+    let earliest:Option<u64>=db.query_row(
+        "SELECT MIN(created_ms) FROM broker_commands WHERE context=?1 AND kind='open' AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.target') ELSE '' END=?2",
+        params![context,target],|r|r.get(0))?;
+    Ok(bound.saturating_sub(120_000).min(earliest.map(|v|v.saturating_sub(60_000)).unwrap_or(u64::MAX)))
+}
+
+/// Return a timed-exit setting only when the open command's exact Deal is
+/// durably linked to this physical position. Never borrow another command's
+/// setting merely because it is the newest command for the same brain.
+fn proven_position_hold(db:&Connection, context:&str, brain:&str, target:&str, pid:u64) -> Result<Option<u64>> {
+    let mut st=db.prepare("SELECT payload,result FROM broker_commands WHERE context=?1 AND brain=?2 AND kind='open' AND state IN ('filled','partial','observed') ORDER BY created_ms DESC,id DESC")?;
+    let rows=st.query_map(params![context,brain],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(st);
+    for (request,result) in rows {
+        let (Ok(q),Ok(r))=(serde_json::from_str::<Value>(&request),serde_json::from_str::<Value>(&result)) else {continue};
+        if q["target"]!=target {continue;}
+        let Some(ticket)=r["deal"].as_u64().filter(|v|*v>0) else {continue};
+        let saved:Option<(u64,String)>=db.query_row("SELECT position_id,payload FROM broker_deals WHERE context=?1 AND ticket=?2 AND brain=?3",params![context,ticket,brain],|row|Ok((row.get(0)?,row.get(1)?))).optional()?;
+        let Some((position,raw))=saved else {continue};
+        let Ok(deal)=serde_json::from_str::<Value>(&raw) else {continue};
+        if position!=pid || deal["entry"]!=0 || deal["symbol"]!=q["symbol"]
+            || deal["magic"]!=q["magic"] || r["position_id"].as_u64().is_some_and(|v|v!=pid) {continue;}
+        if let Some(hold)=q["signal"]["hold_ms"].as_u64() {return Ok(Some(hold));}
+    }
+    Ok(None)
 }
 
 fn json_rows(db: &Connection, sql: &str, key: &str) -> Result<Vec<Value>> {
@@ -278,6 +309,7 @@ CREATE TABLE IF NOT EXISTS daily_loss_locks(account_key TEXT NOT NULL,report_day
 CREATE TABLE IF NOT EXISTS brain_configs(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS broker_commands(id TEXT PRIMARY KEY,context TEXT NOT NULL,brain TEXT NOT NULL,kind TEXT NOT NULL,created_ms INTEGER NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS broker_commands_context ON broker_commands(context,brain,created_ms);
+CREATE INDEX IF NOT EXISTS broker_commands_history_floor ON broker_commands(context,kind,created_ms);
 CREATE TABLE IF NOT EXISTS broker_seen(context TEXT NOT NULL,brain TEXT NOT NULL,signal TEXT NOT NULL,PRIMARY KEY(context,brain,signal));
 CREATE TABLE IF NOT EXISTS broker_deals(context TEXT NOT NULL,ticket INTEGER NOT NULL,position_id INTEGER NOT NULL,brain TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,ticket));
 CREATE TABLE IF NOT EXISTS broker_history_sync(context TEXT NOT NULL,target TEXT NOT NULL CHECK(target IN ('demo','live')),until_ms INTEGER NOT NULL CHECK(until_ms>=0),synced_ms INTEGER NOT NULL CHECK(synced_ms>=0),PRIMARY KEY(context,target));
@@ -325,6 +357,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             history_until_ms: 0,
             active_mode: None,
             last_paper_sample_ms: 0,
+            hold_checks: BTreeMap::new(),
+            history_floor_cache: BTreeMap::new(),
             recovery_cursor: None,
         })
     }
@@ -537,20 +571,30 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 } else {
                     p.ticket
                 };
-                let raw:Option<String>=db.query_row("SELECT payload FROM broker_commands WHERE context=?1 AND brain=?2 AND kind='open' ORDER BY created_ms DESC LIMIT 1",params![key,b.id],|r|r.get(0)).optional()?;
-                let hold = raw
-                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-                    .and_then(|v| v["signal"]["hold_ms"].as_u64())
-                    .unwrap_or(b.max_hold_seconds * 1000);
+                if self.hold_checks.len()>1024 {self.hold_checks.clear();}
+                let cache_key=(key.clone(),t.account_trade_mode,pid);
+                let cached=self.hold_checks.get(&cache_key).copied();
+                let hold=match cached {
+                    Some((_,Some(value)))=>Some(value),
+                    Some((checked,None)) if now.saturating_sub(checked)<1_000=>None,
+                    _=>{
+                        let value=proven_position_hold(db,&key,&b.id,&self.settings.target,pid)?;
+                        self.hold_checks.insert(cache_key,(now,value));value
+                    }
+                };
                 db.execute(
                     "INSERT OR IGNORE INTO broker_observations VALUES(?1,?2,?3,?4,?5,?6)",
-                    params![key, pid, b.id, p.opened_ms, hold, serde_json::to_string(p)?],
+                    params![key, pid, b.id, p.opened_ms, hold.unwrap_or(0), serde_json::to_string(p)?],
                 )?;
-                let frozen: u64 = db.query_row(
+                let mut frozen: u64 = db.query_row(
                     "SELECT hold_ms FROM broker_observations WHERE context=?1 AND position_id=?2",
                     params![key, pid],
                     |r| r.get(0),
                 )?;
+                if let Some(verified)=hold.filter(|value|*value!=frozen) {
+                    db.execute("UPDATE broker_observations SET hold_ms=?4 WHERE context=?1 AND position_id=?2 AND brain=?3",params![key,pid,b.id,verified])?;
+                    frozen=verified;
+                }
                 let last_close:u64=db.query_row("SELECT COALESCE(MAX(created_ms),0) FROM broker_commands WHERE context=?1 AND brain=?2 AND kind='close'",params![key,b.id],|r|r.get(0))?;
                 if !active
                     && frozen > 0
@@ -620,6 +664,10 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             }
             let decision_us = started.elapsed().as_micros() as u64;
             let mut gates = vec![];
+            if b.id=="system" && c.trading.mode==TradingMode::Sniper
+                && !t.point.is_some_and(|p|c.trading.sniper_pip_points_match(p)) {
+                gates.push("القناص: عدد نقاط MT5 لكل pip لا يطابق سعر pip ونقطة الوسيط؛ راجع إعدادات القناص");
+            }
             let netting_sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain<>?2 AND {PENDING_BROKER_SQL})");
             if t.margin_mode!=Some(2)&&db.query_row(&netting_sql,params![key,b.id],|r|r.get::<_,bool>(0))?{gates.push("Netting: أمر لعقل آخر لم تتم تسويته");}
 
@@ -720,7 +768,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         // One durable commit per sampled batch, never one fsync per brain/tick.
         if !activity_samples.is_empty() {
             let tx=db.unchecked_transaction()?;
-            for (id,signal) in activity_samples {crate::brain_control::sample(&tx,&key,c.trading.mode,&id,&signal,now)?;}
+            let activity_key=crate::brain_control::account_key(&key,t.account_trade_mode);
+            for (id,signal) in activity_samples {crate::brain_control::sample(&tx,&activity_key,c.trading.mode,&id,&signal,now)?;}
             tx.commit()?;
         }
         Ok(())
@@ -940,8 +989,16 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 // Crash-safe cursor recovery: never resume from a different
                 // symbol/account/target's in-memory watermark.
                 let (persisted_until,_)=broker_sync_watermark(db,&key,&self.settings.target)?;
+                // The earliest managed open cannot advance as new commands are
+                // created. Cache it per binding so fast pulses do not rescan SQL.
+                if self.history_floor_cache.len()>32 {self.history_floor_cache.clear();}
+                let floor_key=(key.clone(),self.settings.target.clone(),self.settings.bound_ms);
+                let rescan_floor=if let Some(value)=self.history_floor_cache.get(&floor_key) {*value} else {
+                    let value=broker_history_floor(db,&key,&self.settings.target,self.settings.bound_ms)?;
+                    self.history_floor_cache.insert(floor_key,value);value
+                };
                 Ok(
-                    json!({"command":command,"history_from_ms":persisted_until.max(self.settings.bound_ms).saturating_sub(120_000),"account":{"login":t.login,"server":t.server,"currency":t.currency,"trade_mode":t.account_trade_mode},"poll_ms":if self.brains.iter().any(|b|b.enabled){100}else{250}}),
+                    json!({"command":command,"history_from_ms":persisted_until.max(self.settings.bound_ms).saturating_sub(120_000),"history_rescan_from_ms":rescan_floor,"history_scope":key,"account":{"login":t.login,"server":t.server,"currency":t.currency,"trade_mode":t.account_trade_mode},"poll_ms":if self.brains.iter().any(|b|b.enabled){100}else{250}}),
                 )
             }
             ("POST", "/v1/execution/authorize") => {
@@ -1149,6 +1206,29 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
 #[cfg(test)]
 mod execution_persistence_tests {
     use super::*;
+
+    #[test]
+    fn timed_hold_comes_only_from_the_exact_position_deal() {
+        let db=Connection::open_in_memory().unwrap();
+        let _service=Service::new(&db).unwrap();
+        let context="ctx";
+        let request=|ms:u64|json!({"target":"demo","symbol":"XAUUSD","magic":410600,"signal":{"hold_ms":ms}}).to_string();
+        db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload,result) VALUES('old',?1,'system','open',1,'observed',?2,?3)",params![context,request(1_800_000),json!({"deal":71}).to_string()]).unwrap();
+        db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload,result) VALUES('new',?1,'system','open',2,'rejected',?2,?3)",params![context,request(10_000),json!({"deal":72}).to_string()]).unwrap();
+        save_deal(&db,context,&receipt(71,77,410600,0,0.1));
+        assert_eq!(proven_position_hold(&db,context,"system","demo",77).unwrap(),Some(1_800_000));
+        assert_eq!(proven_position_hold(&db,context,"system","demo",78).unwrap(),None);
+        assert_eq!(proven_position_hold(&db,context,"system","live",77).unwrap(),None);
+    }
+    #[test]
+    fn history_rescan_reaches_older_managed_opens_without_crossing_broker_modes() {
+        let db=Connection::open_in_memory().unwrap();let _service=Service::new(&db).unwrap();
+        for (id,target,time) in [("demo","demo",200_000_u64),("live","live",100_000_u64)] {
+            db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload) VALUES(?1,'ctx','system','open',?2,'observed',?3)",params![id,time,json!({"target":target}).to_string()]).unwrap();
+        }
+        assert_eq!(broker_history_floor(&db,"ctx","demo",1_000_000).unwrap(),140_000);
+        assert_eq!(broker_history_floor(&db,"ctx","live",1_000_000).unwrap(),40_000);
+    }
 
     fn demo() -> Telemetry {
         Telemetry {

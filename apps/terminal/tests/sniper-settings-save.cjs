@@ -51,13 +51,13 @@ let sourceData={config:{
  risk:{slippage_ticks:2}},
  commission_editor:{amount:7,basis:'round_trip',
  account:{login:123,server:'Exness-MT5Trial15',currency:'USD',symbol:'XAUUSDr'}}};
-let calls=0,latest,shouldReject=true;
+let calls=0,latest,shouldReject=true,brokerPoint;
 const apply=async input=>{
  calls++;latest=input;
  if(shouldReject)throw Error('Mock Core rejected save');
 };
 function render(){
- index=0;const view=exportsObj.TradingSettingsOperations({source:sourceData,disabled:false,armed:false,apply});
+ index=0;const view=exportsObj.TradingSettingsOperations({source:sourceData,disabled:false,armed:false,apply,brokerPoint});
  const queued=effects;effects=[];queued.forEach(f=>f());
  return view;
 }
@@ -78,6 +78,10 @@ const flush=async()=>{await new Promise(resolve=>setImmediate(resolve));};
  findInput(view,'sniper fixed target pips').props.onChange({target:{value:'7.5'}});
  view=render();
  assert.equal(findInput(view,'sniper fixed target pips').props.value,'7.5');
+ const beforeDisconnect=sourceData;sourceData=null;
+ view=render();assert.equal(findInput(view,'sniper fixed target pips').props.value,'7.5','Disconnect must not erase the draft');
+ sourceData=beforeDisconnect;view=render();
+ assert.equal(findInput(view,'sniper fixed target pips').props.value,'7.5','Same-account reconnect must retain the draft');
  findInput(view,'sniper points per pip').props.onChange({target:{value:'20'}});
  view=render();
  assert.equal(findInput(view,'sniper fixed target pips').props.value,'7.5','Pip conversion must retain user-selected target');
@@ -133,5 +137,12 @@ const flush=async()=>{await new Promise(resolve=>setImmediate(resolve));};
  view=render();saveButton(view).props.onClick();await flush();
  assert.equal(calls,3);assert.equal(latest.slippage_ticks,3);
  assert.equal(latest.trading.sniper_cooldown_seconds,9);
+ brokerPoint=.01;view=render();
+ findInput(view,'sniper cooldown seconds').props.onChange({target:{value:'10'}});
+ view=render();saveButton(view).props.onClick();await flush();
+ assert.equal(calls,3,'Mismatched pip and broker point must not be saved');
+ view=render();findInput(view,'sniper pip price').props.onChange({target:{value:'0.2'}});
+ view=render();saveButton(view).props.onClick();await flush();
+ assert.equal(calls,4,'Corrected pip geometry should save');
  console.log('PASS: edits, pip geometry, rejection, reread and stale draft conflict');
 })().catch(e=>{console.error(e);process.exitCode=1});

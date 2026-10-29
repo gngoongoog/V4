@@ -48,8 +48,8 @@ const MODES=[['scalping','Scalping'],['swing','Swing'],['expert','Expert'],['sni
 const STYLES=['auto','impulse','rebound','confirmed'];
 const safeObject=(data:unknown):Record<string,unknown>=>data!==null&&typeof data==='object'&&!Array.isArray(data)?data as Record<string,unknown>:{};
 
-export function TradingSettingsOperations({source,disabled,armed,apply}: {
- source:unknown;disabled:boolean;armed:boolean;apply:(input:Record<string,unknown>)=>Promise<void>;
+export function TradingSettingsOperations({source,disabled,armed,apply,brokerPoint}: {
+ source:unknown;disabled:boolean;armed:boolean;apply:(input:Record<string,unknown>)=>Promise<void>;brokerPoint?:number|null;
 }) {
  const view=safeObject(source);
  const stored=safeObject(safeObject(view.config).trading);
@@ -101,6 +101,12 @@ export function TradingSettingsOperations({source,disabled,armed,apply}: {
   }
   if(Number(updated.sniper_max_target_pips)<=Number(updated.sniper_min_target_pips)){
    setError('الهدف المتكيف الأعلى يجب أن يكون أكبر من الأدنى');return;
+  }
+  if(updated.mode==='sniper'&&typeof brokerPoint==='number'&&Number.isFinite(brokerPoint)&&brokerPoint>0){
+   const points=Number(updated.pip_points),actual=Number(updated.sniper_pip_price)/brokerPoint;
+   if(Math.abs(actual-points)>Math.max(1e-6,Math.abs(points)*1e-7)){
+    setError('عدد نقاط MT5 لكل pip لا يطابق سعر pip ونقطة الوسيط الحالية. عدّل القيم قبل الحفظ.');return;
+   }
   }
   if(!['fixed','adaptive'].includes(String(updated.sniper_target_mode))){
    setError('نوع هدف القناص غير مدعوم');return;

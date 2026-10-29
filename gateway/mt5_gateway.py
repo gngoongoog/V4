@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 
 from sniper_native import NativeTickBridge
 from transport import LoopbackCore
+from broker_costs import booked_trading_net
 
 BASE = "http://127.0.0.1:18741"
 BAGHDAD = timezone(timedelta(hours=3))
@@ -157,28 +158,10 @@ def day_range(now: datetime):
 def deal_summary(deals, mt5):
     if deals is None:
         return None, None
-    trading = [d for d in deals if d.type in (mt5.DEAL_TYPE_BUY, mt5.DEAL_TYPE_SELL)]
-    # A missing broker-reported cost is unknown, never equivalent to a
-    # zero-commission account. Likewise, NaN/Inf must not reach Core/UI as PnL.
-    booked = []
-    for deal in trading:
-        components = []
-        for key in ('profit', 'commission', 'swap', 'fee'):
-            value = getattr(deal, key, None)
-            if isinstance(value, bool):
-                return None, None
-            try:
-                amount = float(value)
-            except (ValueError, TypeError, OverflowError):
-                return None, None
-            if not math.isfinite(amount):
-                return None, None
-            components.append(amount)
-        booked.append(math.fsum(components))
-    net = math.fsum(booked)
-    if not math.isfinite(net):
+    try:
+        return booked_trading_net(deals, mt5)
+    except ValueError:
         return None, None
-    return net, len(trading)
 
 
 def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, dom_cache=None) -> dict:
@@ -240,13 +223,13 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
     except (ValueError, TypeError, OverflowError):
         margin = None
     minimum_lot_margin = None
-    if (info is not None and tick is not None
-            and hasattr(mt5, "order_calc_margin") and hasattr(mt5, "ORDER_TYPE_BUY")):
+    if (info is not None and tick is not None and hasattr(mt5, "order_calc_margin")
+            and hasattr(mt5, "ORDER_TYPE_BUY") and hasattr(mt5, "ORDER_TYPE_SELL")):
         try:
-            raw = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, symbol,
-                                       float(info.volume_min), float(tick.ask))
-            if raw is not None and math.isfinite(float(raw)) and float(raw) >= 0:
-                minimum_lot_margin = float(raw)
+            margins = [mt5.order_calc_margin(side, symbol, float(info.volume_min), float(price))
+                       for side,price in ((mt5.ORDER_TYPE_BUY,tick.ask),(mt5.ORDER_TYPE_SELL,tick.bid))]
+            if all(v is not None and math.isfinite(float(v)) and float(v) >= 0 for v in margins):
+                minimum_lot_margin = max(float(v) for v in margins)
         except (ValueError, TypeError, OverflowError, RuntimeError):
             pass
     result = empty_snapshot(" ".join(errors))

@@ -128,20 +128,27 @@ export default function Terminal(){
  const [clock,setClock]=useState('');const [lastStatusAt,setLastStatusAt]=useState<number|null>(null);const [liveLogin,setLiveLogin]=useState('');const [approval,setApproval]=useState<OperatorApproval|null>(null);
  const [settingsEdit,setSettingsEdit]=useState<Record<string,unknown>|null>(null);
  const [settingsScope,setSettingsScope]=useState<string|null>(null);
+ const [settingsStale,setSettingsStale]=useState(false);
+ const settingsDirty=useRef(false);const settingsSource=useRef<string|null>(null);
  const [telegramToken,setTelegramToken]=useState('');const [clearTelegram,setClearTelegram]=useState(false);
  const [telegramDraftScope,setTelegramDraftScope]=useState<string|null>(null);
  const dialogRef=useRef<HTMLDivElement|null>(null);
  const [allOpen,setAllOpen]=useState(false);
  const contextKey=`${status?.telemetry?.login??'unknown'}:${status?.telemetry?.server??'offline'}:${status?.telemetry?.symbol??'none'}:${status?.telemetry?.currency??'unknown'}:${status?.telemetry?.account_trade_mode??'unknown'}:${status?.telemetry?.demo??'unknown'}:${online}:${status?.gateway_fresh??false}:${status?.telemetry?.connected??false}`;
+ const lastDraftAccount=useRef('offline');
+ const draftTelemetry=status?.telemetry;
+ if(draftTelemetry?.login&&draftTelemetry.server&&draftTelemetry.symbol&&draftTelemetry.currency&&typeof draftTelemetry.account_trade_mode==='number')
+  lastDraftAccount.current=JSON.stringify([draftTelemetry.login,draftTelemetry.server,draftTelemetry.symbol,draftTelemetry.currency,draftTelemetry.account_trade_mode,draftTelemetry.demo]);
+ const draftAccountKey=lastDraftAccount.current;
  // Config, risk and unsaved secrets/editors are never carried into another
  // MT5 account's renderer before the background refresh useEffect runs.
  const feed=feedEvidence(status,online,lastStatusAt,Date.now());
  const quoteDiagnosis=diagnoseMarketQuote(status,feed);
  const safeConfig=configScope===contextKey?config:null;
  const safeRiskSnapshot=riskScope===contextKey?riskSnapshot:null;
- const activeSettingsEdit=settingsScope===contextKey?settingsEdit:null;
- const activeTelegramToken=!preview&&telegramDraftScope===contextKey?telegramToken:'';
- const activeClearTelegram=!preview&&telegramDraftScope===contextKey?clearTelegram:false;
+ const activeSettingsEdit=settingsScope===draftAccountKey?settingsEdit:null;
+ const activeTelegramToken=!preview&&telegramDraftScope===draftAccountKey?telegramToken:'';
+ const activeClearTelegram=!preview&&telegramDraftScope===draftAccountKey?clearTelegram:false;
  const showStartConfirm=approvalIsCurrent(approval,'start',contextKey)&&!preview&&feed.broker;
  const showStopConfirm=approvalIsCurrent(approval,'stop',contextKey)&&!preview;
  const showExitConfirm=approvalIsCurrent(approval,'exit',contextKey)&&!preview;
@@ -224,10 +231,15 @@ export default function Terminal(){
   };
   // Invalidate old account/mode snapshots synchronously with scope change.
   setRiskSnapshot(null);setLearning(null);setBrainReport(null);
-  setConfig(null);setSettingsEdit(null);
+  setConfig(null);
+  const sameDraft=settingsScope===draftAccountKey;
+  if(!sameDraft){setSettingsEdit(null);settingsDirty.current=false;settingsSource.current=null;setSettingsStale(false)}
   void get('config','/v1/config',r=>{
-    setConfig(r?unwrap(r.config):null);setSettingsEdit(r?unwrap(r.config):null);
-    setConfigScope(contextKey);setSettingsScope(contextKey);
+    const fresh=r?unwrap(r.config):null;
+    setConfig(fresh);
+    if(fresh&&sameDraft&&settingsDirty.current){setSettingsStale(JSON.stringify(fresh)!==settingsSource.current)}
+    else if(fresh){setSettingsEdit(fresh);settingsSource.current=JSON.stringify(fresh);settingsDirty.current=false;setSettingsStale(false)}
+    setConfigScope(contextKey);setSettingsScope(draftAccountKey);
   });
   void get('risk','/v1/risk/monitor',r=>{setRiskSnapshot(r);setRiskScope(contextKey)});
   void get('learning','/v1/learning',setLearning);
@@ -548,8 +560,10 @@ export default function Terminal(){
   }catch(e){if(writeFresh(mutation))sendNotice('تعذر حفظ حدود المحفظة: '+String(e),true)}
   finally{finishWrite(mutation)}
  };
+ const editGeneral=(name:string,value:unknown)=>{settingsDirty.current=true;setSettingsEdit(s=>({...s,[name]:value}))};
  const saveGeneral=async()=>{
   if(!activeSettingsEdit||preview||!hasTauri()||status?.requested_run){sendNotice('احفظ فقط بعد تحميل إعدادات Core للحساب الحالي وفي وضع STOP',true);return}
+  if(settingsStale){sendNotice('تغيّرت الإعدادات المحفوظة أثناء انقطاع الاتصال. راجع المسودة قبل الحفظ.',true);return}
   const mutation=beginWrite('config');if(!mutation)return;
   try{
    await saveSettings(activeSettingsEdit,activeTelegramToken,activeClearTelegram);
@@ -558,7 +572,8 @@ export default function Terminal(){
    if(!writeFresh(mutation))return;
    scopedGeneration.current.invalidate('risk');
    setConfig(unwrap(latest.config));setConfigScope(contextKey);
-   setSettingsEdit(unwrap(latest.config));setSettingsScope(contextKey);
+   setSettingsEdit(unwrap(latest.config));setSettingsScope(draftAccountKey);
+   settingsDirty.current=false;settingsSource.current=JSON.stringify(unwrap(latest.config));setSettingsStale(false);
    setRiskSnapshot(null);setTelegramToken('');setClearTelegram(false);setTelegramDraftScope(null);
    sendNotice('تم حفظ الإعدادات لدى Core. إعادة الاتصال قيد التنفيذ.');
   }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
@@ -817,16 +832,18 @@ export default function Terminal(){
           <DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/risk/monitor')}/>
          </div>:
         page==='settings'||page==='telegram'?<div className="editor-panel"><p>إعدادات V4 المحفوظة محلياً لدى Rust Core — لا تُعرض بيانات Telegram السرية.</p>
-           <label>مسار MT5 Terminal64.exe<input value={String(activeSettingsEdit?.mt5_path||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>setSettingsEdit(s=>({...s,mt5_path:e.target.value}))}/></label>
-           <label>رمز التداول<input value={String(activeSettingsEdit?.symbol||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>setSettingsEdit(s=>({...s,symbol:e.target.value}))}/></label>
-           <label>Telegram Chat ID<input value={String(activeSettingsEdit?.telegram_chat_id||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>setSettingsEdit(s=>({...s,telegram_chat_id:e.target.value}))}/></label>
-           <label>Telegram User ID<input value={String(activeSettingsEdit?.telegram_user_id||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>setSettingsEdit(s=>({...s,telegram_user_id:e.target.value}))}/></label>
-           <label>Bot token (اكتب فقط عند الاستبدال)<input type="password" value={activeTelegramToken} disabled={!activeSettingsEdit||busy||preview} autoComplete="new-password" onChange={e=>{setTelegramDraftScope(contextKey);setTelegramToken(e.target.value)}}/></label>
-           <label className="check-label"><input type="checkbox" checked={Boolean(activeSettingsEdit?.telegram_enabled)} disabled={!activeSettingsEdit||busy||preview} onChange={e=>setSettingsEdit(s=>({...s,telegram_enabled:e.target.checked}))}/>تفعيل تنبيهات Telegram</label>
-           <label className="check-label"><input type="checkbox" disabled={!activeSettingsEdit||busy||preview} checked={activeClearTelegram} onChange={e=>{setTelegramDraftScope(contextKey);setClearTelegram(e.target.checked)}}/>حذف رمز Telegram المحفوظ</label>
+           <label>مسار MT5 Terminal64.exe<input value={String(activeSettingsEdit?.mt5_path||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('mt5_path',e.target.value)}/></label>
+           <label>رمز التداول<input value={String(activeSettingsEdit?.symbol||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('symbol',e.target.value)}/></label>
+           <label>Telegram Chat ID<input value={String(activeSettingsEdit?.telegram_chat_id||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('telegram_chat_id',e.target.value)}/></label>
+           <label>Telegram User ID<input value={String(activeSettingsEdit?.telegram_user_id||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('telegram_user_id',e.target.value)}/></label>
+           <label>Bot token (اكتب فقط عند الاستبدال)<input type="password" value={activeTelegramToken} disabled={!activeSettingsEdit||busy||preview} autoComplete="new-password" onChange={e=>{setTelegramDraftScope(draftAccountKey);setTelegramToken(e.target.value)}}/></label>
+           <label className="check-label"><input type="checkbox" checked={Boolean(activeSettingsEdit?.telegram_enabled)} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('telegram_enabled',e.target.checked)}/>تفعيل تنبيهات Telegram</label>
+           <label className="check-label"><input type="checkbox" disabled={!activeSettingsEdit||busy||preview} checked={activeClearTelegram} onChange={e=>{setTelegramDraftScope(draftAccountKey);setClearTelegram(e.target.checked)}}/>حذف رمز Telegram المحفوظ</label>
+           {settingsStale&&<p className="safe-note">تغيّرت الإعدادات المحفوظة؛ المسودة باقية، ولن تُحفظ حتى تراجعها.</p>}
+           {settingsStale&&<button disabled={!safeConfig||busy} onClick={()=>{if(safeConfig){setSettingsEdit(safeConfig);settingsSource.current=JSON.stringify(safeConfig);settingsDirty.current=false;setSettingsStale(false)}}}>استرجاع الإعدادات المحفوظة</button>}
            <button className="save-button" disabled={busy||preview||!activeSettingsEdit} onClick={()=>void saveGeneral()}>حفظ وإعادة ربط MT5</button>
           </div>:
-        page==='trading'||page==='sniper'?<div className="feature-zone"><div className="live-indicator"><strong>Sniper Priority</strong><span>{display?.analysis?.regime||'UNAVAILABLE'}</span><b>{display?.analysis?.action||'WAIT'}</b></div><p>العقل المنفّذ الوحيد يختاره Core، وأي تبديل أثناء التشغيل يحتاج أوامر MT5 مُسوّاة وعدم وجود مراكز مفتوحة.</p>{page==='sniper'&&<><QuoteClockEvidence status={status} preview={preview}/><SniperDiagnosis key={viewScope} status={status} preview={preview}/><SniperTickEvidence status={!preview&&feed.broker?status:null} report={activeSniperAudit} preview={preview} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperTickAudit');void readPanel('/v1/execution/sniper-tick-audit').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:null})})}}/><SniperFrozenOperations status={!preview&&feed.broker?status:null} page={pageData} report={activeSniperFrozen} preview={preview} disabled={busy} onAction={runFrozenSniper} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperFrozen');void readPanel('/v1/execution/frozen-sniper').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperFrozenSlot({scope:viewScope,report:null})})}}/><SniperClassicOperations status={!preview&&feed.broker?status:null} page={pageData} report={activeClassicFrozen} preview={preview} disabled={busy} onAction={runFrozenClassic} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('classicFrozen');void readPanel('/v1/execution/frozen-classic').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setClassicFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setClassicFrozenSlot({scope:viewScope,report:null})})}}/></>}<ReconciliationDiagnostics key={viewScope} preview={preview}/><TradingSettingsOperations source={pageData} key={viewScope} disabled={busy||preview} armed={status?.requested_run===true} apply={runSaveTrading}/><div className="quick-ops"><button disabled={busy||preview} onClick={()=>void runHandoff(true)}>تفعيل أولوية القناص</button><button disabled={busy||preview} onClick={()=>void runHandoff(false)}>تحويل التنفيذ للبديل</button></div><div className="safe-note">هذه الأزرار تستدعي قواعد التحويل الفعلية في Rust؛ لا يوجد تجاوز لفحوصات المحرك.</div><EnterpriseSupervisor preview={preview} key={contextKey} armed={status?.requested_run===true} onSave={runSaveSupervisor}/><Table rows={rows}/></div>:
+        page==='trading'||page==='sniper'?<div className="feature-zone"><div className="live-indicator"><strong>Sniper Priority</strong><span>{display?.analysis?.regime||'UNAVAILABLE'}</span><b>{display?.analysis?.action||'WAIT'}</b></div><p>العقل المنفّذ الوحيد يختاره Core، وأي تبديل أثناء التشغيل يحتاج أوامر MT5 مُسوّاة وعدم وجود مراكز مفتوحة.</p>{page==='sniper'&&<><QuoteClockEvidence status={status} preview={preview}/><SniperDiagnosis key={viewScope} status={status} preview={preview}/><SniperTickEvidence status={!preview&&feed.broker?status:null} report={activeSniperAudit} preview={preview} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperTickAudit');void readPanel('/v1/execution/sniper-tick-audit').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:null})})}}/><SniperFrozenOperations status={!preview&&feed.broker?status:null} page={pageData} report={activeSniperFrozen} preview={preview} disabled={busy} onAction={runFrozenSniper} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperFrozen');void readPanel('/v1/execution/frozen-sniper').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperFrozenSlot({scope:viewScope,report:null})})}}/><SniperClassicOperations status={!preview&&feed.broker?status:null} page={pageData} report={activeClassicFrozen} preview={preview} disabled={busy} onAction={runFrozenClassic} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('classicFrozen');void readPanel('/v1/execution/frozen-classic').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setClassicFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setClassicFrozenSlot({scope:viewScope,report:null})})}}/></>}<ReconciliationDiagnostics key={viewScope} preview={preview}/><TradingSettingsOperations source={pageData} brokerPoint={status?.telemetry?.point} key={JSON.stringify([page,draftAccountKey,preview])} disabled={busy||preview||!feed.broker} armed={status?.requested_run===true} apply={runSaveTrading}/><div className="quick-ops"><button disabled={busy||preview} onClick={()=>void runHandoff(true)}>تفعيل أولوية القناص</button><button disabled={busy||preview} onClick={()=>void runHandoff(false)}>تحويل التنفيذ للبديل</button></div><div className="safe-note">هذه الأزرار تستدعي قواعد التحويل الفعلية في Rust؛ لا يوجد تجاوز لفحوصات المحرك.</div><EnterpriseSupervisor preview={preview} key={contextKey} armed={status?.requested_run===true} onSave={runSaveSupervisor}/><Table rows={rows}/></div>:
         page==='execution'?<div className="feature-zone"><ExecutionBindingOperations source={pageData} key={viewScope} telemetry={status?.telemetry??null} ready={!preview&&trustworthy} armed={status?.requested_run===true} disabled={busy||preview} onBind={runBrokerBind}/>
         <ExecutionQualityOperations status={!preview&&feed.broker?status:null} report={executionQuality} disabled={preview||busy}
           onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('executionQuality');void readPanel('/v1/execution/quality').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setExecutionQuality(unwrap(v))}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setExecutionQuality(null)})}}/>

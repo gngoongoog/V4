@@ -509,7 +509,7 @@ impl Service {
         if let Some(system) = self.inner.brains.iter_mut().find(|brain| brain.id == "system") {
             system.enabled = true;
         }
-        self.inner.controls = crate::brain_control::load(db, &context(telemetry), config.trading.mode)?;
+        self.inner.controls = crate::brain_control::load_account(db, &context(telemetry), config.trading.mode, telemetry.account_trade_mode)?;
         let available = crate::coordinator_learning::available_frames(telemetry, frames, now);
         self.inner.weights = self.learner.observe(
             db,
@@ -649,7 +649,7 @@ impl Service {
         }
         value["learning_review"] = json!(crate::coordinator_learning::broker_review(db,&key)?);
         value["execution_model"] = json!("adaptive-member-coordinator-v1");
-        value["note"] = json!("العقل الرئيسي يعمل مع START. العقول الثانوية تشارك كمستشارين افتراضياً؛ تفعيل SOLO يفصل العقل المختار فقط، وإطفاؤه يعيده بعد تسوية صفقة SOLO المفتوحة. الصفقات المغلقة على الديمو تحدّث الوزن من أول نتيجة، بعد التكاليف؛ تقييم 12 شمعة يبقى دليلاً افتراضياً منفصلاً. START/STOP منفصلان عن زر العضوية.");
+        value["note"] = json!("العقل الرئيسي للوضع المختار وحده يرسل الأوامر مع START؛ العقول الثانوية للمشورة والتدريب الافتراضي، والتنفيذ المنفرد SOLO غير متاح. أدلة الديمو المغلقة منفصلة عن تقييم الشموع الافتراضي.");
         Ok(value)
     }
 
@@ -688,12 +688,12 @@ impl Service {
             "الحساب أو الوضع تغيّر؛ أعد تحميل البيانات");
         match req.action.as_str(){
             "freeze"=>{
-                let controls=crate::brain_control::load(db,&req.context,req.mode)?;
+                let controls=crate::brain_control::load_account(db,&req.context,req.mode,t.account_trade_mode)?;
                 crate::frozen_coordinator::freeze(db,t,config,&self.inner.brains,
                     &self.inner.weights,&controls,&self.inner.student_policies,now)
             },
             "seal_candidate"=>{
-                let controls=crate::brain_control::load(db,&req.context,req.mode)?;
+                let controls=crate::brain_control::load_account(db,&req.context,req.mode,t.account_trade_mode)?;
                 crate::g7_sealed_candidate::seal(db,t,config,&self.inner.brains,
                     &self.inner.weights,&controls,&self.inner.student_policies,now)
             },
@@ -926,7 +926,7 @@ impl Service {
             anyhow::ensure!(self.inner.active_mode==Some(request.mode), "الوضع تغيّر؛ حدّث الصفحة قبل الحفظ");
             let key=context(status.telemetry.as_ref().unwrap());
             anyhow::ensure!(request.context==key, "الحساب أو الرمز تغيّر؛ حدّث الصفحة قبل الحفظ");
-            crate::brain_control::save(db,&key,request.mode,&request.brain,request.control)?;
+            crate::brain_control::save(db,&crate::brain_control::account_key(&key,status.telemetry.as_ref().unwrap().account_trade_mode),request.mode,&request.brain,request.control)?;
             self.inner.controls.insert(request.brain,request.control);
             self.fast=None;
             self.inner.set_mode(request.mode);
@@ -969,7 +969,11 @@ impl Service {
         if method=="GET" && path=="/v1/execution/brains" {
             let mut value=self.route("GET","/v1/execution",&[],db,status,now)?;
             let key=if status.gateway_fresh && self.account_matches(status) {context(status.telemetry.as_ref().unwrap())}else{String::new()};
-            crate::brain_control::enrich(&mut value,db,&key,self.inner.active_mode.unwrap_or_default())?;
+            let sniper_selected=self.fast.as_ref().filter(|f|!key.is_empty() && context(&f.telemetry)==key
+                && status.telemetry.as_ref().is_some_and(|t|t.account_trade_mode==f.telemetry.account_trade_mode))
+                .map(|f|braintrade_domain::sniper::selected(&f.config));
+            let account_mode=status.telemetry.as_ref().filter(|_|!key.is_empty()).and_then(|t|t.account_trade_mode);
+            crate::brain_control::enrich(&mut value,db,&key,self.inner.active_mode.unwrap_or_default(),account_mode,sniper_selected)?;
             crate::brain_integrity::enrich(&mut value,db,status,self.inner.active_mode.unwrap_or_default())?;
             value["controls_available"]=json!(!key.is_empty());
             return Ok(value);
