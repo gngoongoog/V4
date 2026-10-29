@@ -329,6 +329,29 @@ fn update_brain_paper_all(context: String, mode: String, paper: bool) -> Result<
         .map_err(|err|err.to_string())
 }
 
+#[derive(serde::Deserialize,serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct SelectedClosePosition {ticket:u64,magic:u64,side:String,volume:f64}
+
+#[tauri::command]
+fn close_owned_positions(context:String,positions:Vec<SelectedClosePosition>,profit_only:bool)->Result<Value,String>{
+    let unique:std::collections::BTreeSet<_>=positions.iter().map(|p|p.ticket).collect();
+    if context.is_empty() || context.len()>500 || positions.is_empty() || positions.len()>20
+        || unique.len()!=positions.len() || unique.contains(&0)
+        || positions.iter().any(|p|p.ticket>9_007_199_254_740_991 || !p.volume.is_finite() || p.volume<=0.
+            || !matches!(p.side.as_str(),"BUY"|"SELL")) {
+        return Err("قائمة المراكز أو حساب MT5 غير صحيح".into());
+    }
+    // Only approved, exact owned tickets on the bound account and symbol may
+    // be queued. Core and Gateway independently recheck their current state.
+    match open_client()?.checked_post("/v1/execution/close-selected",
+        json!({"context":context,"positions":positions,"profit_only":profit_only}),Duration::from_secs(8)) {
+        Ok(value)=>Ok(value),
+        Err(CheckedPostError::Rejected(e))=>Err(e),
+        Err(CheckedPostError::Uncertain(_))=>Err("نتيجة طلب الإغلاق غير مؤكدة. لا تكرّر الطلب؛ راجع الأوامر والمراكز في MT5 وانتظر المصالحة.".into()),
+    }
+}
+
 #[tauri::command]
 fn frozen_sniper_action(action:String,context:String)->Result<Value,String>{
     // Research-only, Sniper Learner. Rust Core must independently verify
@@ -472,7 +495,7 @@ pub fn run() {
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore,
-            backtest_action, update_brain_control, update_brain_paper_all, bind_execution
+            backtest_action, update_brain_control, update_brain_paper_all, close_owned_positions, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");

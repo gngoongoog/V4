@@ -539,6 +539,52 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(req['volume'],.05)
         self.assertEqual(req['position'],1)
         self.assertEqual(req['type'],1)
+    def test_manual_profit_close_rechecks_profit_before_send_and_never_retries(self):
+        self.cmd.update(kind='close',position=1,manual_close=True,profit_only=True,expected_position_volume=.05,expected_position_side='BUY')
+        p=N(ticket=1,magic=self.cmd['magic'],symbol='XAUUSD',volume=.05,type=0,profit=3.)
+        self.mt.positions=[p]
+        calls=0
+        def authorize(_):
+            nonlocal calls
+            calls+=1
+            if calls==2:p.profit=-1.
+            return True
+        result=self.ex.execute(self.mt,self.cmd,authorize)
+        self.assertEqual(result['state'],'cancelled',result)
+        self.assertIn('no longer has positive',result['reason'])
+        self.assertFalse(self.mt.sends)
+        p.profit=3.
+        self.assertEqual(self.send()['state'],'cancelled')
+        self.assertFalse(self.mt.sends)
+    def test_manual_close_rechecks_ticket_side_volume_and_account(self):
+        for attribute,new_value in [('ticket',2),('magic',999),('volume',.02),('type',1)]:
+            self.cmd.update(id='close-changed-'+attribute,kind='close',position=1,manual_close=True,profit_only=False,expected_position_volume=.05,expected_position_side='BUY')
+            p=N(ticket=1,magic=self.cmd['magic'],symbol='XAUUSD',volume=.05,type=0,profit=4.)
+            self.mt.positions=[p]
+            calls=0
+            def authorize(_,p=p,a=attribute,v=new_value):
+                nonlocal calls
+                calls+=1
+                if calls==2:setattr(p,a,v)
+                return True
+            result=self.ex.execute(self.mt,self.cmd,authorize)
+            self.assertEqual(result['state'],'cancelled',(attribute,result))
+            self.assertFalse(self.mt.sends)
+        self.cmd.update(id='close-changed-account',kind='close',position=1,manual_close=True,profit_only=False)
+        self.mt.positions=[N(ticket=1,magic=self.cmd['magic'],symbol='XAUUSD',volume=.05,type=0,profit=4.)]
+        self.mt.account_reads=0
+        self.mt.on_account=lambda count:setattr(self.mt.account,'login',99) if count==6 else None
+        result=self.send();self.assertEqual(result['state'],'cancelled',result)
+        self.assertFalse(self.mt.sends)
+        self.mt.on_account=None;self.mt.account.login=17
+        self.cmd.update(id='close-approved-once',kind='close',position=1,manual_close=True,profit_only=True)
+        self.mt.positions=[N(ticket=1,magic=self.cmd['magic'],symbol='XAUUSD',volume=.05,type=0,profit=4.)]
+        result=self.send();self.assertEqual(result['state'],'filled',result)
+        self.assertEqual(len(self.mt.sends),1)
+        self.send();self.assertEqual(len(self.mt.sends),1)
+        self.cmd['profit_only']=False
+        self.assertEqual(self.send()['state'],'unknown')
+        self.assertEqual(len(self.mt.sends),1)
     def test_filling_policy_and_broker_rejection(self):
         self.mt.info.filling_mode=2;self.mt.code=10019;self.assertEqual(self.send()['state'],'rejected');self.assertEqual(self.mt.sends[0]['type_filling'],1)
     def test_missing_journal_unknown_never_becomes_new_order(self):

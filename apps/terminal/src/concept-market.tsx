@@ -4,18 +4,32 @@ import {GoldSymbol} from './gold-symbol';
 import type {ChartFrame} from './chart';
 import type {ChartFrameMeta} from './chart-history';
 import {money,num,signed,up,valid} from './format';
-import type {Market,PageId,Status,Telemetry,Theme} from './types';
+import type {Market,PageId,Position,Status,Telemetry,Theme} from './types';
+
+// Only identities issued by this Core are eligible. Account-wide or other
+// symbols' positions are intentionally not included in this action.
+export function ownedCloseTickets(positions:Position[],symbol:string,profitOnly:boolean):number[]{
+ const matches=positions.filter(p=>Number.isSafeInteger(p.ticket)&&p.ticket>0&&p.symbol===symbol&&
+  Number.isSafeInteger(p.magic)&&((p.magic!>=410600&&p.magic!<=410615)||p.magic===410617)&&
+  (p.side==='BUY'||p.side==='SELL')&&Number.isFinite(p.volume)&&p.volume>0&&
+  (!profitOnly||(Number.isFinite(p.profit)&&p.profit>0)));
+ const tickets=matches.map(p=>p.ticket);
+ return new Set(tickets).size===tickets.length?tickets:[];
+}
 
 type Props={account:Telemetry|null;status:Status|null;quoteFresh:boolean;preview:boolean;busy:boolean;native:boolean;
  frame:ChartFrame;onFrameChange:(frame:ChartFrame)=>void;theme:Theme;market?:Market|null;frameMeta?:ChartFrameMeta;
- open:(page:PageId)=>void;onTradingSettings:()=>void;onStart:()=>void;onStop:()=>void};
+ open:(page:PageId)=>void;onTradingSettings:()=>void;onStart:()=>void;onStop:()=>void;onClose:(profitOnly:boolean)=>void};
 
-export function ConceptMarketDesk({account,status,quoteFresh,preview,busy,native,frame,onFrameChange,theme,market,frameMeta,open,onTradingSettings,onStart,onStop}:Props){
+export function ConceptMarketDesk({account,status,quoteFresh,preview,busy,native,frame,onFrameChange,theme,market,frameMeta,open,onTradingSettings,onStart,onStop,onClose}:Props){
  const bid=(preview||quoteFresh)&&valid(account?.bid)?account.bid:null;
  const ask=(preview||quoteFresh)&&valid(account?.ask)?account.ask:null;
  const spread=bid!==null&&ask!==null&&ask>=bid?ask-bid:null;
  const positions=account?.positions??[],currency=account?.currency||'USD';
  const symbol=account?.symbol||'XAUUSD';
+ const closeReady=!!account&&!!status&&status.requested_run===false&&status.gateway_fresh&&quoteFresh&&!preview&&!busy&&native;
+ const closable=account?ownedCloseTickets(positions,symbol,false):[];
+ const profitable=account?ownedCloseTickets(positions,symbol,true):[];
  return <div className="concept-market">
   <div className="concept-market-stats">
    <div><GoldSymbol className="market-symbol-icon"/><strong>{symbol}</strong><small>{symbol.toUpperCase().startsWith('XAU')?'Gold Spot / U.S. Dollar':'Trading symbol'}</small></div>
@@ -36,7 +50,7 @@ export function ConceptMarketDesk({account,status,quoteFresh,preview,busy,native
     <div className="concept-trading-actions"><button type="button" className="action-btn start" onClick={onStart} disabled={busy||preview||!native||!account||!status?.gateway_fresh||status?.requested_run===true}>▶ بدء التداول</button><button type="button" className="action-btn stop" onClick={onStop} disabled={preview||!native}>■ إيقاف الدخول</button></div>
    </section>
    <div className="concept-market-summary"><div><Wallet/> الرصيد <b>{money(account?.balance,currency)}</b></div><div><ShieldCheck/> الهامش الحر <b>{money(account?.margin_free,currency)}</b></div><div><Target/> الربح اليومي <b>{signed(account?.today_net,currency)}</b></div><div><Zap/> السبريد <b>{num(spread,2)}</b></div></div>
-   <section className="panel concept-quick-orders"><div className="panel-title"><b>أوامر سريعة</b><Settings size={16}/></div><p className="concept-unavailable">لا تتوفر أوامر يدوية أو إغلاق جماعي في Core الحالي.</p><div><button disabled title="غير مدعوم حالياً">شراء بسوق</button><button disabled title="غير مدعوم حالياً">بيع بسوق</button><button disabled title="غير مدعوم حالياً">شراء معلّق</button><button disabled title="غير مدعوم حالياً">بيع معلّق</button><button disabled title="غير مدعوم حالياً">إغلاق كل الصفقات</button></div></section>
+   <section className="panel concept-quick-orders"><div className="panel-title"><b>أوامر سريعة</b><Settings size={16}/></div><p className="concept-unavailable">الإغلاق يشمل مراكز البرنامج للرمز الحالي فقط، حتى 20 في الطلب، بعد STOP. الرابحة تعني الربح العائم الموجب من MT5 قبل حساب الرسوم.</p><div><button disabled title="غير مدعوم حالياً">شراء بسوق</button><button disabled title="غير مدعوم حالياً">بيع بسوق</button><button disabled title="غير مدعوم حالياً">شراء معلّق</button><button disabled title="غير مدعوم حالياً">بيع معلّق</button><button type="button" disabled={!closeReady||!closable.length} onClick={()=>onClose(false)}>إغلاق مراكز البرنامج للرمز</button><button type="button" disabled={!closeReady||!profitable.length} onClick={()=>onClose(true)}>إغلاق الرابحة للرمز</button></div></section>
    <section className="panel concept-open-positions"><div className="panel-title"><b>المراكز المفتوحة ({account?positions.length:'—'})</b><button type="button" onClick={()=>open('positions')}><RefreshCw size={15}/> التفاصيل</button></div><div className="table-scroll"><table><thead><tr>{['#','الرمز','النوع','الحجم','وقف الخسارة','أخذ الربح','سعر الدخول','السعر الحالي','الربح / الخسارة'].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{positions.length?positions.map(p=><tr key={p.ticket}><td>{p.ticket}</td><td>{p.symbol}</td><td className={up(p.side)?'teal':'red'}>{p.side}</td><td>{num(p.volume,2)}</td><td>{num(p.sl,2)}</td><td>{num(p.tp,2)}</td><td>{num(p.price_open,2)}</td><td>{num(p.price_current,2)}</td><td className={p.profit>=0?'teal':'red'}>{signed(p.profit,currency)}</td></tr>):<tr><td colSpan={9} className="empty-row">لا توجد مراكز مؤكدة أو الحساب غير متصل</td></tr>}</tbody></table></div></section>
   </div>
  </div>;

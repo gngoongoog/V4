@@ -50,12 +50,14 @@ def values(obj):
 def is_fast_path(cmd):
     """Return True only for latency-sensitive market actions.
 
-    Tick-keyed entries are the Sniper path. Closing an already-owned position is
-    also safe to dispatch without a separate order_check round trip because the
-    exact broker position is re-read and validated immediately before send.
+    Tick-keyed entries are the Sniper path. Automatic closes keep the existing
+    low-latency path. Operator-requested closes always use broker order_check
+    and re-read the exact position immediately before send.
     """
     if cmd.get('kind') == 'close':
-        return True
+        # Operator-requested bulk closes take the full broker order_check;
+        # the existing automatic Sniper exit path keeps its latency contract.
+        return cmd.get('manual_close') is not True
     signal = cmd.get('signal') or {}
     return cmd.get('kind') == 'open' and str(signal.get('key', '')).startswith('tick:')
 
@@ -581,6 +583,7 @@ class BrokerExecutor:
             # Mutable polling state and timing metadata are deliberately omitted.
             immutable=('login','server','currency','target','symbol','magic',
                        'kind','position','lots','signal','revision',
+                       'manual_close','profit_only','expected_position_volume','expected_position_side',
                        'deviation_points','created_ms','expires_ms',
                        'commission_per_lot','slippage_ticks','risk_percent',
                        'demo_flexible','micro_demo_risk_opt_in',
@@ -668,6 +671,16 @@ class BrokerExecutor:
                     return dict(result,state='cancelled',
                                 reason='Exact owned MT5 position absent; no close order sent. Verify exit from broker Deal history.')
                 p=owned[0]; lots=float(p.volume); side=-1 if p.type==mt5.POSITION_TYPE_BUY else 1
+                if cmd.get('manual_close') is True:
+                    if type(cmd.get('profit_only')) is not bool or p.type not in (mt5.POSITION_TYPE_BUY, getattr(mt5,'POSITION_TYPE_SELL',1)):
+                        raise ValueError('Manual close has invalid profit filter or position side')
+                    expected_volume=float(cmd.get('expected_position_volume',float('nan')))
+                    expected_side='BUY' if p.type==mt5.POSITION_TYPE_BUY else 'SELL'
+                    if (not math.isfinite(expected_volume) or abs(expected_volume-lots)>1e-8
+                            or cmd.get('expected_position_side')!=expected_side):
+                        raise ValueError('Approved position side or volume changed before broker validation')
+                    if cmd['profit_only'] and (not math.isfinite(float(getattr(p,'profit',float('nan')))) or float(p.profit)<=0):
+                        raise ValueError('Position is no longer profitable on MT5 floating P/L')
             else:
                 if any(p.magic==cmd['magic'] for p in positions) or any(o.magic==cmd['magic'] for o in orders):
                     raise ValueError('Brain already owns a position/order')
@@ -941,6 +954,33 @@ class BrokerExecutor:
                         and latest_equity>=float(cmd.get('micro_real_recovery_equity',float('inf')))):
                     self._micro_real_active(cmd,latest_account)  # Persist the crossed milestone before cancelling.
                     result.update(state='cancelled',reason='Micro REAL recovery milestone reached during final checks')
+                    return self._save(cmd,result)
+            if closing and cmd.get('manual_close') is True:
+                # Re-read the approved physical ticket immediately before send.
+                # The floating-profit filter is not a net-after-fees guarantee.
+                try:
+                    latest_positions=mt5.positions_get(symbol=symbol)
+                    same=[] if latest_positions is None else [p for p in latest_positions
+                        if p.ticket==cmd['position'] and p.magic==cmd['magic'] and p.symbol==symbol]
+                    if len(same)!=1:
+                        raise ValueError('Approved position no longer present')
+                    p=same[0]
+                    current_lots=float(p.volume)
+                    if (not math.isfinite(current_lots) or abs(current_lots-request['volume'])>1e-8
+                            or p.type not in (mt5.POSITION_TYPE_BUY,getattr(mt5,'POSITION_TYPE_SELL',1))
+                            or (-1 if p.type==mt5.POSITION_TYPE_BUY else 1)!=side):
+                        raise ValueError('Approved position volume or side changed')
+                    if cmd['profit_only'] and (not math.isfinite(float(getattr(p,'profit',float('nan')))) or float(p.profit)<=0):
+                        raise ValueError('Position no longer has positive MT5 floating P/L')
+                    final_manual_account=mt5.account_info()
+                    if account_identity(final_manual_account)!=expected(cmd) or getattr(final_manual_account,'trade_mode',None)!=target_mode:
+                        raise ValueError('Broker account changed during final position check')
+                except Exception as exc:
+                    result.update(state='cancelled',reason='Manual close pre-send check failed; order not sent: '+str(exc))
+                    return self._save(cmd,result)
+                now=clock_ms(); quote_age=now-quote_time_ms
+                if now>cmd['expires_ms'] or quote_age < -2000 or quote_age>cmd.get('max_quote_age_ms',3000):
+                    result.update(state='cancelled',reason='Manual close quote or intent became stale before send')
                     return self._save(cmd,result)
             if (time.perf_counter()-final_authorized_at)*1000 > FINAL_AUTH_MAX_AGE_MS:
                 result.update(state='cancelled',reason='Final Core authorization became stale during broker checks; order not sent')

@@ -1514,6 +1514,55 @@ mod tests {
     }
 
     #[test]
+    fn operator_close_queues_only_confirmed_owned_tickets_and_rechecks_stop() {
+        use braintrade_domain::Position;
+        let db=setup(); let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry(); t.demo=true; t.account_trade_mode=Some(0);
+        service.inner.settings.login=t.login; service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone(); service.inner.settings.target="demo".into();
+        t.positions=vec![
+            Position{ticket:101,magic:execution::magic("system").unwrap(),symbol:t.symbol.clone(),side:"BUY".into(),volume:0.1,profit:2.,..Default::default()},
+            Position{ticket:102,magic:execution::magic("trend").unwrap(),symbol:t.symbol.clone(),side:"SELL".into(),volume:0.1,profit:-1.,..Default::default()},
+            Position{ticket:103,magic:99,symbol:t.symbol.clone(),side:"BUY".into(),volume:0.1,profit:5.,..Default::default()},
+            Position{ticket:104,magic:execution::magic("system").unwrap(),symbol:"OTHER".into(),side:"BUY".into(),volume:0.1,profit:5.,..Default::default()},
+        ];
+        let key=context(&t);
+        let mut status=Status::default(); status.telemetry=Some(t.clone()); status.gateway_fresh=true;
+        let body=|tickets:Vec<u64>,profit_only:bool|{
+            let positions=tickets.iter().map(|ticket|t.positions.iter().find(|p|p.ticket==*ticket)
+                .map(|p|json!({"ticket":p.ticket,"magic":p.magic,"side":p.side,"volume":p.volume}))
+                .unwrap_or(json!({"ticket":ticket,"magic":410600,"side":"BUY","volume":0.1}))).collect::<Vec<_>>();
+            json!({"context":key,"positions":positions,"profit_only":profit_only}).to_string()
+        };
+        status.requested_run=true;
+        assert!(service.route("POST","/v1/execution/close-selected",body(vec![101],false).as_bytes(),&db,&status,1000).is_err());
+        status.requested_run=false;
+        for (tickets,profit_only) in [(vec![101,101],false),(vec![101,999],false),(vec![101,103],false),(vec![104],false),(vec![101,102],true)] {
+            assert!(service.route("POST","/v1/execution/close-selected",body(tickets,profit_only).as_bytes(),&db,&status,1000).is_err());
+        }
+        let mut wrong:Value=serde_json::from_str(&body(vec![101],false)).unwrap();
+        wrong["context"]=json!("old-account");
+        assert!(service.route("POST","/v1/execution/close-selected",wrong.to_string().as_bytes(),&db,&status,1000).is_err());
+        wrong["context"]=json!(key); wrong["positions"][0]["volume"]=json!(0.2);
+        assert!(service.route("POST","/v1/execution/close-selected",wrong.to_string().as_bytes(),&db,&status,1000).is_err());
+        db.execute_batch("CREATE TRIGGER block_close BEFORE INSERT ON broker_commands WHEN NEW.brain='trend' BEGIN SELECT RAISE(ABORT,'injected failure'); END;").unwrap();
+        assert!(service.route("POST","/v1/execution/close-selected",body(vec![101,102],false).as_bytes(),&db,&status,1000).is_err());
+        let count:i64=db.query_row("SELECT COUNT(*) FROM broker_commands",[],|r|r.get(0)).unwrap(); assert_eq!(count,0);
+        db.execute_batch("DROP TRIGGER block_close;").unwrap();
+        let result=service.route("POST","/v1/execution/close-selected",body(vec![101,102],false).as_bytes(),&db,&status,1000).unwrap();
+        assert_eq!(result["queued"],2);
+        assert_eq!(result["scope"],"owned_positions_current_symbol");
+        assert!(service.route("POST","/v1/execution/close-selected",body(vec![101],false).as_bytes(),&db,&status,1001).is_err());
+        let work=service.route("GET","/v1/execution/gateway",b"",&db,&status,1001).unwrap();
+        assert_eq!(work["command"]["manual_close"],true);
+        let auth=json!({"id":work["command"]["id"]}).to_string();
+        status.requested_run=true;
+        assert_eq!(service.route("POST","/v1/execution/authorize",auth.as_bytes(),&db,&status,1002).unwrap()["authorized"],false);
+        status.requested_run=false;
+        assert_eq!(service.route("POST","/v1/execution/authorize",auth.as_bytes(),&db,&status,1002).unwrap()["authorized"],true);
+    }
+
+    #[test]
     fn stale_or_wrong_mode_mt5_snapshot_does_not_override_booked_history() {
         let db=setup();
         let mut service=Service::new(&db).unwrap();

@@ -20,7 +20,7 @@ const account={connected:true,demo:true,symbol:'XAUUSD',currency:'USD',balance:1
  bid:2000.1,ask:2000.3,positions:[]};
 const props={account,status:{gateway_fresh:true,requested_run:false},quoteFresh:true,preview:false,busy:false,native:true,
  frame:'m15',onFrameChange:()=>{},theme:'light',open:p=>actions.push(p),onTradingSettings:()=>actions.push('settings'),
- onStart:()=>actions.push('start'),onStop:()=>actions.push('stop')};
+ onStart:()=>actions.push('start'),onStop:()=>actions.push('stop'),onClose:profit=>actions.push(profit?'close-profit':'close-owned')};
 let tree=moduleExports.ConceptMarketDesk(props),all=nodes(tree);
 assert(all.some(n=>n.props?.className==='concept-led on'),'Fresh live quotes have a green indicator');
 const start=all.find(n=>n.type==='button'&&n.props.className==='action-btn start');
@@ -28,7 +28,7 @@ const stop=all.find(n=>n.type==='button'&&n.props.className==='action-btn stop')
 assert.equal(start.props.disabled,false);assert.equal(stop.props.disabled,false);
 start.props.onClick();stop.props.onClick();assert.deepEqual(actions,['start','stop']);
 const unsupported=all.filter(n=>n.type==='button'&&/غير مدعوم|أوامر .* غير متاحة/.test(n.props.title||''));
-assert.equal(unsupported.length,7);
+assert.equal(unsupported.length,6);
 for(const button of unsupported)
  assert.equal(button.props.disabled,true,'Unsupported manual orders must never act as broker operations');
 const prices=all.find(n=>n.props?.className==='concept-prices');
@@ -41,4 +41,23 @@ assert(nodes(all.find(n=>n.props?.className==='concept-prices')).filter(n=>n.typ
 assert(!all.some(n=>n.props?.className==='concept-led on'),'An account connection alone must not make stale market data green');
 tree=moduleExports.ConceptMarketDesk({...props,preview:true});all=nodes(tree);
 assert(!all.some(n=>n.props?.className==='concept-led on'),'Synthetic preview must not indicate a live market');
-console.log('PASS: concept market uses fresh prices, dispatches existing START/STOP, and does not enable unsupported manual orders');
+const positions=[
+ {ticket:101,magic:410600,symbol:'XAUUSD',side:'BUY',volume:.1,profit:4},
+ {ticket:102,magic:410617,symbol:'XAUUSD',side:'SELL',volume:.2,profit:-1},
+ {ticket:103,magic:999,symbol:'XAUUSD',side:'BUY',volume:.1,profit:9},
+ {ticket:104,magic:410600,symbol:'EURUSD',side:'BUY',volume:.1,profit:9},
+ {ticket:105,magic:410616,symbol:'XAUUSD',side:'BUY',volume:.1,profit:9},
+];
+assert.deepEqual(Array.from(moduleExports.ownedCloseTickets(positions,'XAUUSD',false)),[101,102]);
+assert.deepEqual(Array.from(moduleExports.ownedCloseTickets(positions,'XAUUSD',true)),[101]);
+assert.deepEqual(Array.from(moduleExports.ownedCloseTickets([positions[0],positions[0]],'XAUUSD',false)),[],'duplicate broker tickets must fail closed');
+tree=moduleExports.ConceptMarketDesk({...props,account:{...account,positions}});all=nodes(tree);
+const close=all.find(n=>n.type==='button'&&n.props.children==='إغلاق مراكز البرنامج للرمز');
+const profit=all.find(n=>n.type==='button'&&n.props.children==='إغلاق الرابحة للرمز');
+assert(!close.props.disabled&&!profit.props.disabled);close.props.onClick();profit.props.onClick();
+assert.deepEqual(actions.slice(-2),['close-owned','close-profit']);
+for(const change of [{preview:true},{quoteFresh:false},{status:{gateway_fresh:true,requested_run:true}},{native:false}]){
+ const view=moduleExports.ConceptMarketDesk({...props,account:{...account,positions},...change});
+ assert(nodes(view).find(n=>n.type==='button'&&n.props.children==='إغلاق مراكز البرنامج للرمز').props.disabled,'close must fail closed in preview, stale quote, running or non-native state');
+}
+console.log('PASS: concept market scopes requested closes to exact owned tickets, protects preview/STOP/quotes, and leaves unsupported manual entries disabled');

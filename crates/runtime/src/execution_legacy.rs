@@ -939,6 +939,55 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 }
                 Ok(json!({"ok":true}))
             }
+            ("POST", "/v1/execution/close-selected") => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Selected {ticket:u64,magic:u64,side:String,volume:f64}
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Request {context:String, positions:Vec<Selected>, profit_only:bool}
+                let request:Request=serde_json::from_slice(body)?;
+                anyhow::ensure!(!status.requested_run,"أوقف الدخول أولاً حتى لا تُفتح مراكز جديدة");
+                anyhow::ensure!(!self.pending(db)?,"انتظر تسوية أوامر الوسيط الحالية قبل الإغلاق");
+                let t=t.filter(|t|self.matches(t)).context("الحساب المرتبط وحديث البيانات مطلوب")?;
+                anyhow::ensure!(request.context==key,"الحساب أو الرمز تغيّر؛ أعد التأكيد");
+                anyhow::ensure!((1..=20).contains(&request.positions.len()),"اختر 1 إلى 20 مركزاً محدداً");
+                let unique:BTreeSet<u64>=request.positions.iter().map(|p|p.ticket).collect();
+                anyhow::ensure!(unique.len()==request.positions.len() && !unique.contains(&0),"أرقام المراكز غير صحيحة أو مكررة");
+                // The operator approves exact tickets. Never expand the set to
+                // new positions which appeared after the confirmation dialog.
+                let mut approved=Vec::with_capacity(unique.len());
+                for selected in &request.positions {
+                    let matching:Vec<_>=t.positions.iter().filter(|p|p.ticket==selected.ticket).collect();
+                    anyhow::ensure!(matching.len()==1,"المركز تغيّر أو لم يعد موجوداً؛ حدّث البيانات");
+                    let p=matching[0];
+                    let id=execution::brain_for_magic(p.magic).context("المركز ليس مملوكاً للبرنامج")?;
+                    anyhow::ensure!(p.symbol==t.symbol && p.volume.is_finite() && p.volume>0.,"المركز خارج الرمز الحالي أو حجمه غير صالح");
+                    anyhow::ensure!(selected.magic==p.magic && matches!(selected.side.as_str(),"BUY"|"SELL")
+                        && selected.side==p.side && selected.volume.is_finite()
+                        && (selected.volume-p.volume).abs()<=1e-8,"اتجاه المركز أو حجمه أو ملكيته تغيّرت؛ أعد التأكيد");
+                    anyhow::ensure!(!request.profit_only || (p.profit.is_finite() && p.profit>0.),"المركز لم يعد رابحاً حسب الربح العائم في MT5");
+                    let brain=self.brains.iter().find(|b|b.id==id).context("هوية المركز غير معروفة")?;
+                    approved.push((p.ticket,brain,p.volume,p.side.clone()));
+                }
+                // All-or-nothing queue creation: a failed disk write cannot
+                // silently send only a subset of the approved positions.
+                let tx=db.unchecked_transaction()?;
+                let mut ids=Vec::new();
+                for (ticket,brain,volume,side) in approved {
+                    let mut command=self.queue(&tx,t,brain,"close",None,ticket,now,None)?;
+                    command["manual_close"]=json!(true);
+                    command["profit_only"]=json!(request.profit_only);
+                    command["expected_position_volume"]=json!(volume);
+                    command["expected_position_side"]=json!(side);
+                    let id=command["id"].as_str().context("Invalid queued close ID")?;
+                    tx.execute("UPDATE broker_commands SET payload=?1 WHERE id=?2",params![command.to_string(),id])?;
+                    ids.push(id.to_owned());
+                }
+                tx.commit()?;
+                Ok(json!({"ok":true,"queued":ids.len(),"ids":ids,"scope":"owned_positions_current_symbol",
+                    "profit_only":request.profit_only,"note":"طلبات مرسلة للطابور؛ تحقق من نتيجة MT5 والمصالحة"}))
+            }
             ("GET", "/v1/execution/gateway") => {
                 let Some(t) = t.filter(|t| self.matches(t)) else {
                     return Ok(json!({"command":null,"history_from_ms":0}));
@@ -975,7 +1024,9 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                                 db,t,now,
                                 cmd["daily_breaker_enabled"].as_bool().unwrap_or(self.settings.target=="live"),
                                 cmd["daily_breaker_limit_percent"].as_f64().unwrap_or(2.))?;
-                        let allowed = cmd["kind"] == "close"
+                        let close_allowed = cmd["kind"] == "close"
+                            && (cmd["manual_close"]!=true || !status.requested_run);
+                        let allowed = close_allowed
                             || (breaker_ok && self.enabled(status)
                                 && self.broker_entry_allowed(cmd));
                         if allowed {
@@ -1019,7 +1070,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     && breaker_ok
                     && t.is_some_and(|t| self.matches(t) && ctx(t) == cmd["context"])
                     && now <= cmd["expires_ms"].as_u64().unwrap_or(0)
-                    && (cmd["kind"] == "close"
+                    && ((cmd["kind"] == "close" && (cmd["manual_close"]!=true || !status.requested_run))
                         || (cmd["revision"].as_u64()==Some(self.settings.revision)
                             && self.enabled(status)
                             && self.broker_entry_allowed(&cmd)));
