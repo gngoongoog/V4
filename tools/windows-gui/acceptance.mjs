@@ -82,14 +82,16 @@ async function startFixture(){
  report.fixture_data=true;
  report.fixture_description='Synthetic CI Demo snapshot; actual gateway disabled; no broker orders';
  await until(async()=>{
-  assert.equal(fixture.exitCode,null,'Synthetic GUI fixture exited');
+  assert(fixture.exitCode===null&&fixture.signalCode===null,'Synthetic GUI fixture exited');
   const s=await status();return s.gateway_fresh===true&&s.telemetry?.server==='Synthetic-CI-Demo';
  });
 }
 async function stopFixture(){
  if(!fixture)return;
  const child=fixture;fixture=undefined;
- if(child.exitCode===null){child.kill();await until(()=>child.exitCode!==null,10000)}
+ if(child.exitCode===null&&child.signalCode===null){
+  child.kill();await until(()=>child.exitCode!==null||child.signalCode!==null,10000);
+ }
 }
 async function exitSafely(){await page.getByRole('button',{name:'خروج كامل آمن',exact:true}).click();await page.getByRole('dialog',{name:'خروج كامل آمن'}).getByRole('button',{name:'طلب الخروج الآمن'}).click();await until(()=>app.exitCode!==null);await until(async()=>!await portOpen(18741)&&!await portOpen(port));browser=undefined;page=undefined}
 
