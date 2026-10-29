@@ -38,7 +38,7 @@ const report={schema:1,source_commit:expected.source_commit,build_id:expected.bu
  runtime:'actual packaged Tauri + WebView2 + Rust Core',fixture_data:false,
  gateway_disabled:true,broker_demo:'NOT TESTED',native_ea:'NOT TESTED',
  all_controls_certified:false,ready_for_real:false,cases:[],page_errors:[]};
-let app,browser,page,failed=false;
+let app,browser,page,fixture,failed=false;
 const log=fs.openSync(path.join(out,'native-process.log'),'a');
 async function until(fn,ms=30000){const deadline=Date.now()+ms;let last;while(Date.now()<deadline){try{const v=await fn();if(v)return v}catch(e){last=e}await delay(200)}throw new Error('Timeout'+(last?': '+last.message:''))}
 async function check(name,fn){
@@ -73,6 +73,24 @@ async function navigate(title){
 }
 async function trading(){await navigate('مركز التداول');const p=page.getByRole('region',{name:'Coordinator and costs'});await p.waitFor();await until(async()=>await p.getByRole('button',{name:'حفظ الوضع والعمولة لدى Core',exact:true}).isEnabled());return p}
 async function readSettings(){const r=await invoke('read_panel',{route:'/v1/trading/settings'});return r.data||r}
+async function startFixture(){
+ assert(!fixture,'Synthetic feed already running');
+ const python=path.join(path.dirname(exe),'runtime','python','python.exe');
+ fixture=spawn(python,[path.join(root,'tools/windows-gui/synthetic_feed.py'),home],{
+  cwd:root,stdio:['ignore',log,log],env:{...process.env,BRAINTRADE_GATEWAY_DISABLED:'1'}});
+ fixture.on('error',e=>console.error('Synthetic GUI fixture failed: '+e.message));
+ report.fixture_data=true;
+ report.fixture_description='Synthetic CI Demo snapshot; actual gateway disabled; no broker orders';
+ await until(async()=>{
+  assert.equal(fixture.exitCode,null,'Synthetic GUI fixture exited');
+  const s=await status();return s.gateway_fresh===true&&s.telemetry?.server==='Synthetic-CI-Demo';
+ });
+}
+async function stopFixture(){
+ if(!fixture)return;
+ const child=fixture;fixture=undefined;
+ if(child.exitCode===null){child.kill();await until(()=>child.exitCode!==null,10000)}
+}
 async function exitSafely(){await page.getByRole('button',{name:'خروج كامل آمن',exact:true}).click();await page.getByRole('dialog',{name:'خروج كامل آمن'}).getByRole('button',{name:'طلب الخروج الآمن'}).click();await until(()=>app.exitCode!==null);await until(async()=>!await portOpen(18741)&&!await portOpen(port));browser=undefined;page=undefined}
 
 try{
@@ -98,6 +116,24 @@ try{
  });
  await check('G7 sealing is disabled without bound fresh Demo',async()=>{
   await navigate('إدارة العقول');assert(await page.getByRole('button',{name:'ختم نسخة Candidate البحثية',exact:true}).isDisabled());
+ });
+ await check('trading settings are disabled when broker is offline',async()=>{
+  await navigate('مركز التداول');
+  const panel=page.getByRole('region',{name:'Coordinator and costs'});await panel.waitFor();
+  assert(await panel.getByRole('button',{name:'حفظ الوضع والعمولة لدى Core',exact:true}).isDisabled());
+  await status();
+ });
+ await check('connect isolated synthetic Demo snapshot',startFixture);
+ await check('commission draft survives disconnect and same-account reconnect',async()=>{
+  let panel=await trading();await panel.getByLabel('commission per lot',{exact:true}).fill('9');
+  await stopFixture();
+  await until(async()=>!(await status()).gateway_fresh);
+  panel=page.getByRole('region',{name:'Coordinator and costs'});
+  await until(async()=>await panel.getByRole('button',{name:'حفظ الوضع والعمولة لدى Core',exact:true}).isDisabled());
+  assert.equal(await panel.getByLabel('commission per lot',{exact:true}).inputValue(),'9');
+  await startFixture();panel=await trading();
+  assert.equal(await panel.getByLabel('commission per lot',{exact:true}).inputValue(),'9');
+  await panel.getByRole('button',{name:'التراجع عن التعديلات',exact:true}).click();
  });
  for(const mode of ['scalping','swing','expert','sniper'])await check('save '+mode+' and commission through real UI',async()=>{
   const panel=await trading();await panel.getByRole('checkbox').nth(0).uncheck();
@@ -148,11 +184,13 @@ try{
  for(const theme of ['Dark','Smoke','Light'])await check(theme+' theme renders',async()=>{
   await page.getByTitle(theme+' theme',{exact:true}).click();await page.waitForFunction(t=>document.body.dataset.theme===t,theme.toLowerCase());await page.locator('main.content').evaluate(n=>n.scrollTop=0);await page.screenshot({path:path.join(out,'theme-'+theme+'.png')});
  });
+ await stopFixture();
  await check('safe full exit releases Core port',exitSafely);
  await check('restart preserves mode, learner and commission with STOPPED default',async()=>{
-  await launch();await status();const s=await readSettings();
+  await launch();await status();await startFixture();const s=await readSettings();
   assert.equal(s.config.trading.mode,'sniper');assert.equal(s.config.trading.sniper_brain,'learner');assert.equal(s.commission_editor.amount,7);
  });
+ await stopFixture();
  await check('final safe full exit',exitSafely);
  assert.deepEqual(report.page_errors,[],'Unhandled renderer errors');
 }catch(e){failed=true;report.error=String(e);console.error(e);
@@ -161,6 +199,7 @@ try{
   report.failure_dom=await page.evaluate(()=>({visibility:document.visibilityState,url:location.href,text:document.body.innerText})).catch(()=>null);
  }
 }finally{
+ await stopFixture();
  if(app&&app.exitCode===null)spawnSync('taskkill.exe',['/PID',String(app.pid),'/T','/F'],{encoding:'utf8'});
  for(const key of policies.reverse()){
   const cleanup=spawnSync('reg.exe',['delete',key,'/v','BrainTradeNext.exe','/f'],{encoding:'utf8'});
