@@ -16,6 +16,7 @@ braintrade-domain = { path = "../../crates/domain" }
 serde_json.workspace = true
 serde.workspace = true
 anyhow.workspace = true
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

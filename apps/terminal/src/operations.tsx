@@ -36,12 +36,20 @@ export function BacktestOperations({onStart,onCancel,disabled,active}: {
    <p className="safe-note">لبدء اختبار جديد: STOP أولاً، اتصال MT5 حديث، وعدم وجود صفقة بحثية مفتوحة. يستطيع Core رفض الطلب إذا لم تتحقق الشروط.</p>
   </form>;
 }
-export function BackupOperations({create,exportBrain,disabled}: {create:()=>Promise<void>;exportBrain:()=>Promise<void>;disabled:boolean}) {
+export function BackupOperations({create,exportBrain,importBrain,source,onRestore,disabled,armed}: {
+ create:()=>Promise<void>;exportBrain:()=>Promise<void>;importBrain:()=>Promise<void>;source:unknown;
+ onRestore:(name:string)=>void;disabled:boolean;armed:boolean;
+}) {
+ const [selected,setSelected]=useState('');
+ const data=safeObject(source),backups=Array.isArray(data.backups)?data.backups.map(safeObject).filter(x=>x.valid===true&&typeof x.name==='string'):[];
+ const validSelection=backups.some(x=>x.name===selected);
  return <section className="operator-card" aria-label="Backup operations">
   <h3><Archive size={18}/> حماية قاعدة البيانات والعقول</h3>
   <p>تُنشأ النسخة داخل مجلد بيانات BRAINTRADE عبر Rust Core بعد التحقق من قاعدة البيانات. الأسرار وسجل إرسال الأوامر لا يُستعادان ضمن Brain Snapshot.</p>
-  <div className="quick-ops"><button disabled={disabled} onClick={()=>void create()}><Archive size={16}/> إنشاء Backup موثّق</button><button disabled={disabled} onClick={()=>void exportBrain()}><Download size={16}/> تصدير Brain Snapshot</button></div>
-  <div className="safe-note"><ShieldAlert size={14}/> الاستعادة ليست زرّاً سريعاً أثناء التداول؛ تحتاج إيقاف التنفيذ والتحقق من الملفات والأوامر أولاً.</div>
+  <div className="quick-ops"><button disabled={disabled} onClick={()=>void create()}><Archive size={16}/> إنشاء Backup موثّق</button><button disabled={disabled} onClick={()=>void exportBrain()}><Download size={16}/> حفظ نسخة العقول</button><button disabled={disabled} onClick={()=>void importBrain()}>تحميل نسخة العقول</button></div>
+  <label>استعادة نسخة محفوظة <select aria-label="اختيار نسخة للاستعادة" value={validSelection?selected:''} disabled={disabled||!backups.length} onChange={e=>setSelected(e.target.value)}><option value="">اختر نسخة موثّقة</option>{backups.map(x=><option key={String(x.name)} value={String(x.name)}>{String(x.name)}</option>)}</select></label>
+  <div className="quick-ops"><button type="button" disabled={disabled||armed||!validSelection} onClick={()=>onRestore(selected)}>مراجعة واستعادة النسخة</button></div>
+  <div className="safe-note"><ShieldAlert size={14}/> النسخة تشمل الإعدادات وقاعدة البيانات كاملة. تُنشأ نسخة تراجع قبل الاستعادة؛ الأسرار ودفتر إرسال Gateway لا تُستبدل.</div>
  </section>;
 }
 

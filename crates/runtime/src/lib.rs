@@ -209,10 +209,21 @@ pub struct Client{http:reqwest::blocking::Client,key:String}
 /// failure is different: the request may have reached Core despite a lost
 /// response, so a caller must not automatically restart it.
 pub enum ShutdownError { Rejected(String), Uncertain(String) }
+/// A timed-out mutation may still have reached Core; callers must distinguish
+/// that case from an explicit Core rejection before retrying or cleaning files.
+pub enum CheckedPostError { Rejected(String), Uncertain(String) }
 impl Client{
     pub fn new(dir:&Path)->Result<Self>{Ok(Self{http:reqwest::blocking::Client::builder().no_proxy().timeout(Duration::from_secs(4)).build()?,key:read_ipc_key(dir)?})}
     pub fn get(&self,path:&str)->Result<Value>{Ok(self.http.get(format!("{BASE}{path}")).bearer_auth(&self.key).send()?.error_for_status()?.json()?)}
     pub fn post(&self,path:&str,body:Value)->Result<Value>{let response=self.http.post(format!("{BASE}{path}")).bearer_auth(&self.key).json(&body).send()?;let code=response.status();let value:Value=response.json()?;if !code.is_success(){bail!("{}",value["error"].as_str().unwrap_or("Request failed"));}Ok(value)}
+    pub fn checked_post(&self,path:&str,body:Value,timeout:Duration)->std::result::Result<Value,CheckedPostError>{
+        let response=self.http.post(format!("{BASE}{path}")).bearer_auth(&self.key)
+            .timeout(timeout).json(&body).send().map_err(|e|CheckedPostError::Uncertain(e.to_string()))?;
+        let code=response.status();
+        let value:Value=response.json().map_err(|e|CheckedPostError::Uncertain(e.to_string()))?;
+        if !code.is_success(){return Err(CheckedPostError::Rejected(value["error"].as_str().unwrap_or("Request failed").to_string()));}
+        Ok(value)
+    }
     pub fn shutdown(&self,instance:&str)->std::result::Result<Value,ShutdownError>{
         let response=self.http.post(format!("{BASE}/v1/shutdown")).bearer_auth(&self.key)
             .timeout(Duration::from_secs(30)).json(&json!({"expected_core_instance":instance})).send()
@@ -543,8 +554,13 @@ impl Engine{
             return Ok(result);
         }
         if method=="POST"&&path=="/v1/backup/restore/stage"{
-            if self.shared.lock().unwrap().status.requested_run{bail!("Stop the system before staging restore");}
-            if self.backtests.loading(){bail!("Cannot stage restore while broker history is loading");}if self.execution.pending(&self.db)?||self.shared.lock().unwrap().status.telemetry.as_ref().is_some_and(|t|t.positions.iter().any(|p|braintrade_domain::execution::brain_for_magic(p.magic).is_some())){bail!("Close owned broker positions and reconcile commands before restore");}
+            let request:Value=serde_json::from_slice(body)?;
+            if let Some(expected)=request["expected_core_instance"].as_str(){
+                anyhow::ensure!(expected==self.instance_id,"Core session changed; request restore again");
+            }
+            let status={let mut shared=self.shared.lock().unwrap();shared.status.refresh(now_ms());shared.status.clone()};
+            verify_safe_shutdown(&status,self.execution.pending(&self.db)?)?;
+            if self.backtests.loading(){bail!("Cannot stage restore while broker history is loading");}
             let config=self.shared.lock().unwrap().config.clone();
             let result=backup::stage(&self.db,&self.dir,&config,body,now_ms())?;
             self.event("backup_restore_staged",json!({"source":result["source"],"rollback":result["rollback"],"secrets_restored":false,"broker_effect":false}))?;

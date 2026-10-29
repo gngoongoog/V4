@@ -198,6 +198,21 @@ try{
  });
  await stopFixture();
  await check('final safe full exit',exitSafely);
+ await check('native staged restore waits for Core and applies on explicit relaunch',async()=>{
+  await launch();await status();
+  const backup=await invoke('backup_action',{action:'create'});
+  assert.equal(typeof backup.name,'string');
+  const staged=await invoke('brain_snapshot_restore',{name:backup.name});
+  assert.equal(staged.staged,true);
+  assert.equal(await portOpen(18741),false,'Restore must wait until the original Core exited');
+  await assert.rejects(()=>invoke('get_status'),'Background status must not restart Core after staging');
+  await invoke('close_terminal').catch(()=>{});await until(()=>app.exitCode!==null);
+  browser=undefined;page=undefined;
+  await launch();await status();
+  const restored=JSON.parse(fs.readFileSync(path.join(home,'restore.last.json'),'utf8'));
+  assert.equal(restored.status,'applied');assert.equal(restored.source,backup.name);
+  await exitSafely();
+ });
  assert.deepEqual(report.page_errors,[],'Unhandled renderer errors');
 }catch(e){failed=true;report.error=String(e);console.error(e);
  if(page&&!page.isClosed()){

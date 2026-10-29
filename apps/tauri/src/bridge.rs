@@ -1,8 +1,8 @@
 //! V4 engine remains authoritative. The browser NEVER reads ipc.key, obtains
 //! a broker token or connects directly to the Core's HTTP port.
-use braintrade_runtime::{connect_existing_core, ensure_core, Client, ShutdownError};
+use braintrade_runtime::{connect_existing_core, ensure_core, Client, ShutdownError,CheckedPostError};
 use serde_json::{json, Value};
-use std::{thread, time::{Duration, Instant}, sync::{Arc,Mutex,OnceLock,atomic::{AtomicBool,Ordering}}};
+use std::{thread, time::{Duration, Instant}, sync::{Arc,Mutex,OnceLock,atomic::{AtomicBool,AtomicU64,Ordering}}};
 use tauri::ipc::Channel;
 
 #[derive(Clone,Default)]
@@ -168,6 +168,110 @@ fn backup_action(action: String) -> Result<Value, String> {
         _=>return Err("هذا الإجراء الاحتياطي غير مسموح".into()),
     };
     open_client()?.post(route,json!({})).map_err(|err|err.to_string())
+}
+
+static SNAPSHOT_SEQUENCE:AtomicU64=AtomicU64::new(0);
+const MAX_SNAPSHOT_BYTES:u64=16*1024*1024*1024+11*1024*1024;
+
+// The file picker, not the renderer, chooses the path. Never overwrite an
+// existing user file or leave a partially copied file on an ordinary error.
+fn copy_snapshot_new(source:&std::path::Path,destination:&std::path::Path)->Result<(),String>{
+    use std::{fs::{self,OpenOptions},io};
+    let mut input=fs::File::open(source).map_err(|e|format!("تعذر فتح ملف النسخة: {e}"))?;
+    let meta=input.metadata().map_err(|e|e.to_string())?;
+    if !meta.is_file()||meta.len()==0||meta.len()>MAX_SNAPSHOT_BYTES{return Err("حجم ملف نسخة العقول غير صالح".into());}
+    let mut output=OpenOptions::new().write(true).create_new(true).open(destination)
+        .map_err(|e|format!("تعذر إنشاء الملف؛ اختر اسماً غير مستخدم: {e}"))?;
+    let copied=io::copy(&mut input,&mut output).and_then(|n|{output.sync_all()?;Ok(n)});
+    match copied {
+        Ok(n) if n==meta.len()=>Ok(()),
+        Ok(_)=>{drop(output);let _=fs::remove_file(destination);Err("تغير حجم الملف أثناء النسخ؛ أعد اختياره".into())},
+        Err(e)=>{drop(output);let _=fs::remove_file(destination);Err(format!("تعذر إكمال النسخ: {e}"))},
+    }
+}
+fn snapshot_name_valid(name:&str)->bool{
+    !name.is_empty()&&name.len()<=160&&name!="."&&name!=".."&&
+        name.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'-'|b'_'|b'.'))
+}
+fn export_brain_snapshot()->Result<Value,String>{
+    let Some(mut destination)=rfd::FileDialog::new().add_filter("BrainTrade Brain Snapshot",&["btbrain"])
+        .set_file_name("BrainTrade-Brain.btbrain").save_file() else{return Ok(json!({"cancelled":true}));};
+    if destination.extension().is_none(){destination.set_extension("btbrain");}
+    if !destination.extension().and_then(|x|x.to_str()).is_some_and(|x|x.eq_ignore_ascii_case("btbrain")){
+        return Err("اختر ملفاً بامتداد btbrain".into());
+    }
+    let client=open_client()?;
+    let result=match client.checked_post("/v1/brain-snapshot/export",json!({}),Duration::from_secs(300)){
+        Ok(v)=>v,
+        Err(CheckedPostError::Rejected(e))=>return Err(e),
+        Err(CheckedPostError::Uncertain(e))=>return Err(format!("تعذر تأكيد نتيجة إنشاء النسخة؛ راجع صفحة النسخ قبل الإعادة: {e}")),
+    };
+    let name=result["file_name"].as_str().filter(|n|snapshot_name_valid(n)&&n.ends_with(".btbrain"))
+        .ok_or("لم يرجع Core اسم نسخة صالحاً")?;
+    let source=braintrade_runtime::data_dir().join("brain_exports").join(name);
+    copy_snapshot_new(&source,&destination)?;
+    Ok(json!({"saved":true,"file_name":destination.file_name().and_then(|x|x.to_str()).unwrap_or("BrainTrade-Brain.btbrain"),
+        "checksum":result["checksum"],"bytes":result["bytes"],"secrets_included":false}))
+}
+fn import_brain_snapshot()->Result<Value,String>{
+    let Some(source)=rfd::FileDialog::new().add_filter("BrainTrade Brain Snapshot",&["btbrain"]).pick_file()
+        else{return Ok(json!({"cancelled":true}));};
+    if !source.extension().and_then(|x|x.to_str()).is_some_and(|x|x.eq_ignore_ascii_case("btbrain")){
+        return Err("اختر ملفاً بامتداد btbrain".into());
+    }
+    let client=open_client()?;
+    let inbox=braintrade_runtime::data_dir().join("brain_imports");
+    std::fs::create_dir_all(&inbox).map_err(|e|e.to_string())?;
+    let name=format!("tauri-{}-{}.btbrain",braintrade_runtime::now_ms(),SNAPSHOT_SEQUENCE.fetch_add(1,Ordering::Relaxed));
+    let target=inbox.join(&name);copy_snapshot_new(&source,&target)?;
+    match client.checked_post("/v1/brain-snapshot/import",json!({"name":name}),Duration::from_secs(300)){
+        Ok(v)=>Ok(v),
+        Err(CheckedPostError::Rejected(e))=>{let _=std::fs::remove_file(&target);Err(e)},
+        Err(CheckedPostError::Uncertain(e))=>Err(format!("تعذر تأكيد نتيجة فحص النسخة؛ راجع قائمة النسخ قبل إعادة الاستيراد: {e}")),
+    }
+}
+fn with_restore_barrier(state:&AppLifecycle,operation:impl FnOnce()->Result<Value,CheckedPostError>)->Result<Value,String>{
+    let _guard=state.start_gate.lock().map_err(|_|"تعذر قفل حالة Core".to_string())?;
+    if state.stopping.load(Ordering::SeqCst){return Err("إيقاف Core أو الاستعادة قيد التحقق".into());}
+    // Prevent background status workers from restarting Core after staging.
+    // Keep the barrier set when the response is lost, since Core may have
+    // accepted the request and stopped even though the UI did not see it.
+    state.stopping.store(true,Ordering::SeqCst);
+    match operation(){
+        Ok(v) if v["staged"]==true=>Ok(v),
+        Ok(_)=>Err("رد الاستعادة غير واضح؛ أغلق البرنامج وتحقق من حالة النسخة قبل إعادة المحاولة".into()),
+        Err(CheckedPostError::Rejected(e))=>{state.stopping.store(false,Ordering::SeqCst);Err(e)},
+        Err(CheckedPostError::Uncertain(e))=>Err(format!("تعذر تأكيد نتيجة تجهيز الاستعادة؛ أغلق البرنامج وافحص حالة النسخ قبل الإعادة: {e}")),
+    }
+}
+fn stage_snapshot_restore(state:&AppLifecycle,name:&str)->Result<Value,String>{
+    if !snapshot_name_valid(name){return Err("اسم النسخة غير صالح".into());}
+    with_restore_barrier(state,||{
+        let client=connect_existing_core().map_err(|e|CheckedPostError::Rejected(format!("تعذر الوصول إلى Core الحالي: {e}")))?;
+        let status=client.get("/v1/status").map_err(|e|CheckedPostError::Rejected(e.to_string()))?;
+        let (pid,instance)=process_identity(&status).map_err(CheckedPostError::Rejected)?;
+        let process=tracked_core::Handle::open(pid).map_err(CheckedPostError::Rejected)?;
+        let current=client.get("/v1/status").map_err(|e|CheckedPostError::Rejected(e.to_string()))?;
+        if process_identity(&current).map_err(CheckedPostError::Rejected)?!=(pid,instance.clone()){
+            return Err(CheckedPostError::Rejected("تغيّرت جلسة Core؛ أعد طلب الاستعادة".into()));
+        }
+        let result=client.checked_post("/v1/backup/restore/stage",json!({"name":name,"expected_core_instance":instance}),Duration::from_secs(300))?;
+        if result["staged"]==true {process.wait().map_err(CheckedPostError::Uncertain)?;}
+        Ok(result)
+    })
+}
+#[tauri::command]
+async fn brain_snapshot_export()->Result<Value,String>{
+    tauri::async_runtime::spawn_blocking(export_brain_snapshot).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
+async fn brain_snapshot_import()->Result<Value,String>{
+    tauri::async_runtime::spawn_blocking(import_brain_snapshot).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
+async fn brain_snapshot_restore(name:String,lifecycle:tauri::State<'_,AppLifecycle>)->Result<Value,String>{
+    let state=lifecycle.inner().clone();
+    tauri::async_runtime::spawn_blocking(move||stage_snapshot_restore(&state,&name)).await.map_err(|e|e.to_string())?
 }
 
 #[tauri::command]
@@ -355,7 +459,8 @@ pub fn run() {
             get_status, read_panel, read_trade_history, execute_control,
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
-            backup_action, backtest_action, update_brain_control, bind_execution
+            backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore,
+            backtest_action, update_brain_control, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");
@@ -444,10 +549,41 @@ mod tests {
         assert!(allowed_read_route("/v1/execution/brains"));
         assert!(allowed_read_route("/v1/execution/reconciliation"));
         assert!(allowed_read_route("/v1/enterprise/supervisor"));
+        assert!(allowed_read_route("/v1/studio/chart-frames"));
         assert!(!allowed_read_route("/v1/gateway/snapshot"));
         assert!(!allowed_read_route("http://attacker.local"));
         assert!(!allowed_read_route("/v1/config/../../ipc.key"));
         assert!(!allowed_read_route("/v1/status?token=x"));
+    }
+    #[test]
+    fn snapshot_copy_never_overwrites_and_rejects_unsafe_names(){
+        use std::{fs,time::{SystemTime,UNIX_EPOCH}};
+        let unique=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir=std::env::temp_dir().join(format!("bt-snapshot-copy-{}-{unique}",std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let source=dir.join("source.btbrain");let dest=dir.join("dest.btbrain");
+        fs::write(&source,b"validated-snapshot").unwrap();
+        copy_snapshot_new(&source,&dest).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(),b"validated-snapshot");
+        fs::write(&source,b"replacement").unwrap();
+        assert!(copy_snapshot_new(&source,&dest).is_err());
+        assert_eq!(fs::read(&dest).unwrap(),b"validated-snapshot");
+        assert!(snapshot_name_valid("imported-brain-42-abc"));
+        for bad in ["","..","../outside","a/b","a\\b"] {assert!(!snapshot_name_valid(bad));}
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn restore_barrier_only_reopens_after_an_explicit_rejection(){
+        let state=AppLifecycle::default();
+        assert!(with_restore_barrier(&state,||Err(CheckedPostError::Rejected("not flat".into()))).is_err());
+        assert!(!state.stopping.load(Ordering::SeqCst));
+        assert!(with_restore_barrier(&state,||Err(CheckedPostError::Uncertain("timeout".into()))).is_err());
+        assert!(state.stopping.load(Ordering::SeqCst));
+        assert!(with_start_permit(&state,||Ok(())).is_err());
+        state.stopping.store(false,Ordering::SeqCst);
+        assert!(with_restore_barrier(&state,||Ok(json!({"staged":true}))).is_ok());
+        assert!(state.stopping.load(Ordering::SeqCst));
+        assert!(with_start_permit(&state,||Ok(())).is_err());
     }
     #[test]
     fn journal_pagination_is_bounded_and_not_an_arbitrary_post_proxy() {

@@ -19,6 +19,10 @@ export async function handoff(sniperActive:boolean):Promise<unknown>{return invo
 export async function shutdownCore():Promise<unknown>{return invoke('shutdown_core')}
 export async function closeTerminal():Promise<void>{return invoke('close_terminal')}
 export async function backupAction(action:'create'|'brain_export'):Promise<unknown>{return invoke('backup_action',{action})}
+// Paths are chosen by native file dialogs, never supplied by the renderer.
+export async function exportBrainSnapshot():Promise<unknown>{return invoke('brain_snapshot_export')}
+export async function importBrainSnapshot():Promise<unknown>{return invoke('brain_snapshot_import')}
+export async function restoreBrainSnapshot(name:string):Promise<unknown>{return invoke('brain_snapshot_restore',{name})}
 export async function backtestAction(action:'start'|'cancel',request?:Record<string,unknown>):Promise<unknown>{return invoke('backtest_action',{action,request:request??null})}
 export async function updateBrainControl(context:string,brain:string,mode:string,advisor:boolean,paper:boolean):Promise<unknown>{return invoke('update_brain_control',{context,brain,mode,advisor,paper})}
 export async function bindExecution(target:'demo'|'live',deviationPoints:number,confirmLiveLogin:string):Promise<unknown>{return invoke('bind_execution',{target,deviationPoints,confirmLiveLogin})}

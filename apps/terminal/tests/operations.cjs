@@ -35,9 +35,10 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  const cancel=nodes(backtest).find(x=>x.type==='button'&&x.props.type==='button');
  await cancel.props.onClick();assert.equal(stopped,1);
  const called=[];
- const backup=exportsObj.BackupOperations({create:async()=>called.push('create'),exportBrain:async()=>called.push('export'),disabled:false});
- for(const btn of nodes(backup).filter(x=>x.type==='button'))await btn.props.onClick();
- assert.deepEqual(called,['create','export']);
+ const backup=exportsObj.BackupOperations({create:async()=>called.push('create'),exportBrain:async()=>called.push('export'),importBrain:async()=>called.push('import'),source:{backups:[]},onRestore:()=>called.push('restore'),disabled:false,armed:false});
+ for(const btn of nodes(backup).filter(x=>x.type==='button'&&!x.props.disabled))await btn.props.onClick();
+ assert.deepEqual(called,['create','export','import']);
+ assert(nodes(backup).some(x=>x.type==='button'&&String(x.props.children).includes('استعادة النسخة')&&x.props.disabled));
  let saved=null;
  for(const source of [null,{}, {config:{trading:{}}}]){
   const empty=exportsObj.TradingSettingsOperations({source,disabled:false,armed:false,apply:async()=>{throw Error('Unavailable source must not save')}});
