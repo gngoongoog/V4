@@ -28,6 +28,7 @@ import {OperatorWriteFence} from './operator-write-fence';
 import type {OperatorWriteTicket} from './operator-write-fence';
 import {MicroCapitalOperations} from './micro-capital-operations';
 import {RiskMasterOperations} from './risk-master-operations';
+import {SoloOperations} from './solo-operations';
 import {ExecutionQualityOperations} from './execution-quality-operations';
 import {ModeEvidenceOperations} from './mode-evidence-operations';
 import {FrozenCoordinatorOperations,supportedFrozenMode} from './frozen-coordinator-operations';
@@ -40,7 +41,7 @@ import {SniperClassicOperations,eligibleFrozenClassic} from './sniper-classic-op
 import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position} from './types';
 import {DESIGN_FIXTURE} from './mock';
-import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
+import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
 import {money,num,signed,up,valid} from './format';
 
 type IconComponent=typeof Home;
@@ -895,6 +896,29 @@ export default function Terminal(){
   }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
   finally{finishWrite(mutation)}
  };
+ const runSolo=async(brain:string)=>{
+  if(preview||!hasTauri()||!feed.broker||!status?.telemetry||status.requested_run!==false){sendNotice('اختيار العقل يحتاج STOP وحساب MT5 متصلاً',true);return}
+  const t=status.telemetry,view=unwrap(pageData),context=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
+  if(view.context!==context||view.account_matches!==true||t.account_trade_mode!==(t.demo?0:2)){sendNotice('تغيّر حساب MT5؛ انتظر تحميل بيانات العقول',true);return}
+  const mode=String(view.trading_mode||'');
+  const target=brain==='system'?'منسق الوضع':String(array(view.brains).find(row=>unwrap(row.config).id===brain)?.name||brain);
+  if(!window.confirm(`سيكون المنفّذ الوحيد لوضع ${mode} هو ${target} للحساب ${t.login} والرمز ${t.symbol}. لا يبدأ الاختيار التداول؛ START أمر منفصل. تأكيد؟`))return;
+  const mutation=beginWrite('solo-owner');if(!mutation)return;
+  const serial=panelSerial();
+  try{
+   const result=unwrap(await selectSoloBrain(context,mode,brain));
+   if(!writeFresh(mutation))return;
+   if(result.ok!==true||result.selected_owner!==brain)throw new Error('لم يؤكد Core العقل المنفّذ');
+   scopedGeneration.current.invalidate('brains');setBrainReport(null);
+   const ticket=scopedGeneration.current.beginRead('brains');
+   const refreshed=unwrap(await readPanel('/v1/execution/brains'));
+   if(!writeFresh(mutation))return;
+   publishPanel(serial,refreshed);
+   if(scopedGeneration.current.isCurrent(ticket))setBrainReport(refreshed);
+   sendNotice(`تم اختيار ${target} كمنفّذ. التداول ما بدأ؛ استخدم START عند الجاهزية.`);
+  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
+  finally{finishWrite(mutation)}
+ };
  const runCloseOwned=async(profitOnly:boolean)=>{
   if(preview||!hasTauri()||!feed.broker||!feed.quote||!status?.telemetry||status.requested_run!==false){sendNotice('أوقف الدخول وانتظر اتصال MT5 وسعراً حديثاً قبل الإغلاق',true);return}
   const t=status.telemetry;
@@ -1018,7 +1042,7 @@ export default function Terminal(){
       <section className="panel risk-stats"><div className="panel-title"><b>مقاييس المخاطر</b></div><div className="risk-bars">{[['Free Margin',account?.margin_free],['Drawdown',drawdown],['Position count',account?positions.length:null],['Risk limit',safeConfig?unwrap(safeConfig.risk).risk_percent:null]].map(([label,value],i)=><div className="risk-line" key={String(label)}><span>{String(label)}</span><div className="risk-meter"><i style={{width:valid(value)?`${Math.min(100,Math.abs(Number(value))*(i===0?.002:10))}%`:'0%'}}/></div><strong>{valid(value)?num(value,2):'—'}</strong></div>)}</div></section>
      </div>
     </div>:<section className={'subpage subpage-'+page}>
-      <div className="subpage-header"><div className="sub-heading"><div className="sub-glyph"><PageIcon size={32}/></div><div><small>{pageMeta.en.toUpperCase()} • V4 RUST CORE</small><h1>{page==='brainControl'?'إعدادات العقول':pageMeta.title}</h1><p>{page==='risk'?'تحكم في مخاطر التداول وإعدادات حماية رأس المال':page==='brainControl'||page==='brains'?'إدارة العقول الذكية للتداول والتحليل':'صفحة تفاعلية مرتبطة بمحرك V4، والبيانات تُعرض فقط إذا وصلت من مصدر فعلي.'}</p></div></div>{page==='brainControl'||page==='brains'?<div className="concept-brains-toolbar"><button type="button" disabled title="التنفيذ المنفرد SOLO غير متاح في Core الحالي">التداول بعقل واحد فقط</button><PaperAllControl source={pageData} disabled={busy||preview||!hasTauri()} armed={status?.requested_run===true} onSet={runPaperAll}/><button type="button" disabled={busy||preview||!hasTauri()} onClick={()=>void runSnapshotExport()}><Database size={16}/> حفظ جميع العقول</button><button type="button" disabled={busy||preview||!hasTauri()} onClick={()=>void runSnapshotImport()}>تحميل نسخة العقول</button></div>:page==='risk'?<button type="button" className="concept-risk-connection" onClick={()=>open('execution')}><ShieldCheck size={25}/><span><b>{preview?'معاينة فقط':accountFresh?'حساب MT5 متصل':'حالة الحساب غير مؤكدة'}</b><small>{preview?'بيانات توضيحية غير حقيقية':account?account.demo?'حساب تجريبي DEMO':'حساب حقيقي REAL':'بانتظار اتصال الوسيط'}</small></span></button>:<ConnectionLine connectedNow={trustworthy} preview={preview}/>}</div>
+      <div className="subpage-header"><div className="sub-heading"><div className="sub-glyph"><PageIcon size={32}/></div><div><small>{pageMeta.en.toUpperCase()} • V4 RUST CORE</small><h1>{page==='brainControl'?'إعدادات العقول':pageMeta.title}</h1><p>{page==='risk'?'تحكم في مخاطر التداول وإعدادات حماية رأس المال':page==='brainControl'||page==='brains'?'إدارة العقول الذكية للتداول والتحليل':'صفحة تفاعلية مرتبطة بمحرك V4، والبيانات تُعرض فقط إذا وصلت من مصدر فعلي.'}</p></div></div>{page==='brainControl'||page==='brains'?<div className="concept-brains-toolbar"><SoloOperations key={viewScope} status={!preview&&feed.broker?status:null} source={pageData} disabled={busy||preview||!hasTauri()} armed={status?.requested_run===true} onSet={runSolo}/><PaperAllControl source={pageData} disabled={busy||preview||!hasTauri()} armed={status?.requested_run===true} onSet={runPaperAll}/><button type="button" disabled={busy||preview||!hasTauri()} onClick={()=>void runSnapshotExport()}><Database size={16}/> حفظ جميع العقول</button><button type="button" disabled={busy||preview||!hasTauri()} onClick={()=>void runSnapshotImport()}>تحميل نسخة العقول</button></div>:page==='risk'?<button type="button" className="concept-risk-connection" onClick={()=>open('execution')}><ShieldCheck size={25}/><span><b>{preview?'معاينة فقط':accountFresh?'حساب MT5 متصل':'حالة الحساب غير مؤكدة'}</b><small>{preview?'بيانات توضيحية غير حقيقية':account?account.demo?'حساب تجريبي DEMO':'حساب حقيقي REAL':'بانتظار اتصال الوسيط'}</small></span></button>:<ConnectionLine connectedNow={trustworthy} preview={preview}/>}</div>
       {page==='risk'?<div className="concept-risk-kpis"><article><BriefcaseBusiness/><div><small>رصيد الحساب</small><strong>{money(account?.balance,currency)}</strong><span>من حساب MT5</span></div></article><article><BarChart3/><div><small>نتيجة اليوم</small><strong>{signed(account?.today_net,currency)}</strong><span>من حساب MT5</span></div></article><article><ShieldCheck/><div><small>السحب الحالي</small><strong>{valid(drawdown)?num(drawdown,1)+'%':'—'}</strong><span>{preview?'بيانات معاينة':'غير متاح دون سجل موثق'}</span></div></article><article><Activity/><div><small>المراكز المفتوحة</small><strong>{account?positions.length:'—'}</strong><span>من الحساب المتصل</span></div></article><article><Target/><div><small>المخاطرة للصفقة</small><strong>{!preview&&valid(unwrap(safeConfig?.risk).risk_percent)?num(unwrap(safeConfig?.risk).risk_percent,2)+'%':'—'}</strong><span>من إعدادات Core</span></div></article></div>:<div className="subpage-stats"><article><small>EQUITY</small><strong>{money(account?.equity,currency)}</strong><span>رأس المال في الحساب</span></article><article><small>DAILY P&L</small><strong className="teal">{signed(account?.today_net,currency)}</strong><span>نتيجة جلسة MT5</span></article><article><small>POSITIONS</small><strong>{account?positions.length:'—'}</strong><span>المراكز المفتوحة</span></article><article><small>ACCOUNT</small><strong>{account?.demo?'DEMO':account?'REAL':'OFFLINE'}</strong><span>حالة الاتصال بالوسيط</span></article></div>}
       <div className="subpage-layout">
       <section className="panel subpage-primary"><div className="panel-title"><b>{pageMeta.title} — بيانات وتشغيل</b><button onClick={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}} disabled={!pageMeta.route||preview||page==='journal'||page==='reports'}>تحديث ↻</button></div>
@@ -1072,7 +1096,7 @@ export default function Terminal(){
  {snapshotStaged&&<div className="confirm-overlay" role="dialog" aria-modal="true" aria-label="نسخة العقول جاهزة للاستعادة"><div className="confirm-dialog" ref={snapshotDialogRef}><div className="confirm-title"><CheckCircle2 size={23}/>تم تجهيز الاستعادة</div><p>توقّف Core ولن يُعاد تشغيله تلقائياً. أغلق الواجهة ثم افتح البرنامج من جديد ليُطبّق النسخة ويعرض نتيجة الاستعادة.</p><div className="confirm-actions"><button onClick={()=>void closeTerminal()}>إغلاق الواجهة</button></div></div></div>}
  {showStopConfirm&&<div className="confirm-overlay" role="dialog" aria-modal="true" aria-label="تأكيد وقف الدخول"><div className="confirm-dialog" ref={dialogRef}><div className="confirm-title"><PauseCircle size={23}/>وقف فتح الصفقات الجديدة فقط</div><p>هذا الإجراء لا يغلق أي مركز مفتوح ولا يلغي أوامر الوسيط القائمة. سيبقى Core يدير الخروج والتسوية وSL/TP للمراكز الموجودة.</p><div className="confirm-actions"><button onClick={()=>setApproval(null)}>إلغاء</button><button onClick={confirmStop}>تأكيد وقف الدخول الجديد</button></div></div></div>}
  {showExitConfirm&&<div className="confirm-overlay" role="dialog" aria-modal="true" aria-label="خروج كامل آمن"><div className="confirm-dialog" ref={dialogRef}><div className="confirm-title"><ShieldCheck size={23}/>الخروج الكامل الآمن</div><p>يطلب إطفاء Gateway وCore والواجهة، وينتظر التحقق من انتهاء العملية. سيُرفض إذا كان التشغيل مستمراً، أو إذا وُجد مركز مفتوح أو أمر معلّق أو كانت حالة MT5 غير موثوقة. إن أردت ترك المحرك يدير الصفقات، اضغط «إغلاق الواجهة فقط».</p><div className="confirm-actions"><button onClick={()=>setApproval(null)}>إلغاء</button><button disabled={busy} onClick={()=>void runFullExit()}>طلب الخروج الآمن</button></div></div></div>}
- {showStartConfirm&&<div className="confirm-overlay" role="dialog" aria-modal="true" aria-label="تأكيد تشغيل التداول"><div className="confirm-dialog" ref={dialogRef}><div className="confirm-title"><ShieldCheck size={23}/>تأكيد تشغيل محرك التداول</div><p>سيتم إرسال طلب التشغيل إلى Rust Core، ولن ينفذ بدون حساب MT5 صالح وفحوصات المخاطر والتحقق من الوضع.</p><p>جلسة MT5: {status?.telemetry?.demo?'DEMO':'REAL'} · {status?.telemetry?.server||'—'} · {status?.telemetry?.login??'—'}</p>
+ {showStartConfirm&&<div className="confirm-overlay" role="dialog" aria-modal="true" aria-label="تأكيد تشغيل التداول"><div className="confirm-dialog" ref={dialogRef}><div className="confirm-title"><ShieldCheck size={23}/>تأكيد تشغيل محرك التداول</div><p>سيتم إرسال طلب التشغيل إلى Rust Core، ولن ينفذ بدون حساب MT5 صالح وفحوصات المخاطر والتحقق من الوضع.</p><p>جلسة MT5: {status?.telemetry?.demo?'DEMO':'REAL'} · {status?.telemetry?.server||'—'} · {status?.telemetry?.login??'—'}</p><p>العقل المنفّذ: {status?.selected_owner==='system'?'منسق الوضع':status?.selected_owner||'بانتظار تأكيد Core'}</p>
  {status?.telemetry?.demo===false&&<label>للموافقة على START في REAL، اكتب رقم الحساب بالضبط<input inputMode="numeric" autoComplete="off" value={liveLogin} onChange={e=>setLiveLogin(e.target.value)} placeholder="رقم حساب MT5 REAL" /></label>}<div className="confirm-actions"><button onClick={()=>{setApproval(null);setLiveLogin('')}}>إلغاء</button><button className="start" disabled={busy||!canConfirmStart(approval,contextKey,status,feed.broker,liveLogin)} onClick={()=>void runCommand('start',liveLogin.trim())}>إرسال أمر START إلى Core</button></div></div></div>}
  </div>
 }

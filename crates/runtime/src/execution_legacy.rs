@@ -52,6 +52,7 @@ pub struct Service {
     pub controls: BTreeMap<String, crate::brain_control::Control>,
     risk_master_key:String,
     risk_master_enabled:bool,
+    solo:Option<SoloOwner>,
     signals: BTreeMap<String, Value>,
     new_entries: Vec<Value>,
     last_sync_ms: u64,
@@ -64,6 +65,8 @@ pub struct Service {
     // Read-only round-robin cursor; it never changes an order's durable state.
     recovery_cursor: Option<(String, u64, String)>,
 }
+#[derive(Clone,Debug,PartialEq)]
+struct SoloOwner {context:String,target:String,mode:TradingMode,brain:String}
 fn ctx(t: &Telemetry) -> String {
     serde_json::to_string(&(&t.server, t.login, &t.symbol, &t.currency)).unwrap()
 }
@@ -276,14 +279,52 @@ fn broker_command_observed(
 
 impl Service {
     pub fn take_entries(&mut self) -> Vec<Value> { std::mem::take(&mut self.new_entries) }
-    /// Entry execution is reserved to the coordinator of the selected trading
-    /// mode. All other strategies remain analytical/shadow observers. Existing
-    /// owned positions still receive their regular close/reconciliation logic.
+    /// One selected owner per account, symbol and trading mode. All other
+    /// strategies remain analytical/Paper observers.
     fn broker_entry_allowed(&self, cmd: &Value) -> bool {
         let Some(mode) = self.active_mode else { return false; };
+        let owner=self.solo.as_ref().filter(|s|s.mode==mode && cmd["context"].as_str()==Some(s.context.as_str()) && cmd["target"].as_str()==Some(s.target.as_str()))
+            .map(|s|s.brain.as_str()).unwrap_or("system");
         cmd["kind"] == "open"
-            && cmd["brain"] == "system"
+            && cmd["brain"] == owner
             && cmd["trading_mode"] == json!(mode)
+    }
+    pub fn solo_owner<'a>(&'a self,t:&Telemetry,mode:TradingMode)->&'a str {
+        self.solo.as_ref().filter(|s|self.matches(t)&&s.context==ctx(t)&&s.target==self.settings.target&&s.mode==mode)
+            .map(|s|s.brain.as_str()).unwrap_or("system")
+    }
+    pub fn sync_owner_flags(&mut self,t:&Telemetry,mode:TradingMode){
+        let owner=self.solo_owner(t,mode).to_owned();
+        for brain in &mut self.brains {brain.enabled=brain.id==owner;}
+    }
+    pub fn refresh_solo(&mut self,db:&Connection,t:&Telemetry,mode:TradingMode)->Result<()> {
+        if !self.matches(t) {self.solo=None;self.sync_owner_flags(t,mode);return Ok(());}
+        let scope=ctx(t);let mode_key=serde_json::to_string(&mode)?;
+        let brain:Option<String>=db.query_row("SELECT brain FROM execution_solo WHERE context=?1 AND account_mode=?2 AND mode=?3",
+            params![scope,t.account_trade_mode,mode_key],|r|r.get(0)).optional()?;
+        if let Some(id)=&brain {anyhow::ensure!(id!="system"&&BRAINS.iter().any(|(known,_)|*known==id.as_str()),"Saved solo brain is invalid");}
+        let next=brain.map(|brain|SoloOwner{context:scope,target:self.settings.target.clone(),mode,brain});
+        if self.solo!=next {self.signals.clear();self.sniper.reset_quotes();}
+        self.solo=next;self.sync_owner_flags(t,mode);Ok(())
+    }
+    pub fn set_solo(&mut self,db:&Connection,t:&Telemetry,mode:TradingMode,brain:&str,now:u64)->Result<()> {
+        anyhow::ensure!(self.matches(t),"الحساب لا يطابق حساب التنفيذ");
+        anyhow::ensure!(brain=="system"||BRAINS.iter().any(|(known,_)|*known==brain),"العقل المطلوب غير معروف");
+        let scope=ctx(t);let mode_key=serde_json::to_string(&mode)?;
+        let mut settings=self.settings.clone();settings.revision=settings.revision.checked_add(1).context("Execution revision exhausted")?;
+        let tx=db.unchecked_transaction()?;
+        if brain=="system" {
+            tx.execute("DELETE FROM execution_solo WHERE context=?1 AND account_mode=?2 AND mode=?3",params![scope,t.account_trade_mode,mode_key])?;
+        }else{
+            tx.execute("INSERT INTO execution_solo(context,account_mode,mode,brain) VALUES(?1,?2,?3,?4) ON CONFLICT(context,account_mode,mode) DO UPDATE SET brain=excluded.brain",params![scope,t.account_trade_mode,mode_key,brain])?;
+        }
+        tx.execute("INSERT OR REPLACE INTO execution_settings VALUES(1,?1)",[serde_json::to_string(&settings)?])?;
+        tx.execute("UPDATE broker_commands SET state='cancelled' WHERE kind='open' AND state='queued'",[])?;
+        tx.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,'execution_owner_changed',?2)",
+            params![now,json!({"context":scope,"account_mode":t.account_trade_mode,"mode":mode,"brain":brain}).to_string()])?;
+        tx.commit()?;self.settings=settings;
+        self.solo=if brain=="system" {None}else{Some(SoloOwner{context:scope,target:self.settings.target.clone(),mode,brain:brain.into()})};
+        self.set_mode(mode);self.sync_owner_flags(t,mode);Ok(())
     }
     pub fn set_mode(&mut self, mode: TradingMode) {
         self.active_mode = Some(mode);
@@ -310,6 +351,7 @@ CREATE TABLE IF NOT EXISTS execution_equity(context TEXT PRIMARY KEY,peak REAL N
 CREATE TABLE IF NOT EXISTS micro_real_recovered(account_key TEXT PRIMARY KEY,reached_ms INTEGER NOT NULL,reached_equity REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS daily_loss_locks(account_key TEXT NOT NULL,report_day TEXT NOT NULL, reached_ms INTEGER NOT NULL,loss_amount REAL NOT NULL, PRIMARY KEY(account_key,report_day));
 CREATE TABLE IF NOT EXISTS risk_master_accounts(account_key TEXT PRIMARY KEY,enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),updated_ms INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS execution_solo(context TEXT NOT NULL,account_mode INTEGER NOT NULL CHECK(account_mode IN (0,2)),mode TEXT NOT NULL,brain TEXT NOT NULL,PRIMARY KEY(context,account_mode,mode));
 CREATE TABLE IF NOT EXISTS brain_configs(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS broker_commands(id TEXT PRIMARY KEY,context TEXT NOT NULL,brain TEXT NOT NULL,kind TEXT NOT NULL,created_ms INTEGER NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS broker_commands_context ON broker_commands(context,brain,created_ms);
@@ -356,6 +398,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             controls: BTreeMap::new(),
             risk_master_key:String::new(),
             risk_master_enabled:true,
+            solo:None,
             new_entries: Vec::new(),
             weights:BTreeMap::new(),
             student_policies:BTreeMap::new(),
@@ -585,6 +628,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             }
         }
         self.active_mode = Some(c.trading.mode);
+        let active_owner=self.solo_owner(t,c.trading.mode).to_owned();
         let paper_due = now.saturating_sub(self.last_paper_sample_ms) >= 1_000;
         if paper_due {self.last_paper_sample_ms=now;}
         let mut activity_samples=Vec::new();
@@ -640,8 +684,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     self.queue(db, t, &b, "close", None, p.ticket, now, None)?;
                 }
             }
-            // Do not skip other brains: evaluate them as observation-only advisors.
-            // Their ready signals can feed paper evidence but never MT5 dispatch.
+            // All brains are evaluated for analysis/Paper; only the currently
+            // selected account/mode owner can create a broker intent below.
             let genome=crate::coordinator_learning::genome(db,&b,t)?;
             let started = std::time::Instant::now();
             let base=if b.id==braintrade_domain::sniper::ID || (b.id=="system" && braintrade_domain::sniper::selected(c)) {sniper_signal.clone()}
@@ -720,8 +764,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             {
                 gates.push("المخاطرة فوق 2% تجريبية على حساب MT5 Demo فقط؛ REAL يبقى بحد 2%");
             }
-            if b.id != "system" {
-                gates.push("SHADOW / PAPER فقط: الوضع المختار يمنع هذا العقل من إرسال صفقات إلى MT5");
+            if b.id != active_owner {
+                gates.push("هذا العقل للمراقبة وPaper؛ عقل آخر هو المنفّذ المختار");
             }
             if active {
                 gates.push("أمر قيد التنفيذ أو المصالحة");
@@ -746,7 +790,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             if now.saturating_sub(last) < cooldown * 1000 {
                 gates.push("فاصل الدخول المختار");
             }
-            if risk_master && b.use_risk_limits {
+            if b.use_risk_limits && risk_master {
                 if peak>0. && (peak-t.equity)/peak*100. >= c.risk.max_drawdown_percent {
                     gates.push("حد التراجع الاختياري من أعلى Equity مرصود لهذا الحساب والرمز");
                 }
@@ -788,7 +832,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             let can = signal.ready && gates.is_empty();
             let result = json!({"signal":signal,"gates":gates,"ready":can,"decision_us":decision_us,"evaluated_ms":now});
             self.signals.insert(b.id.clone(), result.clone());
-            if can && b.id == "system" {
+            if can && b.id == active_owner {
                 let tx = db.unchecked_transaction()?;
                 tx.execute(
                     "INSERT OR IGNORE INTO broker_seen VALUES(?1,?2,?3)",

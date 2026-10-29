@@ -25,6 +25,12 @@ from institutional_controls import (
 MAGIC_MIN, MAGIC_MAX = 410600, 410617
 # Reserved 410616 belongs to the unmerged Adaptive Learner, not this build.
 OWNED_MAGICS = frozenset(range(410600, 410616)) | {410617}
+# Must match the durable Rust identity mapping. The reserved 410616 remains
+# unowned; adding SOLO must not let a brain borrow another brain's magic.
+BRAIN_MAGIC = dict(zip((
+    'system','gann','wyckoff','trend','momentum','structure','zones','dom',
+    'profile','gann_dom_profile','ces','kte','regime','generated','liquidity','trend_pullback'
+),range(410600,410616))) | {'sniper_learner':410617}
 FAST_QUEUE_TARGET_MS = 20
 # A final Core permission may not remain valid through a slow broker call.
 # Bound its age after the RPC; this is not an atomic cross-process STOP/MT5 lock.
@@ -581,7 +587,7 @@ class BrokerExecutor:
             # the broker account. Never reinterpret a saved order with new lot,
             # side, expiry, fees, risk permissions or Demo/REAL destination.
             # Mutable polling state and timing metadata are deliberately omitted.
-            immutable=('login','server','currency','target','symbol','magic',
+            immutable=('login','server','currency','target','symbol','magic','brain',
                        'kind','position','lots','signal','revision',
                        'manual_close','profit_only','expected_position_volume','expected_position_side',
                        'deviation_points','created_ms','expires_ms',
@@ -642,6 +648,8 @@ class BrokerExecutor:
                 raise ValueError('Enable Algo Trading and external Python trading in MT5; account must permit trading')
             if cmd['magic'] not in OWNED_MAGICS:
                 raise ValueError('Unknown brain ownership')
+            if 'brain' in cmd and (not isinstance(cmd['brain'],str) or BRAIN_MAGIC.get(cmd['brain'])!=cmd['magic']):
+                raise ValueError('Brain identity does not match its broker magic')
 
             symbol=cmd['symbol']; info=mt5.symbol_info(symbol); tick=mt5.symbol_info_tick(symbol)
             if info is None or tick is None:

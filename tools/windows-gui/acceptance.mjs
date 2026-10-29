@@ -143,6 +143,20 @@ try{
   await until(async()=>(await execution()).risk_master?.enabled===true);
   await status();
  });
+ await check('select and release one real Core solo owner without START',async()=>{
+  await navigate('إدارة العقول');
+  const panel=page.locator('[aria-label="اختيار العقل المنفّذ"]');await panel.waitFor();
+  const choices=panel.getByLabel('العقل للتداول المنفرد',{exact:true});
+  await until(async()=>await choices.isEnabled());await choices.selectOption('trend');
+  page.once('dialog',dialog=>dialog.accept());
+  await panel.getByRole('button',{name:'تداول بعقل واحد',exact:true}).click();
+  await until(async()=>(await status()).selected_owner==='trend');
+  await until(async()=>await panel.getByRole('button',{name:'العودة للمنسق',exact:true}).isEnabled());
+  page.once('dialog',dialog=>dialog.accept());
+  await panel.getByRole('button',{name:'العودة للمنسق',exact:true}).click();
+  await until(async()=>(await status()).selected_owner==='system');
+  await status(); // Synthetic fixture cannot send to a broker.
+ });
  await check('commission draft survives disconnect and same-account reconnect',async()=>{
   let panel=await trading();await panel.getByLabel('commission per lot',{exact:true}).fill('9');
   await stopFixture();

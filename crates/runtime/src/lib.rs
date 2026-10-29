@@ -437,7 +437,7 @@ impl Engine{
         if path.starts_with("/v1/execution") {
             let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
             let result=self.execution.route(method,path,body,&self.db,&status,now_ms())?;
-            if method=="POST"&&!matches!(path,"/v1/execution/sync"|"/v1/execution/authorize"|"/v1/execution/trades"|"/v1/execution/risk-master") {self.event("broker_execution_action",json!({"path":path,"result":result}))?;}
+            if method=="POST"&&!matches!(path,"/v1/execution/sync"|"/v1/execution/authorize"|"/v1/execution/trades"|"/v1/execution/risk-master"|"/v1/execution/solo") {self.event("broker_execution_action",json!({"path":path,"result":result}))?;}
             let mut s=self.shared.lock().unwrap();s.status.execution_enabled=self.execution.enabled(&s.status);
             return Ok(result);
         }
@@ -600,7 +600,7 @@ impl Engine{
             return Ok(result);
         }
         match(method,path){
-            ("GET","/v1/status")=>{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());let mut value=serde_json::to_value(&s.status)?;value["core_process"]=json!({"pid":std::process::id(),"instance_id":self.instance_id});Ok(value)},
+            ("GET","/v1/status")=>{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());let mut value=serde_json::to_value(&s.status)?;value["selected_owner"]=json!(self.execution.selected_owner_for_status(&s.status));value["core_process"]=json!({"pid":std::process::id(),"instance_id":self.instance_id});Ok(value)},
             ("GET","/v1/config")=>{let s=self.shared.lock().unwrap();Ok(json!({"config":s.config,"token_saved":s.token.is_some()}))},
             ("GET","/v1/learning/account-evidence")=>{
                 let (telemetry,fresh)={
@@ -656,7 +656,7 @@ impl Engine{
                     "real_login_confirmed":self.execution.is_live_target()}))?;
                 let mut s=self.shared.lock().unwrap();
                 s.status.requested_run=true;
-                s.status.message="بدأ النظام. منسّق الوضع المختار وحده يرسل أوامر إلى الحساب المرتبط الحديث.".into();
+                s.status.message="بدأ النظام. العقل المنفّذ المختار وحده يرسل الأوامر إلى الحساب المرتبط الحديث.".into();
                 s.status.refresh(now_ms());
                 Ok(serde_json::to_value(&s.status)?)
             },

@@ -70,13 +70,14 @@ pub fn sample(db:&Connection,key:&str,mode:TradingMode,id:&str,s:&Signal,now:u64
 }
 pub fn enrich(value:&mut Value,db:&Connection,key:&str,mode:TradingMode,account_mode:Option<i32>,sniper_selected:Option<bool>)->Result<()> {
     let controls=load_account(db,key,mode,account_mode)?;
+    let coordinator_active=value["selected_owner"]=="system";
     let activity_key=account_key(key,account_mode);
     value["trading_mode"]=json!(mode);
     value["activity_note"]=json!("الإشارات: رصد جاهزية بعينة واحدة/ثانية مع حذف تكرار مفتاح الإشارة. ليست عدداً لكل نبضة سعر ولا أوامر منفذة. الإحصاءات أدناه للحساب والرمز والوضع الحالي فقط.");
     for b in value["brains"].as_array_mut().into_iter().flatten() {
         let id=b["config"]["id"].as_str().unwrap_or("").to_owned();
         b["control"]=json!(controls.get(&id).copied().unwrap_or_default());
-        let eligible=id!="system" && controls.get(&id).is_none_or(|c|c.advisor) && b["return_pending"]!=true;
+        let eligible=coordinator_active && id!="system" && controls.get(&id).is_none_or(|c|c.advisor) && b["return_pending"]!=true;
         b["participates_in_coordinator"]=if mode==TradingMode::Sniper && id=="sniper_learner" && eligible {
             sniper_selected.map_or(Value::Null,|selected|json!(selected))
         }else{json!(eligible && mode==TradingMode::Expert)};

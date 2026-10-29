@@ -28,6 +28,7 @@ export async function backtestAction(action:'start'|'cancel',request?:Record<str
 export async function updateBrainControl(context:string,brain:string,mode:string,advisor:boolean,paper:boolean):Promise<unknown>{return invoke('update_brain_control',{context,brain,mode,advisor,paper})}
 export async function updateBrainPaperAll(context:string,mode:string,paper:boolean):Promise<unknown>{return invoke('update_brain_paper_all',{context,mode,paper})}
 export async function updateRiskMaster(context:string,enabled:boolean,confirmLiveLogin:string):Promise<unknown>{return invoke('update_risk_master',{context,enabled,confirmLiveLogin})}
+export async function selectSoloBrain(context:string,mode:string,brain:string):Promise<unknown>{return invoke('select_solo_brain',{context,mode,brain})}
 export type SelectedClosePosition={ticket:number;magic:number;side:string;volume:number};
 export async function closeOwnedPositions(context:string,positions:SelectedClosePosition[],profitOnly:boolean):Promise<unknown>{return invoke('close_owned_positions',{context,positions,profitOnly})}
 export async function bindExecution(target:'demo'|'live',deviationPoints:number,confirmLiveLogin:string):Promise<unknown>{return invoke('bind_execution',{target,deviationPoints,confirmLiveLogin})}

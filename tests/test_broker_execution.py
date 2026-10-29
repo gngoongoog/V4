@@ -58,6 +58,16 @@ class ExecutionTests(unittest.TestCase):
         self.cmd['signal']['key']='tick:123'
         self.assertEqual(self.send()['state'],'filled')
         self.assertEqual(len(self.mt.sends),1)
+    def test_solo_brain_ownership_matches_magic_and_is_immutable(self):
+        self.cmd.update(id='solo-trend',brain='trend',magic=410603)
+        result=self.send();self.assertEqual(result['state'],'filled',result)
+        self.assertEqual(self.mt.sends[0]['magic'],410603)
+        self.cmd['brain']='gann'
+        self.assertEqual(self.send()['state'],'unknown','A journalled order cannot change its brain identity')
+        self.cmd.update(id='solo-wrong-magic',brain='trend',magic=410601)
+        result=self.send();self.assertEqual(result['state'],'rejected',result)
+        self.assertIn('identity does not match',result['reason'])
+        self.assertEqual(len(self.mt.sends),1)
 
     def test_exact_commission_schedule_roundtrip_and_no_commission_account(self):
         for lots, fee in ((0.01,0.07),(0.10,0.70),(1.0,7.0)):

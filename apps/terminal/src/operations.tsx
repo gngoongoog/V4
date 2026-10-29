@@ -206,7 +206,7 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
  const selected=safeObject(cards.find(b=>String(safeObject(safeObject(b).config).id||'')===activeBrain));
  const selectedControl=safeObject(selected.control),selectedActivity=safeObject(selected.activity);
  return <section className="operator-card concept-brain-controls" aria-label="Brain controls">
-  <p className="concept-brain-explanation">مشاركة العقول في التحليل وPaper فقط؛ التنفيذ المنفرد للعقول الثانوية غير متاح. إيقاف Paper يمنع التجارب الجديدة، بينما تُسوّى التجارب المفتوحة؛ ولا يوقف التعلّم العام.</p>
+  <p className="concept-brain-explanation">العقل المنفّذ المختار وحده يمكنه التداول بعد START؛ البقية للتحليل أو Paper. إيقاف Paper يمنع التجارب الجديدة، بينما تُسوّى التجارب المفتوحة؛ ولا يوقف التعلّم العام.</p>
   {!actualBrains.length&&<p className="safe-note">الأسماء من قائمة العقول المرفقة بهذا الإصدار. بانتظار Core لتأكيد حالتها ونتائجها؛ الأزرار متوقفة حتى وصول البيانات.</p>}
   <div className="concept-brain-card-grid">{cards.map((b,i)=>{
     const row=safeObject(b),id=String(safeObject(row.config).id||'');

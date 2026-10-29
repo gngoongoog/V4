@@ -41,9 +41,10 @@ class DemoRealTrainingContractTests(unittest.TestCase):
     def test_coordinator_is_not_shadow_locked_and_start_remains_explicit(self):
         wrapper = self.text("crates/runtime/src/execution.rs")
         core = self.text("crates/runtime/src/lib.rs")
-        self.assertIn("system.enabled = true", wrapper)
+        self.assertIn("self.inner.refresh_solo(db,telemetry,config.trading.mode)?", wrapper)
+        self.assertIn("self.inner.sync_owner_flags(&next.telemetry,next.config.trading.mode)", wrapper)
         self.assertIn("status.requested_run && status.gateway_fresh && self.account_matches(status)", wrapper)
-        self.assertIn("منسّق الوضع المختار وحده يرسل أوامر إلى الحساب المرتبط الحديث", core)
+        self.assertIn("العقل المنفّذ المختار وحده يرسل الأوامر إلى الحساب المرتبط الحديث", core)
         self.assertIn('"broker_execution_possible":true', core)
         self.assertIn('"requires_fresh_bound_account":true', core)
         self.assertNotIn('result["start"]==true', core)

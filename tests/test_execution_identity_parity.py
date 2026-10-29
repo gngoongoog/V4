@@ -5,6 +5,7 @@ intentionally fails if the append-only magic range changes on only one side.
 """
 from pathlib import Path
 import re
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +59,11 @@ class ExecutionIdentityParity(unittest.TestCase):
         )
         self.assertEqual(tuple(names[:len(previous)]), previous,
                          "Existing magic identities must not be reordered or remapped; append new brains only")
+        sys.path.insert(0,str(ROOT / "gateway"))
+        from execution import BRAIN_MAGIC
+        expected={name:rust_base+i for i,name in enumerate(names[:16])}
+        expected["sniper_learner"]=410617
+        self.assertEqual(BRAIN_MAGIC,expected,"Gateway brain-to-magic mapping must match Rust exactly")
 
 
 if __name__ == "__main__":
