@@ -240,6 +240,34 @@ CREATE TABLE IF NOT EXISTS wyckoff_observations(context TEXT NOT NULL,timeframe 
             .as_ref()
             .filter(|t| t.connected && s.gateway_fresh && t.symbol == c.symbol);
         match (method, path) {
+            // These are the same account-scoped, closed MT5 frames already
+            // collected for Studio. Reading a chart never schedules a new MT5
+            // request or enters the latency-sensitive Sniper pulse path.
+            ("GET", "/v1/studio/chart-frames") => {
+                let Some(t) = t.filter(|t| t.login>0 && !t.server.is_empty()
+                    && !t.symbol.is_empty() && !t.currency.is_empty()) else {
+                    return Ok(json!({"schema":"chart-frames-v1","ready":false,"frames":{}}));
+                };
+                let key=context(t);
+                let mut frames=serde_json::Map::new();
+                for tf in ["M30","H1","H4","D1"] {
+                    let Some(frame)=self.frames.get(&(key.clone(),tf.to_owned())) else {continue};
+                    // Frames loaded from SQLite were validated at capture;
+                    // revalidate against that capture so older closed history
+                    // remains displayable, while identifying it as historical.
+                    if !frame.error.is_empty() || frame.context()!=key || frame.timeframe!=tf
+                        || frame.captured_ms>now.saturating_add(2000)
+                        || frame.validate(frame.captured_ms).is_err() {continue}
+                    let start=frame.bars.len().saturating_sub(180);
+                    let bars:Vec<_>=frame.bars[start..].iter().map(|bar|bar.candle.clone()).collect();
+                    frames.insert(tf.to_ascii_lowercase(),json!({"bars":bars,
+                        "captured_ms":frame.captured_ms,"live":frame.live(now)}));
+                }
+                Ok(json!({"schema":"chart-frames-v1","ready":true,
+                    "account":{"login":t.login,"server":t.server,"symbol":t.symbol,
+                        "currency":t.currency,"trade_mode":t.account_trade_mode},
+                    "frames":frames,"read_only":true}))
+            }
             ("GET", "/v1/gateway/research/request") => {
                 let poll_ms = if c.trading.mode == trading::TradingMode::Sniper {
                     250
@@ -480,5 +508,38 @@ mod tests {
         let o: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(o["state"], "scored");
         assert!((o["net_per_lot"].as_f64().unwrap() - 137.).abs() < 1e-7);
+    }
+    #[test]
+    fn chart_frames_are_closed_account_scoped_and_explicitly_historical() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let (mut frame,t,mut config)=fixture();
+        let now=frame.captured_ms;
+        config.symbol=t.symbol.clone();
+        frame.timeframe="H1".into();
+        frame.current_open=(now/1000/3600)*3600;
+        for (i,bar) in frame.bars.iter_mut().enumerate() {
+            bar.candle.time=frame.current_open-(110-i as u64)*3600;
+        }
+        frame.validate(now).unwrap();
+        service.frames.insert((context(&t),"H1".into()),frame.clone());
+        let mut status=Status{gateway_fresh:true,telemetry:Some(t.clone()),..Default::default()};
+        let response=service.route("GET","/v1/studio/chart-frames",b"",&db,&config,&status,now).unwrap();
+        assert_eq!(response["ready"],true);
+        assert_eq!(response["account"]["login"],1);
+        assert_eq!(response["frames"]["h1"]["bars"].as_array().unwrap().len(),110);
+        assert_eq!(response["frames"]["h1"]["live"],true);
+        let historical=service.route("GET","/v1/studio/chart-frames",b"",&db,&config,&status,now+121_000).unwrap();
+        assert_eq!(historical["frames"]["h1"]["live"],false);
+        assert_eq!(historical["frames"]["h1"]["bars"].as_array().unwrap().len(),110);
+        status.telemetry.as_mut().unwrap().login=2;
+        let other=service.route("GET","/v1/studio/chart-frames",b"",&db,&config,&status,now).unwrap();
+        assert!(other["frames"].as_object().unwrap().is_empty(),"never expose the previous account's candles");
+        status.gateway_fresh=false;
+        assert_eq!(service.route("GET","/v1/studio/chart-frames",b"",&db,&config,&status,now).unwrap()["ready"],false);
+        frame.bars[0].candle.open=-1.;
+        service.frames.insert((context(&t),"H1".into()),frame);
+        status.gateway_fresh=true;status.telemetry=Some(t);
+        assert!(service.route("GET","/v1/studio/chart-frames",b"",&db,&config,&status,now).unwrap()["frames"].as_object().unwrap().is_empty());
     }
 }

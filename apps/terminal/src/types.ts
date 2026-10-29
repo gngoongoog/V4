@@ -1,5 +1,5 @@
 export type Candle={time:number;open:number;high:number;low:number;close:number;tick_volume:number};
-export type Market={m1?:Candle[];m5?:Candle[];m15?:Candle[]};
+export type Market={m1?:Candle[];m5?:Candle[];m15?:Candle[];m30?:Candle[];h1?:Candle[];h4?:Candle[];d1?:Candle[]};
 export type Position={ticket:number;symbol:string;side:string;volume:number;price_open:number;price_current:number;profit:number;sl:number;tp:number};
 export type Telemetry={connected:boolean;error?:string;demo:boolean;account_trade_mode?:number|null;login:number;server:string;currency:string;symbol:string;balance:number;equity:number;point?:number|null;margin?:number|null;margin_free?:number|null;leverage?:number|null;minimum_lot_margin?:number|null;volume_min?:number|null;volume_step?:number|null;volume_max?:number|null;today_net?:number|null;today_deals?:number|null;tick_age_ms?:number|null;quote_time_ms?:number|null;source_quote_time_ms?:number|null;bid?:number|null;ask?:number|null;positions:Position[];market?:Market|null};
 export type BrainStatus={regime?:string;action?:string;current?:boolean;reason?:string;gates?:string[];opportunities?:unknown};

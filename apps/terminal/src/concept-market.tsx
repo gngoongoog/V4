@@ -2,14 +2,15 @@ import {ArrowDown,ArrowUp,BriefcaseBusiness,ChartCandlestick,Clock,RefreshCw,Set
 import TradingChart from './chart';
 import {GoldSymbol} from './gold-symbol';
 import type {ChartFrame} from './chart';
+import type {ChartFrameMeta} from './chart-history';
 import {money,num,signed,up,valid} from './format';
-import type {PageId,Status,Telemetry,Theme} from './types';
+import type {Market,PageId,Status,Telemetry,Theme} from './types';
 
 type Props={account:Telemetry|null;status:Status|null;quoteFresh:boolean;preview:boolean;busy:boolean;native:boolean;
- frame:ChartFrame;onFrameChange:(frame:ChartFrame)=>void;theme:Theme;
+ frame:ChartFrame;onFrameChange:(frame:ChartFrame)=>void;theme:Theme;market?:Market|null;frameMeta?:ChartFrameMeta;
  open:(page:PageId)=>void;onTradingSettings:()=>void;onStart:()=>void;onStop:()=>void};
 
-export function ConceptMarketDesk({account,status,quoteFresh,preview,busy,native,frame,onFrameChange,theme,open,onTradingSettings,onStart,onStop}:Props){
+export function ConceptMarketDesk({account,status,quoteFresh,preview,busy,native,frame,onFrameChange,theme,market,frameMeta,open,onTradingSettings,onStart,onStop}:Props){
  const bid=(preview||quoteFresh)&&valid(account?.bid)?account.bid:null;
  const ask=(preview||quoteFresh)&&valid(account?.ask)?account.ask:null;
  const spread=bid!==null&&ask!==null&&ask>=bid?ask-bid:null;
@@ -25,7 +26,7 @@ export function ConceptMarketDesk({account,status,quoteFresh,preview,busy,native
    <div><span className={'concept-led '+(quoteFresh&&!preview?'on':'')}/><span>حالة السوق<strong>{quoteFresh?'سعر حديث':'غير مؤكدة'}</strong><small>{quoteFresh?'تيك MT5 حديث':'بانتظار سعر حديث'}</small></span></div>
   </div>
   <div className="concept-market-layout">
-   <TradingChart market={account?.market} symbol={symbol} quote={bid??undefined} frame={frame} onFrameChange={onFrameChange} theme={theme}/>
+   <TradingChart market={market??account?.market} symbol={symbol} quote={bid??undefined} frame={frame} onFrameChange={onFrameChange} theme={theme} frameMeta={frameMeta} preview={preview}/>
    <section className="panel concept-order-panel">
     <div className="panel-title"><b>{symbol} - التداول المباشر</b><button type="button" title="فتح إعدادات التداول" onClick={onTradingSettings}><Settings size={16}/></button></div>
     <div className="concept-manual-tabs"><button type="button" disabled title="أوامر الشراء اليدوية غير متاحة في Core الحالي"><ArrowUp size={16}/> شراء</button><button type="button" disabled title="أوامر البيع اليدوية غير متاحة في Core الحالي"><ArrowDown size={16}/> بيع</button></div>

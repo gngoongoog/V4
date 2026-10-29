@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {reportSeries} from '../src/report-series.ts';
 import {journalCsv} from '../src/journal-export.ts';
 import {BRAIN_DIRECTORY} from '../src/brain-catalog.ts';
+import {chartHistory} from '../src/chart-history.ts';
 
 const row=(id,net,latestDeal='2026-10-28 12:00:00 UTC')=>({
  positionId:id,symbol:'XAUUSD',side:'BUY',status:'CLOSED',opened:'2026-10-28 11:00:00 UTC',
@@ -28,4 +29,17 @@ test('offline brain directory lists exactly the secondary identities bundled in 
  assert(inventory,'Core brain inventory was not found');
  const ids=[...inventory[1].matchAll(/\("([a-z_]+)",/g)].map(m=>m[1]).filter(id=>id!=='system').sort();
  assert.deepEqual(BRAIN_DIRECTORY.map(item=>item[0]).sort(),ids);
+});
+test('extra chart candles are scoped to the current account and validated before display',()=>{
+ const now=1_800_000_000_000, account={connected:true,login:7,server:'Demo',symbol:'XAUUSD',currency:'USD',account_trade_mode:0};
+ const bars=[1,2,3].map(i=>({time:Math.floor(now/1000)-i*3600,open:100,high:102,low:99,close:101,tick_volume:12})).reverse();
+ const row={schema:'chart-frames-v1',ready:true,read_only:true,account:{login:7,server:'Demo',symbol:'XAUUSD',currency:'USD',trade_mode:0},frames:{h1:{bars,captured_ms:now,live:true}}};
+ assert.equal(chartHistory(row,account,now).market.h1.length,3);
+ assert.equal(chartHistory({...row,frames:{h1:{bars,captured_ms:now-121000,live:false}}},account,now).meta.h1.live,false);
+ assert.equal(chartHistory({...row,frames:{h1:{bars,captured_ms:now-121000,live:true}}},account,now).meta.h1.live,false,'Cached live flags must expire');
+ assert.deepEqual(chartHistory(row,{...account,login:8},now).market,{});
+ assert.deepEqual(chartHistory(row,{...account,account_trade_mode:2},now).market,{});
+ assert.deepEqual(chartHistory({...row,frames:{h1:{bars:[...bars].reverse(),captured_ms:now,live:true}}},account,now).market,{});
+ assert.deepEqual(chartHistory({...row,frames:{h1:{bars:[{...bars[0],low:104},...bars.slice(1)],captured_ms:now,live:true}}},account,now).market,{});
+ assert.deepEqual(chartHistory({...row,frames:{h1:{bars,captured_ms:now+3000,live:true}}},account,now).market,{});
 });

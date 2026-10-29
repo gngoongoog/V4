@@ -6,6 +6,7 @@ import {GoldSymbol} from './gold-symbol';
 import {ConceptMarketDesk} from './concept-market';
 import TradingChart from './chart';
 import type {ChartFrame} from './chart';
+import {chartHistory} from './chart-history';
 import {PanelReadFence} from './panel-guard';
 import SystemHealth,{buildHealth} from './system-health';
 import EnterpriseSupervisor from './enterprise-supervisor';
@@ -125,6 +126,7 @@ function ConnectionLine({connectedNow,preview}:{connectedNow:boolean;preview:boo
 export default function Terminal(){
  const [page,setPage]=useState<PageId>('dashboard');const [theme,setTheme]=useState<Theme>(()=>(localStorage.getItem('bt-concept4-theme') as Theme)||'light');
  const [chartFrame,setChartFrame]=useState<ChartFrame>('m15');
+ const [chartSlot,setChartSlot]=useState<{scope:string;report:unknown}|null>(null);
  const [compact,setCompact]=useState(false);const [preview,setPreview]=useState(false);const [status,setStatus]=useState<Status|null>(null);
  const [online,setOnline]=useState(false);const [busy,setBusy]=useState(false);const [error,setError]=useState('');const [notice,setNotice]=useState('');
  const [pagePanel,setPagePanel]=useState<{scope:string;data:unknown}|null>(null);
@@ -218,6 +220,22 @@ export default function Terminal(){
      if(scopedGeneration.current.isCurrent(ticket))setBrainReport(null);
    }
  };
+ useEffect(()=>{
+  if(preview||!hasTauri()||!feed.broker||(page!=='dashboard'&&page!=='trading')||
+     !(['m30','h1','h4','d1'] as ChartFrame[]).includes(chartFrame))return;
+  let active=true;let reading=false;
+  const load=()=>{
+   if(!active||reading||document.visibilityState!=='visible')return;
+   reading=true;const ticket=scopedGeneration.current.beginRead('chart-history');
+   void readPanel('/v1/studio/chart-frames').then(report=>{
+    if(active&&scopedGeneration.current.isCurrent(ticket))setChartSlot({scope:contextKey,report});
+   }).catch(()=>{
+    if(active&&scopedGeneration.current.isCurrent(ticket))setChartSlot(null);
+   }).finally(()=>{reading=false});
+  };
+  load();const timer=window.setInterval(load,5000);
+  return()=>{active=false;window.clearInterval(timer)};
+ },[contextKey,preview,page,feed.broker,chartFrame]);
  useEffect(()=>{document.body.dataset.theme=theme;localStorage.setItem('bt-concept4-theme',theme)},[theme]);
  useEffect(()=>{const t=setInterval(()=>setClock(new Date().toLocaleTimeString('en-GB',{hour12:false})),1000);setClock(new Date().toLocaleTimeString('en-GB'));return()=>clearInterval(t)},[]);
  useEffect(()=>{
@@ -425,6 +443,8 @@ export default function Terminal(){
  const t=display?.telemetry;const trustworthy=preview||feed.quote;
  const accountFresh=preview||feed.broker;
  const account=accountFresh?t:null;const currency=account?.currency||'USD';const positions=account?.positions||[];
+ const extraChart=!preview&&feed.broker&&chartSlot?.scope===contextKey?chartHistory(chartSlot.report,status?.telemetry??null,Date.now()):{market:{},meta:{}};
+ const chartMarket=account?{...account.market,...extraChart.market}:null;
  const buys=positions.filter(p=>up(p.side)).length;const sells=positions.length-buys;
  const brokerResults=preview||!feed.broker?null:brokerEvidence(brainReport,status);
  const win=preview?76:brokerResults?.winRate??null;
@@ -783,7 +803,7 @@ export default function Terminal(){
   <div className="concept-top-brand" data-tauri-drag-region><span className="concept-gold-mark" aria-hidden="true" style={{backgroundImage:`url(${concept4Reference})`}}/><div><strong>BRAINTRADE V4</strong><small>AI TRADING SYSTEM</small></div><span className="concept-edition">Concept 4</span></div>
   <div className="concept-top-actions">
    <button type="button" className="concept-symbol" title="إعدادات رمز التداول" onClick={()=>open('settings')}><GoldSymbol className="concept-gold-symbol"/><b>{account?.symbol||String(safeConfig?.symbol||'XAUUSD')}</b><ChevronDown size={15}/></button>
-   <label className="concept-frame"><span className="sr-only">الإطار الزمني للشارت</span><select value={chartFrame} onChange={e=>setChartFrame(e.target.value as ChartFrame)}><option value="m1">M1</option><option value="m5">M5</option><option value="m15">M15</option></select></label>
+   <label className="concept-frame"><span className="sr-only">الإطار الزمني للشارت</span><select value={chartFrame} onChange={e=>setChartFrame(e.target.value as ChartFrame)}>{(['m1','m5','m15','m30','h1','h4','d1'] as const).map(tf=><option key={tf} value={tf}>{tf.toUpperCase()}</option>)}</select></label>
    <button type="button" className="concept-top-icon" title="الشارت" onClick={()=>open('dashboard')}><ChartCandlestick size={19}/></button>
    <button type="button" className="concept-connection" onClick={()=>open('execution')}><span className={'concept-led '+(accountFresh&&!preview?'on':'')}/><span><b>{preview?'معاينة':accountFresh?'متصل بالمنصة':'غير متصل'}</b><small>MT5 | {account?(account.demo?'Demo Account':'Real Account'):'—'}</small></span></button>
    <button type="button" className="concept-top-icon" title="أحداث النظام" onClick={()=>open('events')}><Bell size={20}/></button>
@@ -823,7 +843,7 @@ export default function Terminal(){
       <button type="button" className="kpi" onClick={()=>open('execution')}><div className="kpi-glyph"><Wifi/></div><div className="kpi-copy"><div className="kpi-ar">الاتصال</div><strong>{preview?'معاينة':accountFresh?'متصل':'غير متصل'}</strong><div className="kpi-footer">{account?(account.demo?'MT5 · Demo':'MT5 · Real'):'بانتظار MT5'}</div></div><span className={'concept-led '+(accountFresh&&!preview?'on':'')}/></button>
      </div>
      <div className="hero-grid">
-      <TradingChart market={account?.market} symbol={account?.symbol||'XAUUSD'} quote={(preview||feed.quote)?account?.bid??undefined:undefined} frame={chartFrame} onFrameChange={setChartFrame} theme={theme}/>
+      <TradingChart market={chartMarket} symbol={account?.symbol||'XAUUSD'} quote={(preview||feed.quote)?account?.bid??undefined:undefined} frame={chartFrame} onFrameChange={setChartFrame} theme={theme} frameMeta={extraChart.meta} preview={preview}/>
       <section className="panel ops-panel">
        <div className="concept-quick-title"><strong>{account?.symbol||'XAUUSD'} - التحكم السريع</strong><button type="button" title="إعدادات التداول" onClick={()=>open('trading')}><Settings size={17}/></button></div>
        <div className="ops-tabs" role="tablist">{[['trade','التداول المباشر'],['orders','إدارة الأوامر'],['advanced','متداول متقدم']].map(([key,label])=><button key={key} role="tab" aria-selected={opsTab===key} className={opsTab===key?'active':''} onClick={()=>setOpsTab(key as typeof opsTab)}>{label}</button>)}</div>
@@ -880,7 +900,7 @@ export default function Terminal(){
            {settingsStale&&<button disabled={!safeConfig||busy} onClick={()=>{if(safeConfig){setSettingsEdit(safeConfig);settingsSource.current=JSON.stringify(safeConfig);settingsDirty.current=false;setSettingsStale(false)}}}>استرجاع الإعدادات المحفوظة</button>}
            <button className="save-button" disabled={busy||preview||!activeSettingsEdit} onClick={()=>void saveGeneral()}>حفظ وإعادة ربط MT5</button>
           </div>:
-        page==='trading'||page==='sniper'?<div className="feature-zone">{page==='trading'&&<ConceptMarketDesk account={account??null} status={status} quoteFresh={feed.quote} preview={preview} busy={busy} native={hasTauri()} frame={chartFrame} onFrameChange={setChartFrame} theme={theme} open={open} onTradingSettings={()=>document.querySelector('[aria-label="Coordinator and costs"]')?.scrollIntoView({behavior:"smooth",block:"start"})} onStart={requestStart} onStop={requestStop}/>}<div className="live-indicator"><strong>Sniper Priority</strong><span>{display?.analysis?.regime||'UNAVAILABLE'}</span><b>{display?.analysis?.action||'WAIT'}</b></div><p>العقل المنفّذ الوحيد يختاره Core، وأي تبديل أثناء التشغيل يحتاج أوامر MT5 مُسوّاة وعدم وجود مراكز مفتوحة.</p>{page==='sniper'&&<><QuoteClockEvidence status={status} preview={preview}/><SniperDiagnosis key={viewScope} status={status} preview={preview}/><SniperTickEvidence status={!preview&&feed.broker?status:null} report={activeSniperAudit} preview={preview} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperTickAudit');void readPanel('/v1/execution/sniper-tick-audit').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:null})})}}/><SniperFrozenOperations status={!preview&&feed.broker?status:null} page={pageData} report={activeSniperFrozen} preview={preview} disabled={busy} onAction={runFrozenSniper} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperFrozen');void readPanel('/v1/execution/frozen-sniper').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperFrozenSlot({scope:viewScope,report:null})})}}/><SniperClassicOperations status={!preview&&feed.broker?status:null} page={pageData} report={activeClassicFrozen} preview={preview} disabled={busy} onAction={runFrozenClassic} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('classicFrozen');void readPanel('/v1/execution/frozen-classic').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setClassicFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setClassicFrozenSlot({scope:viewScope,report:null})})}}/></>}<ReconciliationDiagnostics key={viewScope} preview={preview}/><TradingSettingsOperations source={pageData} brokerPoint={status?.telemetry?.point} key={JSON.stringify([page,draftAccountKey,preview])} disabled={busy||preview||!feed.broker} armed={status?.requested_run===true} apply={runSaveTrading}/><div className="quick-ops"><button disabled={busy||preview} onClick={()=>void runHandoff(true)}>تفعيل أولوية القناص</button><button disabled={busy||preview} onClick={()=>void runHandoff(false)}>تحويل التنفيذ للبديل</button></div><div className="safe-note">هذه الأزرار تستدعي قواعد التحويل الفعلية في Rust؛ لا يوجد تجاوز لفحوصات المحرك.</div><EnterpriseSupervisor preview={preview} key={contextKey} armed={status?.requested_run===true} onSave={runSaveSupervisor}/><Table rows={rows}/></div>:
+        page==='trading'||page==='sniper'?<div className="feature-zone">{page==='trading'&&<ConceptMarketDesk account={account??null} status={status} quoteFresh={feed.quote} preview={preview} busy={busy} native={hasTauri()} frame={chartFrame} onFrameChange={setChartFrame} theme={theme} market={chartMarket} frameMeta={extraChart.meta} open={open} onTradingSettings={()=>document.querySelector('[aria-label="Coordinator and costs"]')?.scrollIntoView({behavior:"smooth",block:"start"})} onStart={requestStart} onStop={requestStop}/>}<div className="live-indicator"><strong>Sniper Priority</strong><span>{display?.analysis?.regime||'UNAVAILABLE'}</span><b>{display?.analysis?.action||'WAIT'}</b></div><p>العقل المنفّذ الوحيد يختاره Core، وأي تبديل أثناء التشغيل يحتاج أوامر MT5 مُسوّاة وعدم وجود مراكز مفتوحة.</p>{page==='sniper'&&<><QuoteClockEvidence status={status} preview={preview}/><SniperDiagnosis key={viewScope} status={status} preview={preview}/><SniperTickEvidence status={!preview&&feed.broker?status:null} report={activeSniperAudit} preview={preview} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperTickAudit');void readPanel('/v1/execution/sniper-tick-audit').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:null})})}}/><SniperFrozenOperations status={!preview&&feed.broker?status:null} page={pageData} report={activeSniperFrozen} preview={preview} disabled={busy} onAction={runFrozenSniper} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperFrozen');void readPanel('/v1/execution/frozen-sniper').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperFrozenSlot({scope:viewScope,report:null})})}}/><SniperClassicOperations status={!preview&&feed.broker?status:null} page={pageData} report={activeClassicFrozen} preview={preview} disabled={busy} onAction={runFrozenClassic} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('classicFrozen');void readPanel('/v1/execution/frozen-classic').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setClassicFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setClassicFrozenSlot({scope:viewScope,report:null})})}}/></>}<ReconciliationDiagnostics key={viewScope} preview={preview}/><TradingSettingsOperations source={pageData} brokerPoint={status?.telemetry?.point} key={JSON.stringify([page,draftAccountKey,preview])} disabled={busy||preview||!feed.broker} armed={status?.requested_run===true} apply={runSaveTrading}/><div className="quick-ops"><button disabled={busy||preview} onClick={()=>void runHandoff(true)}>تفعيل أولوية القناص</button><button disabled={busy||preview} onClick={()=>void runHandoff(false)}>تحويل التنفيذ للبديل</button></div><div className="safe-note">هذه الأزرار تستدعي قواعد التحويل الفعلية في Rust؛ لا يوجد تجاوز لفحوصات المحرك.</div><EnterpriseSupervisor preview={preview} key={contextKey} armed={status?.requested_run===true} onSave={runSaveSupervisor}/><Table rows={rows}/></div>:
         page==='execution'?<div className="feature-zone"><ExecutionBindingOperations source={pageData} key={viewScope} telemetry={status?.telemetry??null} ready={!preview&&trustworthy} armed={status?.requested_run===true} disabled={busy||preview} onBind={runBrokerBind}/>
         <ExecutionQualityOperations status={!preview&&feed.broker?status:null} report={executionQuality} disabled={preview||busy}
           onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('executionQuality');void readPanel('/v1/execution/quality').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setExecutionQuality(unwrap(v))}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setExecutionQuality(null)})}}/>
