@@ -54,7 +54,7 @@ export function MicroCapitalOperations({status,risk,portfolio,monitor,armed,disa
    </label>
    <label>أقل لوت عند الوسيط<strong>{shown(view.minimumLot,4)}</strong></label>
    <label>الهامش الحر الفعلي<strong>{shown(view.freeMargin)} {view.currency}</strong></label>
-   <label>هامش أقل لوت من MT5<strong>{shown(view.minimumLotMargin)} {view.currency}</strong></label>
+   <label>هامش أقل لوت من MT5 (الأعلى بين الشراء والبيع)<strong>{shown(view.minimumLotMargin)} {view.currency}</strong></label>
    <label>هامش أقل لوت عند رافعة المقارنة (تقريبي)<strong>{shown(view.scenarioMargin)} {view.currency}</strong></label>
    <label>ميزانية وقف الصفقة من إعداد Core (تقديرية)<strong>{shown(view.budget)} {view.currency} {view.budgetPercent===null?'':`(${view.budgetPercent}%)`}</strong></label>
   </div>

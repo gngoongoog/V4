@@ -161,6 +161,16 @@ fn contiguous_forward_horizon(bar: u64, future: &[&FrameBar], timeframe: &str) -
 // Validate stored labels again AT READ TIME. Legacy/out-of-order and incomplete
 // records must never become artificial forward wins or weight changes.
 // This is a frozen price/cost estimate, NEVER an MT5 fill or booked broker PnL.
+fn valid_pending_forward_payload(p: &Value) -> bool {
+    if !matches!(p["side"].as_i64(), Some(-1 | 1)) { return false; }
+    for (name, positive) in [("point",true),("entry",true),("tick",true),
+        ("profit",true),("loss",true),("spread",false),("slippage",false),("commission",false)] {
+        let Some(value)=p[name].as_f64() else { return false; };
+        if !value.is_finite() || (positive && value<=0.) || (!positive && value<0.) { return false; }
+    }
+    true
+}
+
 fn verified_forward_feedback(
     bar: u64, payload: &Value, outcome: &Value, now: u64,
 ) -> Option<(f64, f64, u64)> {
@@ -437,11 +447,14 @@ fn selected_weight(forward_global:Stats,forward_regime:Stats,broker_global:Stats
 
 fn execution_history_quality(db:&Connection,key:&str,t:&Telemetry,now:u64)->Result<(f64,u64)> {
     if !table_exists(db,"broker_commands")? { return Ok((0.5,0)); }
-    let mut st=db.prepare("SELECT created_ms,result FROM broker_commands WHERE context=?1 AND brain='system' AND kind='open' AND result<>'{}' ORDER BY created_ms DESC LIMIT 200")?;
-    let rows=st.query_map([key],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let expected_target=match (t.demo,t.account_trade_mode) {(true,Some(0))=>"demo",(false,Some(2))=>"live",_=>return Ok((0.5,0))};
+    let mut st=db.prepare("SELECT created_ms,payload,result FROM broker_commands WHERE context=?1 AND brain='system' AND kind='open' AND result<>'{}' ORDER BY created_ms DESC LIMIT 200")?;
+    let rows=st.query_map([key],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let point=t.point.filter(|v|v.is_finite()&&*v>0.).unwrap_or(0.);
     let(mut weighted,mut mass,mut samples)=(0.,0.,0u64);
-    for(created_ms,raw)in rows {
+    for(created_ms,request,raw)in rows {
+        let Ok(command)=serde_json::from_str::<Value>(&request) else {continue;};
+        if command["target"]!=expected_target {continue;}
         let Ok(result)=serde_json::from_str::<Value>(&raw) else { continue; };
         let state=result["state"].as_str().unwrap_or("");
         let base=match state {
@@ -484,7 +497,7 @@ fn sniper_executed_target_matches(cmd: &Value, result: &Value) -> bool {
                 && matches!(side,-1|1) =>
         {
             let distance=(tp-entry)*side as f64;
-            distance>0. && (distance-expected).abs()<=tick*1.01
+            distance>0. && (distance-expected).abs()<=1e-8_f64.max(tick*1e-6)
         }
         _=>false,
     }
@@ -498,6 +511,7 @@ fn open_learning_commands(db: &Connection, key: &str) -> Result<Vec<(String, Str
         // Once a specialist row exists, it is excluded from future scans.
         "SELECT payload,result FROM broker_commands c
          WHERE c.context=?1 AND c.kind='open'
+         AND CASE WHEN json_valid(c.payload) THEN json_extract(c.payload,'$.target') ELSE '' END='demo'
          AND CAST(json_extract(c.result,'$.deal') AS INTEGER)>0
          AND (
              NOT EXISTS(SELECT 1 FROM broker_learning_processed p
@@ -538,6 +552,9 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry, observed_ms:u64) ->
     let key = context(t);
     for (raw_cmd,raw_result) in open_learning_commands(db,&key)? {
         let cmd:Value=serde_json::from_str(&raw_cmd)?;
+        // The same server/login tuple can theoretically exist in another MT5
+        // mode. Only an explicitly Demo-bound originating intent is admissible.
+        if cmd["target"]!="demo" {continue;}
         let result:Value=serde_json::from_str(&raw_result)?;
         let Some(open_deal)=result["deal"].as_u64().filter(|v|*v>0) else {continue;};
         let position_id:Option<u64>=db.query_row("SELECT position_id FROM broker_deals WHERE context=?1 AND ticket=?2",params![&key,open_deal],|r|r.get(0)).optional()?;
@@ -734,6 +751,12 @@ impl Learner {
         sync_demo_broker_evidence(db, t, now)?;
         let mut out = BTreeMap::new();
         let key = context(t);
+        // Preserve existing Demo evidence. New non-Demo forward observations
+        // use a distinct source; Demo broker outcomes never weight REAL.
+        let demo=t.demo && t.account_trade_mode==Some(0);
+        let source_context=if demo {key.clone()} else {
+            serde_json::to_string(&("broker-mode-isolated-v1",&key,t.account_trade_mode))?
+        };
         let mut intelligence = execution::intelligence_context(t, frames, now);
         let(history_quality,history_samples)=execution_history_quality(db,&key,t,now)?;
         intelligence.execution_history_quality=history_quality;
@@ -743,7 +766,7 @@ impl Learner {
         }
 
         for b in brains {
-            let source = source_key(&key, c.trading.mode, &b.id, &b.timeframe, &b.report_id)?;
+            let source = source_key(&source_context, c.trading.mode, &b.id, &b.timeframe, &b.report_id)?;
             let Some(bars) = frames.get(&b.timeframe).filter(|v| v.len() >= 100) else {
                 continue;
             };
@@ -762,7 +785,15 @@ impl Learner {
                 };
 
                 for (old, raw) in rows {
-                    let p: Value = serde_json::from_str(&raw)?;
+                    let p: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+                    if !valid_pending_forward_payload(&p) {
+                        // Preserve original payload, but quarantine the label so
+                        // damaged/legacy rows cannot panic or train the model.
+                        let invalid=json!({"state":"invalid","reason":"Incomplete pending forward sample"}).to_string();
+                        db.execute("UPDATE coordinator_samples SET outcome=?3 WHERE source=?1 AND bar=?2 AND outcome IS NULL",params![&source,old,&invalid])?;
+                        db.execute("UPDATE coordinator_counterfactuals SET outcome=?3 WHERE source=?1 AND bar=?2 AND outcome IS NULL",params![&source,old,&invalid])?;
+                        continue;
+                    }
                     let future: Vec<_> = bars.iter().filter(|b| b.candle.time > old).collect();
                     let result = if bars[0].candle.time > old {
                         Some(json!({"state":"expired","reason":"Forward horizon not retained"}))
@@ -819,9 +850,11 @@ impl Learner {
 
             // Broker history can mature between completed bars, so weights are refreshed on
             // every observe call rather than only when this member's timeframe advances.
+            let broker_global=if demo {broker_stats(db,&source,None,now)?}else{Stats::default()};
+            let broker_regime=if demo {broker_stats(db,&source,Some(&intelligence.regime),now)?}else{Stats::default()};
             let mut weight=selected_weight(
                 forward_stats(db,&source,None,now)?,forward_stats(db,&source,Some(&intelligence.regime),now)?,
-                broker_stats(db,&source,None,now)?,broker_stats(db,&source,Some(&intelligence.regime),now)?,&intelligence);
+                broker_global,broker_regime,&intelligence);
             weight.context_key=braintrade_domain::student::context_key(&intelligence);
             if c.trading.demo_flexible && t.demo && t.account_trade_mode==Some(0) {
                 (weight.context_samples,weight.context_reward,weight.context_confidence,
@@ -885,6 +918,16 @@ impl Learner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_forward_payload_requires_real_finite_inputs() {
+        assert!(!valid_pending_forward_payload(&json!({})));
+        let mut p=json!({"side":1,"point":0.01,"entry":2000.,"tick":0.01,
+            "profit":1.,"loss":1.,"spread":0.1,"slippage":0.,"commission":7.});
+        assert!(valid_pending_forward_payload(&p));
+        p["tick"]=json!(0.);
+        assert!(!valid_pending_forward_payload(&p));
+    }
 
     // Synthetic test helper: stamp receipts as if Core inserted their first
     // admission in the same SQLite transaction. Never used by production.
@@ -994,7 +1037,7 @@ mod tests {
         let widened=json!({"request":{"price":2000.0,"tp":2000.75}});
         let reversed=json!({"request":{"price":2000.0,"tp":1999.50}});
         assert!(sniper_executed_target_matches(&cmd,&exact));
-        assert!(sniper_executed_target_matches(&cmd,&rounded));
+        assert!(!sniper_executed_target_matches(&cmd,&rounded));
         assert!(!sniper_executed_target_matches(&cmd,&widened));
         assert!(!sniper_executed_target_matches(&cmd,&reversed));
         assert!(!sniper_executed_target_matches(&cmd,&json!({"request":{"price":2000.0}})));
@@ -1049,6 +1092,43 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    #[test]
+    fn incomplete_pending_row_is_quarantined_without_panicking() {
+        let db=Connection::open_in_memory().unwrap();let mut learner=Learner::new(&db).unwrap();
+        let now=1_800_000_000_000_u64;
+        let t=Telemetry{demo:true,account_trade_mode:Some(0),login:1,server:"Test".into(),
+            symbol:"XAUUSD".into(),currency:"USD".into(),..Default::default()};
+        let config=Config::default();
+        let brain=BrainConfig{id:"trend".into(),..Default::default()};
+        let frame=bars(now/1000-60);
+        let old=frame[100].candle.time;
+        let source=source_key(&context(&t),config.trading.mode,&brain.id,&brain.timeframe,&brain.report_id).unwrap();
+        db.execute("INSERT INTO coordinator_samples VALUES(?1,?2,'{}',NULL)",params![source,old]).unwrap();
+        let frames=BTreeMap::from([(brain.timeframe.clone(),frame)]);
+        learner.observe(&db,&t,&config,&[brain],&frames,false,now).unwrap();
+        let (payload,outcome):(String,String)=db.query_row("SELECT payload,outcome FROM coordinator_samples WHERE source=?1 AND bar=?2",params![source,old],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(payload,"{}");
+        assert_eq!(serde_json::from_str::<Value>(&outcome).unwrap()["state"],"invalid");
+    }
+
+    #[test]
+    fn identical_account_tuple_keeps_new_demo_and_real_forward_samples_apart() {
+        let db=Connection::open_in_memory().unwrap();let mut learner=Learner::new(&db).unwrap();
+        let now=1_800_000_000_000_u64;let config=Config::default();
+        let brain=BrainConfig{id:"trend".into(),..Default::default()};
+        let frame=bars(now/1000-60);let price=frame.last().unwrap().candle.close;
+        let mut t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),login:1,server:"Same".into(),
+            symbol:config.symbol.clone(),currency:"USD".into(),point:Some(0.01),tick_size:Some(0.01),
+            tick_value_profit:Some(1.),tick_value_loss:Some(1.),tick_age_ms:Some(0),quote_time_ms:Some(now),
+            bid:Some(price),ask:Some(price+0.01),..Default::default()};
+        let frames=BTreeMap::from([(brain.timeframe.clone(),frame)]);
+        learner.observe(&db,&t,&config,&[brain.clone()],&frames,true,now).unwrap();
+        t.demo=false;t.account_trade_mode=Some(2);
+        learner.observe(&db,&t,&config,&[brain],&frames,true,now).unwrap();
+        let count:u64=db.query_row("SELECT COUNT(DISTINCT source) FROM coordinator_samples",[],|r|r.get(0)).unwrap();
+        assert_eq!(count,2);
     }
 
     #[test]
@@ -1156,7 +1236,7 @@ mod tests {
         t.ask = Some(price + 0.01);
         let key = context(&t);
         let command = json!({
-            "id":"cmd1",
+            "id":"cmd1","target":"demo",
             "signal":{
                 "side":1,"stop_distance":0.10,
                 "coordination":{
@@ -1263,18 +1343,18 @@ mod tests {
             "CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT NOT NULL,brain TEXT NOT NULL,kind TEXT NOT NULL,created_ms INTEGER NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL DEFAULT '{}');"
         ).unwrap();
         let now=1_800_000_000_000u64;
-        let t=Telemetry{point:Some(0.01),..Default::default()};
+        let t=Telemetry{point:Some(0.01),demo:true,account_trade_mode:Some(0),..Default::default()};
         let key="ctx";
         for i in 0..5u64 {
             let result=json!({"state":"filled","request":{"price":2000.0},"price":2000.0+0.01*(i as f64),"send_ms":40.0});
-            db.execute("INSERT INTO broker_commands VALUES(?1,?2,'system','open',?3,'observed','{}',?4)",params![format!("f{i}"),key,now-i*1000,result.to_string()]).unwrap();
+            db.execute("INSERT INTO broker_commands VALUES(?1,?2,'system','open',?3,'observed',?4,?5)",params![format!("f{i}"),key,now-i*1000,json!({"target":"demo"}).to_string(),result.to_string()]).unwrap();
         }
         let(good,n)=execution_history_quality(&db,key,&t,now).unwrap();
         assert_eq!(n,5);
         assert!(good>0.70);
         for i in 0..5u64 {
             let result=json!({"state":"rejected","reason":"fixture"});
-            db.execute("INSERT INTO broker_commands VALUES(?1,?2,'system','open',?3,'rejected','{}',?4)",params![format!("r{i}"),key,now+10_000+i,result.to_string()]).unwrap();
+            db.execute("INSERT INTO broker_commands VALUES(?1,?2,'system','open',?3,'rejected',?4,?5)",params![format!("r{i}"),key,now+10_000+i,json!({"target":"demo"}).to_string(),result.to_string()]).unwrap();
         }
         let(worse,n2)=execution_history_quality(&db,key,&t,now+20_000).unwrap();
         assert_eq!(n2,10);
@@ -1289,7 +1369,7 @@ mod tests {
         let t=Telemetry{demo:true,account_trade_mode:Some(0),login:17,server:"Demo".into(),symbol:"XAUUSD".into(),currency:"USD".into(),..Default::default()};
         let key=context(&t);
         let now=2_000_u64;
-        let cmd=json!({"id":"solo","brain":"trend","signal":{"side":1,"bar_time":12,"stop_distance":1.,"reason":"trend ready"},
+        let cmd=json!({"id":"solo","target":"demo","brain":"trend","signal":{"side":1,"bar_time":12,"stop_distance":1.,"reason":"trend ready"},
             "learning":{"trading_mode":"expert","timeframe":"M1","report_id":"","tick_size":0.01,"tick_value_loss":1.,"weight_at_entry":1.}});
         db.execute("INSERT INTO broker_commands VALUES('solo',?1,'trend','open',1,'observed',?2,?3)",params![key,cmd.to_string(),json!({"deal":1,"request":{"price":2000.,"sl":1999.}}).to_string()]).unwrap();
         let insert=|ticket:u64,entry:i64,volume:f64,profit:f64,commission:f64| {
@@ -1609,7 +1689,7 @@ mod tests {
                 "broker_pnl":serde_json::Value::Null});
             let seal=crate::sniper_research_artifact::persist(
                 &db,&t,&config,&engine,&checkpoint,cutoff).unwrap();
-            let command=json!({"id":"p1k5i-cmd","brain":"system",
+            let command=json!({"id":"p1k5i-cmd","target":"demo","brain":"system",
                 "signal":{"side":1,"bar_time":10,"stop_distance":0.2,
                     "target_distance":0.2,"reason":"synthetic broker acceptance",
                     "coordination":{"trading_mode":"sniper",
@@ -1705,7 +1785,7 @@ mod tests {
         };
         let key = context(&t);
         let command = json!({
-            "id":"sniper-coordinator-1","brain":"system",
+            "id":"sniper-coordinator-1","target":"demo","brain":"system",
             "signal":{
                 "bar_time":1000,"side":1,"stop_distance":0.2,"target_distance":0.2,
                 "reason":"confirmed quote momentum",
