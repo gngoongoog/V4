@@ -67,6 +67,13 @@ try{
   const button=page.locator('#sidebarNav').getByTitle(item.title,{exact:true});await button.click();
   assert.equal(await button.getAttribute('aria-current'),'page',item.id);
   assert((await page.locator('main.content').innerText()).trim().length>15,'Empty page '+item.id);
+  const bounds=await page.locator('main.content').evaluate(e=>({scroll:e.scrollWidth,visible:e.clientWidth}));
+  assert(bounds.scroll<=bounds.visible+1,item.id+' has desktop horizontal overflow');
+  if(!primary.some(([id])=>id===item.id)){
+   await page.locator('main.content').evaluate(e=>e.scrollTop=0);
+   await wait(250);
+   await page.screenshot({path:path.join(out,'extra-'+item.id+'-1536.png')});
+  }
  }
  await page.locator('#sidebarNav .all-pages').click();
  await page.setViewportSize({width:1120,height:730});
@@ -76,8 +83,15 @@ try{
  await page.screenshot({path:path.join(out,'dashboard-1120.png')});
  const narrow=await page.locator('main.content').evaluate(e=>({scroll:e.scrollWidth,visible:e.clientWidth}));
  assert(narrow.scroll<=narrow.visible+1,'Laptop dashboard has horizontal overflow');
+ await page.locator('#sidebarNav .all-pages').click();
+ for(const item of pages){
+  const button=page.locator('#sidebarNav').getByTitle(item.title,{exact:true});await button.click();
+  assert.equal(await button.getAttribute('aria-current'),'page',item.id);
+  const bounds=await page.locator('main.content').evaluate(e=>({scroll:e.scrollWidth,visible:e.clientWidth}));
+  assert(bounds.scroll<=bounds.visible+1,item.id+' has laptop horizontal overflow');
+ }
  assert.deepEqual(errors,[],'Unhandled renderer errors');
- fs.writeFileSync(path.join(out,'result.json'),JSON.stringify({result:'PASS',pages:pages.length,primaryScreens:primary.map(p=>p[0]),viewports:['1536x864','1120x730'],syntheticPreview:true,mt5:'NOT TESTED',orders:'NOT SENT'},null,2));
+ fs.writeFileSync(path.join(out,'result.json'),JSON.stringify({result:'PASS',pages:pages.length,primaryScreens:primary.map(p=>p[0]),allPagesCheckedAtBothViewports:true,viewports:['1536x864','1120x730'],syntheticPreview:true,mt5:'NOT TESTED',orders:'NOT SENT'},null,2));
 }catch(e){
  if(page&&!page.isClosed())await page.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});
  fs.writeFileSync(path.join(out,'failure.txt'),String(e));
