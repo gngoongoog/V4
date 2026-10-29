@@ -489,6 +489,26 @@ class ExecutionTests(unittest.TestCase):
         self.cmd.update(risk_percent=.25,commission_per_lot=7.,slippage_ticks=2.)
         self.assertEqual(self.send()['state'],'filled')
         self.assertAlmostEqual(self.mt.sends[0]['volume'],.1)
+    def test_account_risk_master_off_skips_risk_sizing_but_keeps_broker_checks(self):
+        for target,mode in [('demo',0),('live',2)]:
+            self.cmd.update(id='risk-master-'+target,target=target,risk_master_enabled=False,
+                            daily_breaker_enabled=False,micro_real_temporary=False,
+                            risk_percent=.01,commission_per_lot=0.,slippage_ticks=0.)
+            self.mt.account.trade_mode=mode
+            result=self.send();self.assertEqual(result['state'],'filled',result)
+            self.assertTrue(result['risk_sizing_disabled'])
+            self.assertEqual(result['request']['volume'],.1)
+            self.assertFalse(result['order_check_skipped'])
+            if target=='live':self.assertIn('real_margin_check',result)
+            self.cmd['risk_master_enabled']=True
+            self.assertEqual(self.send()['state'],'unknown','Risk policy cannot be changed for a saved intent')
+        self.cmd.update(id='risk-master-invalid',target='demo',risk_master_enabled=0)
+        self.mt.account.trade_mode=0
+        result=self.send();self.assertEqual(result['state'],'rejected',result)
+        self.assertIn('risk-master',result['reason'])
+        self.cmd.update(id='risk-master-inconsistent',risk_master_enabled=False,daily_breaker_enabled=True)
+        result=self.send();self.assertEqual(result['state'],'rejected',result)
+        self.assertIn('Inconsistent',result['reason'])
     def test_account_switch_during_check_and_stop_before_send(self):
         self.mt.on_check=lambda:setattr(self.mt.account,'login',88);self.assertEqual(self.send()['state'],'rejected');self.assertFalse(self.mt.sends)
         self.mt.on_check=None;self.mt.account.login=17;self.assertEqual(self.ex.execute(self.mt,self.cmd,lambda _:False)['state'],'cancelled');self.assertFalse(self.mt.sends)

@@ -126,6 +126,23 @@ try{
   await status();
  });
  await check('connect isolated synthetic Demo snapshot',startFixture);
+ await check('account risk master toggles in actual UI while synthetic Demo stays stopped',async()=>{
+  await invoke('bind_execution',{target:'demo',deviationPoints:20,confirmLiveLogin:''});
+  const execution=async()=>{const r=await invoke('read_panel',{route:'/v1/execution'});return r.data||r};
+  await until(async()=>(await execution()).risk_master?.enabled===true);
+  await navigate('إدارة المخاطر');
+  const panel=page.getByRole('region',{name:'مفتاح إدارة المخاطر للحساب'});
+  await panel.waitFor();
+  await until(async()=>await panel.getByRole('button',{name:'إيقاف إدارة المخاطر',exact:true}).isEnabled());
+  page.once('dialog',dialog=>dialog.accept());
+  await panel.getByRole('button',{name:'إيقاف إدارة المخاطر',exact:true}).click();
+  await until(async()=>(await execution()).risk_master?.enabled===false);
+  const risk=await invoke('read_panel',{route:'/v1/risk/monitor'});
+  assert.equal((risk.data||risk).risk_master_enabled,false);
+  await panel.getByRole('button',{name:'تفعيل إدارة المخاطر',exact:true}).click();
+  await until(async()=>(await execution()).risk_master?.enabled===true);
+  await status();
+ });
  await check('commission draft survives disconnect and same-account reconnect',async()=>{
   let panel=await trading();await panel.getByLabel('commission per lot',{exact:true}).fill('9');
   await stopFixture();

@@ -27,6 +27,7 @@ import type {DashboardRead} from './dashboard-evidence';
 import {OperatorWriteFence} from './operator-write-fence';
 import type {OperatorWriteTicket} from './operator-write-fence';
 import {MicroCapitalOperations} from './micro-capital-operations';
+import {RiskMasterOperations} from './risk-master-operations';
 import {ExecutionQualityOperations} from './execution-quality-operations';
 import {ModeEvidenceOperations} from './mode-evidence-operations';
 import {FrozenCoordinatorOperations,supportedFrozenMode} from './frozen-coordinator-operations';
@@ -39,7 +40,7 @@ import {SniperClassicOperations,eligibleFrozenClassic} from './sniper-classic-op
 import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position} from './types';
 import {DESIGN_FIXTURE} from './mock';
-import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
+import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
 import {money,num,signed,up,valid} from './format';
 
 type IconComponent=typeof Home;
@@ -656,6 +657,38 @@ export default function Terminal(){
   }catch(e){if(writeFresh(mutation))sendNotice('تعذر حفظ حدود المحفظة: '+String(e),true)}
   finally{finishWrite(mutation)}
  };
+ const runRiskMaster=async(enabled:boolean)=>{
+  if(preview||!hasTauri()||!feed.broker||!status?.telemetry||status.requested_run!==false){sendNotice('تغيير إدارة المخاطر يحتاج STOP وحساب MT5 متصلاً',true);return}
+  const t=status.telemetry,view=unwrap(portfolioReport),settings=unwrap(view.settings);
+  const context=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
+  if(view.context!==context||view.account_matches!==true||settings.target!==(t.demo?'demo':'live')||t.account_trade_mode!==(t.demo?0:2)){
+   sendNotice('تغيّر الحساب؛ انتظر تحديث إعدادات التنفيذ',true);return
+  }
+  let confirmLiveLogin='';
+  if(!enabled){
+   if(!window.confirm(`سيُوقَف تحديد مخاطرة الصفقة وحدود المحفظة والخسارة اليومية لهذا الحساب ${t.demo?'DEMO':'REAL'} رقم ${t.login} حتى تعيد تشغيلها. تبقى فحوص MT5 والهوية والهامش وSL/TP. تأكيد؟`))return;
+   if(!t.demo){
+    const value=window.prompt('اكتب رقم حساب REAL المعروض لتأكيد إيقاف إدارة المخاطر');
+    if(value===null)return;
+    confirmLiveLogin=value.trim();
+    if(confirmLiveLogin!==String(t.login)){sendNotice('رقم حساب REAL لا يطابق الحساب الحالي',true);return}
+   }
+  }
+  const mutation=beginWrite('risk-master');if(!mutation)return;
+  try{
+   const result=unwrap(await updateRiskMaster(context,enabled,confirmLiveLogin));
+   if(!writeFresh(mutation))return;
+   if(result.ok!==true||result.enabled!==enabled)throw new Error('لم يؤكد Core حالة إدارة المخاطر');
+   scopedGeneration.current.invalidate('portfolio');scopedGeneration.current.invalidate('risk');
+   const ticket=scopedGeneration.current.beginRead('portfolio'),riskTicket=scopedGeneration.current.beginRead('risk');
+   const [updated,monitor]=await Promise.all([readPanel('/v1/execution'),readPanel('/v1/risk/monitor')]);
+   if(!writeFresh(mutation))return;
+   if(scopedGeneration.current.isCurrent(ticket))setPortfolioReport(unwrap(updated));
+   if(scopedGeneration.current.isCurrent(riskTicket)){setRiskSnapshot(unwrap(monitor));setRiskScope(contextKey)}
+   sendNotice(enabled?'تم تفعيل إدارة المخاطر للحساب الحالي':'تم إيقاف إدارة المخاطر للحساب الحالي حتى تعيد تشغيلها');
+  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
+  finally{finishWrite(mutation)}
+ };
  const editGeneral=(name:string,value:unknown)=>{settingsDirty.current=true;setSettingsEdit(s=>({...s,[name]:value}))};
  const saveGeneral=async()=>{
   if(!activeSettingsEdit||preview||!hasTauri()||status?.requested_run){sendNotice('احفظ فقط بعد تحميل إعدادات Core للحساب الحالي وفي وضع STOP',true);return}
@@ -990,7 +1023,7 @@ export default function Terminal(){
       <div className="subpage-layout">
       <section className="panel subpage-primary"><div className="panel-title"><b>{pageMeta.title} — بيانات وتشغيل</b><button onClick={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}} disabled={!pageMeta.route||preview||page==='journal'||page==='reports'}>تحديث ↻</button></div>
         {page==='risk'?<div className="feature-zone">
-          <div className="concept-risk-grid"><div className="concept-risk-editor-card"><h3><ShieldCheck size={19}/> التحكم وحدود المخاطرة</h3><RiskEditor key={contextKey} config={!preview&&safeConfig?unwrap(safeConfig.risk):null} apply={saveRiskForm} loading={busy||preview} armed={status?.requested_run===true}/></div>
+          <div className="concept-risk-grid"><div className="concept-risk-editor-card"><h3><ShieldCheck size={19}/> التحكم وحدود المخاطرة</h3><RiskMasterOperations status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} armed={status?.requested_run===true} onSet={runRiskMaster}/><RiskEditor key={contextKey} config={!preview&&safeConfig?unwrap(safeConfig.risk):null} apply={saveRiskForm} loading={busy||preview} armed={status?.requested_run===true}/></div>
           <div className="concept-risk-capital" tabIndex={0} aria-label="إعدادات الحساب الصغير؛ يمكن تمرير المحتوى"><MicroCapitalOperations status={!preview&&feed.broker?status:null} key={contextKey} risk={!preview&&safeConfig?unwrap(safeConfig.risk):null}
              monitor={safeRiskSnapshot} portfolio={unwrap(portfolioReport).portfolio} armed={status?.requested_run===true}
              disabled={busy||preview} onSavePortfolio={runSavePortfolio}/></div>

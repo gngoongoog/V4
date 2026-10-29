@@ -585,7 +585,7 @@ class BrokerExecutor:
                        'kind','position','lots','signal','revision',
                        'manual_close','profit_only','expected_position_volume','expected_position_side',
                        'deviation_points','created_ms','expires_ms',
-                       'commission_per_lot','slippage_ticks','risk_percent',
+                       'commission_per_lot','slippage_ticks','risk_percent','risk_master_enabled',
                        'demo_flexible','micro_demo_risk_opt_in',
                        'micro_real_temporary','micro_real_cap_percent',
                        'micro_real_recovery_equity','daily_breaker_enabled',
@@ -625,6 +625,11 @@ class BrokerExecutor:
             target_mode = 0 if cmd['target']=='demo' else 2 if cmd['target']=='live' else -1
             if account_identity(a)!=expected(cmd) or a.trade_mode!=target_mode:
                 raise ValueError('Bound account or Demo/Live mode changed')
+            risk_master=cmd.get('risk_master_enabled',True)
+            if type(risk_master) is not bool:
+                raise ValueError('Invalid Core account risk-master state')
+            if cmd.get('kind')=='open' and not risk_master and (cmd.get('daily_breaker_enabled') is not False or cmd.get('micro_real_temporary') is True):
+                raise ValueError('Inconsistent disabled-risk broker intent')
             # Economic-event and measured-broker-quality gate. Closing an
             # owned position never waits on these optional external controls.
             self._institutional_entry_guard(cmd)
@@ -745,7 +750,12 @@ class BrokerExecutor:
                 # This check runs for every Core-issued opening order, including
                 # Sniper fast-path and REAL. Legacy REAL intents missing a risk
                 # budget are rejected instead of bypassing the safety layer.
-                if 'risk_percent' not in cmd:
+                if not risk_master:
+                    # Explicit, account-scoped operator setting carried by a
+                    # Core-authorized intent. Broker volume, stop/TP geometry,
+                    # account, margin, journal and authorization stay enforced.
+                    result['risk_sizing_disabled']=True
+                elif 'risk_percent' not in cmd:
                     if cmd['target']=='live':
                         raise ValueError('Risk sizing: REAL entry has no Core risk budget; rejected')
                 else:

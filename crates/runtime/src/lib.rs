@@ -288,6 +288,15 @@ fn verify_initial_shutdown_evidence(status:&Status,gateway_running:bool,prior_se
     }
     Ok(())
 }
+fn apply_risk_master_to_monitor(view:&mut Value,master:Option<bool>){
+    view["risk_master_enabled"]=json!(master);
+    if master==Some(false) && view["account"].is_object() {
+        view["configured_enabled"]=view["enabled"].clone();
+        view["enabled"]=json!(false);
+        view["state"]=json!("disabled");
+        view["reason"]=json!("قاطع الخسارة موقوف بمفتاح إدارة المخاطر للحساب؛ إعداد القاطع والقفل السابق محفوظان");
+    }
+}
 
 impl Engine{
     fn event(&self,kind:&str,detail:Value)->Result<()>{self.db.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,?2,?3)",params![now_ms(),kind,detail.to_string()])?;Ok(())}
@@ -373,7 +382,10 @@ impl Engine{
         if method=="GET" && path=="/v1/risk/monitor" {
             let (cfg,status)={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());
                 (s.config.clone(),s.status.clone())};
-            return risk_monitor::snapshot(&self.db,&cfg,&status,now_ms());
+            let mut view=risk_monitor::snapshot(&self.db,&cfg,&status,now_ms())?;
+            let master=self.execution.risk_master_for_status(&status);
+            apply_risk_master_to_monitor(&mut view,master);
+            return Ok(view);
         }
         if path=="/v1/execution/frozen-shadow" {
             let (cfg,status)={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());(s.config.clone(),s.status.clone())};
@@ -425,7 +437,7 @@ impl Engine{
         if path.starts_with("/v1/execution") {
             let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
             let result=self.execution.route(method,path,body,&self.db,&status,now_ms())?;
-            if method=="POST"&&!matches!(path,"/v1/execution/sync"|"/v1/execution/authorize"|"/v1/execution/trades") {self.event("broker_execution_action",json!({"path":path,"result":result}))?;}
+            if method=="POST"&&!matches!(path,"/v1/execution/sync"|"/v1/execution/authorize"|"/v1/execution/trades"|"/v1/execution/risk-master") {self.event("broker_execution_action",json!({"path":path,"result":result}))?;}
             let mut s=self.shared.lock().unwrap();s.status.execution_enabled=self.execution.enabled(&s.status);
             return Ok(result);
         }
@@ -765,6 +777,19 @@ mod tests{
         s.telemetry.as_mut().unwrap().pending_orders=0;
         s.telemetry.as_mut().unwrap().positions.push(braintrade_domain::Position::default());
         assert!(verify_safe_shutdown(&s,false).is_err());
+    }
+    #[test]
+    fn risk_monitor_exposes_suspended_breaker_without_erasing_persisted_lock(){
+        let mut view=json!({"account":{"login":17},"enabled":true,"state":"locked","locked":true});
+        apply_risk_master_to_monitor(&mut view,Some(false));
+        assert_eq!(view["risk_master_enabled"],false);
+        assert_eq!(view["configured_enabled"],true);
+        assert_eq!(view["enabled"],false);
+        assert_eq!(view["state"],"disabled");
+        assert_eq!(view["locked"],true);
+        let mut missing=json!({"state":"unavailable"});
+        apply_risk_master_to_monitor(&mut missing,Some(false));
+        assert_eq!(missing["state"],"unavailable");
     }
     #[test]
     fn account_reconfiguration_requires_flat_stopped_broker(){

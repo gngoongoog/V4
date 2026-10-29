@@ -359,6 +359,18 @@ fn update_brain_paper_all(context: String, mode: String, paper: bool) -> Result<
         .map_err(|err|err.to_string())
 }
 
+#[tauri::command]
+fn update_risk_master(context:String,enabled:bool,confirm_live_login:String)->Result<Value,String>{
+    if context.is_empty() || context.len()>500 || confirm_live_login.len()>32 {
+        return Err("حساب MT5 أو التأكيد غير صالح".into());
+    }
+    // Core requires STOP, no unresolved broker intents, the exact current
+    // account, and a separate REAL login confirmation when disabling.
+    open_client()?.post("/v1/execution/risk-master",
+        json!({"context":context,"enabled":enabled,"confirm_live_login":confirm_live_login}))
+        .map_err(|err|err.to_string())
+}
+
 #[derive(serde::Deserialize,serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct SelectedClosePosition {ticket:u64,magic:u64,side:String,volume:f64}
@@ -525,7 +537,7 @@ pub fn run() {
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore, save_excel_report,
-            backtest_action, update_brain_control, update_brain_paper_all, close_owned_positions, bind_execution
+            backtest_action, update_brain_control, update_brain_paper_all, update_risk_master, close_owned_positions, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");

@@ -50,6 +50,8 @@ pub struct Service {
     pub weights:BTreeMap<String,braintrade_domain::execution::LearnedWeight>,
     pub student_policies:BTreeMap<String,braintrade_domain::student::ExitStudy>,
     pub controls: BTreeMap<String, crate::brain_control::Control>,
+    risk_master_key:String,
+    risk_master_enabled:bool,
     signals: BTreeMap<String, Value>,
     new_entries: Vec<Value>,
     last_sync_ms: u64,
@@ -302,10 +304,12 @@ impl Service {
     pub fn new(db: &Connection) -> Result<Self> {
         crate::shadow_paper::init(db)?;
         crate::brain_control::init(db)?;
-        db.execute_batch("CREATE TABLE IF NOT EXISTS execution_settings(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
+        db.execute_batch("CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,timestamp_ms INTEGER NOT NULL,kind TEXT NOT NULL,detail TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS execution_settings(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS execution_equity(context TEXT PRIMARY KEY,peak REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS micro_real_recovered(account_key TEXT PRIMARY KEY,reached_ms INTEGER NOT NULL,reached_equity REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS daily_loss_locks(account_key TEXT NOT NULL,report_day TEXT NOT NULL, reached_ms INTEGER NOT NULL,loss_amount REAL NOT NULL, PRIMARY KEY(account_key,report_day));
+CREATE TABLE IF NOT EXISTS risk_master_accounts(account_key TEXT PRIMARY KEY,enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),updated_ms INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS brain_configs(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS broker_commands(id TEXT PRIMARY KEY,context TEXT NOT NULL,brain TEXT NOT NULL,kind TEXT NOT NULL,created_ms INTEGER NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS broker_commands_context ON broker_commands(context,brain,created_ms);
@@ -350,6 +354,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             brains,
             signals: BTreeMap::new(),
             controls: BTreeMap::new(),
+            risk_master_key:String::new(),
+            risk_master_enabled:true,
             new_entries: Vec::new(),
             weights:BTreeMap::new(),
             student_policies:BTreeMap::new(),
@@ -412,12 +418,38 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         }
         Ok(false)
     }
-    fn breaker_enabled(&self, c:&Config) -> bool {
-        match self.settings.target.as_str() {
+    fn breaker_enabled(&self, c:&Config,t:&Telemetry) -> bool {
+        self.risk_master(t).unwrap_or(true) && match self.settings.target.as_str() {
             "live" => c.risk.daily_breaker_real_enabled,
             "demo" => c.risk.daily_breaker_demo_enabled,
             _ => true,
         }
+    }
+    pub fn risk_master(&self,t:&Telemetry)->Option<bool>{
+        (self.matches(t) && self.risk_master_key==daily_account_key(t)).then_some(self.risk_master_enabled)
+    }
+    pub fn refresh_risk_master(&mut self,db:&Connection,t:&Telemetry)->Result<()> {
+        if !self.matches(t) {self.risk_master_key.clear();self.risk_master_enabled=true;return Ok(());}
+        let key=daily_account_key(t);
+        let enabled:Option<i64>=db.query_row("SELECT enabled FROM risk_master_accounts WHERE account_key=?1",[&key],|r|r.get(0)).optional()?;
+        self.risk_master_enabled=match enabled {None|Some(1)=>true,Some(0)=>false,_=>anyhow::bail!("Invalid account risk master setting")};
+        self.risk_master_key=key;
+        Ok(())
+    }
+    pub fn set_risk_master(&mut self,db:&Connection,t:&Telemetry,enabled:bool,now:u64)->Result<()> {
+        anyhow::ensure!(self.matches(t),"الحساب لا يطابق حساب التنفيذ");
+        let key=daily_account_key(t);
+        let mut settings=self.settings.clone();
+        settings.revision=settings.revision.checked_add(1).context("Execution revision exhausted")?;
+        let tx=db.unchecked_transaction()?;
+        tx.execute("INSERT INTO risk_master_accounts(account_key,enabled,updated_ms) VALUES(?1,?2,?3) ON CONFLICT(account_key) DO UPDATE SET enabled=excluded.enabled,updated_ms=excluded.updated_ms",params![key,enabled as i64,now])?;
+        tx.execute("INSERT OR REPLACE INTO execution_settings VALUES(1,?1)",[serde_json::to_string(&settings)?])?;
+        tx.execute("UPDATE broker_commands SET state='cancelled' WHERE kind='open' AND state='queued'",[])?;
+        tx.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,'risk_master_changed',?2)",
+            params![now,json!({"account_key":key,"enabled":enabled,"scope":"bound_broker_account_and_mode"}).to_string()])?;
+        tx.commit()?;
+        self.settings=settings;self.risk_master_key=key;self.risk_master_enabled=enabled;self.signals.clear();
+        Ok(())
     }
     fn matches(&self, t: &Telemetry) -> bool {
         t.connected
@@ -494,12 +526,14 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             p["trading_mode"] = json!(c.trading.mode);
             p["demo_flexible"] = json!(c.trading.demo_flexible && t.demo && t.account_trade_mode==Some(0));
             p["commission_per_lot"] = json!(c.risk.commission_per_lot);
-            p["daily_breaker_enabled"] = json!(self.breaker_enabled(c));
+            let risk_master=self.risk_master(t).unwrap_or(true);
+            p["risk_master_enabled"] = json!(risk_master);
+            p["daily_breaker_enabled"] = json!(self.breaker_enabled(c,t));
             p["daily_breaker_limit_percent"] = json!(c.risk.daily_loss_percent);
             // Mandatory for every new entry (Demo and REAL). The broker uses
             // order_calc_profit at the EXACT final stop and account equity to
             // cap the requested volume without ever increasing it.
-            let micro_real = self.micro_real_active(db, t, c)?;
+            let micro_real = risk_master && self.micro_real_active(db, t, c)?;
             p["risk_percent"] = json!(if micro_real { c.risk.micro_real_cap_percent } else { c.risk.risk_percent });
             p["micro_real_temporary"] = json!(micro_real);
             p["micro_real_recovery_equity"] = json!(c.risk.micro_real_recovery_equity);
@@ -531,9 +565,10 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         }
         let key = ctx(t);
         // Checking eligibility also durably records the milestone once it is reached.
-        let micro_real = self.micro_real_active(db, t, c)?;
+        let risk_master=self.risk_master(t).unwrap_or(true);
+        let micro_real = risk_master && self.micro_real_active(db, t, c)?;
         let daily_breaker_blocked=self.daily_breaker_blocked(
-            db,t,now,self.breaker_enabled(c),c.risk.daily_loss_percent)?;
+            db,t,now,self.breaker_enabled(c,t),c.risk.daily_loss_percent)?;
         db.execute("INSERT INTO execution_equity VALUES(?1,?2) ON CONFLICT(context) DO UPDATE SET peak=MAX(peak,excluded.peak)",params![key,t.equity])?;
         let peak:f64=db.query_row("SELECT peak FROM execution_equity WHERE context=?1",[&key],|r|r.get(0))?;
         // A fill acknowledgement is not a reconciled position snapshot. Keep the
@@ -680,7 +715,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             // Elevated risk is deliberately Demo-only. Reject in Core before
             // queueing to avoid a stream of guaranteed broker rejections on REAL.
             // The MT5 adapter independently enforces the exact broker mode.
-            if c.risk.risk_percent > 2.0
+            if risk_master && c.risk.risk_percent > 2.0
                 && (self.settings.target != "demo" || t.account_trade_mode != Some(0))
             {
                 gates.push("المخاطرة فوق 2% تجريبية على حساب MT5 Demo فقط؛ REAL يبقى بحد 2%");
@@ -711,7 +746,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             if now.saturating_sub(last) < cooldown * 1000 {
                 gates.push("فاصل الدخول المختار");
             }
-            if b.use_risk_limits {
+            if risk_master && b.use_risk_limits {
                 if peak>0. && (peak-t.equity)/peak*100. >= c.risk.max_drawdown_percent {
                     gates.push("حد التراجع الاختياري من أعلى Equity مرصود لهذا الحساب والرمز");
                 }
@@ -1287,6 +1322,25 @@ mod execution_persistence_tests {
             login: 17, server: "Demo-Test".into(), currency: "USD".into(),
             symbol: "XAUUSD".into(), ..Default::default()
         }
+    }
+    #[test]
+    fn risk_master_is_bound_into_the_durable_open_intent() {
+        let db=Connection::open_in_memory().unwrap();let mut svc=Service::new(&db).unwrap();
+        let t=demo();svc.bind(&db,&t,100).unwrap();
+        let brain=svc.brains.iter().find(|b|b.id=="system").unwrap().clone();
+        let signal=Signal{brain:"system".into(),side:1,key:"bar:1".into(),bar_time:1,
+            stop_distance:1.,target_distance:2.,hold_ms:1000,reason:String::new(),ready:true,coordination:None};
+        let mut c=Config::default();c.risk.daily_breaker_demo_enabled=true;
+        svc.set_risk_master(&db,&t,false,101).unwrap();
+        let disabled=svc.queue(&db,&t,&brain,"open",Some(&signal),0,102,Some(&c)).unwrap();
+        assert_eq!(disabled["risk_master_enabled"],false);
+        assert_eq!(disabled["daily_breaker_enabled"],false);
+        assert_eq!(disabled["micro_real_temporary"],false);
+        svc.set_risk_master(&db,&t,true,103).unwrap();
+        let enabled=svc.queue(&db,&t,&brain,"open",Some(&signal),0,104,Some(&c)).unwrap();
+        assert_eq!(enabled["risk_master_enabled"],true);
+        assert_eq!(enabled["daily_breaker_enabled"],true);
+        assert_eq!(db.query_row("SELECT state FROM broker_commands WHERE id=?1",[disabled["id"].as_str().unwrap()],|r|r.get::<_,String>(0)).unwrap(),"cancelled");
     }
 
     fn receipt(ticket:u64,pid:u64,magic:u64,entry:u64,volume:f64)->Value {

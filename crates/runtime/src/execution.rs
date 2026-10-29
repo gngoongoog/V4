@@ -445,6 +445,10 @@ impl Service {
     pub fn enabled(&self, status: &Status) -> bool {
         status.requested_run && status.gateway_fresh && self.account_matches(status)
     }
+    pub fn risk_master_for_status(&self,status:&Status)->Option<bool>{
+        status.telemetry.as_ref().filter(|_|status.gateway_fresh&&self.account_matches(status))
+            .and_then(|t|self.inner.risk_master(t))
+    }
 
     /// Real-money START is independently acknowledged every time. Merely
     /// selecting Live, restoring prior settings or pressing generic START
@@ -471,7 +475,8 @@ impl Service {
                     && t.trade_allowed && t.trade_expert),
             "تعذر تشغيل LIVE: يجب مطابقة حساب MT5 الحقيقي وتحديث الاتصال والسماح بالتداول الآلي"
         );
-        anyhow::ensure!(self.portfolio.enabled,
+        let risk_master=status.telemetry.as_ref().and_then(|t|self.inner.risk_master(t)).unwrap_or(true);
+        anyhow::ensure!(!risk_master || self.portfolio.enabled,
             "تشغيل REAL يحتاج تفعيل حماية المحفظة أولاً (عدد الصفقات، اللوت الكلي، وخطر الوقف)"
         );
         Ok(())
@@ -496,6 +501,15 @@ impl Service {
             crate::broker_quality_circuit::Snapshot::unavailable(key,now)
         };
     }
+    fn apply_portfolio(&mut self,db:&Connection,t:&Telemetry,c:&Config)->Result<()> {
+        let master=self.inner.risk_master(t).unwrap_or(true);
+        let current=if master {enforce_portfolio(db,t,c,&self.portfolio)?}else{exposure(db,t,c,true)?};
+        self.portfolio_state=current.json(&self.portfolio,t.equity);
+        self.portfolio_state["risk_master_enabled"]=json!(master);
+        self.portfolio_state["effective_enabled"]=json!(master && self.portfolio.enabled);
+        if !master {self.portfolio_state["note"]=json!("حدود المحفظة محفوظة لكنها موقوفة عبر مفتاح مخاطر هذا الحساب؛ إدارة الصفقات الحالية والتسوية مستمرة.");}
+        Ok(())
+    }
 
     pub fn observe(
         &mut self,
@@ -509,6 +523,7 @@ impl Service {
         if let Some(system) = self.inner.brains.iter_mut().find(|brain| brain.id == "system") {
             system.enabled = true;
         }
+        self.inner.refresh_risk_master(db,telemetry)?;
         self.inner.controls = crate::brain_control::load_account(db, &context(telemetry), config.trading.mode, telemetry.account_trade_mode)?;
         let available = crate::coordinator_learning::available_frames(telemetry, frames, now);
         self.inner.weights = self.learner.observe(
@@ -583,8 +598,7 @@ impl Service {
         if run {crate::student_learning::log_opportunities(db,telemetry,&self.inner.learning_decisions(),now)?;}
         // Apply one global entry budget after all brains have proposed their queued opens and
         // before the gateway can retrieve them. Exits and reconciliation states are untouched.
-        let current = enforce_portfolio(db, telemetry, config, &self.portfolio)?;
-        self.portfolio_state = current.json(&self.portfolio, telemetry.equity);
+        self.apply_portfolio(db,telemetry,config)?;
         // Diagnostic sampling uses normal reconciled snapshots only, after
         // broker intents and portfolio decisions. Never add this to Fast Pulse.
         if self.inner.matches_bound_telemetry(telemetry) {
@@ -932,6 +946,29 @@ impl Service {
             self.inner.set_mode(request.mode);
             return Ok(json!({"ok":true}));
         }
+        if method=="POST" && path=="/v1/execution/risk-master" {
+            anyhow::ensure!(!status.requested_run && !self.pending(db)?,"أوقف التداول وانتظر تسوية أوامر الوسيط قبل تغيير إدارة المخاطر");
+            anyhow::ensure!(status.gateway_fresh && self.account_matches(status),"اربط الحساب الحالي وانتظر اتصال MT5 حديثاً");
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request{context:String,enabled:bool,confirm_live_login:String}
+            let request:Request=serde_json::from_slice(body)?;
+            let t=status.telemetry.as_ref().unwrap();
+            anyhow::ensure!(request.context==context(t),"الحساب أو الرمز تغيّر؛ أعد التأكيد");
+            anyhow::ensure!((t.demo && t.account_trade_mode==Some(0)) || (!t.demo && t.account_trade_mode==Some(2)),"نوع حساب MT5 غير مؤكّد");
+            if !request.enabled && !t.demo {
+                anyhow::ensure!(request.confirm_live_login==t.login.to_string(),"لتعطيل المخاطر على REAL، أدخل رقم حساب MT5 المطابق");
+            }
+            self.inner.set_risk_master(db,t,request.enabled,now)?;
+            self.fast=None;
+            self.portfolio_state["risk_master_enabled"]=json!(request.enabled);
+            self.portfolio_state["effective_enabled"]=json!(request.enabled && self.portfolio.enabled);
+            self.portfolio_state["note"]=if request.enabled {
+                json!("Portfolio limits block new entries only. Broker SL/TP and reconciliation remain active; a timed close can be deferred while an order is unresolved.")
+            }else{json!("حدود المحفظة محفوظة لكنها موقوفة عبر مفتاح مخاطر هذا الحساب؛ إدارة الصفقات الحالية والتسوية مستمرة.")};
+            return Ok(json!({"ok":true,"enabled":request.enabled,"scope":"bound_broker_account_and_mode",
+                "broker_sl_tp_retained":true,"mt5_margin_and_execution_checks_retained":true}));
+        }
         if method=="POST" && path=="/v1/execution/brain-paper-all" {
             anyhow::ensure!(!status.requested_run && !self.pending(db)?, "أوقف النظام وانتظر تسوية الأوامر قبل تغيير Paper");
             anyhow::ensure!(status.gateway_fresh && self.account_matches(status), "اربط الحساب الحالي وانتظر اتصالاً حديثاً");
@@ -1044,8 +1081,7 @@ impl Service {
             self.sniper_frozen_tick.observe(&next.telemetry,&next.config,
                 self.inner.last_sniper_raw.as_ref(),body,now);
             self.student.capture_entries(self.inner.take_entries(), now);
-            let current = enforce_portfolio(db, &next.telemetry, &next.config, &self.portfolio)?;
-            self.portfolio_state = current.json(&self.portfolio, next.telemetry.equity);
+            self.apply_portfolio(db,&next.telemetry,&next.config)?;
 
             let mut pulse_status = status.clone();
             pulse_status.telemetry = Some(next.telemetry.clone());
@@ -1197,6 +1233,9 @@ impl Service {
         if method == "GET" && path == "/v1/execution" {
             let mut value = Self::enrich_roles(value, db, status)?;
             value["portfolio"] = self.portfolio_state.clone();
+            let risk=self.risk_master_for_status(status);
+            value["risk_master"]=json!({"enabled":risk,"scope":"bound_broker_account_and_mode",
+                "note":"المفتاح يؤثر على ميزانية وقف الصفقة، وحدود المحفظة والخسارة اليومية والحدود الاختيارية. فحوص MT5 والهوية والتسوية وSL/TP تبقى فعالة."});
             let context=status.telemetry.as_ref().map(|t|
                 serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)).unwrap_or_default()
             ).unwrap_or_default();
@@ -1511,6 +1550,58 @@ mod tests {
         let persisted=crate::brain_control::load_account(&db,&key,TradingMode::Expert,Some(0)).unwrap();
         assert_eq!(persisted.len(),braintrade_domain::execution::BRAINS.len()-1);
         assert!(persisted.values().all(|c|!c.paper));
+    }
+
+    #[test]
+    fn risk_master_is_account_and_broker_mode_scoped_and_requires_explicit_real_consent() {
+        let db=setup();let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();t.demo=true;t.account_trade_mode=Some(0);t.trade_allowed=true;t.trade_expert=true;
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();service.inner.settings.target="demo".into();
+        service.inner.refresh_risk_master(&db,&t).unwrap();
+        assert_eq!(service.inner.risk_master(&t),Some(true));
+        let key=context(&t);
+        let mut status=Status::default();status.telemetry=Some(t.clone());status.gateway_fresh=true;
+        let body=|enabled:bool,confirm:&str|json!({"context":key,"enabled":enabled,"confirm_live_login":confirm}).to_string();
+        status.requested_run=true;
+        assert!(service.route("POST","/v1/execution/risk-master",body(false,"").as_bytes(),&db,&status,1000).is_err());
+        status.requested_run=false;
+        service.route("POST","/v1/execution/risk-master",body(false,"").as_bytes(),&db,&status,1000).unwrap();
+        assert_eq!(service.inner.risk_master(&t),Some(false));
+        queue(&db,&t,"unresolved","system",0.01,0.05,1001);
+        assert!(service.route("POST","/v1/execution/risk-master",body(true,"").as_bytes(),&db,&status,1002).is_err());
+        db.execute("UPDATE broker_commands SET state='observed' WHERE id='unresolved'",[]).unwrap();
+        let mut real=t.clone();real.demo=false;real.account_trade_mode=Some(2);
+        service.inner.settings.target="live".into();service.inner.refresh_risk_master(&db,&real).unwrap();
+        assert_eq!(service.inner.risk_master(&real),Some(true),"Demo opt-out must never cross to REAL");
+        status.telemetry=Some(real.clone());
+        assert!(service.route("POST","/v1/execution/risk-master",body(false,"wrong").as_bytes(),&db,&status,1003).is_err());
+        service.route("POST","/v1/execution/risk-master",body(false,&real.login.to_string()).as_bytes(),&db,&status,1004).unwrap();
+        assert_eq!(service.inner.risk_master(&real),Some(false));
+        let start=json!({"confirm_live_login":real.login.to_string()}).to_string();
+        assert!(service.validate_start(&status,start.as_bytes()).is_ok(),"Explicit risk-off does not require a suspended portfolio guard");
+        let mut restored=Service::new(&db).unwrap();restored.inner.refresh_risk_master(&db,&real).unwrap();
+        assert_eq!(restored.inner.risk_master(&real),Some(false),"Account setting survives restart");
+        let mut other=real.clone();other.login+=1;
+        restored.inner.settings.login=other.login;restored.inner.refresh_risk_master(&db,&other).unwrap();
+        assert_eq!(restored.inner.risk_master(&other),Some(true),"New accounts default to risk on");
+    }
+
+    #[test]
+    fn risk_master_off_suspends_portfolio_entry_gate_only_for_the_bound_account() {
+        let db=setup();let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();t.demo=true;t.account_trade_mode=Some(0);
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();service.inner.settings.target="demo".into();
+        service.inner.set_risk_master(&db,&t,false,100).unwrap();
+        service.portfolio=PortfolioLimits{enabled:true,max_positions:1,max_lots:1.,max_risk_percent:2.};
+        queue(&db,&t,"first-risk-off","system",0.01,0.05,1000);
+        queue(&db,&t,"second-risk-off","trend",0.01,0.05,1001);
+        service.apply_portfolio(&db,&t,&Config::default()).unwrap();
+        assert_eq!(state(&db,"first-risk-off"),"queued");assert_eq!(state(&db,"second-risk-off"),"queued");
+        assert_eq!(service.portfolio_state["effective_enabled"],false);
+        let mut other=t.clone();other.login+=1;
+        assert_eq!(service.inner.risk_master(&other),None,"Cached opt-out must not apply to another account");
     }
 
     #[test]
