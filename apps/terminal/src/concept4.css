@@ -84,6 +84,14 @@ body[data-theme] .terminal-v15.concept4 .sidebar{background:linear-gradient(150d
 .terminal-v15.concept4 .sidebar-footer{padding:4px 12px 7px;gap:3px}
 .terminal-v15.concept4 .sidebar-footer strong,.terminal-v15.concept4 .sidebar-footer small{font-size:10px}
 body[data-theme] .terminal-v15.concept4 .subpage-header{background:transparent;box-shadow:none;border:0}
+body[data-theme] .terminal-v15.concept4 .source-status{background:var(--panel);border:1px solid var(--border);color:var(--muted)}
+body[data-theme] .terminal-v15.concept4 .source-status.online{background:#e4f4e9;border-color:#b9dbc4;color:#08773c}
+body[data-theme] .terminal-v15.concept4 .source-status.preview{background:#f6eedc;border-color:#dec691;color:#785712}
+.concept4 .feature-zone p,.concept4 .editor-panel>p,.concept4 .data-description{direction:rtl;text-align:right}
+.terminal-v15.concept4 .subpage-settings .editor-panel,.terminal-v15.concept4 .subpage-telegram .editor-panel{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:16px}
+.terminal-v15.concept4 .editor-panel>p,.terminal-v15.concept4 .editor-panel>.safe-note{grid-column:1/-1}
+.terminal-v15.concept4 .editor-panel>label{min-width:0}
+@media(max-width:1100px){.terminal-v15.concept4 .subpage-settings .editor-panel,.terminal-v15.concept4 .subpage-telegram .editor-panel{grid-template-columns:1fr}}
 
 /* Brains are driven by Core; the offline directory provides names, not data. */
 .concept4 .subpage-brainControl>.subpage-stats,.concept4 .subpage-brains>.subpage-stats,.concept4 .subpage-brainControl .subpage-primary>.panel-title,.concept4 .subpage-brains .subpage-primary>.panel-title{display:none}

@@ -165,6 +165,7 @@ try{
   await navigate('إدارة المخاطر');const riskInputs=page.locator('.risk-editor input');
   assert(await riskInputs.count()>0,'Preview must show the unavailable risk form');
   for(const input of await riskInputs.all())assert(await input.isDisabled(),'Preview must never enable the live risk configuration');
+  assert.equal(await page.locator('.subpage-secondary .live-indicator strong').first().innerText(),'DESIGN PREVIEW','Preview must not claim MT5 is connected');
   await page.getByRole('button',{name:'عرض LIVE',exact:true}).click();await page.locator('.preview-banner').waitFor({state:'hidden'});await status();
  });
  await check('native viewport has no dashboard overflow or overlapping quality labels',async()=>{

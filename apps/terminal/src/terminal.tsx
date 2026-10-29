@@ -120,7 +120,7 @@ function RiskEditor({config,apply,loading,armed}:{config:Record<string,unknown>|
  </form>
 }
 function ConnectionLine({connectedNow,preview}:{connectedNow:boolean;preview:boolean}){
- return <span className={`source-status ${connectedNow?'online':''}`}>{preview?'DESIGN PREVIEW • SAMPLE DATA':connectedNow?'LIVE VERIFIED MT5 FEED':'CORE / MT5 UNAVAILABLE'}</span>
+ return <span className={`source-status ${preview?'preview':connectedNow?'online':''}`}>{preview?'DESIGN PREVIEW • SAMPLE DATA':connectedNow?'LIVE VERIFIED MT5 FEED':'CORE / MT5 UNAVAILABLE'}</span>
 }
 export default function Terminal(){
  const [page,setPage]=useState<PageId>('dashboard');const [theme,setTheme]=useState<Theme>(()=>(localStorage.getItem('bt-concept4-theme') as Theme)||'light');
@@ -897,8 +897,8 @@ export default function Terminal(){
         <div className="feature-zone"><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}}/></div>}
       </section>
       <section className="panel subpage-secondary"><div className="panel-title"><b>حالة المصدر والتنفيذ</b><span>{clock}</span></div>
-       <div className="feature-zone"><div className={'live-indicator '+(!accountFresh?'offline':'')}><div><strong>{accountFresh?'MT5 CONNECTED':'MT5 OFFLINE'}</strong><p>{preview?'PREVIEW':feed.broker?(feed.quote?'ACCOUNT + QUOTES FRESH':'ACCOUNT CONNECTED · QUOTES STALE'):buttonLabel(status,false)}</p></div><div><span>State</span><b>{display?.state||'UNAVAILABLE'}</b></div></div>
-        <div className="phase-list"><div><i/><strong>Core</strong><span>{online?'خدمة Rust متصلة':'خدمة Rust غير متاحة'}</span></div><div><i className={trustworthy?'':'warn'}/><strong>Market Data</strong><span>{preview?'معاينة تصميم فقط':quoteDiagnosis.detail}{!preview&&quoteDiagnosis.settingsRequired&&<button type="button" onClick={()=>open('settings')}>فتح إعدادات الرمز</button>}</span></div><div><i className={!preview&&display?.execution_enabled?'':'warn'}/><strong>Execution</strong><span>{preview?'معاينة فقط':display?.execution_enabled?'مسار التنفيذ مصرح':'غير جاهز للتنفيذ'}</span></div><div><i className="warn"/><strong>Source Integrity</strong><span>لا تُستبدل النتائج الفعلية بأرقام نموذجية</span></div></div>
+       <div className="feature-zone"><div className={'live-indicator '+(!accountFresh?'offline':'')}><div><strong>{preview?'DESIGN PREVIEW':accountFresh?'MT5 CONNECTED':'MT5 OFFLINE'}</strong><p>{preview?'بيانات توضيحية فقط':feed.broker?(feed.quote?'ACCOUNT + QUOTES FRESH':'ACCOUNT CONNECTED · QUOTES STALE'):buttonLabel(status,false)}</p></div><div><span>State</span><b>{preview?'PREVIEW':display?.state||'UNAVAILABLE'}</b></div></div>
+        <div className="phase-list"><div><i className={!preview&&online?'':'warn'}/><strong>Core</strong><span>{preview?'معاينة تصميم فقط':online?'خدمة Rust متصلة':'خدمة Rust غير متاحة'}</span></div><div><i className={!preview&&trustworthy?'':'warn'}/><strong>Market Data</strong><span>{preview?'معاينة تصميم فقط':quoteDiagnosis.detail}{!preview&&quoteDiagnosis.settingsRequired&&<button type="button" onClick={()=>open('settings')}>فتح إعدادات الرمز</button>}</span></div><div><i className={!preview&&display?.execution_enabled?'':'warn'}/><strong>Execution</strong><span>{preview?'معاينة فقط':display?.execution_enabled?'مسار التنفيذ مصرح':'غير جاهز للتنفيذ'}</span></div><div><i className="warn"/><strong>Source Integrity</strong><span>لا تُستبدل النتائج الفعلية بأرقام نموذجية</span></div></div>
        </div><div className="quick-ops"><button onClick={()=>open('dashboard')}>الرجوع للوحة القيادة</button><button onClick={()=>open('events')}>عرض سجل النظام</button></div>
       </section></div>
     </section>}
