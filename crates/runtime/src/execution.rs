@@ -990,7 +990,7 @@ impl Service {
             anyhow::ensure!(status.gateway_fresh && self.account_matches(status),"اربط الحساب الحالي وانتظر اتصال MT5 حديثاً");
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct Request{context:String,enabled:bool,confirm_live_login:String}
+            struct Request{context:String,enabled:bool,confirm_live_login:String,recovery:Option<legacy::RiskRecovery>}
             let request:Request=serde_json::from_slice(body)?;
             let t=status.telemetry.as_ref().unwrap();
             anyhow::ensure!(request.context==context(t),"الحساب أو الرمز تغيّر؛ أعد التأكيد");
@@ -998,14 +998,14 @@ impl Service {
             if !request.enabled && !t.demo {
                 anyhow::ensure!(request.confirm_live_login==t.login.to_string(),"لتعطيل المخاطر على REAL، أدخل رقم حساب MT5 المطابق");
             }
-            self.inner.set_risk_master(db,t,request.enabled,now)?;
+            self.inner.set_risk_master_with_recovery(db,t,request.enabled,request.recovery.clone(),now)?;
             self.fast=None;
             self.portfolio_state["risk_master_enabled"]=json!(request.enabled);
             self.portfolio_state["effective_enabled"]=json!(request.enabled && self.portfolio.enabled);
             self.portfolio_state["note"]=if request.enabled {
                 json!("Portfolio limits block new entries only. Broker SL/TP and reconciliation remain active; a timed close can be deferred while an order is unresolved.")
             }else{json!("حدود المحفظة محفوظة لكنها موقوفة عبر مفتاح مخاطر هذا الحساب؛ إدارة الصفقات الحالية والتسوية مستمرة.")};
-            return Ok(json!({"ok":true,"enabled":request.enabled,"scope":"bound_broker_account_and_mode",
+            return Ok(json!({"ok":true,"enabled":request.enabled,"recovery":request.recovery,"scope":"bound_broker_account_and_mode",
                 "broker_sl_tp_retained":true,"mt5_margin_and_execution_checks_retained":true}));
         }
         if method=="POST" && path=="/v1/execution/brain-paper-all" {
@@ -1273,6 +1273,7 @@ impl Service {
             value["portfolio"] = self.portfolio_state.clone();
             let risk=self.risk_master_for_status(status);
             value["risk_master"]=json!({"enabled":risk,"scope":"bound_broker_account_and_mode",
+                "recovery":status.telemetry.as_ref().and_then(|t|self.inner.risk_recovery(t)),
                 "note":"المفتاح يؤثر على ميزانية وقف الصفقة، وحدود المحفظة والخسارة اليومية والحدود الاختيارية. فحوص MT5 والهوية والتسوية وSL/TP تبقى فعالة."});
             let context=status.telemetry.as_ref().map(|t|
                 serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)).unwrap_or_default()
@@ -1623,6 +1624,80 @@ mod tests {
         let mut other=real.clone();other.login+=1;
         restored.inner.settings.login=other.login;restored.inner.refresh_risk_master(&db,&other).unwrap();
         assert_eq!(restored.inner.risk_master(&other),Some(true),"New accounts default to risk on");
+    }
+
+    #[test]
+    fn risk_master_recovery_is_latched_per_account_and_cancels_stale_entries() {
+        let db=setup();let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();t.demo=true;t.account_trade_mode=Some(0);t.balance=50.;t.equity=30.;
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();service.inner.settings.target="demo".into();
+        let rule=legacy::RiskRecovery{basis:"balance".into(),threshold:500.};
+        service.inner.set_risk_master_with_recovery(&db,&t,false,Some(rule.clone()),1000).unwrap();
+        let old_revision=service.inner.settings.revision;
+        queue(&db,&t,"recovery-queued","system",0.01,0.05,1001);
+        queue(&db,&t,"recovery-dispatched","system",0.01,0.05,1002);
+        db.execute("UPDATE broker_commands SET state='dispatched' WHERE id='recovery-dispatched'",[]).unwrap();
+        t.balance=499.;t.equity=600.;service.inner.refresh_risk_master(&db,&t).unwrap();
+        assert_eq!(service.inner.risk_master(&t),Some(false),"Balance and equity are distinct");
+        t.balance=500.;service.inner.refresh_risk_master(&db,&t).unwrap();
+        assert_eq!(service.inner.risk_master(&t),Some(true));
+        assert_eq!(service.inner.risk_recovery(&t),None);
+        assert!(service.inner.settings.revision>old_revision,"Dispatched old intents lose final authorization");
+        assert_eq!(state(&db,"recovery-queued"),"cancelled");
+        assert_eq!(state(&db,"recovery-dispatched"),"dispatched","Already-dispatched intents remain reconcilable");
+        let events:i64=db.query_row("SELECT COUNT(*) FROM events WHERE kind='risk_master_changed' AND json_extract(detail,'$.reason')='recovery'",[],|r|r.get(0)).unwrap();
+        assert_eq!(events,1);
+        let mut restored=Service::new(&db).unwrap();t.balance=10.;
+        restored.inner.refresh_risk_master(&db,&t).unwrap();
+        assert_eq!(restored.inner.risk_master(&t),Some(true),"Recovery remains on after restart and a later drop");
+        let mut other=t.clone();other.login+=1;restored.inner.settings.login=other.login;
+        restored.inner.refresh_risk_master(&db,&other).unwrap();
+        assert_eq!(restored.inner.risk_master(&other),Some(true),"Account-specific rule cannot transfer");
+    }
+
+    #[test]
+    fn risk_master_consumes_only_matching_durable_gateway_recovery_evidence() {
+        let db=setup();let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();t.demo=true;t.account_trade_mode=Some(0);t.balance=50.;t.equity=30.;
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();service.inner.settings.target="demo".into();
+        let rule=legacy::RiskRecovery{basis:"equity".into(),threshold:500.};
+        service.inner.set_risk_master_with_recovery(&db,&t,false,Some(rule.clone()),1000).unwrap();
+        let revision=service.inner.settings.revision;
+        let recovery_id:String=db.query_row("SELECT recovery_id FROM risk_master_recovery",[],|r|r.get(0)).unwrap();
+        let mut cmd=json!({"id":"gateway-crossing","revision":revision,"login":t.login,"server":t.server,
+            "currency":t.currency,"target":"demo","risk_master_enabled":false,"risk_master_recovery":rule,"risk_master_recovery_id":recovery_id});
+        let mut result=json!({"id":"gateway-crossing","state":"rejected","risk_master_recovery_reached":{"basis":"equity","threshold":500.,"value":100.}});
+        db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload,result) VALUES('gateway-crossing',?1,'system','open',1001,'rejected',?2,?3)",params![context(&t),cmd.to_string(),result.to_string()]).unwrap();
+        service.inner.refresh_risk_master(&db,&t).unwrap();
+        assert_eq!(service.inner.risk_master(&t),Some(false),"Sub-threshold evidence is rejected");
+        result["risk_master_recovery_reached"]["value"]=json!(501.);
+        cmd["login"]=json!(t.login+1);
+        db.execute("UPDATE broker_commands SET payload=?1,result=?2 WHERE id='gateway-crossing'",params![cmd.to_string(),result.to_string()]).unwrap();
+        service.inner.refresh_risk_master(&db,&t).unwrap();
+        assert_eq!(service.inner.risk_master(&t),Some(false),"Another account cannot restore this policy");
+        cmd["login"]=json!(t.login);
+        db.execute("UPDATE broker_commands SET payload=?1 WHERE id='gateway-crossing'",[cmd.to_string()]).unwrap();
+        service.inner.refresh_risk_master(&db,&t).unwrap();
+        assert_eq!(service.inner.risk_master(&t),Some(true),"A crossing between snapshots is latched");
+        let events:i64=db.query_row("SELECT COUNT(*) FROM events WHERE kind='risk_master_changed' AND json_extract(detail,'$.reason')='gateway_recovery'",[],|r|r.get(0)).unwrap();
+        assert_eq!(events,1);
+    }
+
+    #[test]
+    fn risk_recovery_rejects_invalid_or_already_reached_threshold() {
+        let db=setup();let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();t.demo=true;t.account_trade_mode=Some(0);t.balance=500.;
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();service.inner.settings.target="demo".into();
+        for rule in [legacy::RiskRecovery{basis:"balance".into(),threshold:500.},
+            legacy::RiskRecovery{basis:"other".into(),threshold:1000.},
+            legacy::RiskRecovery{basis:"balance".into(),threshold:f64::NAN}] {
+            assert!(service.inner.set_risk_master_with_recovery(&db,&t,false,Some(rule),1000).is_err());
+        }
+        service.inner.refresh_risk_master(&db,&t).unwrap();
+        assert_eq!(service.inner.risk_master(&t),Some(true));
     }
 
     #[test]

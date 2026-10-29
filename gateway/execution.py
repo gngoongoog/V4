@@ -250,10 +250,54 @@ class BrokerExecutor:
         self.db.execute('CREATE TABLE IF NOT EXISTS sends(id TEXT PRIMARY KEY, request TEXT NOT NULL, result TEXT, created_ms INTEGER NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS micro_real_recovered(account_key TEXT PRIMARY KEY, reached_ms INTEGER NOT NULL, reached_equity REAL NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS daily_loss_locks(account_key TEXT NOT NULL, report_day TEXT NOT NULL, reached_ms INTEGER NOT NULL, loss_amount REAL NOT NULL, PRIMARY KEY(account_key,report_day))')
+        self.db.execute('CREATE TABLE IF NOT EXISTS risk_master_recoveries(account_key TEXT NOT NULL, recovery_id TEXT NOT NULL, basis TEXT NOT NULL, threshold REAL NOT NULL, reached_value REAL NOT NULL, PRIMARY KEY(account_key,recovery_id))')
         self.db.execute('CREATE TABLE IF NOT EXISTS history_rescan(scope TEXT PRIMARY KEY, next_ms INTEGER NOT NULL, due_ms INTEGER NOT NULL)')
         initialise_quality_table(self.db)
         self.next_history = 0.0
         self.last_daily_snapshot = None
+
+    def _risk_recovery(self, cmd, account):
+        """Latch a broker-observed recovery for this exact account and rule.
+
+        A later price drop or Gateway restart cannot allow another unprotected
+        entry before Core receives the evidence and re-enables the risk master.
+        A subsequent explicit operator change uses a new recovery identity.
+        """
+        if cmd.get('kind') != 'open' or cmd.get('risk_master_enabled') is not False:
+            return None
+        rule=cmd.get('risk_master_recovery')
+        if rule is None:
+            return None
+        if (type(rule) is not dict or set(rule)!={'basis','threshold'}
+                or rule['basis'] not in ('balance','equity')
+                or type(rule['threshold']) not in (int,float)
+                or not math.isfinite(rule['threshold'])
+                or not 0.01<=rule['threshold']<=1_000_000_000_000
+                or type(cmd.get('risk_master_recovery_id')) is not str
+                or len(cmd['risk_master_recovery_id'])!=32
+                or any(c not in '0123456789abcdef' for c in cmd['risk_master_recovery_id'])):
+            raise ValueError('Invalid risk-master recovery rule or identity')
+        recovery_id=cmd['risk_master_recovery_id']
+        key=json.dumps((*account_identity(account),int(account.trade_mode)),ensure_ascii=False,separators=(',',':'))
+        saved=self.db.execute('SELECT basis,threshold,reached_value FROM risk_master_recoveries WHERE account_key=? AND recovery_id=?',(key,recovery_id)).fetchone()
+        if saved:
+            if saved[0]!=rule['basis'] or saved[1]!=rule['threshold']:
+                raise ValueError('Risk-master recovery rule changed for this identity')
+            return dict(basis=saved[0],threshold=saved[1],value=saved[2])
+        try:value=float(getattr(account,rule['basis']))
+        except (AttributeError,TypeError,ValueError,OverflowError):
+            raise ValueError('Risk-master recovery needs a current broker account value')
+        if not math.isfinite(value) or value<=0:
+            raise ValueError('Risk-master recovery needs a positive finite broker account value')
+        if value<rule['threshold']:
+            return None
+        self.db.execute('INSERT OR IGNORE INTO risk_master_recoveries VALUES(?,?,?,?,?)',
+                        (key,recovery_id,rule['basis'],rule['threshold'],value))
+        self.db.commit()
+        saved=self.db.execute('SELECT basis,threshold,reached_value FROM risk_master_recoveries WHERE account_key=? AND recovery_id=?',(key,recovery_id)).fetchone()
+        if not saved or saved[0]!=rule['basis'] or saved[1]!=rule['threshold']:
+            raise ValueError('Risk-master recovery latch could not be verified')
+        return dict(basis=saved[0],threshold=saved[1],value=saved[2])
 
     def _daily_loss_blocked(self, mt5, cmd, account):
         """Daily equity circuit breaker across all symbols and external positions.
@@ -591,7 +635,7 @@ class BrokerExecutor:
                        'kind','position','lots','signal','revision',
                        'manual_close','profit_only','expected_position_volume','expected_position_side',
                        'deviation_points','created_ms','expires_ms',
-                       'commission_per_lot','slippage_ticks','risk_percent','risk_master_enabled',
+                       'commission_per_lot','slippage_ticks','risk_percent','risk_master_enabled','risk_master_recovery','risk_master_recovery_id',
                        'demo_flexible','micro_demo_risk_opt_in',
                        'micro_real_temporary','micro_real_cap_percent',
                        'micro_real_recovery_equity','daily_breaker_enabled',
@@ -636,6 +680,9 @@ class BrokerExecutor:
                 raise ValueError('Invalid Core account risk-master state')
             if cmd.get('kind')=='open' and not risk_master and (cmd.get('daily_breaker_enabled') is not False or cmd.get('micro_real_temporary') is True):
                 raise ValueError('Inconsistent disabled-risk broker intent')
+            recovery=self._risk_recovery(cmd,a)
+            if recovery is not None:
+                return dict(result,state='rejected',reason='Risk-master recovery reached; wait for Core to restore risk',risk_master_recovery_reached=recovery)
             # Economic-event and measured-broker-quality gate. Closing an
             # owned position never waits on these optional external controls.
             self._institutional_entry_guard(cmd)
@@ -939,6 +986,11 @@ class BrokerExecutor:
                 try:return float(getattr(latest_account,name,float('nan')))
                 except (TypeError,ValueError,OverflowError):return float('nan')
             latest_equity=final_number('equity')
+            if not closing:
+                recovery=self._risk_recovery(cmd,latest_account)
+                if recovery is not None:
+                    result.update(state='cancelled',reason='Risk-master recovery reached before send; wait for Core to restore risk',risk_master_recovery_reached=recovery)
+                    return self._save(cmd,result)
             if not closing and cmd.get('daily_breaker_enabled',cmd.get('target')=='live') is True:
                 snapshot=self.last_daily_snapshot
                 latest_balance=final_number('balance')

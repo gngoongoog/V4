@@ -519,6 +519,56 @@ class ExecutionTests(unittest.TestCase):
         self.cmd.update(id='risk-master-inconsistent',risk_master_enabled=False,daily_breaker_enabled=True)
         result=self.send();self.assertEqual(result['state'],'rejected',result)
         self.assertIn('Inconsistent',result['reason'])
+
+    def test_risk_recovery_latches_broker_balance_crossing_across_restart(self):
+        self.cmd.update(id='recovery-reached',revision=41,risk_master_enabled=False,risk_master_recovery_id='a'*32,
+                        daily_breaker_enabled=False,micro_real_temporary=False,
+                        risk_master_recovery=dict(basis='balance',threshold=500.))
+        self.mt.account.balance=500.;self.mt.account.equity=30.
+        result=self.send();self.assertEqual(result['state'],'rejected',result)
+        self.assertEqual(result['risk_master_recovery_reached'],dict(basis='balance',threshold=500.,value=500.))
+        self.assertEqual(self.mt.sends,[])
+        self.ex.close();self.ex=BrokerExecutor(self.path)
+        self.mt.account.balance=100.;self.cmd['id']='recovery-after-drop'
+        result=self.send();self.assertEqual(result['state'],'rejected',result)
+        self.assertEqual(result['risk_master_recovery_reached']['value'],500.)
+        self.assertEqual(self.mt.sends,[])
+        # Unrelated settings may advance revision; the recovery latch persists.
+        self.cmd.update(id='unrelated-revision',revision=42)
+        self.assertEqual(self.send()['state'],'rejected')
+        # Only an explicit new operator recovery policy receives a new ID.
+        self.cmd.update(id='new-operator-rule',risk_master_recovery_id='b'*32)
+        result=self.send();self.assertEqual(result['state'],'filled',result)
+        self.assertEqual(len(self.mt.sends),1)
+
+    def test_risk_recovery_crossing_after_validation_cancels_and_is_durable(self):
+        self.cmd.update(id='recovery-race',revision=99,risk_master_enabled=False,risk_master_recovery_id='c'*32,
+                        daily_breaker_enabled=False,micro_real_temporary=False,
+                        risk_master_recovery=dict(basis='equity',threshold=500.))
+        self.mt.account.equity=499.
+        self.mt.on_check=lambda:setattr(self.mt.account,'equity',501.)
+        result=self.send();self.assertEqual(result['state'],'cancelled',result)
+        self.assertEqual(result['risk_master_recovery_reached']['value'],501.)
+        self.assertFalse(self.mt.sends)
+        self.mt.on_check=None;self.mt.account.equity=100.
+        self.assertEqual(self.send()['risk_master_recovery_reached']['value'],501.)
+        self.cmd['id']='recovery-race-next'
+        self.assertEqual(self.send()['state'],'rejected')
+        self.assertFalse(self.mt.sends)
+
+    def test_risk_recovery_rejects_invalid_account_values_and_rules(self):
+        self.cmd.update(revision=7,risk_master_enabled=False,risk_master_recovery_id='d'*32,daily_breaker_enabled=False,
+                        micro_real_temporary=False,risk_master_recovery=dict(basis='balance',threshold=500.))
+        for i,value in enumerate((None,float('nan'),-1.)):
+            self.cmd['id']=f'bad-balance-{i}';self.mt.account.balance=value
+            result=self.send();self.assertEqual(result['state'],'rejected',result)
+            self.assertFalse(self.mt.sends)
+        self.mt.account.balance=100.
+        for i,rule in enumerate(({'basis':'other','threshold':500}, {'basis':'balance','threshold':True},
+                                 {'basis':'balance','threshold':0}, {'basis':'equity','threshold':float('inf')})):
+            self.cmd['id']=f'bad-rule-{i}';self.cmd['risk_master_recovery']=rule
+            result=self.send();self.assertEqual(result['state'],'rejected',result)
+            self.assertFalse(self.mt.sends)
     def test_account_switch_during_check_and_stop_before_send(self):
         self.mt.on_check=lambda:setattr(self.mt.account,'login',88);self.assertEqual(self.send()['state'],'rejected');self.assertFalse(self.mt.sends)
         self.mt.on_check=None;self.mt.account.login=17;self.assertEqual(self.ex.execute(self.mt,self.cmd,lambda _:False)['state'],'cancelled');self.assertFalse(self.mt.sends)

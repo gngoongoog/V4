@@ -52,6 +52,8 @@ pub struct Service {
     pub controls: BTreeMap<String, crate::brain_control::Control>,
     risk_master_key:String,
     risk_master_enabled:bool,
+    risk_master_recovery:Option<RiskRecovery>,
+    risk_master_recovery_id:Option<String>,
     solo:Option<SoloOwner>,
     signals: BTreeMap<String, Value>,
     new_entries: Vec<Value>,
@@ -67,6 +69,20 @@ pub struct Service {
 }
 #[derive(Clone,Debug,PartialEq)]
 struct SoloOwner {context:String,target:String,mode:TradingMode,brain:String}
+#[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RiskRecovery {pub basis:String,pub threshold:f64}
+impl RiskRecovery {
+    pub fn validate(&self)->Result<()> {
+        anyhow::ensure!(["balance","equity"].contains(&self.basis.as_str())
+            && self.threshold.is_finite() && (0.01..=1_000_000_000_000.).contains(&self.threshold),
+            "حد إعادة تفعيل المخاطر غير صالح");
+        Ok(())
+    }
+    fn value(&self,t:&Telemetry)->f64 {
+        if self.basis=="balance" {t.balance} else {t.equity}
+    }
+}
 fn ctx(t: &Telemetry) -> String {
     serde_json::to_string(&(&t.server, t.login, &t.symbol, &t.currency)).unwrap()
 }
@@ -351,11 +367,13 @@ CREATE TABLE IF NOT EXISTS execution_equity(context TEXT PRIMARY KEY,peak REAL N
 CREATE TABLE IF NOT EXISTS micro_real_recovered(account_key TEXT PRIMARY KEY,reached_ms INTEGER NOT NULL,reached_equity REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS daily_loss_locks(account_key TEXT NOT NULL,report_day TEXT NOT NULL, reached_ms INTEGER NOT NULL,loss_amount REAL NOT NULL, PRIMARY KEY(account_key,report_day));
 CREATE TABLE IF NOT EXISTS risk_master_accounts(account_key TEXT PRIMARY KEY,enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),updated_ms INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS risk_master_recovery(account_key TEXT PRIMARY KEY,basis TEXT NOT NULL CHECK(basis IN ('balance','equity')),threshold REAL NOT NULL CHECK(threshold>0 AND threshold<=1000000000000),recovery_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS execution_solo(context TEXT NOT NULL,account_mode INTEGER NOT NULL CHECK(account_mode IN (0,2)),mode TEXT NOT NULL,brain TEXT NOT NULL,PRIMARY KEY(context,account_mode,mode));
 CREATE TABLE IF NOT EXISTS brain_configs(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS broker_commands(id TEXT PRIMARY KEY,context TEXT NOT NULL,brain TEXT NOT NULL,kind TEXT NOT NULL,created_ms INTEGER NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS broker_commands_context ON broker_commands(context,brain,created_ms);
 CREATE INDEX IF NOT EXISTS broker_commands_history_floor ON broker_commands(context,kind,created_ms);
+CREATE INDEX IF NOT EXISTS broker_commands_recovery ON broker_commands(kind,state,created_ms);
 CREATE TABLE IF NOT EXISTS broker_seen(context TEXT NOT NULL,brain TEXT NOT NULL,signal TEXT NOT NULL,PRIMARY KEY(context,brain,signal));
 CREATE TABLE IF NOT EXISTS broker_deals(context TEXT NOT NULL,ticket INTEGER NOT NULL,position_id INTEGER NOT NULL,brain TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,ticket));
 CREATE TABLE IF NOT EXISTS broker_history_sync(context TEXT NOT NULL,target TEXT NOT NULL CHECK(target IN ('demo','live')),until_ms INTEGER NOT NULL CHECK(until_ms>=0),synced_ms INTEGER NOT NULL CHECK(synced_ms>=0),PRIMARY KEY(context,target));
@@ -398,6 +416,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             controls: BTreeMap::new(),
             risk_master_key:String::new(),
             risk_master_enabled:true,
+            risk_master_recovery:None,
+            risk_master_recovery_id:None,
             solo:None,
             new_entries: Vec::new(),
             weights:BTreeMap::new(),
@@ -471,27 +491,91 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
     pub fn risk_master(&self,t:&Telemetry)->Option<bool>{
         (self.matches(t) && self.risk_master_key==daily_account_key(t)).then_some(self.risk_master_enabled)
     }
+    pub fn risk_recovery(&self,t:&Telemetry)->Option<RiskRecovery>{
+        self.risk_master(t).and_then(|enabled|if enabled {None} else {self.risk_master_recovery.clone()})
+    }
     pub fn refresh_risk_master(&mut self,db:&Connection,t:&Telemetry)->Result<()> {
-        if !self.matches(t) {self.risk_master_key.clear();self.risk_master_enabled=true;return Ok(());}
+        if !self.matches(t) {self.risk_master_key.clear();self.risk_master_enabled=true;self.risk_master_recovery=None;self.risk_master_recovery_id=None;return Ok(());}
         let key=daily_account_key(t);
         let enabled:Option<i64>=db.query_row("SELECT enabled FROM risk_master_accounts WHERE account_key=?1",[&key],|r|r.get(0)).optional()?;
-        self.risk_master_enabled=match enabled {None|Some(1)=>true,Some(0)=>false,_=>anyhow::bail!("Invalid account risk master setting")};
+        let enabled=match enabled {None|Some(1)=>true,Some(0)=>false,_=>anyhow::bail!("Invalid account risk master setting")};
+        let recovery_row:Option<(RiskRecovery,String)>=if enabled {None} else {db.query_row(
+            "SELECT basis,threshold,recovery_id FROM risk_master_recovery WHERE account_key=?1",[&key],
+            |r|Ok((RiskRecovery{basis:r.get(0)?,threshold:r.get(1)?},r.get(2)?))).optional()?};
+        let (recovery,recovery_id)=match recovery_row {Some((rule,id))=>(Some(rule),Some(id)),None=>(None,None)};
+        if let Some(rule)=&recovery {
+            rule.validate()?;
+            let id=recovery_id.as_deref().context("Missing risk recovery identity")?;
+            anyhow::ensure!(id.len()==32 && id.bytes().all(|c|c.is_ascii_hexdigit()&&!c.is_ascii_uppercase()),"Invalid risk recovery identity");
+            let value=rule.value(t);
+            // Trigger only from a current, identity-matched broker snapshot.
+            // Invalid/missing values cannot authorize an unprotected entry;
+            // Gateway also checks the rule against its own fresh account read.
+            if value.is_finite() && value>0. && value>=rule.threshold {
+                self.set_risk_master_reason(db,t,true,None,crate::now_ms(),"recovery",Some((rule.clone(),value)))?;
+                return Ok(());
+            }
+            // The Gateway may have observed a short-lived threshold crossing
+            // between Core snapshots. Its durable latch rejects subsequent
+            // risk-off sends for this recovery setting. Consume only evidence
+            // tied to this exact account, rule and unique recovery identity.
+            let reached={
+                let mut st=db.prepare("SELECT payload,result FROM broker_commands WHERE kind='open' AND state IN ('rejected','cancelled') AND CASE WHEN json_valid(result) THEN json_type(result,'$.risk_master_recovery_reached')='object' ELSE 0 END AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.risk_master_recovery_id')=?1 ELSE 0 END ORDER BY created_ms DESC")?;
+                let rows=st.query_map([id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?;
+                let mut found=None;
+                for row in rows {
+                    let(raw,result)=row?;
+                    let(Ok(cmd),Ok(receipt))=(serde_json::from_str::<Value>(&raw),serde_json::from_str::<Value>(&result)) else {continue};
+                    let evidence=&receipt["risk_master_recovery_reached"];
+                    if cmd["login"]!=t.login || cmd["server"]!=t.server || cmd["currency"]!=t.currency
+                        || cmd["target"]!=self.settings.target || cmd["risk_master_enabled"]!=false
+                        || cmd["risk_master_recovery"]!=serde_json::to_value(rule)?
+                        || receipt["id"]!=cmd["id"] || evidence["basis"]!=rule.basis
+                        || evidence["threshold"].as_f64()!=Some(rule.threshold) {continue}
+                    if let Some(v)=evidence["value"].as_f64().filter(|v|v.is_finite()&&*v>=rule.threshold) {found=Some(v);break;}
+                }
+                found
+            };
+            if let Some(value)=reached {
+                self.set_risk_master_reason(db,t,true,None,crate::now_ms(),"gateway_recovery",Some((rule.clone(),value)))?;
+                return Ok(());
+            }
+        }
+        self.risk_master_enabled=enabled;
+        self.risk_master_recovery=recovery;
+        self.risk_master_recovery_id=recovery_id;
         self.risk_master_key=key;
         Ok(())
     }
     pub fn set_risk_master(&mut self,db:&Connection,t:&Telemetry,enabled:bool,now:u64)->Result<()> {
+        self.set_risk_master_with_recovery(db,t,enabled,None,now)
+    }
+    pub fn set_risk_master_with_recovery(&mut self,db:&Connection,t:&Telemetry,enabled:bool,recovery:Option<RiskRecovery>,now:u64)->Result<()> {
+        if let Some(rule)=&recovery {
+            rule.validate()?;
+            anyhow::ensure!(!enabled,"لا يمكن ضبط حد الاستعادة عند تفعيل المخاطر");
+            let value=rule.value(t);
+            anyhow::ensure!(value.is_finite() && value>0. && value<rule.threshold,
+                "الرصيد أو Equity الحالي غير صالح أو بلغ حد الاستعادة؛ اختر حداً أعلى");
+        }
+        self.set_risk_master_reason(db,t,enabled,recovery,now,"operator",None)
+    }
+    fn set_risk_master_reason(&mut self,db:&Connection,t:&Telemetry,enabled:bool,recovery:Option<RiskRecovery>,now:u64,reason:&str,reached:Option<(RiskRecovery,f64)>)->Result<()> {
         anyhow::ensure!(self.matches(t),"الحساب لا يطابق حساب التنفيذ");
         let key=daily_account_key(t);
+        let recovery_id=recovery.as_ref().map(|_|uuid::Uuid::new_v4().simple().to_string());
         let mut settings=self.settings.clone();
         settings.revision=settings.revision.checked_add(1).context("Execution revision exhausted")?;
         let tx=db.unchecked_transaction()?;
         tx.execute("INSERT INTO risk_master_accounts(account_key,enabled,updated_ms) VALUES(?1,?2,?3) ON CONFLICT(account_key) DO UPDATE SET enabled=excluded.enabled,updated_ms=excluded.updated_ms",params![key,enabled as i64,now])?;
+        tx.execute("DELETE FROM risk_master_recovery WHERE account_key=?1",[&key])?;
+        if let Some(rule)=&recovery {tx.execute("INSERT INTO risk_master_recovery(account_key,basis,threshold,recovery_id) VALUES(?1,?2,?3,?4)",params![key,rule.basis,rule.threshold,recovery_id])?;}
         tx.execute("INSERT OR REPLACE INTO execution_settings VALUES(1,?1)",[serde_json::to_string(&settings)?])?;
         tx.execute("UPDATE broker_commands SET state='cancelled' WHERE kind='open' AND state='queued'",[])?;
         tx.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,'risk_master_changed',?2)",
-            params![now,json!({"account_key":key,"enabled":enabled,"scope":"bound_broker_account_and_mode"}).to_string()])?;
+            params![now,json!({"account_key":key,"enabled":enabled,"scope":"bound_broker_account_and_mode", "reason":reason,"recovery":recovery,"reached":reached.as_ref().map(|(rule,value)|json!({"rule":rule,"value":value}))}).to_string()])?;
         tx.commit()?;
-        self.settings=settings;self.risk_master_key=key;self.risk_master_enabled=enabled;self.signals.clear();
+        self.settings=settings;self.risk_master_key=key;self.risk_master_enabled=enabled;self.risk_master_recovery=recovery;self.risk_master_recovery_id=recovery_id;self.signals.clear();
         Ok(())
     }
     fn matches(&self, t: &Telemetry) -> bool {
@@ -571,6 +655,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             p["commission_per_lot"] = json!(c.risk.commission_per_lot);
             let risk_master=self.risk_master(t).unwrap_or(true);
             p["risk_master_enabled"] = json!(risk_master);
+            p["risk_master_recovery"] = json!(self.risk_recovery(t));
+            p["risk_master_recovery_id"] = json!(if risk_master {None} else {self.risk_master_recovery_id.clone()});
             p["daily_breaker_enabled"] = json!(self.breaker_enabled(c,t));
             p["daily_breaker_limit_percent"] = json!(c.risk.daily_loss_percent);
             // Mandatory for every new entry (Demo and REAL). The broker uses

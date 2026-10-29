@@ -40,6 +40,7 @@ import {SniperFrozenOperations,eligibleFrozenSniper} from './sniper-frozen-opera
 import {SniperClassicOperations,eligibleFrozenClassic} from './sniper-classic-operations';
 import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position} from './types';
+import type {RiskRecovery} from './bridge';
 import {DESIGN_FIXTURE} from './mock';
 import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
 import {money,num,signed,up,valid} from './format';
@@ -658,7 +659,7 @@ export default function Terminal(){
   }catch(e){if(writeFresh(mutation))sendNotice('تعذر حفظ حدود المحفظة: '+String(e),true)}
   finally{finishWrite(mutation)}
  };
- const runRiskMaster=async(enabled:boolean)=>{
+ const runRiskMaster=async(enabled:boolean,recovery:RiskRecovery|null)=>{
   if(preview||!hasTauri()||!feed.broker||!status?.telemetry||status.requested_run!==false){sendNotice('تغيير إدارة المخاطر يحتاج STOP وحساب MT5 متصلاً',true);return}
   const t=status.telemetry,view=unwrap(portfolioReport),settings=unwrap(view.settings);
   const context=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
@@ -667,7 +668,8 @@ export default function Terminal(){
   }
   let confirmLiveLogin='';
   if(!enabled){
-   if(!window.confirm(`سيُوقَف تحديد مخاطرة الصفقة وحدود المحفظة والخسارة اليومية لهذا الحساب ${t.demo?'DEMO':'REAL'} رقم ${t.login} حتى تعيد تشغيلها. تبقى فحوص MT5 والهوية والهامش وSL/TP. تأكيد؟`))return;
+   const until=recovery?`حتى يصل ${recovery.basis==='balance'?'الرصيد':'Equity'} إلى ${recovery.threshold} ${t.currency}، أو تعيد تشغيلها يدوياً`:'حتى تعيد تشغيلها يدوياً';
+   if(!window.confirm(`سيُوقَف تحديد مخاطرة الصفقة وحدود المحفظة والخسارة اليومية لهذا الحساب ${t.demo?'DEMO':'REAL'} رقم ${t.login} ${until}. تبقى فحوص MT5 والهوية والهامش وSL/TP. تأكيد؟`))return;
    if(!t.demo){
     const value=window.prompt('اكتب رقم حساب REAL المعروض لتأكيد إيقاف إدارة المخاطر');
     if(value===null)return;
@@ -677,7 +679,7 @@ export default function Terminal(){
   }
   const mutation=beginWrite('risk-master');if(!mutation)return;
   try{
-   const result=unwrap(await updateRiskMaster(context,enabled,confirmLiveLogin));
+   const result=unwrap(await updateRiskMaster(context,enabled,confirmLiveLogin,recovery));
    if(!writeFresh(mutation))return;
    if(result.ok!==true||result.enabled!==enabled)throw new Error('لم يؤكد Core حالة إدارة المخاطر');
    scopedGeneration.current.invalidate('portfolio');scopedGeneration.current.invalidate('risk');
@@ -686,7 +688,7 @@ export default function Terminal(){
    if(!writeFresh(mutation))return;
    if(scopedGeneration.current.isCurrent(ticket))setPortfolioReport(unwrap(updated));
    if(scopedGeneration.current.isCurrent(riskTicket)){setRiskSnapshot(unwrap(monitor));setRiskScope(contextKey)}
-   sendNotice(enabled?'تم تفعيل إدارة المخاطر للحساب الحالي':'تم إيقاف إدارة المخاطر للحساب الحالي حتى تعيد تشغيلها');
+   sendNotice(enabled?'تم تفعيل إدارة المخاطر للحساب الحالي':recovery?'تم إيقاف إدارة المخاطر مؤقتاً مع حد إعادة التفعيل المحفوظ':'تم إيقاف إدارة المخاطر للحساب الحالي حتى تعيد تشغيلها');
   }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
   finally{finishWrite(mutation)}
  };
@@ -1047,7 +1049,7 @@ export default function Terminal(){
       <div className="subpage-layout">
       <section className="panel subpage-primary"><div className="panel-title"><b>{pageMeta.title} — بيانات وتشغيل</b><button onClick={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}} disabled={!pageMeta.route||preview||page==='journal'||page==='reports'}>تحديث ↻</button></div>
         {page==='risk'?<div className="feature-zone">
-          <div className="concept-risk-grid"><div className="concept-risk-editor-card"><h3><ShieldCheck size={19}/> التحكم وحدود المخاطرة</h3><RiskMasterOperations status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} armed={status?.requested_run===true} onSet={runRiskMaster}/><RiskEditor key={contextKey} config={!preview&&safeConfig?unwrap(safeConfig.risk):null} apply={saveRiskForm} loading={busy||preview} armed={status?.requested_run===true}/></div>
+          <div className="concept-risk-grid"><div className="concept-risk-editor-card"><h3><ShieldCheck size={19}/> التحكم وحدود المخاطرة</h3><RiskMasterOperations key={contextKey} status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} armed={status?.requested_run===true} onSet={runRiskMaster}/><RiskEditor key={contextKey} config={!preview&&safeConfig?unwrap(safeConfig.risk):null} apply={saveRiskForm} loading={busy||preview} armed={status?.requested_run===true}/></div>
           <div className="concept-risk-capital" tabIndex={0} aria-label="إعدادات الحساب الصغير؛ يمكن تمرير المحتوى"><MicroCapitalOperations status={!preview&&feed.broker?status:null} key={contextKey} risk={!preview&&safeConfig?unwrap(safeConfig.risk):null}
              monitor={safeRiskSnapshot} portfolio={unwrap(portfolioReport).portfolio} armed={status?.requested_run===true}
              disabled={busy||preview} onSavePortfolio={runSavePortfolio}/></div>

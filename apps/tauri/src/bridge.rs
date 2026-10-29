@@ -360,14 +360,14 @@ fn update_brain_paper_all(context: String, mode: String, paper: bool) -> Result<
 }
 
 #[tauri::command]
-fn update_risk_master(context:String,enabled:bool,confirm_live_login:String)->Result<Value,String>{
+fn update_risk_master(context:String,enabled:bool,confirm_live_login:String,recovery:Option<Value>)->Result<Value,String>{
     if context.is_empty() || context.len()>500 || confirm_live_login.len()>32 {
         return Err("حساب MT5 أو التأكيد غير صالح".into());
     }
     // Core requires STOP, no unresolved broker intents, the exact current
     // account, and a separate REAL login confirmation when disabling.
     open_client()?.post("/v1/execution/risk-master",
-        json!({"context":context,"enabled":enabled,"confirm_live_login":confirm_live_login}))
+        json!({"context":context,"enabled":enabled,"confirm_live_login":confirm_live_login,"recovery":recovery}))
         .map_err(|err|err.to_string())
 }
 

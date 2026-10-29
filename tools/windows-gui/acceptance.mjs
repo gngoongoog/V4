@@ -133,10 +133,12 @@ try{
   await navigate('إدارة المخاطر');
   const panel=page.getByRole('region',{name:'مفتاح إدارة المخاطر للحساب'});
   await panel.waitFor();
+  await panel.getByLabel('حد استعادة المخاطر').fill('100000');
   await until(async()=>await panel.getByRole('button',{name:'إيقاف إدارة المخاطر',exact:true}).isEnabled());
   page.once('dialog',dialog=>dialog.accept());
   await panel.getByRole('button',{name:'إيقاف إدارة المخاطر',exact:true}).click();
   await until(async()=>(await execution()).risk_master?.enabled===false);
+  assert.deepEqual((await execution()).risk_master.recovery,{basis:'balance',threshold:100000});
   const risk=await invoke('read_panel',{route:'/v1/risk/monitor'});
   assert.equal((risk.data||risk).risk_master_enabled,false);
   await panel.getByRole('button',{name:'تفعيل إدارة المخاطر',exact:true}).click();

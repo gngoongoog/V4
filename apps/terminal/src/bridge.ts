@@ -27,7 +27,8 @@ export async function saveExcelReport(bytes:Uint8Array,kind:'journal'|'report'):
 export async function backtestAction(action:'start'|'cancel',request?:Record<string,unknown>):Promise<unknown>{return invoke('backtest_action',{action,request:request??null})}
 export async function updateBrainControl(context:string,brain:string,mode:string,advisor:boolean,paper:boolean):Promise<unknown>{return invoke('update_brain_control',{context,brain,mode,advisor,paper})}
 export async function updateBrainPaperAll(context:string,mode:string,paper:boolean):Promise<unknown>{return invoke('update_brain_paper_all',{context,mode,paper})}
-export async function updateRiskMaster(context:string,enabled:boolean,confirmLiveLogin:string):Promise<unknown>{return invoke('update_risk_master',{context,enabled,confirmLiveLogin})}
+export type RiskRecovery={basis:'balance'|'equity';threshold:number};
+export async function updateRiskMaster(context:string,enabled:boolean,confirmLiveLogin:string,recovery:RiskRecovery|null):Promise<unknown>{return invoke('update_risk_master',{context,enabled,confirmLiveLogin,recovery})}
 export async function selectSoloBrain(context:string,mode:string,brain:string):Promise<unknown>{return invoke('select_solo_brain',{context,mode,brain})}
 export type SelectedClosePosition={ticket:number;magic:number;side:string;volume:number};
 export async function closeOwnedPositions(context:string,positions:SelectedClosePosition[],profitOnly:boolean):Promise<unknown>{return invoke('close_owned_positions',{context,positions,profitOnly})}
