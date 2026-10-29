@@ -39,11 +39,16 @@ assert.equal(different.ready,false);assert.equal(different.net,null);
 const real=brokerReport({...status,telemetry:{...status.telemetry,demo:false,account_trade_mode:2}},make([item(1,5)]));
 assert.equal(real.mode,'REAL');
 const generated={};const jsx=(type,props)=>({type,props:props||{}});
+const series={};vm.runInNewContext(load('report-series.ts'),{exports:series,Number,Date,Array,Object});
+const csv={};vm.runInNewContext(load('journal-export.ts'),{exports:csv,String});
 vm.runInNewContext(load('broker-report-operations.tsx'),{exports:generated,
  require:id=>{
-  if(id==='react')return {useState:init=>[init,()=>{}],useEffect:()=>{}};
+  if(id==='react')return {useState:init=>[init,()=>{}],useEffect:()=>{},useMemo:fn=>fn()};
   if(id==='react/jsx-runtime')return {jsx,jsxs:jsx};
+  if(id==='lucide-react')return Object.fromEntries(['BarChart3','CalendarDays','Download','FileText','Filter','Printer','RefreshCw','Target','TrendingUp'].map(x=>[x,x]));
   if(id==='./broker-report')return logic;
+  if(id==='./report-series')return series;
+  if(id==='./journal-export')return csv;
   if(id==='./journal-evidence')return {journalEvidence:()=>make(rows,152)};
   if(id==='./bridge')return {readPanel:()=>Promise.reject(Error('offline')),readTradeHistory:()=>Promise.reject(Error('offline'))};
   throw Error('Unexpected module '+id);

@@ -2,7 +2,7 @@ import type {Status} from './types';
 
 export type BrokerJournalRow={
  positionId:number;symbol:string;side:'BUY'|'SELL';status:string;
- opened:string;lotsOpen:number|null;lotsClosed:number|null;remaining:number|null;
+ opened:string;latestDeal:string;entryPrice:number|null;mode:string;lotsOpen:number|null;lotsClosed:number|null;remaining:number|null;
  profit:number|null;commission:number|null;swap:number|null;fee:number|null;net:number|null;
  provenCosts:boolean;brain:string;reason:string;
 };
@@ -40,6 +40,9 @@ export function journalEvidence(status:Status|null,execution:unknown,history:unk
   rows.push({
    positionId:p.position_id,symbol:String(p.symbol),side:p.side as 'BUY'|'SELL',
    status:String(p.status),opened:typeof p.opened_utc==='string'?p.opened_utc.slice(0,45):'—',
+   latestDeal:typeof p.latest_deal_utc==='string'?p.latest_deal_utc.slice(0,45):'—',
+   entryPrice:good(p.entry_price)&&p.entry_price>0?p.entry_price:null,
+   mode:typeof origin.trading_mode==='string'?origin.trading_mode.slice(0,80):'غير موثق',
    lotsOpen:numberOrNull(p.lots_opened),lotsClosed:numberOrNull(p.lots_closed),
    remaining:numberOrNull(p.remaining_lots),provenCosts:verified,
    net:verified?numberOrNull(p.broker_net_booked):null,

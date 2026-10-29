@@ -1,0 +1,39 @@
+name: V25 Concept 4 visual and navigation checks
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'apps/terminal/**'
+      - 'tools/windows-gui/**'
+      - '.github/workflows/v25-concept4-visual.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: concept4-ui-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  visual:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm --prefix apps/terminal ci --ignore-scripts --no-audit --no-fund
+      - run: npm --prefix tools/windows-gui ci --ignore-scripts --no-audit --no-fund
+      - run: npm --prefix apps/terminal test
+      - run: npm --prefix apps/terminal run build
+      - name: Exercise all pages with clearly labelled synthetic preview
+        run: node tools/windows-gui/concept4-visual.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: V25-Concept4-Visual-Evidence
+          path: test-output/concept4-visual/
+          if-no-files-found: warn
+          retention-days: 14

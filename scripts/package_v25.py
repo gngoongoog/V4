@@ -65,6 +65,7 @@ def stage():
     shutil.copy2(ROOT/'docs/v25/G7H_NATIVE_DEMO_ACCEPTANCE_AR.md',DEST/'G7_H_ACCEPTANCE_AR.md')
     shutil.copy2(ROOT/'docs/v25/USER_MANUAL_V25_AR.md',DEST/'USER_MANUAL_V25_AR.md')
     shutil.copy2(ROOT/'docs/v25/USER_MANUAL_V25_AR.md',DEST/'USER_MANUAL_V25_AR.txt')
+    shutil.copy2(ROOT/'docs/v25/CONCEPT4_UI_AR.md',DEST/'CONCEPT4_UI_AR.md')
     # Redacted reports are written under Documents, outside the signed tree.
     # P0-E: ship source + a strictly explicit operator-side MetaEditor compile
     # path. Build CI has no installed MT5 and must never claim EA .ex5 passed.
