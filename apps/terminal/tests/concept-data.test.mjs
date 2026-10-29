@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {reportSeries} from '../src/report-series.ts';
 import {journalCsv} from '../src/journal-export.ts';
+import {BRAIN_DIRECTORY} from '../src/brain-catalog.ts';
 
 const row=(id,net,latestDeal='2026-10-28 12:00:00 UTC')=>({
  positionId:id,symbol:'XAUUSD',side:'BUY',status:'CLOSED',opened:'2026-10-28 11:00:00 UTC',
@@ -19,4 +21,11 @@ test('CSV keeps missing costs blank and neutralizes spreadsheet formulas in text
  const data=journalCsv([{...row(7,null),brain:'=HYPERLINK("bad")',mode:'  +cmd',commission:null}]);
  assert(data.startsWith('\ufeff'));assert(data.includes('"\'=HYPERLINK(""bad"")"'));
  assert(data.includes('"\'  +cmd"'));assert(data.includes('"7"'));assert(data.includes(',,'));
+});
+test('offline brain directory lists exactly the secondary identities bundled in Core',()=>{
+ const domain=readFileSync(new URL('../../../crates/domain/src/execution_legacy.rs',import.meta.url),'utf8');
+ const inventory=domain.match(/pub const BRAINS[^=]*=\s*\[([\s\S]*?)\];/);
+ assert(inventory,'Core brain inventory was not found');
+ const ids=[...inventory[1].matchAll(/\("([a-z_]+)",/g)].map(m=>m[1]).filter(id=>id!=='system').sort();
+ assert.deepEqual(BRAIN_DIRECTORY.map(item=>item[0]).sort(),ids);
 });

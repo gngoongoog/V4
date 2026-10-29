@@ -56,3 +56,73 @@ body[data-theme=light] .concept4 .explorer-toolbar{background:#f7f9fb;border-col
 @media(max-width:1300px){.concept4.shell{grid-template-columns:185px minmax(0,1fr)}.concept4.compact-nav{grid-template-columns:64px minmax(0,1fr)}.concept4 .dashboard{grid-template-columns:repeat(2,minmax(0,1fr))}.concept4 .dashboard .kpi-row{grid-template-columns:repeat(3,minmax(0,1fr))}.concept4 .dashboard .hero-grid .chart-panel{grid-column:1;grid-row:2}.concept4 .dashboard .hero-grid .ops-panel{grid-column:2;grid-row:2}.concept4 .concept-modes{grid-column:1;grid-row:3}.concept4 .concept-brains{grid-column:2;grid-row:3}.concept4 .dashboard .activity-grid .trades-panel{grid-column:1;grid-row:4}.concept4 .dashboard .activity-grid .positions-panel{grid-column:2;grid-row:4}.concept4 .concept-edition{display:none}.concept4 .concept-connection{min-width:130px}}
 @media(max-height:800px){.concept4 .brand{height:126px;flex-basis:126px;padding-top:3px}.concept4 .concept-portrait{height:78px;background-position:-42px -83px}.concept4 .nav-item{height:37px}.concept4 .health-widget{padding:6px}.concept4 .kpi{height:100px}.concept4 .dashboard .hero-grid .chart-panel,.concept4 .dashboard .hero-grid .ops-panel{height:330px}}
 @media(prefers-reduced-motion:reduce){.concept4 *, .concept4 *:before,.concept4 *:after{animation:none!important;transition:none!important}}
+
+/* Overrides for older terminal themes: keep the original Concept 4 charcoal
+   sidebar and leave all eight primary destinations visible at desktop height. */
+body[data-theme] .terminal-v15.concept4 .sidebar{background:linear-gradient(150deg,#202a30,#151c20 67%,#11191d);width:auto;flex-basis:auto}
+.terminal-v15.concept4 .sidebar #sidebarNav{padding:2px 10px;flex:1;min-height:0}
+.terminal-v15.concept4 .sidebar .nav-item{height:40px;margin:1px 0;padding:0 15px;border-radius:8px;gap:14px;font-size:13px}
+.terminal-v15.concept4 .sidebar .all-pages{height:27px;font-size:10px}
+.terminal-v15.concept4 .health-widget,.terminal-v15.concept4 .health-widget.tone-good,.terminal-v15.concept4 .health-widget.tone-preview,.terminal-v15.concept4 .health-widget.tone-warn,.terminal-v15.concept4 .health-widget.tone-bad{margin:5px 12px 3px;padding:8px 10px;border:1px solid #3b4549;background:#141b1f;box-shadow:none;border-radius:10px}
+.terminal-v15.concept4 .health-widget:before,.terminal-v15.concept4 .health-emblem,.terminal-v15.concept4 .health-heading small,.terminal-v15.concept4 .health-signal{display:none}
+.terminal-v15.concept4 .health-top{min-height:18px}
+.terminal-v15.concept4 .health-heading strong{font-size:11px;color:#f4f6f6}
+.terminal-v15.concept4 .health-expand{color:#9ca9ad}
+.terminal-v15.concept4 .health-state-line{padding:3px 0;margin:4px 0;border:0;background:transparent}
+.terminal-v15.concept4 .health-state-line strong{color:#b4c6bb;font-size:10px;letter-spacing:0}
+.terminal-v15.concept4 .health-state-line small{font-size:9px;color:#a8b4b5}
+.terminal-v15.concept4 .health-orb{width:9px;height:9px;flex-basis:9px;border:0;background:#9ba7a8;box-shadow:none}
+.terminal-v15.concept4 .tone-good .health-orb{background:#10c55e;box-shadow:0 0 8px #10c55e88}
+.terminal-v15.concept4 .tone-warn .health-orb{background:#d8a044}
+.terminal-v15.concept4 .tone-bad .health-orb{background:#e2555e}
+.terminal-v15.concept4 .health-row{height:16px;padding:0 2px;color:#c3cdcf}
+.terminal-v15.concept4 .health-row svg{color:#a4b1b3}
+.terminal-v15.concept4 .health-row .state-preview{color:#aebabc}
+.terminal-v15.concept4 .health-row .state-good{color:#20c875}
+.terminal-v15.concept4 .health-footer{margin-top:3px;padding:3px 2px 0;color:#a6b1b3;border-color:#333d41}
+.terminal-v15.concept4 .sidebar-footer{padding:4px 12px 7px;gap:3px}
+.terminal-v15.concept4 .sidebar-footer strong,.terminal-v15.concept4 .sidebar-footer small{font-size:10px}
+body[data-theme] .terminal-v15.concept4 .subpage-header{background:transparent;box-shadow:none;border:0}
+
+/* Brains are driven by Core; the offline directory provides names, not data. */
+.concept4 .subpage-brainControl>.subpage-stats,.concept4 .subpage-brains>.subpage-stats,.concept4 .subpage-brainControl .subpage-primary>.panel-title,.concept4 .subpage-brains .subpage-primary>.panel-title{display:none}
+body[data-theme] .concept4 .subpage-brainControl .subpage-primary,body[data-theme] .concept4 .subpage-brains .subpage-primary{background:transparent;border:0;box-shadow:none;overflow:visible}
+.concept4 .subpage-brainControl .feature-zone,.concept4 .subpage-brains .feature-zone{padding:0}
+.concept4 .subpage-brainControl .subpage-header,.concept4 .subpage-brains .subpage-header{padding:0 0 8px;min-height:68px;margin:0}
+.concept4 .subpage-brainControl .sub-glyph,.concept4 .subpage-brains .sub-glyph{width:50px;height:50px}
+.concept4 .subpage-header .concept-brains-toolbar{justify-content:flex-end;margin:0;gap:7px}
+.concept4 .subpage-header .concept-brains-toolbar button{min-height:40px;padding:7px 11px;border:1px solid var(--border);border-radius:7px;background:#eef1f4;color:#1e272d;font-size:11px;font-weight:700}
+.concept4 .concept-brain-explanation{margin:0 0 3px;font-size:11px;color:var(--muted)}
+.concept4 .concept-brain-controls>.safe-note{padding:6px 10px;margin:2px 0 7px;font-size:10px}
+.concept4 .concept-brain-card{padding:11px;min-height:114px;box-shadow:0 3px 12px #25384d0b}
+.concept4 .concept-brain-card-head>svg{min-width:27px}
+.concept4 .concept-brain-card-metrics{margin:10px 0 7px}
+.concept4 .concept-brain-card-actions button{padding:5px;font-size:10px}
+.concept4 .concept-brain-inspector{margin-top:9px}
+
+/* Risk cards keep their real controls visible even before configuration loads. */
+.concept4 .subpage-risk>.subpage-header{margin:0 0 8px;padding:0;min-height:48px}
+.concept-risk-connection{display:flex;align-items:center;gap:8px;text-align:left;border:1px solid var(--border);border-radius:8px;background:var(--panel);padding:7px 12px;color:var(--ink)}
+.concept-risk-connection>span{display:flex;flex-direction:column;gap:3px}.concept-risk-connection b{font-size:12px}.concept-risk-connection small{font-size:10px;color:var(--muted)}
+.concept-risk-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px;margin-bottom:10px}
+.concept-risk-kpis article{min-width:0;min-height:92px;display:flex;align-items:flex-start;gap:10px;padding:13px;background:var(--panel);border:1px solid var(--border);border-radius:9px;box-shadow:0 3px 12px #25384d0b}
+.concept-risk-kpis article>svg{width:23px;min-width:23px}.concept-risk-kpis article>div{display:flex;min-width:0;flex-direction:column;gap:5px}.concept-risk-kpis small{font-size:11px}.concept-risk-kpis strong{font-size:19px;white-space:nowrap}.concept-risk-kpis span{font-size:10px;color:var(--muted)}
+.concept4 .concept-risk-editor-card{background:transparent;border:0;padding:0}
+.concept4 .concept-risk-editor-card>h3{display:none}
+.terminal-v15.concept4 .risk-editor{padding:0;display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:start}
+.terminal-v15.concept4 .risk-flags,.terminal-v15.concept4 .risk-form-grid{padding:12px;background:var(--panel);border:1px solid var(--border);border-radius:8px}
+.terminal-v15.concept4 .risk-flags{grid-column:1;grid-row:1;grid-template-columns:1fr;gap:5px}
+.terminal-v15.concept4 .risk-form-grid{grid-column:2;grid-row:1 / span 2;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.terminal-v15.concept4 .risk-flags:before,.terminal-v15.concept4 .risk-form-grid:before{grid-column:1/-1;font-size:14px;font-weight:700;color:var(--ink);padding-bottom:5px}
+.terminal-v15.concept4 .risk-flags:before{content:'التحكم الرئيسي بالمخاطر'}
+.terminal-v15.concept4 .risk-form-grid:before{content:'حدود المخاطرة'}
+.terminal-v15.concept4 .risk-flags label{min-height:37px;background:transparent;border:0;border-bottom:1px solid var(--border);padding:6px 0}
+.terminal-v15.concept4 .risk-form-grid label{font-size:10px;gap:3px}.terminal-v15.concept4 .risk-form-grid label span{color:var(--muted)}
+.terminal-v15.concept4 .risk-form-grid input{padding:6px 8px}
+.terminal-v15.concept4 .risk-editor>.quick-ops{grid-column:1;grid-row:2;display:flex;flex-wrap:wrap;gap:4px}
+.terminal-v15.concept4 .risk-editor>.quick-ops button{padding:6px;font-size:10px}
+.terminal-v15.concept4 .risk-editor>.safe-note,.terminal-v15.concept4 .risk-editor>.save-button{grid-column:1/-1}
+.concept4 .concept-risk-capital{grid-row:1;max-height:410px;overflow:auto;scrollbar-width:thin}
+.concept4 .concept-risk-daily{grid-row:2}
+@media(max-width:1300px){.concept4 .subpage-brainControl .subpage-header,.concept4 .subpage-brains .subpage-header{flex-wrap:wrap}.concept4 .subpage-header .concept-brains-toolbar{justify-content:flex-start}.concept-risk-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.terminal-v15.concept4 .risk-editor{grid-template-columns:1fr}.terminal-v15.concept4 .risk-flags,.terminal-v15.concept4 .risk-form-grid,.terminal-v15.concept4 .risk-editor>.quick-ops{grid-column:1;grid-row:auto}.concept4 .concept-risk-capital{grid-row:1/3;max-height:550px}}
+@media(max-height:800px){.terminal-v15.concept4 .sidebar .nav-item{height:34px}.terminal-v15.concept4 .sidebar .all-pages{height:25px}.terminal-v15.concept4 .health-widget{padding:5px 8px}.terminal-v15.concept4 .health-row{height:15px}.terminal-v15.concept4 .sidebar-footer{padding:3px 9px 5px}}

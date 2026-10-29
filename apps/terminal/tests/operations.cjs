@@ -11,10 +11,13 @@ assert.equal(errors.length,0,errors.map(e=>ts.flattenDiagnosticMessageText(e.mes
 const jsx=(type,props)=>({type,props:props||{}});
 const hooks={useState:initial=>[initial,()=>{}],useEffect:()=>{},useRef:initial=>({current:initial})};
 const exportsObj={};
+const catalog={};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root,'src/brain-catalog.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:catalog});
 vm.runInNewContext(output.outputText,{exports:exportsObj,require:id=>{
  if(id==='react')return hooks;
  if(id==='react/jsx-runtime')return {jsx,jsxs:jsx};
- if(id==='lucide-react')return Object.fromEntries(['Archive','CalendarClock','Download','Play','Square','ShieldAlert'].map(n=>[n,n]));
+ if(id==='lucide-react')return Object.fromEntries(['Archive','BarChart3','BrainCircuit','CalendarClock','Download','Layers3','Play','Square','ShieldAlert','Target','TrendingUp','Zap'].map(n=>[n,n]));
+ if(id==='./brain-catalog')return catalog;
  throw Error('untrusted module '+id);
 },Date,Number,String,JSON,console});
 function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
@@ -62,6 +65,14 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  assert(advisor&&paper,'sub-brain advisor and Paper controls remain available');
  await advisor.props.onClick();assert.deepEqual(brainState,['trend',false,false]);
  await paper.props.onClick();assert.deepEqual(brainState,['trend',true,true]);
+ const offline=exportsObj.BrainControlsOperations({source:null,disabled:false,armed:false,onSave:async()=>{throw Error('offline control must never execute')}});
+ const offlineCards=nodes(offline).filter(x=>x.type==='article'&&String(x.props.className).includes('concept-brain-card'));
+ assert.equal(offlineCards.length,16,'offline directory shows the actual secondary brain identities');
+ for(const card of offlineCards){
+  const controls=nodes(card).filter(x=>x.type==='button'&&String(x.props.children).includes(':'));
+  assert.equal(controls.length,2);assert(controls.every(b=>b.props.disabled),'offline controls must be disabled');
+  assert(nodes(card).some(x=>x.props?.className==='concept-control-state '&&x.props.children==='غير موثق'));
+ }
  let bound=null;
  const broker=exportsObj.ExecutionBindingOperations({source:{settings:{target:'demo',login:0}},telemetry:{demo:true,account_trade_mode:0,login:12345,server:'Demo-Server',currency:'USD',symbol:'XAUUSD'},ready:true,armed:false,disabled:false,onBind:async(...v)=>bound=v});
  await nodes(broker).find(x=>x.type==='form').props.onSubmit({preventDefault(){}});

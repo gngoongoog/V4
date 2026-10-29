@@ -1,4 +1,5 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
+import {GoldSymbol} from './gold-symbol';
 import type {Candle,Market} from './types';
 import {num} from './format';
 const FRAMES=['m1','m5','m15','h1','h4','d1'] as const;
@@ -57,7 +58,7 @@ export default function TradingChart({market,symbol,quote,frame:currentFrame,onF
  },[chart,averages,crosshair,hover,ready,theme]);
  const last=chart.at(-1);const highlighted=hover===null?last:chart[hover]??last;
  return <section className="panel chart-panel">
-   <div className="chart-head"><div className="chart-symbol"><div className="gold-icon">◆</div><div><strong>{symbol||'XAUUSD'}</strong><small>Gold Spot / US Dollar</small></div><b className="concept-chart-quote">{quote===undefined?'—':num(quote)}</b></div>
+   <div className="chart-head"><div className="chart-symbol"><GoldSymbol className="gold-icon"/><div><strong>{symbol||'XAUUSD'}</strong><small>{(symbol||'XAUUSD').toUpperCase().startsWith('XAU')?'Gold Spot / US Dollar':'Trading symbol'}</small></div><b className="concept-chart-quote">{quote===undefined?'—':num(quote)}</b></div>
     <div className="chart-actions"><div className="timeframes">{FRAMES.map(tf=><button key={tf} type="button" className={tf===frame?'selected':''} aria-pressed={tf===frame} disabled={!(['m1','m5','m15'] as string[]).includes(tf)} title={(['m1','m5','m15'] as string[]).includes(tf)?`MT5 ${tf.toUpperCase()} • verified candles`:`${tf.toUpperCase()} needs a new MT5 Core candle feed`} onClick={()=>{if(tf==='m1'||tf==='m5'||tf==='m15')setFrame(tf);setHover(null)}}>{tf.toUpperCase()}</button>)}</div>
       <button className={'tool-button '+(crosshair?'tool-on':'')} onClick={()=>setCrosshair(v=>!v)} title="Crosshair">⌖</button>
       <button className={'tool-button '+(averages?'tool-on':'')} onClick={()=>setAverages(v=>!v)} title="Moving averages">⌁</button>

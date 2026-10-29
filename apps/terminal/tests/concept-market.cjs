@@ -10,6 +10,7 @@ vm.runInNewContext(compile('concept-market.tsx'),{exports:moduleExports,Number,S
   if(id==='react/jsx-runtime')return {jsx,jsxs:jsx};
   if(id==='lucide-react')return Object.fromEntries(['ArrowDown','ArrowUp','BriefcaseBusiness','ChartCandlestick','Clock','RefreshCw','Settings','ShieldCheck','Target','Wallet','Zap'].map(k=>[k,k]));
   if(id==='./chart')return {default:'TradingChart'};
+  if(id==='./gold-symbol')return {GoldSymbol:'GoldSymbol'};
   if(id==='./format')return fmt;
   throw Error('unexpected import '+id);
  }});

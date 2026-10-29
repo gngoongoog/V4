@@ -1,5 +1,6 @@
 import {ArrowDown,ArrowUp,BriefcaseBusiness,ChartCandlestick,Clock,RefreshCw,Settings,ShieldCheck,Target,Wallet,Zap} from 'lucide-react';
 import TradingChart from './chart';
+import {GoldSymbol} from './gold-symbol';
 import type {ChartFrame} from './chart';
 import {money,num,signed,up,valid} from './format';
 import type {PageId,Status,Telemetry,Theme} from './types';
@@ -16,7 +17,7 @@ export function ConceptMarketDesk({account,status,quoteFresh,preview,busy,native
  const symbol=account?.symbol||'XAUUSD';
  return <div className="concept-market">
   <div className="concept-market-stats">
-   <div><span className="market-symbol-icon">◆</span><strong>{symbol}</strong><small>Gold Spot / U.S. Dollar</small></div>
+   <div><GoldSymbol className="market-symbol-icon"/><strong>{symbol}</strong><small>{symbol.toUpperCase().startsWith('XAU')?'Gold Spot / U.S. Dollar':'Trading symbol'}</small></div>
    <div><Clock/><span>سعر البيع الحالي<strong>{num(bid,2)}</strong><small>Bid من MT5</small></span></div>
    <div><ArrowUp/><span>سعر الشراء الحالي<strong>{num(ask,2)}</strong><small>Ask من MT5</small></span></div>
    <div><ChartCandlestick/><span>السبريد الحالي<strong>{num(spread,2)}</strong><small>فرق السعر</small></span></div>

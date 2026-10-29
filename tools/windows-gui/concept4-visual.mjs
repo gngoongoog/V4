@@ -33,10 +33,29 @@ try{
  const enterPreview=page.getByRole('button',{name:'معاينة التصميم',exact:true});
  if(await enterPreview.count())await enterPreview.click();
  assert(await page.locator('.preview-banner').isVisible(),'Synthetic preview must be labelled');
+ const primaryTitles=['نظرة عامة','مركز التداول','إدارة العقول','إدارة المخاطر','التقارير','السجلات','الأخبار','الإعدادات'];
+ async function assertPrimaryNavigation(){
+  const nav=await page.locator('#sidebarNav').boundingBox();assert(nav);
+  for(const title of primaryTitles){
+   const box=await page.locator('#sidebarNav').getByTitle(title,{exact:true}).boundingBox();assert(box,title+' has no layout');
+   assert(box.y>=nav.y-1&&box.y+box.height<=nav.y+nav.height+1,title+' is clipped in the primary navigation');
+  }
+ }
+ await assertPrimaryNavigation();
  const primary=[['dashboard','نظرة عامة'],['trading','مركز التداول'],['brainControl','إدارة العقول'],['risk','إدارة المخاطر'],['reports','التقارير'],['journal','السجلات']];
  for(const [id,title] of primary){
   const button=page.locator('#sidebarNav').getByTitle(title,{exact:true});await button.click();
   await page.waitForFunction(title=>document.querySelector('#sidebarNav [aria-current="page"]')?.getAttribute('title')===title,title);
+  // Nav and panel transitions take ~200 ms; capture the settled UI, not the
+  // previous page's selection or a partially faded panel.
+  await wait(350);
+  if(id==='brainControl'){
+   assert.equal(await page.locator('.concept-brain-card').count(),16,'Offline directory must reflect the bundled Core inventory');
+   for(const button of await page.locator('.concept-brain-card-actions button').all())assert(await button.isDisabled(),'Offline brain controls must be disabled');
+  }
+  if(id==='risk'){
+   for(const input of await page.locator('.risk-editor input').all())assert(await input.isDisabled(),'Unavailable Core risk controls must be disabled');
+  }
   await page.screenshot({path:path.join(out,id+'-1536.png')});
   const width=await page.locator('main.content').evaluate(e=>({scroll:e.scrollWidth,visible:e.clientWidth}));
   assert(width.scroll<=width.visible+1,`${id} content has horizontal overflow`);
@@ -49,8 +68,11 @@ try{
   assert.equal(await button.getAttribute('aria-current'),'page',item.id);
   assert((await page.locator('main.content').innerText()).trim().length>15,'Empty page '+item.id);
  }
+ await page.locator('#sidebarNav .all-pages').click();
  await page.setViewportSize({width:1120,height:730});
  await page.locator('#sidebarNav').getByTitle('نظرة عامة',{exact:true}).click();
+ await wait(350);
+ await assertPrimaryNavigation();
  await page.screenshot({path:path.join(out,'dashboard-1120.png')});
  const narrow=await page.locator('main.content').evaluate(e=>({scroll:e.scrollWidth,visible:e.clientWidth}));
  assert(narrow.scroll<=narrow.visible+1,'Laptop dashboard has horizontal overflow');
