@@ -22,7 +22,7 @@ export function ConceptMarketDesk({account,status,quoteFresh,preview,busy,native
    <div><ArrowUp/><span>سعر الشراء الحالي<strong>{num(ask,2)}</strong><small>Ask من MT5</small></span></div>
    <div><ChartCandlestick/><span>السبريد الحالي<strong>{num(spread,2)}</strong><small>فرق السعر</small></span></div>
    <div><BriefcaseBusiness/><span>المراكز المفتوحة<strong>{account?positions.length:'—'}</strong><small>من الحساب المتصل</small></span></div>
-   <div><span className={'concept-led '+(account?'on':'')}/><span>حالة السوق<strong>{quoteFresh?'سعر حديث':'غير مؤكدة'}</strong><small>{quoteFresh?'تيك MT5 حديث':'بانتظار سعر حديث'}</small></span></div>
+   <div><span className={'concept-led '+(quoteFresh&&!preview?'on':'')}/><span>حالة السوق<strong>{quoteFresh?'سعر حديث':'غير مؤكدة'}</strong><small>{quoteFresh?'تيك MT5 حديث':'بانتظار سعر حديث'}</small></span></div>
   </div>
   <div className="concept-market-layout">
    <TradingChart market={account?.market} symbol={symbol} quote={bid??undefined} frame={frame} onFrameChange={onFrameChange} theme={theme}/>

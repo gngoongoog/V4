@@ -22,6 +22,7 @@ const props={account,status:{gateway_fresh:true,requested_run:false},quoteFresh:
  frame:'m15',onFrameChange:()=>{},theme:'light',open:p=>actions.push(p),onTradingSettings:()=>actions.push('settings'),
  onStart:()=>actions.push('start'),onStop:()=>actions.push('stop')};
 let tree=moduleExports.ConceptMarketDesk(props),all=nodes(tree);
+assert(all.some(n=>n.props?.className==='concept-led on'),'Fresh live quotes have a green indicator');
 const start=all.find(n=>n.type==='button'&&n.props.className==='action-btn start');
 const stop=all.find(n=>n.type==='button'&&n.props.className==='action-btn stop');
 assert.equal(start.props.disabled,false);assert.equal(stop.props.disabled,false);
@@ -37,4 +38,7 @@ all=nodes(tree);assert.equal(all.find(n=>n.type==='button'&&n.props.className===
 assert(nodes(all.find(n=>n.props?.className==='concept-prices')).filter(n=>n.type==='strong').every(n=>n.props.children==='—'));
 tree=moduleExports.ConceptMarketDesk({...props,quoteFresh:false});all=nodes(tree);
 assert(nodes(all.find(n=>n.props?.className==='concept-prices')).filter(n=>n.type==='strong').every(n=>n.props.children==='—'),'Stale broker quotes must not appear as live prices');
+assert(!all.some(n=>n.props?.className==='concept-led on'),'An account connection alone must not make stale market data green');
+tree=moduleExports.ConceptMarketDesk({...props,preview:true});all=nodes(tree);
+assert(!all.some(n=>n.props?.className==='concept-led on'),'Synthetic preview must not indicate a live market');
 console.log('PASS: concept market uses fresh prices, dispatches existing START/STOP, and does not enable unsupported manual orders');

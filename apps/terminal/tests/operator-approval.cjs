@@ -70,7 +70,8 @@ for(const token of [
  "disabled={busy||preview||!feed.broker}",
  "await saveSettings(activeSettingsEdit,activeTelegramToken,activeClearTelegram)",
  "disabled={busy||preview||!activeSettingsEdit}",
- "key={contextKey} config={safeConfig?",
+ "key={contextKey} config={!preview&&safeConfig?",
+ "loading={busy||preview}",
  "setTelegramToken('');setClearTelegram(false);setTelegramDraftScope(null);",
  "setApproval(null);setLiveLogin('');",
 ]){

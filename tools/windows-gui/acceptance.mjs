@@ -162,6 +162,9 @@ try{
  await check('preview is explicit and cannot start trading',async()=>{
   await navigate('نظرة عامة');await page.getByRole('button',{name:'معاينة التصميم',exact:true}).click();
   await page.locator('.preview-banner').waitFor();assert(await page.locator('button.action-btn.start').isDisabled());
+  await navigate('إدارة المخاطر');const riskInputs=page.locator('.risk-editor input');
+  assert(await riskInputs.count()>0,'Preview must show the unavailable risk form');
+  for(const input of await riskInputs.all())assert(await input.isDisabled(),'Preview must never enable the live risk configuration');
   await page.getByRole('button',{name:'عرض LIVE',exact:true}).click();await page.locator('.preview-banner').waitFor({state:'hidden'});await status();
  });
  await check('native viewport has no dashboard overflow or overlapping quality labels',async()=>{
