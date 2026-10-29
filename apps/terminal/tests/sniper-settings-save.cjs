@@ -35,6 +35,7 @@ vm.runInNewContext(output.outputText,{exports:exportsObj,require(id){
  if(id==='react')return hooks;
  if(id==='react/jsx-runtime')return {jsx,jsxs:jsx};
  if(id==='lucide-react')return Object.fromEntries(['Archive','CalendarClock','Download','Play','Square','ShieldAlert'].map(k=>[k,k]));
+ if(id==='./brain-catalog')return {BRAIN_DIRECTORY:[]};
  throw Error('Unknown module '+id);
 },Date,Number,String,JSON,console});
 function nodes(node,out=[]){

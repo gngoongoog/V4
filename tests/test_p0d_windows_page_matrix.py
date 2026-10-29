@@ -52,6 +52,8 @@ class P0DPageMatrixTests(unittest.TestCase):
         self.assertEqual(matrix.check(root)["checks"]["22_unique_page_registry"]["status"],"FAIL")
         target.write_text(original.replace("allOpen||i<11||x.id===page","allOpen||i<11"),encoding="utf-8")
         self.assertEqual(matrix.check(root)["checks"]["navigation_actions_for_all_pages"]["status"],"FAIL")
+        target.write_text(original.replace("...PAGES.filter(x=>!primaryNav.includes(x.id))","...[]"),encoding="utf-8")
+        self.assertEqual(matrix.check(root)["checks"]["navigation_actions_for_all_pages"]["status"],"FAIL")
 
     def test_stale_old_account_render_fence_removal_fails_release(self):
         root=self.fixture()

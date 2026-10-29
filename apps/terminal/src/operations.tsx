@@ -1,6 +1,7 @@
 import {useEffect,useRef,useState} from 'react';
 import type {FormEvent} from 'react';
-import {Archive,CalendarClock,Download,Play,Square,ShieldAlert} from 'lucide-react';
+import {Archive,BarChart3,BrainCircuit,CalendarClock,Download,Layers3,Play,Square,ShieldAlert,Target,TrendingUp,Zap} from 'lucide-react';
+import {BRAIN_DIRECTORY} from './brain-catalog';
 
 const iso=(offsetDays:number)=>new Date(Date.now()+offsetDays*86400000).toISOString().slice(0,10);
 
@@ -170,21 +171,39 @@ export function TradingSettingsOperations({source,disabled,armed,apply,brokerPoi
 export function BrainControlsOperations({source,disabled,armed,onSave}: {
  source:unknown;disabled:boolean;armed:boolean;onSave:(brain:string,advisor:boolean,paper:boolean)=>Promise<void>;
 }) {
- const view=safeObject(source),available=view.controls_available===true;
+ const view=safeObject(source);
  const brains=Array.isArray(view.brains)?view.brains:[];
- return <section className="operator-card" aria-label="Brain controls">
-  <h3><ShieldAlert size={18}/> مشاركة العقول في التحليل والتعلّم الافتراضي</h3>
-  <p>الأزرار تتحكم في دور العقل الاستشاري وبحوث Paper فقط. لا تسمح لأي عقل ثانوي بإرسال صفقات حقيقية منفرداً.</p>
-  {brains.filter((b)=>safeObject(safeObject(b).config).id!=='system').map((b,i)=>{
+ const actualBrains=brains.filter((b)=>safeObject(safeObject(b).config).id!=='system');
+ const available=view.controls_available===true&&actualBrains.length>0;
+ // Names are the identities shipped in this Core version. A directory entry is
+ // deliberately not given a state or statistics until Core sends them.
+ const cards=actualBrains.length?actualBrains:BRAIN_DIRECTORY.map(([id,name,description])=>({config:{id},name,description}));
+ const [selectedBrain,setSelectedBrain]=useState<string|null>(null);
+ const activeBrain=cards.some(b=>String(safeObject(safeObject(b).config).id||'')===selectedBrain)?selectedBrain:String(safeObject(safeObject(cards[0]).config).id||'');
+ const selected=safeObject(cards.find(b=>String(safeObject(safeObject(b).config).id||'')===activeBrain));
+ const selectedControl=safeObject(selected.control),selectedActivity=safeObject(selected.activity);
+ return <section className="operator-card concept-brain-controls" aria-label="Brain controls">
+  <p className="concept-brain-explanation">مشاركة العقول في التحليل وPaper فقط؛ التنفيذ المنفرد للعقول الثانوية غير متاح.</p>
+  {!actualBrains.length&&<p className="safe-note">الأسماء من قائمة العقول المرفقة بهذا الإصدار. بانتظار Core لتأكيد حالتها ونتائجها؛ الأزرار متوقفة حتى وصول البيانات.</p>}
+  <div className="concept-brain-card-grid">{cards.map((b,i)=>{
     const row=safeObject(b),id=String(safeObject(row.config).id||'');
     if(!id)return null;
-    const state=safeObject(row.control);
-    return <div key={`${id}-${i}`} className="brain-control-row">
-      <b>{String(row.name||id)}</b><span>Advisor: {state.advisor===false?'OFF':'ON'} · Paper: {state.paper===false?'OFF':'ON'}</span>
-      <button disabled={disabled||armed||!available} onClick={()=>void onSave(id,state.advisor===false,state.paper!==false)}>Toggle Advisor</button>
-      <button disabled={disabled||armed||!available} onClick={()=>void onSave(id,state.advisor!==false,state.paper===false)}>Toggle Paper</button>
-    </div>;
-  })}
+    const state=safeObject(row.control),activity=safeObject(row.activity),orders=safeObject(row.attributed_orders);
+    const integrity=safeObject(row.integrity),evidence=safeObject(integrity.broker_evidence);
+    const directory=BRAIN_DIRECTORY.find(item=>item[0]===id);
+    const Icon=id==='sniper_learner'?Target:id==='trend'||id==='trend_pullback'?TrendingUp:id==='momentum'||id==='kte'?Zap:id==='zones'||id==='structure'?Layers3:id==='profile'||id==='dom'?BarChart3:BrainCircuit;
+    const count=Number(evidence.sample_count),rate=evidence.win_rate;
+    const verified=available&&view.account_matches===true&&evidence.source==='closed_costed_mt5_demo_deals_only'&&
+      evidence.scope==='current_demo_account_symbol_mode_brain'&&evidence.no_auto_promotion===true&&
+      typeof rate==='number'&&Number.isFinite(rate)&&rate>=0&&rate<=1&&Number.isInteger(count)&&count>=30;
+    return <article key={`${id}-${i}`} className={'concept-brain-card '+(activeBrain===id?'selected':'')}>
+      <button type="button" className="concept-brain-card-head" onClick={()=>setSelectedBrain(id)} aria-pressed={activeBrain===id}><Icon size={27}/><span><b>{directory?.[1]||String(row.name||id)}</b><small>{directory?.[2]||String(row.name||id)}</small></span><span className={'concept-control-state '+(available&&state.advisor!==false?'on':'')}>{available?(state.advisor===false?'متوقف':'نشط'):'غير موثق'}</span></button>
+      <div className="concept-brain-card-metrics"><span>إشارات <b>{available&&view.account_matches===true&&typeof activity.signals==='number'?activity.signals:'—'}</b></span><span>تنفيذ موثق <b>{available&&view.account_matches===true&&typeof orders.fill_acknowledged==='number'?orders.fill_acknowledged:'—'}</b></span><span>نسبة النجاح <b>{verified?`${(rate*100).toFixed(1)}%`:'—'}</b></span></div>
+      <div className="concept-brain-card-actions"><button disabled={disabled||armed||!available} onClick={()=>void onSave(id,state.advisor===false,state.paper!==false)}>المشاركة: {available?(state.advisor===false?'إيقاف':'تشغيل'):'—'}</button>
+      <button disabled={disabled||armed||!available} onClick={()=>void onSave(id,state.advisor!==false,state.paper===false)}>Paper: {available?(state.paper===false?'إيقاف':'تشغيل'):'—'}</button></div>
+    </article>;
+  })}</div>
+  <div className="concept-brain-inspector"><h3><ShieldAlert size={18}/> تفاصيل العقل المختار</h3>{activeBrain&&Object.keys(selected).length?<div><strong>{BRAIN_DIRECTORY.find(item=>item[0]===activeBrain)?.[1]||String(selected.name||activeBrain)}</strong><p>المشاركة: {available?(selectedControl.advisor===false?'متوقفة':'مفعّلة'):'غير مؤكدة'} · Paper: {available?(selectedControl.paper===false?'متوقف':'مفعّل'):'غير مؤكد'}</p><p>فحوص التحليل: {available&&typeof selectedActivity.checks==='number'?selectedActivity.checks:'—'} · الإشارات المرصودة: {available&&typeof selectedActivity.signals==='number'?selectedActivity.signals:'—'}</p><small>تُطبّق التغييرات من أزرار المشاركة وPaper على البطاقة، ضمن الحساب والوضع الحاليين.</small></div>:<p>اختَر بطاقة عقل لعرض حالته الفعلية.</p>}</div>
   <p className="safe-note">يتطلب التعديل Core متصلاً بحساب MT5 مطابقاً، وإيقاف START، وعدم وجود أوامر وسيط غير محسومة.</p>
  </section>;
 }
