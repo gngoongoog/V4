@@ -1059,7 +1059,7 @@ impl Service {
             self.fast=None;
             self.inner.set_mode(request.mode);
             return Ok(json!({"ok":true,"paper":request.paper,"scope":"secondary_brains_current_account_and_mode",
-                "existing_paper_positions_settle":true,"global_learning_frozen":false}));
+                "existing_paper_positions_settle":true,"global_learning_frozen":self.learning_frozen()}));
         }
         // P0-B: broker-journal diagnostics, not an order or an admission gate.
         // Never return any history for a stale, unbound or mismatched account.
@@ -1626,6 +1626,9 @@ mod tests {
         let persisted=crate::brain_control::load_account(&db,&key,TradingMode::Expert,Some(0)).unwrap();
         assert_eq!(persisted.len(),braintrade_domain::execution::BRAINS.len()-1);
         assert!(persisted.values().all(|c|!c.paper));
+        service.set_learning_frozen(&db,&status,true,1001).unwrap();
+        let result=service.route("POST","/v1/execution/brain-paper-all",body.as_bytes(),&db,&status,1002).unwrap();
+        assert_eq!(result["global_learning_frozen"],true,"Paper actions must report the independent global pause accurately");
     }
 
     #[test]
