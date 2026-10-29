@@ -39,6 +39,24 @@ pub fn save(db:&Connection,key:&str,mode:TradingMode,id:&str,c:Control)->Result<
     db.execute("INSERT OR REPLACE INTO brain_controls VALUES(?1,?2,?3,?4)",params![key,mode_key(mode),id,serde_json::to_string(&c)?])?;
     Ok(())
 }
+/// Change Paper admission for every secondary brain in one transaction.
+/// Existing advisor choices are preserved, including inherited legacy values.
+/// This does not stop analytical learning or cancel already-open Paper trades.
+pub fn set_all_paper(db:&Connection,key:&str,mode:TradingMode,account_mode:Option<i32>,paper:bool)->Result<BTreeMap<String,Control>> {
+    anyhow::ensure!(!key.is_empty(),"اربط حساب MT5 أولاً");
+    anyhow::ensure!(matches!(account_mode,Some(0|2)),"نوع حساب MT5 غير مؤكد");
+    let tx=db.unchecked_transaction()?;
+    let mut controls=load_account(&tx,key,mode,account_mode)?;
+    let scoped=account_key(key,account_mode);
+    for (id,_) in BRAINS.iter().filter(|(id,_)|*id!="system") {
+        let mut control=controls.get(*id).copied().unwrap_or_default();
+        control.paper=paper;
+        save(&tx,&scoped,mode,id,control)?;
+        controls.insert((*id).to_owned(),control);
+    }
+    tx.commit()?;
+    Ok(controls)
+}
 /// Called at most once per second, outside the per-tick accounting path. Counts
 /// ready observations with a new key/direction, NOT fills or every broker tick.
 pub fn sample(db:&Connection,key:&str,mode:TradingMode,id:&str,s:&Signal,now:u64)->Result<()> {
@@ -113,5 +131,24 @@ pub fn enrich(value:&mut Value,db:&Connection,key:&str,mode:TradingMode,account_
         s.ready=true;sample(&db,"a",TradingMode::Expert,"trend",&s,4000).unwrap();
         let counts:(u64,u64)=db.query_row("SELECT checks,signals FROM brain_activity",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();assert_eq!(counts,(4,1));
         assert!(save(&db,"a",TradingMode::Expert,"system",Control::default()).is_err());
+    }
+    #[test] fn bulk_paper_is_atomic_account_mode_scoped_and_preserves_advisors() {
+        let db=Connection::open_in_memory().unwrap();init(&db).unwrap();
+        save(&db,"acct",TradingMode::Expert,"trend",Control{advisor:false,paper:true}).unwrap();
+        let updated=set_all_paper(&db,"acct",TradingMode::Expert,Some(0),false).unwrap();
+        assert_eq!(updated.len(),BRAINS.len()-1);
+        assert!(updated.values().all(|c|!c.paper));
+        assert!(!updated["trend"].advisor);
+        assert!(load_account(&db,"acct",TradingMode::Expert,Some(2)).unwrap()["trend"].paper);
+        assert!(load_account(&db,"other",TradingMode::Expert,Some(0)).unwrap().is_empty());
+        assert!(load_account(&db,"acct",TradingMode::Sniper,Some(0)).unwrap().is_empty());
+        let reopened=set_all_paper(&db,"acct",TradingMode::Expert,Some(0),true).unwrap();
+        assert!(reopened.values().all(|c|c.paper));
+        assert!(!reopened["trend"].advisor);
+        assert!(set_all_paper(&db,"acct",TradingMode::Expert,None,false).is_err());
+        db.execute_batch("CREATE TRIGGER stop_bulk BEFORE INSERT ON brain_controls WHEN NEW.brain='trend' BEGIN SELECT RAISE(ABORT,'injected failure'); END;").unwrap();
+        assert!(set_all_paper(&db,"acct",TradingMode::Expert,Some(0),false).is_err());
+        let after=load_account(&db,"acct",TradingMode::Expert,Some(0)).unwrap();
+        assert!(after.values().all(|c|c.paper),"partial bulk changes must roll back");
     }
 }

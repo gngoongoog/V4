@@ -66,6 +66,20 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  assert(advisor&&paper,'sub-brain advisor and Paper controls remain available');
  await advisor.props.onClick();assert.deepEqual(brainState,['trend',false,false]);
  await paper.props.onClick();assert.deepEqual(brainState,['trend',true,true]);
+ const allChanges=[];
+ const paperSource=(trend,gann)=>({controls_available:true,account_matches:true,brains:[
+  {config:{id:'system'}},{config:{id:'trend'},control:{paper:trend}},{config:{id:'gann'},control:{paper:gann}}
+ ]});
+ for(const [source,expected] of [[paperSource(true,true),false],[paperSource(false,false),true],[paperSource(true,false),true]]){
+  const bulk=exportsObj.PaperAllControl({source,disabled:false,armed:false,onSet:async paper=>allChanges.push(paper)});
+  const button=nodes(bulk).find(x=>x.type==='button');
+  assert(!button.props.disabled);await button.props.onClick();assert.equal(allChanges.pop(),expected);
+ }
+ for(const source of [null,{...paperSource(true,true),account_matches:false},paperSource(true,undefined)]){
+  const bulk=exportsObj.PaperAllControl({source,disabled:false,armed:false,onSet:async()=>{throw Error('unverified Paper control')}});
+  assert(nodes(bulk).find(x=>x.type==='button').props.disabled,'unverified Paper state cannot dispatch a bulk change');
+ }
+ assert(nodes(exportsObj.PaperAllControl({source:paperSource(true,true),disabled:false,armed:true,onSet:async()=>{}})).find(x=>x.type==='button').props.disabled,'Paper controls wait for STOP');
  const offline=exportsObj.BrainControlsOperations({source:null,disabled:false,armed:false,onSave:async()=>{throw Error('offline control must never execute')}});
  const offlineCards=nodes(offline).filter(x=>x.type==='article'&&String(x.props.className).includes('concept-brain-card'));
  assert.equal(offlineCards.length,16,'offline directory shows the actual secondary brain identities');

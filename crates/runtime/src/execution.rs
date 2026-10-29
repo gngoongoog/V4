@@ -932,6 +932,24 @@ impl Service {
             self.inner.set_mode(request.mode);
             return Ok(json!({"ok":true}));
         }
+        if method=="POST" && path=="/v1/execution/brain-paper-all" {
+            anyhow::ensure!(!status.requested_run && !self.pending(db)?, "أوقف النظام وانتظر تسوية الأوامر قبل تغيير Paper");
+            anyhow::ensure!(status.gateway_fresh && self.account_matches(status), "اربط الحساب الحالي وانتظر اتصالاً حديثاً");
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request {context:String, mode:braintrade_domain::trading::TradingMode, paper:bool}
+            let request:Request=serde_json::from_slice(body)?;
+            anyhow::ensure!(self.inner.active_mode==Some(request.mode), "الوضع تغيّر؛ حدّث الصفحة قبل الحفظ");
+            let t=status.telemetry.as_ref().unwrap();
+            let key=context(t);
+            anyhow::ensure!(request.context==key, "الحساب أو الرمز تغيّر؛ حدّث الصفحة قبل الحفظ");
+            let controls=crate::brain_control::set_all_paper(db,&key,request.mode,t.account_trade_mode,request.paper)?;
+            self.inner.controls=controls;
+            self.fast=None;
+            self.inner.set_mode(request.mode);
+            return Ok(json!({"ok":true,"paper":request.paper,"scope":"secondary_brains_current_account_and_mode",
+                "existing_paper_positions_settle":true,"global_learning_frozen":false}));
+        }
         // P0-B: broker-journal diagnostics, not an order or an admission gate.
         // Never return any history for a stale, unbound or mismatched account.
         if method=="GET" && path=="/v1/execution/quality" {
@@ -1463,6 +1481,36 @@ mod tests {
         let restarted=Service::new(&db).unwrap();
         assert!(restarted.portfolio.enabled);
         assert_eq!(restarted.portfolio.max_positions,2);
+    }
+
+    #[test]
+    fn bulk_paper_requires_fresh_bound_stopped_account_and_reconciled_orders() {
+        use braintrade_domain::trading::TradingMode;
+        let db=setup();
+        let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry(); t.demo=true; t.account_trade_mode=Some(0);
+        service.inner.settings.login=t.login; service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone(); service.inner.settings.target="demo".into();
+        service.inner.set_mode(TradingMode::Expert);
+        let key=context(&t);
+        let body=json!({"context":key,"mode":"expert","paper":false}).to_string();
+        let mut status=Status::default(); status.telemetry=Some(t.clone());
+        assert!(service.route("POST","/v1/execution/brain-paper-all",body.as_bytes(),&db,&status,1000).is_err());
+        status.gateway_fresh=true; status.requested_run=true;
+        assert!(service.route("POST","/v1/execution/brain-paper-all",body.as_bytes(),&db,&status,1000).is_err());
+        status.requested_run=false;
+        queue(&db,&t,"in-flight","trend",0.01,0.05,1000);
+        assert!(service.route("POST","/v1/execution/brain-paper-all",body.as_bytes(),&db,&status,1000).is_err());
+        db.execute("UPDATE broker_commands SET state='observed' WHERE id='in-flight'",[]).unwrap();
+        let wrong=json!({"context":"wrong-account","mode":"expert","paper":false}).to_string();
+        assert!(service.route("POST","/v1/execution/brain-paper-all",wrong.as_bytes(),&db,&status,1000).is_err());
+        let wrong=json!({"context":key,"mode":"sniper","paper":false}).to_string();
+        assert!(service.route("POST","/v1/execution/brain-paper-all",wrong.as_bytes(),&db,&status,1000).is_err());
+        let result=service.route("POST","/v1/execution/brain-paper-all",body.as_bytes(),&db,&status,1000).unwrap();
+        assert_eq!(result["global_learning_frozen"],false);
+        let persisted=crate::brain_control::load_account(&db,&key,TradingMode::Expert,Some(0)).unwrap();
+        assert_eq!(persisted.len(),braintrade_domain::execution::BRAINS.len()-1);
+        assert!(persisted.values().all(|c|!c.paper));
     }
 
     #[test]

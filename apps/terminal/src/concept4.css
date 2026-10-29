@@ -101,6 +101,7 @@ body[data-theme] .concept4 .subpage-brainControl .subpage-primary,body[data-them
 .concept4 .subpage-brainControl .sub-glyph,.concept4 .subpage-brains .sub-glyph{width:50px;height:50px}
 .concept4 .subpage-header .concept-brains-toolbar{justify-content:flex-end;margin:0;gap:7px}
 .concept4 .subpage-header .concept-brains-toolbar button{min-height:40px;padding:7px 11px;border:1px solid var(--border);border-radius:7px;background:#eef1f4;color:#1e272d;font-size:11px;font-weight:700}
+.concept-paper-all{display:flex;flex-direction:column;align-items:center;gap:3px}.concept-paper-all span{font-size:10px;color:var(--muted)}
 .concept4 .concept-brain-explanation{margin:0 0 3px;font-size:11px;color:var(--muted)}
 .concept4 .concept-brain-controls>.safe-note{padding:6px 10px;margin:2px 0 7px;font-size:10px}
 .concept4 .concept-brain-card{padding:11px;min-height:114px;box-shadow:0 3px 12px #25384d0b}

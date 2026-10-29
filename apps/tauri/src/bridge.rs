@@ -318,6 +318,18 @@ fn update_brain_control(context: String, brain: String, mode: String, advisor: b
 }
 
 #[tauri::command]
+fn update_brain_paper_all(context: String, mode: String, paper: bool) -> Result<Value,String> {
+    if !["scalping","swing","expert","sniper"].contains(&mode.as_str()) || context.len()>500 || context.is_empty() {
+        return Err("حساب MT5 أو وضع التشغيل غير مسموح".into());
+    }
+    // Core performs the account/mode/STOP/reconciliation checks and commits
+    // all secondary-brain settings atomically. This is not a trading command.
+    open_client()?.post("/v1/execution/brain-paper-all",
+        json!({"context":context,"mode":mode,"paper":paper}))
+        .map_err(|err|err.to_string())
+}
+
+#[tauri::command]
 fn frozen_sniper_action(action:String,context:String)->Result<Value,String>{
     // Research-only, Sniper Learner. Rust Core must independently verify
     // STOP, reconciled broker intents, fresh Demo and exact account identity.
@@ -460,7 +472,7 @@ pub fn run() {
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore,
-            backtest_action, update_brain_control, bind_execution
+            backtest_action, update_brain_control, update_brain_paper_all, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");

@@ -25,6 +25,7 @@ export async function importBrainSnapshot():Promise<unknown>{return invoke('brai
 export async function restoreBrainSnapshot(name:string):Promise<unknown>{return invoke('brain_snapshot_restore',{name})}
 export async function backtestAction(action:'start'|'cancel',request?:Record<string,unknown>):Promise<unknown>{return invoke('backtest_action',{action,request:request??null})}
 export async function updateBrainControl(context:string,brain:string,mode:string,advisor:boolean,paper:boolean):Promise<unknown>{return invoke('update_brain_control',{context,brain,mode,advisor,paper})}
+export async function updateBrainPaperAll(context:string,mode:string,paper:boolean):Promise<unknown>{return invoke('update_brain_paper_all',{context,mode,paper})}
 export async function bindExecution(target:'demo'|'live',deviationPoints:number,confirmLiveLogin:string):Promise<unknown>{return invoke('bind_execution',{target,deviationPoints,confirmLiveLogin})}
 // Channel is one-way backend -> renderer, and only carries trusted Core status.
 export async function subscribe(onChange:(update:StreamEvent)=>void):Promise<void>{

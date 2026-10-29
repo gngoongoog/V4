@@ -176,6 +176,21 @@ export function TradingSettingsOperations({source,disabled,armed,apply,brokerPoi
  </section>;
 }
 
+export function PaperAllControl({source,disabled,armed,onSet}: {
+ source:unknown;disabled:boolean;armed:boolean;onSet:(paper:boolean)=>Promise<void>;
+}) {
+ const view=safeObject(source);
+ const brains=Array.isArray(view.brains)?view.brains.map(safeObject).filter(b=>safeObject(b.config).id!=='system'):[];
+ const valid=brains.length>0&&brains.every(b=>typeof safeObject(b.control).paper==='boolean');
+ const available=view.controls_available===true&&view.account_matches===true&&valid;
+ const enabled=available?brains.filter(b=>safeObject(b.control).paper===true).length:0;
+ const allEnabled=available&&enabled===brains.length;
+ const label=!available?'غير متاح':allEnabled?'مفعّل للكل':enabled===0?'متوقف للكل':`${enabled} من ${brains.length} مفعّل`;
+ return <div className="concept-paper-all"><button type="button" aria-label="تغيير Paper لكل العقول" disabled={disabled||armed||!available}
+   onClick={()=>void onSet(!allEnabled)}>{allEnabled?'إيقاف Paper للعقول':'تشغيل Paper للعقول'}</button>
+   <span>Paper: {label}</span></div>;
+}
+
 export function BrainControlsOperations({source,disabled,armed,onSave}: {
  source:unknown;disabled:boolean;armed:boolean;onSave:(brain:string,advisor:boolean,paper:boolean)=>Promise<void>;
 }) {
@@ -191,7 +206,7 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
  const selected=safeObject(cards.find(b=>String(safeObject(safeObject(b).config).id||'')===activeBrain));
  const selectedControl=safeObject(selected.control),selectedActivity=safeObject(selected.activity);
  return <section className="operator-card concept-brain-controls" aria-label="Brain controls">
-  <p className="concept-brain-explanation">مشاركة العقول في التحليل وPaper فقط؛ التنفيذ المنفرد للعقول الثانوية غير متاح.</p>
+  <p className="concept-brain-explanation">مشاركة العقول في التحليل وPaper فقط؛ التنفيذ المنفرد للعقول الثانوية غير متاح. إيقاف Paper يمنع التجارب الجديدة، بينما تُسوّى التجارب المفتوحة؛ ولا يوقف التعلّم العام.</p>
   {!actualBrains.length&&<p className="safe-note">الأسماء من قائمة العقول المرفقة بهذا الإصدار. بانتظار Core لتأكيد حالتها ونتائجها؛ الأزرار متوقفة حتى وصول البيانات.</p>}
   <div className="concept-brain-card-grid">{cards.map((b,i)=>{
     const row=safeObject(b),id=String(safeObject(row.config).id||'');
