@@ -11,7 +11,7 @@ fs.mkdirSync(out,{recursive:true});
 const chrome=['/usr/bin/google-chrome','/usr/bin/google-chrome-stable','/usr/bin/chromium'].find(fs.existsSync);
 assert(chrome,'Hosted runner Chrome was not found');
 const server=spawn('npm',['--prefix','apps/terminal','run','dev'],{cwd:root,stdio:'ignore'});
-let browser;
+let browser,page;
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 try{
  let ready=false;
@@ -23,12 +23,15 @@ try{
  assert(ready,'Vite readiness timeout');
  browser=await chromium.launch({executablePath:chrome,headless:true,args:['--no-sandbox']});
  const context=await browser.newContext({viewport:{width:1536,height:864},deviceScaleFactor:1});
- const page=await context.newPage(),errors=[];
+ page=await context.newPage();const errors=[];
  page.on('pageerror',e=>errors.push(String(e)));
  await page.goto('http://127.0.0.1:1420/',{waitUntil:'networkidle'});
  await page.locator('#sidebarNav').waitFor();
  assert(await page.locator('.action-btn.start').isDisabled(),'Offline browser cannot start trading');
- await page.getByRole('button',{name:'معاينة التصميم',exact:true}).click();
+ // A browser without Tauri automatically opens the labelled design preview.
+ // In Tauri the operator explicitly enters it with the footer control.
+ const enterPreview=page.getByRole('button',{name:'معاينة التصميم',exact:true});
+ if(await enterPreview.count())await enterPreview.click();
  assert(await page.locator('.preview-banner').isVisible(),'Synthetic preview must be labelled');
  const primary=[['dashboard','نظرة عامة'],['trading','مركز التداول'],['brainControl','إدارة العقول'],['risk','إدارة المخاطر'],['reports','التقارير'],['journal','السجلات']];
  for(const [id,title] of primary){
@@ -53,6 +56,10 @@ try{
  assert(narrow.scroll<=narrow.visible+1,'Laptop dashboard has horizontal overflow');
  assert.deepEqual(errors,[],'Unhandled renderer errors');
  fs.writeFileSync(path.join(out,'result.json'),JSON.stringify({result:'PASS',pages:pages.length,primaryScreens:primary.map(p=>p[0]),viewports:['1536x864','1120x730'],syntheticPreview:true,mt5:'NOT TESTED',orders:'NOT SENT'},null,2));
+}catch(e){
+ if(page&&!page.isClosed())await page.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});
+ fs.writeFileSync(path.join(out,'failure.txt'),String(e));
+ throw e;
 }finally{
  if(browser)await browser.close();
  server.kill();
