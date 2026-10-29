@@ -274,6 +274,36 @@ async fn brain_snapshot_restore(name:String,lifecycle:tauri::State<'_,AppLifecyc
     tauri::async_runtime::spawn_blocking(move||stage_snapshot_restore(&state,&name)).await.map_err(|e|e.to_string())?
 }
 
+fn write_excel_new(destination:&std::path::Path,bytes:&[u8])->Result<(),String>{
+    use std::{fs::{self,OpenOptions},io::Write};
+    let mut file=OpenOptions::new().write(true).create_new(true).open(destination)
+        .map_err(|e|format!("تعذر إنشاء الملف؛ اختر اسماً غير مستخدم: {e}"))?;
+    if let Err(error)=file.write_all(bytes).and_then(|_|file.sync_all()) {
+        drop(file);let _=fs::remove_file(destination);
+        return Err(format!("تعذر حفظ ملف Excel: {error}"));
+    }
+    Ok(())
+}
+fn save_excel_file(bytes:Vec<u8>,kind:String)->Result<Value,String>{
+    if !matches!(kind.as_str(),"journal"|"report") || bytes.len()>2*1024*1024
+        || bytes.len()<22 || !bytes.starts_with(b"PK\x03\x04") {
+        return Err("بيانات ملف Excel غير صالحة".into());
+    }
+    let name=if kind=="journal"{"BrainTrade-Journal.xlsx"}else{"BrainTrade-Report.xlsx"};
+    let Some(mut destination)=rfd::FileDialog::new().add_filter("Excel workbook",&["xlsx"])
+        .set_file_name(name).save_file() else{return Ok(json!({"cancelled":true}));};
+    if destination.extension().is_none(){destination.set_extension("xlsx");}
+    if !destination.extension().and_then(|s|s.to_str()).is_some_and(|s|s.eq_ignore_ascii_case("xlsx")) {
+        return Err("اختر اسماً بامتداد xlsx".into());
+    }
+    write_excel_new(&destination,&bytes)?;
+    Ok(json!({"saved":true,"bytes":bytes.len()}))
+}
+#[tauri::command]
+async fn save_excel_report(bytes:Vec<u8>,kind:String)->Result<Value,String>{
+    tauri::async_runtime::spawn_blocking(move||save_excel_file(bytes,kind)).await.map_err(|e|e.to_string())?
+}
+
 #[tauri::command]
 fn backtest_action(action: String, request: Option<Value>) -> Result<Value, String> {
     let (route,body)=match action.as_str(){
@@ -494,7 +524,7 @@ pub fn run() {
             get_status, read_panel, read_trade_history, execute_control,
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
-            backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore,
+            backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore, save_excel_report,
             backtest_action, update_brain_control, update_brain_paper_all, close_owned_positions, bind_execution
         ])
         .run(tauri::generate_context!())
@@ -605,6 +635,20 @@ mod tests {
         assert_eq!(fs::read(&dest).unwrap(),b"validated-snapshot");
         assert!(snapshot_name_valid("imported-brain-42-abc"));
         for bad in ["","..","../outside","a/b","a\\b"] {assert!(!snapshot_name_valid(bad));}
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn excel_save_rejects_invalid_payload_and_never_overwrites(){
+        use std::{fs,time::{SystemTime,UNIX_EPOCH}};
+        assert!(save_excel_file(vec![],"journal".into()).is_err());
+        assert!(save_excel_file(vec![0;23],"report".into()).is_err());
+        assert!(save_excel_file(vec![0;23],"unknown".into()).is_err());
+        let unique=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir=std::env::temp_dir().join(format!("bt-xlsx-save-{}-{unique}",std::process::id()));
+        fs::create_dir_all(&dir).unwrap();let dest=dir.join("report.xlsx");
+        write_excel_new(&dest,b"first").unwrap();
+        assert!(write_excel_new(&dest,b"second").is_err());
+        assert_eq!(fs::read(&dest).unwrap(),b"first");
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]

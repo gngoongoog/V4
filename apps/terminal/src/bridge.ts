@@ -23,6 +23,7 @@ export async function backupAction(action:'create'|'brain_export'):Promise<unkno
 export async function exportBrainSnapshot():Promise<unknown>{return invoke('brain_snapshot_export')}
 export async function importBrainSnapshot():Promise<unknown>{return invoke('brain_snapshot_import')}
 export async function restoreBrainSnapshot(name:string):Promise<unknown>{return invoke('brain_snapshot_restore',{name})}
+export async function saveExcelReport(bytes:Uint8Array,kind:'journal'|'report'):Promise<unknown>{return invoke('save_excel_report',{bytes:Array.from(bytes),kind})}
 export async function backtestAction(action:'start'|'cancel',request?:Record<string,unknown>):Promise<unknown>{return invoke('backtest_action',{action,request:request??null})}
 export async function updateBrainControl(context:string,brain:string,mode:string,advisor:boolean,paper:boolean):Promise<unknown>{return invoke('update_brain_control',{context,brain,mode,advisor,paper})}
 export async function updateBrainPaperAll(context:string,mode:string,paper:boolean):Promise<unknown>{return invoke('update_brain_paper_all',{context,mode,paper})}

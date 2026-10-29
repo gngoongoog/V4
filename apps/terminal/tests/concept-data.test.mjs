@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {reportSeries} from '../src/report-series.ts';
-import {journalCsv} from '../src/journal-export.ts';
+import {journalCsv,journalXlsx} from '../src/journal-export.ts';
 import {BRAIN_DIRECTORY} from '../src/brain-catalog.ts';
 import {chartHistory} from '../src/chart-history.ts';
 
@@ -22,6 +22,28 @@ test('CSV keeps missing costs blank and neutralizes spreadsheet formulas in text
  const data=journalCsv([{...row(7,null),brain:'=HYPERLINK("bad")',mode:'  +cmd',commission:null}]);
  assert(data.startsWith('\ufeff'));assert(data.includes('"\'=HYPERLINK(""bad"")"'));
  assert(data.includes('"\'  +cmd"'));assert(data.includes('"7"'));assert(data.includes(',,'));
+});
+test('XLSX exports a scoped workbook with literal text and missing costs blank',()=>{
+ const bytes=Buffer.from(journalXlsx([{...row(9007199254740991,null),brain:'=HYPERLINK("bad")',mode:'<test>',commission:null}],
+  'حساب تجريبي & النطاق المعروض'));
+ const files=new Map();let cursor=0;
+ while(bytes.readUInt32LE(cursor)===0x04034b50){
+  assert.equal(bytes.readUInt16LE(cursor+8),0,'Workbook entries use a supported ZIP method');
+  const size=bytes.readUInt32LE(cursor+18),nameSize=bytes.readUInt16LE(cursor+26),extra=bytes.readUInt16LE(cursor+28);
+  const name=bytes.subarray(cursor+30,cursor+30+nameSize).toString('utf8');
+  const start=cursor+30+nameSize+extra;files.set(name,bytes.subarray(start,start+size).toString('utf8'));
+  cursor=start+size;
+ }
+ assert.equal(files.size,5);assert.equal(bytes.readUInt32LE(cursor),0x02014b50);
+ assert.equal(bytes.readUInt32LE(bytes.length-22),0x06054b50,'ZIP must contain the central directory');
+ assert(files.has('xl/workbook.xml')&&files.has('[Content_Types].xml'));
+ const sheet=files.get('xl/worksheets/sheet1.xml');
+ assert(sheet.includes('حساب تجريبي &amp; النطاق المعروض'));
+ assert(sheet.includes('<c r="A3" t="inlineStr"><is><t xml:space="preserve">9007199254740991'));
+ assert(sheet.includes('<c r="G3" t="inlineStr"><is><t xml:space="preserve">=HYPERLINK("bad")'));
+ assert(sheet.includes('&lt;test&gt;')&&!sheet.includes('<f>'));
+ assert(!sheet.includes('<c r="J3"')&&!sheet.includes('<c r="K3"'));
+ assert(sheet.includes('<c r="L3"><v>0</v></c>'));
 });
 test('offline brain directory lists exactly the secondary identities bundled in Core',()=>{
  const domain=readFileSync(new URL('../../../crates/domain/src/execution_legacy.rs',import.meta.url),'utf8');

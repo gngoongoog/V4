@@ -279,9 +279,26 @@ fn verify_safe_shutdown(status: &Status, unresolved: bool) -> Result<()> {
     }
     Ok(())
 }
+// An empty initial status after a restart is not evidence that a previously
+// connected MT5 account is flat. The same rule protects exit and restore.
+fn verify_initial_shutdown_evidence(status:&Status,gateway_running:bool,prior_session:bool)->Result<()> {
+    if status.telemetry.is_none() {
+        anyhow::ensure!(!gateway_running && !prior_session,
+            "تعذر إيقاف Core أو استعادة النسخة: انتظر حالة حساب MT5 حديثة للتحقق من المراكز");
+    }
+    Ok(())
+}
 
 impl Engine{
     fn event(&self,kind:&str,detail:Value)->Result<()>{self.db.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,?2,?3)",params![now_ms(),kind,detail.to_string()])?;Ok(())}
+    fn verify_shutdown_session(&mut self,status:&Status)->Result<()> {
+        if status.telemetry.is_none() {
+            let gateway_running=match self.gateway.as_mut(){Some(child)=>child.try_wait()?.is_none(),None=>false};
+            let prior_session:bool=self.db.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE kind='gateway_connection' AND json_extract(detail,'$.connected')=1)",[],|row|row.get(0))?;
+            verify_initial_shutdown_evidence(status,gateway_running,prior_session)?;
+        }
+        Ok(())
+    }
     fn launch_gateway(&mut self)->Result<()>{
         if std::env::var("BRAINTRADE_GATEWAY_DISABLED").as_deref()==Ok("1"){return Ok(());}
         if let Some(child)=self.gateway.as_mut(){if child.try_wait()?.is_none(){return Ok(());}}
@@ -559,6 +576,7 @@ impl Engine{
                 anyhow::ensure!(expected==self.instance_id,"Core session changed; request restore again");
             }
             let status={let mut shared=self.shared.lock().unwrap();shared.status.refresh(now_ms());shared.status.clone()};
+            self.verify_shutdown_session(&status)?;
             verify_safe_shutdown(&status,self.execution.pending(&self.db)?)?;
             if self.backtests.loading(){bail!("Cannot stage restore while broker history is loading");}
             let config=self.shared.lock().unwrap().config.clone();
@@ -658,15 +676,7 @@ impl Engine{
                 }
                 let unresolved=self.execution.pending(&self.db)?;
                 let current={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
-                if current.telemetry.is_none() {
-                    // Status is initially empty after a restart. A previous
-                    // broker connection or a running gateway means that an
-                    // empty initial snapshot is not evidence of a flat account.
-                    let gateway_running=match self.gateway.as_mut(){Some(child)=>child.try_wait()?.is_none(),None=>false};
-                    let prior_session:bool=self.db.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE kind='gateway_connection' AND json_extract(detail,'$.connected')=1)",[],|row|row.get(0))?;
-                    anyhow::ensure!(!gateway_running && !prior_session,
-                        "تعذر الخروج الكامل: انتظر حالة حساب MT5 حديثة بعد بدء المحرك أو أعد الاتصال للتحقق من المراكز");
-                }
+                self.verify_shutdown_session(&current)?;
                 verify_safe_shutdown(&current,unresolved)?;
                 self.event("core_shutdown_requested",json!({"safe":true,"positions":0,"pending_orders":0}))?;
                 let barrier=lifecycle::ShutdownBarrier::begin(&self.dir)?;
@@ -735,6 +745,9 @@ mod tests{
     fn full_exit_is_blocked_if_monitoring_or_account_is_unverified(){
         let mut s=Status::default();
         assert!(verify_safe_shutdown(&s,false).is_ok());
+        assert!(verify_initial_shutdown_evidence(&s,false,false).is_ok());
+        assert!(verify_initial_shutdown_evidence(&s,true,false).is_err());
+        assert!(verify_initial_shutdown_evidence(&s,false,true).is_err());
         assert!(verify_safe_shutdown(&s,true).is_err());
         s.requested_run=true;
         assert!(verify_safe_shutdown(&s,false).is_err());
@@ -745,6 +758,7 @@ mod tests{
         assert!(verify_safe_shutdown(&s,false).is_err());
         s.gateway_fresh=true;
         s.telemetry.as_mut().unwrap().connected=true;
+        assert!(verify_initial_shutdown_evidence(&s,true,true).is_ok());
         assert!(verify_safe_shutdown(&s,false).is_ok());
         s.telemetry.as_mut().unwrap().pending_orders=1;
         assert!(verify_safe_shutdown(&s,false).is_err());
