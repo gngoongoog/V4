@@ -99,7 +99,7 @@ impl Learner {
             e.trial.observe(bid,ask,ms,now,t.tick_age_ms.is_some_and(|age| age <= 1000));
         }
     }
-    fn persist(&self, db: &Connection) -> Result<()> {
+    pub fn persist(&self, db: &Connection) -> Result<()> {
         let tx = db.unchecked_transaction()?;
         for e in self.active.values() {
             tx.execute("INSERT INTO student_entry_trials VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(context,command_id) DO UPDATE SET complete=excluded.complete,payload=excluded.payload",

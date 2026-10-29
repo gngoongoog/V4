@@ -147,6 +147,14 @@ def main():
                 assert db.execute('SELECT COUNT(*) FROM learning_predictions').fetchone()[0]==1
                 assert db.execute("SELECT COUNT(*) FROM learning_slots WHERE slot='champion' AND model_id IS NOT NULL").fetchone()[0]==0
             assert not list(folder.glob('*.sealed'))
+            frozen=api('/v1/learning/control',{'frozen':True})
+            assert frozen['frozen'] and frozen['trading_unchanged'] and frozen['cutoff_ms']>0
+            assert api('/v1/status')['learning_control']['frozen']
+            assert api('/v1/learning/control',{'frozen':True})['cutoff_ms']==frozen['cutoff_ms']
+            for route,body in (('/v1/studio/run',{}),('/v1/studio/auto',{'enabled':True}),('/v1/learning/register',{})):
+                try:api(route,body)
+                except urllib.error.HTTPError as e:assert e.code==400
+                else:raise AssertionError('Learning write was accepted while globally frozen: '+route)
             events_before=api('/v1/events')['events']
             api('/v1/shutdown',{});process.wait(timeout=5)
             assert process.returncode==0
@@ -155,6 +163,8 @@ def main():
                 try:status=api('/v1/status');break
                 except OSError:time.sleep(.1)
             assert status['state']=='stopped' and not status['execution_enabled']
+            assert status['learning_control']['frozen'] and status['learning_control']['cutoff_ms']==frozen['cutoff_ms']
+            assert api('/v1/learning/control',{'frozen':False})['frozen'] is False
             api('/v1/gateway/snapshot',snapshot)
             assert api('/v1/status')['paper']['trades']==1
             assert len(api('/v1/decisions')['decisions'])==1

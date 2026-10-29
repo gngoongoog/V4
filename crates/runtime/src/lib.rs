@@ -43,6 +43,7 @@ mod backtest;
 mod correlation;
 mod evaluation;
 mod learning;
+mod learning_control;
 mod learning_inference;
 mod learning_performance_review;
 mod learning_review;
@@ -365,8 +366,22 @@ impl Engine{
         }
         Ok(())
     }
-    fn tick(&mut self){let cfg=self.shared.lock().unwrap().config.clone();self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
+    fn tick(&mut self){let cfg=self.shared.lock().unwrap().config.clone();self.studio.set_learning_frozen(self.execution.learning_frozen());self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
     fn route(&mut self,method:&str,path:&str,body:&[u8])->Result<Value>{
+        if path=="/v1/learning/control" {
+            if method=="GET" {return Ok(self.execution.learning_status());}
+            if method=="POST" {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Request {frozen:bool}
+                let request:Request=serde_json::from_slice(body)?;
+                let status={let mut shared=self.shared.lock().unwrap();shared.status.refresh(now_ms());shared.status.clone()};
+                let result=self.execution.set_learning_frozen(&self.db,&status,request.frozen,now_ms())?;
+                self.studio.set_learning_frozen(request.frozen);
+                return Ok(result);
+            }
+            bail!("Unknown learning control method");
+        }
         if path=="/v1/research/execution-lifecycle" && method=="POST" {
             return research_order_lifecycle::replay(body);
         }
@@ -600,7 +615,7 @@ impl Engine{
             return Ok(result);
         }
         match(method,path){
-            ("GET","/v1/status")=>{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());let mut value=serde_json::to_value(&s.status)?;value["selected_owner"]=json!(self.execution.selected_owner_for_status(&s.status));value["core_process"]=json!({"pid":std::process::id(),"instance_id":self.instance_id});Ok(value)},
+            ("GET","/v1/status")=>{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());let mut value=serde_json::to_value(&s.status)?;value["selected_owner"]=json!(self.execution.selected_owner_for_status(&s.status));value["learning_control"]=self.execution.learning_status();value["core_process"]=json!({"pid":std::process::id(),"instance_id":self.instance_id});Ok(value)},
             ("GET","/v1/config")=>{let s=self.shared.lock().unwrap();Ok(json!({"config":s.config,"token_saved":s.token.is_some()}))},
             ("GET","/v1/learning/account-evidence")=>{
                 let (telemetry,fresh)={
@@ -612,7 +627,7 @@ impl Engine{
             },
             ("GET","/v1/learning")=>{let base=self.learning.status(&self.db)?;let reviewed=learning_review::enrich_learning_status(&self.db,base)?;let inferred=self.inference.enrich_learning_status(&self.db,reviewed)?;let scored=self.scoring.enrich_learning_status(&self.db,inferred)?;let reviewed=learning_performance_review::enrich_learning_status(&self.db,scored)?;let mut result=reviewed;result["frozen_forward_audit"]=learning_forward_audit::audit(&self.db)?;Ok(result)},
             ("POST","/v1/learning/export")=>self.learning.export(&self.db,&self.dir,now_ms()),
-            ("POST","/v1/learning/register")=>{let artifact:Value=serde_json::from_slice(body)?;self.learning.register(&mut self.db,artifact,now_ms())},
+            ("POST","/v1/learning/register")=>{anyhow::ensure!(!self.execution.learning_frozen(),"التعلم مجمّد؛ استأنفه قبل تسجيل نموذج جديد");let artifact:Value=serde_json::from_slice(body)?;self.learning.register(&mut self.db,artifact,now_ms())},
             ("GET","/v1/decisions")=>research::decision_history(&self.db),
             ("GET","/v1/opportunities/history")=>research::opportunity_history(&self.db),
             ("POST","/v1/risk")=>{

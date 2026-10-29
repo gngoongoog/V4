@@ -110,6 +110,13 @@ try{
   await page.locator('button.action-btn.stop').click();await page.getByRole('button',{name:'تأكيد وقف الدخول الجديد',exact:true}).click();
   await page.getByRole('dialog').waitFor({state:'hidden'});await status();
  });
+ await check('freeze and resume actual Core learning from dashboard without START',async()=>{
+  const buttons=page.locator('.concept-learning-actions').getByRole('button');
+  await until(async()=>await buttons.nth(0).isEnabled());await buttons.nth(0).click();
+  await until(async()=>(await status()).learning_control?.frozen===true);
+  await until(async()=>await buttons.nth(1).isEnabled());await buttons.nth(1).click();
+  await until(async()=>(await status()).learning_control?.frozen===false);
+ });
  const source=fs.readFileSync(path.join(root,'apps/terminal/src/terminal.tsx'),'utf8');
  const pages=[...source.matchAll(/\{id:'([^']+)',title:'([^']+)',en:'([^']+)'/g)].map(m=>({id:m[1],title:m[2]}));
  assert.equal(pages.length,22,'Expected all 22 source-registered pages');

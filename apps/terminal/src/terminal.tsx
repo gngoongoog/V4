@@ -42,7 +42,7 @@ import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position} from './types';
 import type {RiskRecovery} from './bridge';
 import {DESIGN_FIXTURE} from './mock';
-import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
+import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,setLearningFrozen,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
 import {money,num,signed,up,valid} from './format';
 
 type IconComponent=typeof Home;
@@ -692,6 +692,19 @@ export default function Terminal(){
   }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
   finally{finishWrite(mutation)}
  };
+ const runLearningFreeze=async(frozen:boolean)=>{
+  if(preview||!hasTauri()||!online||typeof status?.learning_control?.frozen!=='boolean'){
+   sendNotice('اتصل بـ Core حتى تتأكد حالة التعلّم قبل تغييرها',true);return;
+  }
+  const mutation=beginWrite('learning-freeze');if(!mutation)return;
+  try{
+   const result=unwrap(await setLearningFrozen(frozen));
+   if(!writeFresh(mutation))return;
+   if(result.frozen!==frozen||result.trading_unchanged!==true)throw new Error('لم يؤكد Core حالة التعلّم');
+   sendNotice(frozen?'تم تجميد تدريب العقول؛ التداول ومتابعة المراكز مستمران':'تم استئناف تدريب العقول');
+  }catch(e){if(writeFresh(mutation))sendNotice('تعذر تغيير حالة التعلم: '+String(e),true)}
+  finally{finishWrite(mutation)}
+ };
  const editGeneral=(name:string,value:unknown)=>{settingsDirty.current=true;setSettingsEdit(s=>({...s,[name]:value}))};
  const saveGeneral=async()=>{
   if(!activeSettingsEdit||preview||!hasTauri()||status?.requested_run){sendNotice('احفظ فقط بعد تحميل إعدادات Core للحساب الحالي وفي وضع STOP',true);return}
@@ -1021,7 +1034,7 @@ export default function Terminal(){
         <div className="concept-prices"><div className="concept-sell"><strong>{(preview||feed.quote)&&valid(account?.bid)?num(account?.bid,2):'—'}</strong><small>SELL · Bid</small></div><div><strong>{(preview||feed.quote)&&valid(account?.ask)&&valid(account?.bid)&&Number(account?.ask)>=Number(account?.bid)?num(Number(account?.ask)-Number(account?.bid),2):'—'}</strong><small>SPREAD</small></div><div className="concept-buy"><strong>{(preview||feed.quote)&&valid(account?.ask)?num(account?.ask,2):'—'}</strong><small>BUY · Ask</small></div></div>
         <div className="concept-quick-config"><button type="button" onClick={()=>open('trading')}><small>إعدادات القناص</small><b>الهدف والستوب ›</b></button><button type="button" onClick={()=>open('risk')}><small>العمولة والمخاطرة</small><b>إعدادات Core ›</b></button></div>
         <div className="action-row double"><button className="action-btn start" onClick={requestStart} disabled={busy||preview||!feed.broker||status?.requested_run===true}><Play size={23}/><span>بدء التداول<small>Start</small></span></button><button className="action-btn stop" onClick={requestStop} disabled={preview||!hasTauri()}><PauseCircle size={23}/><span>وقف الدخول<small>Stop entries</small></span></button><button className="action-btn shadow" onClick={()=>open('shadow')}><Eye size={21}/><span>ظل<small>Shadow</small></span></button></div>
-        <div className="concept-learning-actions"><button type="button" disabled title="إيقاف التعلم العام غير متاح في Core الحالي">❄ تجميد التعلّم</button><button type="button" disabled title="استئناف التعلم العام غير متاح في Core الحالي">▶ استئناف التعلّم</button></div><p className="concept-learning-note">يمكن التحكم بـPaper لكل عقل من صفحة إدارة العقول.</p>
+        <div className="concept-learning-actions"><button type="button" disabled={busy||preview||!online||!status?.learning_control||status.learning_control.frozen} onClick={()=>void runLearningFreeze(true)}>❄ تجميد التعلّم</button><button type="button" disabled={busy||preview||!online||!status?.learning_control||!status.learning_control.frozen} onClick={()=>void runLearningFreeze(false)}>▶ استئناف التعلّم</button></div><p className="concept-learning-note">{!status?.learning_control?'حالة التعلّم غير متاحة':status.learning_control.frozen?'التدريب مجمّد؛ المراقبة وتسوية المراكز مستمرة.':'التدريب غير مجمّد.'} Paper يُدار من صفحة العقول.</p>
         <div className="action-row triple"><button className="pill-btn" title="فتح شاشة ربط حساب MT5 Demo. هذا الزر لا يغيّر الحساب مباشرة" onClick={()=>open('execution')}>▣ <span>إعداد Demo</span></button><button className="pill-btn green" title="فتح شاشة ربط REAL مع تأكيد رقم الحساب؛ لا يغيّر MT5 مباشرة" onClick={()=>open('execution')}>◉ <span>إعداد Live</span></button><button className="pill-btn slate" onClick={()=>open('learning')}>⚙ <span>التعلّم<small>Learning</small></span></button></div>
         <div className="action-row quadruple"><button className="mini-btn risk" onClick={()=>open('risk')}>◉ <span>المخاطر<small>Risk</small></span></button><button className="mini-btn risk-off" onClick={()=>open('risk')}>◌ <span>Limits<small>Safety</small></span></button><button className="mini-btn telegram" onClick={()=>open('telegram')}>➤ <span>تلغرام<small>Alerts</small></span></button><button className="mini-btn" onClick={()=>open('settings')}>⚙ <span>الإعدادات<small>Setup</small></span></button></div>
         </>:<div className="ops-alt"><h3>{opsTab==='orders'?'مراقبة الأوامر':'خيارات النظام المتقدمة'}</h3><p>{opsTab==='orders'?'المراكز الفعلية والتسوية تأتي من Core وMT5.':'تغيير وضع التنفيذ وإعدادات القناص يتم بعد تحقق Core.'}</p><button className="quick-link" onClick={()=>open(opsTab==='orders'?'positions':'trading')}>فتح الصفحة ذات الصلة ←</button></div>}

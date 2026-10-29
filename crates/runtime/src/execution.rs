@@ -331,6 +331,7 @@ pub struct Service {
     supervisor_policy_valid: bool,
     quality_circuit: crate::broker_quality_circuit::Snapshot,
     fast: Option<pulse::FastContext>,
+    learning_gate:crate::learning_control::Gate,
 }
 
 impl Service {
@@ -385,7 +386,34 @@ impl Service {
             supervisor_policy_valid,
             quality_circuit: crate::broker_quality_circuit::Snapshot::default(),
             fast: None,
+            learning_gate:crate::learning_control::load(db)?,
         })
+    }
+
+    pub fn learning_frozen(&self)->bool{self.learning_gate.frozen}
+    pub fn learning_status(&self)->Value{
+        json!({"frozen":self.learning_gate.frozen,"valid":self.learning_gate.valid,
+            "cutoff_ms":self.learning_gate.cutoff(),"scope":"all_accounts_and_learning_services",
+            "broker_reconciliation_continues":true,"trading_unchanged":true})
+    }
+    pub fn set_learning_frozen(&mut self,db:&Connection,status:&Status,frozen:bool,now:u64)->Result<Value>{
+        if self.learning_gate.frozen==frozen && self.learning_gate.valid {
+            return Ok(self.learning_status());
+        }
+        let gate=if frozen {
+            let scoped=status.telemetry.as_ref().filter(|t|status.gateway_fresh && self.inner.matches_bound_telemetry(t));
+            let (quality,samples)=if scoped.is_some(){self.inner.weights.values().next()
+                .filter(|w|w.execution_history_quality.is_finite()&&(0.0..=1.0).contains(&w.execution_history_quality))
+                .map(|w|(w.execution_history_quality,w.execution_history_samples)).unwrap_or((0.5,0))
+            }else{(0.5,0)};
+            crate::learning_control::Gate{frozen:true,cutoff_ms:now,
+                quality_context:scoped.map(context).unwrap_or_default(),
+                quality_target:scoped.map(|t|if t.account_trade_mode==Some(0) {"demo"}else{"live"}).unwrap_or("").into(),
+                quality,quality_samples:samples,valid:true}
+        }else{crate::learning_control::Gate::default()};
+        crate::learning_control::save(db,&gate,now)?;
+        self.learning_gate=gate;
+        Ok(self.learning_status())
     }
 
     fn load_supervisor_fail_closed(db:&Connection)->(crate::enterprise_supervisor::Settings,bool) {
@@ -527,7 +555,10 @@ impl Service {
         self.inner.refresh_solo(db,telemetry,config.trading.mode)?;
         self.inner.controls = crate::brain_control::load_account(db, &context(telemetry), config.trading.mode, telemetry.account_trade_mode)?;
         let available = crate::coordinator_learning::available_frames(telemetry, frames, now);
-        self.inner.weights = self.learner.observe(
+        let cutoff=self.learning_gate.cutoff();
+        let target=if telemetry.account_trade_mode==Some(0) {"demo"} else {"live"};
+        let frozen_quality=self.learning_gate.history_quality(&context(telemetry),target);
+        self.inner.weights = self.learner.observe_gated(
             db,
             telemetry,
             config,
@@ -535,9 +566,12 @@ impl Service {
             &available,
             run,
             now,
+            cutoff,
+            frozen_quality,
         )?;
-        crate::sniper_learning::refresh(&mut self.inner.sniper, db, telemetry, now)?;
-        self.student.observe(db,telemetry,now)?;
+        crate::sniper_learning::refresh_gated(&mut self.inner.sniper, db, telemetry, now,cutoff)?;
+        let learning_frozen=self.learning_frozen();
+        self.student.observe_gated(db,telemetry,now,learning_frozen)?;
         self.inner.student_policies=self.student.policies.clone();
         // Legacy engine still owns durable broker intents and reconciliation.
         // V20 institutional admission: never prevent already-open position exits
@@ -594,8 +628,9 @@ impl Service {
                         "error":error.to_string().chars().take(240).collect::<String>()}).to_string()]);
           }
         }
-        self.student.capture_entries(self.inner.take_entries(), now);
-        if run {crate::student_learning::log_opportunities(db,telemetry,&self.inner.learning_decisions(),now)?;}
+        let entries=self.inner.take_entries();
+        if !self.learning_frozen(){self.student.capture_entries(entries, now);}
+        if run && !self.learning_frozen() {crate::student_learning::log_opportunities(db,telemetry,&self.inner.learning_decisions(),now)?;}
         // Apply one global entry budget after all brains have proposed their queued opens and
         // before the gateway can retrieve them. Exits and reconciliation states are untouched.
         self.apply_portfolio(db,telemetry,config)?;
@@ -1117,7 +1152,8 @@ impl Service {
             // execution/portfolio gates. Research never creates a broker intent.
             self.sniper_frozen_tick.observe(&next.telemetry,&next.config,
                 self.inner.last_sniper_raw.as_ref(),body,now);
-            self.student.capture_entries(self.inner.take_entries(), now);
+            let entries=self.inner.take_entries();
+            if !self.learning_frozen(){self.student.capture_entries(entries, now);}
             self.apply_portfolio(db,&next.telemetry,&next.config)?;
 
             let mut pulse_status = status.clone();
@@ -1263,7 +1299,8 @@ impl Service {
                 // Tick cannot race back into a just-breached quality circuit.
                 self.refresh_quality_circuit(db,t,now);
                 // Register acknowledged fill before the next quote pulse.
-                self.student.observe(db, t, now)?;
+                let learning_frozen=self.learning_frozen();
+                self.student.observe_gated(db, t, now,learning_frozen)?;
             } else {
                 self.quality_circuit=crate::broker_quality_circuit::Snapshot::default();
             }
@@ -1654,6 +1691,19 @@ mod tests {
         let mut other=t.clone();other.login+=1;restored.inner.settings.login=other.login;
         restored.inner.refresh_risk_master(&db,&other).unwrap();
         assert_eq!(restored.inner.risk_master(&other),Some(true),"Account-specific rule cannot transfer");
+    }
+
+    #[test]
+    fn global_learning_pause_survives_restart_without_changing_trading_state(){
+        let db=setup();let mut service=Service::new(&db).unwrap();
+        let mut status=Status::default();status.requested_run=true;
+        let result=service.set_learning_frozen(&db,&status,true,1000).unwrap();
+        assert_eq!(result["frozen"],true);assert_eq!(result["trading_unchanged"],true);
+        assert!(status.requested_run,"Training pause must not issue STOP");
+        let mut restarted=Service::new(&db).unwrap();
+        assert!(restarted.learning_frozen());assert_eq!(restarted.learning_status()["cutoff_ms"],1000);
+        assert_eq!(restarted.set_learning_frozen(&db,&status,false,2000).unwrap()["frozen"],false);
+        assert!(!Service::new(&db).unwrap().learning_frozen());
     }
 
     #[test]

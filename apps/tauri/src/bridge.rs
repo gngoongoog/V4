@@ -372,6 +372,12 @@ fn update_risk_master(context:String,enabled:bool,confirm_live_login:String,reco
 }
 
 #[tauri::command]
+fn set_learning_frozen(frozen:bool)->Result<Value,String>{
+    open_client()?.post("/v1/learning/control",json!({"frozen":frozen}))
+        .map_err(|err|err.to_string())
+}
+
+#[tauri::command]
 fn select_solo_brain(context:String,mode:String,brain:String)->Result<Value,String>{
     if context.is_empty() || context.len()>500 || !["scalping","swing","expert","sniper"].contains(&mode.as_str())
         || brain.is_empty() || brain.len()>100 || !brain.bytes().all(|b|b.is_ascii_lowercase()||b==b'_') {
@@ -549,7 +555,7 @@ pub fn run() {
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore, save_excel_report,
-            backtest_action, update_brain_control, update_brain_paper_all, update_risk_master, select_solo_brain, close_owned_positions, bind_execution
+            backtest_action, update_brain_control, update_brain_paper_all, update_risk_master, set_learning_frozen, select_solo_brain, close_owned_positions, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");
