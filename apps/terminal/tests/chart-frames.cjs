@@ -29,4 +29,27 @@ assert(JSON.stringify(footer.props.children).includes('SL/TP'),'Verified or clea
 const foreign=out.default({symbol:'XAUUSD',positions:[{...position,symbol:'EURUSD'}],market:{},preview:true});
 const foreignFooter=nodes(foreign).find(n=>n.props.className==='chart-footer');
 assert(!JSON.stringify(foreignFooter.props.children).includes('SL/TP'),'Positions of another symbol must never appear on the chart');
+
+// Sanitization, chronology, EMA and visible-window regression tests.
+const candle=(time,open,close,high,low,tick_volume=20)=>({time,open,close,high,low,tick_volume});
+const valid=[
+ candle(100,10,11,12,9),candle(200,11,10,11.5,9.5),
+ candle(300,10,12,12.2,9),candle(400,12,11,12.1,10.5)
+];
+const mixed=[valid[2],valid[0],valid[1],valid[2],
+ candle(500,10,11,10.5,9),candle(600,-1,-2,-.5,-2.5),valid[3]];
+const cleaned=out.cleanChartCandles(mixed);
+assert.deepEqual(Array.from(cleaned.map(c=>c.time)),[100,200,300,400],
+ 'Candles must be chronological, unique and true OHLC; no fabricated correction');
+assert.equal(out.chartWindow(cleaned,12,0).bars.at(-1).time,400);
+assert.equal(out.chartWindow(cleaned,12,1).bars.at(-1).time,300,'Historical pan must remove latest bar');
+assert.equal(out.chartWindow(cleaned,12,300).bars.length,0,'Pan may not invent bars beyond history');
+const ema=out.emaSeries(cleaned,9);
+assert.equal(ema.length,4);
+assert.equal(ema[0],cleaned[0].close);
+assert(ema.every(Number.isFinite));
+const zoomButton=nodes(chart).find(n=>n.type==='button'&&n.props['aria-label']==='تكبير الشموع');
+const resetButton=nodes(chart).find(n=>n.type==='button'&&n.props['aria-label']==='العودة لأحدث شمعة');
+assert(typeof zoomButton.props.onClick==='function'&&typeof resetButton.props.onClick==='function');
+
 console.log('PASS: all seven chart timeframes select the real chart state');
