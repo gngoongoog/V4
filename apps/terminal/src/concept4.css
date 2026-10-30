@@ -150,3 +150,101 @@ body[data-theme] .concept4 .subpage-brainControl .subpage-primary,body[data-them
 .concept4 .concept-risk-daily{grid-row:2}
 @media(max-width:1300px){.concept4 .subpage-brainControl .subpage-header,.concept4 .subpage-brains .subpage-header{flex-wrap:wrap}.concept4 .subpage-header .concept-brains-toolbar{justify-content:flex-start}.concept-risk-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.terminal-v15.concept4 .risk-editor{grid-template-columns:1fr}.terminal-v15.concept4 .risk-flags,.terminal-v15.concept4 .risk-form-grid,.terminal-v15.concept4 .risk-editor>.quick-ops{grid-column:1;grid-row:auto}.concept4 .concept-risk-capital{grid-row:1/3;max-height:550px}}
 @media(max-height:800px){.terminal-v15.concept4 .sidebar .nav-item{height:34px}.terminal-v15.concept4 .sidebar .all-pages{height:25px}.terminal-v15.concept4 .health-widget{padding:5px 8px}.terminal-v15.concept4 .health-row{height:15px}.terminal-v15.concept4 .sidebar-footer{padding:3px 9px 5px}}
+
+
+/* Concept 4 source-reference pass: stronger card hierarchy, shaded icons and
+   real-price chart emphasis. This changes appearance only; absent broker data
+   and unavailable controls remain honestly unavailable. */
+body[data-theme=light] .terminal-v15.concept4 .content{
+  background:radial-gradient(ellipse at 60% 0%,#f5f7fc 0%,#edf1f7 62%,#e9edf4 100%);
+}
+body[data-theme=light] .terminal-v15.concept4 .panel,
+body[data-theme=light] .terminal-v15.concept4 .kpi,
+body[data-theme=light] .terminal-v15.concept4 .operator-card{
+  background:linear-gradient(135deg,#fff 0%,#fafbfd 100%);
+  border:1px solid #e0e6ef;
+  box-shadow:0 3px 13px rgba(34,46,65,.065);
+  border-radius:11px;
+}
+.terminal-v15.concept4 .dashboard .kpi-row .kpi{
+  align-items:flex-start;
+  min-height:119px;
+  height:119px;
+  padding:15px 13px;
+  gap:11px;
+  transition:box-shadow .16s,border-color .16s;
+}
+.terminal-v15.concept4 .dashboard .kpi-row .kpi:hover{
+  border-color:#d4dbe6;box-shadow:0 6px 18px rgba(30,41,56,.1);
+}
+.terminal-v15.concept4 .kpi-glyph{
+  display:grid;place-items:center;width:42px;height:42px;min-width:42px;border-radius:10px;
+  background:#fff3dc;color:#bc8218;box-shadow:inset 0 0 0 1px #fae8c7;
+}
+.terminal-v15.concept4 .kpi-glyph svg{width:25px;height:25px;stroke-width:2.15}
+.terminal-v15.concept4 .concept-kpis .kpi:nth-child(2) .kpi-glyph{background:#e6f8ef;color:#049a57;box-shadow:inset 0 0 0 1px #d7f0e3}
+.terminal-v15.concept4 .concept-kpis .kpi:nth-child(3) .kpi-glyph{background:#ecf0f4;color:#475b69;box-shadow:inset 0 0 0 1px #dce4eb}
+.terminal-v15.concept4 .concept-kpis .kpi:nth-child(4) .kpi-glyph{background:#e7f7eb;color:#0c9c62;box-shadow:inset 0 0 0 1px #d5eedf}
+.terminal-v15.concept4 .concept-kpis .kpi:nth-child(5) .kpi-glyph{background:#e8f2ff;color:#2677cc;box-shadow:inset 0 0 0 1px #d9e8fb}
+.terminal-v15.concept4 .concept-kpis .kpi:nth-child(6) .kpi-glyph{background:#e9f8ee;color:#069e56;box-shadow:inset 0 0 0 1px #d9f1e4}
+.terminal-v15.concept4 .kpi-copy{display:flex;flex-direction:column;min-width:0;flex:1}
+.terminal-v15.concept4 .kpi-copy strong{font-size:21px;line-height:1.25;margin-top:9px;font-weight:800;color:#1c2930}
+.terminal-v15.concept4 .kpi-ar{font-size:12px;font-weight:750;line-height:1.3;color:#29343e}
+.terminal-v15.concept4 .kpi-footer{font-size:10px;line-height:1.5;color:#89949f;margin-top:5px}
+.terminal-v15.concept4 .kpi .concept-led{width:10px;height:10px;right:12px;top:20px}
+
+.terminal-v15.concept4 .chart-panel{border-color:#dce4ed;box-shadow:0 4px 14px rgba(29,45,62,.065)}
+.terminal-v15.concept4 .chart-symbol strong{font-weight:800;letter-spacing:.1px}
+.terminal-v15.concept4 .chart-symbol .concept-chart-quote{font-weight:800;color:#243039}
+.terminal-v15.concept4 .chart-frame{border-radius:4px;overflow:hidden}
+.terminal-v15.concept4 .chart-panel .timeframes button{font-weight:700;border-radius:4px}
+.terminal-v15.concept4 .chart-panel .tool-button.tool-on{background:#dcecf9;border-color:#a2c8e7;color:#277db2}
+.terminal-v15.concept4 .chart-panel .tool-button:hover{background:#dceaf6}
+
+.terminal-v15.concept4 .ops-panel .concept-quick-title strong,
+.terminal-v15.concept4 .panel-title b{font-weight:800;letter-spacing:.08px;color:#25313c}
+.terminal-v15.concept4 .ops-panel .concept-prices>div{border:1px solid rgba(0,0,0,.025);border-radius:7px;padding-block:10px}
+.terminal-v15.concept4 .ops-panel .concept-sell strong{color:#d93446}
+.terminal-v15.concept4 .ops-panel .concept-buy strong{color:#078d55}
+.terminal-v15.concept4 .ops-panel .action-btn.start:not(:disabled),
+.terminal-v15.concept4 .concept-trading-actions .action-btn.start:not(:disabled){background:linear-gradient(120deg,#12b36a,#049454);box-shadow:0 3px 8px rgba(11,158,88,.18)}
+.terminal-v15.concept4 .ops-panel .action-btn.stop:not(:disabled),
+.terminal-v15.concept4 .concept-trading-actions .action-btn.stop:not(:disabled){background:linear-gradient(120deg,#ea4e57,#c92c39);box-shadow:0 3px 8px rgba(210,49,66,.16)}
+.terminal-v15.concept4 .ops-panel .action-btn:disabled{opacity:.62;filter:grayscale(.24)}
+.terminal-v15.concept4 .ops-panel .ops-tabs button{font-weight:700;font-size:11px}
+.terminal-v15.concept4 .ops-panel .concept-quick-config button{min-height:42px;border-radius:7px;background:#f8fafe;border:1px solid #e3e9f2}
+.terminal-v15.concept4 .ops-panel .concept-quick-config button:hover{border-color:#bbcad8;background:#eff4fa}
+
+.terminal-v15.concept4 .concept-mode-grid{gap:8px;padding:0 11px 11px}
+.terminal-v15.concept4 .concept-mode{
+  background:linear-gradient(155deg,#fff,#f3f6fa);
+  border:1px solid #e3e8ee;
+  border-radius:9px;
+  padding:10px;
+  box-shadow:0 2px 5px rgba(33,43,52,.035);
+}
+.terminal-v15.concept4 .concept-mode.active{
+  background:linear-gradient(150deg,#34414a,#222d35);color:#fff;
+  border-color:#384550;box-shadow:0 4px 11px rgba(20,32,46,.15);
+}
+.terminal-v15.concept4 .concept-mode-icon{
+  display:grid;place-items:center;width:36px;height:36px;border-radius:9px;
+  background:#f9eecf;color:#b78220;
+}
+.terminal-v15.concept4 .concept-mode:nth-child(2) .concept-mode-icon{background:#edeaf9;color:#6551b2}
+.terminal-v15.concept4 .concept-mode:nth-child(3) .concept-mode-icon{background:#e7f3fa;color:#237dba}
+.terminal-v15.concept4 .concept-mode:nth-child(4) .concept-mode-icon{background:#eee9fa;color:#8367c9}
+.terminal-v15.concept4 .concept-mode.active .concept-mode-icon{background:rgba(229,175,58,.16);color:#ffd77c}
+.terminal-v15.concept4 .concept-mode strong{font-size:14px;font-weight:800}
+.terminal-v15.concept4 .concept-mode small{color:#7f8b96}
+.terminal-v15.concept4 .concept-mode.active small{color:#b9c7d1}
+.terminal-v15.concept4 .concept-mode.active>span:not(.concept-mode-icon){color:#c4d0d8}
+.terminal-v15.concept4 .concept-brain-list button:hover{background:#f5f8fd}
+.terminal-v15.concept4 .concept-market-stats>div{box-shadow:0 2px 7px rgba(34,44,52,.045)}
+
+@media (max-width:1200px){
+  .terminal-v15.concept4 .dashboard .kpi-row .kpi{padding:10px 8px;gap:6px}
+  .terminal-v15.concept4 .kpi-glyph{min-width:31px;width:31px;height:31px;border-radius:7px}
+  .terminal-v15.concept4 .kpi-glyph svg{width:21px;height:21px}
+  .terminal-v15.concept4 .kpi-copy strong{font-size:17px}
+}
