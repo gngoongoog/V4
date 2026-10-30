@@ -94,7 +94,11 @@ try{
   const unwired=await page.locator('main.content').evaluate(main=>Array.from(main.querySelectorAll('button:not(:disabled)'))
    .filter(button=>button.getClientRects().length>0)
    .filter(button=>{
-    const key=Object.keys(button).find(k=>k.startsWith('__reactProps
+    const key=Object.keys(button).find(k=>k.startsWith('__reactProps'));
+    const props=key?button[key]:null;
+    return typeof props?.onClick!=='function'&&typeof props?.onPointerDown!=='function'&&typeof props?.onMouseDown!=='function'&&!(button.type==='submit'&&button.closest('form'));
+   }).map(button=>(button.textContent||button.getAttribute('aria-label')||button.title||'unlabelled').trim()).slice(0,30));
+  assert.deepEqual(unwired,[],item.id+' contains enabled buttons without an action');
   const bounds=await page.locator('main.content').evaluate(e=>({scroll:e.scrollWidth,visible:e.clientWidth}));
   assert(bounds.scroll<=bounds.visible+1,item.id+' has desktop horizontal overflow');
   if(!primary.some(([id])=>id===item.id)){
