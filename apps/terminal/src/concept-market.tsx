@@ -80,7 +80,7 @@ export function ConceptMarketDesk({account,status,accountMatches,quoteFresh,prev
    <div><span className={'concept-led '+(quoteFresh&&!preview?'on':'')}/><span>حالة السوق<strong>{quoteFresh?'سعر حديث':'غير مؤكدة'}</strong><small>{quoteFresh?'تيك MT5 حديث':'بانتظار سعر حديث'}</small></span></div>
   </div>
   <div className="concept-market-layout">
-   <TradingChart market={market??account?.market} symbol={symbol} quote={bid??undefined} positions={preview||quoteFresh?positions:[]} frame={frame} onFrameChange={onFrameChange} theme={theme} frameMeta={frameMeta} preview={preview}/>
+   <TradingChart market={market??account?.market} symbol={symbol} quote={bid??undefined} point={account?.point} positions={preview||quoteFresh?positions:[]} frame={frame} onFrameChange={onFrameChange} theme={theme} frameMeta={frameMeta} preview={preview}/>
    <section className="panel concept-order-panel">
     <div className="panel-title"><b>{symbol} - التداول المباشر</b><button type="button" title="فتح إعدادات التداول" onClick={onTradingSettings}><Settings size={16}/></button></div>
     <div className="concept-manual-tabs"><button type="button" aria-pressed={direction===1} onClick={()=>setDirection(1)}><ArrowUp size={16}/> شراء</button><button type="button" aria-pressed={direction===-1} onClick={()=>setDirection(-1)}><ArrowDown size={16}/> بيع</button></div>
