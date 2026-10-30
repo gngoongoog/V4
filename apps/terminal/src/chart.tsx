@@ -1,6 +1,6 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {GoldSymbol} from './gold-symbol';
-import {Crosshair,Activity,ZoomIn,ZoomOut,RotateCcw,Maximize2,Minimize2,Target,Info,Copy} from 'lucide-react';
+import {Crosshair,Activity,ZoomIn,ZoomOut,RotateCcw,Maximize2,Minimize2,Target,Info,Copy,ChartColumn,Download} from 'lucide-react';
 import type {Candle,Market,Position} from './types';
 import type {ChartFrameMeta} from './chart-history';
 import {num} from './format';
@@ -91,9 +91,10 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
  theme='light',frameMeta,preview=false}:ChartProps){
  const [localFrame,setLocalFrame]=useState<ChartFrame>('m15');
  const frame=currentFrame??localFrame;
- const [averages,setAverages]=useState(true),[crosshair,setCrosshair]=useState(true);
+ const [averages,setAverages]=useState(true),[crosshair,setCrosshair]=useState(true),[showVolume,setShowVolume]=useState(true);
  const [expanded,setExpanded]=useState(false),[fitLevels,setFitLevels]=useState(false);
  const [diagnostics,setDiagnostics]=useState(false),[copyState,setCopyState]=useState('');
+ const [exportNote,setExportNote]=useState('');
  const [barsVisible,setBarsVisible]=useState(56),[offset,setOffset]=useState(0);
  const [hover,setHover]=useState<Hover>(null);
  const canvas=useRef<HTMLCanvasElement>(null);
@@ -154,8 +155,8 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
      ink=light?'#71808b':'#a9bac5',grid=light?'#e9edf2':'#26343f',
      lineUp=light?'#079f72':'#22c492',lineDown=light?'#dc3c49':'#f35a69';
    const xLeft=12,xRight=w-69,top=12,timeBottom=h-23;
-   const volHeight=clamp(h*.19,33,68),volumeBottom=timeBottom-7;
-   const volumeTop=volumeBottom-volHeight,priceBottom=volumeTop-13;
+   const volHeight=showVolume?clamp(h*.19,33,68):0,volumeBottom=timeBottom-7;
+   const volumeTop=volumeBottom-volHeight,priceBottom=showVolume?volumeTop-13:timeBottom-10;
    const priceHeight=priceBottom-top,plotWidth=xRight-xLeft;
    ctx.fillStyle=bg;ctx.fillRect(0,0,w,h);
    ctx.fillStyle=light?'#f5f8fb':'#19242d';ctx.fillRect(xRight,0,w-xRight,h);
@@ -170,7 +171,7 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
     const gx=Math.round(xLeft+j*plotWidth/6)+.5;
     ctx.beginPath();ctx.moveTo(gx,top);ctx.lineTo(gx,timeBottom);ctx.stroke();
    }
-   ctx.beginPath();ctx.moveTo(xLeft,volumeTop-.5);ctx.lineTo(w,volumeTop-.5);ctx.stroke();
+   if(showVolume){ctx.beginPath();ctx.moveTo(xLeft,volumeTop-.5);ctx.lineTo(w,volumeTop-.5);ctx.stroke();}
    if(!ready){
     ctx.fillStyle=ink;ctx.font='13px Segoe UI, sans-serif';ctx.textAlign='center';
     ctx.fillText(preview?'لا توجد شموع معاينة':'بانتظار بيانات OHLC من MT5 لهذا الفريم',w/2,h/2);
@@ -200,7 +201,7 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
     ctx.fillText(priceText(value,digits),xRight+7,top+j*priceHeight/5+4);
    }
    // The lower histogram is MT5 tick volume, not centralized exchange volume.
-   chart.forEach((b,i)=>{
+   if(showVolume)chart.forEach((b,i)=>{
     const x=xLeft+(i+.5)*step,up=b.close>=b.open;
     const color=up?(light?'rgba(18,166,116,.35)':'rgba(35,190,137,.42)'):
       (light?'rgba(219,70,84,.32)':'rgba(240,85,99,.42)');
@@ -294,7 +295,7 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
     ctx.fillText(timeText(chart[i].time,frame),clamp(x,34,w-95),h-7);
    }
    ctx.textAlign='left';ctx.font='9px Segoe UI';ctx.fillStyle=ink;
-   ctx.fillText('TICK VOL',xLeft+3,volumeTop+10);
+   if(showVolume)ctx.fillText('TICK VOL',xLeft+3,volumeTop+10);
    if(crosshair&&hover&&hover.index>=0&&hover.index<chart.length){
     const hx=xLeft+(hover.index+.5)*step,hy=clamp(hover.y,top,priceBottom);
     ctx.save();ctx.strokeStyle=light?'#78909ea6':'#a5bfcca0';ctx.lineWidth=1;
@@ -309,7 +310,7 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
   };
   const observer=new ResizeObserver(draw);
   observer.observe(el);draw();return()=>observer.disconnect();
- },[chart,ready,windowed.start,ema9,ema21,position,priceQuote,theme,averages,crosshair,hover,frame,preview,fitLevels,digits]);
+ },[chart,ready,windowed.start,ema9,ema21,position,priceQuote,theme,averages,crosshair,hover,frame,preview,fitLevels,digits,showVolume]);
  const highlighted=hover?chart[hover.index]??chart.at(-1):chart.at(-1);
  const highlightedAt=highlighted?new Date(highlighted.time*1000).toISOString().slice(0,16).replace('T',' ')+' UTC':null;
  const lastClose=lastClosedAt(all,frame);
@@ -326,6 +327,27 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
  const dataLabel=sourceEvidence.state==='preview'?'SIMULATED • NOT MT5':
   sourceEvidence.state==='recent'?'MT5 • CLOSED OHLC · RECENT':
   sourceEvidence.state==='cached'?'MT5 • CACHED OHLC':'MT5 • OHLC CLOCK UNKNOWN';
+ const exportChart=()=>{
+  const current=canvas.current;if(!current||!ready){setExportNote('لا توجد شموع صالحة لتصدير صورة الشارت');return}
+  try{
+   const result=document.createElement('canvas'),margin=34;
+   result.width=current.width;result.height=current.height+margin;
+   const ctx=result.getContext('2d');if(!ctx)throw Error('Canvas unavailable');
+   ctx.fillStyle='#19232b';ctx.fillRect(0,0,result.width,margin);
+   ctx.fillStyle='#ffffff';ctx.font='bold 13px Arial,sans-serif';
+   ctx.fillText('BRAINTRADE V4 | '+symbol+' | '+frame.toUpperCase()+' | '+dataLabel,12,22);
+   ctx.drawImage(current,0,margin);
+   const anchor=document.createElement('a');
+   anchor.download='BRAINTRADE_'+symbol.replace(/[^a-zA-Z0-9_-]/g,'_')+'_'+frame+
+     (preview?'_SIMULATED':'_MT5_HISTORY')+'.png';
+   anchor.href=result.toDataURL('image/png');
+   document.body.appendChild(anchor);anchor.click();anchor.remove();
+   setExportNote('تم إنشاء صورة الشارت، مع توضيح مصدر البيانات');
+  }catch{
+   setExportNote('تعذر تصدير الشارت في هذه البيئة');
+  }
+ };
+
  const sourceAge=sourceEvidence.ageMs===null?'UNKNOWN':
   sourceEvidence.ageMs<1000?sourceEvidence.ageMs+' ms':
   sourceEvidence.ageMs<60000?Math.round(sourceEvidence.ageMs/1000)+' s':
@@ -343,6 +365,10 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
      aria-pressed={crosshair} onClick={()=>setCrosshair(v=>!v)}><Crosshair size={16}/></button>
     <button type="button" className={'tool-button '+(averages?'tool-on':'')} title="EMA 9 / EMA 21"
      aria-pressed={averages} onClick={()=>setAverages(v=>!v)}><Activity size={16}/></button>
+    <button type="button" className={'tool-button '+(showVolume?'tool-on':'')}
+     aria-label="عرض أحجام Tick Volume" aria-pressed={showVolume}
+     title="إظهار أو إخفاء Tick Volume لتوسيع منطقة الشموع"
+     onClick={()=>setShowVolume(v=>!v)}><ChartColumn size={16}/></button>
     <button type="button" className="tool-button" title="تكبير الشموع" aria-label="تكبير الشموع"
      onClick={()=>setBarsVisible(v=>clamp(v-12,16,120))}><ZoomIn size={17}/></button>
     <button type="button" className="tool-button" title="تصغير الشموع" aria-label="تصغير الشموع"
@@ -360,6 +386,9 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
      aria-label="تشخيص بيانات الشارت" aria-expanded={diagnostics}
      title="إظهار مصدر وتوقيت شموع الشارت دون بيانات الحساب"
      onClick={()=>{setDiagnostics(v=>!v);setCopyState('')}}><Info size={16}/></button>
+    <button type="button" className="tool-button" aria-label="حفظ صورة الشارت PNG"
+     title="حفظ صورة الشارت مع تسمية البيانات الحقيقية أو التجريبية"
+     onClick={exportChart} disabled={!ready}><Download size={16}/></button>
    </div>
   </div>
   <div className="ohlc-line">{highlighted?
@@ -401,9 +430,9 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
    <pre aria-label="تقرير تشخيص الشارت">{diagnosticsText}</pre>
    <small aria-live="polite">{copyState||'يعرض آخر شموع مغلقة فقط؛ لا يفحص أو ينفّذ أوامر التداول.'}</small>
   </div>}
-  <div className="chart-footer">
+  <div className="chart-footer" title={exportNote} aria-label={exportNote||'ملخص الشارت'}>
    <span>{preview?'معاينة توضيحية، ليست أسعار السوق':'بيانات المصدر: MT5'} • {ready?chart.length+' شمعة '+frame.toUpperCase():'لا توجد شموع موثوقة'}{position?' • ENTRY / SL/TP من المركز المعروض':''}</span>
-   <span>{offset>0?'عرض تاريخي · '+offset+' شمعة للخلف':'آخر شمعة'} • {lastClose?'آخر إغلاق '+lastClose:'لا يوجد إغلاق مؤكد'} • {preview?'SIMULATED':sourceEvidence.ageMs===null?'OHLC وقت الالتقاط غير مؤكد':'عمر الجلب '+sourceAge} • Tick Volume</span>
+   <span>{exportNote||((offset>0?'عرض تاريخي · '+offset+' شمعة للخلف':'آخر شمعة')+' • '+(lastClose?'آخر إغلاق '+lastClose:'لا يوجد إغلاق مؤكد')+' • '+(preview?'SIMULATED':sourceEvidence.ageMs===null?'OHLC وقت الالتقاط غير مؤكد':'عمر الجلب '+sourceAge)+' • '+(showVolume?'Tick Volume':'Volume hidden'))}</span>
   </div>
  </section>;
 }
