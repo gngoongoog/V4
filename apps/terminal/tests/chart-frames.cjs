@@ -8,7 +8,7 @@ vm.runInNewContext(js,{exports:out,require(id){
  if(id==='react')return {useState:v=>[v,()=>{}],useEffect:()=>{},useMemo:fn=>fn(),useRef:()=>({current:null})};
  if(id==='react/jsx-runtime')return {jsx,jsxs:jsx};
  if(id==='./gold-symbol')return {GoldSymbol:'GoldSymbol'};
- if(id==='lucide-react')return Object.fromEntries(['Crosshair','Activity','ZoomIn','ZoomOut','RotateCcw','Maximize2','Minimize2'].map(k=>[k,k]));
+ if(id==='lucide-react')return Object.fromEntries(['Crosshair','Activity','ZoomIn','ZoomOut','RotateCcw','Maximize2','Minimize2','Target'].map(k=>[k,k]));
  if(id==='./format')return {num:v=>String(v)};
  throw Error('Unknown chart dependency '+id);
 },Date,Math,Number,String});
