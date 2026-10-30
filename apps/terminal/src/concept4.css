@@ -373,3 +373,59 @@ body[data-theme=dark] .terminal-v15.concept4 .concept-chart-source-unknown,
 body[data-theme=smoke] .terminal-v15.concept4 .concept-chart-source-unknown{
  color:#faacb2;background:#47232a;border-color:#71404a
 }
+
+
+/* Chart provenance diagnostics, local to the chart and read-only. */
+.terminal-v15.concept4 .chart-diagnostics{
+ border-top:1px solid #dde5ed;background:#f7f9fc;
+ padding:9px 12px;display:flex;flex-direction:column;gap:7px;
+}
+.terminal-v15.concept4 .chart-diagnostics-header{
+ display:flex;align-items:center;justify-content:space-between;gap:10px;
+ color:#354457;font-size:11px
+}
+.terminal-v15.concept4 .chart-diagnostics-header button{
+ display:inline-flex;align-items:center;gap:6px;border:1px solid #ccd6e0;
+ border-radius:6px;background:#fff;color:#334958;padding:6px 9px;
+ font-size:11px;font-weight:700
+}
+.terminal-v15.concept4 .chart-diagnostics-header button:hover{
+ background:#edf5fc;border-color:#a9c8df
+}
+.terminal-v15.concept4 .chart-diagnostics pre{
+ margin:0;max-height:170px;overflow:auto;direction:ltr;text-align:left;
+ background:#fff;border:1px solid #dde4ed;color:#3e5261;
+ border-radius:6px;padding:9px;font:10px/1.5 Consolas,monospace;
+ user-select:text;white-space:pre-wrap;overflow-wrap:anywhere
+}
+.terminal-v15.concept4 .chart-diagnostics small{color:#67788a;font-size:10px}
+body[data-theme=dark] .terminal-v15.concept4 .chart-diagnostics,
+body[data-theme=smoke] .terminal-v15.concept4 .chart-diagnostics{
+ background:#202b35;border-color:#3a4958;color:#e1ebf5
+}
+body[data-theme=dark] .terminal-v15.concept4 .chart-diagnostics pre,
+body[data-theme=smoke] .terminal-v15.concept4 .chart-diagnostics pre{
+ color:#d4e0ec;background:#17232d;border-color:#394956
+}
+
+
+/* The normal chart has a fixed-height Canvas. When diagnostics are opened,
+   grow the whole card instead of clipping the JSON behind the next row. */
+.terminal-v15.concept4 .dashboard .hero-grid .chart-panel:has(.chart-diagnostics):not(.chart-expanded),
+.terminal-v15.concept4 .concept-market-layout>.chart-panel:has(.chart-diagnostics):not(.chart-expanded){
+ height:auto;min-height:580px;overflow:visible;display:flex;flex-direction:column
+}
+.terminal-v15.concept4 .chart-panel:has(.chart-diagnostics):not(.chart-expanded) .chart-frame{
+ height:278px;min-height:278px;flex:0 0 278px
+}
+.terminal-v15.concept4 .chart-panel:has(.chart-diagnostics):not(.chart-expanded) .chart-diagnostics{
+ flex:0 0 auto;min-height:175px
+}
+.terminal-v15.concept4 .chart-panel:has(.chart-diagnostics):not(.chart-expanded) .chart-diagnostics pre{
+ max-height:188px;min-height:105px;flex:1 1 auto
+}
+@media(max-width:1120px){
+ .terminal-v15.concept4 .chart-panel:has(.chart-diagnostics):not(.chart-expanded) .chart-frame{
+  height:240px;min-height:240px;flex-basis:240px
+ }
+}

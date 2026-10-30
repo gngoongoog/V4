@@ -33,6 +33,23 @@ try{
  const enterPreview=page.getByRole('button',{name:'معاينة التصميم',exact:true});
  if(await enterPreview.count())await enterPreview.click();
  assert(await page.locator('.preview-banner').isVisible(),'Synthetic preview must be labelled');
+ await page.getByRole('button',{name:'تشخيص بيانات الشارت',exact:true}).click();
+ assert(await page.locator('.chart-diagnostics pre').isVisible(),'Working diagnostic drawer must show account-redacted source data');
+ const diagnostic=JSON.parse(await page.locator('.chart-diagnostics pre').innerText());
+ assert.equal(diagnostic.mode,'SIMULATED_PREVIEW');
+ assert.equal(diagnostic.source_state,'preview');
+ assert(!('login' in diagnostic)&&!('balance' in diagnostic)&&!('server' in diagnostic),'Diagnostics must not expose account identifiers');
+ assert(await page.getByRole('button',{name:'نسخ تشخيص الشارت',exact:true}).isEnabled());
+ await page.getByRole('button',{name:'نسخ تشخيص الشارت',exact:true}).click();
+ await page.waitForFunction(()=>/تم نسخ|تعذر النسخ/.test(document.querySelector('.chart-diagnostics small')?.textContent||''));
+ const chartPanelBox=await page.locator('.dashboard .hero-grid .chart-panel').boundingBox();
+ const diagnosticBox=await page.locator('.chart-diagnostics pre').boundingBox();
+ assert(chartPanelBox&&diagnosticBox&&diagnosticBox.height>=95&&
+   diagnosticBox.y+diagnosticBox.height<=chartPanelBox.y+chartPanelBox.height-16,
+   'Diagnostic JSON must be fully inside the expanded chart card, not clipped below its fixed height');
+ await page.screenshot({path:path.join(out,'chart-diagnostics-1536.png')});
+ await page.getByRole('button',{name:'تشخيص بيانات الشارت',exact:true}).click();
+ assert.equal(await page.locator('.chart-diagnostics').count(),0,'The diagnostic drawer must close');
  assert.equal(await page.locator('.chart-panel .concept-chart-source-preview').count(),1,'Chart must explicitly label simulated OHLC, not claim an MT5 feed');
  for(const frame of ['M1','M5','M15','M30','H1','H4','D1']){
   await page.locator('.chart-panel .timeframes').getByRole('button',{name:frame,exact:true}).click();

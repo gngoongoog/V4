@@ -8,7 +8,7 @@ vm.runInNewContext(js,{exports:out,require(id){
  if(id==='react')return {useState:v=>[v,()=>{}],useEffect:()=>{},useMemo:fn=>fn(),useRef:()=>({current:null})};
  if(id==='react/jsx-runtime')return {jsx,jsxs:jsx};
  if(id==='./gold-symbol')return {GoldSymbol:'GoldSymbol'};
- if(id==='lucide-react')return Object.fromEntries(['Crosshair','Activity','ZoomIn','ZoomOut','RotateCcw','Maximize2','Minimize2','Target'].map(k=>[k,k]));
+ if(id==='lucide-react')return Object.fromEntries(['Crosshair','Activity','ZoomIn','ZoomOut','RotateCcw','Maximize2','Minimize2','Target','Info','Copy'].map(k=>[k,k]));
  if(id==='./format')return {num:v=>String(v)};
  throw Error('Unknown chart dependency '+id);
 },Date,Math,Number,String});
@@ -110,5 +110,23 @@ assert.equal(out.chartSourceEvidence('h4',recentMarket,{h4:{capturedMs:observedA
  'A once-live long timeframe becomes cached after expiration');
 assert.equal(out.chartSourceEvidence('d1',undefined,undefined,observedAt,true).state,'preview',
  'Synthetic chart preview must never impersonate MT5');
+
+
+const inspected=out.chartDiagnosticReport('XAUUSD','m5',
+ {state:'cached',capturedMs:1800000000000,ageMs:32000},[candle(100,10,11,12,9)],10.6,false);
+const parsed=JSON.parse(inspected);
+assert.equal(parsed.source_state,'cached');
+assert.equal(parsed.displayed_bid,10.6);
+assert.equal(parsed.last_candle.open,10);
+assert.equal(parsed.symbol,'XAUUSD');
+assert(!inspected.includes('login')&&!inspected.includes('server')&&
+ !inspected.includes('balance')&&!inspected.includes('token'),
+ 'Diagnostics must omit account identifiers and secrets');
+const preDiag=JSON.parse(out.chartDiagnosticReport('XAUUSD','m5',
+ {state:'preview',capturedMs:null,ageMs:null},[],null,true));
+assert.equal(preDiag.mode,'SIMULATED_PREVIEW');
+assert.equal(preDiag.last_candle,null);
+const diagnosticButton=nodes(chart).find(n=>n.type==='button'&&n.props['aria-label']==='تشخيص بيانات الشارت');
+assert(typeof diagnosticButton?.props.onClick==='function','Diagnostic drawer button must work');
 
 console.log('PASS: all seven chart timeframes select the real chart state');

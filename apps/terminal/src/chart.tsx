@@ -1,6 +1,6 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {GoldSymbol} from './gold-symbol';
-import {Crosshair,Activity,ZoomIn,ZoomOut,RotateCcw,Maximize2,Minimize2,Target} from 'lucide-react';
+import {Crosshair,Activity,ZoomIn,ZoomOut,RotateCcw,Maximize2,Minimize2,Target,Info,Copy} from 'lucide-react';
 import type {Candle,Market,Position} from './types';
 import type {ChartFrameMeta} from './chart-history';
 import {num} from './format';
@@ -69,6 +69,21 @@ export function chartSourceEvidence(frame:ChartFrame,market:Market|null|undefine
  const recent=extended?frameMeta?.[frame as keyof ChartFrameMeta]?.live===true&&age<120000:age<15000;
  return {state:recent?'recent':'cached',capturedMs:captured,ageMs:age};
 }
+export function chartDiagnosticReport(symbol:string,frame:ChartFrame,source:ChartSourceEvidence,
+ bars:Candle[],quote:number|null,preview:boolean):string{
+ const last=bars.at(-1);
+ // Deliberately omit login, server, balances, positions, tokens and API keys.
+ return JSON.stringify({
+  schema:'braintrade-chart-diagnostics-v1',
+  mode:preview?'SIMULATED_PREVIEW':'MT5_READ_ONLY_CHART',
+  symbol,frame,source_state:source.state,capture_age_ms:source.ageMs,
+  candles:bars.length,last_closed_at:lastClosedAt(bars,frame),
+  last_candle:last?{time:last.time,open:last.open,high:last.high,
+   low:last.low,close:last.close,tick_volume:last.tick_volume}:null,
+  displayed_bid:quote,
+  note:preview?'Synthetic design data, not MT5':'Historical closed OHLC; BID is a separate quote feed.'
+ },null,2);
+}
 type ChartProps={market?:Market|null;symbol:string;quote?:number;point?:number|null;positions?:Position[];frame?:ChartFrame;
  onFrameChange?:(frame:ChartFrame)=>void;theme?:'dark'|'smoke'|'light';frameMeta?:ChartFrameMeta;preview?:boolean};
 type Hover={index:number;y:number}|null;
@@ -78,6 +93,7 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
  const frame=currentFrame??localFrame;
  const [averages,setAverages]=useState(true),[crosshair,setCrosshair]=useState(true);
  const [expanded,setExpanded]=useState(false),[fitLevels,setFitLevels]=useState(false);
+ const [diagnostics,setDiagnostics]=useState(false),[copyState,setCopyState]=useState('');
  const [barsVisible,setBarsVisible]=useState(56),[offset,setOffset]=useState(0);
  const [hover,setHover]=useState<Hover>(null);
  const canvas=useRef<HTMLCanvasElement>(null);
@@ -298,6 +314,15 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
  const highlightedAt=highlighted?new Date(highlighted.time*1000).toISOString().slice(0,16).replace('T',' ')+' UTC':null;
  const lastClose=lastClosedAt(all,frame);
  const sourceEvidence=chartSourceEvidence(frame,market,frameMeta,Date.now(),preview);
+ const diagnosticsText=chartDiagnosticReport(symbol,frame,sourceEvidence,all,priceQuote,preview);
+ const copyDiagnostics=async()=>{
+  try{
+   if(!navigator.clipboard?.writeText)throw Error('Clipboard API unavailable');
+   await navigator.clipboard.writeText(diagnosticsText);setCopyState('تم نسخ تشخيص الشارت');
+  }catch{
+   setCopyState('تعذر النسخ التلقائي؛ حدد النص في لوحة التشخيص وانسخه يدوياً');
+  }
+ };
  const dataLabel=sourceEvidence.state==='preview'?'SIMULATED • NOT MT5':
   sourceEvidence.state==='recent'?'MT5 • CLOSED OHLC · RECENT':
   sourceEvidence.state==='cached'?'MT5 • CACHED OHLC':'MT5 • OHLC CLOCK UNKNOWN';
@@ -331,6 +356,10 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
     <button type="button" className="tool-button wide" aria-label={expanded?'استعادة حجم الشارت':'تكبير الشارت'}
      aria-pressed={expanded} title={expanded?'استعادة حجم الشارت':'تكبير الشارت'}
      onClick={()=>setExpanded(v=>!v)}>{expanded?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
+    <button type="button" className={'tool-button '+(diagnostics?'tool-on':'')}
+     aria-label="تشخيص بيانات الشارت" aria-expanded={diagnostics}
+     title="إظهار مصدر وتوقيت شموع الشارت دون بيانات الحساب"
+     onClick={()=>{setDiagnostics(v=>!v);setCopyState('')}}><Info size={16}/></button>
    </div>
   </div>
   <div className="ohlc-line">{highlighted?
@@ -363,6 +392,15 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
      setHover({index:clamp(i,0,chart.length-1),y:e.clientY-bounds.top});
     }}/>
   </div>
+  {diagnostics&&<div className="chart-diagnostics" aria-label="تشخيص الشارت للقراءة فقط">
+   <div className="chart-diagnostics-header"><strong>تشخيص الشارت · بدون رقم الحساب أو أسرار الدخول</strong>
+    <button type="button" aria-label="نسخ تشخيص الشارت" onClick={()=>void copyDiagnostics()}>
+     <Copy size={14}/> نسخ المعلومات
+    </button>
+   </div>
+   <pre aria-label="تقرير تشخيص الشارت">{diagnosticsText}</pre>
+   <small aria-live="polite">{copyState||'يعرض آخر شموع مغلقة فقط؛ لا يفحص أو ينفّذ أوامر التداول.'}</small>
+  </div>}
   <div className="chart-footer">
    <span>{preview?'معاينة توضيحية، ليست أسعار السوق':'بيانات المصدر: MT5'} • {ready?chart.length+' شمعة '+frame.toUpperCase():'لا توجد شموع موثوقة'}{position?' • ENTRY / SL/TP من المركز المعروض':''}</span>
    <span>{offset>0?'عرض تاريخي · '+offset+' شمعة للخلف':'آخر شمعة'} • {lastClose?'آخر إغلاق '+lastClose:'لا يوجد إغلاق مؤكد'} • {preview?'SIMULATED':sourceEvidence.ageMs===null?'OHLC وقت الالتقاط غير مؤكد':'عمر الجلب '+sourceAge} • Tick Volume</span>
