@@ -40,6 +40,9 @@ try{
  assert.equal(diagnostic.source_state,'preview');
  assert(!('login' in diagnostic)&&!('balance' in diagnostic)&&!('server' in diagnostic),'Diagnostics must not expose account identifiers');
  assert(await page.getByRole('button',{name:'نسخ تشخيص الشارت',exact:true}).isEnabled());
+ await page.getByRole('button',{name:'نسخ تشخيص الشارت',exact:true}).click();
+ await page.waitForFunction(()=>/تم نسخ|تعذر النسخ/.test(document.querySelector('.chart-diagnostics small')?.textContent||''));
+ await page.screenshot({path:path.join(out,'chart-diagnostics-1536.png')});
  await page.getByRole('button',{name:'تشخيص بيانات الشارت',exact:true}).click();
  assert.equal(await page.locator('.chart-diagnostics').count(),0,'The diagnostic drawer must close');
  assert.equal(await page.locator('.chart-panel .concept-chart-source-preview').count(),1,'Chart must explicitly label simulated OHLC, not claim an MT5 feed');
