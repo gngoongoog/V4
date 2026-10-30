@@ -46,7 +46,7 @@ export function ConceptMarketDesk({account,status,accountMatches,quoteFresh,prev
  const spread=bid!==null&&ask!==null&&ask>=bid?ask-bid:null;
  const positions=account?.positions??[],currency=account?.currency||'USD';
  const symbol=account?.symbol||'XAUUSD';
- const closeReady=!!account&&!!status&&status.requested_run===false&&status.gateway_fresh&&quoteFresh&&!preview&&!busy&&native;
+ const closeReady=!!account&&!!status&&accountMatches&&status.requested_run===false&&status.gateway_fresh&&quoteFresh&&!preview&&!busy&&native;
  const closable=account?ownedCloseTickets(positions,symbol,false):[];
  const profitable=account?ownedCloseTickets(positions,symbol,true):[];
  const manualReady=closeReady&&accountMatches&&account?.trade_allowed===true&&account?.trade_expert===true;
@@ -75,7 +75,7 @@ export function ConceptMarketDesk({account,status,accountMatches,quoteFresh,prev
     <button type="button" disabled={!manualReady} onClick={()=>submitManual(direction)}>تنفيذ {direction===1?'شراء':'بيع'} بسعر السوق</button>
     <p className="concept-unavailable">الطلب يحتاج STOP وحساباً مرتبطاً وسعراً حديثاً. أدخل SL وTP كأرقام أسعار؛ يُراجع Core والوسيط اللوت والانزلاق والمخاطر، ولا يؤكد الطابور حصول التنفيذ.</p>
     <div className="concept-order-fields"><button type="button" onClick={onTradingSettings}>إعداد الهدف ووقف القناص ›</button><button type="button" onClick={()=>open('risk')}>إعداد المخاطر واللوت ›</button></div>
-    <div className="concept-trading-actions"><button type="button" className="action-btn start" onClick={onStart} disabled={busy||preview||!native||!account||!status?.gateway_fresh||status?.requested_run===true}>▶ بدء التداول</button><button type="button" className="action-btn stop" onClick={onStop} disabled={preview||!native}>■ إيقاف الدخول</button></div>
+    <div className="concept-trading-actions"><button type="button" className="action-btn start" onClick={onStart} disabled={busy||preview||!native||!account||!accountMatches||!quoteFresh||account.trade_allowed!==true||account.trade_expert!==true||!status?.gateway_fresh||status?.requested_run===true}>▶ بدء التداول</button><button type="button" className="action-btn stop" onClick={onStop} disabled={preview||!native}>■ إيقاف الدخول</button></div>
    </section>
    <div className="concept-market-summary"><div><Wallet/> الرصيد <b>{money(account?.balance,currency)}</b></div><div><ShieldCheck/> الهامش الحر <b>{money(account?.margin_free,currency)}</b></div><div><Target/> الربح اليومي <b>{signed(account?.today_net,currency)}</b></div><div><Zap/> السبريد <b>{num(spread,2)}</b></div></div>
    <section className="panel concept-quick-orders"><div className="panel-title"><b>أوامر سريعة</b><Settings size={16}/></div><p className="concept-unavailable">الإغلاق يشمل مراكز البرنامج للرمز الحالي فقط، حتى 20 في الطلب، بعد STOP. الرابحة تعني الربح العائم الموجب من MT5 قبل حساب الرسوم.</p><div><button type="button" disabled={!manualReady} onClick={()=>submitManual(1)}>شراء بسوق</button><button type="button" disabled={!manualReady} onClick={()=>submitManual(-1)}>بيع بسوق</button><button disabled title="غير مدعوم حالياً">شراء معلّق</button><button disabled title="غير مدعوم حالياً">بيع معلّق</button><button type="button" disabled={!closeReady||!closable.length} onClick={()=>onClose(false)}>إغلاق مراكز البرنامج للرمز</button><button type="button" disabled={!closeReady||!profitable.length} onClick={()=>onClose(true)}>إغلاق الرابحة للرمز</button></div></section>
