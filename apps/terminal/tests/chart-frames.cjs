@@ -52,4 +52,22 @@ const zoomButton=nodes(chart).find(n=>n.type==='button'&&n.props['aria-label']==
 const resetButton=nodes(chart).find(n=>n.type==='button'&&n.props['aria-label']==='العودة لأحدث شمعة');
 assert(typeof zoomButton.props.onClick==='function'&&typeof resetButton.props.onClick==='function');
 
+
+const previewModule={};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root,'mock.ts'),'utf8'),{
+ compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}
+}).outputText,{exports:previewModule,Math,Date,Number,Object});
+const preview=previewModule.generatePreviewCandles(3.8,900);
+assert.equal(preview.length,128);
+assert.equal(preview.at(-1).close,2479.54,'Fixture must align its explicitly simulated quote');
+assert.deepEqual(JSON.stringify(preview),JSON.stringify(previewModule.generatePreviewCandles(3.8,900)),
+ 'A stable preview must not randomly change while a user is inspecting the design');
+assert(preview.every((bar,i)=>bar.time>0&&(i===0||bar.time>preview[i-1].time)&&
+ bar.high>=Math.max(bar.open,bar.close)&&bar.low<=Math.min(bar.open,bar.close)&&bar.tick_volume>=0),
+ 'All fixture candles must be proper OHLC data');
+assert(new Set(preview.slice(10,65).map(x=>Math.round(Math.abs(x.close-x.open)*100))).size>15,
+ 'Preview candles must have varied body shapes, not fixed-period sine candles');
+assert(new Set(preview.slice(10,65).map(x=>x.tick_volume)).size>15,
+ 'Preview volume must vary with the candles');
+
 console.log('PASS: all seven chart timeframes select the real chart state');
