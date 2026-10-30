@@ -131,6 +131,24 @@ pub struct Position {
     pub tp: f64,
 }
 
+/// Broker-reported active order details. Absence of this list is unknown,
+/// distinct from a complete and empty MT5 order list.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PendingOrder {
+    pub ticket:u64,
+    pub symbol:String,
+    pub magic:u64,
+    pub order_type:i32,
+    pub volume_initial:f64,
+    pub volume_current:f64,
+    pub price_open:f64,
+    pub sl:f64,
+    pub tp:f64,
+    pub price_stoplimit:f64,
+    pub time_setup_ms:u64,
+    pub expiration:u64,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DomLevel {
     pub side: String,
@@ -159,6 +177,8 @@ pub struct Telemetry {
     #[serde(default)] pub minimum_lot_margin: Option<f64>,
     pub positions: Vec<Position>,
     pub pending_orders: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_order_details: Option<Vec<PendingOrder>>,
     pub today_net: Option<f64>,
     pub today_deals: Option<u32>,
     pub report_day: String,
@@ -228,6 +248,16 @@ impl Telemetry {
             && self.margin.is_none_or(|v| v >= 0.0)
             && self.market.as_ref().is_none_or(MarketData::valid)
             && self.positions.len() <= 10_000
+            && self.pending_order_details.as_ref().is_none_or(|orders| {
+                orders.len()<=1_000 && orders.len()==self.pending_orders as usize
+                    && orders.iter().all(|o| o.ticket>0 && !o.symbol.is_empty() && o.symbol.len()<=80
+                        && [o.ticket,o.magic,o.time_setup_ms,o.expiration].iter().all(|n|*n<=9_007_199_254_740_991)
+                        && (0..=8).contains(&o.order_type)
+                        && [o.volume_initial,o.volume_current,o.price_open,o.sl,o.tp,o.price_stoplimit].iter().all(|n|n.is_finite())
+                        && o.volume_initial>0. && o.volume_current>0. && o.volume_current<=o.volume_initial+1e-8
+                        && o.price_open>0. && o.sl>=0. && o.tp>=0. && o.price_stoplimit>=0.)
+                    && orders.iter().map(|o|o.ticket).collect::<std::collections::BTreeSet<_>>().len()==orders.len()
+            })
             && self.positions.iter().all(|p| {
                 [
                     p.volume,
@@ -445,6 +475,18 @@ mod tests {
         s.requested_run = false;
         s.refresh(9001);
         assert_eq!(s.state, RunState::Stopped);
+    }
+    #[test]
+    fn active_order_details_must_be_complete_finite_and_distinct() {
+        let order=PendingOrder{ticket:42,symbol:"EURUSD".into(),magic:410618,order_type:2,
+            volume_initial:0.1,volume_current:0.08,price_open:1.2,sl:1.1,tp:1.3,
+            price_stoplimit:0.,time_setup_ms:123_000,expiration:0};
+        let mut t=Telemetry{pending_orders:1,pending_order_details:Some(vec![order.clone()]),..Default::default()};
+        assert!(t.validate());
+        t.pending_orders=2;assert!(!t.validate(),"Partial order details must not claim a complete list");
+        t.pending_order_details=Some(vec![order.clone(),order.clone()]);assert!(!t.validate(),"Duplicate tickets rejected");
+        t.pending_orders=1;t.pending_order_details=Some(vec![PendingOrder{sl:f64::NAN,..order}]);assert!(!t.validate());
+        t.pending_order_details=None;assert!(t.validate(),"Older snapshots and unknown details remain valid");
     }
     #[test]
     fn stale_report_does_not_present_old_balance_as_current() {

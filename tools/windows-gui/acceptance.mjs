@@ -193,6 +193,18 @@ try{
    await until(async()=>(await execution()).position_protection?.policy?.break_even_enabled===false);
   }finally{fs.rmSync(marker,{force:true});fs.rmSync(position,{force:true});fs.rmSync(permission,{force:true});}
  });
+ await check('active account order list displays complete synthetic MT5 data',async()=>{
+  const marker=path.join(home,'synthetic-pending-order.flag');fs.writeFileSync(marker,'CI synthetic order only');
+  try{
+   await until(async()=>(await status()).telemetry?.pending_order_details?.some(o=>o.ticket===880001));
+   await navigate('مركز التداول');
+   const table=page.locator('.concept-pending-orders');await table.waitFor();
+   await table.getByText('EURUSD',{exact:true}).waitFor();
+   assert.equal(await table.getByText('BUY LIMIT',{exact:true}).count(),1);
+   assert.equal((await status()).requested_run,false);
+  }finally{fs.rmSync(marker,{force:true})}
+  await until(async()=>(await status()).telemetry?.pending_orders===0);
+ });
  await check('manual market ticket queues exact inputs and fixture cancels without broker',async()=>{
   const enabled=path.join(home,'synthetic-manual-allowed.flag'),cancel=path.join(home,'synthetic-cancel-manual.flag');
   fs.writeFileSync(enabled,'CI synthetic permissions only');

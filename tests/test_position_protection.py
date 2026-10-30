@@ -1,5 +1,6 @@
 """Synthetic MT5-only tests. No broker connection or real order is used."""
 import copy
+import json
 import sys
 import tempfile
 import unittest
@@ -106,6 +107,14 @@ class PositionProtectionTests(unittest.TestCase):
         self.assertEqual(self.execute()['state'], 'cancelled')
         self.assertEqual(len(self.mt.sends), 1)
 
+    def test_corrupt_prior_result_fails_closed_for_same_position(self):
+        saved=copy.deepcopy(self.cmd)
+        self.ex.db.execute('INSERT INTO sends(id,request,result,created_ms) VALUES(?,?,?,?)',
+                           ('older', json.dumps(saved), '{bad json', clock_ms()))
+        self.ex.db.commit()
+        self.assertEqual(self.execute()['state'], 'cancelled')
+        self.assertEqual(self.mt.sends, [])
+
     def test_immutable_identity_and_old_unjournaled_intent_never_resend(self):
         self.mt.apply_change=False
         self.assertEqual(self.execute()['state'], 'placed')
@@ -165,6 +174,43 @@ class PositionProtectionTests(unittest.TestCase):
         self.mt.positions[0].tp=2005.
         self.assertEqual(self.execute()['state'], 'cancelled')
         self.assertEqual(self.mt.sends, [])
+
+    def test_account_switch_after_journal_cannot_modify_the_new_account(self):
+        calls=[]
+        def authorize(_):
+            calls.append(True)
+            if len(calls)==2:
+                self.mt.account.login=18
+            return True
+        self.assertEqual(self.execute(authorize)['state'], 'cancelled')
+        self.assertEqual(self.mt.sends, [])
+        self.mt.account.login=17
+        self.assertEqual(self.execute()['state'], 'cancelled')
+        self.assertEqual(self.mt.sends, [])
+
+    def test_account_switch_during_final_position_read_cancels_before_send(self):
+        calls=[]
+        def positions_get(**_):
+            calls.append(1)
+            if len(calls)==2:
+                self.mt.account.login=18
+            return self.mt.positions
+        self.mt.positions_get=positions_get
+        self.assertEqual(self.execute()['state'], 'cancelled')
+        self.assertEqual(self.mt.sends, [])
+
+    def test_unknown_is_not_reconciled_against_a_different_account_or_position(self):
+        self.mt.raise_send=True
+        self.assertEqual(self.execute()['state'], 'unknown')
+        self.mt.positions[0].sl=2000.5
+        self.mt.account.trade_mode=2
+        self.assertEqual(self.execute()['state'], 'unknown')
+        self.mt.account.trade_mode=0
+        self.mt.positions[0].identifier=701
+        self.assertEqual(self.execute()['state'], 'unknown')
+        self.mt.positions[0].identifier=700
+        self.assertEqual(self.execute()['state'], 'filled')
+        self.assertEqual(len(self.mt.sends), 1)
 
     def test_revoked_authorization_after_journal_is_terminal(self):
         calls=[]

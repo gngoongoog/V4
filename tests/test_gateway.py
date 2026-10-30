@@ -122,6 +122,28 @@ class Tests(unittest.TestCase):
     def test_failed_positions_is_not_empty_positions(self):
         m=FakeMT5();m.positions=None
         self.assertFalse(gateway.collect(m,"XAUUSD")["connected"])
+    def test_active_order_details_are_complete_or_explicitly_unknown(self):
+        m=FakeMT5()
+        self.assertEqual(gateway.collect(m,'XAUUSD')['pending_order_details'],[])
+        order=NS(ticket=42,magic=410618,type=2,time_setup_msc=123000,time_expiration=0,
+                 symbol='EURUSD',volume_initial=.1,volume_current=.08,price_open=1.2,
+                 sl=1.1,tp=1.3,price_stoplimit=0.)
+        m.orders=[order]
+        snapshot=gateway.collect(m,'XAUUSD')
+        self.assertEqual(snapshot['pending_orders'],1)
+        detail=snapshot['pending_order_details'][0]
+        self.assertEqual((detail['ticket'],detail['symbol'],detail['order_type'],detail['volume_current']),
+                         (42,'EURUSD',2,.08))
+        m.orders=[order,order]
+        snapshot=gateway.collect(m,'XAUUSD')
+        self.assertEqual(snapshot['pending_orders'],2)
+        self.assertIsNone(snapshot['pending_order_details'],'Duplicate tickets cannot form a reliable list')
+        m.orders=[order];order.sl=float('nan')
+        self.assertIsNone(gateway.collect(m,'XAUUSD')['pending_order_details'])
+        order.sl=1.1;del order.price_stoplimit
+        self.assertIsNone(gateway.collect(m,'XAUUSD')['pending_order_details'])
+        order.price_stoplimit=0.;order.ticket=9_007_199_254_740_992
+        self.assertIsNone(gateway.collect(m,'XAUUSD')['pending_order_details'],'A ticket must survive the JavaScript boundary exactly')
     def test_account_switch_rejects_snapshot(self):
         m=FakeMT5();account=m.account;calls=[]
         def switch():

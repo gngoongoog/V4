@@ -188,7 +188,7 @@ def execute_protection(executor, mt5, cmd, authorize, owned_magics, brain_magic,
             return executor._save(cmd, dict(result, state='cancelled', reason='Core withdrew authorization after journal; not sent'))
         authorized_at = time.perf_counter()
         final_request = _validate(mt5, cmd, owned_magics, brain_magic)
-        if (final_request != request or _now() > cmd['expires_ms']
+        if (final_request != request or not _account_ok(mt5, cmd) or _now() > cmd['expires_ms']
                 or (time.perf_counter()-authorized_at)*1000 > max_auth_age_ms):
             return executor._save(cmd, dict(result, state='cancelled', reason='Final position, price or authorization changed; not sent'))
         sent = True

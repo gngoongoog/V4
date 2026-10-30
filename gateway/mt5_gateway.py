@@ -164,6 +164,38 @@ def deal_summary(deals, mt5):
         return None, None
 
 
+def active_order_details(orders):
+    """Return the complete MT5 order list, or None if any item is unreliable."""
+    try:
+        # Keep snapshots bounded well below the Core request size limit. A
+        # larger account is reported as unknown details, never truncated.
+        if len(orders)>1_000:
+            return None
+        result=[];tickets=set()
+        for order in orders:
+            integer_fields=('ticket','magic','type','time_setup_msc','time_expiration')
+            integer_values=[getattr(order,k) for k in integer_fields]
+            if any(isinstance(v,bool) or not isinstance(v,int) or not 0<=v<=9_007_199_254_740_991 for v in integer_values):
+                return None
+            ticket,magic,kind,setup,expiration=integer_values
+            symbol=getattr(order,'symbol')
+            raw=[getattr(order,k) for k in ('volume_initial','volume_current','price_open','sl','tp','price_stoplimit')]
+            if any(isinstance(v,bool) for v in raw):
+                return None
+            initial,current,price,sl,tp,stoplimit=map(float,raw)
+            if (ticket==0 or ticket in tickets or not isinstance(symbol,str) or not symbol or len(symbol)>80
+                    or kind>8 or not all(math.isfinite(v) for v in (initial,current,price,sl,tp,stoplimit))
+                    or initial<=0 or current<=0 or current>initial+1e-8 or price<=0 or min(sl,tp,stoplimit)<0):
+                return None
+            tickets.add(ticket)
+            result.append(dict(ticket=ticket,symbol=symbol,magic=magic,order_type=kind,
+                volume_initial=initial,volume_current=current,price_open=price,sl=sl,tp=tp,
+                price_stoplimit=stoplimit,time_setup_ms=setup,expiration=expiration))
+        return result
+    except (AttributeError,TypeError,ValueError,OverflowError):
+        return None
+
+
 def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, dom_cache=None) -> dict:
     now = now or datetime.now(timezone.utc)
     terminal = mt5.terminal_info()
@@ -245,7 +277,7 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
                                   side="BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL",
                                   volume=p.volume, price_open=p.price_open,
                                   price_current=p.price_current, profit=p.profit, sl=p.sl, tp=p.tp)
-                             for p in positions], pending_orders=len(orders), today_net=net,
+                             for p in positions], pending_orders=len(orders), pending_order_details=active_order_details(orders), today_net=net,
                   today_deals=count, report_day=report_day, symbol=symbol,
                   bid=tick.bid if tick else None, ask=tick.ask if tick else None,
                   quote_time_ms=tms,source_quote_time_ms=tms,

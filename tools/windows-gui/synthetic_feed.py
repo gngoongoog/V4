@@ -49,6 +49,11 @@ while True:
         symbol='XAUUSD', side='BUY', volume=0.1, price_open=2499.0,
         price_current=2500.0, profit=10.0, sl=synthetic_stop if synthetic_stop is not None else 2490.0, tp=2510.0)]
         if (home / 'synthetic-owned-position.flag').exists() else [])
+    snapshot['pending_order_details']=([dict(ticket=880001,symbol='EURUSD',magic=410618,order_type=2,
+        volume_initial=0.1,volume_current=0.1,price_open=1.1,sl=1.0,tp=1.2,
+        price_stoplimit=0.,time_setup_ms=now,expiration=0)]
+        if (home / 'synthetic-pending-order.flag').exists() else [])
+    snapshot['pending_orders']=len(snapshot['pending_order_details'])
     snapshot.update(quote_time_ms=now, source_quote_time_ms=now, tick_age_ms=0)
     request = urllib.request.Request(
         "http://127.0.0.1:18741/v1/gateway/snapshot",

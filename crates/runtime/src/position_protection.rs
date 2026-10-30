@@ -93,7 +93,12 @@ fn candidate(p:&Position,t:&Telemetry,policy:&Policy)->Option<f64> {
     let profit=(exit-p.price_open)*direction;
     let mut candidate:Option<f64>=None;
     if policy.break_even_enabled && profit+tick*1e-7>=policy.break_even_trigger_points as f64*point {
-        candidate=Some(p.price_open+direction*policy.break_even_offset_points as f64*point);
+        let exact=p.price_open+direction*policy.break_even_offset_points as f64*point;
+        let ticks=exact/tick;
+        // A broker tick may be larger than its point. Rounding a requested
+        // break-even offset away from profit could place the SL below entry;
+        // leave it unchanged when the exact requested offset is not tradable.
+        if ticks.is_finite() && (ticks-ticks.round()).abs()<=1e-6 {candidate=Some(ticks.round()*tick);}
     }
     if policy.trailing_enabled && profit+tick*1e-7>=policy.trailing_distance_points as f64*point {
         let raw=exit-direction*policy.trailing_distance_points as f64*point;
@@ -259,6 +264,15 @@ mod tests {
         near(candidate(&p,&t,&enabled()).unwrap(),1999.95);
         p.sl=1999.90;
         assert!(candidate(&p,&t,&enabled()).is_none(),"Never loosen an already better stop");
+    }
+
+    #[test]
+    fn break_even_never_rounds_an_unrepresentable_offset_into_a_loss() {
+        let mut t=telemetry(100_000);t.tick_size=Some(0.05);
+        let policy=Policy{break_even_enabled:true,trailing_enabled:false,..Policy::default()};
+        assert!(candidate(&t.positions[0],&t,&policy).is_none());
+        let representable=Policy{break_even_offset_points:5,..policy};
+        near(candidate(&t.positions[0],&t,&representable).unwrap(),2000.05);
     }
 
     #[test]

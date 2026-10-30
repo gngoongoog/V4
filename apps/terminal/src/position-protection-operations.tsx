@@ -54,7 +54,7 @@ export function PositionProtectionOperations({status,source,disabled,onSet}:{
    <button className="save-button" type="submit" disabled={locked||!valid||!dirty}>حفظ إعدادات حماية المراكز</button>
   </form>
   <p>تعمل على مراكز BrainTrade المملوكة للرمز الحالي فقط، حتى بعد STOP، عند اتصال MT5. الوقف المتحرك يبدأ عندما يتحرك السعر بمقدار المسافة المطلوبة. النقطة حسب وسيطك{typeof t?.point==='number'?` (${t.point})`:''}. الهدف TP يبقى كما هو؛ قد يرفض الوسيط التعديل.</p>
-  <p>التعادل محسوب من سعر الدخول قبل العمولة والسواب والانزلاق؛ ليس ضماناً لربح صافٍ. انقطاع البرنامج أو MT5 يوقف التحديثات الجديدة، والوقف الموجود يبقى لدى الوسيط.</p>
+  <p>التعادل محسوب من سعر الدخول قبل العمولة والسواب والانزلاق؛ ليس ضماناً لربح صافٍ. إذا لم يطابق سعر التعادل خطوة السعر لدى الوسيط فلن يُرسل. انقطاع البرنامج أو MT5 يوقف التحديثات الجديدة، والوقف الموجود يبقى لدى الوسيط.</p>
   {commands.length>0&&<div className="protection-results"><strong>آخر تعديلات الوقف</strong>{commands.map((item,i)=>{const command=object(item),request=object(command.request),state=String(command.state||'unknown');return <span key={String(command.id||i)}>#{String(request.position||'—')} · {stateLabel[state]||state}</span>})}</div>}
  </section>;
 }
