@@ -88,6 +88,44 @@ class Tests(unittest.TestCase):
         d=gateway.collect_market(Bars(),'X',now)
         self.assertEqual(d['error'],'');self.assertEqual(len(d['m1']),180)
         self.assertTrue(all(p==1 and n==180 for _,p,n in calls))
+    def test_display_market_rejects_bad_ohlc_without_cross_contaminating_frames(self):
+        # The MT5 fixture returns genuine-looking closed bars in UTC order.
+        # Corrupt one M1 field at a time; M5/M15 remain independently valid.
+        now=datetime(2026,10,11,12,0,20,tzinfo=timezone.utc)
+        boundary=int(now.timestamp())//60*60
+        datasets={}
+        for timeframe in (1,5,15):
+            size=60*timeframe
+            end=int(now.timestamp())//size*size
+            datasets[timeframe]=[dict(time=end-(180-i)*size,open=2000.,
+                high=2001.,low=1999.,close=2000.5,tick_volume=100) for i in range(180)]
+        class Bars:
+            TIMEFRAME_M1=1;TIMEFRAME_M5=5;TIMEFRAME_M15=15
+            def copy_rates_from_pos(self,symbol,tf,pos,count):
+                return [dict(bar) for bar in datasets[tf]]
+        self.assertEqual(gateway.collect_market(Bars(),'X',now)['error'],'')
+        for kind in ('future','duplicate','reverse','bad_high','nan','negative_price',
+                     'negative_volume','misaligned'):
+            with self.subTest(kind=kind):
+                raw=[dict(bar) for bar in datasets[1]]
+                if kind=='future': raw[-1]['time']=boundary
+                elif kind=='duplicate': raw[55]['time']=raw[54]['time']
+                elif kind=='reverse': raw[55],raw[56]=raw[56],raw[55]
+                elif kind=='bad_high': raw[55]['high']=1999.5
+                elif kind=='nan': raw[55]['close']=float('nan')
+                elif kind=='negative_price': raw[55]['low']=-1.0
+                elif kind=='negative_volume': raw[55]['tick_volume']=-3
+                elif kind=='misaligned': raw[55]['time']+=1
+                datasets[1]=raw
+                result=gateway.collect_market(Bars(),'X',now)
+                self.assertEqual(result['m1'],[],kind)
+                self.assertIn('M1:',result['error'])
+                self.assertEqual(len(result['m5']),180)
+                self.assertEqual(len(result['m15']),180)
+                # Restore pristine MT5 bars for the next independent failure.
+                size=60
+                datasets[1]=[dict(time=boundary-(180-i)*size,open=2000.,
+                    high=2001.,low=1999.,close=2000.5,tick_volume=100) for i in range(180)]
     def test_market_cache_changes_with_account(self):
         from unittest.mock import patch
         cache=gateway.MarketCache();now=datetime.now(timezone.utc)
