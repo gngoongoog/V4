@@ -19,12 +19,12 @@ def _order_identity(order, cmd, *, active):
             or getattr(order,'time_setup_msc',None)!=cmd['expected_setup_ms']
             or getattr(order,'time_expiration',None)!=cmd['expected_expiration']):
         return False
-    if any(abs(_number(getattr(order,field,None),field)-_number(cmd[key],key))>1e-8
+    if any(_number(getattr(order,field,None),field)!=_number(cmd[key],key)
            for field,key in numeric):
         return False
     initial=_number(getattr(order,'volume_initial',None),'initial volume',1e-12)
     current=_number(getattr(order,'volume_current',None),'remaining volume')
-    return current<=initial+1e-8 and (not active or abs(current-_number(cmd['expected_volume_current'],'approved remainder',1e-12))<=1e-8)
+    return current<=initial+1e-8 and (not active or current==_number(cmd['expected_volume_current'],'approved remainder',1e-12))
 
 
 def _terminal(mt5,cmd):

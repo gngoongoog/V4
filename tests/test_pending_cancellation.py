@@ -63,7 +63,7 @@ class PendingCancellationTests(unittest.TestCase):
         done=copy.copy(self.mt.order);done.state=self.mt.ORDER_STATE_FILLED;done.volume_current=0.;self.mt.active=[];self.mt.history=[done]
         self.assertEqual(self.execute()['state'],'filled');self.assertEqual(self.mt.sends,[])
     def test_account_owner_and_exact_order_are_checked(self):
-        for field,value in [('ticket',43),('magic',410600),('symbol','XAUUSD'),('type',3),('volume_initial',.2),('volume_current',.05),('price_open',1.11),('sl',.9),('tp',1.3),('price_stoplimit',.5),('time_setup_msc',123001),('time_expiration',1)]:
+        for field,value in [('ticket',43),('magic',410600),('symbol','XAUUSD'),('type',3),('volume_initial',.2),('volume_current',.05),('volume_current',.099999999),('price_open',1.11),('price_open',1.100000001),('sl',.9),('tp',1.3),('price_stoplimit',.5),('time_setup_msc',123001),('time_expiration',1)]:
             original=getattr(self.mt.order,field);setattr(self.mt.order,field,value);self.assertEqual(self.execute()['state'],'rejected',field);setattr(self.mt.order,field,original)
         self.mt.account.trade_mode=2;self.assertEqual(self.execute()['state'],'rejected');self.assertEqual(self.mt.sends,[])
     def test_changed_order_after_journal_is_not_sent(self):
