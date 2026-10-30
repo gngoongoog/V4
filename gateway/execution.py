@@ -382,7 +382,7 @@ class BrokerExecutor:
         # must never swallow/transform a real send acknowledgment.
         self.db.execute('UPDATE sends SET result=? WHERE id=?', (json.dumps(result, allow_nan=False), cmd['id']))
         self.db.commit()
-        if cmd.get('kind') != 'protect':
+        if cmd.get('kind') not in ('protect','cancel_pending'):
             try:
                 record_execution_quality(self.db, cmd, result, clock_ms())
             except (sqlite3.Error, KeyError, TypeError, ValueError):
@@ -625,6 +625,9 @@ class BrokerExecutor:
         return result
 
     def execute(self, mt5, cmd, authorize):
+        if cmd.get('kind') == 'cancel_pending':
+            from order_cancellation import execute_cancellation
+            return execute_cancellation(self,mt5,cmd,authorize,OWNED_MAGICS,BRAIN_MAGIC,FINAL_AUTH_MAX_AGE_MS)
         if cmd.get('kind') == 'protect':
             # Protective modifications have no deal/volume acknowledgement;
             # reconcile actual SL/TP state separately from trade fills.
