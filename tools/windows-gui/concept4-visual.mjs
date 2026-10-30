@@ -56,11 +56,18 @@ try{
  await assertPrimaryNavigation();
  const primary=[['dashboard','نظرة عامة'],['trading','مركز التداول'],['brainControl','إدارة العقول'],['risk','إدارة المخاطر'],['reports','التقارير'],['journal','السجلات']];
  for(const [id,title] of primary){
+  // Reproduce operator navigation after scrolling far down a long page.
+  await page.locator('main.content').evaluate(e=>{e.scrollTop=e.scrollHeight});
   const button=page.locator('#sidebarNav').getByTitle(title,{exact:true});await button.click();
   await page.waitForFunction(title=>document.querySelector('#sidebarNav [aria-current="page"]')?.getAttribute('title')===title,title);
   // Nav and panel transitions take ~200 ms; capture the settled UI, not the
   // previous page's selection or a partially faded panel.
   await wait(350);
+  assert.equal(await page.locator('main.content').evaluate(e=>e.scrollTop),0,`Navigation to ${id} must show the top, not the previous page's scroll offset`);
+  if(id==='trading'){
+   const bg=await page.locator('.concept-order-panel .operator-grid input[type=number]').first().evaluate(e=>getComputedStyle(e).backgroundColor);
+   assert.equal(bg,'rgb(246, 248, 251)','Light Concept 4 order inputs must not inherit the dark terminal palette');
+  }
   if(id==='brainControl'){
    assert.equal(await page.locator('.concept-brain-card').count(),16,'Offline directory must reflect the bundled Core inventory');
    for(const button of await page.locator('.concept-brain-card-actions button').all())assert(await button.isDisabled(),'Offline brain controls must be disabled');
@@ -76,9 +83,22 @@ try{
  const pages=[...fs.readFileSync(path.join(root,'apps/terminal/src/terminal.tsx'),'utf8').matchAll(/\{id:'([^']+)',title:'([^']+)',en:'([^']+)'/g)].map(m=>({id:m[1],title:m[2]}));
  assert.equal(pages.length,22);
  for(const item of pages){
+  await page.locator('main.content').evaluate(e=>{e.scrollTop=e.scrollHeight});
   const button=page.locator('#sidebarNav').getByTitle(item.title,{exact:true});await button.click();
   assert.equal(await button.getAttribute('aria-current'),'page',item.id);
+  assert.equal(await page.locator('main.content').evaluate(e=>e.scrollTop),0,`Opening ${item.id} must reset the scroll position`);
   assert((await page.locator('main.content').innerText()).trim().length>15,'Empty page '+item.id);
+  // Every visible enabled action in the 22-page offline fixture needs a
+  // React handler (or a real form submission). This is a wiring smoke test,
+  // NOT evidence that an MT5/Gateway transaction actually succeeded.
+  const unwired=await page.locator('main.content').evaluate(main=>Array.from(main.querySelectorAll('button:not(:disabled)'))
+   .filter(button=>button.getClientRects().length>0)
+   .filter(button=>{
+    const key=Object.keys(button).find(k=>k.startsWith('__reactProps'));
+    const props=key?button[key]:null;
+    return typeof props?.onClick!=='function'&&typeof props?.onPointerDown!=='function'&&typeof props?.onMouseDown!=='function'&&!(button.type==='submit'&&button.closest('form'));
+   }).map(button=>(button.textContent||button.getAttribute('aria-label')||button.title||'unlabelled').trim()).slice(0,30));
+  assert.deepEqual(unwired,[],item.id+' contains enabled buttons without an action');
   const bounds=await page.locator('main.content').evaluate(e=>({scroll:e.scrollWidth,visible:e.clientWidth}));
   assert(bounds.scroll<=bounds.visible+1,item.id+' has desktop horizontal overflow');
   if(!primary.some(([id])=>id===item.id)){
@@ -103,6 +123,7 @@ try{
  for(const item of pages){
   const button=page.locator('#sidebarNav').getByTitle(item.title,{exact:true});await button.click();
   assert.equal(await button.getAttribute('aria-current'),'page',item.id);
+  assert.equal(await page.locator('main.content').evaluate(e=>e.scrollTop),0,`Opening ${item.id} must reset the scroll position`);
   const bounds=await page.locator('main.content').evaluate(e=>({scroll:e.scrollWidth,visible:e.clientWidth}));
   assert(bounds.scroll<=bounds.visible+1,item.id+' has laptop horizontal overflow');
  }

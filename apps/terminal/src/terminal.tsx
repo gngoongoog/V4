@@ -623,16 +623,19 @@ export default function Terminal(){
   }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
   finally{finishWrite(mutation)}
  };
+ // Keep every new page anchored at its header, even after a long scroll.
+ // The scroll container is persistent across React route changes.
+ const resetContentScroll=()=>{const main=document.querySelector('main.content');if(main)main.scrollTop=0};
  const changePreview=()=>{
   // Preview is not an operator account. Discard pending consent and unsaved
   // sensitive Telegram edits; never revive them after leaving demo visuals.
   setApproval(null);setLiveLogin('');
   setSnapshotApproval(null);
   setTelegramToken('');setClearTelegram(false);setTelegramDraftScope(null);
-  setPreview(v=>!v);setPage('dashboard');
+  resetContentScroll();setPreview(v=>!v);setPage('dashboard');
   sendNotice('وضع المعاينة منفصل تماماً عن أوامر التداول؛ أُلغيت التأكيدات ومسودات الأسرار');
  };
- const open=(next:PageId)=>{setPage(next);setNotice('');setError('')};
+ const open=(next:PageId)=>{resetContentScroll();setPage(next);setNotice('');setError('')};
  const saveRiskForm=async(risk:Record<string,unknown>)=>{
   if(!hasTauri()||preview||status?.requested_run){sendNotice('تعديل المخاطر يتطلب توقف الدخول وحساب Core فعلي',true);return}
   const mutation=beginWrite('risk');if(!mutation)return;

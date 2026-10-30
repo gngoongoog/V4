@@ -18,7 +18,7 @@ vm.runInNewContext(compile('concept-market.tsx'),{exports:moduleExports,Number,S
 function nodes(n,out=[]){if(!n||typeof n!=='object')return out;if(Array.isArray(n)){n.forEach(v=>nodes(v,out));return out}out.push(n);nodes(n.props?.children,out);return out}
 let actions=[];
 const account={connected:true,demo:true,symbol:'XAUUSD',currency:'USD',balance:100,margin_free:80,
- bid:2000.1,ask:2000.3,positions:[]};
+ bid:2000.1,ask:2000.3,trade_allowed:true,trade_expert:true,positions:[]};
 const props={account,status:{gateway_fresh:true,requested_run:false},accountMatches:true,quoteFresh:true,preview:false,busy:false,native:true,
  frame:'m15',onFrameChange:()=>{},theme:'light',open:p=>actions.push(p),onTradingSettings:()=>actions.push('settings'),
  onStart:()=>actions.push('start'),onStop:()=>actions.push('stop'),onClose:profit=>actions.push(profit?'close-profit':'close-owned'),onCloseTicket:ticket=>actions.push('ticket-'+ticket),onManual:input=>actions.push(input)};
@@ -67,9 +67,12 @@ const selected=all.find(n=>n.type==='button'&&n.props['aria-label']==='إغلا�
 const foreign=all.find(n=>n.type==='button'&&n.props['aria-label']==='إغلاق المركز 103');
 assert(!selected.props.disabled);assert(foreign.props.disabled,'Foreign positions cannot be closed by the owned-position action');
 selected.props.onClick();assert.equal(actions.at(-1),'ticket-101','The row action must request exactly the clicked ticket');
-for(const change of [{preview:true},{quoteFresh:false},{status:{gateway_fresh:true,requested_run:true}},{native:false}]){
+for(const change of [{preview:true},{quoteFresh:false},{accountMatches:false},{status:{gateway_fresh:true,requested_run:true}},{native:false}]){
  const view=moduleExports.ConceptMarketDesk({...props,account:{...account,positions},...change});
  assert(nodes(view).find(n=>n.type==='button'&&n.props.children==='إغلاق مراكز البرنامج للرمز').props.disabled,'close must fail closed in preview, stale quote, running or non-native state');
  assert(nodes(view).find(n=>n.type==='button'&&n.props['aria-label']==='إغلاق المركز 101').props.disabled,'individual close must obey the same execution guard');
+ assert(nodes(view).find(n=>n.type==='button'&&n.props.className==='action-btn start').props.disabled,'START must not appear ready when scope, quotes, runtime or preview is untrusted');
 }
+const wrongScope=moduleExports.ConceptMarketDesk({...props,account:{...account,positions},accountMatches:false});
+assert(nodes(wrongScope).some(n=>n.type==='button'&&String(Array.isArray(n.props.children)?n.props.children.join(''):n.props.children)==='تنفيذ شراء بسعر السوق'&&n.props.disabled===true),'Manual entry must be disabled when the account scope is not reconciled');
 console.log('PASS: concept market scopes requested closes to exact owned tickets, protects preview/STOP/quotes, and leaves unsupported manual entries disabled');
