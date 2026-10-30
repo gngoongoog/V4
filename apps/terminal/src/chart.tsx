@@ -82,7 +82,7 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
  const [hover,setHover]=useState<Hover>(null);
  const canvas=useRef<HTMLCanvasElement>(null);
  const drag=useRef<{x:number;offset:number;step:number}|null>(null);
- const frameCandles=(market?.[frame as keyof Market]??EMPTY_CANDLES) as Candle[];
+ const frameCandles=market?.[frame]??EMPTY_CANDLES;
  const all=useMemo(()=>{
   const validated=cleanChartCandles(frameCandles);
   return preview?validated:closedBrokerCandles(validated,frame,Date.now());
