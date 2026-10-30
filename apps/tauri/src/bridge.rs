@@ -648,16 +648,37 @@ mod tests {
         let mut fixture=Fixture{dir:dir.clone(),child:None,old:keys.iter().map(|k|(*k,std::env::var_os(k))).collect()};
         unsafe{std::env::set_var(keys[0],&dir);std::env::set_var(keys[1],"1");std::env::set_var(keys[2],"1");}
         let binary=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/braintrade-core.exe");
-        fixture.child=Some(Command::new(binary).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap());
+        assert!(binary.is_file(),"Portable build must first compile the real debug Core: {}",binary.display());
+        // Do NOT hide the Core's startup error. On a loaded Windows runner the
+        // database initialization can take longer than a single HTTP attempt.
+        // A dead child must fail immediately with its stderr, not be reported
+        // as a mysterious readiness timeout 20 seconds later.
+        let startup_log=dir.join("isolated-core-startup.log");
+        let logfile=fs::File::create(&startup_log).unwrap();
+        fixture.child=Some(Command::new(binary).stdin(Stdio::null())
+            .stdout(Stdio::null()).stderr(Stdio::from(logfile)).spawn().unwrap());
         let pid=fixture.child.as_ref().unwrap().id();
-        let deadline=Instant::now()+Duration::from_secs(20);
+        let deadline=Instant::now()+Duration::from_secs(60);
+        let mut last_probe=String::from("No Core response yet");
         loop {
-            if let Ok(client)=connect_existing_core(){
-                if let Ok(status)=client.get("/v1/status"){
-                    if process_identity(&status).is_ok_and(|(observed,_)|observed==pid){break;}
-                }
+            if let Some(exit)=fixture.child.as_mut().unwrap().try_wait().unwrap(){
+                panic!("Isolated Core PID {pid} exited before readiness ({exit}); last probe: {last_probe}; startup: {}",
+                    fs::read_to_string(&startup_log).unwrap_or_else(|_|"Startup log unreadable".into()));
             }
-            assert!(Instant::now()<deadline,"isolated Core did not become ready");
+            match connect_existing_core(){
+                Ok(client)=>match client.get("/v1/status"){
+                    Ok(status)=>{
+                        if process_identity(&status).is_ok_and(|(observed,_)|observed==pid){break;}
+                        last_probe=format!("Core identity was not the expected isolated PID {pid}");
+                    }
+                    Err(error)=>last_probe=format!("Core status request: {error}"),
+                },
+                Err(error)=>last_probe=format!("Core connection: {error}"),
+            }
+            if Instant::now()>=deadline {
+                panic!("Isolated Core PID {pid} was not ready within 60 seconds; last probe: {last_probe}; startup: {}",
+                    fs::read_to_string(&startup_log).unwrap_or_else(|_|"Startup log unreadable".into()));
+            }
             thread::sleep(Duration::from_millis(100));
         }
         let state=AppLifecycle::default();
