@@ -56,8 +56,10 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
       ];
       for(const level of levels){
         if(!(level.value>=low&&level.value<=high))continue;
-        const pointY=y(level.value),entryY=Math.max(top,Math.min(bottom,y(entry)));
-        context.fillStyle=level.fill;context.fillRect(left,Math.min(pointY,entryY),right-left,Math.max(2,Math.abs(pointY-entryY)));
+        const pointY=y(level.value);
+        // Thin levels, not a full entry-to-TP profit area: the latter visually
+        // misrepresents the reference and can obscure the candle bodies.
+        context.fillStyle=level.fill;context.fillRect(left,pointY-6,right-left,12);
         context.save();context.setLineDash([5,4]);context.lineWidth=1.2;
         context.strokeStyle=level.line;context.beginPath();context.moveTo(left,pointY);context.lineTo(right,pointY);context.stroke();context.restore();
         context.fillStyle=level.line;context.fillRect(right-30,pointY-13,30,17);
@@ -66,8 +68,11 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
         context.textAlign='left';
       }
       if(entry>=low&&entry<=high){
+        const entryY=y(entry),bandLeft=left+(right-left)*.38;
+        context.fillStyle=overlay.side.toUpperCase()==='BUY'?'rgba(25,168,102,.10)':'rgba(211,64,73,.10)';
+        context.fillRect(bandLeft,entryY-11,right-bandLeft,22);
         context.save();context.strokeStyle='#b8872b';context.setLineDash([3,5]);
-        context.beginPath();context.moveTo(left,y(entry));context.lineTo(right,y(entry));context.stroke();context.restore();
+        context.beginPath();context.moveTo(left,entryY);context.lineTo(right,entryY);context.stroke();context.restore();
       }
     }
     chart.forEach((bar,i)=>{
