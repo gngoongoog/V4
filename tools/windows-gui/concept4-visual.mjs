@@ -84,6 +84,56 @@ try{
   assert.equal(await button.getAttribute('aria-current'),'page',item.id);
   assert.equal(await page.locator('main.content').evaluate(e=>e.scrollTop),0,`Opening ${item.id} must reset the scroll position`);
   assert((await page.locator('main.content').innerText()).trim().length>15,'Empty page '+item.id);
+  // Every visible enabled action in the 22-page offline fixture needs a
+  // React handler (or a real form submission). This is a wiring smoke test,
+  // NOT evidence that an MT5/Gateway transaction actually succeeded.
+  const unwired=await page.locator('main.content').evaluate(main=>Array.from(main.querySelectorAll('button:not(:disabled)'))
+   .filter(button=>button.getClientRects().length>0)
+   .filter(button=>{
+    const key=Object.keys(button).find(k=>k.startsWith('__reactProps
+  const bounds=await page.locator('main.content').evaluate(e=>({scroll:e.scrollWidth,visible:e.clientWidth}));
+  assert(bounds.scroll<=bounds.visible+1,item.id+' has desktop horizontal overflow');
+  if(!primary.some(([id])=>id===item.id)){
+   await page.locator('main.content').evaluate(e=>e.scrollTop=0);
+   await wait(250);
+   await page.screenshot({path:path.join(out,'extra-'+item.id+'-1536.png')});
+  }
+ }
+ await page.locator('#sidebarNav .all-pages').click();
+ await page.setViewportSize({width:1120,height:730});
+ await page.locator('#sidebarNav').getByTitle('نظرة عامة',{exact:true}).click();
+ await wait(350);
+ await assertPrimaryNavigation();
+ await page.getByRole('button',{name:'تكبير الشارت',exact:true}).click();
+ assert(await page.locator('.chart-panel.chart-expanded').isVisible(),'Chart expansion must remain available on laptop widths');
+ await page.keyboard.press('Escape');
+ assert.equal(await page.locator('.chart-panel.chart-expanded').count(),0);
+ await page.screenshot({path:path.join(out,'dashboard-1120.png')});
+ const narrow=await page.locator('main.content').evaluate(e=>({scroll:e.scrollWidth,visible:e.clientWidth}));
+ assert(narrow.scroll<=narrow.visible+1,'Laptop dashboard has horizontal overflow');
+ await page.locator('#sidebarNav .all-pages').click();
+ for(const item of pages){
+  const button=page.locator('#sidebarNav').getByTitle(item.title,{exact:true});await button.click();
+  assert.equal(await button.getAttribute('aria-current'),'page',item.id);
+  assert.equal(await page.locator('main.content').evaluate(e=>e.scrollTop),0,`Opening ${item.id} must reset the scroll position`);
+  const bounds=await page.locator('main.content').evaluate(e=>({scroll:e.scrollWidth,visible:e.clientWidth}));
+  assert(bounds.scroll<=bounds.visible+1,item.id+' has laptop horizontal overflow');
+ }
+ assert.deepEqual(errors,[],'Unhandled renderer errors');
+ fs.writeFileSync(path.join(out,'result.json'),JSON.stringify({result:'PASS',pages:pages.length,primaryScreens:primary.map(p=>p[0]),allPagesCheckedAtBothViewports:true,viewports:['1536x864','1120x730'],syntheticPreview:true,mt5:'NOT TESTED',orders:'NOT SENT'},null,2));
+}catch(e){
+ if(page&&!page.isClosed())await page.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});
+ fs.writeFileSync(path.join(out,'failure.txt'),String(e));
+ throw e;
+}finally{
+ if(browser)await browser.close();
+ server.kill();
+}
+));
+    const props=key?button[key]:null;
+    return typeof props?.onClick!=='function'&&typeof props?.onPointerDown!=='function'&&typeof props?.onMouseDown!=='function'&&!(button.type==='submit'&&button.closest('form'));
+   }).map(button=>(button.textContent||button.getAttribute('aria-label')||button.title||'unlabelled').trim()).slice(0,30));
+  assert.deepEqual(unwired,[],item.id+' contains enabled buttons without an action');
   const bounds=await page.locator('main.content').evaluate(e=>({scroll:e.scrollWidth,visible:e.clientWidth}));
   assert(bounds.scroll<=bounds.visible+1,item.id+' has desktop horizontal overflow');
   if(!primary.some(([id])=>id===item.id)){
