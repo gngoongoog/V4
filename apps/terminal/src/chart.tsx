@@ -12,8 +12,9 @@ const clamp=(n:number,low:number,high:number)=>Math.max(low,Math.min(high,n));
 
 /** Rendering never manufactures a candle. Reject malformed bars, order by time
  * and remove duplicate timestamps before calculating the display window. */
-export function cleanChartCandles(input:Candle[]):Candle[]{
- const sorted=input.filter(b=>Number.isSafeInteger(b.time)&&b.time>0&&
+export function cleanChartCandles(input:unknown):Candle[]{
+ if(!Array.isArray(input))return [];
+ const sorted=input.filter((b):b is Candle=>Boolean(b&&typeof b==='object')&&Number.isSafeInteger(b.time)&&b.time>0&&
   [b.open,b.high,b.low,b.close].every(n=>Number.isFinite(n)&&n>0)&&
   b.high>=b.low&&b.high>=Math.max(b.open,b.close)&&b.low<=Math.min(b.open,b.close)&&
   Number.isSafeInteger(b.tick_volume)&&b.tick_volume>=0).sort((a,b)=>a.time-b.time);
