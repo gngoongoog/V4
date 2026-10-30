@@ -33,6 +33,18 @@ try{
  const enterPreview=page.getByRole('button',{name:'معاينة التصميم',exact:true});
  if(await enterPreview.count())await enterPreview.click();
  assert(await page.locator('.preview-banner').isVisible(),'Synthetic preview must be labelled');
+ for(const frame of ['M1','M5','M15','M30','H1','H4','D1']){
+  await page.locator('.chart-panel .timeframes').getByRole('button',{name:frame,exact:true}).click();
+  assert.equal(await page.locator('.concept-frame select').inputValue(),frame.toLowerCase(),'Chart and header frame must stay synchronized');
+  assert.equal(await page.locator('.chart-frame canvas').getAttribute('aria-label'),`MT5 XAUUSD ${frame.toLowerCase()} candlestick chart`);
+ }
+ await page.locator('.chart-panel .timeframes').getByRole('button',{name:'M15',exact:true}).click();
+ await page.getByRole('button',{name:'تكبير الشارت',exact:true}).click();
+ assert(await page.locator('.chart-panel.chart-expanded').isVisible());
+ const enlarged=await page.locator('.chart-panel.chart-expanded').boundingBox();
+ assert(enlarged&&enlarged.width>1400&&enlarged.height>750,'Expanded chart must use the available window');
+ await page.keyboard.press('Escape');
+ assert.equal(await page.locator('.chart-panel.chart-expanded').count(),0,'Escape returns the chart to its page');
  const primaryTitles=['نظرة عامة','مركز التداول','إدارة العقول','إدارة المخاطر','التقارير','السجلات','الأخبار','الإعدادات'];
  async function assertPrimaryNavigation(){
   const nav=await page.locator('#sidebarNav').boundingBox();assert(nav);
@@ -80,6 +92,10 @@ try{
  await page.locator('#sidebarNav').getByTitle('نظرة عامة',{exact:true}).click();
  await wait(350);
  await assertPrimaryNavigation();
+ await page.getByRole('button',{name:'تكبير الشارت',exact:true}).click();
+ assert(await page.locator('.chart-panel.chart-expanded').isVisible(),'Chart expansion must remain available on laptop widths');
+ await page.keyboard.press('Escape');
+ assert.equal(await page.locator('.chart-panel.chart-expanded').count(),0);
  await page.screenshot({path:path.join(out,'dashboard-1120.png')});
  const narrow=await page.locator('main.content').evaluate(e=>({scroll:e.scrollWidth,visible:e.clientWidth}));
  assert(narrow.scroll<=narrow.visible+1,'Laptop dashboard has horizontal overflow');

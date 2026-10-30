@@ -58,6 +58,79 @@ class ExecutionTests(unittest.TestCase):
         self.cmd['signal']['key']='tick:123'
         self.assertEqual(self.send()['state'],'filled')
         self.assertEqual(len(self.mt.sends),1)
+    def test_solo_brain_ownership_matches_magic_and_is_immutable(self):
+        self.cmd.update(id='solo-trend',brain='trend',magic=410603)
+        result=self.send();self.assertEqual(result['state'],'filled',result)
+        self.assertEqual(self.mt.sends[0]['magic'],410603)
+        self.cmd['brain']='gann'
+        self.assertEqual(self.send()['state'],'unknown','A journalled order cannot change its brain identity')
+        self.cmd.update(id='solo-wrong-magic',brain='trend',magic=410601)
+        result=self.send();self.assertEqual(result['state'],'rejected',result)
+        self.assertIn('identity does not match',result['reason'])
+        self.assertEqual(len(self.mt.sends),1)
+
+    def test_manual_market_preserves_approved_geometry_and_is_idempotent(self):
+        self.cmd.update(id='manual-buy',brain='manual',magic=410618,manual_open=True,
+                        manual_epoch='a'*32,manual_reference_price=2000.1,
+                        manual_stop_price=1999.,manual_target_price=2002.,
+                        risk_percent=1.,commission_per_lot=0.,slippage_ticks=0.)
+        result=self.send();self.assertEqual(result['state'],'filled',result)
+        self.assertEqual((result['request']['sl'],result['request']['tp'],result['request']['volume']),(1999.,2002.,.1))
+        self.assertEqual(len(self.mt.sends),1);self.assertEqual(self.send()['state'],'filled')
+        self.assertEqual(len(self.mt.sends),1,'Replayed intent must never send twice')
+        self.cmd['manual_target_price']=2003.
+        self.assertEqual(self.send()['state'],'unknown','Approved target is part of durable identity')
+
+    def test_manual_market_rejects_price_drift_bad_grid_or_changed_lot(self):
+        self.cmd.update(brain='manual',magic=410618,manual_open=True,manual_epoch='b'*32,
+                        manual_reference_price=2000.1,manual_stop_price=1999.,manual_target_price=2002.,
+                        risk_percent=1.,commission_per_lot=0.,slippage_ticks=0.)
+        self.mt.tick.ask=2000.4
+        result=self.send();self.assertEqual(result['state'],'rejected',result)
+        self.assertIn('deviation',result['reason']);self.assertFalse(self.mt.sends)
+        self.mt.tick.ask=2000.1;self.cmd['id']='manual-off-grid';self.cmd['manual_stop_price']=1999.005
+        self.assertEqual(self.send()['state'],'rejected');self.assertFalse(self.mt.sends)
+        self.cmd.update(id='manual-risk',manual_stop_price=1999.,risk_percent=.01)
+        self.mt.account.equity=100.
+        self.assertEqual(self.send()['state'],'rejected');self.assertFalse(self.mt.sends)
+        self.cmd.update(id='manual-identity',brain='trend')
+        self.assertEqual(self.send()['state'],'rejected');self.assertFalse(self.mt.sends)
+
+    def test_manual_market_sell_uses_exact_approved_prices(self):
+        self.cmd.update(id='manual-sell',brain='manual',magic=410618,manual_open=True,
+                        manual_epoch='c'*32,manual_reference_price=2000.,
+                        manual_stop_price=2001.,manual_target_price=1998.,
+                        risk_percent=1.,commission_per_lot=0.,slippage_ticks=0.,
+                        signal=dict(side=-1,stop_distance=1.,target_distance=2.))
+        result=self.send();self.assertEqual(result['state'],'filled',result)
+        self.assertEqual((result['request']['sl'],result['request']['tp']),(2001.,1998.))
+
+    def test_manual_market_rechecks_other_owned_positions_and_quote_before_send(self):
+        self.cmd.update(id='manual-late-position',brain='manual',magic=410618,manual_open=True,
+                        manual_epoch='d'*32,manual_reference_price=2000.1,
+                        manual_stop_price=1999.,manual_target_price=2002.,
+                        risk_percent=1.,commission_per_lot=0.,slippage_ticks=0.)
+        self.mt.on_check=lambda:self.mt.positions.append(N(magic=410600))
+        result=self.send();self.assertEqual(result['state'],'cancelled',result)
+        self.assertFalse(self.mt.sends)
+        self.mt.positions=[];self.cmd['id']='manual-late-quote'
+        self.mt.on_check=lambda:setattr(self.mt.tick,'ask',2000.11)
+        result=self.send();self.assertEqual(result['state'],'cancelled',result)
+        self.assertFalse(self.mt.sends)
+
+    def test_manual_market_budgets_the_entire_approved_price_deviation(self):
+        self.cmd.update(id='manual-worst-price',brain='manual',magic=410618,manual_open=True,
+                        manual_epoch='e'*32,manual_reference_price=2000.1,
+                        manual_stop_price=1999.,manual_target_price=2002.,
+                        risk_percent=1.,commission_per_lot=0.,slippage_ticks=0.)
+        # Current price risks $11 at 0.1 lot; the approved adverse deviation
+        # can risk $13. A $12 budget must reject, never silently cut the lot.
+        self.mt.account.equity=1200.
+        result=self.send();self.assertEqual(result['state'],'rejected',result)
+        self.assertFalse(self.mt.sends)
+        self.mt.account.equity=10000.;self.mt.tick.ask=2000.2;self.cmd['id']='manual-remaining-deviation'
+        result=self.send();self.assertEqual(result['state'],'filled',result)
+        self.assertEqual(result['request']['deviation'],10,'The broker receives only the remaining approved deviation')
 
     def test_exact_commission_schedule_roundtrip_and_no_commission_account(self):
         for lots, fee in ((0.01,0.07),(0.10,0.70),(1.0,7.0)):
@@ -489,6 +562,76 @@ class ExecutionTests(unittest.TestCase):
         self.cmd.update(risk_percent=.25,commission_per_lot=7.,slippage_ticks=2.)
         self.assertEqual(self.send()['state'],'filled')
         self.assertAlmostEqual(self.mt.sends[0]['volume'],.1)
+    def test_account_risk_master_off_skips_risk_sizing_but_keeps_broker_checks(self):
+        for target,mode in [('demo',0),('live',2)]:
+            self.cmd.update(id='risk-master-'+target,target=target,risk_master_enabled=False,
+                            daily_breaker_enabled=False,micro_real_temporary=False,
+                            risk_percent=.01,commission_per_lot=0.,slippage_ticks=0.)
+            self.mt.account.trade_mode=mode
+            result=self.send();self.assertEqual(result['state'],'filled',result)
+            self.assertTrue(result['risk_sizing_disabled'])
+            self.assertEqual(result['request']['volume'],.1)
+            self.assertFalse(result['order_check_skipped'])
+            if target=='live':self.assertIn('real_margin_check',result)
+            self.cmd['risk_master_enabled']=True
+            self.assertEqual(self.send()['state'],'unknown','Risk policy cannot be changed for a saved intent')
+        self.cmd.update(id='risk-master-invalid',target='demo',risk_master_enabled=0)
+        self.mt.account.trade_mode=0
+        result=self.send();self.assertEqual(result['state'],'rejected',result)
+        self.assertIn('risk-master',result['reason'])
+        self.cmd.update(id='risk-master-inconsistent',risk_master_enabled=False,daily_breaker_enabled=True)
+        result=self.send();self.assertEqual(result['state'],'rejected',result)
+        self.assertIn('Inconsistent',result['reason'])
+
+    def test_risk_recovery_latches_broker_balance_crossing_across_restart(self):
+        self.cmd.update(id='recovery-reached',revision=41,risk_master_enabled=False,risk_master_recovery_id='a'*32,
+                        daily_breaker_enabled=False,micro_real_temporary=False,
+                        risk_master_recovery=dict(basis='balance',threshold=500.))
+        self.mt.account.balance=500.;self.mt.account.equity=30.
+        result=self.send();self.assertEqual(result['state'],'rejected',result)
+        self.assertEqual(result['risk_master_recovery_reached'],dict(basis='balance',threshold=500.,value=500.))
+        self.assertEqual(self.mt.sends,[])
+        self.ex.close();self.ex=BrokerExecutor(self.path)
+        self.mt.account.balance=100.;self.cmd['id']='recovery-after-drop'
+        result=self.send();self.assertEqual(result['state'],'rejected',result)
+        self.assertEqual(result['risk_master_recovery_reached']['value'],500.)
+        self.assertEqual(self.mt.sends,[])
+        # Unrelated settings may advance revision; the recovery latch persists.
+        self.cmd.update(id='unrelated-revision',revision=42)
+        self.assertEqual(self.send()['state'],'rejected')
+        # Only an explicit new operator recovery policy receives a new ID.
+        self.cmd.update(id='new-operator-rule',risk_master_recovery_id='b'*32)
+        result=self.send();self.assertEqual(result['state'],'filled',result)
+        self.assertEqual(len(self.mt.sends),1)
+
+    def test_risk_recovery_crossing_after_validation_cancels_and_is_durable(self):
+        self.cmd.update(id='recovery-race',revision=99,risk_master_enabled=False,risk_master_recovery_id='c'*32,
+                        daily_breaker_enabled=False,micro_real_temporary=False,
+                        risk_master_recovery=dict(basis='equity',threshold=500.))
+        self.mt.account.equity=499.
+        self.mt.on_check=lambda:setattr(self.mt.account,'equity',501.)
+        result=self.send();self.assertEqual(result['state'],'cancelled',result)
+        self.assertEqual(result['risk_master_recovery_reached']['value'],501.)
+        self.assertFalse(self.mt.sends)
+        self.mt.on_check=None;self.mt.account.equity=100.
+        self.assertEqual(self.send()['risk_master_recovery_reached']['value'],501.)
+        self.cmd['id']='recovery-race-next'
+        self.assertEqual(self.send()['state'],'rejected')
+        self.assertFalse(self.mt.sends)
+
+    def test_risk_recovery_rejects_invalid_account_values_and_rules(self):
+        self.cmd.update(revision=7,risk_master_enabled=False,risk_master_recovery_id='d'*32,daily_breaker_enabled=False,
+                        micro_real_temporary=False,risk_master_recovery=dict(basis='balance',threshold=500.))
+        for i,value in enumerate((None,float('nan'),-1.)):
+            self.cmd['id']=f'bad-balance-{i}';self.mt.account.balance=value
+            result=self.send();self.assertEqual(result['state'],'rejected',result)
+            self.assertFalse(self.mt.sends)
+        self.mt.account.balance=100.
+        for i,rule in enumerate(({'basis':'other','threshold':500}, {'basis':'balance','threshold':True},
+                                 {'basis':'balance','threshold':0}, {'basis':'equity','threshold':float('inf')})):
+            self.cmd['id']=f'bad-rule-{i}';self.cmd['risk_master_recovery']=rule
+            result=self.send();self.assertEqual(result['state'],'rejected',result)
+            self.assertFalse(self.mt.sends)
     def test_account_switch_during_check_and_stop_before_send(self):
         self.mt.on_check=lambda:setattr(self.mt.account,'login',88);self.assertEqual(self.send()['state'],'rejected');self.assertFalse(self.mt.sends)
         self.mt.on_check=None;self.mt.account.login=17;self.assertEqual(self.ex.execute(self.mt,self.cmd,lambda _:False)['state'],'cancelled');self.assertFalse(self.mt.sends)
@@ -539,6 +682,52 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(req['volume'],.05)
         self.assertEqual(req['position'],1)
         self.assertEqual(req['type'],1)
+    def test_manual_profit_close_rechecks_profit_before_send_and_never_retries(self):
+        self.cmd.update(kind='close',position=1,manual_close=True,profit_only=True,expected_position_volume=.05,expected_position_side='BUY')
+        p=N(ticket=1,magic=self.cmd['magic'],symbol='XAUUSD',volume=.05,type=0,profit=3.)
+        self.mt.positions=[p]
+        calls=0
+        def authorize(_):
+            nonlocal calls
+            calls+=1
+            if calls==2:p.profit=-1.
+            return True
+        result=self.ex.execute(self.mt,self.cmd,authorize)
+        self.assertEqual(result['state'],'cancelled',result)
+        self.assertIn('no longer has positive',result['reason'])
+        self.assertFalse(self.mt.sends)
+        p.profit=3.
+        self.assertEqual(self.send()['state'],'cancelled')
+        self.assertFalse(self.mt.sends)
+    def test_manual_close_rechecks_ticket_side_volume_and_account(self):
+        for attribute,new_value in [('ticket',2),('magic',999),('volume',.02),('type',1)]:
+            self.cmd.update(id='close-changed-'+attribute,kind='close',position=1,manual_close=True,profit_only=False,expected_position_volume=.05,expected_position_side='BUY')
+            p=N(ticket=1,magic=self.cmd['magic'],symbol='XAUUSD',volume=.05,type=0,profit=4.)
+            self.mt.positions=[p]
+            calls=0
+            def authorize(_,p=p,a=attribute,v=new_value):
+                nonlocal calls
+                calls+=1
+                if calls==2:setattr(p,a,v)
+                return True
+            result=self.ex.execute(self.mt,self.cmd,authorize)
+            self.assertEqual(result['state'],'cancelled',(attribute,result))
+            self.assertFalse(self.mt.sends)
+        self.cmd.update(id='close-changed-account',kind='close',position=1,manual_close=True,profit_only=False)
+        self.mt.positions=[N(ticket=1,magic=self.cmd['magic'],symbol='XAUUSD',volume=.05,type=0,profit=4.)]
+        self.mt.account_reads=0
+        self.mt.on_account=lambda count:setattr(self.mt.account,'login',99) if count==6 else None
+        result=self.send();self.assertEqual(result['state'],'cancelled',result)
+        self.assertFalse(self.mt.sends)
+        self.mt.on_account=None;self.mt.account.login=17
+        self.cmd.update(id='close-approved-once',kind='close',position=1,manual_close=True,profit_only=True)
+        self.mt.positions=[N(ticket=1,magic=self.cmd['magic'],symbol='XAUUSD',volume=.05,type=0,profit=4.)]
+        result=self.send();self.assertEqual(result['state'],'filled',result)
+        self.assertEqual(len(self.mt.sends),1)
+        self.send();self.assertEqual(len(self.mt.sends),1)
+        self.cmd['profit_only']=False
+        self.assertEqual(self.send()['state'],'unknown')
+        self.assertEqual(len(self.mt.sends),1)
     def test_filling_policy_and_broker_rejection(self):
         self.mt.info.filling_mode=2;self.mt.code=10019;self.assertEqual(self.send()['state'],'rejected');self.assertEqual(self.mt.sends[0]['type_filling'],1)
     def test_missing_journal_unknown_never_becomes_new_order(self):

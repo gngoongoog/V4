@@ -219,11 +219,14 @@ fn verified_forward_feedback(
 }
 
 fn forward_stats(db: &Connection, source: &str, regime: Option<&str>, now: u64) -> Result<Stats> {
+    forward_stats_at(db,source,regime,now,None)
+}
+fn forward_stats_at(db: &Connection, source: &str, regime: Option<&str>, now: u64, cutoff:Option<u64>) -> Result<Stats> {
     let mut st = db.prepare(
         "SELECT bar,payload,outcome FROM coordinator_samples
-         WHERE source=?1 AND outcome IS NOT NULL ORDER BY bar DESC LIMIT 4000"
+         WHERE source=?1 AND outcome IS NOT NULL AND (?2 IS NULL OR CASE WHEN json_valid(outcome) THEN CAST(json_extract(outcome,'$.scored_ms') AS INTEGER)<=?2 ELSE 0 END) ORDER BY bar DESC LIMIT 4000"
     )?;
-    let rows = st.query_map([source], |r| Ok((
+    let rows = st.query_map(params![source,cutoff], |r| Ok((
         r.get::<_, u64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?,
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let (mut samples, mut wins, mut weighted_wins, mut weighted_net, mut weighted_reward, mut effective)
@@ -319,14 +322,17 @@ fn verified_admission(source:&str,ctx:&str,brain:&str,pos:u64,closed:u64,
 }
 
 fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<Stats>{
+    broker_stats_at(db,source,regime,now,None)
+}
+fn broker_stats_at(db:&Connection,source:&str,regime:Option<&str>,now:u64,cutoff:Option<u64>)->Result<Stats>{
     let mut st=db.prepare(
         "SELECT s.context,s.brain,s.position_id,s.closed_ms,s.payload,
             a.context,a.brain,a.closed_ms,a.admitted_ms,a.payload_sha256,a.protocol
          FROM coordinator_broker_samples s
          LEFT JOIN coordinator_broker_admissions a
             ON a.source=s.source AND a.position_id=s.position_id
-         WHERE s.source=?1 ORDER BY s.closed_ms DESC LIMIT 4000")?;
-    let rows=st.query_map([source],|r|Ok((
+         WHERE s.source=?1 AND (?2 IS NULL OR (a.admitted_ms<=?2 AND s.closed_ms<=?2)) ORDER BY s.closed_ms DESC LIMIT 4000")?;
+    let rows=st.query_map(params![source,cutoff],|r|Ok((
         r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,
         r.get::<_,i64>(3)?,r.get::<_,String>(4)?,
         BrokerAdmission{
@@ -364,14 +370,17 @@ fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<
 // in coordinator_broker_samples. An observed loss is not proof that the strategy
 // caused the market move. The response is a temporary, bounded preference shift.
 fn contextual_stats(db:&Connection,source:&str,key:&str,now:u64)->Result<(u64,f64,f64,u64,f64)> {
+    contextual_stats_at(db,source,key,now,None)
+}
+fn contextual_stats_at(db:&Connection,source:&str,key:&str,now:u64,cutoff:Option<u64>)->Result<(u64,f64,f64,u64,f64)> {
     let mut st=db.prepare(
         "SELECT s.context,s.brain,s.position_id,s.closed_ms,s.payload,
             a.context,a.brain,a.closed_ms,a.admitted_ms,a.payload_sha256,a.protocol
          FROM coordinator_broker_samples s
          LEFT JOIN coordinator_broker_admissions a
             ON a.source=s.source AND a.position_id=s.position_id
-         WHERE s.source=?1 ORDER BY s.closed_ms DESC,s.position_id DESC LIMIT 4000")?;
-    let rows=st.query_map([source],|r|Ok((
+         WHERE s.source=?1 AND (?2 IS NULL OR (a.admitted_ms<=?2 AND s.closed_ms<=?2)) ORDER BY s.closed_ms DESC,s.position_id DESC LIMIT 4000")?;
+    let rows=st.query_map(params![source,cutoff],|r|Ok((
         r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,
         r.get::<_,i64>(3)?,r.get::<_,String>(4)?,
         BrokerAdmission{
@@ -512,6 +521,7 @@ fn open_learning_commands(db: &Connection, key: &str) -> Result<Vec<(String, Str
         "SELECT payload,result FROM broker_commands c
          WHERE c.context=?1 AND c.kind='open'
          AND CASE WHEN json_valid(c.payload) THEN json_extract(c.payload,'$.target') ELSE '' END='demo'
+         AND CASE WHEN json_valid(c.payload) THEN COALESCE(json_extract(c.payload,'$.manual_open'),0)<>1 ELSE 0 END
          AND CAST(json_extract(c.result,'$.deal') AS INTEGER)>0
          AND (
              NOT EXISTS(SELECT 1 FROM broker_learning_processed p
@@ -554,7 +564,7 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry, observed_ms:u64) ->
         let cmd:Value=serde_json::from_str(&raw_cmd)?;
         // The same server/login tuple can theoretically exist in another MT5
         // mode. Only an explicitly Demo-bound originating intent is admissible.
-        if cmd["target"]!="demo" {continue;}
+        if cmd["target"]!="demo" || cmd["manual_open"]==true {continue;}
         let result:Value=serde_json::from_str(&raw_result)?;
         let Some(open_deal)=result["deal"].as_u64().filter(|v|*v>0) else {continue;};
         let position_id:Option<u64>=db.query_row("SELECT position_id FROM broker_deals WHERE context=?1 AND ticket=?2",params![&key,open_deal],|r|r.get(0)).optional()?;
@@ -748,7 +758,15 @@ impl Learner {
         run: bool,
         now: u64,
     ) -> Result<BTreeMap<String, LearnedWeight>> {
-        sync_demo_broker_evidence(db, t, now)?;
+        self.observe_gated(db,t,c,brains,frames,run,now,None,(0.5,0))
+    }
+    pub fn observe_gated(
+        &mut self,db:&Connection,t:&Telemetry,c:&Config,brains:&[BrainConfig],
+        frames:&BTreeMap<String,Vec<FrameBar>>,run:bool,now:u64,cutoff:Option<u64>,
+        frozen_quality:(f64,u64),
+    )->Result<BTreeMap<String,LearnedWeight>> {
+        if cutoff.is_none(){sync_demo_broker_evidence(db,t,now)?;}
+        let evidence_time=cutoff.unwrap_or(now);
         let mut out = BTreeMap::new();
         let key = context(t);
         // Preserve existing Demo evidence. New non-Demo forward observations
@@ -758,7 +776,7 @@ impl Learner {
             serde_json::to_string(&("broker-mode-isolated-v1",&key,t.account_trade_mode))?
         };
         let mut intelligence = execution::intelligence_context(t, frames, now);
-        let(history_quality,history_samples)=execution_history_quality(db,&key,t,now)?;
+        let(history_quality,history_samples)=if cutoff.is_some(){frozen_quality}else{execution_history_quality(db,&key,t,now)?};
         intelligence.execution_history_quality=history_quality;
         intelligence.execution_history_samples=history_samples;
         if history_samples>=5 {
@@ -772,7 +790,7 @@ impl Learner {
             };
             let bar = bars.last().unwrap().candle.time;
 
-            if self.last.get(&source) != Some(&bar) {
+            if cutoff.is_none() && self.last.get(&source) != Some(&bar) {
                 let rows = {
                     let mut st = db.prepare(
                         "SELECT bar,payload FROM coordinator_samples WHERE source=?1 AND outcome IS NULL ORDER BY bar LIMIT 2000",
@@ -850,19 +868,19 @@ impl Learner {
 
             // Broker history can mature between completed bars, so weights are refreshed on
             // every observe call rather than only when this member's timeframe advances.
-            let broker_global=if demo {broker_stats(db,&source,None,now)?}else{Stats::default()};
-            let broker_regime=if demo {broker_stats(db,&source,Some(&intelligence.regime),now)?}else{Stats::default()};
+            let broker_global=if demo {broker_stats_at(db,&source,None,evidence_time,cutoff)?}else{Stats::default()};
+            let broker_regime=if demo {broker_stats_at(db,&source,Some(&intelligence.regime),evidence_time,cutoff)?}else{Stats::default()};
             let mut weight=selected_weight(
-                forward_stats(db,&source,None,now)?,forward_stats(db,&source,Some(&intelligence.regime),now)?,
+                forward_stats_at(db,&source,None,evidence_time,cutoff)?,forward_stats_at(db,&source,Some(&intelligence.regime),evidence_time,cutoff)?,
                 broker_global,broker_regime,&intelligence);
             weight.context_key=braintrade_domain::student::context_key(&intelligence);
             if c.trading.demo_flexible && t.demo && t.account_trade_mode==Some(0) {
                 (weight.context_samples,weight.context_reward,weight.context_confidence,
-                 weight.context_loss_streak,weight.context_mistake_penalty)=contextual_stats(db,&source,&weight.context_key,now)?;
+                 weight.context_loss_streak,weight.context_mistake_penalty)=contextual_stats_at(db,&source,&weight.context_key,evidence_time,cutoff)?;
             }
             self.weights.insert(source.clone(),weight);
 
-            if run {
+            if run && cutoff.is_none() {
                 let signal = execution::evaluate(b, t, c, frames, genome(db, b, t)?.as_ref(), now);
                 if signal.ready
                     && [
@@ -1111,6 +1129,50 @@ mod tests {
         let (payload,outcome):(String,String)=db.query_row("SELECT payload,outcome FROM coordinator_samples WHERE source=?1 AND bar=?2",params![source,old],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
         assert_eq!(payload,"{}");
         assert_eq!(serde_json::from_str::<Value>(&outcome).unwrap()["state"],"invalid");
+    }
+
+    #[test]
+    fn global_pause_defers_forward_training_until_resume(){
+        let db=Connection::open_in_memory().unwrap();let mut learner=Learner::new(&db).unwrap();
+        let now=1_800_000_000_000_u64;
+        let t=Telemetry{demo:true,account_trade_mode:Some(0),login:1,server:"Test".into(),
+            symbol:"XAUUSD".into(),currency:"USD".into(),..Default::default()};
+        let config=Config::default();let brain=BrainConfig{id:"trend".into(),..Default::default()};
+        let frame=bars(now/1000-60);let old=frame[100].candle.time;
+        let source=source_key(&context(&t),config.trading.mode,&brain.id,&brain.timeframe,&brain.report_id).unwrap();
+        db.execute("INSERT INTO coordinator_samples VALUES(?1,?2,'{}',NULL)",params![source,old]).unwrap();
+        let frames=BTreeMap::from([(brain.timeframe.clone(),frame)]);
+        learner.observe_gated(&db,&t,&config,&[brain.clone()],&frames,true,now,Some(now-1),(0.5,0)).unwrap();
+        let pending:bool=db.query_row("SELECT outcome IS NULL FROM coordinator_samples WHERE source=?1 AND bar=?2",params![source,old],|r|r.get(0)).unwrap();
+        assert!(pending,"Pause cannot mature or train the pending sample");
+        learner.observe(&db,&t,&config,&[brain],&frames,false,now).unwrap();
+        let result:String=db.query_row("SELECT outcome FROM coordinator_samples WHERE source=?1 AND bar=?2",params![source,old],|r|r.get(0)).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&result).unwrap()["state"],"invalid");
+    }
+    #[test]
+    fn global_pause_excludes_forward_labels_after_the_saved_cutoff(){
+        let db=Connection::open_in_memory().unwrap();Learner::new(&db).unwrap();
+        let now=1_800_000_000_000_u64;let bar=now/1000-3600;
+        let p=json!({"side":1,"regime":"trend_up_normal","timeframe":"M1",
+            "observed_ms":(bar+60)*1000,"entry":2000.,"tick":0.01,"profit":1.,
+            "loss":1.,"spread":0.02,"slippage":0.01,"commission":7.});
+        let o=json!({"state":"scored","net":2.,"risk_per_lot":4.,"r_multiple":0.5,
+            "reward":0.5_f64.tanh(),"exit_bar":bar+720,"scored_ms":now,
+            "horizon_bars":12,"horizon_seconds":720,"horizon_contiguous":true});
+        db.execute("INSERT INTO coordinator_samples VALUES('s',?1,?2,?3)",params![bar,p.to_string(),o.to_string()]).unwrap();
+        assert_eq!(forward_stats_at(&db,"s",None,now-1,Some(now-1)).unwrap().samples,0);
+        assert_eq!(forward_stats(&db,"s",None,now).unwrap().samples,1);
+    }
+    #[test]
+    fn manual_orders_are_excluded_from_automatic_training_scan(){
+        let db=Connection::open_in_memory().unwrap();Learner::new(&db).unwrap();
+        db.execute_batch("CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT,brain TEXT,kind TEXT,created_ms INTEGER,state TEXT,payload TEXT,result TEXT);").unwrap();
+        let manual=json!({"target":"demo","manual_open":true}).to_string();
+        let automatic=json!({"target":"demo"}).to_string();
+        db.execute("INSERT INTO broker_commands VALUES('manual','a','manual','open',1,'filled',?1,'{\"deal\":1}')",[manual]).unwrap();
+        db.execute("INSERT INTO broker_commands VALUES('auto','a','system','open',2,'filled',?1,'{\"deal\":2}')",[automatic]).unwrap();
+        let rows=open_learning_commands(&db,"a").unwrap();
+        assert_eq!(rows.len(),1);assert_eq!(serde_json::from_str::<Value>(&rows[0].0).unwrap()["target"],"demo");
     }
 
     #[test]

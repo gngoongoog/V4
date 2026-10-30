@@ -37,8 +37,13 @@ impl FastContext {
         config: &Config,
         frames: &BTreeMap<String, Vec<FrameBar>>,
     ) -> Self {
+        let mut fast_telemetry=telemetry.clone();
+        // Full active-order details are for reconciled snapshots/operator
+        // views, never needed in the per-tick Sniper decision. Keep the
+        // broker-reported count, but do not clone an order list on each tick.
+        fast_telemetry.pending_order_details=None;
         Self {
-            telemetry: telemetry.clone(),
+            telemetry: fast_telemetry,
             config: config.clone(),
             frames: Arc::new(frames.clone()),
         }

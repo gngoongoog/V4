@@ -110,6 +110,19 @@ try{
   await page.locator('button.action-btn.stop').click();await page.getByRole('button',{name:'تأكيد وقف الدخول الجديد',exact:true}).click();
   await page.getByRole('dialog').waitFor({state:'hidden'});await status();
  });
+ await check('actual WebView chart expands and restores with Escape',async()=>{
+  await page.getByRole('button',{name:'تكبير الشارت',exact:true}).click();
+  await page.locator('.chart-panel.chart-expanded').waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('.chart-panel.chart-expanded').waitFor({state:'detached'});
+ });
+ await check('freeze and resume actual Core learning from dashboard without START',async()=>{
+  const buttons=page.locator('.concept-learning-actions').getByRole('button');
+  await until(async()=>await buttons.nth(0).isEnabled());await buttons.nth(0).click();
+  await until(async()=>(await status()).learning_control?.frozen===true);
+  await until(async()=>await buttons.nth(1).isEnabled());await buttons.nth(1).click();
+  await until(async()=>(await status()).learning_control?.frozen===false);
+ });
  const source=fs.readFileSync(path.join(root,'apps/terminal/src/terminal.tsx'),'utf8');
  const pages=[...source.matchAll(/\{id:'([^']+)',title:'([^']+)',en:'([^']+)'/g)].map(m=>({id:m[1],title:m[2]}));
  assert.equal(pages.length,22,'Expected all 22 source-registered pages');
@@ -126,6 +139,123 @@ try{
   await status();
  });
  await check('connect isolated synthetic Demo snapshot',startFixture);
+ await check('account risk master toggles in actual UI while synthetic Demo stays stopped',async()=>{
+  await invoke('bind_execution',{target:'demo',deviationPoints:20,confirmLiveLogin:''});
+  const execution=async()=>{const r=await invoke('read_panel',{route:'/v1/execution'});return r.data||r};
+  await until(async()=>(await execution()).risk_master?.enabled===true);
+  await navigate('إدارة المخاطر');
+  const panel=page.getByRole('region',{name:'مفتاح إدارة المخاطر للحساب'});
+  await panel.waitFor();
+  await panel.getByLabel('حد استعادة المخاطر',{exact:true}).fill('100000');
+  await until(async()=>await panel.getByRole('button',{name:'إيقاف إدارة المخاطر',exact:true}).isEnabled());
+  page.once('dialog',dialog=>dialog.accept());
+  await panel.getByRole('button',{name:'إيقاف إدارة المخاطر',exact:true}).click();
+  await until(async()=>(await execution()).risk_master?.enabled===false);
+  assert.deepEqual((await execution()).risk_master.recovery,{basis:'balance',threshold:100000});
+  const risk=await invoke('read_panel',{route:'/v1/risk/monitor'});
+  assert.equal((risk.data||risk).risk_master_enabled,false);
+  await panel.getByRole('button',{name:'تفعيل إدارة المخاطر',exact:true}).click();
+  await until(async()=>(await execution()).risk_master?.enabled===true);
+  await status();
+ });
+ await check('select and release one real Core solo owner without START',async()=>{
+  await navigate('إدارة العقول');
+  const panel=page.locator('[aria-label="اختيار العقل المنفّذ"]');await panel.waitFor();
+  const choices=panel.getByLabel('العقل للتداول المنفرد',{exact:true});
+  await until(async()=>await choices.isEnabled());await choices.selectOption('trend');
+  page.once('dialog',dialog=>dialog.accept());
+  await panel.getByRole('button',{name:'تداول بعقل واحد',exact:true}).click();
+  await until(async()=>(await status()).selected_owner==='trend');
+  await until(async()=>await panel.getByRole('button',{name:'العودة للمنسق',exact:true}).isEnabled());
+  page.once('dialog',dialog=>dialog.accept());
+  await panel.getByRole('button',{name:'العودة للمنسق',exact:true}).click();
+  await until(async()=>(await status()).selected_owner==='system');
+  await status(); // Synthetic fixture cannot send to a broker.
+ });
+ await check('position protection queues and reconciles a synthetic SL while STOPPED',async()=>{
+  const permission=path.join(home,'synthetic-manual-allowed.flag'),position=path.join(home,'synthetic-owned-position.flag');
+  const marker=path.join(home,'synthetic-protect-observe.flag');
+  fs.writeFileSync(permission,'CI synthetic permissions only');fs.writeFileSync(position,'CI synthetic position only');
+  try{
+   await until(async()=>{const s=await status();return s.telemetry?.trade_allowed===true&&s.telemetry?.positions?.some(p=>p.ticket===777001)});
+   await navigate('إدارة المخاطر');
+   const panel=page.getByRole('region',{name:'حماية المراكز بالتعادل والوقف المتحرك'});await panel.waitFor();
+   const toggle=panel.getByRole('checkbox',{name:'تفعيل نقل الوقف إلى التعادل'});
+   await until(async()=>await toggle.isEnabled());await toggle.check();
+   page.once('dialog',dialog=>dialog.accept());await panel.getByRole('button',{name:'حفظ إعدادات حماية المراكز',exact:true}).click();
+   const execution=async()=>{const r=await invoke('read_panel',{route:'/v1/execution'});return r.data||r};
+   await until(async()=>(await execution()).position_protection?.policy?.break_even_enabled===true);
+   fs.writeFileSync(marker,'CI fake observation only');
+   await until(async()=>(await execution()).position_protection?.commands?.some(c=>c.state==='observed'&&c.request?.position===777001&&c.request?.expected_position_tp===2510));
+   assert.equal((await status()).requested_run,false,'Protection must not start entry execution');
+   await until(async()=>await toggle.isChecked());await toggle.uncheck();
+   page.once('dialog',dialog=>dialog.accept());await panel.getByRole('button',{name:'حفظ إعدادات حماية المراكز',exact:true}).click();
+   await until(async()=>(await execution()).position_protection?.policy?.break_even_enabled===false);
+  }finally{fs.rmSync(marker,{force:true});fs.rmSync(position,{force:true});fs.rmSync(permission,{force:true});}
+ });
+ await check('active account order list displays complete synthetic MT5 data',async()=>{
+  const marker=path.join(home,'synthetic-pending-order.flag'),permission=path.join(home,'synthetic-manual-allowed.flag'),cancel=path.join(home,'synthetic-cancel-pending.flag');
+  fs.writeFileSync(marker,'CI synthetic order only');fs.writeFileSync(permission,'CI synthetic permissions only');
+  try{
+   await until(async()=>{const s=await status();return s.telemetry?.trade_allowed===true&&s.telemetry?.pending_order_details?.some(o=>o.ticket===880001)});
+   await navigate('مركز التداول');
+   const table=page.locator('.concept-pending-orders');await table.waitFor();
+   await table.getByText('EURUSD',{exact:true}).waitFor();
+   assert.equal(await table.getByText('BUY LIMIT',{exact:true}).count(),1);
+   assert.equal((await status()).requested_run,false);
+   const button=table.getByRole('button',{name:'إلغاء الأمر 880001',exact:true});
+   await until(async()=>await button.isEnabled());page.once('dialog',dialog=>dialog.accept());await button.click();
+   const execution=async()=>{const r=await invoke('read_panel',{route:'/v1/execution'});return r.data||r};
+   await until(async()=>(await execution()).pending_cancellations?.some(c=>c.state==='queued'&&c.request?.order===880001));
+   fs.writeFileSync(cancel,'CI cancellation only; no MT5 call');
+   await until(async()=>(await execution()).pending_cancellations?.some(c=>c.state==='cancelled'&&c.request?.order===880001&&!c.result?.terminal_order));
+  }finally{fs.rmSync(cancel,{force:true});fs.rmSync(permission,{force:true});fs.rmSync(marker,{force:true})}
+  await until(async()=>(await status()).telemetry?.pending_orders===0);
+ });
+ await check('manual market ticket queues exact inputs and fixture cancels without broker',async()=>{
+  const enabled=path.join(home,'synthetic-manual-allowed.flag'),cancel=path.join(home,'synthetic-cancel-manual.flag');
+  fs.writeFileSync(enabled,'CI synthetic permissions only');
+  try{
+   await until(async()=>(await status()).telemetry?.trade_allowed===true);
+   await navigate('مركز التداول');
+   await page.getByLabel('لوت الأمر اليدوي',{exact:true}).fill('0.1');
+   await page.getByLabel('وقف الأمر اليدوي',{exact:true}).fill('2499');
+   await page.getByLabel('هدف الأمر اليدوي',{exact:true}).fill('2502');
+   const buy=page.getByRole('button',{name:'شراء بسوق',exact:true});await until(async()=>await buy.isEnabled());
+   page.once('dialog',dialog=>dialog.accept());await buy.click();
+   await until(async()=>{
+    const r=await invoke('read_panel',{route:'/v1/execution'}),data=r.data||r;
+    return data.commands?.some(c=>c.request?.manual_open===true&&c.request?.manual_stop_price===2499&&c.request?.manual_target_price===2502&&c.state==='queued');
+   });
+   fs.writeFileSync(cancel,'CI cancellation only');
+   await until(async()=>{
+    const r=await invoke('read_panel',{route:'/v1/execution'}),data=r.data||r;
+    return data.commands?.some(c=>c.request?.manual_open===true&&c.state==='cancelled');
+   });
+  }finally{fs.rmSync(cancel,{force:true});fs.rmSync(enabled,{force:true});}
+  await until(async()=>(await status()).telemetry?.trade_allowed===false);
+ });
+ await check('row close queues exactly one synthetic owned ticket through Core',async()=>{
+  const marker=path.join(home,'synthetic-owned-position.flag');fs.writeFileSync(marker,'CI synthetic only');
+  try{
+   await until(async()=>(await status()).telemetry?.positions?.some(p=>p.ticket===777001));
+   await navigate('مركز التداول');
+   const close=page.getByRole('button',{name:'إغلاق المركز 777001',exact:true});
+   await until(async()=>await close.isEnabled());
+   page.once('dialog',dialog=>dialog.accept());await close.click();
+   await until(async()=>{
+    const r=await invoke('read_panel',{route:'/v1/execution'}),data=r.data||r;
+    return data.commands?.some(c=>c.request?.position===777001&&c.request?.manual_close===true&&c.state==='queued');
+   });
+   // The fixture reports cancellation without sending to any broker.
+   const cancel=path.join(home,'synthetic-cancel-close.flag');fs.writeFileSync(cancel,'CI cancellation only');
+   try{await until(async()=>{
+    const r=await invoke('read_panel',{route:'/v1/execution'}),data=r.data||r;
+    return data.commands?.some(c=>c.request?.position===777001&&c.request?.manual_close===true&&c.state==='cancelled');
+   });}finally{fs.rmSync(cancel,{force:true});}
+  }finally{fs.rmSync(marker,{force:true});}
+  await until(async()=>!(await status()).telemetry?.positions?.some(p=>p.ticket===777001));
+ });
  await check('commission draft survives disconnect and same-account reconnect',async()=>{
   let panel=await trading();await panel.getByLabel('commission per lot',{exact:true}).fill('9');
   await stopFixture();
@@ -198,6 +328,26 @@ try{
  });
  await stopFixture();
  await check('final safe full exit',exitSafely);
+ await check('native staged restore waits for Core and applies on explicit relaunch',async()=>{
+  await launch();await status();
+  const backup=await invoke('backup_action',{action:'create'});
+  assert.equal(typeof backup.name,'string');
+  await assert.rejects(()=>invoke('brain_snapshot_restore',{name:backup.name}),
+    'A previously connected account must be reverified before restore');
+  await status(); // A definite rejection must release the restart barrier.
+  await startFixture(); // Synthetic flat MT5, isolated from any real broker.
+  const staged=await invoke('brain_snapshot_restore',{name:backup.name});
+  assert.equal(staged.staged,true);
+  assert.equal(await portOpen(18741),false,'Restore must wait until the original Core exited');
+  await assert.rejects(()=>invoke('get_status'),'Background status must not restart Core after staging');
+  await stopFixture();
+  await invoke('close_terminal').catch(()=>{});await until(()=>app.exitCode!==null);
+  browser=undefined;page=undefined;
+  await launch();await startFixture();await status();
+  const restored=JSON.parse(fs.readFileSync(path.join(home,'restore.last.json'),'utf8'));
+  assert.equal(restored.status,'applied');assert.equal(restored.source,backup.name);
+  await stopFixture();await exitSafely();
+ });
  assert.deepEqual(report.page_errors,[],'Unhandled renderer errors');
 }catch(e){failed=true;report.error=String(e);console.error(e);
  if(page&&!page.isClosed()){

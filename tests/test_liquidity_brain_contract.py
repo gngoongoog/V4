@@ -26,7 +26,7 @@ class LiquidityBrainContractTests(unittest.TestCase):
         self.assertIn('assert_eq!(magic("liquidity"), Some(410_614));', self.domain)
 
     def test_gateway_ceiling_can_expand_without_remapping_liquidity(self):
-        self.assertIn('MAGIC_MIN, MAGIC_MAX = 410600, 410617', self.gateway)
+        self.assertIn('MAGIC_MIN, MAGIC_MAX = 410600, 410618', self.gateway)
         spec = importlib.util.spec_from_file_location("braintrade_gateway_execution", GATEWAY)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)

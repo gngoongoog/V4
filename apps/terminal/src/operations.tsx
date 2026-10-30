@@ -36,12 +36,20 @@ export function BacktestOperations({onStart,onCancel,disabled,active}: {
    <p className="safe-note">لبدء اختبار جديد: STOP أولاً، اتصال MT5 حديث، وعدم وجود صفقة بحثية مفتوحة. يستطيع Core رفض الطلب إذا لم تتحقق الشروط.</p>
   </form>;
 }
-export function BackupOperations({create,exportBrain,disabled}: {create:()=>Promise<void>;exportBrain:()=>Promise<void>;disabled:boolean}) {
+export function BackupOperations({create,exportBrain,importBrain,source,onRestore,disabled,armed}: {
+ create:()=>Promise<void>;exportBrain:()=>Promise<void>;importBrain:()=>Promise<void>;source:unknown;
+ onRestore:(name:string)=>void;disabled:boolean;armed:boolean;
+}) {
+ const [selected,setSelected]=useState('');
+ const data=safeObject(source),backups=Array.isArray(data.backups)?data.backups.map(safeObject).filter(x=>x.valid===true&&typeof x.name==='string'):[];
+ const validSelection=backups.some(x=>x.name===selected);
  return <section className="operator-card" aria-label="Backup operations">
   <h3><Archive size={18}/> حماية قاعدة البيانات والعقول</h3>
   <p>تُنشأ النسخة داخل مجلد بيانات BRAINTRADE عبر Rust Core بعد التحقق من قاعدة البيانات. الأسرار وسجل إرسال الأوامر لا يُستعادان ضمن Brain Snapshot.</p>
-  <div className="quick-ops"><button disabled={disabled} onClick={()=>void create()}><Archive size={16}/> إنشاء Backup موثّق</button><button disabled={disabled} onClick={()=>void exportBrain()}><Download size={16}/> تصدير Brain Snapshot</button></div>
-  <div className="safe-note"><ShieldAlert size={14}/> الاستعادة ليست زرّاً سريعاً أثناء التداول؛ تحتاج إيقاف التنفيذ والتحقق من الملفات والأوامر أولاً.</div>
+  <div className="quick-ops"><button disabled={disabled} onClick={()=>void create()}><Archive size={16}/> إنشاء Backup موثّق</button><button disabled={disabled} onClick={()=>void exportBrain()}><Download size={16}/> حفظ نسخة العقول</button><button disabled={disabled} onClick={()=>void importBrain()}>تحميل نسخة العقول</button></div>
+  <label>استعادة نسخة محفوظة <select aria-label="اختيار نسخة للاستعادة" value={validSelection?selected:''} disabled={disabled||!backups.length} onChange={e=>setSelected(e.target.value)}><option value="">اختر نسخة موثّقة</option>{backups.map(x=><option key={String(x.name)} value={String(x.name)}>{String(x.name)}</option>)}</select></label>
+  <div className="quick-ops"><button type="button" disabled={disabled||armed||!validSelection} onClick={()=>onRestore(selected)}>مراجعة واستعادة النسخة</button></div>
+  <div className="safe-note"><ShieldAlert size={14}/> النسخة تشمل الإعدادات وقاعدة البيانات كاملة. تُنشأ نسخة تراجع قبل الاستعادة؛ الأسرار ودفتر إرسال Gateway لا تُستبدل.</div>
  </section>;
 }
 
@@ -168,6 +176,21 @@ export function TradingSettingsOperations({source,disabled,armed,apply,brokerPoi
  </section>;
 }
 
+export function PaperAllControl({source,disabled,armed,onSet}: {
+ source:unknown;disabled:boolean;armed:boolean;onSet:(paper:boolean)=>Promise<void>;
+}) {
+ const view=safeObject(source);
+ const brains=Array.isArray(view.brains)?view.brains.map(safeObject).filter(b=>safeObject(b.config).id!=='system'):[];
+ const valid=brains.length>0&&brains.every(b=>typeof safeObject(b.control).paper==='boolean');
+ const available=view.controls_available===true&&view.account_matches===true&&valid;
+ const enabled=available?brains.filter(b=>safeObject(b.control).paper===true).length:0;
+ const allEnabled=available&&enabled===brains.length;
+ const label=!available?'غير متاح':allEnabled?'مفعّل للكل':enabled===0?'متوقف للكل':`${enabled} من ${brains.length} مفعّل`;
+ return <div className="concept-paper-all"><button type="button" aria-label="تغيير Paper لكل العقول" disabled={disabled||armed||!available}
+   onClick={()=>void onSet(!allEnabled)}>{allEnabled?'إيقاف Paper للعقول':'تشغيل Paper للعقول'}</button>
+   <span>Paper: {label}</span></div>;
+}
+
 export function BrainControlsOperations({source,disabled,armed,onSave}: {
  source:unknown;disabled:boolean;armed:boolean;onSave:(brain:string,advisor:boolean,paper:boolean)=>Promise<void>;
 }) {
@@ -183,7 +206,7 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
  const selected=safeObject(cards.find(b=>String(safeObject(safeObject(b).config).id||'')===activeBrain));
  const selectedControl=safeObject(selected.control),selectedActivity=safeObject(selected.activity);
  return <section className="operator-card concept-brain-controls" aria-label="Brain controls">
-  <p className="concept-brain-explanation">مشاركة العقول في التحليل وPaper فقط؛ التنفيذ المنفرد للعقول الثانوية غير متاح.</p>
+  <p className="concept-brain-explanation">العقل المنفّذ المختار وحده يمكنه التداول بعد START؛ البقية للتحليل أو Paper. إيقاف Paper يمنع التجارب الجديدة، بينما تُسوّى التجارب المفتوحة؛ ولا يوقف التعلّم العام.</p>
   {!actualBrains.length&&<p className="safe-note">الأسماء من قائمة العقول المرفقة بهذا الإصدار. بانتظار Core لتأكيد حالتها ونتائجها؛ الأزرار متوقفة حتى وصول البيانات.</p>}
   <div className="concept-brain-card-grid">{cards.map((b,i)=>{
     const row=safeObject(b),id=String(safeObject(row.config).id||'');

@@ -35,9 +35,10 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  const cancel=nodes(backtest).find(x=>x.type==='button'&&x.props.type==='button');
  await cancel.props.onClick();assert.equal(stopped,1);
  const called=[];
- const backup=exportsObj.BackupOperations({create:async()=>called.push('create'),exportBrain:async()=>called.push('export'),disabled:false});
- for(const btn of nodes(backup).filter(x=>x.type==='button'))await btn.props.onClick();
- assert.deepEqual(called,['create','export']);
+ const backup=exportsObj.BackupOperations({create:async()=>called.push('create'),exportBrain:async()=>called.push('export'),importBrain:async()=>called.push('import'),source:{backups:[]},onRestore:()=>called.push('restore'),disabled:false,armed:false});
+ for(const btn of nodes(backup).filter(x=>x.type==='button'&&!x.props.disabled))await btn.props.onClick();
+ assert.deepEqual(called,['create','export','import']);
+ assert(nodes(backup).some(x=>x.type==='button'&&String(x.props.children).includes('استعادة النسخة')&&x.props.disabled));
  let saved=null;
  for(const source of [null,{}, {config:{trading:{}}}]){
   const empty=exportsObj.TradingSettingsOperations({source,disabled:false,armed:false,apply:async()=>{throw Error('Unavailable source must not save')}});
@@ -65,6 +66,20 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  assert(advisor&&paper,'sub-brain advisor and Paper controls remain available');
  await advisor.props.onClick();assert.deepEqual(brainState,['trend',false,false]);
  await paper.props.onClick();assert.deepEqual(brainState,['trend',true,true]);
+ const allChanges=[];
+ const paperSource=(trend,gann)=>({controls_available:true,account_matches:true,brains:[
+  {config:{id:'system'}},{config:{id:'trend'},control:{paper:trend}},{config:{id:'gann'},control:{paper:gann}}
+ ]});
+ for(const [source,expected] of [[paperSource(true,true),false],[paperSource(false,false),true],[paperSource(true,false),true]]){
+  const bulk=exportsObj.PaperAllControl({source,disabled:false,armed:false,onSet:async paper=>allChanges.push(paper)});
+  const button=nodes(bulk).find(x=>x.type==='button');
+  assert(!button.props.disabled);await button.props.onClick();assert.equal(allChanges.pop(),expected);
+ }
+ for(const source of [null,{...paperSource(true,true),account_matches:false},paperSource(true,undefined)]){
+  const bulk=exportsObj.PaperAllControl({source,disabled:false,armed:false,onSet:async()=>{throw Error('unverified Paper control')}});
+  assert(nodes(bulk).find(x=>x.type==='button').props.disabled,'unverified Paper state cannot dispatch a bulk change');
+ }
+ assert(nodes(exportsObj.PaperAllControl({source:paperSource(true,true),disabled:false,armed:true,onSet:async()=>{}})).find(x=>x.type==='button').props.disabled,'Paper controls wait for STOP');
  const offline=exportsObj.BrainControlsOperations({source:null,disabled:false,armed:false,onSave:async()=>{throw Error('offline control must never execute')}});
  const offlineCards=nodes(offline).filter(x=>x.type==='article'&&String(x.props.className).includes('concept-brain-card'));
  assert.equal(offlineCards.length,16,'offline directory shows the actual secondary brain identities');

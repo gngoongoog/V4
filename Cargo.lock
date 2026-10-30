@@ -649,6 +649,7 @@ dependencies = [
  "anyhow",
  "braintrade-domain",
  "braintrade-runtime",
+ "rfd",
  "serde",
  "serde_json",
  "tauri",

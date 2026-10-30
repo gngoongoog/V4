@@ -38,8 +38,23 @@ snapshot.update(connected=True, login=170000001, server="Synthetic-CI-Demo",
                 volume_min=0.01, volume_step=0.01, volume_max=100.0,
                 tick_value_loss=1.0, tick_value_profit=1.0)
 
+synthetic_stop=None
+synthetic_order_setup=time.time_ns() // 1_000_000
 while True:
     now = time.time_ns() // 1_000_000
+    allow_manual=(home / 'synthetic-manual-allowed.flag').exists()
+    snapshot.update(trade_allowed=allow_manual,trade_expert=allow_manual)
+    # An explicit CI-only marker exposes a fabricated owned position for the
+    # native row-close test. The real MT5 Gateway remains disabled throughout.
+    snapshot['positions'] = ([dict(ticket=777001, identifier=777001, magic=410600,
+        symbol='XAUUSD', side='BUY', volume=0.1, price_open=2499.0,
+        price_current=2500.0, profit=10.0, sl=synthetic_stop if synthetic_stop is not None else 2490.0, tp=2510.0)]
+        if (home / 'synthetic-owned-position.flag').exists() else [])
+    snapshot['pending_order_details']=([dict(ticket=880001,symbol='EURUSD',magic=410618,order_type=2,
+        volume_initial=0.1,volume_current=0.1,price_open=1.1,sl=1.0,tp=1.2,
+        price_stoplimit=0.,time_setup_ms=synthetic_order_setup,expiration=0)]
+        if (home / 'synthetic-pending-order.flag').exists() else [])
+    snapshot['pending_orders']=len(snapshot['pending_order_details'])
     snapshot.update(quote_time_ms=now, source_quote_time_ms=now, tick_age_ms=0)
     request = urllib.request.Request(
         "http://127.0.0.1:18741/v1/gateway/snapshot",
@@ -49,4 +64,48 @@ while True:
     with opener.open(request, timeout=8) as response:
         if json.load(response).get("ok") is not True:
             raise RuntimeError("Core rejected the synthetic GUI-test snapshot")
+    if (home / 'synthetic-protect-observe.flag').exists() and synthetic_stop is None:
+        # Verify a single Core modification intent and acknowledge it without
+        # importing MetaTrader5. The next fake snapshot exposes the new stop.
+        poll=urllib.request.Request('http://127.0.0.1:18741/v1/execution/gateway',headers={'Authorization':'Bearer '+key})
+        with opener.open(poll,timeout=8) as response:
+            command=json.load(response).get('command')
+        if command is not None:
+            if not (command.get('kind')=='protect' and command.get('position')==777001
+                    and command.get('magic')==410600 and command.get('expected_position_tp')==2510.0
+                    and 2490.0<command.get('protect_stop',0)<2500.0):
+                raise RuntimeError('Unexpected synthetic protection command')
+            auth=urllib.request.Request('http://127.0.0.1:18741/v1/execution/authorize',
+                data=json.dumps({'id':command['id']}).encode(),headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})
+            with opener.open(auth,timeout=8) as response:
+                if json.load(response).get('authorized') is not True:raise RuntimeError('Synthetic protection authorization failed')
+            reply=urllib.request.Request('http://127.0.0.1:18741/v1/execution/result',
+                data=json.dumps({'id':command['id'],'state':'placed','reason':'CI fake: no broker call'}).encode(),
+                headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})
+            with opener.open(reply,timeout=8) as response:
+                if json.load(response).get('ok') is not True:raise RuntimeError('Synthetic protection result rejected')
+            synthetic_stop=command['protect_stop']
+    if not (home / 'synthetic-owned-position.flag').exists():
+        synthetic_stop=None
+    cancel_close=(home / 'synthetic-cancel-close.flag').exists()
+    cancel_manual=(home / 'synthetic-cancel-manual.flag').exists()
+    cancel_pending=(home / 'synthetic-cancel-pending.flag').exists()
+    if cancel_close or cancel_manual or cancel_pending:
+        # Simulate a terminal *cancellation*, not an execution. Only the one
+        # hard-coded fixture ticket is eligible, and no MT5 API is called.
+        poll=urllib.request.Request('http://127.0.0.1:18741/v1/execution/gateway',
+            headers={'Authorization':'Bearer '+key})
+        with opener.open(poll,timeout=8) as response:
+            command=json.load(response).get('command')
+        if command is not None:
+            valid_close=cancel_close and command.get('kind')=='close' and command.get('manual_close') is True and command.get('position')==777001
+            valid_manual=cancel_manual and command.get('kind')=='open' and command.get('manual_open') is True and command.get('brain')=='manual' and command.get('magic')==410618
+            valid_pending=cancel_pending and command.get('kind')=='cancel_pending' and command.get('order')==880001 and command.get('symbol')=='EURUSD'
+            if not (valid_close or valid_manual or valid_pending):
+                raise RuntimeError('Unexpected synthetic gateway command')
+            result=dict(id=command['id'],state='cancelled',reason='CI fixture: no broker order was sent')
+            reply=urllib.request.Request('http://127.0.0.1:18741/v1/execution/result',
+                data=json.dumps(result).encode(),headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})
+            with opener.open(reply,timeout=8) as response:
+                if json.load(response).get('ok') is not True:raise RuntimeError('Synthetic cancellation rejected')
     time.sleep(0.25)

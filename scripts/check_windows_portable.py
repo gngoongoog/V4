@@ -119,7 +119,38 @@ def main():
                 risk["risk_percent"] = 0.42
                 api("/v1/risk", risk)
                 original_key = (directory / "ipc.key").read_bytes()
-                staged = api("/v1/backup/restore/stage", {"name": backup.name})
+                try:
+                    staged = api("/v1/backup/restore/stage", {"name": backup.name})
+                except urllib.error.HTTPError as err:
+                    # The automatically launched gateway may already have
+                    # reported a disconnected MT5. Restore must refuse that
+                    # unverified state. Stop only this disposable CI process
+                    # tree, then exercise restore in a new gateway-disabled
+                    # Core that never observed a connected broker session.
+                    if err.code != 400:
+                        raise
+                    offline = api("/v1/status")
+                    assert offline["state"] == "stopped" and not offline["gateway_fresh"]
+                    assert not (offline.get("telemetry") or {}).get("connected")
+                    if process.poll() is None:
+                        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                       check=False, timeout=15, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL)
+                    process.wait(timeout=15)
+                    time.sleep(0.4)
+                    environment["BRAINTRADE_GATEWAY_DISABLED"] = "1"
+                    process = subprocess.Popen([str(executable), "--core"], env=environment, stderr=log)
+                    for _ in range(100):
+                        try:
+                            status = api("/v1/status")
+                            break
+                        except OSError:
+                            if process.poll() is not None:
+                                raise AssertionError("Packaged Core exited before offline restore test")
+                            time.sleep(0.1)
+                    else:
+                        raise AssertionError("Packaged Core offline restore startup timeout")
+                    staged = api("/v1/backup/restore/stage", {"name": backup.name})
                 assert staged["staged"] and staged["secrets_restored"] is False
                 assert process.wait(timeout=15) == 0
                 process = subprocess.Popen([str(executable), "--core"], env=environment, stderr=log)

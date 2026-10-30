@@ -43,6 +43,9 @@ mod backtest;
 mod correlation;
 mod evaluation;
 mod learning;
+mod learning_control;
+mod position_protection;
+mod pending_cancellation;
 mod learning_inference;
 mod learning_performance_review;
 mod learning_review;
@@ -209,10 +212,21 @@ pub struct Client{http:reqwest::blocking::Client,key:String}
 /// failure is different: the request may have reached Core despite a lost
 /// response, so a caller must not automatically restart it.
 pub enum ShutdownError { Rejected(String), Uncertain(String) }
+/// A timed-out mutation may still have reached Core; callers must distinguish
+/// that case from an explicit Core rejection before retrying or cleaning files.
+pub enum CheckedPostError { Rejected(String), Uncertain(String) }
 impl Client{
     pub fn new(dir:&Path)->Result<Self>{Ok(Self{http:reqwest::blocking::Client::builder().no_proxy().timeout(Duration::from_secs(4)).build()?,key:read_ipc_key(dir)?})}
     pub fn get(&self,path:&str)->Result<Value>{Ok(self.http.get(format!("{BASE}{path}")).bearer_auth(&self.key).send()?.error_for_status()?.json()?)}
     pub fn post(&self,path:&str,body:Value)->Result<Value>{let response=self.http.post(format!("{BASE}{path}")).bearer_auth(&self.key).json(&body).send()?;let code=response.status();let value:Value=response.json()?;if !code.is_success(){bail!("{}",value["error"].as_str().unwrap_or("Request failed"));}Ok(value)}
+    pub fn checked_post(&self,path:&str,body:Value,timeout:Duration)->std::result::Result<Value,CheckedPostError>{
+        let response=self.http.post(format!("{BASE}{path}")).bearer_auth(&self.key)
+            .timeout(timeout).json(&body).send().map_err(|e|CheckedPostError::Uncertain(e.to_string()))?;
+        let code=response.status();
+        let value:Value=response.json().map_err(|e|CheckedPostError::Uncertain(e.to_string()))?;
+        if !code.is_success(){return Err(CheckedPostError::Rejected(value["error"].as_str().unwrap_or("Request failed").to_string()));}
+        Ok(value)
+    }
     pub fn shutdown(&self,instance:&str)->std::result::Result<Value,ShutdownError>{
         let response=self.http.post(format!("{BASE}/v1/shutdown")).bearer_auth(&self.key)
             .timeout(Duration::from_secs(30)).json(&json!({"expected_core_instance":instance})).send()
@@ -268,9 +282,35 @@ fn verify_safe_shutdown(status: &Status, unresolved: bool) -> Result<()> {
     }
     Ok(())
 }
+// An empty initial status after a restart is not evidence that a previously
+// connected MT5 account is flat. The same rule protects exit and restore.
+fn verify_initial_shutdown_evidence(status:&Status,gateway_running:bool,prior_session:bool)->Result<()> {
+    if status.telemetry.is_none() {
+        anyhow::ensure!(!gateway_running && !prior_session,
+            "تعذر إيقاف Core أو استعادة النسخة: انتظر حالة حساب MT5 حديثة للتحقق من المراكز");
+    }
+    Ok(())
+}
+fn apply_risk_master_to_monitor(view:&mut Value,master:Option<bool>){
+    view["risk_master_enabled"]=json!(master);
+    if master==Some(false) && view["account"].is_object() {
+        view["configured_enabled"]=view["enabled"].clone();
+        view["enabled"]=json!(false);
+        view["state"]=json!("disabled");
+        view["reason"]=json!("قاطع الخسارة موقوف بمفتاح إدارة المخاطر للحساب؛ إعداد القاطع والقفل السابق محفوظان");
+    }
+}
 
 impl Engine{
     fn event(&self,kind:&str,detail:Value)->Result<()>{self.db.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,?2,?3)",params![now_ms(),kind,detail.to_string()])?;Ok(())}
+    fn verify_shutdown_session(&mut self,status:&Status)->Result<()> {
+        if status.telemetry.is_none() {
+            let gateway_running=match self.gateway.as_mut(){Some(child)=>child.try_wait()?.is_none(),None=>false};
+            let prior_session:bool=self.db.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE kind='gateway_connection' AND json_extract(detail,'$.connected')=1)",[],|row|row.get(0))?;
+            verify_initial_shutdown_evidence(status,gateway_running,prior_session)?;
+        }
+        Ok(())
+    }
     fn launch_gateway(&mut self)->Result<()>{
         if std::env::var("BRAINTRADE_GATEWAY_DISABLED").as_deref()==Ok("1"){return Ok(());}
         if let Some(child)=self.gateway.as_mut(){if child.try_wait()?.is_none(){return Ok(());}}
@@ -328,8 +368,22 @@ impl Engine{
         }
         Ok(())
     }
-    fn tick(&mut self){let cfg=self.shared.lock().unwrap().config.clone();self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
+    fn tick(&mut self){let cfg=self.shared.lock().unwrap().config.clone();self.studio.set_learning_frozen(self.execution.learning_frozen());self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
     fn route(&mut self,method:&str,path:&str,body:&[u8])->Result<Value>{
+        if path=="/v1/learning/control" {
+            if method=="GET" {return Ok(self.execution.learning_status());}
+            if method=="POST" {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Request {frozen:bool}
+                let request:Request=serde_json::from_slice(body)?;
+                let status={let mut shared=self.shared.lock().unwrap();shared.status.refresh(now_ms());shared.status.clone()};
+                let result=self.execution.set_learning_frozen(&self.db,&status,request.frozen,now_ms())?;
+                self.studio.set_learning_frozen(request.frozen);
+                return Ok(result);
+            }
+            bail!("Unknown learning control method");
+        }
         if path=="/v1/research/execution-lifecycle" && method=="POST" {
             return research_order_lifecycle::replay(body);
         }
@@ -345,7 +399,10 @@ impl Engine{
         if method=="GET" && path=="/v1/risk/monitor" {
             let (cfg,status)={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());
                 (s.config.clone(),s.status.clone())};
-            return risk_monitor::snapshot(&self.db,&cfg,&status,now_ms());
+            let mut view=risk_monitor::snapshot(&self.db,&cfg,&status,now_ms())?;
+            let master=self.execution.risk_master_for_status(&status);
+            apply_risk_master_to_monitor(&mut view,master);
+            return Ok(view);
         }
         if path=="/v1/execution/frozen-shadow" {
             let (cfg,status)={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());(s.config.clone(),s.status.clone())};
@@ -397,7 +454,7 @@ impl Engine{
         if path.starts_with("/v1/execution") {
             let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
             let result=self.execution.route(method,path,body,&self.db,&status,now_ms())?;
-            if method=="POST"&&!matches!(path,"/v1/execution/sync"|"/v1/execution/authorize"|"/v1/execution/trades") {self.event("broker_execution_action",json!({"path":path,"result":result}))?;}
+            if method=="POST"&&!matches!(path,"/v1/execution/sync"|"/v1/execution/authorize"|"/v1/execution/trades"|"/v1/execution/risk-master"|"/v1/execution/solo"|"/v1/execution/manual-market") {self.event("broker_execution_action",json!({"path":path,"result":result}))?;}
             let mut s=self.shared.lock().unwrap();s.status.execution_enabled=self.execution.enabled(&s.status);
             return Ok(result);
         }
@@ -543,8 +600,14 @@ impl Engine{
             return Ok(result);
         }
         if method=="POST"&&path=="/v1/backup/restore/stage"{
-            if self.shared.lock().unwrap().status.requested_run{bail!("Stop the system before staging restore");}
-            if self.backtests.loading(){bail!("Cannot stage restore while broker history is loading");}if self.execution.pending(&self.db)?||self.shared.lock().unwrap().status.telemetry.as_ref().is_some_and(|t|t.positions.iter().any(|p|braintrade_domain::execution::brain_for_magic(p.magic).is_some())){bail!("Close owned broker positions and reconcile commands before restore");}
+            let request:Value=serde_json::from_slice(body)?;
+            if let Some(expected)=request["expected_core_instance"].as_str(){
+                anyhow::ensure!(expected==self.instance_id,"Core session changed; request restore again");
+            }
+            let status={let mut shared=self.shared.lock().unwrap();shared.status.refresh(now_ms());shared.status.clone()};
+            self.verify_shutdown_session(&status)?;
+            verify_safe_shutdown(&status,self.execution.pending(&self.db)?)?;
+            if self.backtests.loading(){bail!("Cannot stage restore while broker history is loading");}
             let config=self.shared.lock().unwrap().config.clone();
             let result=backup::stage(&self.db,&self.dir,&config,body,now_ms())?;
             self.event("backup_restore_staged",json!({"source":result["source"],"rollback":result["rollback"],"secrets_restored":false,"broker_effect":false}))?;
@@ -554,7 +617,7 @@ impl Engine{
             return Ok(result);
         }
         match(method,path){
-            ("GET","/v1/status")=>{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());let mut value=serde_json::to_value(&s.status)?;value["core_process"]=json!({"pid":std::process::id(),"instance_id":self.instance_id});Ok(value)},
+            ("GET","/v1/status")=>{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());let mut value=serde_json::to_value(&s.status)?;value["selected_owner"]=json!(self.execution.selected_owner_for_status(&s.status));value["learning_control"]=self.execution.learning_status();value["core_process"]=json!({"pid":std::process::id(),"instance_id":self.instance_id});Ok(value)},
             ("GET","/v1/config")=>{let s=self.shared.lock().unwrap();Ok(json!({"config":s.config,"token_saved":s.token.is_some()}))},
             ("GET","/v1/learning/account-evidence")=>{
                 let (telemetry,fresh)={
@@ -566,7 +629,7 @@ impl Engine{
             },
             ("GET","/v1/learning")=>{let base=self.learning.status(&self.db)?;let reviewed=learning_review::enrich_learning_status(&self.db,base)?;let inferred=self.inference.enrich_learning_status(&self.db,reviewed)?;let scored=self.scoring.enrich_learning_status(&self.db,inferred)?;let reviewed=learning_performance_review::enrich_learning_status(&self.db,scored)?;let mut result=reviewed;result["frozen_forward_audit"]=learning_forward_audit::audit(&self.db)?;Ok(result)},
             ("POST","/v1/learning/export")=>self.learning.export(&self.db,&self.dir,now_ms()),
-            ("POST","/v1/learning/register")=>{let artifact:Value=serde_json::from_slice(body)?;self.learning.register(&mut self.db,artifact,now_ms())},
+            ("POST","/v1/learning/register")=>{anyhow::ensure!(!self.execution.learning_frozen(),"التعلم مجمّد؛ استأنفه قبل تسجيل نموذج جديد");let artifact:Value=serde_json::from_slice(body)?;self.learning.register(&mut self.db,artifact,now_ms())},
             ("GET","/v1/decisions")=>research::decision_history(&self.db),
             ("GET","/v1/opportunities/history")=>research::opportunity_history(&self.db),
             ("POST","/v1/risk")=>{
@@ -605,12 +668,13 @@ impl Engine{
             ("POST","/v1/start")=>{
                 if self.backtests.loading(){bail!("جلب التاريخ قيد العمل؛ انتظر أو ألغِ الاختبار قبل تشغيل المحاكاة");}
                 let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
+                self.execution.validate_manual_handoff(&self.db,&status)?;
                 self.execution.validate_start(&status,body)?;
                 self.event("monitoring_requested",json!({"broker_execution_possible":true,"requires_fresh_bound_account":true,
                     "real_login_confirmed":self.execution.is_live_target()}))?;
                 let mut s=self.shared.lock().unwrap();
                 s.status.requested_run=true;
-                s.status.message="بدأ النظام. منسّق الوضع المختار وحده يرسل أوامر إلى الحساب المرتبط الحديث.".into();
+                s.status.message="بدأ النظام. العقل المنفّذ المختار وحده يرسل الأوامر إلى الحساب المرتبط الحديث.".into();
                 s.status.refresh(now_ms());
                 Ok(serde_json::to_value(&s.status)?)
             },
@@ -642,15 +706,7 @@ impl Engine{
                 }
                 let unresolved=self.execution.pending(&self.db)?;
                 let current={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
-                if current.telemetry.is_none() {
-                    // Status is initially empty after a restart. A previous
-                    // broker connection or a running gateway means that an
-                    // empty initial snapshot is not evidence of a flat account.
-                    let gateway_running=match self.gateway.as_mut(){Some(child)=>child.try_wait()?.is_none(),None=>false};
-                    let prior_session:bool=self.db.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE kind='gateway_connection' AND json_extract(detail,'$.connected')=1)",[],|row|row.get(0))?;
-                    anyhow::ensure!(!gateway_running && !prior_session,
-                        "تعذر الخروج الكامل: انتظر حالة حساب MT5 حديثة بعد بدء المحرك أو أعد الاتصال للتحقق من المراكز");
-                }
+                self.verify_shutdown_session(&current)?;
                 verify_safe_shutdown(&current,unresolved)?;
                 self.event("core_shutdown_requested",json!({"safe":true,"positions":0,"pending_orders":0}))?;
                 let barrier=lifecycle::ShutdownBarrier::begin(&self.dir)?;
@@ -671,7 +727,7 @@ impl Engine{
 pub fn run_core()->Result<()>{
     let dir=data_dir();fs::create_dir_all(&dir)?;
     #[cfg(unix)] {use std::os::unix::fs::PermissionsExt;fs::set_permissions(&dir,fs::Permissions::from_mode(0o700))?;}
-    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}recover_settings_transaction(&dir)?;let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;correlation::init(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let mut engine=Engine{dir,shared:shared.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,instance_id:uuid::Uuid::new_v4().to_string(),shutdown_barrier:None,research,backtests,evaluations,news,learning,inference,scoring,studio,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
+    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}recover_settings_transaction(&dir)?;let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;correlation::init(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let mut execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let mut engine=Engine{dir,shared:shared.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,instance_id:uuid::Uuid::new_v4().to_string(),shutdown_barrier:None,research,backtests,evaluations,news,learning,inference,scoring,studio,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
     while !engine.shutting_down{engine.tick();let Some(mut request)=server.recv_timeout(Duration::from_millis(250))? else{continue;};let authenticated=request.headers().iter().any(|h|h.field.equiv("Authorization")&&h.value.as_str()==format!("Bearer {key}"));let origin=request.headers().iter().any(|h|h.field.equiv("Origin"));if !authenticated||origin{let _=request.respond(tiny_http::Response::from_string("{\"error\":\"Unauthorized\"}").with_status_code(401));continue;}if request.body_length().is_none()&&request.method().as_str()=="POST"{let _=request.respond(tiny_http::Response::empty(411));continue;}if request.body_length().unwrap_or(0)>2_000_000{let _=request.respond(tiny_http::Response::empty(413));continue;}let mut body=Vec::new();if request.as_reader().read_to_end(&mut body).is_err(){continue;}let result=engine.route(request.method().as_str(),request.url(),&body);let(code,value)=match result{Ok(v)=>(200,v),Err(e)=>(400,json!({"error":e.to_string()}))};let response=tiny_http::Response::from_string(value.to_string()).with_status_code(code).with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());let _=request.respond(response);}
     engine.stop_gateway();engine.backtests.cancel();engine.evaluations.cancel();engine.studio.cancel();engine.event("core_stopped",json!({}))?;drop(lock);Ok(())
 }
@@ -719,6 +775,9 @@ mod tests{
     fn full_exit_is_blocked_if_monitoring_or_account_is_unverified(){
         let mut s=Status::default();
         assert!(verify_safe_shutdown(&s,false).is_ok());
+        assert!(verify_initial_shutdown_evidence(&s,false,false).is_ok());
+        assert!(verify_initial_shutdown_evidence(&s,true,false).is_err());
+        assert!(verify_initial_shutdown_evidence(&s,false,true).is_err());
         assert!(verify_safe_shutdown(&s,true).is_err());
         s.requested_run=true;
         assert!(verify_safe_shutdown(&s,false).is_err());
@@ -729,12 +788,26 @@ mod tests{
         assert!(verify_safe_shutdown(&s,false).is_err());
         s.gateway_fresh=true;
         s.telemetry.as_mut().unwrap().connected=true;
+        assert!(verify_initial_shutdown_evidence(&s,true,true).is_ok());
         assert!(verify_safe_shutdown(&s,false).is_ok());
         s.telemetry.as_mut().unwrap().pending_orders=1;
         assert!(verify_safe_shutdown(&s,false).is_err());
         s.telemetry.as_mut().unwrap().pending_orders=0;
         s.telemetry.as_mut().unwrap().positions.push(braintrade_domain::Position::default());
         assert!(verify_safe_shutdown(&s,false).is_err());
+    }
+    #[test]
+    fn risk_monitor_exposes_suspended_breaker_without_erasing_persisted_lock(){
+        let mut view=json!({"account":{"login":17},"enabled":true,"state":"locked","locked":true});
+        apply_risk_master_to_monitor(&mut view,Some(false));
+        assert_eq!(view["risk_master_enabled"],false);
+        assert_eq!(view["configured_enabled"],true);
+        assert_eq!(view["enabled"],false);
+        assert_eq!(view["state"],"disabled");
+        assert_eq!(view["locked"],true);
+        let mut missing=json!({"state":"unavailable"});
+        apply_risk_master_to_monitor(&mut missing,Some(false));
+        assert_eq!(missing["state"],"unavailable");
     }
     #[test]
     fn account_reconfiguration_requires_flat_stopped_broker(){

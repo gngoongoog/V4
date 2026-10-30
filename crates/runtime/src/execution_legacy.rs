@@ -50,6 +50,12 @@ pub struct Service {
     pub weights:BTreeMap<String,braintrade_domain::execution::LearnedWeight>,
     pub student_policies:BTreeMap<String,braintrade_domain::student::ExitStudy>,
     pub controls: BTreeMap<String, crate::brain_control::Control>,
+    risk_master_key:String,
+    risk_master_enabled:bool,
+    risk_master_recovery:Option<RiskRecovery>,
+    risk_master_recovery_id:Option<String>,
+    manual_epoch:String,
+    solo:Option<SoloOwner>,
     signals: BTreeMap<String, Value>,
     new_entries: Vec<Value>,
     last_sync_ms: u64,
@@ -61,6 +67,22 @@ pub struct Service {
     history_floor_cache: BTreeMap<(String,String,u64),u64>,
     // Read-only round-robin cursor; it never changes an order's durable state.
     recovery_cursor: Option<(String, u64, String)>,
+}
+#[derive(Clone,Debug,PartialEq)]
+struct SoloOwner {context:String,target:String,mode:TradingMode,brain:String}
+#[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RiskRecovery {pub basis:String,pub threshold:f64}
+impl RiskRecovery {
+    pub fn validate(&self)->Result<()> {
+        anyhow::ensure!(["balance","equity"].contains(&self.basis.as_str())
+            && self.threshold.is_finite() && (0.01..=1_000_000_000_000.).contains(&self.threshold),
+            "حد إعادة تفعيل المخاطر غير صالح");
+        Ok(())
+    }
+    fn value(&self,t:&Telemetry)->f64 {
+        if self.basis=="balance" {t.balance} else {t.equity}
+    }
 }
 fn ctx(t: &Telemetry) -> String {
     serde_json::to_string(&(&t.server, t.login, &t.symbol, &t.currency)).unwrap()
@@ -274,14 +296,52 @@ fn broker_command_observed(
 
 impl Service {
     pub fn take_entries(&mut self) -> Vec<Value> { std::mem::take(&mut self.new_entries) }
-    /// Entry execution is reserved to the coordinator of the selected trading
-    /// mode. All other strategies remain analytical/shadow observers. Existing
-    /// owned positions still receive their regular close/reconciliation logic.
+    /// One selected owner per account, symbol and trading mode. All other
+    /// strategies remain analytical/Paper observers.
     fn broker_entry_allowed(&self, cmd: &Value) -> bool {
         let Some(mode) = self.active_mode else { return false; };
+        let owner=self.solo.as_ref().filter(|s|s.mode==mode && cmd["context"].as_str()==Some(s.context.as_str()) && cmd["target"].as_str()==Some(s.target.as_str()))
+            .map(|s|s.brain.as_str()).unwrap_or("system");
         cmd["kind"] == "open"
-            && cmd["brain"] == "system"
+            && cmd["brain"] == owner
             && cmd["trading_mode"] == json!(mode)
+    }
+    pub fn solo_owner<'a>(&'a self,t:&Telemetry,mode:TradingMode)->&'a str {
+        self.solo.as_ref().filter(|s|self.matches(t)&&s.context==ctx(t)&&s.target==self.settings.target&&s.mode==mode)
+            .map(|s|s.brain.as_str()).unwrap_or("system")
+    }
+    pub fn sync_owner_flags(&mut self,t:&Telemetry,mode:TradingMode){
+        let owner=self.solo_owner(t,mode).to_owned();
+        for brain in &mut self.brains {brain.enabled=brain.id==owner;}
+    }
+    pub fn refresh_solo(&mut self,db:&Connection,t:&Telemetry,mode:TradingMode)->Result<()> {
+        if !self.matches(t) {self.solo=None;self.sync_owner_flags(t,mode);return Ok(());}
+        let scope=ctx(t);let mode_key=serde_json::to_string(&mode)?;
+        let brain:Option<String>=db.query_row("SELECT brain FROM execution_solo WHERE context=?1 AND account_mode=?2 AND mode=?3",
+            params![scope,t.account_trade_mode,mode_key],|r|r.get(0)).optional()?;
+        if let Some(id)=&brain {anyhow::ensure!(id!="system"&&BRAINS.iter().any(|(known,_)|*known==id.as_str()),"Saved solo brain is invalid");}
+        let next=brain.map(|brain|SoloOwner{context:scope,target:self.settings.target.clone(),mode,brain});
+        if self.solo!=next {self.signals.clear();self.sniper.reset_quotes();}
+        self.solo=next;self.sync_owner_flags(t,mode);Ok(())
+    }
+    pub fn set_solo(&mut self,db:&Connection,t:&Telemetry,mode:TradingMode,brain:&str,now:u64)->Result<()> {
+        anyhow::ensure!(self.matches(t),"الحساب لا يطابق حساب التنفيذ");
+        anyhow::ensure!(brain=="system"||BRAINS.iter().any(|(known,_)|*known==brain),"العقل المطلوب غير معروف");
+        let scope=ctx(t);let mode_key=serde_json::to_string(&mode)?;
+        let mut settings=self.settings.clone();settings.revision=settings.revision.checked_add(1).context("Execution revision exhausted")?;
+        let tx=db.unchecked_transaction()?;
+        if brain=="system" {
+            tx.execute("DELETE FROM execution_solo WHERE context=?1 AND account_mode=?2 AND mode=?3",params![scope,t.account_trade_mode,mode_key])?;
+        }else{
+            tx.execute("INSERT INTO execution_solo(context,account_mode,mode,brain) VALUES(?1,?2,?3,?4) ON CONFLICT(context,account_mode,mode) DO UPDATE SET brain=excluded.brain",params![scope,t.account_trade_mode,mode_key,brain])?;
+        }
+        tx.execute("INSERT OR REPLACE INTO execution_settings VALUES(1,?1)",[serde_json::to_string(&settings)?])?;
+        tx.execute("UPDATE broker_commands SET state='cancelled' WHERE kind='open' AND state='queued'",[])?;
+        tx.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,'execution_owner_changed',?2)",
+            params![now,json!({"context":scope,"account_mode":t.account_trade_mode,"mode":mode,"brain":brain}).to_string()])?;
+        tx.commit()?;self.settings=settings;
+        self.solo=if brain=="system" {None}else{Some(SoloOwner{context:scope,target:self.settings.target.clone(),mode,brain:brain.into()})};
+        self.set_mode(mode);self.sync_owner_flags(t,mode);Ok(())
     }
     pub fn set_mode(&mut self, mode: TradingMode) {
         self.active_mode = Some(mode);
@@ -302,14 +362,20 @@ impl Service {
     pub fn new(db: &Connection) -> Result<Self> {
         crate::shadow_paper::init(db)?;
         crate::brain_control::init(db)?;
-        db.execute_batch("CREATE TABLE IF NOT EXISTS execution_settings(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
+        db.execute_batch("CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,timestamp_ms INTEGER NOT NULL,kind TEXT NOT NULL,detail TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS execution_settings(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS execution_equity(context TEXT PRIMARY KEY,peak REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS micro_real_recovered(account_key TEXT PRIMARY KEY,reached_ms INTEGER NOT NULL,reached_equity REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS daily_loss_locks(account_key TEXT NOT NULL,report_day TEXT NOT NULL, reached_ms INTEGER NOT NULL,loss_amount REAL NOT NULL, PRIMARY KEY(account_key,report_day));
+CREATE TABLE IF NOT EXISTS risk_master_accounts(account_key TEXT PRIMARY KEY,enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),updated_ms INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS risk_master_recovery(account_key TEXT PRIMARY KEY,basis TEXT NOT NULL CHECK(basis IN ('balance','equity')),threshold REAL NOT NULL CHECK(threshold>0 AND threshold<=1000000000000),recovery_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS execution_solo(context TEXT NOT NULL,account_mode INTEGER NOT NULL CHECK(account_mode IN (0,2)),mode TEXT NOT NULL,brain TEXT NOT NULL,PRIMARY KEY(context,account_mode,mode));
 CREATE TABLE IF NOT EXISTS brain_configs(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS broker_commands(id TEXT PRIMARY KEY,context TEXT NOT NULL,brain TEXT NOT NULL,kind TEXT NOT NULL,created_ms INTEGER NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS broker_commands_context ON broker_commands(context,brain,created_ms);
 CREATE INDEX IF NOT EXISTS broker_commands_history_floor ON broker_commands(context,kind,created_ms);
+CREATE INDEX IF NOT EXISTS broker_commands_recovery ON broker_commands(kind,state,created_ms);
+CREATE INDEX IF NOT EXISTS broker_commands_manual_pending ON broker_commands(brain,state);
 CREATE TABLE IF NOT EXISTS broker_seen(context TEXT NOT NULL,brain TEXT NOT NULL,signal TEXT NOT NULL,PRIMARY KEY(context,brain,signal));
 CREATE TABLE IF NOT EXISTS broker_deals(context TEXT NOT NULL,ticket INTEGER NOT NULL,position_id INTEGER NOT NULL,brain TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,ticket));
 CREATE TABLE IF NOT EXISTS broker_history_sync(context TEXT NOT NULL,target TEXT NOT NULL CHECK(target IN ('demo','live')),until_ms INTEGER NOT NULL CHECK(until_ms>=0),synced_ms INTEGER NOT NULL CHECK(synced_ms>=0),PRIMARY KEY(context,target));
@@ -350,6 +416,12 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             brains,
             signals: BTreeMap::new(),
             controls: BTreeMap::new(),
+            risk_master_key:String::new(),
+            risk_master_enabled:true,
+            risk_master_recovery:None,
+            risk_master_recovery_id:None,
+            manual_epoch:uuid::Uuid::new_v4().simple().to_string(),
+            solo:None,
             new_entries: Vec::new(),
             weights:BTreeMap::new(),
             student_policies:BTreeMap::new(),
@@ -412,12 +484,102 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         }
         Ok(false)
     }
-    fn breaker_enabled(&self, c:&Config) -> bool {
-        match self.settings.target.as_str() {
+    fn breaker_enabled(&self, c:&Config,t:&Telemetry) -> bool {
+        self.risk_master(t).unwrap_or(true) && match self.settings.target.as_str() {
             "live" => c.risk.daily_breaker_real_enabled,
             "demo" => c.risk.daily_breaker_demo_enabled,
             _ => true,
         }
+    }
+    pub fn risk_master(&self,t:&Telemetry)->Option<bool>{
+        (self.matches(t) && self.risk_master_key==daily_account_key(t)).then_some(self.risk_master_enabled)
+    }
+    pub fn risk_recovery(&self,t:&Telemetry)->Option<RiskRecovery>{
+        self.risk_master(t).and_then(|enabled|if enabled {None} else {self.risk_master_recovery.clone()})
+    }
+    pub fn refresh_risk_master(&mut self,db:&Connection,t:&Telemetry)->Result<()> {
+        if !self.matches(t) {self.risk_master_key.clear();self.risk_master_enabled=true;self.risk_master_recovery=None;self.risk_master_recovery_id=None;return Ok(());}
+        let key=daily_account_key(t);
+        let enabled:Option<i64>=db.query_row("SELECT enabled FROM risk_master_accounts WHERE account_key=?1",[&key],|r|r.get(0)).optional()?;
+        let enabled=match enabled {None|Some(1)=>true,Some(0)=>false,_=>anyhow::bail!("Invalid account risk master setting")};
+        let recovery_row:Option<(RiskRecovery,String)>=if enabled {None} else {db.query_row(
+            "SELECT basis,threshold,recovery_id FROM risk_master_recovery WHERE account_key=?1",[&key],
+            |r|Ok((RiskRecovery{basis:r.get(0)?,threshold:r.get(1)?},r.get(2)?))).optional()?};
+        let (recovery,recovery_id)=match recovery_row {Some((rule,id))=>(Some(rule),Some(id)),None=>(None,None)};
+        if let Some(rule)=&recovery {
+            rule.validate()?;
+            let id=recovery_id.as_deref().context("Missing risk recovery identity")?;
+            anyhow::ensure!(id.len()==32 && id.bytes().all(|c|c.is_ascii_hexdigit()&&!c.is_ascii_uppercase()),"Invalid risk recovery identity");
+            let value=rule.value(t);
+            // Trigger only from a current, identity-matched broker snapshot.
+            // Invalid/missing values cannot authorize an unprotected entry;
+            // Gateway also checks the rule against its own fresh account read.
+            if value.is_finite() && value>0. && value>=rule.threshold {
+                self.set_risk_master_reason(db,t,true,None,crate::now_ms(),"recovery",Some((rule.clone(),value)))?;
+                return Ok(());
+            }
+            // The Gateway may have observed a short-lived threshold crossing
+            // between Core snapshots. Its durable latch rejects subsequent
+            // risk-off sends for this recovery setting. Consume only evidence
+            // tied to this exact account, rule and unique recovery identity.
+            let reached={
+                let mut st=db.prepare("SELECT payload,result FROM broker_commands WHERE kind='open' AND state IN ('rejected','cancelled') AND CASE WHEN json_valid(result) THEN json_type(result,'$.risk_master_recovery_reached')='object' ELSE 0 END AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.risk_master_recovery_id')=?1 ELSE 0 END ORDER BY created_ms DESC")?;
+                let rows=st.query_map([id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?;
+                let mut found=None;
+                for row in rows {
+                    let(raw,result)=row?;
+                    let(Ok(cmd),Ok(receipt))=(serde_json::from_str::<Value>(&raw),serde_json::from_str::<Value>(&result)) else {continue};
+                    let evidence=&receipt["risk_master_recovery_reached"];
+                    if cmd["login"]!=t.login || cmd["server"]!=t.server || cmd["currency"]!=t.currency
+                        || cmd["target"]!=self.settings.target || cmd["risk_master_enabled"]!=false
+                        || cmd["risk_master_recovery"]!=serde_json::to_value(rule)?
+                        || receipt["id"]!=cmd["id"] || evidence["basis"]!=rule.basis
+                        || evidence["threshold"].as_f64()!=Some(rule.threshold) {continue}
+                    if let Some(v)=evidence["value"].as_f64().filter(|v|v.is_finite()&&*v>=rule.threshold) {found=Some(v);break;}
+                }
+                found
+            };
+            if let Some(value)=reached {
+                self.set_risk_master_reason(db,t,true,None,crate::now_ms(),"gateway_recovery",Some((rule.clone(),value)))?;
+                return Ok(());
+            }
+        }
+        self.risk_master_enabled=enabled;
+        self.risk_master_recovery=recovery;
+        self.risk_master_recovery_id=recovery_id;
+        self.risk_master_key=key;
+        Ok(())
+    }
+    pub fn set_risk_master(&mut self,db:&Connection,t:&Telemetry,enabled:bool,now:u64)->Result<()> {
+        self.set_risk_master_with_recovery(db,t,enabled,None,now)
+    }
+    pub fn set_risk_master_with_recovery(&mut self,db:&Connection,t:&Telemetry,enabled:bool,recovery:Option<RiskRecovery>,now:u64)->Result<()> {
+        if let Some(rule)=&recovery {
+            rule.validate()?;
+            anyhow::ensure!(!enabled,"لا يمكن ضبط حد الاستعادة عند تفعيل المخاطر");
+            let value=rule.value(t);
+            anyhow::ensure!(value.is_finite() && value>0. && value<rule.threshold,
+                "الرصيد أو Equity الحالي غير صالح أو بلغ حد الاستعادة؛ اختر حداً أعلى");
+        }
+        self.set_risk_master_reason(db,t,enabled,recovery,now,"operator",None)
+    }
+    fn set_risk_master_reason(&mut self,db:&Connection,t:&Telemetry,enabled:bool,recovery:Option<RiskRecovery>,now:u64,reason:&str,reached:Option<(RiskRecovery,f64)>)->Result<()> {
+        anyhow::ensure!(self.matches(t),"الحساب لا يطابق حساب التنفيذ");
+        let key=daily_account_key(t);
+        let recovery_id=recovery.as_ref().map(|_|uuid::Uuid::new_v4().simple().to_string());
+        let mut settings=self.settings.clone();
+        settings.revision=settings.revision.checked_add(1).context("Execution revision exhausted")?;
+        let tx=db.unchecked_transaction()?;
+        tx.execute("INSERT INTO risk_master_accounts(account_key,enabled,updated_ms) VALUES(?1,?2,?3) ON CONFLICT(account_key) DO UPDATE SET enabled=excluded.enabled,updated_ms=excluded.updated_ms",params![key,enabled as i64,now])?;
+        tx.execute("DELETE FROM risk_master_recovery WHERE account_key=?1",[&key])?;
+        if let Some(rule)=&recovery {tx.execute("INSERT INTO risk_master_recovery(account_key,basis,threshold,recovery_id) VALUES(?1,?2,?3,?4)",params![key,rule.basis,rule.threshold,recovery_id])?;}
+        tx.execute("INSERT OR REPLACE INTO execution_settings VALUES(1,?1)",[serde_json::to_string(&settings)?])?;
+        tx.execute("UPDATE broker_commands SET state='cancelled' WHERE kind='open' AND state='queued'",[])?;
+        tx.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,'risk_master_changed',?2)",
+            params![now,json!({"account_key":key,"enabled":enabled,"scope":"bound_broker_account_and_mode", "reason":reason,"recovery":recovery,"reached":reached.as_ref().map(|(rule,value)|json!({"rule":rule,"value":value}))}).to_string()])?;
+        tx.commit()?;
+        self.settings=settings;self.risk_master_key=key;self.risk_master_enabled=enabled;self.risk_master_recovery=recovery;self.risk_master_recovery_id=recovery_id;self.signals.clear();
+        Ok(())
     }
     fn matches(&self, t: &Telemetry) -> bool {
         t.connected
@@ -465,12 +627,39 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         let sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE {PENDING_BROKER_SQL})");
         Ok(db.query_row(&sql,[],|r|r.get(0))?)
     }
-    pub fn cancel_entries(&self, db: &Connection) -> Result<()> {
+    pub fn cancel_entries(&mut self, db: &Connection) -> Result<()> {
         db.execute(
             "UPDATE broker_commands SET state='cancelled' WHERE kind='open' AND state='queued'",
             [],
         )?;
+        self.manual_epoch=uuid::Uuid::new_v4().simple().to_string();
         Ok(())
+    }
+    fn manual_entry_allowed(&self,cmd:&Value,status:&Status)->bool{
+        cmd["kind"]=="open" && cmd["manual_open"]==true && cmd["brain"]=="manual" && !status.requested_run
+            && cmd["manual_epoch"]==self.manual_epoch && cmd["revision"].as_u64()==Some(self.settings.revision)
+            && self.active_mode.is_some_and(|mode|cmd["trading_mode"]==json!(mode))
+    }
+    pub fn queue_manual(&self,db:&Connection,t:&Telemetry,c:&Config,side:i8,lots:f64,stop:f64,target:f64,reference:f64,now:u64)->Result<Value>{
+        let brain=BrainConfig{id:"manual".into(),lots,..Default::default()};
+        let deviation=self.settings.deviation_points as f64*t.point.unwrap_or(0.);
+        let signal=Signal{brain:"manual".into(),side,key:format!("manual:{now}"),bar_time:now/1000,
+            stop_distance:(reference-stop).abs()+deviation,target_distance:(target-reference).abs(),
+            hold_ms:0,reason:"Manual order explicitly approved by operator".into(),ready:true,coordination:None};
+        let tx=db.unchecked_transaction()?;
+        let mut command=self.queue(&tx,t,&brain,"open",Some(&signal),0,now,Some(c))?;
+        command["manual_open"]=json!(true);
+        command["manual_epoch"]=json!(self.manual_epoch);
+        command["manual_reference_price"]=json!(reference);
+        command["manual_stop_price"]=json!(stop);
+        command["manual_target_price"]=json!(target);
+        command["demo_flexible"]=json!(false);
+        command["learning"]=Value::Null;
+        let id=command["id"].as_str().context("Manual command ID missing")?;
+        tx.execute("UPDATE broker_commands SET payload=?1 WHERE id=?2",params![command.to_string(),id])?;
+        tx.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,'manual_market_requested',?2)",
+            params![now,json!({"id":id,"context":ctx(t),"side":side,"lots":lots,"stop":stop,"target":target,"reference":reference}).to_string()])?;
+        tx.commit()?;Ok(command)
     }
     fn queue(
         &self,
@@ -494,12 +683,16 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             p["trading_mode"] = json!(c.trading.mode);
             p["demo_flexible"] = json!(c.trading.demo_flexible && t.demo && t.account_trade_mode==Some(0));
             p["commission_per_lot"] = json!(c.risk.commission_per_lot);
-            p["daily_breaker_enabled"] = json!(self.breaker_enabled(c));
+            let risk_master=self.risk_master(t).unwrap_or(true);
+            p["risk_master_enabled"] = json!(risk_master);
+            p["risk_master_recovery"] = json!(self.risk_recovery(t));
+            p["risk_master_recovery_id"] = json!(if risk_master {None} else {self.risk_master_recovery_id.clone()});
+            p["daily_breaker_enabled"] = json!(self.breaker_enabled(c,t));
             p["daily_breaker_limit_percent"] = json!(c.risk.daily_loss_percent);
             // Mandatory for every new entry (Demo and REAL). The broker uses
             // order_calc_profit at the EXACT final stop and account equity to
             // cap the requested volume without ever increasing it.
-            let micro_real = self.micro_real_active(db, t, c)?;
+            let micro_real = risk_master && self.micro_real_active(db, t, c)?;
             p["risk_percent"] = json!(if micro_real { c.risk.micro_real_cap_percent } else { c.risk.risk_percent });
             p["micro_real_temporary"] = json!(micro_real);
             p["micro_real_recovery_equity"] = json!(c.risk.micro_real_recovery_equity);
@@ -531,9 +724,10 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         }
         let key = ctx(t);
         // Checking eligibility also durably records the milestone once it is reached.
-        let micro_real = self.micro_real_active(db, t, c)?;
+        let risk_master=self.risk_master(t).unwrap_or(true);
+        let micro_real = risk_master && self.micro_real_active(db, t, c)?;
         let daily_breaker_blocked=self.daily_breaker_blocked(
-            db,t,now,self.breaker_enabled(c),c.risk.daily_loss_percent)?;
+            db,t,now,self.breaker_enabled(c,t),c.risk.daily_loss_percent)?;
         db.execute("INSERT INTO execution_equity VALUES(?1,?2) ON CONFLICT(context) DO UPDATE SET peak=MAX(peak,excluded.peak)",params![key,t.equity])?;
         let peak:f64=db.query_row("SELECT peak FROM execution_equity WHERE context=?1",[&key],|r|r.get(0))?;
         // A fill acknowledgement is not a reconciled position snapshot. Keep the
@@ -550,6 +744,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             }
         }
         self.active_mode = Some(c.trading.mode);
+        let active_owner=self.solo_owner(t,c.trading.mode).to_owned();
         let paper_due = now.saturating_sub(self.last_paper_sample_ms) >= 1_000;
         if paper_due {self.last_paper_sample_ms=now;}
         let mut activity_samples=Vec::new();
@@ -605,8 +800,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     self.queue(db, t, &b, "close", None, p.ticket, now, None)?;
                 }
             }
-            // Do not skip other brains: evaluate them as observation-only advisors.
-            // Their ready signals can feed paper evidence but never MT5 dispatch.
+            // All brains are evaluated for analysis/Paper; only the currently
+            // selected account/mode owner can create a broker intent below.
             let genome=crate::coordinator_learning::genome(db,&b,t)?;
             let started = std::time::Instant::now();
             let base=if b.id==braintrade_domain::sniper::ID || (b.id=="system" && braintrade_domain::sniper::selected(c)) {sniper_signal.clone()}
@@ -680,13 +875,13 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             // Elevated risk is deliberately Demo-only. Reject in Core before
             // queueing to avoid a stream of guaranteed broker rejections on REAL.
             // The MT5 adapter independently enforces the exact broker mode.
-            if c.risk.risk_percent > 2.0
+            if risk_master && c.risk.risk_percent > 2.0
                 && (self.settings.target != "demo" || t.account_trade_mode != Some(0))
             {
                 gates.push("المخاطرة فوق 2% تجريبية على حساب MT5 Demo فقط؛ REAL يبقى بحد 2%");
             }
-            if b.id != "system" {
-                gates.push("SHADOW / PAPER فقط: الوضع المختار يمنع هذا العقل من إرسال صفقات إلى MT5");
+            if b.id != active_owner {
+                gates.push("هذا العقل للمراقبة وPaper؛ عقل آخر هو المنفّذ المختار");
             }
             if active {
                 gates.push("أمر قيد التنفيذ أو المصالحة");
@@ -711,7 +906,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             if now.saturating_sub(last) < cooldown * 1000 {
                 gates.push("فاصل الدخول المختار");
             }
-            if b.use_risk_limits {
+            if b.use_risk_limits && risk_master {
                 if peak>0. && (peak-t.equity)/peak*100. >= c.risk.max_drawdown_percent {
                     gates.push("حد التراجع الاختياري من أعلى Equity مرصود لهذا الحساب والرمز");
                 }
@@ -753,7 +948,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             let can = signal.ready && gates.is_empty();
             let result = json!({"signal":signal,"gates":gates,"ready":can,"decision_us":decision_us,"evaluated_ms":now});
             self.signals.insert(b.id.clone(), result.clone());
-            if can && b.id == "system" {
+            if can && b.id == active_owner {
                 let tx = db.unchecked_transaction()?;
                 tx.execute(
                     "INSERT OR IGNORE INTO broker_seen VALUES(?1,?2,?3)",
@@ -939,6 +1134,56 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 }
                 Ok(json!({"ok":true}))
             }
+            ("POST", "/v1/execution/close-selected") => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Selected {ticket:u64,magic:u64,side:String,volume:f64}
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Request {context:String, positions:Vec<Selected>, profit_only:bool}
+                let request:Request=serde_json::from_slice(body)?;
+                anyhow::ensure!(!status.requested_run,"أوقف الدخول أولاً حتى لا تُفتح مراكز جديدة");
+                anyhow::ensure!(!self.pending(db)?,"انتظر تسوية أوامر الوسيط الحالية قبل الإغلاق");
+                let t=t.filter(|t|self.matches(t)).context("الحساب المرتبط وحديث البيانات مطلوب")?;
+                anyhow::ensure!(request.context==key,"الحساب أو الرمز تغيّر؛ أعد التأكيد");
+                anyhow::ensure!((1..=20).contains(&request.positions.len()),"اختر 1 إلى 20 مركزاً محدداً");
+                let unique:BTreeSet<u64>=request.positions.iter().map(|p|p.ticket).collect();
+                anyhow::ensure!(unique.len()==request.positions.len() && !unique.contains(&0),"أرقام المراكز غير صحيحة أو مكررة");
+                // The operator approves exact tickets. Never expand the set to
+                // new positions which appeared after the confirmation dialog.
+                let mut approved=Vec::with_capacity(unique.len());
+                for selected in &request.positions {
+                    let matching:Vec<_>=t.positions.iter().filter(|p|p.ticket==selected.ticket).collect();
+                    anyhow::ensure!(matching.len()==1,"المركز تغيّر أو لم يعد موجوداً؛ حدّث البيانات");
+                    let p=matching[0];
+                    let id=execution::brain_for_magic(p.magic).context("المركز ليس مملوكاً للبرنامج")?;
+                    anyhow::ensure!(p.symbol==t.symbol && p.volume.is_finite() && p.volume>0.,"المركز خارج الرمز الحالي أو حجمه غير صالح");
+                    anyhow::ensure!(selected.magic==p.magic && matches!(selected.side.as_str(),"BUY"|"SELL")
+                        && selected.side==p.side && selected.volume.is_finite()
+                        && (selected.volume-p.volume).abs()<=1e-8,"اتجاه المركز أو حجمه أو ملكيته تغيّرت؛ أعد التأكيد");
+                    anyhow::ensure!(!request.profit_only || (p.profit.is_finite() && p.profit>0.),"المركز لم يعد رابحاً حسب الربح العائم في MT5");
+                    let brain=if id=="manual" {BrainConfig{id:"manual".into(),lots:p.volume,..Default::default()}}
+                        else {self.brains.iter().find(|b|b.id==id).context("هوية المركز غير معروفة")?.clone()};
+                    approved.push((p.ticket,brain,p.volume,p.side.clone()));
+                }
+                // All-or-nothing queue creation: a failed disk write cannot
+                // silently send only a subset of the approved positions.
+                let tx=db.unchecked_transaction()?;
+                let mut ids=Vec::new();
+                for (ticket,brain,volume,side) in approved {
+                    let mut command=self.queue(&tx,t,&brain,"close",None,ticket,now,None)?;
+                    command["manual_close"]=json!(true);
+                    command["profit_only"]=json!(request.profit_only);
+                    command["expected_position_volume"]=json!(volume);
+                    command["expected_position_side"]=json!(side);
+                    let id=command["id"].as_str().context("Invalid queued close ID")?;
+                    tx.execute("UPDATE broker_commands SET payload=?1 WHERE id=?2",params![command.to_string(),id])?;
+                    ids.push(id.to_owned());
+                }
+                tx.commit()?;
+                Ok(json!({"ok":true,"queued":ids.len(),"ids":ids,"scope":"owned_positions_current_symbol",
+                    "profit_only":request.profit_only,"note":"طلبات مرسلة للطابور؛ تحقق من نتيجة MT5 والمصالحة"}))
+            }
             ("GET", "/v1/execution/gateway") => {
                 let Some(t) = t.filter(|t| self.matches(t)) else {
                     return Ok(json!({"command":null,"history_from_ms":0}));
@@ -975,9 +1220,10 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                                 db,t,now,
                                 cmd["daily_breaker_enabled"].as_bool().unwrap_or(self.settings.target=="live"),
                                 cmd["daily_breaker_limit_percent"].as_f64().unwrap_or(2.))?;
-                        let allowed = cmd["kind"] == "close"
-                            || (breaker_ok && self.enabled(status)
-                                && self.broker_entry_allowed(cmd));
+                        let close_allowed = cmd["kind"] == "close"
+                            && (cmd["manual_close"]!=true || !status.requested_run);
+                        let allowed = close_allowed || (breaker_ok &&
+                            ((self.enabled(status) && self.broker_entry_allowed(cmd)) || self.manual_entry_allowed(cmd,status)));
                         if allowed {
                             db.execute("UPDATE broker_commands SET state='dispatched' WHERE id=?1 AND state='queued'",[id])?;
                         } else {
@@ -1019,10 +1265,10 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     && breaker_ok
                     && t.is_some_and(|t| self.matches(t) && ctx(t) == cmd["context"])
                     && now <= cmd["expires_ms"].as_u64().unwrap_or(0)
-                    && (cmd["kind"] == "close"
+                    && ((cmd["kind"] == "close" && (cmd["manual_close"]!=true || !status.requested_run))
                         || (cmd["revision"].as_u64()==Some(self.settings.revision)
-                            && self.enabled(status)
-                            && self.broker_entry_allowed(&cmd)));
+                            && ((self.enabled(status) && self.broker_entry_allowed(&cmd))
+                                || self.manual_entry_allowed(&cmd,status))));
                 Ok(json!({"authorized":ok}))
             }
             ("POST", "/v1/execution/result") => {
@@ -1236,6 +1482,25 @@ mod execution_persistence_tests {
             login: 17, server: "Demo-Test".into(), currency: "USD".into(),
             symbol: "XAUUSD".into(), ..Default::default()
         }
+    }
+    #[test]
+    fn risk_master_is_bound_into_the_durable_open_intent() {
+        let db=Connection::open_in_memory().unwrap();let mut svc=Service::new(&db).unwrap();
+        let t=demo();svc.bind(&db,&t,100).unwrap();
+        let brain=svc.brains.iter().find(|b|b.id=="system").unwrap().clone();
+        let signal=Signal{brain:"system".into(),side:1,key:"bar:1".into(),bar_time:1,
+            stop_distance:1.,target_distance:2.,hold_ms:1000,reason:String::new(),ready:true,coordination:None};
+        let mut c=Config::default();c.risk.daily_breaker_demo_enabled=true;
+        svc.set_risk_master(&db,&t,false,101).unwrap();
+        let disabled=svc.queue(&db,&t,&brain,"open",Some(&signal),0,102,Some(&c)).unwrap();
+        assert_eq!(disabled["risk_master_enabled"],false);
+        assert_eq!(disabled["daily_breaker_enabled"],false);
+        assert_eq!(disabled["micro_real_temporary"],false);
+        svc.set_risk_master(&db,&t,true,103).unwrap();
+        let enabled=svc.queue(&db,&t,&brain,"open",Some(&signal),0,104,Some(&c)).unwrap();
+        assert_eq!(enabled["risk_master_enabled"],true);
+        assert_eq!(enabled["daily_breaker_enabled"],true);
+        assert_eq!(db.query_row("SELECT state FROM broker_commands WHERE id=?1",[disabled["id"].as_str().unwrap()],|r|r.get::<_,String>(0)).unwrap(),"cancelled");
     }
 
     fn receipt(ticket:u64,pid:u64,magic:u64,entry:u64,volume:f64)->Value {

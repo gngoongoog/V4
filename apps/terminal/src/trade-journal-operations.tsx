@@ -1,10 +1,10 @@
 import {useEffect,useState} from 'react';
 import {BarChart3,Clock,Download,FileText,RefreshCw,Search,Target} from 'lucide-react';
 import type {Status} from './types';
-import {readPanel,readTradeHistory} from './bridge';
+import {hasTauri,readPanel,readTradeHistory,saveExcelReport} from './bridge';
 import {journalEvidence} from './journal-evidence';
 import {brokerReport} from './broker-report';
-import {journalCsv} from './journal-export';
+import {journalCsv,journalXlsx} from './journal-export';
 
 type Read={scope:string;offset:number;limit:number;execution:unknown;history:unknown};
 const fmt=(n:number|null)=>n===null?'—':n.toLocaleString('en-US',{maximumFractionDigits:2});
@@ -17,6 +17,7 @@ export function TradeJournalOperations({status,scope,preview}:{
  const [offset,setOffset]=useState(0),[limit,setLimit]=useState(12);
  const [revision,setRevision]=useState(0);
  const [data,setData]=useState<Read|null>(null),[error,setError]=useState('');
+ const [exportBusy,setExportBusy]=useState(false),[exportMessage,setExportMessage]=useState('');
  const [selected,setSelected]=useState<number|null>(null);
  const [query,setQuery]=useState(''),[side,setSide]=useState<'all'|'BUY'|'SELL'>('all');
  const [outcome,setOutcome]=useState<'all'|'win'|'loss'|'open'>('all');
@@ -59,12 +60,23 @@ export function TradeJournalOperations({status,scope,preview}:{
   link.href=url;link.download='braintrade-mt5-journal-page.csv';link.click();
   window.setTimeout(()=>URL.revokeObjectURL(url),1000);
  };
+ const exportExcel=async()=>{
+  if(!report?.ready||!filtered.length||!status?.telemetry||!hasTauri()||exportBusy)return;
+  setExportBusy(true);setExportMessage('');
+  try{
+   const t=status.telemetry;
+   const bytes=journalXlsx(filtered,`MT5 ${t.login} · ${t.server} · ${t.symbol} · ${t.currency} · ${t.demo?'DEMO':'REAL'} | صفحة السجل المعروضة بعد الفلترة فقط`);
+   const result=await saveExcelReport(bytes,'journal') as {saved?:boolean;cancelled?:boolean};
+   setExportMessage(result.saved?'تم حفظ صفحة السجل في ملف Excel':result.cancelled?'أُلغي حفظ ملف Excel':'تعذر تأكيد حفظ ملف Excel');
+  }catch(e){setExportMessage('تعذر تصدير ملف Excel: '+String(e))}
+  finally{setExportBusy(false)}
+ };
  const currency=status?.telemetry?.currency||'';
  const message=preview?'معاينة التصميم: لا يُعرض سجل وسيط فعلي':error?'خطأ قراءة السجل: '+error:
     !report?'جار تحميل صفحة السجل من Core...':!report.ready?report.reason:
     'السجل مرتبط بالحساب الحالي. الفلاتر والتصدير يطبقان على الصفحة المعروضة فقط.';
  return <section className="operator-card concept-journal" aria-label="MT5 broker trade journal">
-  <div className="concept-journal-head"><div><h3><FileText size={23}/> سجل العمليات</h3><p>عرض الصفقات المسجلة وإيصالات التنفيذ الفعلية</p></div><div><button type="button" disabled={preview||!report?.ready||!filtered.length} onClick={exportPage}><Download size={15}/> تصدير CSV لـExcel</button><button type="button" disabled={preview} onClick={()=>setRevision(x=>x+1)}><RefreshCw size={15}/> تحديث</button></div></div>
+  <div className="concept-journal-head"><div><h3><FileText size={23}/> سجل العمليات</h3><p>عرض الصفقات المسجلة وإيصالات التنفيذ الفعلية</p></div><div><button type="button" disabled={preview||!report?.ready||!filtered.length||!hasTauri()||exportBusy} onClick={()=>void exportExcel()}><Download size={15}/> تصدير Excel</button><button type="button" disabled={preview||!report?.ready||!filtered.length} onClick={exportPage}><Download size={15}/> تصدير CSV</button><button type="button" disabled={preview} onClick={()=>setRevision(x=>x+1)}><RefreshCw size={15}/> تحديث</button></div></div>
   <div className="concept-journal-metrics">
    <div><FileText/><span>المراكز المسجلة<strong>{report?.ready?report.total:'—'}</strong><small>في سجل Core الحالي</small></span></div>
    <div><BarChart3/><span>صافي عينة الصفحة<strong>{summary.ready?fmt(summary.net):'—'} {summary.net!==null?currency:''}</strong><small>بعد الرسوم الموثقة</small></span></div>
@@ -77,6 +89,7 @@ export function TradeJournalOperations({status,scope,preview}:{
    <div className="concept-outcome-filters">{([['all','جميع النتائج'],['win','الرابحة'],['loss','الخاسرة'],['open','غير مغلقة']] as const).map(([id,label])=><button type="button" key={id} aria-pressed={outcome===id} className={outcome===id?'active':''} onClick={()=>setOutcome(id)}>{label}</button>)}</div>
   </div>
   <p className="safe-note" role="status">{message}</p>
+  {exportMessage&&<p className="safe-note" role="status">{exportMessage}</p>}
   <div className="concept-journal-body"><div className="table-scroll">
    <table aria-label="مراكز التداول الموثقة"><thead><tr>{['#','الوقت UTC','الرمز','الوضع','العقل','الاتجاه','الحجم','سعر الدخول','العمولة','النتيجة','الحالة'].map(x=><th key={x}>{x}</th>)}</tr></thead>
     <tbody>{filtered.length?filtered.map(row=><tr key={row.positionId} className={selected===row.positionId?'selected':''} onClick={()=>setSelected(row.positionId)}>
