@@ -64,6 +64,9 @@ try{
   // previous page's selection or a partially faded panel.
   await wait(350);
   assert.equal(await page.locator('main.content').evaluate(e=>e.scrollTop),0,`Navigation to ${id} must show the top, not the previous page's scroll offset`);
+  if(id==='dashboard'){
+   assert.equal(await page.locator('.concept-kpis .kpi-glyph').count(),6,'Reference dashboard must retain six colored KPI icons');
+  }
   if(id==='trading'){
    const bg=await page.locator('.concept-order-panel .operator-grid input[type=number]').first().evaluate(e=>getComputedStyle(e).backgroundColor);
    assert.equal(bg,'rgb(246, 248, 251)','Light Concept 4 order inputs must not inherit the dark terminal palette');
