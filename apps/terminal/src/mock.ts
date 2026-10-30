@@ -1,6 +1,6 @@
 import type {Candle,Status} from './types';
 
-// DISPLAY FIXTURE ONLY: deterministic pseudo-random OHLC makes the preview
+// Visual fixture ONLY: deterministic pseudo-random OHLC makes the preview
 // visually varied rather than the old perfect sine/cosine wave. No fixture
 // ever enters Gateway, Core, or the MT5 execution paths.
 export function generatePreviewCandles(seed=1,seconds=300):Candle[]{
