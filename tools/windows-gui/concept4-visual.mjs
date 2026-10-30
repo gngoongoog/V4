@@ -58,6 +58,10 @@ try{
  await candleCanvas.hover();await page.mouse.wheel(0,-100);await wait(100);
  assert((await page.locator('.chart-panel .chart-footer').innerText()).includes('48 شمعة'),'Mouse wheel must zoom without using a decorative button');
  await page.getByRole('button',{name:'العودة لأحدث شمعة',exact:true}).click();
+ const fit=page.getByRole('button',{name:'ملاءمة مستويات الدخول والهدف والوقف',exact:true});
+ assert.equal(await fit.getAttribute('aria-pressed'),'false','Candles should remain legible by default');
+ await fit.click();assert.equal(await fit.getAttribute('aria-pressed'),'true','Operator can deliberately include distant position levels');
+ await fit.click();assert.equal(await fit.getAttribute('aria-pressed'),'false','Fit-levels must be reversible');
  await page.getByRole('button',{name:'تكبير الشارت',exact:true}).click();
  assert(await page.locator('.chart-panel.chart-expanded').isVisible());
  const enlarged=await page.locator('.chart-panel.chart-expanded').boundingBox();
