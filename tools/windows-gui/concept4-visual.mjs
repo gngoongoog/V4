@@ -68,8 +68,8 @@ try{
    assert.equal(await page.locator('.concept-kpis .kpi-glyph').count(),6,'Reference dashboard must retain six colored KPI icons');
   }
   if(id==='trading'){
-   const bg=await page.locator('.concept-order-panel .operator-grid input[type=number]').first().evaluate(e=>getComputedStyle(e).backgroundColor);
-   assert.equal(bg,'rgb(246, 248, 251)','Light Concept 4 order inputs must not inherit the dark terminal palette');
+   const bg=await page.locator('.concept-order-panel .concept-numeric-control').first().evaluate(e=>getComputedStyle(e).backgroundColor);
+   assert.equal(bg,'rgb(249, 251, 253)','Concept 4 price steppers must have the light reference background');
   }
   if(id==='brainControl'){
    assert.equal(await page.locator('.concept-brain-card').count(),16,'Offline directory must reflect the bundled Core inventory');
