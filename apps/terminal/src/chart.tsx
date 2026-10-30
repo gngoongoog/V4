@@ -136,7 +136,7 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
     :levels.filter(v=>v>lowC-baseRange*.2&&v<highC+baseRange*.2);
    const nearby=[...visibleLevels,priceQuote]
     .filter((v):v is number=>typeof v==='number'&&Number.isFinite(v)&&v>0&&
-     v>lowC-baseRange*(fitLevels?.9:.3)&&v<highC+baseRange*(fitLevels?.9:.3));
+     v>lowC-baseRange*(fitLevels ? 0.9 : 0.3)&&v<highC+baseRange*(fitLevels ? 0.9 : 0.3));
    const low=Math.min(lowC,...nearby)-baseRange*.095;
    const high=Math.max(highC,...nearby)+baseRange*.095;
    const y=(price:number)=>top+(high-price)/(high-low)*priceHeight;
