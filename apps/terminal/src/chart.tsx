@@ -7,6 +7,22 @@ import {num} from './format';
 
 const FRAMES=['m1','m5','m15','m30','h1','h4','d1'] as const;
 const EMPTY_CANDLES:Candle[]=[];
+const FRAME_SECONDS:Record<ChartFrame,number>={m1:60,m5:300,m15:900,m30:1800,h1:3600,h4:14400,d1:86400};
+export function closedBrokerCandles(bars:Candle[],frame:ChartFrame,nowMs:number):Candle[]{
+ const now=Math.floor(nowMs/1000);
+ return bars.filter(b=>b.time+FRAME_SECONDS[frame]<=now+2);
+}
+export function brokerPriceDigits(point:unknown):number{
+ if(typeof point!=='number'||!Number.isFinite(point)||point<=0)return 2;
+ for(let digits=0;digits<=6;digits++)if(Math.abs(point*10**digits-Math.round(point*10**digits))<1e-7)return digits;
+ return 6;
+}
+export function lastClosedAt(bars:Candle[],frame:ChartFrame):string|null{
+ const bar=bars.at(-1);if(!bar)return null;
+ const closedMs=(bar.time+FRAME_SECONDS[frame])*1000;
+ if(!Number.isFinite(closedMs))return null;
+ return new Date(closedMs).toISOString().slice(0,16).replace('T',' ')+' UTC';
+}
 export type ChartFrame=typeof FRAMES[number];
 const UP='#0eaa78',DOWN='#e34855';
 const clamp=(n:number,low:number,high:number)=>Math.max(low,Math.min(high,n));
@@ -31,16 +47,16 @@ export function emaSeries(bars:Candle[],period:number):number[]{
  for(let i=0;i<bars.length;i++)values.push(i===0?bars[i].close:bars[i].close*alpha+values[i-1]*(1-alpha));
  return values;
 }
-const priceText=(v:number,step:number)=>v.toFixed(step<.01?3:2);
+const priceText=(v:number,digits:number)=>v.toFixed(digits);
 function timeText(time:number,frame:ChartFrame){
  const date=new Date(time*1000);
  if(frame==='d1'||frame==='h4')return date.toLocaleDateString('en-GB',{timeZone:'UTC',day:'2-digit',month:'short'});
  return date.toLocaleTimeString('en-GB',{timeZone:'UTC',hour:'2-digit',minute:'2-digit'});
 }
-type ChartProps={market?:Market|null;symbol:string;quote?:number;positions?:Position[];frame?:ChartFrame;
+type ChartProps={market?:Market|null;symbol:string;quote?:number;point?:number|null;positions?:Position[];frame?:ChartFrame;
  onFrameChange?:(frame:ChartFrame)=>void;theme?:'dark'|'smoke'|'light';frameMeta?:ChartFrameMeta;preview?:boolean};
 type Hover={index:number;y:number}|null;
-export default function TradingChart({market,symbol,quote,positions=[],frame:currentFrame,onFrameChange,
+export default function TradingChart({market,symbol,quote,point,positions=[],frame:currentFrame,onFrameChange,
  theme='light',frameMeta,preview=false}:ChartProps){
  const [localFrame,setLocalFrame]=useState<ChartFrame>('m15');
  const frame=currentFrame??localFrame;
@@ -51,7 +67,10 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
  const canvas=useRef<HTMLCanvasElement>(null);
  const drag=useRef<{x:number;offset:number;step:number}|null>(null);
  const frameCandles=(market?.[frame as keyof Market]??EMPTY_CANDLES) as Candle[];
- const all=useMemo(()=>cleanChartCandles(frameCandles),[frameCandles]);
+ const all=useMemo(()=>{
+  const validated=cleanChartCandles(frameCandles);
+  return preview?validated:closedBrokerCandles(validated,frame,Date.now());
+ },[frameCandles,frame,preview]);
  const windowed=useMemo(()=>chartWindow(all,barsVisible,offset),[all,barsVisible,offset]);
  const chart=windowed.bars,ready=chart.length>=3;
  const ema9=useMemo(()=>emaSeries(all,9),[all]),ema21=useMemo(()=>emaSeries(all,21),[all]);
@@ -60,6 +79,7 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
   Number.isFinite(p.price_open)&&p.price_open>0&&Number.isFinite(p.volume)&&p.volume>0&&
   (p.side.toUpperCase()==='BUY'||p.side.toUpperCase()==='SELL')),[positions,symbol]);
  const priceQuote=typeof quote==='number'&&Number.isFinite(quote)&&quote>0?quote:null;
+ const digits=brokerPriceDigits(point);
  const setFrame=(next:ChartFrame)=>{
   setLocalFrame(next);onFrameChange?.(next);setHover(null);setOffset(0);drag.current=null;
  };
@@ -145,7 +165,7 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
    ctx.fillStyle=ink;ctx.textAlign='left';ctx.font='11px Segoe UI, sans-serif';
    for(let j=0;j<=5;j++){
     const value=high-(high-low)*j/5;
-    ctx.fillText(priceText(value,baseRange/5),xRight+7,top+j*priceHeight/5+4);
+    ctx.fillText(priceText(value,digits),xRight+7,top+j*priceHeight/5+4);
    }
    // The lower histogram is MT5 tick volume, not centralized exchange volume.
    chart.forEach((b,i)=>{
@@ -189,7 +209,7 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
      ctx.fillStyle=l.color;ctx.globalAlpha=.89;
      ctx.fillRect(xRight-110,badgeY,108,16);ctx.globalAlpha=1;
      ctx.fillStyle='#fff';ctx.font='bold 9px Segoe UI';ctx.textAlign='center';
-     ctx.fillText((above?'↑ ':'↓ ')+l.label+' '+priceText(l.value,baseRange/5),
+     ctx.fillText((above?'↑ ':'↓ ')+l.label+' '+priceText(l.value,digits),
       xRight-56,badgeY+11);ctx.textAlign='left';
     }
    }
@@ -225,7 +245,15 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
     ctx.beginPath();ctx.moveTo(xLeft,yy);ctx.lineTo(xRight,yy);ctx.stroke();ctx.restore();
     ctx.fillStyle=up?UP:DOWN;ctx.fillRect(xRight,yy-10,w-xRight,20);
     ctx.fillStyle='#fff';ctx.textAlign='center';ctx.font='bold 10px Segoe UI';
-    ctx.fillText(priceText(priceQuote,baseRange/5),xRight+(w-xRight)/2,yy+3);
+    ctx.fillText(priceText(priceQuote,digits),xRight+(w-xRight)/2,yy+3);
+   }
+   if(priceQuote!==null&&(priceQuote<=low||priceQuote>=high)){
+    // The quote is real but off scale. Show direction and exact numeric value,
+    // rather than drawing a deceptive horizontal price line through the candles.
+    const highSide=priceQuote>=high, yy=highSide?top+22:priceBottom-18;
+    ctx.fillStyle='#2b677d';ctx.fillRect(xRight-108,yy-12,108,18);
+    ctx.fillStyle='#fff';ctx.textAlign='center';ctx.font='bold 10px Segoe UI';
+    ctx.fillText((highSide?'↑ BID ':'↓ BID ')+priceText(priceQuote,digits),xRight-54,yy+1);
    }
    ctx.fillStyle=ink;ctx.textAlign='center';ctx.font='10px Segoe UI, sans-serif';
    const ticks=Math.min(6,chart.length-1);
@@ -244,21 +272,23 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
     const price=high-(hy-top)/priceHeight*(high-low);
     ctx.fillStyle=light?'#263b48':'#bacbd5';ctx.fillRect(xRight,hy-10,w-xRight,20);
     ctx.fillStyle=light?'#fff':'#15202b';ctx.font='bold 10px Segoe UI';ctx.textAlign='center';
-    ctx.fillText(priceText(price,baseRange/5),xRight+(w-xRight)/2,hy+3);
+    ctx.fillText(priceText(price,digits),xRight+(w-xRight)/2,hy+3);
    }
   };
   const observer=new ResizeObserver(draw);
   observer.observe(el);draw();return()=>observer.disconnect();
- },[chart,ready,windowed.start,ema9,ema21,position,priceQuote,theme,averages,crosshair,hover,frame,preview,fitLevels]);
+ },[chart,ready,windowed.start,ema9,ema21,position,priceQuote,theme,averages,crosshair,hover,frame,preview,fitLevels,digits]);
  const highlighted=hover?chart[hover.index]??chart.at(-1):chart.at(-1);
+ const highlightedAt=highlighted?new Date(highlighted.time*1000).toISOString().slice(0,16).replace('T',' ')+' UTC':null;
+ const lastClose=lastClosedAt(all,frame);
  const historical=frame==='m30'||frame==='h1'||frame==='h4'||frame==='d1'?frameMeta?.[frame]:undefined;
  const dataLabel=preview?'SIMULATED • NOT MT5':historical?
-   (historical.live?'MT5 HISTORY':'MT5 HISTORY • STALE'):'MT5 OHLC';
+   (historical.live?'MT5 • CLOSED OHLC':'MT5 HISTORY • CACHED'):'MT5 • CLOSED OHLC';
  return <section className={'panel chart-panel '+(expanded?'chart-expanded':'')}>
   <div className="chart-head">
    <div className="chart-symbol"><GoldSymbol className="gold-icon"/>
     <div><strong>{symbol||'XAUUSD'}</strong><small>{(symbol||'XAUUSD').toUpperCase().startsWith('XAU')?'Gold Spot / US Dollar':'Trading symbol'}</small></div>
-    <b className="concept-chart-quote">{priceQuote===null?'—':num(priceQuote)}</b></div>
+    <b className="concept-chart-quote">{priceQuote===null?'—':num(priceQuote,digits)}</b></div>
    <div className="chart-actions">
     <div className="timeframes">{FRAMES.map(tf=><button type="button" key={tf} className={tf===frame?'selected':''}
      aria-pressed={tf===frame} title={'MT5 '+tf.toUpperCase()+' • closed candles'}
@@ -283,9 +313,9 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
    </div>
   </div>
   <div className="ohlc-line">{highlighted?
-   'O '+num(highlighted.open)+'   H '+num(highlighted.high)+'   L '+num(highlighted.low)+
-   '   C '+num(highlighted.close)+'   '+(highlighted.close>=highlighted.open?'▲':'▼')+
-   '   Vol '+highlighted.tick_volume:'O —   H —   L —   C —'}
+   'O '+num(highlighted.open,digits)+'   H '+num(highlighted.high,digits)+'   L '+num(highlighted.low,digits)+
+   '   C '+num(highlighted.close,digits)+'   '+(highlighted.close>=highlighted.open?'▲':'▼')+
+   '   Vol '+highlighted.tick_volume+(highlightedAt?'   '+highlightedAt:''):'O —   H —   L —   C —'}
    <span className="concept-chart-source">{dataLabel}</span>
   </div>
   <div className="chart-frame">
@@ -314,7 +344,7 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
   </div>
   <div className="chart-footer">
    <span>{preview?'معاينة توضيحية، ليست أسعار السوق':'بيانات المصدر: MT5'} • {ready?chart.length+' شمعة '+frame.toUpperCase():'لا توجد شموع موثوقة'}{position?' • ENTRY / SL/TP من المركز المعروض':''}</span>
-   <span>{offset>0?'عرض تاريخي · '+offset+' شمعة للخلف':'آخر شمعة'} • UTC • Tick Volume</span>
+   <span>{offset>0?'عرض تاريخي · '+offset+' شمعة للخلف':'آخر شمعة'} • {lastClose?'آخر إغلاق '+lastClose:'لا يوجد إغلاق مؤكد'} • Tick Volume</span>
   </div>
  </section>;
 }
