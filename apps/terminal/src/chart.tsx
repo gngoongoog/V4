@@ -249,7 +249,7 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
    <span className="concept-chart-source">{dataLabel}</span>
   </div>
   <div className="chart-frame">
-   <canvas aria-label={'MT5 '+symbol+' '+frame+' OHLC candlestick chart'} ref={canvas}
+   <canvas aria-label={'MT5 '+symbol+' '+frame+' candlestick chart'} title={'MT5 OHLC '+frame.toUpperCase()} ref={canvas}
     onDoubleClick={resetView}
     onWheel={e=>{
      if(!ready)return;
