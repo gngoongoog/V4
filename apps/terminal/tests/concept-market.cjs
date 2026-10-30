@@ -74,5 +74,5 @@ for(const change of [{preview:true},{quoteFresh:false},{accountMatches:false},{s
  assert(nodes(view).find(n=>n.type==='button'&&n.props.className==='action-btn start').props.disabled,'START must not appear ready when scope, quotes, runtime or preview is untrusted');
 }
 const wrongScope=moduleExports.ConceptMarketDesk({...props,account:{...account,positions},accountMatches:false});
-assert(nodes(wrongScope).find(n=>n.type==='button'&&n.props.children==='تنفيذ شراء بسعر السوق').props.disabled,'Manual entry must be disabled when the account scope is not reconciled');
+assert(nodes(wrongScope).some(n=>n.type==='button'&&String(Array.isArray(n.props.children)?n.props.children.join(''):n.props.children)==='تنفيذ شراء بسعر السوق'&&n.props.disabled===true),'Manual entry must be disabled when the account scope is not reconciled');
 console.log('PASS: concept market scopes requested closes to exact owned tickets, protects preview/STOP/quotes, and leaves unsupported manual entries disabled');
