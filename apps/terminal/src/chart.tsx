@@ -1,11 +1,11 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {GoldSymbol} from './gold-symbol';
-import type {Candle,Market} from './types';
+import type {Candle,Market,Position} from './types';
 import type {ChartFrameMeta} from './chart-history';
 import {num} from './format';
 const FRAMES=['m1','m5','m15','m30','h1','h4','d1'] as const;
 export type ChartFrame=typeof FRAMES[number];
-export default function TradingChart({market,symbol,quote,frame:currentFrame,onFrameChange,theme='light',frameMeta,preview=false}:{market?:Market|null;symbol:string;quote?:number;frame?:ChartFrame;onFrameChange?:(frame:ChartFrame)=>void;theme?:'dark'|'smoke'|'light';frameMeta?:ChartFrameMeta;preview?:boolean}){
+export default function TradingChart({market,symbol,quote,positions=[],frame:currentFrame,onFrameChange,theme='light',frameMeta,preview=false}:{market?:Market|null;symbol:string;quote?:number;positions?:Position[];frame?:ChartFrame;onFrameChange?:(frame:ChartFrame)=>void;theme?:'dark'|'smoke'|'light';frameMeta?:ChartFrameMeta;preview?:boolean}){
  const [localFrame,setLocalFrame]=useState<ChartFrame>('m15');const frame=currentFrame??localFrame;
  const setFrame=(v:ChartFrame)=>{setLocalFrame(v);onFrameChange?.(v)};
  const [averages,setAverages]=useState(true);const [crosshair,setCrosshair]=useState(true);
@@ -13,6 +13,10 @@ export default function TradingChart({market,symbol,quote,frame:currentFrame,onF
  const canvas=useRef<HTMLCanvasElement>(null);const [hover,setHover]=useState<number|null>(null);const [zoom,setZoom]=useState(68);
  const candles=(market?.[frame as keyof Market]??[]) as Candle[];
  const chart=useMemo(()=>candles.filter(c=>[c.open,c.close,c.high,c.low].every(Number.isFinite)&&c.high>=Math.max(c.open,c.close)&&c.low<=Math.min(c.open,c.close)&&c.tick_volume>=0).slice(-zoom),[candles,zoom]);
+ // Overlay only prices already belonging to an actual MT5 position (or the explicitly marked design fixture).
+ // These are not algorithmic signals, entry predictions, or broker order receipts.
+ const visiblePositions=useMemo(()=>positions.filter(p=>p.symbol===symbol&&Number.isFinite(p.price_open)&&p.price_open>0&&
+   Number.isFinite(p.volume)&&p.volume>0&&(p.side.toUpperCase()==='BUY'||p.side.toUpperCase()==='SELL')).slice(0,1),[positions,symbol]);
  const ready=chart.length>=3;
  useEffect(()=>{
   if(!expanded)return;
@@ -35,10 +39,37 @@ export default function TradingChart({market,symbol,quote,frame:currentFrame,onF
     for(let j=0;j<=5;j++){const y=top+j*(bottom-top)/5;context.beginPath();context.moveTo(left,y);context.lineTo(w,y);context.stroke()}
     for(let j=0;j<10;j++){const x=left+j*(right-left)/9;context.beginPath();context.moveTo(x,top);context.lineTo(x,bottom);context.stroke()}
     if(!ready){context.fillStyle=light?'#73818b':'#a9bac4';context.font='13px Segoe UI';context.textAlign='center';context.fillText('بانتظار شموع MT5 مكتملة لهذه الفترة',w/2,h/2);return}
-    const lo=Math.min(...chart.map(c=>c.low)),hi=Math.max(...chart.map(c=>c.high));const padding=Math.max((hi-lo)*.09,.01);const low=lo-padding,high=hi+padding;
+    const lo=Math.min(...chart.map(c=>c.low)),hi=Math.max(...chart.map(c=>c.high));
+    const padRange=Math.max(hi-lo,.01),overlay=visiblePositions[0];
+    const marks=overlay?[overlay.price_open,overlay.sl,overlay.tp].filter(v=>Number.isFinite(v)&&v>0&&v>=lo-padRange*.6&&v<=hi+padRange*.6):[];
+    const padding=Math.max(padRange*.09,.01);
+    const low=Math.min(lo,...marks)-padding,high=Math.max(hi,...marks)+padding;
     const y=(v:number)=>top+(high-v)/(high-low)*ph;
     const dx=(right-left)/chart.length;const bodyWidth=Math.max(2,Math.min(12,dx*.65));
     const volumeMax=Math.max(1,...chart.map(c=>c.tick_volume||0));
+    if(overlay){
+      // Soft, true-position bands align with the Concept 4 reference. The broker values
+      // are not fabricated. Clipped levels are not portrayed as visible price marks.
+      const entry=overlay.price_open,levels=[
+        {value:overlay.tp,label:'TP',line:'#119c59',fill:'rgba(18,163,95,.11)'},
+        {value:overlay.sl,label:'SL',line:'#da3d47',fill:'rgba(216,57,69,.10)'}
+      ];
+      for(const level of levels){
+        if(!(level.value>=low&&level.value<=high))continue;
+        const pointY=y(level.value),entryY=Math.max(top,Math.min(bottom,y(entry)));
+        context.fillStyle=level.fill;context.fillRect(left,Math.min(pointY,entryY),right-left,Math.max(2,Math.abs(pointY-entryY)));
+        context.save();context.setLineDash([5,4]);context.lineWidth=1.2;
+        context.strokeStyle=level.line;context.beginPath();context.moveTo(left,pointY);context.lineTo(right,pointY);context.stroke();context.restore();
+        context.fillStyle=level.line;context.fillRect(right-30,pointY-13,30,17);
+        context.fillStyle='#fff';context.textAlign='center';context.font='bold 10px Segoe UI';
+        context.fillText(level.label,right-15,pointY-1);
+        context.textAlign='left';
+      }
+      if(entry>=low&&entry<=high){
+        context.save();context.strokeStyle='#b8872b';context.setLineDash([3,5]);
+        context.beginPath();context.moveTo(left,y(entry));context.lineTo(right,y(entry));context.stroke();context.restore();
+      }
+    }
     chart.forEach((bar,i)=>{
        const x=left+(i+.5)*dx,up=bar.close>=bar.open;
        const color=up?'#129a60':'#df3742';
@@ -62,7 +93,7 @@ export default function TradingChart({market,symbol,quote,frame:currentFrame,onF
     }
   };
   const observer=new ResizeObserver(paint);observer.observe(el);paint();return ()=>observer.disconnect();
- },[chart,averages,crosshair,hover,ready,theme,frame]);
+ },[chart,averages,crosshair,hover,ready,theme,frame,visiblePositions]);
  const last=chart.at(-1);const highlighted=hover===null?last:chart[hover]??last;
  const historical=frame==='m30'||frame==='h1'||frame==='h4'||frame==='d1'?frameMeta?.[frame]:undefined;
  return <section className={'panel chart-panel '+(expanded?'chart-expanded':'')}>
@@ -78,6 +109,6 @@ export default function TradingChart({market,symbol,quote,frame:currentFrame,onF
       if(!crosshair||!ready)return;
       const width=e.currentTarget.getBoundingClientRect().width-73;setHover(Math.max(0,Math.min(chart.length-1,Math.floor((e.nativeEvent.offsetX-10)/width*chart.length))))
     }}/></div>
-    <div className="chart-footer">{preview?'DESIGN PREVIEW':historical?(historical.live?'MT5 OHLC':'MT5 HISTORY · STALE'):'MT5 OHLC'} • {ready?`${chart.length} bars • ${frame.toUpperCase()} · UTC`:'No verified candles'} <span>{quote===undefined?'':`LAST ${num(quote)}`}</span></div>
+    <div className="chart-footer">{preview?'DESIGN PREVIEW':historical?(historical.live?'MT5 OHLC':'MT5 HISTORY · STALE'):'MT5 OHLC'} • {ready?`${chart.length} bars • ${frame.toUpperCase()} · UTC`:'No verified candles'}{visiblePositions.length?' • SL/TP من المركز المعروض':''} <span>{quote===undefined?'':`LAST ${num(quote)}`}</span></div>
    </section>
 }
