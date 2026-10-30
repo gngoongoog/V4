@@ -71,4 +71,25 @@ assert(new Set(preview.slice(10,65).map(x=>Math.round(Math.abs(x.close-x.open)*1
 assert(new Set(preview.slice(10,65).map(x=>x.tick_volume)).size>15,
  'Preview volume must vary with the candles');
 
+
+// Closed-candle and broker precision regression: never render the active
+// partial bar as a closed MT5 candle, even if it appears in a bad payload.
+assert.equal(out.brokerPriceDigits(0.01),2);
+assert.equal(out.brokerPriceDigits(0.001),3);
+assert.equal(out.brokerPriceDigits(0.1),1);
+assert.equal(out.brokerPriceDigits(null),2);
+const nowMs=1_800_000_000_000,nowSec=Math.floor(nowMs/1000);
+const realBars=[candle(nowSec-120,2450,2451,2452,2449),
+ candle(nowSec-60,2451,2452,2453,2450),
+ candle(nowSec,2452,2454,2455,2451)];
+assert.equal(out.closedBrokerCandles(realBars,'m1',nowMs).length,2,
+ 'A source M1 candle still forming must never be called closed');
+assert.equal(out.closedBrokerCandles(realBars,'m5',nowMs).length,0,
+ 'Each timeframe must apply its own close horizon');
+assert.equal(out.lastClosedAt(realBars.slice(0,1),'m1'),
+ new Date((nowSec-60)*1000).toISOString().slice(0,16).replace('T',' ')+' UTC');
+assert.equal(out.lastClosedAt([],'m1'),null);
+const nowClosed=out.closedBrokerCandles(realBars,'m1',nowMs);
+assert.equal(nowClosed.at(-1).time,nowSec-60);
+
 console.log('PASS: all seven chart timeframes select the real chart state');
