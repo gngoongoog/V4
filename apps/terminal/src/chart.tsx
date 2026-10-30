@@ -3,21 +3,67 @@ import {GoldSymbol} from './gold-symbol';
 import type {Candle,Market,Position} from './types';
 import type {ChartFrameMeta} from './chart-history';
 import {num} from './format';
+
 const FRAMES=['m1','m5','m15','m30','h1','h4','d1'] as const;
 export type ChartFrame=typeof FRAMES[number];
-export default function TradingChart({market,symbol,quote,positions=[],frame:currentFrame,onFrameChange,theme='light',frameMeta,preview=false}:{market?:Market|null;symbol:string;quote?:number;positions?:Position[];frame?:ChartFrame;onFrameChange?:(frame:ChartFrame)=>void;theme?:'dark'|'smoke'|'light';frameMeta?:ChartFrameMeta;preview?:boolean}){
- const [localFrame,setLocalFrame]=useState<ChartFrame>('m15');const frame=currentFrame??localFrame;
- const setFrame=(v:ChartFrame)=>{setLocalFrame(v);onFrameChange?.(v)};
- const [averages,setAverages]=useState(true);const [crosshair,setCrosshair]=useState(true);
+const UP='#0eaa78',DOWN='#e34855';
+const clamp=(n:number,low:number,high:number)=>Math.max(low,Math.min(high,n));
+
+/** Rendering never manufactures a candle. Reject malformed bars, order by time
+ * and remove duplicate timestamps before calculating the display window. */
+export function cleanChartCandles(input:Candle[]):Candle[]{
+ const sorted=input.filter(b=>Number.isSafeInteger(b.time)&&b.time>0&&
+  [b.open,b.high,b.low,b.close].every(n=>Number.isFinite(n)&&n>0)&&
+  b.high>=b.low&&b.high>=Math.max(b.open,b.close)&&b.low<=Math.min(b.open,b.close)&&
+  Number.isSafeInteger(b.tick_volume)&&b.tick_volume>=0).sort((a,b)=>a.time-b.time);
+ return sorted.filter((b,i)=>i===0||b.time!==sorted[i-1].time).slice(-300);
+}
+export function chartWindow(all:Candle[],count:number,offset:number):{bars:Candle[];start:number;end:number}{
+ const end=clamp(all.length-Math.round(offset),0,all.length);
+ const start=Math.max(0,end-clamp(Math.round(count),12,180));
+ return {bars:all.slice(start,end),start,end};
+}
+export function emaSeries(bars:Candle[],period:number):number[]{
+ const alpha=2/(period+1),values:number[]=[];
+ for(let i=0;i<bars.length;i++)values.push(i===0?bars[i].close:bars[i].close*alpha+values[i-1]*(1-alpha));
+ return values;
+}
+const priceText=(v:number,step:number)=>v.toFixed(step<.01?3:2);
+function timeText(time:number,frame:ChartFrame){
+ const date=new Date(time*1000);
+ if(frame==='d1'||frame==='h4')return date.toLocaleDateString('en-GB',{timeZone:'UTC',day:'2-digit',month:'short'});
+ return date.toLocaleTimeString('en-GB',{timeZone:'UTC',hour:'2-digit',minute:'2-digit'});
+}
+type ChartProps={market?:Market|null;symbol:string;quote?:number;positions?:Position[];frame?:ChartFrame;
+ onFrameChange?:(frame:ChartFrame)=>void;theme?:'dark'|'smoke'|'light';frameMeta?:ChartFrameMeta;preview?:boolean};
+type Hover={index:number;y:number}|null;
+export default function TradingChart({market,symbol,quote,positions=[],frame:currentFrame,onFrameChange,
+ theme='light',frameMeta,preview=false}:ChartProps){
+ const [localFrame,setLocalFrame]=useState<ChartFrame>('m15');
+ const frame=currentFrame??localFrame;
+ const [averages,setAverages]=useState(true),[crosshair,setCrosshair]=useState(true);
  const [expanded,setExpanded]=useState(false);
- const canvas=useRef<HTMLCanvasElement>(null);const [hover,setHover]=useState<number|null>(null);const [zoom,setZoom]=useState(68);
- const candles=(market?.[frame as keyof Market]??[]) as Candle[];
- const chart=useMemo(()=>candles.filter(c=>[c.open,c.close,c.high,c.low].every(Number.isFinite)&&c.high>=Math.max(c.open,c.close)&&c.low<=Math.min(c.open,c.close)&&c.tick_volume>=0).slice(-zoom),[candles,zoom]);
- // Overlay only prices already belonging to an actual MT5 position (or the explicitly marked design fixture).
- // These are not algorithmic signals, entry predictions, or broker order receipts.
- const visiblePositions=useMemo(()=>positions.filter(p=>p.symbol===symbol&&Number.isFinite(p.price_open)&&p.price_open>0&&
-   Number.isFinite(p.volume)&&p.volume>0&&(p.side.toUpperCase()==='BUY'||p.side.toUpperCase()==='SELL')).slice(0,1),[positions,symbol]);
- const ready=chart.length>=3;
+ const [barsVisible,setBarsVisible]=useState(56),[offset,setOffset]=useState(0);
+ const [hover,setHover]=useState<Hover>(null);
+ const canvas=useRef<HTMLCanvasElement>(null);
+ const drag=useRef<{x:number;offset:number;step:number}|null>(null);
+ const all=useMemo(()=>cleanChartCandles((market?.[frame as keyof Market]??[]) as Candle[]),
+  [market,frame]);
+ const windowed=useMemo(()=>chartWindow(all,barsVisible,offset),[all,barsVisible,offset]);
+ const chart=windowed.bars,ready=chart.length>=3;
+ const ema9=useMemo(()=>emaSeries(all,9),[all]),ema21=useMemo(()=>emaSeries(all,21),[all]);
+ // A single broker-provided position is shown, never a guessed trading signal.
+ const position=useMemo(()=>positions.find(p=>p.symbol===symbol&&
+  Number.isFinite(p.price_open)&&p.price_open>0&&Number.isFinite(p.volume)&&p.volume>0&&
+  (p.side.toUpperCase()==='BUY'||p.side.toUpperCase()==='SELL')),[positions,symbol]);
+ const priceQuote=typeof quote==='number'&&Number.isFinite(quote)&&quote>0?quote:null;
+ const setFrame=(next:ChartFrame)=>{
+  setLocalFrame(next);onFrameChange?.(next);setHover(null);setOffset(0);drag.current=null;
+ };
+ const resetView=()=>{setOffset(0);setBarsVisible(56);setHover(null)};
+ useEffect(()=>{
+  setOffset(0);setHover(null);drag.current=null;
+ },[frame,symbol]);
  useEffect(()=>{
   if(!expanded)return;
   const close=(event:KeyboardEvent)=>{if(event.key==='Escape')setExpanded(false)};
@@ -25,95 +71,216 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
  },[expanded]);
  useEffect(()=>{
   const el=canvas.current;if(!el)return;
-  const context=el.getContext('2d');if(!context)return;
-  let w=0,h=0;
-  const paint=()=>{
-    const bounds=el.getBoundingClientRect();w=Math.round(bounds.width);h=Math.round(bounds.height);
-    if(!w||!h)return;
-    const dpr=Math.min(window.devicePixelRatio||1,2);el.width=w*dpr;el.height=h*dpr;
-    context.setTransform(dpr,0,0,dpr,0,0);context.clearRect(0,0,w,h);
-    const light=theme==='light';
-    context.fillStyle=light?'#f8fafc':'#141c23';context.fillRect(0,0,w,h);
-    const left=10,right=w-63,top=10,bottom=h-36,ph=bottom-top-35,volBase=bottom,volH=45;
-    context.strokeStyle=light?'rgba(121,140,153,.16)':'rgba(139,158,174,.16)';context.lineWidth=1;
-    for(let j=0;j<=5;j++){const y=top+j*(bottom-top)/5;context.beginPath();context.moveTo(left,y);context.lineTo(w,y);context.stroke()}
-    for(let j=0;j<10;j++){const x=left+j*(right-left)/9;context.beginPath();context.moveTo(x,top);context.lineTo(x,bottom);context.stroke()}
-    if(!ready){context.fillStyle=light?'#73818b':'#a9bac4';context.font='13px Segoe UI';context.textAlign='center';context.fillText('بانتظار شموع MT5 مكتملة لهذه الفترة',w/2,h/2);return}
-    const lo=Math.min(...chart.map(c=>c.low)),hi=Math.max(...chart.map(c=>c.high));
-    const padRange=Math.max(hi-lo,.01),overlay=visiblePositions[0];
-    const marks=overlay?[overlay.price_open,overlay.sl,overlay.tp].filter(v=>Number.isFinite(v)&&v>0&&v>=lo-padRange*.6&&v<=hi+padRange*.6):[];
-    const padding=Math.max(padRange*.09,.01);
-    const low=Math.min(lo,...marks)-padding,high=Math.max(hi,...marks)+padding;
-    const y=(v:number)=>top+(high-v)/(high-low)*ph;
-    const dx=(right-left)/chart.length;const bodyWidth=Math.max(2,Math.min(12,dx*.65));
-    const volumeMax=Math.max(1,...chart.map(c=>c.tick_volume||0));
-    if(overlay){
-      // Soft, true-position bands align with the Concept 4 reference. The broker values
-      // are not fabricated. Clipped levels are not portrayed as visible price marks.
-      const entry=overlay.price_open,levels=[
-        {value:overlay.tp,label:'TP',line:'#119c59',fill:'rgba(18,163,95,.11)'},
-        {value:overlay.sl,label:'SL',line:'#da3d47',fill:'rgba(216,57,69,.10)'}
-      ];
-      for(const level of levels){
-        if(!(level.value>=low&&level.value<=high))continue;
-        const pointY=y(level.value);
-        // Thin levels, not a full entry-to-TP profit area: the latter visually
-        // misrepresents the reference and can obscure the candle bodies.
-        context.fillStyle=level.fill;context.fillRect(left,pointY-6,right-left,12);
-        context.save();context.setLineDash([5,4]);context.lineWidth=1.2;
-        context.strokeStyle=level.line;context.beginPath();context.moveTo(left,pointY);context.lineTo(right,pointY);context.stroke();context.restore();
-        context.fillStyle=level.line;context.fillRect(right-30,pointY-13,30,17);
-        context.fillStyle='#fff';context.textAlign='center';context.font='bold 10px Segoe UI';
-        context.fillText(level.label,right-15,pointY-1);
-        context.textAlign='left';
-      }
-      if(entry>=low&&entry<=high){
-        const entryY=y(entry),bandLeft=left+(right-left)*.38;
-        context.fillStyle=overlay.side.toUpperCase()==='BUY'?'rgba(25,168,102,.10)':'rgba(211,64,73,.10)';
-        context.fillRect(bandLeft,entryY-11,right-bandLeft,22);
-        context.save();context.strokeStyle='#b8872b';context.setLineDash([3,5]);
-        context.beginPath();context.moveTo(left,entryY);context.lineTo(right,entryY);context.stroke();context.restore();
-      }
+  const ctx=el.getContext('2d');if(!ctx)return;
+  const draw=()=>{
+   const bounds=el.getBoundingClientRect();
+   const w=Math.round(bounds.width),h=Math.round(bounds.height);
+   if(w<160||h<100)return;
+   const dpr=Math.min(window.devicePixelRatio||1,2);
+   if(el.width!==Math.round(w*dpr)||el.height!==Math.round(h*dpr)){
+    el.width=Math.round(w*dpr);el.height=Math.round(h*dpr);
+   }
+   ctx.setTransform(dpr,0,0,dpr,0,0);
+   ctx.clearRect(0,0,w,h);
+   const light=theme==='light',bg=light?'#ffffff':'#151e26',
+     ink=light?'#71808b':'#a9bac5',grid=light?'#e9edf2':'#26343f',
+     lineUp=light?'#079f72':'#22c492',lineDown=light?'#dc3c49':'#f35a69';
+   const xLeft=12,xRight=w-69,top=12,timeBottom=h-23;
+   const volHeight=clamp(h*.19,33,68),volumeBottom=timeBottom-7;
+   const volumeTop=volumeBottom-volHeight,priceBottom=volumeTop-13;
+   const priceHeight=priceBottom-top,plotWidth=xRight-xLeft;
+   ctx.fillStyle=bg;ctx.fillRect(0,0,w,h);
+   ctx.fillStyle=light?'#f5f8fb':'#19242d';ctx.fillRect(xRight,0,w-xRight,h);
+   ctx.fillStyle=light?'#f9fbfd':'#17222b';ctx.fillRect(0,timeBottom,w,h-timeBottom);
+   ctx.font='11px Segoe UI, sans-serif';ctx.textAlign='left';
+   ctx.strokeStyle=grid;ctx.lineWidth=1;
+   for(let j=0;j<=5;j++){
+    const gy=Math.round(top+j*priceHeight/5)+.5;
+    ctx.beginPath();ctx.moveTo(xLeft,gy);ctx.lineTo(w,gy);ctx.stroke();
+   }
+   for(let j=0;j<=6;j++){
+    const gx=Math.round(xLeft+j*plotWidth/6)+.5;
+    ctx.beginPath();ctx.moveTo(gx,top);ctx.lineTo(gx,timeBottom);ctx.stroke();
+   }
+   ctx.beginPath();ctx.moveTo(xLeft,volumeTop-.5);ctx.lineTo(w,volumeTop-.5);ctx.stroke();
+   if(!ready){
+    ctx.fillStyle=ink;ctx.font='13px Segoe UI, sans-serif';ctx.textAlign='center';
+    ctx.fillText(preview?'لا توجد شموع معاينة':'بانتظار بيانات OHLC من MT5 لهذا الفريم',w/2,h/2);
+    return;
+   }
+   const highC=Math.max(...chart.map(b=>b.high)),lowC=Math.min(...chart.map(b=>b.low));
+   const baseRange=Math.max(.01,highC-lowC);
+   const nearby=[position?.price_open,position?.sl,position?.tp,priceQuote]
+    .filter((v):v is number=>typeof v==='number'&&Number.isFinite(v)&&v>0&&
+     v>lowC-baseRange*.3&&v<highC+baseRange*.3);
+   const low=Math.min(lowC,...nearby)-baseRange*.095;
+   const high=Math.max(highC,...nearby)+baseRange*.095;
+   const y=(price:number)=>top+(high-price)/(high-low)*priceHeight;
+   const step=plotWidth/chart.length,bodyW=Math.max(2,Math.min(16,step*.72));
+   const volumeMax=Math.max(1,...chart.map(b=>b.tick_volume));
+   ctx.fillStyle=ink;ctx.textAlign='left';ctx.font='11px Segoe UI, sans-serif';
+   for(let j=0;j<=5;j++){
+    const value=high-(high-low)*j/5;
+    ctx.fillText(priceText(value,baseRange/5),xRight+7,top+j*priceHeight/5+4);
+   }
+   // The lower histogram is MT5 tick volume, not centralized exchange volume.
+   chart.forEach((b,i)=>{
+    const x=xLeft+(i+.5)*step,up=b.close>=b.open;
+    const color=up?(light?'rgba(18,166,116,.35)':'rgba(35,190,137,.42)'):
+      (light?'rgba(219,70,84,.32)':'rgba(240,85,99,.42)');
+    const barH=b.tick_volume/volumeMax*(volHeight-9);
+    ctx.fillStyle=color;ctx.fillRect(Math.round(x-bodyW/2),volumeBottom-barH,bodyW,Math.max(1,barH));
+   });
+   // Broker position levels stay behind the candle bodies.
+   if(position){
+    const levels=[
+     {value:position.tp,label:'TP',color:'#099e68'},
+     {value:position.sl,label:'SL',color:'#dc4654'},
+     {value:position.price_open,label:'ENTRY',color:'#b58a2a'}
+    ];
+    ctx.save();ctx.beginPath();ctx.rect(xLeft,top,plotWidth,priceHeight);ctx.clip();
+    for(const l of levels){
+     if(!Number.isFinite(l.value)||l.value<=low||l.value>=high)continue;
+     const yy=y(l.value);
+     ctx.fillStyle=l.color==='#099e68'?'rgba(13,167,103,.08)':
+      l.color==='#dc4654'?'rgba(222,67,84,.07)':'rgba(181,138,42,.05)';
+     ctx.fillRect(xLeft,yy-4,plotWidth,8);
+     ctx.strokeStyle=l.color;ctx.lineWidth=1;ctx.setLineDash([5,4]);
+     ctx.beginPath();ctx.moveTo(xLeft,yy);ctx.lineTo(xRight,yy);ctx.stroke();ctx.setLineDash([]);
     }
-    chart.forEach((bar,i)=>{
-       const x=left+(i+.5)*dx,up=bar.close>=bar.open;
-       const color=up?'#129a60':'#df3742';
-       context.fillStyle=up?'#159f6460':'#dc475660';
-       context.fillRect(x-bodyWidth/2,volBase-(bar.tick_volume||0)/volumeMax*volH,bodyWidth,Math.max(1,(bar.tick_volume||0)/volumeMax*volH));
-       context.strokeStyle=color;context.lineWidth=1.35;context.beginPath();context.moveTo(x,y(bar.high));context.lineTo(x,y(bar.low));context.stroke();
-       context.fillStyle=color;context.fillRect(x-bodyWidth/2,y(Math.max(bar.open,bar.close)),bodyWidth,Math.max(1,Math.abs(y(bar.open)-y(bar.close))));
-    });
-    if(averages){
-      for (const [period,color] of [[11,'#5d7d79'],[25,'#343e44']] as const){
-        context.strokeStyle=color;context.lineWidth=1.4;context.beginPath();
-        chart.forEach((_,i)=>{if(i<period-1)return;const avg=chart.slice(i-period+1,i+1).reduce((s,c)=>s+c.close,0)/period;
-          const x=left+(i+.5)*dx;if(i===period-1)context.moveTo(x,y(avg));else context.lineTo(x,y(avg))});context.stroke();
-      }
+    ctx.restore();
+    for(const l of levels){
+     if(!Number.isFinite(l.value)||l.value<=low||l.value>=high)continue;
+     const yy=y(l.value);
+     ctx.fillStyle=l.color;ctx.fillRect(xRight-33,yy-11,33,15);
+     ctx.fillStyle='#fff';ctx.textAlign='center';ctx.font='bold 9px Segoe UI';
+     ctx.fillText(l.label,xRight-16,yy);ctx.textAlign='left';
     }
-    context.textAlign='left';context.fillStyle=light?'#6e7a84':'#aabac5';context.font='11px Segoe UI';
-    for(let j=0;j<6;j++)context.fillText(num(high-(high-low)*j/5,2),right+7,top+j*ph/5+4);
-    for(let j=0;j<7;j++){const bar=chart[Math.min(chart.length-1,Math.floor(j*(chart.length-1)/6))];const t=new Date(bar.time*1000);const label=frame==='h4'||frame==='d1'?t.toLocaleDateString('en-GB',{day:'2-digit',month:'short',timeZone:'UTC'}):t.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:'UTC'});context.fillText(label,left+j*(right-left)/7,bottom+22)}
-    if(crosshair&&hover!==null&&hover>=0&&hover<chart.length){
-      const x=left+(hover+.5)*dx;context.save();context.setLineDash([4,4]);context.strokeStyle='#9fe7fe9c';context.beginPath();context.moveTo(x,top);context.lineTo(x,bottom);context.stroke();context.restore();
+   }
+   // Render each OHLC bar as a wick plus filled body, independent of volume.
+   ctx.save();ctx.beginPath();ctx.rect(xLeft,top,plotWidth,priceHeight);ctx.clip();
+   chart.forEach((b,i)=>{
+    const x=xLeft+(i+.5)*step,up=b.close>=b.open,col=up?lineUp:lineDown;
+    const hi=y(b.high),lo=y(b.low),open=y(b.open),close=y(b.close);
+    ctx.strokeStyle=col;ctx.lineWidth=1.25;
+    ctx.beginPath();ctx.moveTo(Math.round(x)+.5,hi);ctx.lineTo(Math.round(x)+.5,lo);ctx.stroke();
+    const bodyTop=Math.min(open,close),height=Math.abs(close-open);
+    ctx.fillStyle=col;
+    if(height<1.2)ctx.fillRect(Math.round(x-bodyW/2),bodyTop-.6,bodyW,1.3);
+    else ctx.fillRect(Math.round(x-bodyW/2),bodyTop,bodyW,Math.max(1.2,height));
+   });
+   if(averages){
+    for(const [array,color] of [[ema9,'#e4a83a'],[ema21,light?'#354f61':'#b0c0cb']] as const){
+     ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.setLineDash([]);
+     ctx.beginPath();let moved=false;
+     for(let i=0;i<chart.length;i++){
+      const v=array[windowed.start+i];if(!Number.isFinite(v))continue;
+      const x=xLeft+(i+.5)*step;
+      if(!moved){ctx.moveTo(x,y(v));moved=true}else ctx.lineTo(x,y(v));
+     }
+     if(moved)ctx.stroke();
     }
+   }
+   ctx.restore();
+   // Last actual quote marker. Do not imply a live quote in DESIGN PREVIEW.
+   if(priceQuote!==null&&priceQuote>low&&priceQuote<high){
+    const yy=y(priceQuote),up=priceQuote>=chart[chart.length-1].open;
+    ctx.save();ctx.setLineDash([3,3]);ctx.strokeStyle=up?UP:DOWN;
+    ctx.beginPath();ctx.moveTo(xLeft,yy);ctx.lineTo(xRight,yy);ctx.stroke();ctx.restore();
+    ctx.fillStyle=up?UP:DOWN;ctx.fillRect(xRight,yy-10,w-xRight,20);
+    ctx.fillStyle='#fff';ctx.textAlign='center';ctx.font='bold 10px Segoe UI';
+    ctx.fillText(priceText(priceQuote,baseRange/5),xRight+(w-xRight)/2,yy+3);
+   }
+   ctx.fillStyle=ink;ctx.textAlign='center';ctx.font='10px Segoe UI, sans-serif';
+   const ticks=Math.min(6,chart.length-1);
+   for(let j=0;j<=ticks;j++){
+    const i=Math.round(j*(chart.length-1)/ticks),x=xLeft+(i+.5)*step;
+    ctx.fillText(timeText(chart[i].time,frame),clamp(x,34,w-95),h-7);
+   }
+   ctx.textAlign='left';ctx.font='9px Segoe UI';ctx.fillStyle=ink;
+   ctx.fillText('TICK VOL',xLeft+3,volumeTop+10);
+   if(crosshair&&hover&&hover.index>=0&&hover.index<chart.length){
+    const hx=xLeft+(hover.index+.5)*step,hy=clamp(hover.y,top,priceBottom);
+    ctx.save();ctx.strokeStyle=light?'#78909ea6':'#a5bfcca0';ctx.lineWidth=1;
+    ctx.setLineDash([4,4]);ctx.beginPath();
+    ctx.moveTo(hx,top);ctx.lineTo(hx,timeBottom);
+    ctx.moveTo(xLeft,hy);ctx.lineTo(xRight,hy);ctx.stroke();ctx.restore();
+    const price=high-(hy-top)/priceHeight*(high-low);
+    ctx.fillStyle=light?'#263b48':'#bacbd5';ctx.fillRect(xRight,hy-10,w-xRight,20);
+    ctx.fillStyle=light?'#fff':'#15202b';ctx.font='bold 10px Segoe UI';ctx.textAlign='center';
+    ctx.fillText(priceText(price,baseRange/5),xRight+(w-xRight)/2,hy+3);
+   }
   };
-  const observer=new ResizeObserver(paint);observer.observe(el);paint();return ()=>observer.disconnect();
- },[chart,averages,crosshair,hover,ready,theme,frame,visiblePositions]);
- const last=chart.at(-1);const highlighted=hover===null?last:chart[hover]??last;
+  const observer=new ResizeObserver(draw);
+  observer.observe(el);draw();return()=>observer.disconnect();
+ },[chart,ready,windowed.start,ema9,ema21,position,priceQuote,theme,averages,crosshair,hover,frame,preview]);
+ const highlighted=hover?chart[hover.index]??chart.at(-1):chart.at(-1);
  const historical=frame==='m30'||frame==='h1'||frame==='h4'||frame==='d1'?frameMeta?.[frame]:undefined;
+ const dataLabel=preview?'SIMULATED • NOT MT5':historical?
+   (historical.live?'MT5 HISTORY':'MT5 HISTORY • STALE'):'MT5 OHLC';
  return <section className={'panel chart-panel '+(expanded?'chart-expanded':'')}>
-   <div className="chart-head"><div className="chart-symbol"><GoldSymbol className="gold-icon"/><div><strong>{symbol||'XAUUSD'}</strong><small>{(symbol||'XAUUSD').toUpperCase().startsWith('XAU')?'Gold Spot / US Dollar':'Trading symbol'}</small></div><b className="concept-chart-quote">{quote===undefined?'—':num(quote)}</b></div>
-    <div className="chart-actions"><div className="timeframes">{FRAMES.map(tf=><button key={tf} type="button" className={tf===frame?'selected':''} aria-pressed={tf===frame} title={`MT5 ${tf.toUpperCase()} • closed candles`} onClick={()=>{setFrame(tf);setHover(null)}}>{tf.toUpperCase()}</button>)}</div>
-      <button className={'tool-button '+(crosshair?'tool-on':'')} onClick={()=>setCrosshair(v=>!v)} title="Crosshair">⌖</button>
-      <button className={'tool-button '+(averages?'tool-on':'')} onClick={()=>setAverages(v=>!v)} title="Moving averages">⌁</button>
-      <button className="tool-button" onClick={()=>setZoom(v=>v===68?40:v===40?84:68)} title="Candle zoom">⊕</button>
-      <button type="button" className="tool-button wide" aria-label={expanded?'استعادة حجم الشارت':'تكبير الشارت'} aria-pressed={expanded} onClick={()=>setExpanded(v=>!v)} title={expanded?'استعادة حجم الشارت':'تكبير الشارت'}>⛶</button>
-    </div></div>
-    <div className="ohlc-line">{highlighted?`O ${num(highlighted.open)}　H ${num(highlighted.high)}　L ${num(highlighted.low)}　C ${num(highlighted.close)}　${highlighted.close>=highlighted.open?'▲':'▼'}`:'O —　H —　L —　C —'}</div>
-    <div className="chart-frame"><canvas aria-label={`MT5 ${symbol} ${frame} candlestick chart`} ref={canvas} onMouseLeave={()=>setHover(null)} onMouseMove={e=>{
-      if(!crosshair||!ready)return;
-      const width=e.currentTarget.getBoundingClientRect().width-73;setHover(Math.max(0,Math.min(chart.length-1,Math.floor((e.nativeEvent.offsetX-10)/width*chart.length))))
-    }}/></div>
-    <div className="chart-footer">{preview?'DESIGN PREVIEW':historical?(historical.live?'MT5 OHLC':'MT5 HISTORY · STALE'):'MT5 OHLC'} • {ready?`${chart.length} bars • ${frame.toUpperCase()} · UTC`:'No verified candles'}{visiblePositions.length?' • SL/TP من المركز المعروض':''} <span>{quote===undefined?'':`LAST ${num(quote)}`}</span></div>
-   </section>
+  <div className="chart-head">
+   <div className="chart-symbol"><GoldSymbol className="gold-icon"/>
+    <div><strong>{symbol||'XAUUSD'}</strong><small>{(symbol||'XAUUSD').toUpperCase().startsWith('XAU')?'Gold Spot / US Dollar':'Trading symbol'}</small></div>
+    <b className="concept-chart-quote">{priceQuote===null?'—':num(priceQuote)}</b></div>
+   <div className="chart-actions">
+    <div className="timeframes">{FRAMES.map(tf=><button type="button" key={tf} className={tf===frame?'selected':''}
+     aria-pressed={tf===frame} title={'MT5 '+tf.toUpperCase()+' • closed candles'}
+     onClick={()=>setFrame(tf)}>{tf.toUpperCase()}</button>)}</div>
+    <button type="button" className={'tool-button '+(crosshair?'tool-on':'')} title="Crosshair"
+     aria-pressed={crosshair} onClick={()=>setCrosshair(v=>!v)}>⌖</button>
+    <button type="button" className={'tool-button '+(averages?'tool-on':'')} title="EMA 9 / EMA 21"
+     aria-pressed={averages} onClick={()=>setAverages(v=>!v)}>⌁</button>
+    <button type="button" className="tool-button" title="تكبير الشموع" aria-label="تكبير الشموع"
+     onClick={()=>setBarsVisible(v=>clamp(v-12,16,120))}>＋</button>
+    <button type="button" className="tool-button" title="تصغير الشموع" aria-label="تصغير الشموع"
+     onClick={()=>setBarsVisible(v=>clamp(v+12,16,120))}>－</button>
+    <button type="button" className="tool-button" title="العودة لأحدث شمعة" aria-label="العودة لأحدث شمعة"
+     onClick={resetView}>↺</button>
+    <button type="button" className="tool-button wide" aria-label={expanded?'استعادة حجم الشارت':'تكبير الشارت'}
+     aria-pressed={expanded} title={expanded?'استعادة حجم الشارت':'تكبير الشارت'}
+     onClick={()=>setExpanded(v=>!v)}>⛶</button>
+   </div>
+  </div>
+  <div className="ohlc-line">{highlighted?
+   'O '+num(highlighted.open)+'   H '+num(highlighted.high)+'   L '+num(highlighted.low)+
+   '   C '+num(highlighted.close)+'   '+(highlighted.close>=highlighted.open?'▲':'▼')+
+   '   Vol '+highlighted.tick_volume:'O —   H —   L —   C —'}
+   <span className="concept-chart-source">{dataLabel}</span>
+  </div>
+  <div className="chart-frame">
+   <canvas aria-label={'MT5 '+symbol+' '+frame+' OHLC candlestick chart'} ref={canvas}
+    onDoubleClick={resetView}
+    onWheel={e=>{
+     if(!ready)return;
+     e.preventDefault();
+     if(e.shiftKey){setOffset(v=>clamp(v+(e.deltaY>0?5:-5),0,Math.max(0,all.length-12)))}
+     else setBarsVisible(v=>clamp(v+(e.deltaY>0?8:-8),16,120));
+    }}
+    onPointerDown={e=>{
+     if(e.button!==0||!ready)return;
+     drag.current={x:e.clientX,offset,step:Math.max(2,(e.currentTarget.clientWidth-81)/chart.length)};
+     e.currentTarget.setPointerCapture(e.pointerId);
+    }}
+    onPointerUp={e=>{drag.current=null;if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId)}}
+    onPointerCancel={()=>{drag.current=null}}
+    onPointerLeave={()=>{if(!drag.current)setHover(null)}}
+    onPointerMove={e=>{
+     if(!ready)return;
+     if(drag.current){
+      const shift=Math.round((e.clientX-drag.current.x)/drag.current.step);
+      setOffset(clamp(drag.current.offset+shift,0,Math.max(0,all.length-12)));
+      return;
+     }
+     if(!crosshair)return;
+     const bounds=e.currentTarget.getBoundingClientRect();
+     const width=Math.max(1,bounds.width-81),i=Math.floor((e.clientX-bounds.left-12)/width*chart.length);
+     setHover({index:clamp(i,0,chart.length-1),y:e.clientY-bounds.top});
+    }}/>
+  </div>
+  <div className="chart-footer">
+   <span>{preview?'معاينة توضيحية، ليست أسعار السوق':'بيانات المصدر: MT5'} • {ready?chart.length+' شمعة '+frame.toUpperCase():'لا توجد شموع موثوقة'}{position?' • مستويات مركز MT5/معاينة':''}</span>
+   <span>{offset>0?'عرض تاريخي · '+offset+' شمعة للخلف':'آخر شمعة'} • UTC • Tick Volume</span>
+  </div>
+ </section>;
 }
