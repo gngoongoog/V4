@@ -19,6 +19,14 @@ export function ownedCloseTickets(positions:Position[],symbol:string,profitOnly:
 }
 
 export type ManualInput={side:1|-1;lots:number;stop:number;target:number;reference:number};
+// Numeric steppers change only a local draft. MT5 remains the authority for
+// volume and price steps; the subsequent order is independently validated.
+export function steppedDraftValue(raw:string,step:number,direction:-1|1,min=0,max=Number.MAX_SAFE_INTEGER):string{
+ if(!raw.trim()||!Number.isFinite(Number(raw))||!Number.isFinite(step)||step<=0)return raw;
+ const digits=Math.min(8,Math.max(0,(String(step).split('.')[1]||'').length));
+ const next=Math.min(max,Math.max(min,Number((Number(raw)+direction*step).toFixed(Math.max(digits,4)))));
+ return next.toFixed(digits);
+}
 export function manualDraft(side:1|-1,lotsText:string,stopText:string,targetText:string,bid:number|null,ask:number|null):ManualInput|null{
  if(!lotsText.trim()||!stopText.trim()||!targetText.trim()||bid===null||ask===null)return null;
  const lots=Number(lotsText),stop=Number(stopText),target=Number(targetText),reference=side===1?ask:bid,exit=side===1?bid:ask;
@@ -41,6 +49,13 @@ type Props={account:Telemetry|null;status:Status|null;accountMatches:boolean;quo
 export function ConceptMarketDesk({account,status,accountMatches,quoteFresh,preview,busy,native,frame,onFrameChange,theme,market,frameMeta,open,onTradingSettings,onStart,onStop,onClose,onCloseTicket,onManual,onCancelPending,pendingCancellations}:Props){
  const [direction,setDirection]=useState<1|-1>(1);const [lots,setLots]=useState('0.01');
  const [stop,setStop]=useState('');const [target,setTarget]=useState('');const [manualError,setManualError]=useState('');
+ const volumeStep=valid(account?.volume_step)&&account.volume_step>0?account.volume_step:0.01;
+ const volumeMin=valid(account?.volume_min)&&account.volume_min>0?account.volume_min:volumeStep;
+ const volumeMax=valid(account?.volume_max)&&account.volume_max>=volumeMin?account.volume_max:100;
+ const priceStep=valid(account?.point)&&account.point>0?account.point:preview?0.01:0;
+ const stepPrice=(value:string,update:(text:string)=>void,direction:-1|1)=>{
+  if(priceStep>0&&value.trim())update(steppedDraftValue(value,priceStep,direction,priceStep));
+ };
  const bid=(preview||quoteFresh)&&valid(account?.bid)?account.bid:null;
  const ask=(preview||quoteFresh)&&valid(account?.ask)?account.ask:null;
  const spread=bid!==null&&ask!==null&&ask>=bid?ask-bid:null;
@@ -65,12 +80,32 @@ export function ConceptMarketDesk({account,status,accountMatches,quoteFresh,prev
    <div><span className={'concept-led '+(quoteFresh&&!preview?'on':'')}/><span>حالة السوق<strong>{quoteFresh?'سعر حديث':'غير مؤكدة'}</strong><small>{quoteFresh?'تيك MT5 حديث':'بانتظار سعر حديث'}</small></span></div>
   </div>
   <div className="concept-market-layout">
-   <TradingChart market={market??account?.market} symbol={symbol} quote={bid??undefined} frame={frame} onFrameChange={onFrameChange} theme={theme} frameMeta={frameMeta} preview={preview}/>
+   <TradingChart market={market??account?.market} symbol={symbol} quote={bid??undefined} positions={preview||quoteFresh?positions:[]} frame={frame} onFrameChange={onFrameChange} theme={theme} frameMeta={frameMeta} preview={preview}/>
    <section className="panel concept-order-panel">
     <div className="panel-title"><b>{symbol} - التداول المباشر</b><button type="button" title="فتح إعدادات التداول" onClick={onTradingSettings}><Settings size={16}/></button></div>
     <div className="concept-manual-tabs"><button type="button" aria-pressed={direction===1} onClick={()=>setDirection(1)}><ArrowUp size={16}/> شراء</button><button type="button" aria-pressed={direction===-1} onClick={()=>setDirection(-1)}><ArrowDown size={16}/> بيع</button></div>
     <div className="concept-prices"><div className="concept-sell"><strong>{num(bid,2)}</strong><small>SELL</small></div><div><strong>{num(spread,2)}</strong><small>SPREAD</small></div><div className="concept-buy"><strong>{num(ask,2)}</strong><small>BUY</small></div></div>
-    <div className="operator-grid"><label>حجم العقد (لوت)<input aria-label="لوت الأمر اليدوي" type="number" min="0.001" step="any" value={lots} onChange={e=>setLots(e.target.value)}/></label><label>وقف الخسارة (السعر)<input aria-label="وقف الأمر اليدوي" type="number" step="any" value={stop} onChange={e=>setStop(e.target.value)}/></label><label>أخذ الربح (السعر)<input aria-label="هدف الأمر اليدوي" type="number" step="any" value={target} onChange={e=>setTarget(e.target.value)}/></label></div>
+    <div className="operator-grid concept-trade-inputs">
+     <label>حجم العقد (لوت)<div className="concept-numeric-control">
+      <button type="button" aria-label="تقليل اللوت" onClick={()=>setLots(v=>steppedDraftValue(v,volumeStep,-1,volumeMin,volumeMax))} disabled={busy||volumeStep<=0}>−</button>
+      <input aria-label="لوت الأمر اليدوي" type="number" min={volumeMin} max={volumeMax} step="any" value={lots} onChange={e=>setLots(e.target.value)}/>
+      <button type="button" aria-label="زيادة اللوت" onClick={()=>setLots(v=>steppedDraftValue(v,volumeStep,1,volumeMin,volumeMax))} disabled={busy||volumeStep<=0}>+</button>
+     </div></label>
+     <label>الرافعة المالية (الوسيط)<div className="concept-broker-leverage">
+      <strong>{valid(account?.leverage)&&account.leverage>0?'1:'+account.leverage:'—'}</strong>
+      <button type="button" onClick={()=>open('execution')} title="الرافعة يحددها الوسيط، وليست إعداداً محلياً">إدارة الربط ↗</button>
+     </div></label>
+     <label>وقف الخسارة (السعر)<div className="concept-numeric-control">
+      <button type="button" aria-label="تقليل وقف الخسارة" disabled={!priceStep||!stop.trim()||busy} onClick={()=>stepPrice(stop,setStop,-1)}>−</button>
+      <input aria-label="وقف الأمر اليدوي" type="number" step="any" value={stop} onChange={e=>setStop(e.target.value)}/>
+      <button type="button" aria-label="زيادة وقف الخسارة" disabled={!priceStep||!stop.trim()||busy} onClick={()=>stepPrice(stop,setStop,1)}>+</button>
+     </div></label>
+     <label>أخذ الربح (السعر)<div className="concept-numeric-control">
+      <button type="button" aria-label="تقليل أخذ الربح" disabled={!priceStep||!target.trim()||busy} onClick={()=>stepPrice(target,setTarget,-1)}>−</button>
+      <input aria-label="هدف الأمر اليدوي" type="number" step="any" value={target} onChange={e=>setTarget(e.target.value)}/>
+      <button type="button" aria-label="زيادة أخذ الربح" disabled={!priceStep||!target.trim()||busy} onClick={()=>stepPrice(target,setTarget,1)}>+</button>
+     </div></label>
+    </div>
     {manualError&&<p className="operator-error" role="alert">{manualError}</p>}
     <button type="button" disabled={!manualReady} onClick={()=>submitManual(direction)}>تنفيذ {direction===1?'شراء':'بيع'} بسعر السوق</button>
     <p className="concept-unavailable">الطلب يحتاج STOP وحساباً مرتبطاً وسعراً حديثاً. أدخل SL وTP كأرقام أسعار؛ يُراجع Core والوسيط اللوت والانزلاق والمخاطر، ولا يؤكد الطابور حصول التنفيذ.</p>
