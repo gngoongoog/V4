@@ -33,6 +33,7 @@ export type PositionProtectionPolicy={break_even_enabled:boolean;break_even_trig
 export async function updatePositionProtection(context:string,policy:PositionProtectionPolicy,expectedPolicyId:string,confirmLiveLogin:string):Promise<unknown>{return invoke('update_position_protection',{context,policy,expectedPolicyId,confirmLiveLogin})}
 export async function setLearningFrozen(frozen:boolean):Promise<unknown>{return invoke('set_learning_frozen',{frozen})}
 export async function manualMarket(request:Record<string,unknown>):Promise<unknown>{return invoke('manual_market',{request})}
+export async function cancelPendingOrder(context:string,order:import('./types').PendingOrder):Promise<unknown>{return invoke('cancel_pending_order',{context,order})}
 export async function selectSoloBrain(context:string,mode:string,brain:string):Promise<unknown>{return invoke('select_solo_brain',{context,mode,brain})}
 export type SelectedClosePosition={ticket:number;magic:number;side:string;volume:number};
 export async function closeOwnedPositions(context:string,positions:SelectedClosePosition[],profitOnly:boolean):Promise<unknown>{return invoke('close_owned_positions',{context,positions,profitOnly})}

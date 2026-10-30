@@ -133,7 +133,7 @@ pub struct Position {
 
 /// Broker-reported active order details. Absence of this list is unknown,
 /// distinct from a complete and empty MT5 order list.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct PendingOrder {
     pub ticket:u64,
     pub symbol:String,

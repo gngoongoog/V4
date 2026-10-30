@@ -336,6 +336,7 @@ pub struct Service {
     // Only touched on full snapshots or when work exists; never scan the
     // protection journal on every latency-sensitive Sniper quote.
     protection_work:bool,
+    cancellation_work:bool,
 }
 
 impl Service {
@@ -347,6 +348,7 @@ impl Service {
         crate::matched_trade::init(db)?;
         crate::sniper_opportunities::init(db)?;
         crate::position_protection::init(db)?;
+        crate::pending_cancellation::init(db)?;
         let mut inner = legacy::Service::new(db)?;
         // Old per-brain flags do not choose an execution owner. A scoped solo
         // selection is loaded only after a matching reconciled broker snapshot.
@@ -394,6 +396,7 @@ impl Service {
             learning_gate:crate::learning_control::load(db)?,
             manual_blocked:true,
             protection_work:false,
+            cancellation_work:false,
         })
     }
 
@@ -521,15 +524,18 @@ impl Service {
     }
 
     pub fn pending(&self, db: &Connection) -> Result<bool> {
-        self.inner.pending(db)
+        Ok(self.inner.pending(db)? || crate::pending_cancellation::pending(db)?)
     }
 
     fn manual_exposure(db:&Connection,t:Option<&Telemetry>)->Result<bool>{
         let sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE brain='manual' AND {PENDING_BROKER_SQL})");
         let pending:bool=db.query_row(&sql,[],|r|r.get(0))?;
-        Ok(pending || t.is_some_and(|t|t.positions.iter().any(|p|p.symbol==t.symbol&&p.magic==410_618)))
+        Ok(pending || t.is_some_and(|t|t.positions.iter().any(|p|p.symbol==t.symbol&&p.magic==410_618)
+            || t.pending_orders>0 && t.pending_order_details.as_ref().is_none_or(|orders|
+                orders.iter().any(|o|o.symbol==t.symbol&&o.magic==410_618))))
     }
     pub fn validate_manual_handoff(&self,db:&Connection,status:&Status)->Result<()> {
+        anyhow::ensure!(!crate::pending_cancellation::pending(db)?,"انتظر تسوية طلب إلغاء الأمر المعلّق قبل START");
         anyhow::ensure!(!Self::manual_exposure(db,status.telemetry.as_ref())?,
             "أغلق المركز اليدوي وانتظر تسوية أوامره قبل تشغيل الوضع الآلي");
         Ok(())
@@ -625,6 +631,9 @@ impl Service {
         // modification; the read-only report exposes the error to the UI.
         self.protection_work=if self.inner.matches_bound_telemetry(telemetry) {
             crate::position_protection::observe(db,telemetry,&self.inner.settings.target,now).unwrap_or(false)
+        } else {false};
+        self.cancellation_work=if self.inner.matches_bound_telemetry(telemetry) {
+            crate::pending_cancellation::ready(db,telemetry,&self.inner.settings.target,now).unwrap_or(false)
         } else {false};
         // Separate read-only Classic forward cohort uses full M1 snapshots.
         // It never consumes or contaminates Learner Fast Pulse comparisons.
@@ -831,6 +840,22 @@ impl Service {
         status: &Status,
         now: u64,
     ) -> Result<Value> {
+        if method=="POST" && path=="/v1/execution/settings" {
+            anyhow::ensure!(!crate::pending_cancellation::pending(db)?,"انتظر تسوية طلب إلغاء الأمر المعلّق قبل تغيير الحساب");
+        }
+        if method=="POST" && path=="/v1/execution/cancel-pending" {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request {context:String,order:braintrade_domain::PendingOrder}
+            let request:Request=serde_json::from_slice(body)?;
+            anyhow::ensure!(!status.requested_run && status.gateway_fresh && self.account_matches(status),
+                "أوقف الدخول واربط حساب MT5 الحديث قبل الإلغاء");
+            let t=status.telemetry.as_ref().context("حساب MT5 غير متاح")?;
+            anyhow::ensure!(request.context==context(t) && t.trade_allowed && t.trade_expert,"تغيّر الحساب أو التداول غير مسموح من MT5");
+            let result=crate::pending_cancellation::queue(db,t,&self.inner.settings.target,&request.order,now)?;
+            self.cancellation_work=true;
+            return Ok(result);
+        }
         if method=="POST" && path=="/v1/execution/position-protection" {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]
@@ -849,6 +874,13 @@ impl Service {
         if method=="POST" && path=="/v1/execution/authorize" {
             let packet:Value=serde_json::from_slice(body)?;
             let id=packet["id"].as_str().context("Authorization id required")?;
+            if id.starts_with("pending-cancel-") {
+                let authorized=if !status.requested_run && status.gateway_fresh && self.account_matches(status) {
+                    status.telemetry.as_ref().is_some_and(|t|
+                        crate::pending_cancellation::authorize(db,t,&self.inner.settings.target,id,now).unwrap_or(false))
+                } else {false};
+                return Ok(json!({"authorized":authorized}));
+            }
             if id.starts_with("protect-") {
                 let authorized=if status.gateway_fresh && self.account_matches(status) {
                     status.telemetry.as_ref().is_some_and(|t|
@@ -859,6 +891,10 @@ impl Service {
         }
         if method=="POST" && path=="/v1/execution/result" {
             let packet:Value=serde_json::from_slice(body)?;
+            if packet["id"].as_str().is_some_and(|id|id.starts_with("pending-cancel-")) {
+                anyhow::ensure!(crate::pending_cancellation::result(db,&packet)?,"Unknown cancellation intent");
+                return Ok(json!({"ok":true}));
+            }
             if packet["id"].as_str().is_some_and(|id|id.starts_with("protect-")) {
                 anyhow::ensure!(crate::position_protection::result(db,&packet)?,"Unknown protection intent");
                 return Ok(json!({"ok":true}));
@@ -1289,6 +1325,11 @@ impl Service {
                 &pulse_status,
                 now,
             )?;
+            if self.cancellation_work && (work["command"].is_null()
+                || matches!(work["command"]["state"].as_str(),Some("unknown"|"placed"|"partial"|"observed"))) {
+                if let Some(command)=crate::pending_cancellation::next(db,pulse_status.telemetry.as_ref().unwrap(),&self.inner.settings.target,now).unwrap_or(None) {work["command"]=command;}
+                self.cancellation_work=false;
+            }
             if self.protection_work && work["command"].is_null() {
                 work["command"]=json!(crate::position_protection::next(db,pulse_status.telemetry.as_ref().unwrap(),&self.inner.settings.target,now).unwrap_or(None));
                 self.protection_work=false;
@@ -1392,6 +1433,14 @@ impl Service {
         }
 
         let mut value = self.inner.route(method, path, body, db, status, now)?;
+        if method=="GET" && path=="/v1/execution/gateway" && self.cancellation_work
+            && (value["command"].is_null() || matches!(value["command"]["state"].as_str(),Some("unknown"|"placed"|"partial"|"observed")))
+            && status.gateway_fresh && self.account_matches(status) {
+            if let Some(t)=status.telemetry.as_ref() {
+                if let Some(command)=crate::pending_cancellation::next(db,t,&self.inner.settings.target,now).unwrap_or(None) {value["command"]=command;}
+                self.cancellation_work=false;
+            }
+        }
         if method=="GET" && path=="/v1/execution/gateway" && self.protection_work
             && value["command"].is_null() && status.gateway_fresh && self.account_matches(status) {
             if let Some(t)=status.telemetry.as_ref() {
@@ -1449,6 +1498,10 @@ impl Service {
             value["position_protection"]=if status.gateway_fresh && self.account_matches(status) {
                 status.telemetry.as_ref().map(|t|crate::position_protection::report(db,t,&self.inner.settings.target)
                     .unwrap_or_else(|e|json!({"error":e.to_string()}))).unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["pending_cancellations"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|crate::pending_cancellation::report(db,t,&self.inner.settings.target)
+                    .map(|rows|json!(rows)).unwrap_or(Value::Null)).unwrap_or(Value::Null)
             } else {Value::Null};
             let context=status.telemetry.as_ref().map(|t|
                 serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)).unwrap_or_default()
@@ -1845,6 +1898,46 @@ mod tests {
         assert!(restarted.learning_frozen());assert_eq!(restarted.learning_status()["cutoff_ms"],1000);
         assert_eq!(restarted.set_learning_frozen(&db,&status,false,2000).unwrap()["frozen"],false);
         assert!(!Service::new(&db).unwrap().learning_frozen());
+    }
+
+    #[test]
+    fn manual_pending_order_blocks_automatic_handoff_until_account_snapshot_is_clear(){
+        let db=setup();let _service=Service::new(&db).unwrap();let mut t=telemetry();
+        let mut order=braintrade_domain::PendingOrder{ticket:42,symbol:t.symbol.clone(),magic:410618,order_type:2,
+            volume_initial:0.1,volume_current:0.1,price_open:1999.,sl:1998.,tp:2001.,price_stoplimit:0.,time_setup_ms:1,expiration:0};
+        t.pending_orders=1;t.pending_order_details=Some(vec![order.clone()]);
+        assert!(Service::manual_exposure(&db,Some(&t)).unwrap());
+        order.symbol="EURUSD".into();t.pending_order_details=Some(vec![order]);
+        assert!(!Service::manual_exposure(&db,Some(&t)).unwrap(),"Another symbol does not own this one");
+        t.pending_order_details=None;assert!(Service::manual_exposure(&db,Some(&t)).unwrap(),"Unknown active orders cannot authorize handoff");
+        t.pending_orders=0;t.pending_order_details=Some(vec![]);assert!(!Service::manual_exposure(&db,Some(&t)).unwrap());
+    }
+
+    #[test]
+    fn cancel_pending_dispatch_is_stop_guarded_and_requires_explicit_reconciliation(){
+        let db=setup();let mut service=Service::new(&db).unwrap();let mut t=telemetry();
+        t.demo=true;t.account_trade_mode=Some(0);t.trade_allowed=true;t.trade_expert=true;
+        let order=braintrade_domain::PendingOrder{ticket:42,symbol:"EURUSD".into(),magic:410618,order_type:2,
+            volume_initial:0.1,volume_current:0.1,price_open:1.1,sl:1.,tp:1.2,price_stoplimit:0.,time_setup_ms:1,expiration:0};
+        t.pending_orders=1;t.pending_order_details=Some(vec![order.clone()]);
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();service.inner.settings.target="demo".into();
+        let mut status=Status::default();status.gateway_fresh=true;status.telemetry=Some(t.clone());
+        let body=json!({"context":context(&t),"order":order}).to_string();status.requested_run=true;
+        assert!(service.route("POST","/v1/execution/cancel-pending",body.as_bytes(),&db,&status,100_000).is_err());
+        status.requested_run=false;
+        let queued=service.route("POST","/v1/execution/cancel-pending",body.as_bytes(),&db,&status,100_000).unwrap();
+        let id=queued["id"].as_str().unwrap();assert!(service.validate_manual_handoff(&db,&status).is_err());
+        let work=service.route("GET","/v1/execution/gateway",b"",&db,&status,100_001).unwrap();
+        assert_eq!(work["command"]["id"],id);assert_eq!(work["command"]["order"],42);
+        let auth=json!({"id":id}).to_string();status.requested_run=true;
+        assert_eq!(service.route("POST","/v1/execution/authorize",auth.as_bytes(),&db,&status,100_002).unwrap()["authorized"],false);
+        status.requested_run=false;
+        assert_eq!(service.route("POST","/v1/execution/authorize",auth.as_bytes(),&db,&status,100_003).unwrap()["authorized"],true);
+        let outcome=json!({"id":id,"state":"unknown","reason":"synthetic uncertainty"}).to_string();
+        service.route("POST","/v1/execution/result",outcome.as_bytes(),&db,&status,100_004).unwrap();
+        assert!(service.validate_manual_handoff(&db,&status).is_err(),"Unknown cancellation must not permit START");
+        assert!(service.route("POST","/v1/execution/cancel-pending",body.as_bytes(),&db,&status,100_005).is_err(),"No second send for this ticket");
     }
 
     #[test]

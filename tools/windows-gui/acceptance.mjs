@@ -194,15 +194,22 @@ try{
   }finally{fs.rmSync(marker,{force:true});fs.rmSync(position,{force:true});fs.rmSync(permission,{force:true});}
  });
  await check('active account order list displays complete synthetic MT5 data',async()=>{
-  const marker=path.join(home,'synthetic-pending-order.flag');fs.writeFileSync(marker,'CI synthetic order only');
+  const marker=path.join(home,'synthetic-pending-order.flag'),permission=path.join(home,'synthetic-manual-allowed.flag'),cancel=path.join(home,'synthetic-cancel-pending.flag');
+  fs.writeFileSync(marker,'CI synthetic order only');fs.writeFileSync(permission,'CI synthetic permissions only');
   try{
-   await until(async()=>(await status()).telemetry?.pending_order_details?.some(o=>o.ticket===880001));
+   await until(async()=>{const s=await status();return s.telemetry?.trade_allowed===true&&s.telemetry?.pending_order_details?.some(o=>o.ticket===880001)});
    await navigate('مركز التداول');
    const table=page.locator('.concept-pending-orders');await table.waitFor();
    await table.getByText('EURUSD',{exact:true}).waitFor();
    assert.equal(await table.getByText('BUY LIMIT',{exact:true}).count(),1);
    assert.equal((await status()).requested_run,false);
-  }finally{fs.rmSync(marker,{force:true})}
+   const button=table.getByRole('button',{name:'إلغاء الأمر 880001',exact:true});
+   await until(async()=>await button.isEnabled());page.once('dialog',dialog=>dialog.accept());await button.click();
+   const execution=async()=>{const r=await invoke('read_panel',{route:'/v1/execution'});return r.data||r};
+   await until(async()=>(await execution()).pending_cancellations?.some(c=>c.state==='queued'&&c.request?.order===880001));
+   fs.writeFileSync(cancel,'CI cancellation only; no MT5 call');
+   await until(async()=>(await execution()).pending_cancellations?.some(c=>c.state==='cancelled'&&c.request?.order===880001&&!c.result?.terminal_order));
+  }finally{fs.rmSync(cancel,{force:true});fs.rmSync(permission,{force:true});fs.rmSync(marker,{force:true})}
   await until(async()=>(await status()).telemetry?.pending_orders===0);
  });
  await check('manual market ticket queues exact inputs and fixture cancels without broker',async()=>{

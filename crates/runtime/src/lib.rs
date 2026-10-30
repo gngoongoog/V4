@@ -45,6 +45,7 @@ mod evaluation;
 mod learning;
 mod learning_control;
 mod position_protection;
+mod pending_cancellation;
 mod learning_inference;
 mod learning_performance_review;
 mod learning_review;

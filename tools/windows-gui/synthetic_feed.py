@@ -39,6 +39,7 @@ snapshot.update(connected=True, login=170000001, server="Synthetic-CI-Demo",
                 tick_value_loss=1.0, tick_value_profit=1.0)
 
 synthetic_stop=None
+synthetic_order_setup=time.time_ns() // 1_000_000
 while True:
     now = time.time_ns() // 1_000_000
     allow_manual=(home / 'synthetic-manual-allowed.flag').exists()
@@ -51,7 +52,7 @@ while True:
         if (home / 'synthetic-owned-position.flag').exists() else [])
     snapshot['pending_order_details']=([dict(ticket=880001,symbol='EURUSD',magic=410618,order_type=2,
         volume_initial=0.1,volume_current=0.1,price_open=1.1,sl=1.0,tp=1.2,
-        price_stoplimit=0.,time_setup_ms=now,expiration=0)]
+        price_stoplimit=0.,time_setup_ms=synthetic_order_setup,expiration=0)]
         if (home / 'synthetic-pending-order.flag').exists() else [])
     snapshot['pending_orders']=len(snapshot['pending_order_details'])
     snapshot.update(quote_time_ms=now, source_quote_time_ms=now, tick_age_ms=0)
@@ -88,7 +89,8 @@ while True:
         synthetic_stop=None
     cancel_close=(home / 'synthetic-cancel-close.flag').exists()
     cancel_manual=(home / 'synthetic-cancel-manual.flag').exists()
-    if cancel_close or cancel_manual:
+    cancel_pending=(home / 'synthetic-cancel-pending.flag').exists()
+    if cancel_close or cancel_manual or cancel_pending:
         # Simulate a terminal *cancellation*, not an execution. Only the one
         # hard-coded fixture ticket is eligible, and no MT5 API is called.
         poll=urllib.request.Request('http://127.0.0.1:18741/v1/execution/gateway',
@@ -98,7 +100,8 @@ while True:
         if command is not None:
             valid_close=cancel_close and command.get('kind')=='close' and command.get('manual_close') is True and command.get('position')==777001
             valid_manual=cancel_manual and command.get('kind')=='open' and command.get('manual_open') is True and command.get('brain')=='manual' and command.get('magic')==410618
-            if not (valid_close or valid_manual):
+            valid_pending=cancel_pending and command.get('kind')=='cancel_pending' and command.get('order')==880001 and command.get('symbol')=='EURUSD'
+            if not (valid_close or valid_manual or valid_pending):
                 raise RuntimeError('Unexpected synthetic gateway command')
             result=dict(id=command['id'],state='cancelled',reason='CI fixture: no broker order was sent')
             reply=urllib.request.Request('http://127.0.0.1:18741/v1/execution/result',
