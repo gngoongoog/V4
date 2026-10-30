@@ -53,6 +53,22 @@ function timeText(time:number,frame:ChartFrame){
  if(frame==='d1'||frame==='h4')return date.toLocaleDateString('en-GB',{timeZone:'UTC',day:'2-digit',month:'short'});
  return date.toLocaleTimeString('en-GB',{timeZone:'UTC',hour:'2-digit',minute:'2-digit'});
 }
+export type ChartSourceEvidence={state:'preview'|'recent'|'cached'|'unknown';capturedMs:number|null;ageMs:number|null};
+/** Account-bound gateway capture timestamp is different from latest broker BID.
+ * A frequent Rust heartbeat must never make old OHLC history look freshly sampled.
+ * The M30/H1/H4/D1 history source has its own captured_ms and validated clock. */
+export function chartSourceEvidence(frame:ChartFrame,market:Market|null|undefined,
+ frameMeta:ChartFrameMeta|undefined,nowMs:number,preview:boolean):ChartSourceEvidence{
+ if(preview)return {state:'preview',capturedMs:null,ageMs:null};
+ const extended=frame==='m30'||frame==='h1'||frame==='h4'||frame==='d1';
+ const captured=extended?frameMeta?.[frame as keyof ChartFrameMeta]?.capturedMs:market?.captured_ms;
+ if(typeof captured!=='number'||!Number.isSafeInteger(captured)||captured<=0||
+   !Number.isFinite(nowMs)||captured>nowMs+2000)
+  return {state:'unknown',capturedMs:null,ageMs:null};
+ const age=Math.max(0,nowMs-captured);
+ const recent=extended?frameMeta?.[frame as keyof ChartFrameMeta]?.live===true&&age<120000:age<15000;
+ return {state:recent?'recent':'cached',capturedMs:captured,ageMs:age};
+}
 type ChartProps={market?:Market|null;symbol:string;quote?:number;point?:number|null;positions?:Position[];frame?:ChartFrame;
  onFrameChange?:(frame:ChartFrame)=>void;theme?:'dark'|'smoke'|'light';frameMeta?:ChartFrameMeta;preview?:boolean};
 type Hover={index:number;y:number}|null;
@@ -66,7 +82,7 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
  const [hover,setHover]=useState<Hover>(null);
  const canvas=useRef<HTMLCanvasElement>(null);
  const drag=useRef<{x:number;offset:number;step:number}|null>(null);
- const frameCandles=(market?.[frame as keyof Market]??EMPTY_CANDLES) as Candle[];
+ const frameCandles=market?.[frame]??EMPTY_CANDLES;
  const all=useMemo(()=>{
   const validated=cleanChartCandles(frameCandles);
   return preview?validated:closedBrokerCandles(validated,frame,Date.now());
@@ -281,9 +297,14 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
  const highlighted=hover?chart[hover.index]??chart.at(-1):chart.at(-1);
  const highlightedAt=highlighted?new Date(highlighted.time*1000).toISOString().slice(0,16).replace('T',' ')+' UTC':null;
  const lastClose=lastClosedAt(all,frame);
- const historical=frame==='m30'||frame==='h1'||frame==='h4'||frame==='d1'?frameMeta?.[frame]:undefined;
- const dataLabel=preview?'SIMULATED • NOT MT5':historical?
-   (historical.live?'MT5 • CLOSED OHLC':'MT5 HISTORY • CACHED'):'MT5 • CLOSED OHLC';
+ const sourceEvidence=chartSourceEvidence(frame,market,frameMeta,Date.now(),preview);
+ const dataLabel=sourceEvidence.state==='preview'?'SIMULATED • NOT MT5':
+  sourceEvidence.state==='recent'?'MT5 • CLOSED OHLC · RECENT':
+  sourceEvidence.state==='cached'?'MT5 • CACHED OHLC':'MT5 • OHLC CLOCK UNKNOWN';
+ const sourceAge=sourceEvidence.ageMs===null?'UNKNOWN':
+  sourceEvidence.ageMs<1000?sourceEvidence.ageMs+' ms':
+  sourceEvidence.ageMs<60000?Math.round(sourceEvidence.ageMs/1000)+' s':
+  Math.floor(sourceEvidence.ageMs/60000)+' min';
  return <section className={'panel chart-panel '+(expanded?'chart-expanded':'')}>
   <div className="chart-head">
    <div className="chart-symbol"><GoldSymbol className="gold-icon"/>
@@ -316,7 +337,7 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
    'O '+num(highlighted.open,digits)+'   H '+num(highlighted.high,digits)+'   L '+num(highlighted.low,digits)+
    '   C '+num(highlighted.close,digits)+'   '+(highlighted.close>=highlighted.open?'▲':'▼')+
    '   Vol '+highlighted.tick_volume+(highlightedAt?'   '+highlightedAt:''):'O —   H —   L —   C —'}
-   <span className="concept-chart-source">{dataLabel}</span>
+   <span className={'concept-chart-source concept-chart-source-'+sourceEvidence.state} title={preview?'معاينة اصطناعية، لا تُستخدم للتنفيذ':sourceEvidence.capturedMs===null?'لا يمكن التحقق من وقت التقاط شموع الوسيط':'آخر جلب لشموع الوسيط: '+sourceAge+' مضت'}>{dataLabel}</span>
   </div>
   <div className="chart-frame">
    <canvas aria-label={'MT5 '+symbol+' '+frame+' candlestick chart'} title={'MT5 OHLC '+frame.toUpperCase()} ref={canvas}
@@ -344,7 +365,7 @@ export default function TradingChart({market,symbol,quote,point,positions=[],fra
   </div>
   <div className="chart-footer">
    <span>{preview?'معاينة توضيحية، ليست أسعار السوق':'بيانات المصدر: MT5'} • {ready?chart.length+' شمعة '+frame.toUpperCase():'لا توجد شموع موثوقة'}{position?' • ENTRY / SL/TP من المركز المعروض':''}</span>
-   <span>{offset>0?'عرض تاريخي · '+offset+' شمعة للخلف':'آخر شمعة'} • {lastClose?'آخر إغلاق '+lastClose:'لا يوجد إغلاق مؤكد'} • Tick Volume</span>
+   <span>{offset>0?'عرض تاريخي · '+offset+' شمعة للخلف':'آخر شمعة'} • {lastClose?'آخر إغلاق '+lastClose:'لا يوجد إغلاق مؤكد'} • {preview?'SIMULATED':sourceEvidence.ageMs===null?'OHLC وقت الالتقاط غير مؤكد':'عمر الجلب '+sourceAge} • Tick Volume</span>
   </div>
  </section>;
 }

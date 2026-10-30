@@ -349,3 +349,27 @@ body[data-theme=smoke] .terminal-v15.concept4 .concept-chart-source{
  .terminal-v15.concept4 .chart-panel .chart-actions{overflow-x:auto;scrollbar-width:none}
  .terminal-v15.concept4 .chart-panel .chart-actions::-webkit-scrollbar{display:none}
 }
+
+
+/* Distinguish broker-captured OHLC from historical/cached observations.
+   No connectivity/color signal is inferred solely from a Rust UI heartbeat. */
+.terminal-v15.concept4 .concept-chart-source-recent{
+ color:#0a915f;background:#e6f8ef;border-color:#cceddf
+}
+.terminal-v15.concept4 .concept-chart-source-cached{
+ color:#8d6015;background:#fff5de;border-color:#efdcab
+}
+.terminal-v15.concept4 .concept-chart-source-unknown{
+ color:#9e3c47;background:#fff0f1;border-color:#f3c9cd
+}
+.terminal-v15.concept4 .concept-chart-source-preview{
+ color:#667084;background:#eef2f6;border-color:#d9e0e8
+}
+body[data-theme=dark] .terminal-v15.concept4 .concept-chart-source-cached,
+body[data-theme=smoke] .terminal-v15.concept4 .concept-chart-source-cached{
+ color:#efc57b;background:#493717;border-color:#6d5525
+}
+body[data-theme=dark] .terminal-v15.concept4 .concept-chart-source-unknown,
+body[data-theme=smoke] .terminal-v15.concept4 .concept-chart-source-unknown{
+ color:#faacb2;background:#47232a;border-color:#71404a
+}

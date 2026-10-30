@@ -33,6 +33,7 @@ try{
  const enterPreview=page.getByRole('button',{name:'معاينة التصميم',exact:true});
  if(await enterPreview.count())await enterPreview.click();
  assert(await page.locator('.preview-banner').isVisible(),'Synthetic preview must be labelled');
+ assert.equal(await page.locator('.chart-panel .concept-chart-source-preview').count(),1,'Chart must explicitly label simulated OHLC, not claim an MT5 feed');
  for(const frame of ['M1','M5','M15','M30','H1','H4','D1']){
   await page.locator('.chart-panel .timeframes').getByRole('button',{name:frame,exact:true}).click();
   assert.equal(await page.locator('.concept-frame select').inputValue(),frame.toLowerCase(),'Chart and header frame must stay synchronized');

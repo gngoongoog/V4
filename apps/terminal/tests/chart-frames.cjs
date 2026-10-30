@@ -92,4 +92,23 @@ assert.equal(out.lastClosedAt([],'m1'),null);
 const nowClosed=out.closedBrokerCandles(realBars,'m1',nowMs);
 assert.equal(nowClosed.at(-1).time,nowSec-60);
 
+
+const observedAt=1800000000000;
+const recentMarket={captured_ms:observedAt-5000,m1:[],m5:[],m15:[]};
+assert.equal(out.chartSourceEvidence('m1',recentMarket,undefined,observedAt,false).state,'recent',
+ 'Fresh Core heartbeat alone is not proof; rely on broker capture time');
+assert.equal(out.chartSourceEvidence('m15',{...recentMarket,captured_ms:observedAt-20000},undefined,observedAt,false).state,'cached',
+ 'An unchanged broker OHLC snapshot must be marked cached');
+assert.equal(out.chartSourceEvidence('m1',undefined,undefined,observedAt,false).state,'unknown',
+ 'Absent broker capture timestamp must never claim real-time quotes');
+assert.equal(out.chartSourceEvidence('m5',{captured_ms:observedAt+10000},undefined,observedAt,false).state,'unknown',
+ 'Future capture time without trustworthy clock must not be called recent');
+assert.equal(out.chartSourceEvidence('h1',recentMarket,{h1:{capturedMs:observedAt-10000,live:true}},observedAt,false).state,'recent');
+assert.equal(out.chartSourceEvidence('h1',recentMarket,{h1:{capturedMs:observedAt-10000,live:false}},observedAt,false).state,'cached',
+ 'History API explicitly reporting cached must override mere capture recency');
+assert.equal(out.chartSourceEvidence('h4',recentMarket,{h4:{capturedMs:observedAt-140000,live:true}},observedAt,false).state,'cached',
+ 'A once-live long timeframe becomes cached after expiration');
+assert.equal(out.chartSourceEvidence('d1',undefined,undefined,observedAt,true).state,'preview',
+ 'Synthetic chart preview must never impersonate MT5');
+
 console.log('PASS: all seven chart timeframes select the real chart state');
