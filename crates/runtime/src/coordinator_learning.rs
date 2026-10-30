@@ -563,7 +563,7 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry, observed_ms:u64) ->
         let cmd:Value=serde_json::from_str(&raw_cmd)?;
         // The same server/login tuple can theoretically exist in another MT5
         // mode. Only an explicitly Demo-bound originating intent is admissible.
-        if cmd["target"]!="demo" {continue;}
+        if cmd["target"]!="demo" || cmd["manual_open"]==true {continue;}
         let result:Value=serde_json::from_str(&raw_result)?;
         let Some(open_deal)=result["deal"].as_u64().filter(|v|*v>0) else {continue;};
         let position_id:Option<u64>=db.query_row("SELECT position_id FROM broker_deals WHERE context=?1 AND ticket=?2",params![&key,open_deal],|r|r.get(0)).optional()?;

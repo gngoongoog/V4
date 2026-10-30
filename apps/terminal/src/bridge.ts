@@ -30,6 +30,7 @@ export async function updateBrainPaperAll(context:string,mode:string,paper:boole
 export type RiskRecovery={basis:'balance'|'equity';threshold:number};
 export async function updateRiskMaster(context:string,enabled:boolean,confirmLiveLogin:string,recovery:RiskRecovery|null):Promise<unknown>{return invoke('update_risk_master',{context,enabled,confirmLiveLogin,recovery})}
 export async function setLearningFrozen(frozen:boolean):Promise<unknown>{return invoke('set_learning_frozen',{frozen})}
+export async function manualMarket(request:Record<string,unknown>):Promise<unknown>{return invoke('manual_market',{request})}
 export async function selectSoloBrain(context:string,mode:string,brain:string):Promise<unknown>{return invoke('select_solo_brain',{context,mode,brain})}
 export type SelectedClosePosition={ticket:number;magic:number;side:string;volume:number};
 export async function closeOwnedPositions(context:string,positions:SelectedClosePosition[],profitOnly:boolean):Promise<unknown>{return invoke('close_owned_positions',{context,positions,profitOnly})}

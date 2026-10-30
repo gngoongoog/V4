@@ -69,6 +69,69 @@ class ExecutionTests(unittest.TestCase):
         self.assertIn('identity does not match',result['reason'])
         self.assertEqual(len(self.mt.sends),1)
 
+    def test_manual_market_preserves_approved_geometry_and_is_idempotent(self):
+        self.cmd.update(id='manual-buy',brain='manual',magic=410618,manual_open=True,
+                        manual_epoch='a'*32,manual_reference_price=2000.1,
+                        manual_stop_price=1999.,manual_target_price=2002.,
+                        risk_percent=1.,commission_per_lot=0.,slippage_ticks=0.)
+        result=self.send();self.assertEqual(result['state'],'filled',result)
+        self.assertEqual((result['request']['sl'],result['request']['tp'],result['request']['volume']),(1999.,2002.,.1))
+        self.assertEqual(len(self.mt.sends),1);self.assertEqual(self.send()['state'],'filled')
+        self.assertEqual(len(self.mt.sends),1,'Replayed intent must never send twice')
+        self.cmd['manual_target_price']=2003.
+        self.assertEqual(self.send()['state'],'unknown','Approved target is part of durable identity')
+
+    def test_manual_market_rejects_price_drift_bad_grid_or_changed_lot(self):
+        self.cmd.update(brain='manual',magic=410618,manual_open=True,manual_epoch='b'*32,
+                        manual_reference_price=2000.1,manual_stop_price=1999.,manual_target_price=2002.,
+                        risk_percent=1.,commission_per_lot=0.,slippage_ticks=0.)
+        self.mt.tick.ask=2000.4
+        result=self.send();self.assertEqual(result['state'],'rejected',result)
+        self.assertIn('deviation',result['reason']);self.assertFalse(self.mt.sends)
+        self.mt.tick.ask=2000.1;self.cmd['id']='manual-off-grid';self.cmd['manual_stop_price']=1999.005
+        self.assertEqual(self.send()['state'],'rejected');self.assertFalse(self.mt.sends)
+        self.cmd.update(id='manual-risk',manual_stop_price=1999.,risk_percent=.01)
+        self.mt.account.equity=100.
+        self.assertEqual(self.send()['state'],'rejected');self.assertFalse(self.mt.sends)
+        self.cmd.update(id='manual-identity',brain='trend')
+        self.assertEqual(self.send()['state'],'rejected');self.assertFalse(self.mt.sends)
+
+    def test_manual_market_sell_uses_exact_approved_prices(self):
+        self.cmd.update(id='manual-sell',brain='manual',magic=410618,manual_open=True,
+                        manual_epoch='c'*32,manual_reference_price=2000.,
+                        manual_stop_price=2001.,manual_target_price=1998.,
+                        risk_percent=1.,commission_per_lot=0.,slippage_ticks=0.,
+                        signal=dict(side=-1,stop_distance=1.,target_distance=2.))
+        result=self.send();self.assertEqual(result['state'],'filled',result)
+        self.assertEqual((result['request']['sl'],result['request']['tp']),(2001.,1998.))
+
+    def test_manual_market_rechecks_other_owned_positions_and_quote_before_send(self):
+        self.cmd.update(id='manual-late-position',brain='manual',magic=410618,manual_open=True,
+                        manual_epoch='d'*32,manual_reference_price=2000.1,
+                        manual_stop_price=1999.,manual_target_price=2002.,
+                        risk_percent=1.,commission_per_lot=0.,slippage_ticks=0.)
+        self.mt.on_check=lambda:self.mt.positions.append(N(magic=410600))
+        result=self.send();self.assertEqual(result['state'],'cancelled',result)
+        self.assertFalse(self.mt.sends)
+        self.mt.positions=[];self.cmd['id']='manual-late-quote'
+        self.mt.on_check=lambda:setattr(self.mt.tick,'ask',2000.11)
+        result=self.send();self.assertEqual(result['state'],'cancelled',result)
+        self.assertFalse(self.mt.sends)
+
+    def test_manual_market_budgets_the_entire_approved_price_deviation(self):
+        self.cmd.update(id='manual-worst-price',brain='manual',magic=410618,manual_open=True,
+                        manual_epoch='e'*32,manual_reference_price=2000.1,
+                        manual_stop_price=1999.,manual_target_price=2002.,
+                        risk_percent=1.,commission_per_lot=0.,slippage_ticks=0.)
+        # Current price risks $11 at 0.1 lot; the approved adverse deviation
+        # can risk $13. A $12 budget must reject, never silently cut the lot.
+        self.mt.account.equity=1200.
+        result=self.send();self.assertEqual(result['state'],'rejected',result)
+        self.assertFalse(self.mt.sends)
+        self.mt.account.equity=10000.;self.mt.tick.ask=2000.2;self.cmd['id']='manual-remaining-deviation'
+        result=self.send();self.assertEqual(result['state'],'filled',result)
+        self.assertEqual(result['request']['deviation'],10,'The broker receives only the remaining approved deviation')
+
     def test_exact_commission_schedule_roundtrip_and_no_commission_account(self):
         for lots, fee in ((0.01,0.07),(0.10,0.70),(1.0,7.0)):
             self.assertAlmostEqual(round_trip_commission(7.,lots),fee)

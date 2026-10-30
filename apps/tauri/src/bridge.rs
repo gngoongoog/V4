@@ -378,6 +378,15 @@ fn set_learning_frozen(frozen:bool)->Result<Value,String>{
 }
 
 #[tauri::command]
+fn manual_market(request:Value)->Result<Value,String>{
+    match open_client()?.checked_post("/v1/execution/manual-market",request,Duration::from_secs(8)) {
+        Ok(value)=>Ok(value),
+        Err(CheckedPostError::Rejected(error))=>Err(error),
+        Err(CheckedPostError::Uncertain(_))=>Err("نتيجة الطلب اليدوي غير مؤكدة. لا تكرر الطلب؛ راجع أوامر Core والمصالحة وMT5 أولاً.".into()),
+    }
+}
+
+#[tauri::command]
 fn select_solo_brain(context:String,mode:String,brain:String)->Result<Value,String>{
     if context.is_empty() || context.len()>500 || !["scalping","swing","expert","sniper"].contains(&mode.as_str())
         || brain.is_empty() || brain.len()>100 || !brain.bytes().all(|b|b.is_ascii_lowercase()||b==b'_') {
@@ -555,7 +564,7 @@ pub fn run() {
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore, save_excel_report,
-            backtest_action, update_brain_control, update_brain_paper_all, update_risk_master, set_learning_frozen, select_solo_brain, close_owned_positions, bind_execution
+            backtest_action, update_brain_control, update_brain_paper_all, update_risk_master, set_learning_frozen, manual_market, select_solo_brain, close_owned_positions, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");

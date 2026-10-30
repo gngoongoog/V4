@@ -22,15 +22,15 @@ from institutional_controls import (
     record_execution_quality,
 )
 
-MAGIC_MIN, MAGIC_MAX = 410600, 410617
+MAGIC_MIN, MAGIC_MAX = 410600, 410618
 # Reserved 410616 belongs to the unmerged Adaptive Learner, not this build.
-OWNED_MAGICS = frozenset(range(410600, 410616)) | {410617}
+OWNED_MAGICS = frozenset(range(410600, 410616)) | {410617, 410618}
 # Must match the durable Rust identity mapping. The reserved 410616 remains
 # unowned; adding SOLO must not let a brain borrow another brain's magic.
 BRAIN_MAGIC = dict(zip((
     'system','gann','wyckoff','trend','momentum','structure','zones','dom',
     'profile','gann_dom_profile','ces','kte','regime','generated','liquidity','trend_pullback'
-),range(410600,410616))) | {'sniper_learner':410617}
+),range(410600,410616))) | {'sniper_learner':410617, 'manual':410618}
 FAST_QUEUE_TARGET_MS = 20
 # A final Core permission may not remain valid through a slow broker call.
 # Bound its age after the RPC; this is not an atomic cross-process STOP/MT5 lock.
@@ -633,6 +633,7 @@ class BrokerExecutor:
             # Mutable polling state and timing metadata are deliberately omitted.
             immutable=('login','server','currency','target','symbol','magic','brain',
                        'kind','position','lots','signal','revision',
+                       'manual_open','manual_epoch','manual_reference_price','manual_stop_price','manual_target_price',
                        'manual_close','profit_only','expected_position_volume','expected_position_side',
                        'deviation_points','created_ms','expires_ms',
                        'commission_per_lot','slippage_ticks','risk_percent','risk_master_enabled','risk_master_recovery','risk_master_recovery_id',
@@ -697,6 +698,8 @@ class BrokerExecutor:
                 raise ValueError('Unknown brain ownership')
             if 'brain' in cmd and (not isinstance(cmd['brain'],str) or BRAIN_MAGIC.get(cmd['brain'])!=cmd['magic']):
                 raise ValueError('Brain identity does not match its broker magic')
+            if cmd.get('kind')=='open' and ((cmd.get('brain')=='manual') != (cmd.get('manual_open') is True)):
+                raise ValueError('Manual entry identity or authorization is invalid')
 
             symbol=cmd['symbol']; info=mt5.symbol_info(symbol); tick=mt5.symbol_info_tick(symbol)
             if info is None or tick is None:
@@ -711,6 +714,9 @@ class BrokerExecutor:
             positions=mt5.positions_get(symbol=symbol); orders=mt5.orders_get(symbol=symbol)
             if positions is None or orders is None:
                 raise ValueError('Position/order reconciliation unavailable')
+            if cmd.get('manual_open') is True and (any(p.magic in OWNED_MAGICS for p in positions)
+                    or any(o.magic in OWNED_MAGICS for o in orders)):
+                raise ValueError('A BrainTrade position or order already owns this symbol')
             closing=cmd['kind']=='close'
             if closing:
                 # A different close intent must not bypass an existing
@@ -756,6 +762,7 @@ class BrokerExecutor:
                 raise ValueError('Volume/side does not match broker min/max/step')
 
             price=float(tick.ask if side==1 else tick.bid)
+            validated_bid,validated_ask=float(tick.bid),float(tick.ask)
             fill_flags=getattr(info,'filling_mode',0)
             if fill_flags & 1:
                 filling=mt5.ORDER_FILLING_FOK
@@ -773,6 +780,21 @@ class BrokerExecutor:
                 request['position']=cmd['position']
             else:
                 stop=float(cmd['signal']['stop_distance']);target=float(cmd['signal']['target_distance']);step=info.trade_tick_size
+                if cmd.get('manual_open') is True:
+                    reference=float(cmd.get('manual_reference_price',float('nan')))
+                    manual_stop=float(cmd.get('manual_stop_price',float('nan')))
+                    manual_target=float(cmd.get('manual_target_price',float('nan')))
+                    if (not all(math.isfinite(v) and v>0 for v in (reference,manual_stop,manual_target))
+                            or abs(price-reference)>int(cmd['deviation_points'])*info.point+step*1e-8
+                            or abs(manual_stop/step-round(manual_stop/step))>1e-6
+                            or abs(manual_target/step-round(manual_target/step))>1e-6):
+                        raise ValueError('Manual price moved beyond approved deviation or exact SL/TP is off broker grid')
+                    remaining=max(0.,int(cmd['deviation_points'])*info.point-abs(price-reference))
+                    request['deviation']=max(0,math.floor(remaining/info.point+1e-8))
+                    worst_manual_entry=reference+side*int(cmd['deviation_points'])*info.point
+                    if (not math.isfinite(worst_manual_entry) or worst_manual_entry<=0
+                            or (manual_target-worst_manual_entry)*side<=0):
+                        raise ValueError('Manual maximum deviation makes entry invalid or reaches the target')
                 if fast_path:
                     stop, target, minimum, spread = sniper_broker_geometry(info, tick, stop, target)
                     result['pricing'] = dict(
@@ -785,7 +807,10 @@ class BrokerExecutor:
                     )
                 if not all(math.isfinite(v) and v>0 for v in (stop,target)):
                     raise ValueError('Invalid stop/target geometry')
-                if fast_path:
+                if cmd.get('manual_open') is True:
+                    request['sl']=manual_stop
+                    request['tp']=manual_target
+                elif fast_path:
                     # All three values must lie on the broker grid. Integer tick
                     # arithmetic avoids float ceil/floor widening an exact TP.
                     base_steps = price / step
@@ -816,13 +841,15 @@ class BrokerExecutor:
                 else:
                     risk_started=time.perf_counter()
                     lots,result['risk_sizing']=size_to_stop_risk(
-                        mt5,a,info,symbol,side,price,request['sl'],lots,
+                        mt5,a,info,symbol,side,worst_manual_entry if cmd.get('manual_open') is True else price,request['sl'],lots,
                         float(cmd['risk_percent']),
                         float(cmd.get('commission_per_lot',float('nan'))),
                         float(cmd.get('slippage_ticks',float('nan'))),
                         micro_demo_risk_opt_in=cmd.get('micro_demo_risk_opt_in') is True,
                         broker_demo=cmd['target']=='demo' and a.trade_mode==0,
                         micro_real_active=self._micro_real_active(cmd,a))
+                    if cmd.get('manual_open') is True and abs(lots-float(cmd['lots']))>1e-8:
+                        raise ValueError('Manual volume exceeds risk budget; no automatic lot reduction')
                     request['volume']=lots
                     result['risk_sizing_ms']=(time.perf_counter()-risk_started)*1000
                     if 'sizing' in result:
@@ -835,6 +862,11 @@ class BrokerExecutor:
             if not closing and cmd['target']=='live':
                 try:
                     margin=mt5.order_calc_margin(request['type'],symbol,request['volume'],price)
+                    if cmd.get('manual_open') is True:
+                        worst_margin=mt5.order_calc_margin(request['type'],symbol,request['volume'],worst_manual_entry)
+                        if worst_margin is None or not math.isfinite(float(worst_margin)) or float(worst_margin)<0:
+                            raise ValueError('REAL margin preflight: worst permitted manual price unavailable')
+                        margin=max(float(margin),float(worst_margin)) if margin is not None else None
                 except Exception as exc:
                     raise ValueError('REAL margin preflight: broker calculator failed') from exc
                 free=float(getattr(a,'margin_free',float('nan')))
@@ -1024,6 +1056,32 @@ class BrokerExecutor:
                         and latest_equity>=float(cmd.get('micro_real_recovery_equity',float('inf')))):
                     self._micro_real_active(cmd,latest_account)  # Persist the crossed milestone before cancelling.
                     result.update(state='cancelled',reason='Micro REAL recovery milestone reached during final checks')
+                    return self._save(cmd,result)
+            if not closing and cmd.get('manual_open') is True:
+                # Manual orders are less latency-sensitive than Sniper. Never
+                # send if another owner appeared or the quote used for exact
+                # stops/risk sizing changed during confirmation/authorization.
+                current_positions=mt5.positions_get(symbol=symbol)
+                current_orders=mt5.orders_get(symbol=symbol)
+                current_tick=mt5.symbol_info_tick(symbol)
+                current_age=clock_ms()-int(current_tick.time_msc) if current_tick is not None else 10**12
+                if (current_positions is None or current_orders is None or current_tick is None
+                        or any(p.magic in OWNED_MAGICS for p in current_positions)
+                        or any(o.magic in OWNED_MAGICS for o in current_orders)
+                        or float(current_tick.bid)!=validated_bid or float(current_tick.ask)!=validated_ask
+                        or current_age < -2000 or current_age>cmd.get('max_quote_age_ms',3000)):
+                    result.update(state='cancelled',reason='Manual quote or owned position changed during final checks; no order sent')
+                    return self._save(cmd,result)
+                current_account=mt5.account_info()
+                if account_identity(current_account)!=expected(cmd) or getattr(current_account,'trade_mode',None)!=target_mode:
+                    result.update(state='cancelled',reason='Manual account changed during final checks; no order sent')
+                    return self._save(cmd,result)
+                recovery=self._risk_recovery(cmd,current_account)
+                if recovery is not None:
+                    result.update(state='cancelled',reason='Risk-master recovery reached during manual checks',risk_master_recovery_reached=recovery)
+                    return self._save(cmd,result)
+                if any(float(getattr(current_account,k,float('nan')))!=final_number(k) for k in ('balance','equity','margin_free')):
+                    result.update(state='cancelled',reason='Manual account values changed during final checks; no order sent')
                     return self._save(cmd,result)
             if closing and cmd.get('manual_close') is True:
                 # Re-read the approved physical ticket immediately before send.

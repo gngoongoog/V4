@@ -43,14 +43,15 @@ class ExecutionIdentityParity(unittest.TestCase):
         # The Adaptive learner's 410616 magic is reserved but intentionally
         # unowned. The shipped Sniper specialist owns 410617. Check the actual
         # Python allowlist, not merely a contiguous upper bound.
-        self.assertEqual(high, 410617)
+        self.assertEqual(high, 410618)
         self.assertEqual(names[16:], ["sniper_learner"])
         self.assertRegex(self.rust, r'if\s+id\s*==\s*"sniper_learner"\s*\{\s*return\s+Some\(410_617\)')
-        allowed = re.search(r"OWNED_MAGICS\s*=\s*frozenset\(range\((\d+),\s*(\d+)\)\)\s*\|\s*\{(\d+)\}", self.python)
+        self.assertRegex(self.rust, r'if\s+id\s*==\s*"manual"\s*\{\s*return\s+Some\(410_618\)')
+        allowed = re.search(r"OWNED_MAGICS\s*=\s*frozenset\(range\((\d+),\s*(\d+)\)\)\s*\|\s*\{(\d+),\s*(\d+)\}", self.python)
         self.assertIsNotNone(allowed, "Gateway must enforce explicit non-contiguous magic whitelist")
-        start, stop, sniper = map(int, allowed.groups())
-        self.assertEqual(set(range(start,stop)) | {sniper}, set(range(rust_base,rust_base+16)) | {410617})
-        self.assertNotIn(410616,set(range(start,stop))|{sniper},
+        start, stop, sniper, manual = map(int, allowed.groups())
+        self.assertEqual(set(range(start,stop)) | {sniper,manual}, set(range(rust_base,rust_base+16)) | {410617,410618})
+        self.assertNotIn(410616,set(range(start,stop))|{sniper,manual},
                          "Reserved Adaptive magic must never be accepted without registered owner")
         previous = (
             "system", "gann", "wyckoff", "trend", "momentum", "structure",
@@ -63,6 +64,7 @@ class ExecutionIdentityParity(unittest.TestCase):
         from execution import BRAIN_MAGIC
         expected={name:rust_base+i for i,name in enumerate(names[:16])}
         expected["sniper_learner"]=410617
+        expected["manual"]=410618
         self.assertEqual(BRAIN_MAGIC,expected,"Gateway brain-to-magic mapping must match Rust exactly")
 
 

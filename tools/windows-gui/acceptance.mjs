@@ -166,6 +166,29 @@ try{
   await until(async()=>(await status()).selected_owner==='system');
   await status(); // Synthetic fixture cannot send to a broker.
  });
+ await check('manual market ticket queues exact inputs and fixture cancels without broker',async()=>{
+  const enabled=path.join(home,'synthetic-manual-allowed.flag'),cancel=path.join(home,'synthetic-cancel-manual.flag');
+  fs.writeFileSync(enabled,'CI synthetic permissions only');
+  try{
+   await until(async()=>(await status()).telemetry?.trade_allowed===true);
+   await navigate('مركز التداول');
+   await page.getByLabel('لوت الأمر اليدوي',{exact:true}).fill('0.1');
+   await page.getByLabel('وقف الأمر اليدوي',{exact:true}).fill('2499');
+   await page.getByLabel('هدف الأمر اليدوي',{exact:true}).fill('2502');
+   const buy=page.getByRole('button',{name:'شراء بسوق',exact:true});await until(async()=>await buy.isEnabled());
+   page.once('dialog',dialog=>dialog.accept());await buy.click();
+   await until(async()=>{
+    const r=await invoke('read_panel',{route:'/v1/execution'}),data=r.data||r;
+    return data.commands?.some(c=>c.request?.manual_open===true&&c.request?.manual_stop_price===2499&&c.request?.manual_target_price===2502&&c.state==='queued');
+   });
+   fs.writeFileSync(cancel,'CI cancellation only');
+   await until(async()=>{
+    const r=await invoke('read_panel',{route:'/v1/execution'}),data=r.data||r;
+    return data.commands?.some(c=>c.request?.manual_open===true&&c.state==='cancelled');
+   });
+  }finally{fs.rmSync(cancel,{force:true});fs.rmSync(enabled,{force:true});}
+  await until(async()=>(await status()).telemetry?.trade_allowed===false);
+ });
  await check('row close queues exactly one synthetic owned ticket through Core',async()=>{
   const marker=path.join(home,'synthetic-owned-position.flag');fs.writeFileSync(marker,'CI synthetic only');
   try{

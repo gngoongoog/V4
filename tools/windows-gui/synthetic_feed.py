@@ -40,6 +40,8 @@ snapshot.update(connected=True, login=170000001, server="Synthetic-CI-Demo",
 
 while True:
     now = time.time_ns() // 1_000_000
+    allow_manual=(home / 'synthetic-manual-allowed.flag').exists()
+    snapshot.update(trade_allowed=allow_manual,trade_expert=allow_manual)
     # An explicit CI-only marker exposes a fabricated owned position for the
     # native row-close test. The real MT5 Gateway remains disabled throughout.
     snapshot['positions'] = ([dict(ticket=777001, identifier=777001, magic=410600,
@@ -55,7 +57,9 @@ while True:
     with opener.open(request, timeout=8) as response:
         if json.load(response).get("ok") is not True:
             raise RuntimeError("Core rejected the synthetic GUI-test snapshot")
-    if (home / 'synthetic-cancel-close.flag').exists():
+    cancel_close=(home / 'synthetic-cancel-close.flag').exists()
+    cancel_manual=(home / 'synthetic-cancel-manual.flag').exists()
+    if cancel_close or cancel_manual:
         # Simulate a terminal *cancellation*, not an execution. Only the one
         # hard-coded fixture ticket is eligible, and no MT5 API is called.
         poll=urllib.request.Request('http://127.0.0.1:18741/v1/execution/gateway',
@@ -63,7 +67,9 @@ while True:
         with opener.open(poll,timeout=8) as response:
             command=json.load(response).get('command')
         if command is not None:
-            if command.get('kind')!='close' or command.get('manual_close') is not True or command.get('position')!=777001:
+            valid_close=cancel_close and command.get('kind')=='close' and command.get('manual_close') is True and command.get('position')==777001
+            valid_manual=cancel_manual and command.get('kind')=='open' and command.get('manual_open') is True and command.get('brain')=='manual' and command.get('magic')==410618
+            if not (valid_close or valid_manual):
                 raise RuntimeError('Unexpected synthetic gateway command')
             result=dict(id=command['id'],state='cancelled',reason='CI fixture: no broker order was sent')
             reply=urllib.request.Request('http://127.0.0.1:18741/v1/execution/result',

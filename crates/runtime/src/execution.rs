@@ -332,6 +332,7 @@ pub struct Service {
     quality_circuit: crate::broker_quality_circuit::Snapshot,
     fast: Option<pulse::FastContext>,
     learning_gate:crate::learning_control::Gate,
+    manual_blocked:bool,
 }
 
 impl Service {
@@ -387,6 +388,7 @@ impl Service {
             quality_circuit: crate::broker_quality_circuit::Snapshot::default(),
             fast: None,
             learning_gate:crate::learning_control::load(db)?,
+            manual_blocked:true,
         })
     }
 
@@ -470,7 +472,7 @@ impl Service {
     /// Global broker execution is armed by START + a fresh bound account.
     /// Secondary-brain SOLO switches are optional overrides and are not the master arm.
     pub fn enabled(&self, status: &Status) -> bool {
-        status.requested_run && status.gateway_fresh && self.account_matches(status)
+        status.requested_run && status.gateway_fresh && self.account_matches(status) && !self.manual_blocked
     }
     pub fn risk_master_for_status(&self,status:&Status)->Option<bool>{
         status.telemetry.as_ref().filter(|_|status.gateway_fresh&&self.account_matches(status))
@@ -517,7 +519,18 @@ impl Service {
         self.inner.pending(db)
     }
 
-    pub fn cancel_entries(&self, db: &Connection) -> Result<()> {
+    fn manual_exposure(db:&Connection,t:Option<&Telemetry>)->Result<bool>{
+        let sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE brain='manual' AND {PENDING_BROKER_SQL})");
+        let pending:bool=db.query_row(&sql,[],|r|r.get(0))?;
+        Ok(pending || t.is_some_and(|t|t.positions.iter().any(|p|p.symbol==t.symbol&&p.magic==410_618)))
+    }
+    pub fn validate_manual_handoff(&self,db:&Connection,status:&Status)->Result<()> {
+        anyhow::ensure!(!Self::manual_exposure(db,status.telemetry.as_ref())?,
+            "أغلق المركز اليدوي وانتظر تسوية أوامره قبل تشغيل الوضع الآلي");
+        Ok(())
+    }
+
+    pub fn cancel_entries(&mut self, db: &Connection) -> Result<()> {
         self.inner.cancel_entries(db)
     }
 
@@ -553,6 +566,7 @@ impl Service {
     ) -> Result<()> {
         self.inner.refresh_risk_master(db,telemetry)?;
         self.inner.refresh_solo(db,telemetry,config.trading.mode)?;
+        self.manual_blocked=Self::manual_exposure(db,Some(telemetry)).unwrap_or(true);
         self.inner.controls = crate::brain_control::load_account(db, &context(telemetry), config.trading.mode, telemetry.account_trade_mode)?;
         let available = crate::coordinator_learning::available_frames(telemetry, frames, now);
         let cutoff=self.learning_gate.cutoff();
@@ -581,7 +595,7 @@ impl Service {
         // management. Fail closed for fresh opens while reconciliation proceeds.
         // This check reads the durable Core journal only on reconciled snapshots.
         self.refresh_quality_circuit(db,telemetry,now);
-        let quality_allows=self.quality_circuit.entry_allowed(telemetry,self.is_live_target());
+        let quality_allows=self.quality_circuit.entry_allowed(telemetry,self.is_live_target()) && !self.manual_blocked;
         let entries_allowed=if run && quality_allows && self.supervisor_policy_valid {
             if !self.supervisor.enforce_entry_gate {true}
             else {
@@ -806,6 +820,66 @@ impl Service {
         status: &Status,
         now: u64,
     ) -> Result<Value> {
+        if method=="POST" && path=="/v1/execution/manual-market" {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request{context:String,side:i8,lots:f64,stop:f64,target:f64,reference:f64,expected_risk_master:bool,confirm_live_login:String}
+            let request:Request=serde_json::from_slice(body)?;
+            anyhow::ensure!(!status.requested_run && !self.pending(db)?,"أوقف التداول وانتظر تسوية الأوامر قبل الطلب اليدوي");
+            let t=status.telemetry.as_ref().filter(|t|status.gateway_fresh && self.account_matches(status) && t.quote_is_fresh(now,3000))
+                .context("اربط حساب MT5 وانتظر سعراً حديثاً")?;
+            anyhow::ensure!(request.context==context(t) && t.trade_allowed && t.trade_expert,"تغيّر الحساب أو التداول الآلي غير مسموح من MT5");
+            anyhow::ensure!(matches!((t.demo,t.account_trade_mode),(true,Some(0))|(false,Some(2))),"نوع حساب MT5 غير مؤكّد");
+            anyhow::ensure!(self.inner.risk_master(t)==Some(request.expected_risk_master),"حالة إدارة المخاطر تغيّرت؛ حدّث البيانات وأعد مراجعة الأمر");
+            if self.is_live_target() {self.validate_start(status,&json!({"confirm_live_login":request.confirm_live_login}).to_string().into_bytes())?;}
+            anyhow::ensure!(!t.positions.iter().any(|p|p.symbol==t.symbol&&execution::brain_for_magic(p.magic).is_some()),
+                "أغلق مراكز البرنامج لهذا الرمز قبل التداول اليدوي");
+            let (c,manual_frames)={let fast=self.fast.as_ref().filter(|f|context(&f.telemetry)==context(t)
+                && f.telemetry.account_trade_mode==t.account_trade_mode && self.inner.active_mode==Some(f.config.trading.mode))
+                .context("انتظر مزامنة إعدادات الحساب والرمز")?;
+                (fast.config.clone(),fast.frames.clone())};
+            anyhow::ensure!(c.symbol==t.symbol,"الرمز تغير؛ انتظر مزامنة إعدادات التداول");
+            let (bid,ask)=t.bid.zip(t.ask).filter(|(b,a)|b.is_finite()&&a.is_finite()&&*b>0.&&*a>=*b).context("سعر الوسيط غير صالح")?;
+            let point=t.point.filter(|v|v.is_finite()&&*v>0.).context("نقطة الوسيط غير متاحة")?;
+            let tick=t.tick_size.filter(|v|v.is_finite()&&*v>0.).context("شبكة سعر الوسيط غير متاحة")?;
+            let (minimum,step,maximum)=t.volume_min.zip(t.volume_step).zip(t.volume_max).map(|((a,b),c)|(a,b,c))
+                .filter(|(a,b,c)|a.is_finite()&&b.is_finite()&&c.is_finite()&&*a>0.&&*b>0.&&*c>=*a).context("حدود حجم الوسيط غير متاحة")?;
+            anyhow::ensure!(matches!(request.side,-1|1) && [request.lots,request.stop,request.target,request.reference].iter().all(|v|v.is_finite()&&*v>0.),"قيم الأمر اليدوي غير صالحة");
+            anyhow::ensure!(request.lots>=minimum-1e-9 && request.lots<=maximum+1e-9
+                && (request.lots/step-(request.lots/step).round()).abs()<=1e-7,"اللوت لا يطابق حدود وخطوة الوسيط");
+            let live_price=if request.side==1 {ask} else {bid};let exit_price=if request.side==1 {bid}else{ask};
+            anyhow::ensure!((live_price-request.reference).abs()<=self.inner.settings.deviation_points as f64*point+tick*1e-8,
+                "تغير السعر أكثر من الانزلاق المسموح؛ راجع الطلب");
+            let worst_entry=request.reference+request.side as f64*self.inner.settings.deviation_points as f64*point;
+            anyhow::ensure!(worst_entry.is_finite()&&worst_entry>0. && (request.target-worst_entry)*request.side as f64>0.,
+                "حد الانزلاق يصل إلى الهدف أو يجعل السعر غير صالح");
+            anyhow::ensure!((exit_price-request.stop)*request.side as f64>0. && (request.target-exit_price)*request.side as f64>0.
+                && (request.stop/tick-(request.stop/tick).round()).abs()<=1e-6
+                && (request.target/tick-(request.target/tick).round()).abs()<=1e-6,
+                "الستوب والهدف يجب أن يكونا على شبكة الوسيط وباتجاه صحيح");
+            self.refresh_quality_circuit(db,t,now);
+            anyhow::ensure!(self.quality_circuit.entry_allowed(t,self.is_live_target()),"حماية جودة التنفيذ تمنع دخولاً جديداً حالياً");
+            anyhow::ensure!(self.supervisor_policy_valid,"إعدادات حماية التنفيذ غير صالحة");
+            if self.supervisor.enforce_entry_gate {
+                let frames:BTreeMap<String,Vec<braintrade_domain::Candle>>=manual_frames.iter().map(|(tf,bars)|
+                    (tf.clone(),bars.iter().map(|bar|bar.candle.clone()).collect())).collect();
+                anyhow::ensure!(self.supervisor_permits_entry(crate::enterprise_supervisor::assess(&self.supervisor,Some(t),&c,&frames,now).entry_allowed),"حماية التنفيذ تمنع الدخول اليدوي حالياً");
+            }
+            if self.inner.risk_master(t).unwrap_or(true) && self.portfolio.enabled {
+                let mut proposed=exposure(db,t,&c,true)?;proposed.open_intents+=1;proposed.lots+=request.lots;
+                let candidate=json!({"lots":request.lots,"signal":{"stop_distance":(worst_entry-request.stop).abs()}});
+                match intent_risk(t,&c,&candidate){Some(r)=>proposed.estimated_risk+=r,None=>proposed.risk_known=false};
+                if c.risk.slippage_ticks>0. {
+                    if let Some(value)=t.tick_value_loss.filter(|v|v.is_finite()&&*v>0.) {
+                        proposed.estimated_risk+=2.*c.risk.slippage_ticks*value*request.lots;
+                    }else{proposed.risk_known=false;}
+                }
+                if let Some(reason)=portfolio_reason(&self.portfolio,&proposed,t.equity){anyhow::bail!(reason);}
+            }
+            let command=self.inner.queue_manual(db,t,&c,request.side,request.lots,request.stop,request.target,request.reference,now)?;
+            self.manual_blocked=true;
+            return Ok(json!({"ok":true,"id":command["id"],"queued":true,"broker_execution_confirmed":false}));
+        }
         if path=="/v1/execution/frozen-classic" {
             let t=status.telemetry.as_ref().filter(|t|
                 status.gateway_fresh && self.account_matches(status)
@@ -1133,7 +1207,7 @@ impl Service {
             // Fast Pulse MUST obey the exact same optional V20 entry guard.
             // No re-sending an unknown command, no bypass on lower latency.
             // Cached reconciled candles are reused; fresh pulse quote is overlaid.
-            let quality_allows=self.quality_circuit.entry_allowed(&next.telemetry,self.is_live_target());
+            let quality_allows=self.quality_circuit.entry_allowed(&next.telemetry,self.is_live_target()) && !self.manual_blocked;
             let enter=if status.requested_run && quality_allows && self.supervisor_policy_valid {
                 if !self.supervisor.enforce_entry_gate {true}
                 else {self.supervisor_permits_entry(crate::enterprise_supervisor::assess(&self.supervisor,Some(&next.telemetry),
@@ -1278,9 +1352,14 @@ impl Service {
             && value["authorized"]==true {
             let request:Value=serde_json::from_slice(body)?;
             let id=request["id"].as_str().context("Authorization id required")?;
-            let (kind,cmd_context):(String,String)=db.query_row(
-                "SELECT kind,context FROM broker_commands WHERE id=?1",
-                [id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+            let (kind,cmd_context,raw):(String,String,String)=db.query_row(
+                "SELECT kind,context,payload FROM broker_commands WHERE id=?1",
+                [id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+            let command:Value=serde_json::from_str(&raw)?;
+            if kind=="open" && command["manual_open"]!=true && self.manual_blocked
+                && Self::manual_exposure(db,status.telemetry.as_ref()).unwrap_or(true) {
+                return Ok(json!({"authorized":false,"reason":"manual_position_or_intent_pending"}));
+            }
             if kind=="open" && self.is_live_target() {
                 let authorized_quality=status.telemetry.as_ref()
                     .filter(|t|status.gateway_fresh&&self.account_matches(status)
@@ -1707,6 +1786,70 @@ mod tests {
         assert!(restarted.learning_frozen());assert_eq!(restarted.learning_status()["cutoff_ms"],1000);
         assert_eq!(restarted.set_learning_frozen(&db,&status,false,2000).unwrap()["frozen"],false);
         assert!(!Service::new(&db).unwrap().learning_frozen());
+    }
+
+    #[test]
+    fn manual_market_uses_distinct_owner_and_stop_revokes_dispatched_intent(){
+        use braintrade_domain::trading::TradingMode;
+        let db=setup();let mut service=Service::new(&db).unwrap();let now=1_800_000_000_000_u64;
+        let mut t=telemetry();t.demo=true;t.account_trade_mode=Some(0);t.trade_allowed=true;t.trade_expert=true;
+        t.bid=Some(2000.);t.ask=Some(2000.1);t.tick_age_ms=Some(0);t.quote_time_ms=Some(now);
+        t.point=Some(0.01);t.tick_size=Some(0.01);t.volume_min=Some(0.01);t.volume_step=Some(0.01);t.volume_max=Some(100.);
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();service.inner.settings.currency=t.currency.clone();service.inner.settings.target="demo".into();
+        let c=Config::default();service.inner.set_mode(TradingMode::Expert);
+        service.inner.set_risk_master(&db,&t,true,now-1).unwrap();
+        service.fast=Some(pulse::FastContext::new(&t,&c,&BTreeMap::new()));
+        let mut status=Status::default();status.telemetry=Some(t.clone());status.gateway_fresh=true;
+        let body=json!({"context":context(&t),"side":1,"lots":0.1,"stop":1999.,"target":2002.,"reference":2000.1,"expected_risk_master":true,"confirm_live_login":""}).to_string();
+        let mut bad:Value=serde_json::from_str(&body).unwrap();bad["context"]=json!("wrong account");
+        assert!(service.route("POST","/v1/execution/manual-market",bad.to_string().as_bytes(),&db,&status,now).is_err());
+        bad=serde_json::from_str(&body).unwrap();bad["expected_risk_master"]=json!(false);
+        assert!(service.route("POST","/v1/execution/manual-market",bad.to_string().as_bytes(),&db,&status,now).is_err());
+        bad=serde_json::from_str(&body).unwrap();bad["stop"]=json!(2001.);
+        assert!(service.route("POST","/v1/execution/manual-market",bad.to_string().as_bytes(),&db,&status,now).is_err());
+        let queued=service.route("POST","/v1/execution/manual-market",body.as_bytes(),&db,&status,now).unwrap();
+        assert_eq!(queued["queued"],true);assert_eq!(queued["broker_execution_confirmed"],false);
+        let id=queued["id"].as_str().unwrap();
+        assert!(service.validate_manual_handoff(&db,&status).is_err());
+        assert!(service.route("POST","/v1/execution/manual-market",body.as_bytes(),&db,&status,now).is_err(),"No duplicate while pending");
+        let work=service.route("GET","/v1/execution/gateway",&[],&db,&status,now).unwrap();
+        assert_eq!(work["command"]["id"],id);assert_eq!(work["command"]["brain"],"manual");assert_eq!(work["command"]["magic"],410618);
+        let authorization=json!({"id":id}).to_string();
+        assert_eq!(service.route("POST","/v1/execution/authorize",authorization.as_bytes(),&db,&status,now).unwrap()["authorized"],true);
+        service.cancel_entries(&db).unwrap();
+        assert_eq!(state(&db,id),"dispatched","Dispatched intent remains reconcilable");
+        assert_eq!(service.route("POST","/v1/execution/authorize",authorization.as_bytes(),&db,&status,now).unwrap()["authorized"],false);
+        let mut restarted=Service::new(&db).unwrap();restarted.inner.set_mode(TradingMode::Expert);
+        assert_eq!(restarted.route("POST","/v1/execution/authorize",authorization.as_bytes(),&db,&status,now).unwrap()["authorized"],false);
+        db.execute("UPDATE broker_commands SET state='cancelled' WHERE id=?1",[id]).unwrap();
+        status.telemetry.as_mut().unwrap().positions.push(Position{ticket:77,identifier:77,magic:410_618,
+            symbol:t.symbol.clone(),side:"BUY".into(),volume:0.1,price_open:2000.1,price_current:2000.,profit:-1.,sl:1999.,tp:2002.,..Default::default()});
+        assert!(service.validate_manual_handoff(&db,&status).is_err(),"Manual position blocks automatic owner");
+        let close=json!({"context":context(&t),"positions":[{"ticket":77,"magic":410618,"side":"BUY","volume":0.1}],"profit_only":false}).to_string();
+        let result=service.route("POST","/v1/execution/close-selected",close.as_bytes(),&db,&status,now).unwrap();
+        assert_eq!(result["queued"],1);
+        let close_id=result["ids"][0].as_str().unwrap();
+        let raw:String=db.query_row("SELECT payload FROM broker_commands WHERE id=?1",[close_id],|r|r.get(0)).unwrap();
+        let command:Value=serde_json::from_str(&raw).unwrap();
+        assert_eq!(command["brain"],"manual");assert_eq!(command["magic"],410618);
+    }
+
+    #[test]
+    fn manual_real_order_requires_its_own_exact_account_confirmation(){
+        use braintrade_domain::trading::TradingMode;
+        let db=setup();let mut service=Service::new(&db).unwrap();let now=1_800_000_000_000_u64;
+        let mut t=telemetry();t.demo=false;t.account_trade_mode=Some(2);t.trade_allowed=true;t.trade_expert=true;
+        t.bid=Some(2000.);t.ask=Some(2000.1);t.tick_age_ms=Some(0);t.quote_time_ms=Some(now);
+        t.point=Some(0.01);t.tick_size=Some(0.01);t.volume_min=Some(0.01);t.volume_step=Some(0.01);t.volume_max=Some(100.);
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();service.inner.settings.currency=t.currency.clone();service.inner.settings.target="live".into();
+        service.inner.set_mode(TradingMode::Expert);service.inner.set_risk_master(&db,&t,true,now-1).unwrap();
+        service.portfolio.enabled=true;
+        service.fast=Some(pulse::FastContext::new(&t,&Config::default(),&BTreeMap::new()));
+        let mut status=Status::default();status.telemetry=Some(t.clone());status.gateway_fresh=true;
+        let mut body=json!({"context":context(&t),"side":1,"lots":0.1,"stop":1999.,"target":2002.,"reference":2000.1,"expected_risk_master":true,"confirm_live_login":"wrong"});
+        assert!(service.route("POST","/v1/execution/manual-market",body.to_string().as_bytes(),&db,&status,now).is_err());
+        body["confirm_live_login"]=json!(t.login.to_string());
+        assert_eq!(service.route("POST","/v1/execution/manual-market",body.to_string().as_bytes(),&db,&status,now).unwrap()["queued"],true);
     }
 
     #[test]

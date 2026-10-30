@@ -54,6 +54,7 @@ pub struct Service {
     risk_master_enabled:bool,
     risk_master_recovery:Option<RiskRecovery>,
     risk_master_recovery_id:Option<String>,
+    manual_epoch:String,
     solo:Option<SoloOwner>,
     signals: BTreeMap<String, Value>,
     new_entries: Vec<Value>,
@@ -374,6 +375,7 @@ CREATE TABLE IF NOT EXISTS broker_commands(id TEXT PRIMARY KEY,context TEXT NOT 
 CREATE INDEX IF NOT EXISTS broker_commands_context ON broker_commands(context,brain,created_ms);
 CREATE INDEX IF NOT EXISTS broker_commands_history_floor ON broker_commands(context,kind,created_ms);
 CREATE INDEX IF NOT EXISTS broker_commands_recovery ON broker_commands(kind,state,created_ms);
+CREATE INDEX IF NOT EXISTS broker_commands_manual_pending ON broker_commands(brain,state);
 CREATE TABLE IF NOT EXISTS broker_seen(context TEXT NOT NULL,brain TEXT NOT NULL,signal TEXT NOT NULL,PRIMARY KEY(context,brain,signal));
 CREATE TABLE IF NOT EXISTS broker_deals(context TEXT NOT NULL,ticket INTEGER NOT NULL,position_id INTEGER NOT NULL,brain TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(context,ticket));
 CREATE TABLE IF NOT EXISTS broker_history_sync(context TEXT NOT NULL,target TEXT NOT NULL CHECK(target IN ('demo','live')),until_ms INTEGER NOT NULL CHECK(until_ms>=0),synced_ms INTEGER NOT NULL CHECK(synced_ms>=0),PRIMARY KEY(context,target));
@@ -418,6 +420,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             risk_master_enabled:true,
             risk_master_recovery:None,
             risk_master_recovery_id:None,
+            manual_epoch:uuid::Uuid::new_v4().simple().to_string(),
             solo:None,
             new_entries: Vec::new(),
             weights:BTreeMap::new(),
@@ -624,12 +627,39 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         let sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE {PENDING_BROKER_SQL})");
         Ok(db.query_row(&sql,[],|r|r.get(0))?)
     }
-    pub fn cancel_entries(&self, db: &Connection) -> Result<()> {
+    pub fn cancel_entries(&mut self, db: &Connection) -> Result<()> {
         db.execute(
             "UPDATE broker_commands SET state='cancelled' WHERE kind='open' AND state='queued'",
             [],
         )?;
+        self.manual_epoch=uuid::Uuid::new_v4().simple().to_string();
         Ok(())
+    }
+    fn manual_entry_allowed(&self,cmd:&Value,status:&Status)->bool{
+        cmd["kind"]=="open" && cmd["manual_open"]==true && cmd["brain"]=="manual" && !status.requested_run
+            && cmd["manual_epoch"]==self.manual_epoch && cmd["revision"].as_u64()==Some(self.settings.revision)
+            && self.active_mode.is_some_and(|mode|cmd["trading_mode"]==json!(mode))
+    }
+    pub fn queue_manual(&self,db:&Connection,t:&Telemetry,c:&Config,side:i8,lots:f64,stop:f64,target:f64,reference:f64,now:u64)->Result<Value>{
+        let brain=BrainConfig{id:"manual".into(),lots,..Default::default()};
+        let deviation=self.settings.deviation_points as f64*t.point.unwrap_or(0.);
+        let signal=Signal{brain:"manual".into(),side,key:format!("manual:{now}"),bar_time:now/1000,
+            stop_distance:(reference-stop).abs()+deviation,target_distance:(target-reference).abs(),
+            hold_ms:0,reason:"Manual order explicitly approved by operator".into(),ready:true,coordination:None};
+        let tx=db.unchecked_transaction()?;
+        let mut command=self.queue(&tx,t,&brain,"open",Some(&signal),0,now,Some(c))?;
+        command["manual_open"]=json!(true);
+        command["manual_epoch"]=json!(self.manual_epoch);
+        command["manual_reference_price"]=json!(reference);
+        command["manual_stop_price"]=json!(stop);
+        command["manual_target_price"]=json!(target);
+        command["demo_flexible"]=json!(false);
+        command["learning"]=Value::Null;
+        let id=command["id"].as_str().context("Manual command ID missing")?;
+        tx.execute("UPDATE broker_commands SET payload=?1 WHERE id=?2",params![command.to_string(),id])?;
+        tx.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,'manual_market_requested',?2)",
+            params![now,json!({"id":id,"context":ctx(t),"side":side,"lots":lots,"stop":stop,"target":target,"reference":reference}).to_string()])?;
+        tx.commit()?;Ok(command)
     }
     fn queue(
         &self,
@@ -1132,7 +1162,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         && selected.side==p.side && selected.volume.is_finite()
                         && (selected.volume-p.volume).abs()<=1e-8,"اتجاه المركز أو حجمه أو ملكيته تغيّرت؛ أعد التأكيد");
                     anyhow::ensure!(!request.profit_only || (p.profit.is_finite() && p.profit>0.),"المركز لم يعد رابحاً حسب الربح العائم في MT5");
-                    let brain=self.brains.iter().find(|b|b.id==id).context("هوية المركز غير معروفة")?;
+                    let brain=if id=="manual" {BrainConfig{id:"manual".into(),lots:p.volume,..Default::default()}}
+                        else {self.brains.iter().find(|b|b.id==id).context("هوية المركز غير معروفة")?.clone()};
                     approved.push((p.ticket,brain,p.volume,p.side.clone()));
                 }
                 // All-or-nothing queue creation: a failed disk write cannot
@@ -1140,7 +1171,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 let tx=db.unchecked_transaction()?;
                 let mut ids=Vec::new();
                 for (ticket,brain,volume,side) in approved {
-                    let mut command=self.queue(&tx,t,brain,"close",None,ticket,now,None)?;
+                    let mut command=self.queue(&tx,t,&brain,"close",None,ticket,now,None)?;
                     command["manual_close"]=json!(true);
                     command["profit_only"]=json!(request.profit_only);
                     command["expected_position_volume"]=json!(volume);
@@ -1191,9 +1222,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                                 cmd["daily_breaker_limit_percent"].as_f64().unwrap_or(2.))?;
                         let close_allowed = cmd["kind"] == "close"
                             && (cmd["manual_close"]!=true || !status.requested_run);
-                        let allowed = close_allowed
-                            || (breaker_ok && self.enabled(status)
-                                && self.broker_entry_allowed(cmd));
+                        let allowed = close_allowed || (breaker_ok &&
+                            ((self.enabled(status) && self.broker_entry_allowed(cmd)) || self.manual_entry_allowed(cmd,status)));
                         if allowed {
                             db.execute("UPDATE broker_commands SET state='dispatched' WHERE id=?1 AND state='queued'",[id])?;
                         } else {
@@ -1237,8 +1267,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     && now <= cmd["expires_ms"].as_u64().unwrap_or(0)
                     && ((cmd["kind"] == "close" && (cmd["manual_close"]!=true || !status.requested_run))
                         || (cmd["revision"].as_u64()==Some(self.settings.revision)
-                            && self.enabled(status)
-                            && self.broker_entry_allowed(&cmd)));
+                            && ((self.enabled(status) && self.broker_entry_allowed(&cmd))
+                                || self.manual_entry_allowed(&cmd,status))));
                 Ok(json!({"authorized":ok}))
             }
             ("POST", "/v1/execution/result") => {

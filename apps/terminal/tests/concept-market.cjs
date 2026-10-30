@@ -8,6 +8,7 @@ const moduleExports={},jsx=(type,props)=>({type,props:props||{}});
 vm.runInNewContext(compile('concept-market.tsx'),{exports:moduleExports,Number,String,Math,
  require(id){
   if(id==='react/jsx-runtime')return {jsx,jsxs:jsx};
+  if(id==='react')return {useState:value=>[value,()=>{}]};
   if(id==='lucide-react')return Object.fromEntries(['ArrowDown','ArrowUp','BriefcaseBusiness','ChartCandlestick','Clock','RefreshCw','Settings','ShieldCheck','Target','Wallet','Zap'].map(k=>[k,k]));
   if(id==='./chart')return {default:'TradingChart'};
   if(id==='./gold-symbol')return {GoldSymbol:'GoldSymbol'};
@@ -18,9 +19,9 @@ function nodes(n,out=[]){if(!n||typeof n!=='object')return out;if(Array.isArray(
 let actions=[];
 const account={connected:true,demo:true,symbol:'XAUUSD',currency:'USD',balance:100,margin_free:80,
  bid:2000.1,ask:2000.3,positions:[]};
-const props={account,status:{gateway_fresh:true,requested_run:false},quoteFresh:true,preview:false,busy:false,native:true,
+const props={account,status:{gateway_fresh:true,requested_run:false},accountMatches:true,quoteFresh:true,preview:false,busy:false,native:true,
  frame:'m15',onFrameChange:()=>{},theme:'light',open:p=>actions.push(p),onTradingSettings:()=>actions.push('settings'),
- onStart:()=>actions.push('start'),onStop:()=>actions.push('stop'),onClose:profit=>actions.push(profit?'close-profit':'close-owned'),onCloseTicket:ticket=>actions.push('ticket-'+ticket)};
+ onStart:()=>actions.push('start'),onStop:()=>actions.push('stop'),onClose:profit=>actions.push(profit?'close-profit':'close-owned'),onCloseTicket:ticket=>actions.push('ticket-'+ticket),onManual:input=>actions.push(input)};
 let tree=moduleExports.ConceptMarketDesk(props),all=nodes(tree);
 assert(all.some(n=>n.props?.className==='concept-led on'),'Fresh live quotes have a green indicator');
 const start=all.find(n=>n.type==='button'&&n.props.className==='action-btn start');
@@ -28,9 +29,15 @@ const stop=all.find(n=>n.type==='button'&&n.props.className==='action-btn stop')
 assert.equal(start.props.disabled,false);assert.equal(stop.props.disabled,false);
 start.props.onClick();stop.props.onClick();assert.deepEqual(actions,['start','stop']);
 const unsupported=all.filter(n=>n.type==='button'&&/غير مدعوم|أوامر .* غير متاحة/.test(n.props.title||''));
-assert.equal(unsupported.length,6);
+assert.equal(unsupported.length,2);
 for(const button of unsupported)
  assert.equal(button.props.disabled,true,'Unsupported manual orders must never act as broker operations');
+assert.equal(moduleExports.manualDraft(1,'','','',2000,2000.1),null);
+assert.equal(moduleExports.manualDraft(1,'0.1','2001','2002',2000,2000.1),null);
+const validBuy=moduleExports.manualDraft(1,'0.1','1999','2002',2000,2000.1);
+assert.equal(validBuy.reference,2000.1);assert.equal(validBuy.stop,1999);assert.equal(validBuy.lots,0.1);
+const validSell=moduleExports.manualDraft(-1,'0.1','2001','1998',2000,2000.1);
+assert.equal(validSell.reference,2000);assert.equal(validSell.target,1998);
 const prices=all.find(n=>n.props?.className==='concept-prices');
 assert(nodes(prices).some(n=>n.type==='strong'&&n.props.children==='2,000.10'));
 tree=moduleExports.ConceptMarketDesk({...props,account:null,status:{gateway_fresh:false,requested_run:false},quoteFresh:false});
