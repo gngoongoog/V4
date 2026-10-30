@@ -120,6 +120,33 @@ class DomCache:
             return False,[]
 
 
+def validated_closed_chart_bars(rows, seconds, now_s):
+    """Fail closed on malformed broker OHLC without repairing or inventing bars.
+
+    This is display/analysis history, not the live tick execution path.
+    Missing weekend/session intervals are allowed; duplicate and unordered
+    timestamps or non-finite prices invalidate the entire timeframe.
+    """
+    if not 100 <= len(rows) <= 180 or seconds not in (60, 300, 900):
+        return False
+    previous=0
+    for bar in rows:
+        stamp=bar['time']
+        if (not isinstance(stamp,int) or stamp<=previous or stamp<=0
+                or stamp%seconds or stamp+seconds>now_s):
+            return False
+        values=(bar['open'],bar['high'],bar['low'],bar['close'])
+        if (not all(math.isfinite(v) and v>0 for v in values)
+                or bar['high']<max(bar['open'],bar['close'])
+                or bar['low']>min(bar['open'],bar['close'])
+                or bar['high']<bar['low']
+                or not isinstance(bar['tick_volume'],int)
+                or bar['tick_volume']<0):
+            return False
+        previous=stamp
+    return True
+
+
 def collect_market(mt5,symbol,now):
     data=dict(captured_ms=int(now.timestamp()*1000),m1=[],m5=[],m15=[],error="")
     errors=[]
@@ -129,10 +156,10 @@ def collect_market(mt5,symbol,now):
             if rates is None or len(rates)<100:
                 errors.append(name.upper()+": waiting for 100 closed candles");continue
             rows=[dict(time=int(r['time']),open=float(r['open']),high=float(r['high']),low=float(r['low']),close=float(r['close']),tick_volume=int(r['tick_volume'])) for r in rates]
-            if any(r['time']+seconds>now.timestamp() for r in rows):
-                errors.append(name.upper()+": unfinished or future candle rejected");continue
+            if not validated_closed_chart_bars(rows,seconds,now.timestamp()):
+                errors.append(name.upper()+": invalid, unordered or unfinished broker OHLC rejected");continue
             data[name]=rows
-        except (AttributeError,TypeError,ValueError,RuntimeError):
+        except (AttributeError,TypeError,ValueError,RuntimeError,OverflowError):
             errors.append(name.upper()+": history unavailable")
     data['error']='; '.join(errors)
     return data
