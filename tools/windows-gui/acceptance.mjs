@@ -140,7 +140,7 @@ try{
   await navigate('إدارة المخاطر');
   const panel=page.getByRole('region',{name:'مفتاح إدارة المخاطر للحساب'});
   await panel.waitFor();
-  await panel.getByLabel('حد استعادة المخاطر').fill('100000');
+  await panel.getByLabel('حد استعادة المخاطر',{exact:true}).fill('100000');
   await until(async()=>await panel.getByRole('button',{name:'إيقاف إدارة المخاطر',exact:true}).isEnabled());
   page.once('dialog',dialog=>dialog.accept());
   await panel.getByRole('button',{name:'إيقاف إدارة المخاطر',exact:true}).click();
@@ -165,6 +165,27 @@ try{
   await panel.getByRole('button',{name:'العودة للمنسق',exact:true}).click();
   await until(async()=>(await status()).selected_owner==='system');
   await status(); // Synthetic fixture cannot send to a broker.
+ });
+ await check('row close queues exactly one synthetic owned ticket through Core',async()=>{
+  const marker=path.join(home,'synthetic-owned-position.flag');fs.writeFileSync(marker,'CI synthetic only');
+  try{
+   await until(async()=>(await status()).telemetry?.positions?.some(p=>p.ticket===777001));
+   await navigate('مركز التداول');
+   const close=page.getByRole('button',{name:'إغلاق المركز 777001',exact:true});
+   await until(async()=>await close.isEnabled());
+   page.once('dialog',dialog=>dialog.accept());await close.click();
+   await until(async()=>{
+    const r=await invoke('read_panel',{route:'/v1/execution'}),data=r.data||r;
+    return data.commands?.some(c=>c.request?.position===777001&&c.request?.manual_close===true&&c.state==='queued');
+   });
+   // The fixture reports cancellation without sending to any broker.
+   const cancel=path.join(home,'synthetic-cancel-close.flag');fs.writeFileSync(cancel,'CI cancellation only');
+   try{await until(async()=>{
+    const r=await invoke('read_panel',{route:'/v1/execution'}),data=r.data||r;
+    return data.commands?.some(c=>c.request?.position===777001&&c.request?.manual_close===true&&c.state==='cancelled');
+   });}finally{fs.rmSync(cancel,{force:true});}
+  }finally{fs.rmSync(marker,{force:true});}
+  await until(async()=>!(await status()).telemetry?.positions?.some(p=>p.ticket===777001));
  });
  await check('commission draft survives disconnect and same-account reconnect',async()=>{
   let panel=await trading();await panel.getByLabel('commission per lot',{exact:true}).fill('9');

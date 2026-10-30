@@ -20,7 +20,7 @@ const account={connected:true,demo:true,symbol:'XAUUSD',currency:'USD',balance:1
  bid:2000.1,ask:2000.3,positions:[]};
 const props={account,status:{gateway_fresh:true,requested_run:false},quoteFresh:true,preview:false,busy:false,native:true,
  frame:'m15',onFrameChange:()=>{},theme:'light',open:p=>actions.push(p),onTradingSettings:()=>actions.push('settings'),
- onStart:()=>actions.push('start'),onStop:()=>actions.push('stop'),onClose:profit=>actions.push(profit?'close-profit':'close-owned')};
+ onStart:()=>actions.push('start'),onStop:()=>actions.push('stop'),onClose:profit=>actions.push(profit?'close-profit':'close-owned'),onCloseTicket:ticket=>actions.push('ticket-'+ticket)};
 let tree=moduleExports.ConceptMarketDesk(props),all=nodes(tree);
 assert(all.some(n=>n.props?.className==='concept-led on'),'Fresh live quotes have a green indicator');
 const start=all.find(n=>n.type==='button'&&n.props.className==='action-btn start');
@@ -56,8 +56,13 @@ const close=all.find(n=>n.type==='button'&&n.props.children==='إغلاق مرا
 const profit=all.find(n=>n.type==='button'&&n.props.children==='إغلاق الرابحة للرمز');
 assert(!close.props.disabled&&!profit.props.disabled);close.props.onClick();profit.props.onClick();
 assert.deepEqual(actions.slice(-2),['close-owned','close-profit']);
+const selected=all.find(n=>n.type==='button'&&n.props['aria-label']==='إغلاق المركز 101');
+const foreign=all.find(n=>n.type==='button'&&n.props['aria-label']==='إغلاق المركز 103');
+assert(!selected.props.disabled);assert(foreign.props.disabled,'Foreign positions cannot be closed by the owned-position action');
+selected.props.onClick();assert.equal(actions.at(-1),'ticket-101','The row action must request exactly the clicked ticket');
 for(const change of [{preview:true},{quoteFresh:false},{status:{gateway_fresh:true,requested_run:true}},{native:false}]){
  const view=moduleExports.ConceptMarketDesk({...props,account:{...account,positions},...change});
  assert(nodes(view).find(n=>n.type==='button'&&n.props.children==='إغلاق مراكز البرنامج للرمز').props.disabled,'close must fail closed in preview, stale quote, running or non-native state');
+ assert(nodes(view).find(n=>n.type==='button'&&n.props['aria-label']==='إغلاق المركز 101').props.disabled,'individual close must obey the same execution guard');
 }
 console.log('PASS: concept market scopes requested closes to exact owned tickets, protects preview/STOP/quotes, and leaves unsupported manual entries disabled');
