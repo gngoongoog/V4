@@ -1,5 +1,6 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {GoldSymbol} from './gold-symbol';
+import {Crosshair,Activity,ZoomIn,ZoomOut,RotateCcw,Maximize2,Minimize2} from 'lucide-react';
 import type {Candle,Market,Position} from './types';
 import type {ChartFrameMeta} from './chart-history';
 import {num} from './format';
@@ -71,6 +72,19 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
   const close=(event:KeyboardEvent)=>{if(event.key==='Escape')setExpanded(false)};
   window.addEventListener('keydown',close);return()=>window.removeEventListener('keydown',close);
  },[expanded]);
+ // Browser wheel events may be passive under React. A native non-passive
+ // listener enables chart zoom without scrolling the entire application.
+ useEffect(()=>{
+  const el=canvas.current;if(!el)return;
+  const onWheel=(event:WheelEvent)=>{
+   if(all.length<3)return;
+   event.preventDefault();
+   if(event.shiftKey)setOffset(v=>clamp(v+(event.deltaY>0?5:-5),0,Math.max(0,all.length-12)));
+   else setBarsVisible(v=>clamp(v+(event.deltaY>0?8:-8),16,120));
+  };
+  el.addEventListener('wheel',onWheel,{passive:false});
+  return()=>el.removeEventListener('wheel',onWheel);
+ },[all.length]);
  useEffect(()=>{
   const el=canvas.current;if(!el)return;
   const ctx=el.getContext('2d');if(!ctx)return;
@@ -112,9 +126,15 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
    }
    const highC=Math.max(...chart.map(b=>b.high)),lowC=Math.min(...chart.map(b=>b.low));
    const baseRange=Math.max(.01,highC-lowC);
-   const nearby=[position?.price_open,position?.sl,position?.tp,priceQuote]
+   const levels=position?[position.price_open,position.sl,position.tp]
+    .filter((v):v is number=>Number.isFinite(v)&&v>0):[];
+   // Include SL/TP when they are at a sensible visible distance. A far-away
+   // target may not compress real candles into a one-pixel line.
+   const levelSpan=Math.max(highC,...levels)-Math.min(lowC,...levels);
+   const visibleLevels=levelSpan<=baseRange*2.5?levels:[];
+   const nearby=[...visibleLevels,priceQuote]
     .filter((v):v is number=>typeof v==='number'&&Number.isFinite(v)&&v>0&&
-     v>lowC-baseRange*.3&&v<highC+baseRange*.3);
+     v>lowC-baseRange*.8&&v<highC+baseRange*.8);
    const low=Math.min(lowC,...nearby)-baseRange*.095;
    const high=Math.max(highC,...nearby)+baseRange*.095;
    const y=(price:number)=>top+(high-price)/(high-low)*priceHeight;
@@ -230,18 +250,18 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
      aria-pressed={tf===frame} title={'MT5 '+tf.toUpperCase()+' • closed candles'}
      onClick={()=>setFrame(tf)}>{tf.toUpperCase()}</button>)}</div>
     <button type="button" className={'tool-button '+(crosshair?'tool-on':'')} title="Crosshair"
-     aria-pressed={crosshair} onClick={()=>setCrosshair(v=>!v)}>⌖</button>
+     aria-pressed={crosshair} onClick={()=>setCrosshair(v=>!v)}><Crosshair size={16}/></button>
     <button type="button" className={'tool-button '+(averages?'tool-on':'')} title="EMA 9 / EMA 21"
-     aria-pressed={averages} onClick={()=>setAverages(v=>!v)}>⌁</button>
+     aria-pressed={averages} onClick={()=>setAverages(v=>!v)}><Activity size={16}/></button>
     <button type="button" className="tool-button" title="تكبير الشموع" aria-label="تكبير الشموع"
-     onClick={()=>setBarsVisible(v=>clamp(v-12,16,120))}>＋</button>
+     onClick={()=>setBarsVisible(v=>clamp(v-12,16,120))}><ZoomIn size={17}/></button>
     <button type="button" className="tool-button" title="تصغير الشموع" aria-label="تصغير الشموع"
-     onClick={()=>setBarsVisible(v=>clamp(v+12,16,120))}>－</button>
+     onClick={()=>setBarsVisible(v=>clamp(v+12,16,120))}><ZoomOut size={17}/></button>
     <button type="button" className="tool-button" title="العودة لأحدث شمعة" aria-label="العودة لأحدث شمعة"
-     onClick={resetView}>↺</button>
+     onClick={resetView}><RotateCcw size={16}/></button>
     <button type="button" className="tool-button wide" aria-label={expanded?'استعادة حجم الشارت':'تكبير الشارت'}
      aria-pressed={expanded} title={expanded?'استعادة حجم الشارت':'تكبير الشارت'}
-     onClick={()=>setExpanded(v=>!v)}>⛶</button>
+     onClick={()=>setExpanded(v=>!v)}>{expanded?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
    </div>
   </div>
   <div className="ohlc-line">{highlighted?
@@ -253,12 +273,6 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
   <div className="chart-frame">
    <canvas aria-label={'MT5 '+symbol+' '+frame+' candlestick chart'} title={'MT5 OHLC '+frame.toUpperCase()} ref={canvas}
     onDoubleClick={resetView}
-    onWheel={e=>{
-     if(!ready)return;
-     e.preventDefault();
-     if(e.shiftKey){setOffset(v=>clamp(v+(e.deltaY>0?5:-5),0,Math.max(0,all.length-12)))}
-     else setBarsVisible(v=>clamp(v+(e.deltaY>0?8:-8),16,120));
-    }}
     onPointerDown={e=>{
      if(e.button!==0||!ready)return;
      drag.current={x:e.clientX,offset,step:Math.max(2,(e.currentTarget.clientWidth-81)/chart.length)};
