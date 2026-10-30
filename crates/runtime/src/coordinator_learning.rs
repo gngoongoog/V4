@@ -521,6 +521,7 @@ fn open_learning_commands(db: &Connection, key: &str) -> Result<Vec<(String, Str
         "SELECT payload,result FROM broker_commands c
          WHERE c.context=?1 AND c.kind='open'
          AND CASE WHEN json_valid(c.payload) THEN json_extract(c.payload,'$.target') ELSE '' END='demo'
+         AND CASE WHEN json_valid(c.payload) THEN COALESCE(json_extract(c.payload,'$.manual_open'),0)<>1 ELSE 0 END
          AND CAST(json_extract(c.result,'$.deal') AS INTEGER)>0
          AND (
              NOT EXISTS(SELECT 1 FROM broker_learning_processed p
@@ -1161,6 +1162,17 @@ mod tests {
         db.execute("INSERT INTO coordinator_samples VALUES('s',?1,?2,?3)",params![bar,p.to_string(),o.to_string()]).unwrap();
         assert_eq!(forward_stats_at(&db,"s",None,now-1,Some(now-1)).unwrap().samples,0);
         assert_eq!(forward_stats(&db,"s",None,now).unwrap().samples,1);
+    }
+    #[test]
+    fn manual_orders_are_excluded_from_automatic_training_scan(){
+        let db=Connection::open_in_memory().unwrap();Learner::new(&db).unwrap();
+        db.execute_batch("CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT,brain TEXT,kind TEXT,created_ms INTEGER,state TEXT,payload TEXT,result TEXT);").unwrap();
+        let manual=json!({"target":"demo","manual_open":true}).to_string();
+        let automatic=json!({"target":"demo"}).to_string();
+        db.execute("INSERT INTO broker_commands VALUES('manual','a','manual','open',1,'filled',?1,'{\"deal\":1}')",[manual]).unwrap();
+        db.execute("INSERT INTO broker_commands VALUES('auto','a','system','open',2,'filled',?1,'{\"deal\":2}')",[automatic]).unwrap();
+        let rows=open_learning_commands(&db,"a").unwrap();
+        assert_eq!(rows.len(),1);assert_eq!(serde_json::from_str::<Value>(&rows[0].0).unwrap()["target"],"demo");
     }
 
     #[test]
