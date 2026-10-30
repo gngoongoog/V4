@@ -1094,7 +1094,7 @@ export default function Terminal(){
       <button type="button" className="kpi" onClick={()=>open('execution')}><div className="kpi-glyph"><Wifi/></div><div className="kpi-copy"><div className="kpi-ar">الاتصال</div><strong>{preview?'معاينة':accountFresh?'متصل':'غير متصل'}</strong><div className="kpi-footer">{account?(account.demo?'MT5 · Demo':'MT5 · Real'):'بانتظار MT5'}</div></div><span className={'concept-led '+(accountFresh&&!preview?'on':'')}/></button>
      </div>
      <div className="hero-grid">
-      <TradingChart market={chartMarket} symbol={account?.symbol||'XAUUSD'} quote={(preview||feed.quote)?account?.bid??undefined:undefined} frame={chartFrame} onFrameChange={setChartFrame} theme={theme} frameMeta={extraChart.meta} preview={preview}/>
+      <TradingChart market={chartMarket} symbol={account?.symbol||'XAUUSD'} quote={(preview||feed.quote)?account?.bid??undefined:undefined} positions={preview||feed.broker?positions:[]} frame={chartFrame} onFrameChange={setChartFrame} theme={theme} frameMeta={extraChart.meta} preview={preview}/>
       <section className="panel ops-panel">
        <div className="concept-quick-title"><strong>{account?.symbol||'XAUUSD'} - التحكم السريع</strong><button type="button" title="إعدادات التداول" onClick={()=>open('trading')}><Settings size={17}/></button></div>
        <div className="ops-tabs" role="tablist">{[['trade','التداول المباشر'],['orders','إدارة الأوامر'],['advanced','متداول متقدم']].map(([key,label])=><button key={key} role="tab" aria-selected={opsTab===key} className={opsTab===key?'active':''} onClick={()=>setOpsTab(key as typeof opsTab)}>{label}</button>)}</div>
