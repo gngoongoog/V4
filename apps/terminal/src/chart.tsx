@@ -1,6 +1,6 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {GoldSymbol} from './gold-symbol';
-import {Crosshair,Activity,ZoomIn,ZoomOut,RotateCcw,Maximize2,Minimize2} from 'lucide-react';
+import {Crosshair,Activity,ZoomIn,ZoomOut,RotateCcw,Maximize2,Minimize2,Target} from 'lucide-react';
 import type {Candle,Market,Position} from './types';
 import type {ChartFrameMeta} from './chart-history';
 import {num} from './format';
@@ -45,7 +45,7 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
  const [localFrame,setLocalFrame]=useState<ChartFrame>('m15');
  const frame=currentFrame??localFrame;
  const [averages,setAverages]=useState(true),[crosshair,setCrosshair]=useState(true);
- const [expanded,setExpanded]=useState(false);
+ const [expanded,setExpanded]=useState(false),[fitLevels,setFitLevels]=useState(false);
  const [barsVisible,setBarsVisible]=useState(56),[offset,setOffset]=useState(0);
  const [hover,setHover]=useState<Hover>(null);
  const canvas=useRef<HTMLCanvasElement>(null);
@@ -131,10 +131,12 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
    // Include SL/TP when they are at a sensible visible distance. A far-away
    // target may not compress real candles into a one-pixel line.
    const levelSpan=Math.max(highC,...levels)-Math.min(lowC,...levels);
-   const visibleLevels=levelSpan<=baseRange*2.5?levels:[];
+   const visibleLevels=fitLevels&&levelSpan<=baseRange*3
+    ?levels
+    :levels.filter(v=>v>lowC-baseRange*.2&&v<highC+baseRange*.2);
    const nearby=[...visibleLevels,priceQuote]
     .filter((v):v is number=>typeof v==='number'&&Number.isFinite(v)&&v>0&&
-     v>lowC-baseRange*.8&&v<highC+baseRange*.8);
+     v>lowC-baseRange*(fitLevels?.9:.3)&&v<highC+baseRange*(fitLevels?.9:.3));
    const low=Math.min(lowC,...nearby)-baseRange*.095;
    const high=Math.max(highC,...nearby)+baseRange*.095;
    const y=(price:number)=>top+(high-price)/(high-low)*priceHeight;
@@ -177,6 +179,18 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
      ctx.fillStyle=l.color;ctx.fillRect(xRight-33,yy-11,33,15);
      ctx.fillStyle='#fff';ctx.textAlign='center';ctx.font='bold 9px Segoe UI';
      ctx.fillText(l.label,xRight-16,yy);ctx.textAlign='left';
+    }
+    // Off-screen levels are displayed as arrows, never projected at a false
+    // price coordinate. The default price scale prioritizes candle detail.
+    for(const l of levels){
+     if(!Number.isFinite(l.value)||l.value<=0||l.value>=low&&l.value<=high)continue;
+     const above=l.value>high;
+     const badgeY=above?top+7:priceBottom-14;
+     ctx.fillStyle=l.color;ctx.globalAlpha=.89;
+     ctx.fillRect(xRight-110,badgeY,108,16);ctx.globalAlpha=1;
+     ctx.fillStyle='#fff';ctx.font='bold 9px Segoe UI';ctx.textAlign='center';
+     ctx.fillText((above?'↑ ':'↓ ')+l.label+' '+priceText(l.value,baseRange/5),
+      xRight-56,badgeY+11);ctx.textAlign='left';
     }
    }
    // Render each OHLC bar as a wick plus filled body, independent of volume.
@@ -235,7 +249,7 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
   };
   const observer=new ResizeObserver(draw);
   observer.observe(el);draw();return()=>observer.disconnect();
- },[chart,ready,windowed.start,ema9,ema21,position,priceQuote,theme,averages,crosshair,hover,frame,preview]);
+ },[chart,ready,windowed.start,ema9,ema21,position,priceQuote,theme,averages,crosshair,hover,frame,preview,fitLevels]);
  const highlighted=hover?chart[hover.index]??chart.at(-1):chart.at(-1);
  const historical=frame==='m30'||frame==='h1'||frame==='h4'||frame==='d1'?frameMeta?.[frame]:undefined;
  const dataLabel=preview?'SIMULATED • NOT MT5':historical?
@@ -259,6 +273,10 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
      onClick={()=>setBarsVisible(v=>clamp(v+12,16,120))}><ZoomOut size={17}/></button>
     <button type="button" className="tool-button" title="العودة لأحدث شمعة" aria-label="العودة لأحدث شمعة"
      onClick={resetView}><RotateCcw size={16}/></button>
+    <button type="button" className={'tool-button '+(fitLevels?'tool-on':'')}
+     aria-label="ملاءمة مستويات الدخول والهدف والوقف" aria-pressed={fitLevels}
+     title="إظهار مستويات SL/TP البعيدة ضمن تدريج السعر"
+     disabled={!position} onClick={()=>setFitLevels(v=>!v)}><Target size={16}/></button>
     <button type="button" className="tool-button wide" aria-label={expanded?'استعادة حجم الشارت':'تكبير الشارت'}
      aria-pressed={expanded} title={expanded?'استعادة حجم الشارت':'تكبير الشارت'}
      onClick={()=>setExpanded(v=>!v)}>{expanded?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
