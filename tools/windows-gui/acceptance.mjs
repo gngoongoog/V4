@@ -172,6 +172,27 @@ try{
   await until(async()=>(await status()).selected_owner==='system');
   await status(); // Synthetic fixture cannot send to a broker.
  });
+ await check('position protection queues and reconciles a synthetic SL while STOPPED',async()=>{
+  const permission=path.join(home,'synthetic-manual-allowed.flag'),position=path.join(home,'synthetic-owned-position.flag');
+  const marker=path.join(home,'synthetic-protect-observe.flag');
+  fs.writeFileSync(permission,'CI synthetic permissions only');fs.writeFileSync(position,'CI synthetic position only');
+  try{
+   await until(async()=>{const s=await status();return s.telemetry?.trade_allowed===true&&s.telemetry?.positions?.some(p=>p.ticket===777001)});
+   await navigate('إدارة المخاطر');
+   const panel=page.getByRole('region',{name:'حماية المراكز بالتعادل والوقف المتحرك'});await panel.waitFor();
+   const toggle=panel.getByRole('checkbox',{name:'تفعيل نقل الوقف إلى التعادل'});
+   await until(async()=>await toggle.isEnabled());await toggle.check();
+   page.once('dialog',dialog=>dialog.accept());await panel.getByRole('button',{name:'حفظ إعدادات حماية المراكز',exact:true}).click();
+   const execution=async()=>{const r=await invoke('read_panel',{route:'/v1/execution'});return r.data||r};
+   await until(async()=>(await execution()).position_protection?.policy?.break_even_enabled===true);
+   fs.writeFileSync(marker,'CI fake observation only');
+   await until(async()=>(await execution()).position_protection?.commands?.some(c=>c.state==='observed'&&c.request?.position===777001&&c.request?.expected_position_tp===2510));
+   assert.equal((await status()).requested_run,false,'Protection must not start entry execution');
+   await until(async()=>await toggle.isChecked());await toggle.uncheck();
+   page.once('dialog',dialog=>dialog.accept());await panel.getByRole('button',{name:'حفظ إعدادات حماية المراكز',exact:true}).click();
+   await until(async()=>(await execution()).position_protection?.policy?.break_even_enabled===false);
+  }finally{fs.rmSync(marker,{force:true});fs.rmSync(position,{force:true});fs.rmSync(permission,{force:true});}
+ });
  await check('manual market ticket queues exact inputs and fixture cancels without broker',async()=>{
   const enabled=path.join(home,'synthetic-manual-allowed.flag'),cancel=path.join(home,'synthetic-cancel-manual.flag');
   fs.writeFileSync(enabled,'CI synthetic permissions only');

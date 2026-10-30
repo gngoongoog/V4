@@ -92,6 +92,10 @@ try{
  await page.locator('#sidebarNav').getByTitle('نظرة عامة',{exact:true}).click();
  await wait(350);
  await assertPrimaryNavigation();
+ await page.getByRole('button',{name:'تكبير الشارت',exact:true}).click();
+ assert(await page.locator('.chart-panel.chart-expanded').isVisible(),'Chart expansion must remain available on laptop widths');
+ await page.keyboard.press('Escape');
+ assert.equal(await page.locator('.chart-panel.chart-expanded').count(),0);
  await page.screenshot({path:path.join(out,'dashboard-1120.png')});
  const narrow=await page.locator('main.content').evaluate(e=>({scroll:e.scrollWidth,visible:e.clientWidth}));
  assert(narrow.scroll<=narrow.visible+1,'Laptop dashboard has horizontal overflow');

@@ -333,6 +333,9 @@ pub struct Service {
     fast: Option<pulse::FastContext>,
     learning_gate:crate::learning_control::Gate,
     manual_blocked:bool,
+    // Only touched on full snapshots or when work exists; never scan the
+    // protection journal on every latency-sensitive Sniper quote.
+    protection_work:bool,
 }
 
 impl Service {
@@ -343,6 +346,7 @@ impl Service {
         crate::matched_forward::init(db)?;
         crate::matched_trade::init(db)?;
         crate::sniper_opportunities::init(db)?;
+        crate::position_protection::init(db)?;
         let mut inner = legacy::Service::new(db)?;
         // Old per-brain flags do not choose an execution owner. A scoped solo
         // selection is loaded only after a matching reconciled broker snapshot.
@@ -389,6 +393,7 @@ impl Service {
             fast: None,
             learning_gate:crate::learning_control::load(db)?,
             manual_blocked:true,
+            protection_work:false,
         })
     }
 
@@ -615,6 +620,12 @@ impl Service {
         self.sniper_frozen_tick.flush_research_events(db,telemetry);
         self.inner
             .observe(db, telemetry, config, entries_allowed, frames, now)?;
+        // Protection failures must not interrupt broker reconciliation or
+        // existing exit logic. A failed or corrupt policy simply creates no
+        // modification; the read-only report exposes the error to the UI.
+        self.protection_work=if self.inner.matches_bound_telemetry(telemetry) {
+            crate::position_protection::observe(db,telemetry,&self.inner.settings.target,now).unwrap_or(false)
+        } else {false};
         // Separate read-only Classic forward cohort uses full M1 snapshots.
         // It never consumes or contaminates Learner Fast Pulse comparisons.
         self.sniper_classic_forward.observe(telemetry,config,frames,now);
@@ -820,6 +831,39 @@ impl Service {
         status: &Status,
         now: u64,
     ) -> Result<Value> {
+        if method=="POST" && path=="/v1/execution/position-protection" {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request {context:String,policy:crate::position_protection::Policy,expected_policy_id:String,confirm_live_login:String}
+            let request:Request=serde_json::from_slice(body)?;
+            anyhow::ensure!(status.gateway_fresh && self.account_matches(status),"اربط الحساب الحالي وانتظر اتصال MT5 حديثاً");
+            let t=status.telemetry.as_ref().context("حساب MT5 غير متاح")?;
+            anyhow::ensure!(request.context==context(t),"الحساب أو الرمز تغيّر؛ أعد مراجعة الإعدادات");
+            if !t.demo && (request.policy.break_even_enabled || request.policy.trailing_enabled) {
+                anyhow::ensure!(request.confirm_live_login==t.login.to_string(),"اكتب رقم حساب REAL لتأكيد إعدادات حماية المراكز");
+            }
+            let value=crate::position_protection::save(db,t,&self.inner.settings.target,&request.policy,&request.expected_policy_id,now)?;
+            self.protection_work=false;
+            return Ok(value);
+        }
+        if method=="POST" && path=="/v1/execution/authorize" {
+            let packet:Value=serde_json::from_slice(body)?;
+            let id=packet["id"].as_str().context("Authorization id required")?;
+            if id.starts_with("protect-") {
+                let authorized=if status.gateway_fresh && self.account_matches(status) {
+                    status.telemetry.as_ref().is_some_and(|t|
+                        crate::position_protection::authorize(db,t,&self.inner.settings.target,id,now).unwrap_or(false))
+                } else {false};
+                return Ok(json!({"authorized":authorized}));
+            }
+        }
+        if method=="POST" && path=="/v1/execution/result" {
+            let packet:Value=serde_json::from_slice(body)?;
+            if packet["id"].as_str().is_some_and(|id|id.starts_with("protect-")) {
+                anyhow::ensure!(crate::position_protection::result(db,&packet)?,"Unknown protection intent");
+                return Ok(json!({"ok":true}));
+            }
+        }
         if method=="POST" && path=="/v1/execution/manual-market" {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]
@@ -1245,6 +1289,10 @@ impl Service {
                 &pulse_status,
                 now,
             )?;
+            if self.protection_work && work["command"].is_null() {
+                work["command"]=json!(crate::position_protection::next(db,pulse_status.telemetry.as_ref().unwrap(),&self.inner.settings.target,now).unwrap_or(None));
+                self.protection_work=false;
+            }
             // No SQLite writes on Sniper hot path; this is bounded in-memory
             // accepted-pulse observation only. A failed Core pulse is not counted.
             self.sniper_tick_audit.observe(pulse_status.telemetry.as_ref().unwrap(),body,now);
@@ -1343,7 +1391,14 @@ impl Service {
             return Ok(result);
         }
 
-        let value = self.inner.route(method, path, body, db, status, now)?;
+        let mut value = self.inner.route(method, path, body, db, status, now)?;
+        if method=="GET" && path=="/v1/execution/gateway" && self.protection_work
+            && value["command"].is_null() && status.gateway_fresh && self.account_matches(status) {
+            if let Some(t)=status.telemetry.as_ref() {
+                value["command"]=json!(crate::position_protection::next(db,t,&self.inner.settings.target,now).unwrap_or(None));
+                self.protection_work=false;
+            }
+        }
         // Final authorization is the last Core gate before Gateway calls MT5.
         // Read the committed journal independently here; never trust only a
         // previous tick's cached snapshot. Existing close/reconciliation intents
@@ -1391,6 +1446,10 @@ impl Service {
             value["risk_master"]=json!({"enabled":risk,"scope":"bound_broker_account_and_mode",
                 "recovery":status.telemetry.as_ref().and_then(|t|self.inner.risk_recovery(t)),
                 "note":"المفتاح يؤثر على ميزانية وقف الصفقة، وحدود المحفظة والخسارة اليومية والحدود الاختيارية. فحوص MT5 والهوية والتسوية وSL/TP تبقى فعالة."});
+            value["position_protection"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|crate::position_protection::report(db,t,&self.inner.settings.target)
+                    .unwrap_or_else(|e|json!({"error":e.to_string()}))).unwrap_or(Value::Null)
+            } else {Value::Null};
             let context=status.telemetry.as_ref().map(|t|
                 serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)).unwrap_or_default()
             ).unwrap_or_default();

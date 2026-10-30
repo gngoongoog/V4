@@ -372,6 +372,16 @@ fn update_risk_master(context:String,enabled:bool,confirm_live_login:String,reco
 }
 
 #[tauri::command]
+fn update_position_protection(context:String,policy:Value,expected_policy_id:String,confirm_live_login:String)->Result<Value,String>{
+    if context.is_empty() || context.len()>500 || expected_policy_id.len()>64 || confirm_live_login.len()>32 {
+        return Err("حساب MT5 أو التأكيد غير صالح".into());
+    }
+    open_client()?.post("/v1/execution/position-protection",
+        json!({"context":context,"policy":policy,"expected_policy_id":expected_policy_id,"confirm_live_login":confirm_live_login}))
+        .map_err(|err|err.to_string())
+}
+
+#[tauri::command]
 fn set_learning_frozen(frozen:bool)->Result<Value,String>{
     open_client()?.post("/v1/learning/control",json!({"frozen":frozen}))
         .map_err(|err|err.to_string())
@@ -564,7 +574,7 @@ pub fn run() {
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore, save_excel_report,
-            backtest_action, update_brain_control, update_brain_paper_all, update_risk_master, set_learning_frozen, manual_market, select_solo_brain, close_owned_positions, bind_execution
+            backtest_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, set_learning_frozen, manual_market, select_solo_brain, close_owned_positions, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");

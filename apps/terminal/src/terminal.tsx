@@ -29,6 +29,7 @@ import {OperatorWriteFence} from './operator-write-fence';
 import type {OperatorWriteTicket} from './operator-write-fence';
 import {MicroCapitalOperations} from './micro-capital-operations';
 import {RiskMasterOperations} from './risk-master-operations';
+import {PositionProtectionOperations} from './position-protection-operations';
 import {SoloOperations} from './solo-operations';
 import {ExecutionQualityOperations} from './execution-quality-operations';
 import {ModeEvidenceOperations} from './mode-evidence-operations';
@@ -41,9 +42,9 @@ import {SniperFrozenOperations,eligibleFrozenSniper} from './sniper-frozen-opera
 import {SniperClassicOperations,eligibleFrozenClassic} from './sniper-classic-operations';
 import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position} from './types';
-import type {RiskRecovery} from './bridge';
+import type {RiskRecovery,PositionProtectionPolicy} from './bridge';
 import {DESIGN_FIXTURE} from './mock';
-import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,setLearningFrozen,manualMarket,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
+import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,updatePositionProtection,setLearningFrozen,manualMarket,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
 import {money,num,signed,up,valid} from './format';
 
 type IconComponent=typeof Home;
@@ -693,6 +694,32 @@ export default function Terminal(){
   }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
   finally{finishWrite(mutation)}
  };
+ const runPositionProtection=async(policy:PositionProtectionPolicy,expectedPolicyId:string):Promise<boolean>=>{
+  if(preview||!hasTauri()||!feed.broker||!status?.telemetry){sendNotice('حماية المراكز تحتاج حساب MT5 مرتبطاً واتصالاً حديثاً',true);return false}
+  const t=status.telemetry,view=unwrap(portfolioReport),protection=unwrap(view.position_protection);
+  const context=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
+  if(view.context!==context||view.account_matches!==true||protection.policy_id!==expectedPolicyId||t.account_trade_mode!==(t.demo?0:2)){
+   sendNotice('الحساب أو إعدادات الحماية تغيّرت؛ أعد المراجعة',true);return false
+  }
+  if(!window.confirm(`حفظ التعادل والوقف المتحرك لمراكز BrainTrade بالرمز ${t.symbol} والحساب ${t.login} · ${t.demo?'DEMO':'REAL'}؟ يستمر التعديل أثناء STOP عند توفر MT5، ولا يتغير TP.`))return false;
+  let confirmLiveLogin='';
+  if(!t.demo&&(policy.break_even_enabled||policy.trailing_enabled)){
+   const value=window.prompt('اكتب رقم حساب REAL لتأكيد إعدادات حماية المراكز');if(value===null)return false;
+   confirmLiveLogin=value.trim();if(confirmLiveLogin!==String(t.login)){sendNotice('رقم حساب REAL غير مطابق',true);return false}
+  }
+  const mutation=beginWrite('position-protection');if(!mutation)return false;
+  try{
+   const result=unwrap(await updatePositionProtection(context,policy,expectedPolicyId,confirmLiveLogin));
+   if(!writeFresh(mutation))return false;
+   if(result.ok!==true)throw new Error('لم يؤكد Core حفظ الإعدادات');
+   scopedGeneration.current.invalidate('portfolio');const ticket=scopedGeneration.current.beginRead('portfolio');
+   const updated=unwrap(await readPanel('/v1/execution'));
+   if(!writeFresh(mutation))return false;
+   if(scopedGeneration.current.isCurrent(ticket))setPortfolioReport(updated);
+   sendNotice('تم حفظ حماية المراكز؛ تحقق من حالة كل تعديل ورد MT5.');return true;
+  }catch(e){if(writeFresh(mutation))sendNotice('تعذر تأكيد حفظ حماية المراكز: '+String(e),true);return false}
+  finally{finishWrite(mutation)}
+ };
  const runLearningFreeze=async(frozen:boolean)=>{
   if(preview||!hasTauri()||!online||typeof status?.learning_control?.frozen!=='boolean'){
    sendNotice('اتصل بـ Core حتى تتأكد حالة التعلّم قبل تغييرها',true);return;
@@ -1088,7 +1115,7 @@ export default function Terminal(){
              monitor={safeRiskSnapshot} portfolio={unwrap(portfolioReport).portfolio} armed={status?.requested_run===true}
              disabled={busy||preview} onSavePortfolio={runSavePortfolio}/></div>
           <div className="concept-risk-daily"><DailyRiskOperations status={!preview&&feed.broker?status:null} monitor={safeRiskSnapshot} preview={preview}/></div>
-          <div className="concept-risk-extra"><h3>إعدادات إضافية في التصميم</h3><div><label><input type="checkbox" disabled/> إغلاق كل الصفقات للطوارئ (Kill Switch)</label><label><input type="checkbox" disabled/> إعداد نقطة التعادل</label><label><input type="checkbox" disabled/> إعداد الوقف المتحرك</label></div><p>هذه المفاتيح غير مدعومة للتحكم من الواجهة في الإصدار الحالي؛ STOP يوقف الدخول الجديد ولا يغلق المراكز.</p></div></div>
+          <div className="concept-risk-extra"><PositionProtectionOperations key={contextKey} status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} onSet={runPositionProtection}/><h3>الإغلاق الطارئ للحساب</h3><div><label><input type="checkbox" disabled/> إغلاق كل الصفقات للطوارئ (Kill Switch)</label></div><p>الإغلاق الشامل للحساب غير متاح بعد؛ STOP يوقف الدخول الجديد ولا يغلق المراكز.</p></div></div>
           <DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/risk/monitor')}/>
          </div>:
         page==='settings'||page==='telegram'?<div className="editor-panel"><p>إعدادات V4 المحفوظة محلياً لدى Rust Core — لا تُعرض بيانات Telegram السرية.</p>

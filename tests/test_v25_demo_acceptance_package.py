@@ -49,7 +49,7 @@ class DemoAcceptancePortableContract(unittest.TestCase):
     def test_missing_cli_gui_or_collector_fails_release(self):
         for relative in ("Tools/Run-Demo-Acceptance.ps1",
                          "Tools/Run-Demo-Acceptance-GUI.ps1",
-                         "runtime/gateway/check_runtime.py"):
+                         "runtime/gateway/check_runtime.py", "runtime/gateway/position_protection.py"):
             target = self.portable / relative
             previous = target.read_bytes()
             target.unlink()

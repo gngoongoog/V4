@@ -382,12 +382,13 @@ class BrokerExecutor:
         # must never swallow/transform a real send acknowledgment.
         self.db.execute('UPDATE sends SET result=? WHERE id=?', (json.dumps(result, allow_nan=False), cmd['id']))
         self.db.commit()
-        try:
-            record_execution_quality(self.db, cmd, result, clock_ms())
-        except (sqlite3.Error, KeyError, TypeError, ValueError):
-            # This is observable by the read-only quality report (missing
-            # sample). It must never make a successful broker send 'unknown'.
-            pass
+        if cmd.get('kind') != 'protect':
+            try:
+                record_execution_quality(self.db, cmd, result, clock_ms())
+            except (sqlite3.Error, KeyError, TypeError, ValueError):
+                # This is observable by the read-only quality report (missing
+                # sample). It must never make a successful broker send 'unknown'.
+                pass
         return result
 
     def _institutional_entry_guard(self, cmd):
@@ -624,6 +625,11 @@ class BrokerExecutor:
         return result
 
     def execute(self, mt5, cmd, authorize):
+        if cmd.get('kind') == 'protect':
+            # Protective modifications have no deal/volume acknowledgement;
+            # reconcile actual SL/TP state separately from trade fills.
+            from position_protection import execute_protection
+            return execute_protection(self, mt5, cmd, authorize, OWNED_MAGICS, BRAIN_MAGIC, FINAL_AUTH_MAX_AGE_MS)
         row = self.db.execute('SELECT request,result FROM sends WHERE id=?', (cmd['id'],)).fetchone()
         if row:
             saved = json.loads(row[0])

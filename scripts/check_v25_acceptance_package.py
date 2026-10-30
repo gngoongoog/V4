@@ -20,6 +20,7 @@ REQUIRED_TOOLS = (
     "runtime/gateway/demo_readiness.py",
     "G2_DEMO_READINESS_AR.md",
     "runtime/gateway/execution.py",
+    "runtime/gateway/position_protection.py",
 )
 SAFETY_CONTRACTS = {
     "Run-Demo-Acceptance.cmd": (

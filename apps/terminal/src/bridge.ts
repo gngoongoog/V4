@@ -29,6 +29,8 @@ export async function updateBrainControl(context:string,brain:string,mode:string
 export async function updateBrainPaperAll(context:string,mode:string,paper:boolean):Promise<unknown>{return invoke('update_brain_paper_all',{context,mode,paper})}
 export type RiskRecovery={basis:'balance'|'equity';threshold:number};
 export async function updateRiskMaster(context:string,enabled:boolean,confirmLiveLogin:string,recovery:RiskRecovery|null):Promise<unknown>{return invoke('update_risk_master',{context,enabled,confirmLiveLogin,recovery})}
+export type PositionProtectionPolicy={break_even_enabled:boolean;break_even_trigger_points:number;break_even_offset_points:number;trailing_enabled:boolean;trailing_distance_points:number;trailing_step_points:number};
+export async function updatePositionProtection(context:string,policy:PositionProtectionPolicy,expectedPolicyId:string,confirmLiveLogin:string):Promise<unknown>{return invoke('update_position_protection',{context,policy,expectedPolicyId,confirmLiveLogin})}
 export async function setLearningFrozen(frozen:boolean):Promise<unknown>{return invoke('set_learning_frozen',{frozen})}
 export async function manualMarket(request:Record<string,unknown>):Promise<unknown>{return invoke('manual_market',{request})}
 export async function selectSoloBrain(context:string,mode:string,brain:string):Promise<unknown>{return invoke('select_solo_brain',{context,mode,brain})}

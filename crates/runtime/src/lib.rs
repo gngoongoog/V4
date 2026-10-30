@@ -44,6 +44,7 @@ mod correlation;
 mod evaluation;
 mod learning;
 mod learning_control;
+mod position_protection;
 mod learning_inference;
 mod learning_performance_review;
 mod learning_review;

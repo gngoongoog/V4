@@ -71,7 +71,7 @@ export default function TradingChart({market,symbol,quote,frame:currentFrame,onF
       <button className={'tool-button '+(crosshair?'tool-on':'')} onClick={()=>setCrosshair(v=>!v)} title="Crosshair">⌖</button>
       <button className={'tool-button '+(averages?'tool-on':'')} onClick={()=>setAverages(v=>!v)} title="Moving averages">⌁</button>
       <button className="tool-button" onClick={()=>setZoom(v=>v===68?40:v===40?84:68)} title="Candle zoom">⊕</button>
-      <button type="button" className="tool-button" aria-label={expanded?'استعادة حجم الشارت':'تكبير الشارت'} aria-pressed={expanded} onClick={()=>setExpanded(v=>!v)} title={expanded?'استعادة حجم الشارت':'تكبير الشارت'}>⛶</button>
+      <button type="button" className="tool-button wide" aria-label={expanded?'استعادة حجم الشارت':'تكبير الشارت'} aria-pressed={expanded} onClick={()=>setExpanded(v=>!v)} title={expanded?'استعادة حجم الشارت':'تكبير الشارت'}>⛶</button>
     </div></div>
     <div className="ohlc-line">{highlighted?`O ${num(highlighted.open)}　H ${num(highlighted.high)}　L ${num(highlighted.low)}　C ${num(highlighted.close)}　${highlighted.close>=highlighted.open?'▲':'▼'}`:'O —　H —　L —　C —'}</div>
     <div className="chart-frame"><canvas aria-label={`MT5 ${symbol} ${frame} candlestick chart`} ref={canvas} onMouseLeave={()=>setHover(null)} onMouseMove={e=>{
