@@ -279,7 +279,7 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
     }}/>
   </div>
   <div className="chart-footer">
-   <span>{preview?'معاينة توضيحية، ليست أسعار السوق':'بيانات المصدر: MT5'} • {ready?chart.length+' شمعة '+frame.toUpperCase():'لا توجد شموع موثوقة'}{position?' • مستويات مركز MT5/معاينة':''}</span>
+   <span>{preview?'معاينة توضيحية، ليست أسعار السوق':'بيانات المصدر: MT5'} • {ready?chart.length+' شمعة '+frame.toUpperCase():'لا توجد شموع موثوقة'}{position?' • ENTRY / SL/TP من المركز المعروض':''}</span>
    <span>{offset>0?'عرض تاريخي · '+offset+' شمعة للخلف':'آخر شمعة'} • UTC • Tick Volume</span>
   </div>
  </section>;
