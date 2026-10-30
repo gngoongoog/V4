@@ -291,3 +291,18 @@ body[data-theme=light] .terminal-v15.concept4 .concept-trade-inputs .concept-num
 @media(max-width:1100px){
  .terminal-v15.concept4 .concept-market .concept-trade-inputs{grid-template-columns:minmax(0,1fr)}
 }
+
+/* Source-reference brain bars are labelled preview-only in their button title and text. */
+.terminal-v15.concept4 .concept-brain-preview{min-height:46px;gap:8px}
+.terminal-v15.concept4 .concept-brain-preview>svg{flex:0 0 20px;color:#278d72}
+.terminal-v15.concept4 .concept-brain-preview .concept-preview-meter{
+ flex:0 0 67px;height:7px;border-radius:7px;background:#dce7e3;overflow:hidden;display:block
+}
+.terminal-v15.concept4 .concept-brain-preview .concept-preview-meter i{
+ display:block;height:100%;background:linear-gradient(90deg,#4bd17a,#039b58);
+ border-radius:7px
+}
+.terminal-v15.concept4 .concept-brain-preview>strong{flex:0 0 33px;text-align:right;color:#168f54;font-weight:800}
+@media(max-width:1120px){
+ .terminal-v15.concept4 .concept-brain-preview .concept-preview-meter{flex-basis:38px}
+}
