@@ -20,7 +20,7 @@ export function brokerPriceDigits(point:unknown):number{
 export function lastClosedAt(bars:Candle[],frame:ChartFrame):string|null{
  const bar=bars.at(-1);if(!bar)return null;
  const closedMs=(bar.time+FRAME_SECONDS[frame])*1000;
- if(!Number.isFinite(closedMs))return null;
+ if(!Number.isFinite(closedMs)||closedMs<0||closedMs>8640000000000000)return null;
  return new Date(closedMs).toISOString().slice(0,16).replace('T',' ')+' UTC';
 }
 export type ChartFrame=typeof FRAMES[number];
@@ -31,7 +31,7 @@ const clamp=(n:number,low:number,high:number)=>Math.max(low,Math.min(high,n));
  * and remove duplicate timestamps before calculating the display window. */
 export function cleanChartCandles(input:unknown):Candle[]{
  if(!Array.isArray(input))return [];
- const sorted=input.filter((b):b is Candle=>Boolean(b&&typeof b==='object')&&Number.isSafeInteger(b.time)&&b.time>0&&
+ const sorted=input.filter((b):b is Candle=>Boolean(b&&typeof b==='object')&&Number.isSafeInteger(b.time)&&b.time>0&&b.time<=4102444800&&
   [b.open,b.high,b.low,b.close].every(n=>Number.isFinite(n)&&n>0)&&
   b.high>=b.low&&b.high>=Math.max(b.open,b.close)&&b.low<=Math.min(b.open,b.close)&&
   Number.isSafeInteger(b.tick_volume)&&b.tick_volume>=0).sort((a,b)=>a.time-b.time);
