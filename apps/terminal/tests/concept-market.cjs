@@ -75,4 +75,13 @@ for(const change of [{preview:true},{quoteFresh:false},{accountMatches:false},{s
 }
 const wrongScope=moduleExports.ConceptMarketDesk({...props,account:{...account,positions},accountMatches:false});
 assert(nodes(wrongScope).some(n=>n.type==='button'&&String(Array.isArray(n.props.children)?n.props.children.join(''):n.props.children)==='تنفيذ شراء بسعر السوق'&&n.props.disabled===true),'Manual entry must be disabled when the account scope is not reconciled');
+
+assert.equal(moduleExports.steppedDraftValue('0.01',0.01,1,0.01,0.05),'0.02');
+assert.equal(moduleExports.steppedDraftValue('0.05',0.01,1,0.01,0.05),'0.05','Broker volume maximum must cap the draft');
+assert.equal(moduleExports.steppedDraftValue('0.01',0.01,-1,0.01,0.05),'0.01','Broker volume minimum must cap the draft');
+assert.equal(moduleExports.steppedDraftValue('2479.50',0.01,1),'2479.51');
+assert.equal(moduleExports.steppedDraftValue('',0.01,1),'','Do not invent an SL/TP when the user has not entered one');
+const steppers=nodes(moduleExports.ConceptMarketDesk({...props,account:{...account,volume_step:0.01,volume_min:0.01,volume_max:2,leverage:500,point:0.01}}));
+assert(steppers.some(n=>n.type==='button'&&n.props['aria-label']==='زيادة اللوت'&&typeof n.props.onClick==='function'));
+assert(steppers.some(n=>n.type==='button'&&n.props.title?.includes('الرافعة يحددها الوسيط')&&typeof n.props.onClick==='function'));
 console.log('PASS: concept market scopes requested closes to exact owned tickets, protects preview/STOP/quotes, and leaves unsupported manual entries disabled');
