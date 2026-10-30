@@ -56,6 +56,7 @@ try{
  assert.equal(await volumeSwitch.getAttribute('aria-pressed'),'true');
  await volumeSwitch.click();
  assert.equal(await volumeSwitch.getAttribute('aria-pressed'),'false','Volume toggle must hide the histogram');
+ await page.screenshot({path:path.join(out,'chart-volume-hidden-1536.png')});
  await volumeSwitch.click();
  assert.equal(await volumeSwitch.getAttribute('aria-pressed'),'true','Volume pane must restore when clicked again');
  const pngExport=page.getByRole('button',{name:'حفظ صورة الشارت PNG',exact:true});
@@ -64,6 +65,11 @@ try{
  assert(chartDownload.suggestedFilename().includes('SIMULATED.png'),
    'Preview chart PNG must be explicitly marked synthetic, not live broker data');
  assert(chartDownload.suggestedFilename().endsWith('.png'));
+ const exported=path.join(out,'chart-export-SIMULATED.png');
+ await chartDownload.saveAs(exported);
+ const exportedBytes=fs.readFileSync(exported);
+ assert(exportedBytes.length>10000&&exportedBytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])),
+   'A real nonempty PNG image must be written by the chart export action');
 
  for(const frame of ['M1','M5','M15','M30','H1','H4','D1']){
   await page.locator('.chart-panel .timeframes').getByRole('button',{name:frame,exact:true}).click();
