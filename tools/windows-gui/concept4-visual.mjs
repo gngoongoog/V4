@@ -39,6 +39,29 @@ try{
   assert.equal(await page.locator('.chart-frame canvas').getAttribute('aria-label'),`MT5 XAUUSD ${frame.toLowerCase()} candlestick chart`);
  }
  await page.locator('.chart-panel .timeframes').getByRole('button',{name:'M15',exact:true}).click();
+ const candleCanvas=page.locator('.chart-panel .chart-frame canvas');
+ const colors=await candleCanvas.evaluate(canvas=>{
+  const ctx=canvas.getContext('2d'),data=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+  let up=0,down=0;
+  for(let i=0;i<data.length;i+=4){
+   const r=data[i],g=data[i+1],b=data[i+2];
+   if(g>115&&r<95&&b<185)up++;
+   if(r>170&&g<130&&b<160)down++;
+  }
+  return {up,down};
+ });
+ assert(colors.up>70&&colors.down>50,'Chart must paint actual distinct green/red candle and volume pixels');
+ await page.getByRole('button',{name:'تكبير الشموع',exact:true}).click();
+ assert((await page.locator('.chart-panel .chart-footer').innerText()).includes('44 شمعة'),'Zoom in must update visible OHLC bars');
+ await page.getByRole('button',{name:'العودة لأحدث شمعة',exact:true}).click();
+ assert((await page.locator('.chart-panel .chart-footer').innerText()).includes('56 شمعة'),'Reset must restore the default zoom');
+ await candleCanvas.hover();await page.mouse.wheel(0,-100);await wait(100);
+ assert((await page.locator('.chart-panel .chart-footer').innerText()).includes('48 شمعة'),'Mouse wheel must zoom without using a decorative button');
+ await page.getByRole('button',{name:'العودة لأحدث شمعة',exact:true}).click();
+ const fit=page.getByRole('button',{name:'ملاءمة مستويات الدخول والهدف والوقف',exact:true});
+ assert.equal(await fit.getAttribute('aria-pressed'),'false','Candles should remain legible by default');
+ await fit.click();assert.equal(await fit.getAttribute('aria-pressed'),'true','Operator can deliberately include distant position levels');
+ await fit.click();assert.equal(await fit.getAttribute('aria-pressed'),'false','Fit-levels must be reversible');
  await page.getByRole('button',{name:'تكبير الشارت',exact:true}).click();
  assert(await page.locator('.chart-panel.chart-expanded').isVisible());
  const enlarged=await page.locator('.chart-panel.chart-expanded').boundingBox();
