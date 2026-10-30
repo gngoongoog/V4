@@ -61,12 +61,12 @@ export function chartSourceEvidence(frame:ChartFrame,market:Market|null|undefine
  frameMeta:ChartFrameMeta|undefined,nowMs:number,preview:boolean):ChartSourceEvidence{
  if(preview)return {state:'preview',capturedMs:null,ageMs:null};
  const extended=frame==='m30'||frame==='h1'||frame==='h4'||frame==='d1';
- const captured=extended?frameMeta?.[frame]?.capturedMs:market?.captured_ms;
+ const captured=extended?frameMeta?.[frame as keyof ChartFrameMeta]?.capturedMs:market?.captured_ms;
  if(typeof captured!=='number'||!Number.isSafeInteger(captured)||captured<=0||
    !Number.isFinite(nowMs)||captured>nowMs+2000)
   return {state:'unknown',capturedMs:null,ageMs:null};
  const age=Math.max(0,nowMs-captured);
- const recent=extended?frameMeta?.[frame]?.live===true&&age<120000:age<15000;
+ const recent=extended?frameMeta?.[frame as keyof ChartFrameMeta]?.live===true&&age<120000:age<15000;
  return {state:recent?'recent':'cached',capturedMs:captured,ageMs:age};
 }
 type ChartProps={market?:Market|null;symbol:string;quote?:number;point?:number|null;positions?:Position[];frame?:ChartFrame;
