@@ -19,4 +19,6 @@ for(const [i,frame] of ['m1','m5','m15','m30','h1','h4','d1'].entries()){
  assert(!buttons[i].props.disabled,frame+' must be selectable even when history has not arrived');
  buttons[i].props.onClick();assert.equal(chosen,frame);
 }
+const expand=nodes(chart).find(n=>n.type==='button'&&n.props['aria-label']==='تكبير الشارت');
+assert(expand&&!expand.props.disabled,'Chart expansion must have an active accessible control');
 console.log('PASS: all seven chart timeframes select the real chart state');

@@ -9,10 +9,16 @@ export default function TradingChart({market,symbol,quote,frame:currentFrame,onF
  const [localFrame,setLocalFrame]=useState<ChartFrame>('m15');const frame=currentFrame??localFrame;
  const setFrame=(v:ChartFrame)=>{setLocalFrame(v);onFrameChange?.(v)};
  const [averages,setAverages]=useState(true);const [crosshair,setCrosshair]=useState(true);
+ const [expanded,setExpanded]=useState(false);
  const canvas=useRef<HTMLCanvasElement>(null);const [hover,setHover]=useState<number|null>(null);const [zoom,setZoom]=useState(68);
  const candles=(market?.[frame as keyof Market]??[]) as Candle[];
  const chart=useMemo(()=>candles.filter(c=>[c.open,c.close,c.high,c.low].every(Number.isFinite)&&c.high>=Math.max(c.open,c.close)&&c.low<=Math.min(c.open,c.close)&&c.tick_volume>=0).slice(-zoom),[candles,zoom]);
  const ready=chart.length>=3;
+ useEffect(()=>{
+  if(!expanded)return;
+  const close=(event:KeyboardEvent)=>{if(event.key==='Escape')setExpanded(false)};
+  window.addEventListener('keydown',close);return()=>window.removeEventListener('keydown',close);
+ },[expanded]);
  useEffect(()=>{
   const el=canvas.current;if(!el)return;
   const context=el.getContext('2d');if(!context)return;
@@ -59,12 +65,13 @@ export default function TradingChart({market,symbol,quote,frame:currentFrame,onF
  },[chart,averages,crosshair,hover,ready,theme,frame]);
  const last=chart.at(-1);const highlighted=hover===null?last:chart[hover]??last;
  const historical=frame==='m30'||frame==='h1'||frame==='h4'||frame==='d1'?frameMeta?.[frame]:undefined;
- return <section className="panel chart-panel">
+ return <section className={'panel chart-panel '+(expanded?'chart-expanded':'')}>
    <div className="chart-head"><div className="chart-symbol"><GoldSymbol className="gold-icon"/><div><strong>{symbol||'XAUUSD'}</strong><small>{(symbol||'XAUUSD').toUpperCase().startsWith('XAU')?'Gold Spot / US Dollar':'Trading symbol'}</small></div><b className="concept-chart-quote">{quote===undefined?'—':num(quote)}</b></div>
     <div className="chart-actions"><div className="timeframes">{FRAMES.map(tf=><button key={tf} type="button" className={tf===frame?'selected':''} aria-pressed={tf===frame} title={`MT5 ${tf.toUpperCase()} • closed candles`} onClick={()=>{setFrame(tf);setHover(null)}}>{tf.toUpperCase()}</button>)}</div>
       <button className={'tool-button '+(crosshair?'tool-on':'')} onClick={()=>setCrosshair(v=>!v)} title="Crosshair">⌖</button>
       <button className={'tool-button '+(averages?'tool-on':'')} onClick={()=>setAverages(v=>!v)} title="Moving averages">⌁</button>
       <button className="tool-button" onClick={()=>setZoom(v=>v===68?40:v===40?84:68)} title="Candle zoom">⊕</button>
+      <button type="button" className="tool-button" aria-label={expanded?'استعادة حجم الشارت':'تكبير الشارت'} aria-pressed={expanded} onClick={()=>setExpanded(v=>!v)} title={expanded?'استعادة حجم الشارت':'تكبير الشارت'}>⛶</button>
     </div></div>
     <div className="ohlc-line">{highlighted?`O ${num(highlighted.open)}　H ${num(highlighted.high)}　L ${num(highlighted.low)}　C ${num(highlighted.close)}　${highlighted.close>=highlighted.open?'▲':'▼'}`:'O —　H —　L —　C —'}</div>
     <div className="chart-frame"><canvas aria-label={`MT5 ${symbol} ${frame} candlestick chart`} ref={canvas} onMouseLeave={()=>setHover(null)} onMouseMove={e=>{

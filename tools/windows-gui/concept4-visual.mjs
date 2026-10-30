@@ -39,6 +39,12 @@ try{
   assert.equal(await page.locator('.chart-frame canvas').getAttribute('aria-label'),`MT5 XAUUSD ${frame.toLowerCase()} candlestick chart`);
  }
  await page.locator('.chart-panel .timeframes').getByRole('button',{name:'M15',exact:true}).click();
+ await page.getByRole('button',{name:'تكبير الشارت',exact:true}).click();
+ assert(await page.locator('.chart-panel.chart-expanded').isVisible());
+ const enlarged=await page.locator('.chart-panel.chart-expanded').boundingBox();
+ assert(enlarged&&enlarged.width>1400&&enlarged.height>750,'Expanded chart must use the available window');
+ await page.keyboard.press('Escape');
+ assert.equal(await page.locator('.chart-panel.chart-expanded').count(),0,'Escape returns the chart to its page');
  const primaryTitles=['نظرة عامة','مركز التداول','إدارة العقول','إدارة المخاطر','التقارير','السجلات','الأخبار','الإعدادات'];
  async function assertPrimaryNavigation(){
   const nav=await page.locator('#sidebarNav').boundingBox();assert(nav);

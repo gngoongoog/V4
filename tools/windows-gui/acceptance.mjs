@@ -110,6 +110,12 @@ try{
   await page.locator('button.action-btn.stop').click();await page.getByRole('button',{name:'تأكيد وقف الدخول الجديد',exact:true}).click();
   await page.getByRole('dialog').waitFor({state:'hidden'});await status();
  });
+ await check('actual WebView chart expands and restores with Escape',async()=>{
+  await page.getByRole('button',{name:'تكبير الشارت',exact:true}).click();
+  await page.locator('.chart-panel.chart-expanded').waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('.chart-panel.chart-expanded').waitFor({state:'detached'});
+ });
  await check('freeze and resume actual Core learning from dashboard without START',async()=>{
   const buttons=page.locator('.concept-learning-actions').getByRole('button');
   await until(async()=>await buttons.nth(0).isEnabled());await buttons.nth(0).click();
