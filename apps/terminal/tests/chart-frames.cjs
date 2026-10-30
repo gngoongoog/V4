@@ -8,7 +8,7 @@ vm.runInNewContext(js,{exports:out,require(id){
  if(id==='react')return {useState:v=>[v,()=>{}],useEffect:()=>{},useMemo:fn=>fn(),useRef:()=>({current:null})};
  if(id==='react/jsx-runtime')return {jsx,jsxs:jsx};
  if(id==='./gold-symbol')return {GoldSymbol:'GoldSymbol'};
- if(id==='lucide-react')return Object.fromEntries(['Crosshair','Activity','ZoomIn','ZoomOut','RotateCcw','Maximize2','Minimize2','Target','Info','Copy'].map(k=>[k,k]));
+ if(id==='lucide-react')return Object.fromEntries(['Crosshair','Activity','ZoomIn','ZoomOut','RotateCcw','Maximize2','Minimize2','Target','Info','Copy','ChartColumn','Download'].map(k=>[k,k]));
  if(id==='./format')return {num:v=>String(v)};
  throw Error('Unknown chart dependency '+id);
 },Date,Math,Number,String});
@@ -128,5 +128,14 @@ assert.equal(preDiag.mode,'SIMULATED_PREVIEW');
 assert.equal(preDiag.last_candle,null);
 const diagnosticButton=nodes(chart).find(n=>n.type==='button'&&n.props['aria-label']==='تشخيص بيانات الشارت');
 assert(typeof diagnosticButton?.props.onClick==='function','Diagnostic drawer button must work');
+
+
+const volumeToggle=nodes(chart).find(n=>n.type==='button'&&n.props['aria-label']==='عرض أحجام Tick Volume');
+assert.equal(volumeToggle?.props['aria-pressed'],true,'Tick volume is visible by default');
+assert(typeof volumeToggle?.props.onClick==='function','Volume button must change state');
+const exportBtn=nodes(chart).find(n=>n.type==='button'&&n.props['aria-label']==='حفظ صورة الشارت PNG');
+assert(exportBtn&&exportBtn.props.disabled===true,
+ 'Never export an empty or unavailable chart as genuine broker history');
+assert(typeof exportBtn.props.onClick==='function','Export button must have real behavior');
 
 console.log('PASS: all seven chart timeframes select the real chart state');

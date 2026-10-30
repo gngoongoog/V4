@@ -22,7 +22,7 @@ try{
  }
  assert(ready,'Vite readiness timeout');
  browser=await chromium.launch({executablePath:chrome,headless:true,args:['--no-sandbox']});
- const context=await browser.newContext({viewport:{width:1536,height:864},deviceScaleFactor:1});
+ const context=await browser.newContext({viewport:{width:1536,height:864},deviceScaleFactor:1,acceptDownloads:true});
  page=await context.newPage();const errors=[];
  page.on('pageerror',e=>errors.push(String(e)));
  await page.goto('http://127.0.0.1:1420/',{waitUntil:'networkidle'});
@@ -51,6 +51,26 @@ try{
  await page.getByRole('button',{name:'تشخيص بيانات الشارت',exact:true}).click();
  assert.equal(await page.locator('.chart-diagnostics').count(),0,'The diagnostic drawer must close');
  assert.equal(await page.locator('.chart-panel .concept-chart-source-preview').count(),1,'Chart must explicitly label simulated OHLC, not claim an MT5 feed');
+
+ const volumeSwitch=page.getByRole('button',{name:'عرض أحجام Tick Volume',exact:true});
+ assert.equal(await volumeSwitch.getAttribute('aria-pressed'),'true');
+ await volumeSwitch.click();
+ assert.equal(await volumeSwitch.getAttribute('aria-pressed'),'false','Volume toggle must hide the histogram');
+ await page.screenshot({path:path.join(out,'chart-volume-hidden-1536.png')});
+ await volumeSwitch.click();
+ assert.equal(await volumeSwitch.getAttribute('aria-pressed'),'true','Volume pane must restore when clicked again');
+ const pngExport=page.getByRole('button',{name:'حفظ صورة الشارت PNG',exact:true});
+ assert(await pngExport.isEnabled(),'Chart image export must be available once candles are present');
+ const [chartDownload]=await Promise.all([page.waitForEvent('download'),pngExport.click()]);
+ assert(chartDownload.suggestedFilename().includes('SIMULATED.png'),
+   'Preview chart PNG must be explicitly marked synthetic, not live broker data');
+ assert(chartDownload.suggestedFilename().endsWith('.png'));
+ const exported=path.join(out,'chart-export-SIMULATED.png');
+ await chartDownload.saveAs(exported);
+ const exportedBytes=fs.readFileSync(exported);
+ assert(exportedBytes.length>10000&&exportedBytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])),
+   'A real nonempty PNG image must be written by the chart export action');
+
  for(const frame of ['M1','M5','M15','M30','H1','H4','D1']){
   await page.locator('.chart-panel .timeframes').getByRole('button',{name:frame,exact:true}).click();
   assert.equal(await page.locator('.concept-frame select').inputValue(),frame.toLowerCase(),'Chart and header frame must stay synchronized');
