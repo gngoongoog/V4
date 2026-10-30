@@ -21,4 +21,12 @@ for(const [i,frame] of ['m1','m5','m15','m30','h1','h4','d1'].entries()){
 }
 const expand=nodes(chart).find(n=>n.type==='button'&&n.props['aria-label']==='تكبير الشارت');
 assert(expand&&!expand.props.disabled,'Chart expansion must have an active accessible control');
+
+const position={ticket:1,symbol:'XAUUSD',side:'BUY',volume:.1,price_open:2479,sl:2475,tp:2485};
+const posChart=out.default({symbol:'XAUUSD',positions:[position],market:{},preview:true});
+const footer=nodes(posChart).find(n=>n.props.className==='chart-footer');
+assert(JSON.stringify(footer.props.children).includes('SL/TP'),'Verified or clearly-marked preview positions must annotate chart levels');
+const foreign=out.default({symbol:'XAUUSD',positions:[{...position,symbol:'EURUSD'}],market:{},preview:true});
+const foreignFooter=nodes(foreign).find(n=>n.props.className==='chart-footer');
+assert(!JSON.stringify(foreignFooter.props.children).includes('SL/TP'),'Positions of another symbol must never appear on the chart');
 console.log('PASS: all seven chart timeframes select the real chart state');
