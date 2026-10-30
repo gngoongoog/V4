@@ -5,6 +5,7 @@ import type {ChartFrameMeta} from './chart-history';
 import {num} from './format';
 
 const FRAMES=['m1','m5','m15','m30','h1','h4','d1'] as const;
+const EMPTY_CANDLES:Candle[]=[];
 export type ChartFrame=typeof FRAMES[number];
 const UP='#0eaa78',DOWN='#e34855';
 const clamp=(n:number,low:number,high:number)=>Math.max(low,Math.min(high,n));
@@ -47,8 +48,8 @@ export default function TradingChart({market,symbol,quote,positions=[],frame:cur
  const [hover,setHover]=useState<Hover>(null);
  const canvas=useRef<HTMLCanvasElement>(null);
  const drag=useRef<{x:number;offset:number;step:number}|null>(null);
- const all=useMemo(()=>cleanChartCandles((market?.[frame as keyof Market]??[]) as Candle[]),
-  [market,frame]);
+ const frameCandles=(market?.[frame as keyof Market]??EMPTY_CANDLES) as Candle[];
+ const all=useMemo(()=>cleanChartCandles(frameCandles),[frameCandles]);
  const windowed=useMemo(()=>chartWindow(all,barsVisible,offset),[all,barsVisible,offset]);
  const chart=windowed.bars,ready=chart.length>=3;
  const ema9=useMemo(()=>emaSeries(all,9),[all]),ema21=useMemo(()=>emaSeries(all,21),[all]);
