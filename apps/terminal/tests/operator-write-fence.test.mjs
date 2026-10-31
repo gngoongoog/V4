@@ -115,7 +115,8 @@ test('ui Core mutations are wired to a fence before sending and checking acknowl
   "<TradingSettingsOperations source={pageData} brokerPoint={status?.telemetry?.point} key={JSON.stringify([page,draftAccountKey,preview])}",
   "<ExecutionBindingOperations source={pageData} key={viewScope}",
   "<MicroCapitalOperations status={!preview&&feed.broker?status:null} key={contextKey}",
-  "<BacktestOperations key={viewScope}",
+  "<BacktestWorkspace key={viewScope}",
+   "onStart={r=>runBacktest('start',r)}",
  ])assert(ui.includes(marker),'missing safe writer/scope isolation: '+marker);
  const supervisor=fs.readFileSync(path.resolve(import.meta.dirname,'../src/enterprise-supervisor.tsx'),'utf8');
  assert(supervisor.includes('const observed=await onSave(settings)'),'supervisor must not bypass scoped parent mutation');
