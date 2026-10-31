@@ -26,6 +26,7 @@ export async function restoreBrainSnapshot(name:string):Promise<unknown>{return 
 export async function saveExcelReport(bytes:Uint8Array,kind:'journal'|'report'):Promise<unknown>{return invoke('save_excel_report',{bytes:Array.from(bytes),kind})}
 export async function backtestAction(action:'start'|'cancel',request?:Record<string,unknown>):Promise<unknown>{return invoke('backtest_action',{action,request:request??null})}
 export async function newsAction(action:'refresh'|'enable'|'disable'):Promise<unknown>{return invoke('news_action',{action})}
+export async function studioAction(action:'run'|'auto_enable'|'auto_disable'|'cancel',timeframe?:string):Promise<unknown>{return invoke('studio_action',{action,timeframe:timeframe??null})}
 export type StudyKind='backtest'|'evaluation';
 export type StudyPlan={mode:'holdout';holdout_percent:number}|{mode:'rolling';development_days:number;holdout_days:number;step_days:number};
 export async function studyAction(kind:StudyKind,action:'runs'|'report'|'export'|'start'|'cancel',id?:string,sourceId?:string,plan?:StudyPlan):Promise<unknown>{
