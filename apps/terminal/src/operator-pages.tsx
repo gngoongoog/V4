@@ -84,9 +84,23 @@ const DESCRIPTIONS:Record<Exclude<Page,'news'>,{title:string;description:string;
  shadow:{title:'سجل قرارات الظل',description:'قرارات تحليلية محفوظة؛ تُعرض بوصفها أحداث بحثية قديمة لا تداولاً منفذاً.',notice:'لا تفترض أن قرار الظل أغلق أو فتح مركزاً حقيقياً.'},
  events:{title:'أحداث وتشخيص النظام',description:'آخر الأحداث المسجلة بواسطة Rust Core، مع ترتيبها والتفاصيل الأصلية.',notice:'عدم وجود أحداث لا يعني ضمان سلامة المنظومة؛ حالة الوسيط وGateway تحتاج فحوصاً منفصلة.'}
 };
-export function CoreReadoutWorkspace({page,source,preview,error,onRefresh,onNavigate}:{page:Exclude<Page,'news'>;source:unknown;preview:boolean;error:string;onRefresh:()=>void;onNavigate:(page:'backtest'|'evaluation'|'execution'|'brainControl'|'events')=>void}){
+export function CoreReadoutWorkspace({page,source,preview,error,disabled,onRefresh,onNavigate,onStudioAction}:{page:Exclude<Page,'news'>;source:unknown;preview:boolean;error:string;disabled:boolean;onRefresh:()=>void;onNavigate:(page:'backtest'|'evaluation'|'execution'|'brainControl'|'events')=>void;onStudioAction:(action:'run'|'auto_enable'|'auto_disable'|'cancel',timeframe?:string)=>Promise<unknown>}){
  const data=object(source),desc=DESCRIPTIONS[page];
  const [search,setSearch]=useState('');
+ const [studioFrame,setStudioFrame]=useState('ALL'),[studioBusy,setStudioBusy]=useState(false);
+ const [studioError,setStudioError]=useState(''),[studioNotice,setStudioNotice]=useState('');
+ const actStudio=async(action:'run'|'auto_enable'|'auto_disable'|'cancel')=>{
+  if(preview||disabled||studioBusy)return;
+  setStudioBusy(true);setStudioError('');setStudioNotice('');
+  try{
+   const response=object(await onStudioAction(action,action==='run'?studioFrame:undefined));
+   if(action==='run'){
+    const queued=num(response.queued);
+    setStudioNotice(queued===0?'لم يضع Core أي تجربة جديدة بالطابور. راجع كفاية الشموع والتجارب المعلقة.':'أكد Core جدولة '+count(queued)+' تجربة بحثية؛ هذا ليس تنفيذ تداول.');
+   }else setStudioNotice('أكد Core استلام الإجراء البحثي، وتم تحديث حالة الاستوديو.');
+  }catch(e){setStudioError('تعذر تأكيد إجراء الاستوديو: '+String(e))}
+  finally{setStudioBusy(false)}
+ };
  const [frameOnly,setFrameOnly]=useState(false);
  const frames=rows(data.frames),reports=rows(data.reports),learning=rows(data.wyckoff_learning);
  const entries=page==='analysis'?rows(data.setups):page==='shadow'?rows(data.decisions):page==='events'?rows(data.events):[];
@@ -98,6 +112,19 @@ export function CoreReadoutWorkspace({page,source,preview,error,onRefresh,onNavi
   {present&&<>
    {page==='studio'&&<>
     <div className="operator-measures"><Measure label="حالة الربط" value={data.connected===true?'متصل':data.connected===false?'غير متصل':'غير معروف'} detail="بحسب تقرير الاستوديو"/><Measure label="طابور التجارب" value={count(data.queued)} detail="الطلبات المنتظرة"/><Measure label="تجارب محفوظة" value={String(reports.length)} detail="في استجابة Core الحالية"/><Measure label="التعلّم" value={data.learning_frozen===true?'مجمّد':data.learning_frozen===false?'غير مجمّد':'غير مؤكد'} detail={data.auto===true?'التشغيل التلقائي مفعل':data.auto===false?'التلقائي متوقف':'وضع التلقائي غير معروف'}/></div>
+    <div className="operator-control-panel">
+     <h4>أوامر الاستوديو البحثي</h4>
+     <p>التجارب تتطلب تاريخ MT5 كافياً. أوامر الاستوديو لا تنفذ صفقات ولا تختار نموذجاً للتداول تلقائياً.</p>
+     <div className="operator-filters"><label>الفريم<select aria-label="فريم تجربة الاستوديو" disabled={disabled||studioBusy} value={studioFrame} onChange={e=>setStudioFrame(e.target.value)}><option value="ALL">جميع الفريمات المتاحة</option>{frames.map((f,i)=><option key={i} value={txt(f.timeframe)}>{txt(f.timeframe)}</option>)}</select></label></div>
+     <div className="operator-links">
+      <button type="button" disabled={preview||disabled||studioBusy||data.connected!==true||data.learning_frozen===true} onClick={()=>void actStudio('run')}>تشغيل تجربة بحثية</button>
+      <button type="button" disabled={preview||disabled||studioBusy||data.learning_frozen===true||data.auto!==false} onClick={()=>void actStudio('auto_enable')}>تفعيل التشغيل البحثي التلقائي</button>
+      <button type="button" disabled={preview||disabled||studioBusy||data.auto!==true} onClick={()=>void actStudio('auto_disable')}>إيقاف التلقائي</button>
+      <button type="button" disabled={preview||disabled||studioBusy||(!data.working&&data.auto!==true&&num(data.queued)===0)} onClick={()=>void actStudio('cancel')}>إلغاء مهام الاستوديو</button>
+     </div>
+     {studioError&&<p role="alert" className="operator-caveat">{studioError}</p>}
+     {studioNotice&&<p role="status" className="operator-evidence">{studioNotice}</p>}
+    </div>
     <h4>تغطية الأطر الزمنية</h4><div className="operator-filters"><label className="operator-check"><input type="checkbox" checked={frameOnly} onChange={e=>setFrameOnly(e.target.checked)}/> إظهار الفريمات ذات البيانات فقط</label></div>
     <div className="operator-source-grid">{frames.filter(f=>!frameOnly||Number(f.bars)>0).map((f,i)=><article key={txt(f.timeframe,String(i))}><b>{txt(f.timeframe)}</b><span>{f.live===true?'التاريخ حديث':'التاريخ غير حديث أو لم يصل'}</span><small>شموع Core: {count(f.bars)}</small><small>آخر التقاط: {stamp(f.captured_ms)}</small>{txt(f.error,'')&&<small>{txt(f.error)}</small>}</article>)}</div>
     <h4>التجارب والرصد البحثي</h4><div className="operator-measures"><Measure label="نتائج محفوظة" value={count(reports.length)} detail="مقيدة بالحساب في Core"/><Measure label="فريمات ذات ملاحظات" value={count(learning.length)} detail="Wyckoff"/><Measure label="المهمة الجارية" value={txt(data.working,'لا توجد')} detail="الفريم الجاري"/><Measure label="آخر خطأ" value={txt(data.last_error,'لا يوجد خطأ مُبلغ')} detail="لا يعني ضمان خلو النظام من الأخطاء"/></div>
