@@ -70,3 +70,7 @@
 .concept4 .operator-event-reading p{padding:9px 12px;background:var(--panel2);border-radius:7px;font-size:12px;margin:0}
 .concept4 .operator-event-reading small{font-size:11px;color:var(--muted);line-height:1.8}
 @media(max-width:650px){.concept4 .operator-plain-row{flex-direction:column;gap:4px}.concept4 .operator-plain-row b{max-width:100%;text-align:right}}
+
+.concept4 .page-help-guide{display:inline-block;margin-top:8px;border:1px solid var(--border);border-radius:7px;padding:6px 10px;max-width:630px;background:var(--panel)}
+.concept4 .page-help-guide summary{cursor:pointer;font-size:12px;font-weight:600;color:var(--ink)}
+.concept4 .page-help-guide p{font-size:12px!important;line-height:1.8;margin:8px 0 0}
