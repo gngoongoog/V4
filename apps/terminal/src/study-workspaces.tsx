@@ -76,6 +76,17 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
  };
  const metrics=obj(report?.metrics);
  const outcome=report!==null;
+ // Every plotted point is one immutable Core result; no fabricated interpolation,
+ // prices or trader PnL. SVG is a visual connection of source observations.
+ const curve=arr(report?.equity_curve).filter(r=>number(r.time)!==null&&number(r.equity)!==null)
+   .map(r=>({time:Number(r.time),equity:Number(r.equity)}));
+ const trades=arr(report?.recent_trades).filter(t=>number(t.net)!==null);
+ const low=curve.length?Math.min(...curve.map(p=>p.equity)):0;
+ const high=curve.length?Math.max(...curve.map(p=>p.equity)):0;
+ const range=Math.max(high-low,0.000001);
+ const plot=curve.map((point,i)=>`${30+i*700/Math.max(1,curve.length-1)},${190-(point.equity-low)*140/range}`).join(' ');
+ const utc=(stamp:unknown)=>typeof stamp==='number'&&Number.isSafeInteger(stamp)&&stamp>0?
+   new Date(stamp*1000).toISOString().slice(0,16).replace('T',' ')+' UTC':'—';
  return <section className="study-workspace" dir="rtl" aria-label="Backtest workspace">
   <div className="study-hero"><div><small>STRATEGY LAB • HISTORICAL</small><h2><CalendarClock size={24}/> مختبر الاختبار التاريخي</h2><p>اختَر الاستراتيجية والفترة، شغّل المحاكاة على شموع MT5 المكتملة، وبعدها افتح تقريراً واضحاً للنتائج والمخاطر.</p></div><button type="button" onClick={()=>{onRefresh();void refresh()}} disabled={disabled||loading}><RefreshCw size={16}/> تحديث البيانات</button></div>
   <div className="study-tips"><Tip title="١. جهّز الفترة">يحتاج Core إلى حساب MT5 حديث، تاريخ M1 كافٍ، وإيقاف START. النهاية غير مشمولة بالتوقيت العالمي UTC.</Tip><Tip title="٢. شغّل الاختبار">يحسب Core الصفقات الافتراضية والتكاليف والانزلاق وفق إعدادات المخاطر التاريخية. لا يفتح صفقة حقيقية.</Tip><Tip title="٣. راجع النتائج">قارن صافي الربح، حجم العينة، السحب الأقصى، تكلفة العمولة، والفجوات قبل التفكير بأي تعديل.</Tip></div>
@@ -112,6 +123,27 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
   {outcome?<div className="operator-card study-results">
     <div className="study-row"><div><small>تقرير محفوظ من Core</small><h3><TrendingUp size={18}/> قراءة نتيجة المحاكاة</h3></div><div className="study-actions"><button type="button" onClick={()=>void exportReport()} disabled={busy||disabled}><Download size={15}/> تصدير التقرير</button><button type="button" onClick={onEvaluation}>تقييم خارج العينة</button></div></div>
     <div className="study-metrics"><Metric name="صافي النتيجة" value={show(metrics.net,2)} hint="بعد التكاليف المحاكية"/><Metric name="عدد الصفقات" value={show(metrics.trades,0)} hint="داخل التاريخ المختبر"/><Metric name="نسبة الفوز" value={show(metrics.win_rate,1,'%')} hint="لا تكفي وحدها للحكم"/><Metric name="Profit Factor" value={show(metrics.profit_factor)} hint="غير معرّف دون خسائر"/><Metric name="أقصى تراجع" value={show(metrics.max_drawdown_percent,2,'%')} hint="داخل العينة المختبرة"/><Metric name="العمولات" value={show(metrics.commissions,2)} hint="محسوبة تقديرياً"/></div>
+    <div className="study-visual-layout">
+      <div className="study-equity-panel"><div className="study-row"><h4>منحنى رأس المال الافتراضي</h4><small>{curve.length} نقطة معروضة من {show(report?.recorded_equity_points,0)} مسجلة لدى Core</small></div>
+       {curve.length>=2&&report?.display_points_are_exact_saved_observations===true?
+        <svg className="study-equity-svg" viewBox="0 0 760 225" role="img" aria-label="منحنى رأس المال الافتراضي المسجل في الاختبار التاريخي" preserveAspectRatio="none">
+         <line x1="30" y1="190" x2="735" y2="190" stroke="currentColor" opacity=".2"/>
+         <line x1="30" y1="50" x2="735" y2="50" stroke="currentColor" opacity=".15"/>
+         <polyline fill="none" stroke="#a98539" strokeWidth="3" points={plot}/>
+         <circle cx="30" cy={190-(curve[0].equity-low)*140/range} r="4" fill="#a98539"/>
+         <circle cx="730" cy={190-(curve[curve.length-1].equity-low)*140/range} r="4" fill="#a98539"/>
+        </svg>:
+        <p className="study-empty">لا توجد نقاط كافية من Core لرسم منحنى موثّق؛ لا نرسم مساراً افتراضياً.</p>}
+       {curve.length>0&&<div className="study-equity-legend"><span>أول رصيد: {show(curve[0].equity)}</span><span>أعلى رصيد مرصود: {show(high)}</span><span>آخر رصيد: {show(curve[curve.length-1].equity)}</span></div>}
+       <small className="study-help">هذا منحنى محاكاة من بيانات تاريخية محفوظة، وليس رصيد حساب MT5 الحالي أو نتائج وسيط مؤكدة.</small>
+      </div>
+      <div className="study-trades-panel"><div className="study-row"><h4>آخر الصفقات الافتراضية</h4><small>{trades.length} صفقة من Core</small></div>
+       {trades.length?<div className="study-trades-scroll"><table><thead><tr><th>الاتجاه</th><th>وقت الدخول</th><th>اللوت</th><th>صافي النتيجة</th><th>الخروج</th></tr></thead>
+        <tbody>{trades.map((t,i)=><tr key={i}><td>{t.side===1?'شراء BUY':t.side===-1?'بيع SELL':'—'}</td><td dir="ltr">{utc(t.entry_time)}</td><td>{show(t.lots,2)}</td><td className={Number(t.net)>0?'study-profit':Number(t.net)<0?'study-loss':''}>{show(t.net,2)}</td><td>{txt(t.reason)}{t.ambiguous===true?' • حركة ملتبسة':''}</td></tr>)}</tbody></table></div>:
+        <p className="study-empty">لم يرسل Core سجل صفقات افتراضية مؤهلة للعرض ضمن هذه النتيجة.</p>}
+       <small className="study-help">التقرير لا يساوي سجلات MT5. الصفقة الملتبسة قد تشمل لمس وقف وهدف داخل شمعة واحدة.</small>
+      </div>
+    </div>
     <details className="study-raw"><summary>التقرير التفصيلي وأسباب الدخول والخروج</summary><pre dir="auto">{txt(report?.text,txt(report?.summary,'لا توجد تفاصيل أخرى'))}</pre></details>
   </div>:<div className="study-empty study-prompt">اختر اختباراً محفوظاً من القائمة لتظهر هنا قراءة مفهومة للنتائج، بدلاً من عرض JSON خام.</div>}
   <Warning/>
