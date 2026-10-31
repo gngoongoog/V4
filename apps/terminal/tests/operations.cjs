@@ -59,13 +59,22 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  assert(nodes(settings).some(x=>x.props?.['aria-label']==='sniper fixed target pips'));
  assert(nodes(settings).some(x=>x.props?.['aria-label']==='sniper cooldown seconds'));
  let brainState=null;
- const brains=exportsObj.BrainControlsOperations({source:{controls_available:true,brains:[{name:'system',config:{id:'system'}},{name:'Trend',config:{id:'trend'},control:{advisor:true,paper:false}}]},disabled:false,armed:false,onSave:async(...v)=>{brainState=v}});
+ const scopedBrain={controls_available:true,account_matches:true,brains:[{name:'system',config:{id:'system'}},{name:'Trend',config:{id:'trend'},control:{advisor:true,paper:false}}]};
+ const brains=exportsObj.BrainControlsOperations({source:scopedBrain,disabled:false,armed:false,onSave:async(...v)=>{brainState=v}});
  const brainButtons=nodes(brains).filter(x=>x.type==='button');
- const advisor=brainButtons.find(x=>String(x.props.children).includes('المشاركة:'));
- const paper=brainButtons.find(x=>String(x.props.children).includes('Paper:'));
- assert(advisor&&paper,'sub-brain advisor and Paper controls remain available');
+ const advisor=brainButtons.find(x=>String(x.props['aria-label']||'').includes('مشاركة trend'));
+ const paper=brainButtons.find(x=>String(x.props['aria-label']||'').includes('Paper trend'));
+ assert(advisor&&!advisor.props.disabled&&paper&&!paper.props.disabled,'Core-scoped advisor and Paper controls are actionable');
+ assert.equal(advisor.props['aria-label'],'إيقاف مشاركة trend','enabled advisor action must say STOP');
+ assert.equal(paper.props['aria-label'],'تشغيل Paper trend','disabled Paper action must say START');
  await advisor.props.onClick();assert.deepEqual(brainState,['trend',false,false]);
  await paper.props.onClick();assert.deepEqual(brainState,['trend',true,true]);
+ for(const [caseName,locked] of [['running',true],['wrong account',false]]){
+  const scoped=caseName==='wrong account'?{...scopedBrain,account_matches:false}:scopedBrain;
+  const disabledBrain=exportsObj.BrainControlsOperations({source:scoped,disabled:false,armed:locked,onSave:async()=>{throw Error('Locked Core controls must never save')}});
+  assert(nodes(disabledBrain).filter(x=>x.type==='button'&&String(x.props['aria-label']||'').includes('trend')).every(x=>x.props.disabled),
+    caseName+' must block broker control mutations');
+ }
  const allChanges=[];
  const paperSource=(trend,gann)=>({controls_available:true,account_matches:true,brains:[
   {config:{id:'system'}},{config:{id:'trend'},control:{paper:trend}},{config:{id:'gann'},control:{paper:gann}}
