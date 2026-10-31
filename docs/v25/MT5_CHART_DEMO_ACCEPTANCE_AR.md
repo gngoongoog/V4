@@ -9,6 +9,26 @@
 - Python وحزمة MetaTrader5: `py -3 -m pip install MetaTrader5`.
 - تشغيل PowerShell من مجلد مصدر المشروع (الذي يحتوي `scripts`).
 
+## من حزمة Windows المحمولة V25
+
+بعد فك الضغط **بالكامل** وفتح MT5 بحساب Demo، اضغط مرتين على `Run-MT5-Chart-Demo.cmd` من جذر الحزمة. يستخدم المشغّل نسخة Python المرفقة في `runtime\\python\\python.exe` ويستدعي `Tools\\check_mt5_chart_readonly.py` مباشرة. لا تحتاج تثبيت Python آخر إذا كانت الحزمة مكتملة.
+
+لرمز وسيط لاحقته مختلفة، افتح CMD من مجلد الحزمة وشغّل:
+
+```bat
+Run-MT5-Chart-Demo.cmd --symbol XAUUSDm --require-fresh
+```
+
+استعمل `--require-fresh` **فقط وقت وجود سوق نشط**؛ عند إغلاق الذهب في نهاية الأسبوع سيبقى تاريخ الشموع صحيحاً لكن حالة السعر الحديث لا يمكن إثباتها.
+
+تُطبع نتيجة JSON من دون رقم الحساب؛ يمكنك حفظها من PowerShell أو CMD بالتوجيه إلى ملف محلي، مع إخفاء أي تفاصيل خاصة قبل المشاركة:
+
+```bat
+Run-MT5-Chart-Demo.cmd --symbol XAUUSD > mt5-chart-audit.json
+```
+
+لا تخلط نجاح هذا الاختبار مع نجاح EA/Named Pipe أو صفقات Demo أو الحساب الحقيقي.
+
 ## الفحص
 
 ```powershell
