@@ -428,6 +428,42 @@ fn studio_action(action:String,timeframe:Option<String>)->Result<Value,String>{
  Ok(response)
 }
 
+// Saved historical correlation only. Never accepts arbitrary Core endpoints.
+fn correlation_request(action:&str,source_ids:Option<&[String]>,overlap:Option<u32>,report_id:Option<&str>)->Result<(&'static str,bool,Value),String>{
+ let valid_id=|id:&str|id.len()>=8&&id.len()<=100&&id.bytes().all(|c|c.is_ascii_alphanumeric()||c==b'-');
+ match action{
+  "sources"=>Ok(("/v1/research/correlation/sources",false,json!({}))),
+  "reports"=>Ok(("/v1/research/correlation/reports",false,json!({}))),
+  "report"=>{
+   let id=report_id.filter(|v|valid_id(v)).ok_or("معرّف تقرير ارتباط غير صالح")?;
+   Ok(("/v1/research/correlation/report",true,json!({"id":id})))
+  },
+  "analyze"=>{
+   let ids=source_ids.ok_or("اختر مصدرين تاريخيين على الأقل")?;
+   if ids.len()<2||ids.len()>8||ids.iter().any(|v|!valid_id(v)) {
+    return Err("يجب اختيار 2 إلى 8 مصادر تاريخية محفوظة بمعرّفات سليمة".into());
+   }
+   let mut unique=std::collections::BTreeSet::new();
+   if ids.iter().any(|id|!unique.insert(id)){return Err("تكرار مصدر تاريخي غير مسموح".into());}
+   let n=overlap.unwrap_or(30);
+   if !(2..=60_000).contains(&n){return Err("عدد دقائق التداخل خارج الحدود".into());}
+   Ok(("/v1/research/correlation/analyze",true,json!({"source_ids":ids,"min_overlap":n})))
+  },
+  _=>Err("عملية ارتباط غير مسموحة".into())
+ }
+}
+#[tauri::command]
+fn correlation_action(action:String,source_ids:Option<Vec<String>>,min_overlap:Option<u32>,report_id:Option<String>)->Result<Value,String>{
+ let (route,post,body)=correlation_request(&action,source_ids.as_deref(),min_overlap,report_id.as_deref())?;
+ let client=open_client()?;
+ let response=if post{client.post(route,body)}else{client.get(route)}
+  .map_err(|e|format!("تعذر تأكيد رد Core: {e}"))?;
+ if action=="analyze"&&(response["ok"]!=true||response["summary"]["id"].as_str().is_none()){
+  return Err("لم يؤكد Core حفظ تقرير الارتباط".into());
+ }
+ Ok(response)
+}
+
 #[tauri::command]
 fn bind_execution(target: String, deviation_points: u32, confirm_live_login: String) -> Result<Value,String> {
     if !matches!(target.as_str(),"demo" | "live") || deviation_points > 100_000 {
@@ -691,7 +727,7 @@ pub fn run() {
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore, save_excel_report,
-            backtest_action, study_action, news_action, studio_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
+            backtest_action, study_action, news_action, studio_action, correlation_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");
@@ -730,6 +766,20 @@ mod tests {
         assert_eq!(studio_request("auto_disable",None).unwrap().1["enabled"],false);
         assert!(studio_request("run",Some("XAUUSD")).is_err());
         assert!(studio_request("trade",None).is_err());
+    }
+    #[test]
+    fn historical_correlation_actions_are_bounded(){
+        let ids=vec!["saved-run-a".to_string(),"saved-run-b".to_string()];
+        let (route,post,body)=correlation_request("analyze",Some(&ids),Some(30),None).unwrap();
+        assert_eq!(route,"/v1/research/correlation/analyze");
+        assert!(post);
+        assert_eq!(body["min_overlap"],30);
+        assert!(correlation_request("analyze",Some(&ids),Some(1),None).is_err());
+        assert!(correlation_request("analyze",Some(&ids[..1]),Some(30),None).is_err());
+        let duplicate=vec![ids[0].clone(),ids[0].clone()];
+        assert!(correlation_request("analyze",Some(&duplicate),Some(30),None).is_err());
+        assert!(correlation_request("report",None,None,Some("../etc/secret")).is_err());
+        assert!(correlation_request("trade",None,None,None).is_err());
     }
     #[test]
     fn full_exit_requires_a_valid_core_process_identity() {
