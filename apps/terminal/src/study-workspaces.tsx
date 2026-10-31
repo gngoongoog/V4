@@ -69,6 +69,16 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
   catch(e){setError(String(e))}
   finally{setBusy(false)}
  };
+ const cancelBacktest=async()=>{
+  if(disabled||busy||!active)return;
+  setBusy(true);setError('');setNotice('');
+  try{
+   await onCancel();
+   setNotice('أكّد Core قبول طلب الإلغاء. راقب الحالة أعلاه حتى تتحدث.');
+  }catch(e){
+   setError('لم يتأكد قبول إلغاء الاختبار: '+String(e));
+  }finally{setBusy(false)}
+ };
  const exportReport=async()=>{
   if(!selected)return;setBusy(true);
   try{const result=obj(await studyAction('backtest','export',selected));setNotice('حفظ Core ملف التصدير في مجلد بياناته: '+txt(result.path,txt(result.directory,'راجع مجلد exports')))}
@@ -110,7 +120,7 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
      <label>أرضية السبريد بسعر الذهب<input type="number" aria-label="spread floor" min="0" step="0.01" value={spread} onChange={e=>setSpread(e.target.value)}/></label>
     </div>
     <small className="study-help">السبريد هنا قيمة سعرية دنيا للمحاكاة، وليس عدد نقاط MT5. النتائج تقديرية، والعمولة تتبع إعداد المخاطر في Core.</small>
-    <div className="study-actions"><button type="submit" className="study-primary" disabled={disabled||armed||active||busy}><Play size={16}/> بدء الاختبار</button><button type="button" disabled={disabled||!active||busy} onClick={()=>void onCancel()}><Square size={16}/> إلغاء المهمة</button></div>
+    <div className="study-actions"><button type="submit" className="study-primary" disabled={disabled||armed||active||busy}><Play size={16}/> بدء الاختبار</button><button type="button" disabled={disabled||!active||busy} onClick={()=>void cancelBacktest()}><Square size={16}/> إلغاء المهمة</button></div>
     {armed&&<p className="safe-note">اضغط STOP قبل جلب اختبار جديد. التقارير القديمة متاحة دون تشغيل تداول.</p>}
    </form>
    <div className="operator-card study-history"><div className="study-row"><h3><BookOpen size={18}/> الاختبارات المحفوظة</h3><button type="button" onClick={()=>void refresh()} disabled={disabled||loading}><RefreshCw size={15}/> تحديث</button></div>
