@@ -429,3 +429,77 @@ body[data-theme=smoke] .terminal-v15.concept4 .chart-diagnostics pre{
   height:240px;min-height:240px;flex-basis:240px
  }
 }
+
+
+/* V25 research workspaces: evidence first, native Core actions; never display synthetic PnL. */
+.concept4 .study-workspace{display:flex;flex-direction:column;gap:14px;color:var(--ink);direction:rtl;max-width:100%}
+.concept4 .study-hero{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:20px 22px;background:var(--panel);border:1px solid var(--border);border-radius:12px}
+.concept4 .study-hero h2{display:flex;align-items:center;gap:10px;font-size:22px;margin:5px 0 8px;color:var(--ink)}
+.concept4 .study-hero small{font-size:11px;letter-spacing:.08em;color:#a47d36;font-weight:700}
+.concept4 .study-hero p{margin:0;color:var(--muted);max-width:690px;line-height:1.8}
+.concept4 .study-hero>button{white-space:nowrap;display:flex;align-items:center;gap:6px}
+.concept4 .study-tips{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.concept4 .study-tip{border:1px solid var(--border);border-radius:9px;background:var(--panel);padding:13px 15px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.concept4 .study-tip b{font-size:14px;color:var(--ink)}
+.concept4 .study-tip span{color:var(--muted);font-size:12px;line-height:1.8}
+.concept4 .study-state{display:flex;align-items:center;gap:14px;border:1px solid var(--border);background:var(--panel2);padding:12px 15px;border-radius:9px}
+.concept4 .study-state>div{flex:1;display:flex;flex-direction:column;gap:5px}
+.concept4 .study-state b{font-size:13px;color:var(--ink)}
+.concept4 .study-state small{font-size:11px;color:var(--muted)}
+.concept4 .study-phase{padding:7px 12px;background:#e6edf3;color:#344b5c;border-radius:999px;font-size:11px;font-weight:800;white-space:nowrap}
+.concept4 .study-phase.processing{background:#fff0d1;color:#8b641a}
+.concept4 .study-phase.failed{background:#fde8e8;color:#b13939}
+.concept4 .study-percent{font-size:17px;font-weight:800;color:var(--ink)}
+.concept4 .study-two-column{display:grid;grid-template-columns:minmax(300px,1.25fr) minmax(270px,1fr);gap:12px;align-items:start}
+.concept4 .study-form,.concept4 .study-history,.concept4 .study-results{border-radius:10px}
+.concept4 .study-form h3,.concept4 .study-history h3,.concept4 .study-results h3{display:flex;align-items:center;gap:8px;font-size:16px;margin:0 0 12px;color:var(--ink)}
+.concept4 .study-form>label,.concept4 .study-fields label{display:flex;flex-direction:column;gap:7px;font-size:12px;font-weight:650;color:var(--ink);min-width:0}
+.concept4 .study-form>label{margin:0 0 13px}
+.concept4 .study-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:12px}
+.concept4 .study-form input,.concept4 .study-form select{height:39px;width:100%;min-width:0;border:1px solid var(--border);border-radius:7px;padding:6px 9px;background:var(--panel2);color:var(--ink);font:inherit}
+.concept4 .study-form input:focus-visible,.concept4 .study-form select:focus-visible{outline:2px solid #b5883a;outline-offset:1px}
+.concept4 .study-help{display:block;color:var(--muted);line-height:1.8;font-size:11px;margin:6px 0 12px}
+.concept4 .study-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0}
+.concept4 .study-actions button,.concept4 .study-row button,.concept4 .study-form>button{display:inline-flex;justify-content:center;align-items:center;gap:7px;min-height:36px;padding:8px 12px}
+.concept4 .study-actions button.study-primary{background:#293f4a;color:white;border-color:#293f4a;font-weight:750}
+.concept4 .study-actions button.study-primary:hover:not(:disabled){background:#162d39;color:white}
+.concept4 .study-actions button:disabled,.concept4 .study-row button:disabled{opacity:.5;cursor:not-allowed}
+.concept4 .study-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.concept4 .study-run-list{display:flex;flex-direction:column;gap:7px;max-height:345px;overflow:auto}
+.concept4 .study-run-list button{width:100%;text-align:right;display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:11px 12px;border:1px solid var(--border);border-radius:7px;background:var(--panel2);color:var(--ink)}
+.concept4 .study-run-list button b{font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+.concept4 .study-run-list button small{color:var(--muted);font-size:10px;direction:ltr}
+.concept4 .study-run-list button.chosen{outline:2px solid #b5883a;background:var(--panel)}
+.concept4 .study-empty{padding:24px 14px;text-align:center;color:var(--muted);border:1px dashed var(--border);border-radius:8px;line-height:1.9}
+.concept4 .study-prompt{background:var(--panel);font-size:13px}
+.concept4 .study-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:12px 0}
+.concept4 .study-metric{display:flex;flex-direction:column;gap:5px;border:1px solid var(--border);padding:12px;border-radius:8px;background:var(--panel2);min-width:0}
+.concept4 .study-metric small{color:var(--muted);font-size:11px}
+.concept4 .study-metric strong{font-size:19px;font-variant-numeric:tabular-nums;color:var(--ink);direction:ltr;text-align:right}
+.concept4 .study-metric span{font-size:10px;color:var(--muted);line-height:1.6}
+.concept4 .study-compare{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.concept4 .study-compare>div{border:1px solid var(--border);border-radius:10px;padding:12px;min-width:0}
+.concept4 .study-compare h4{color:var(--ink);margin:3px 0 12px}
+.concept4 .study-compare .study-metric{margin-bottom:6px}
+.concept4 .study-raw{border:1px solid var(--border);border-radius:7px;margin-top:12px;padding:10px}
+.concept4 .study-raw summary{cursor:pointer;font-weight:700;color:var(--ink)}
+.concept4 .study-raw pre{max-height:330px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted);font-size:11px;line-height:1.8}
+.concept4 .study-notice{background:var(--panel2);border:1px solid var(--border);padding:10px 14px;border-radius:8px;color:var(--ink);line-height:1.8}
+.concept4 .study-research-warning{display:flex;align-items:flex-start;gap:10px;padding:13px 15px;border:1px solid #ceb78a;border-radius:9px;background:var(--panel);font-size:12px;line-height:1.8;color:var(--ink)}
+.concept4 .study-research-warning svg{flex:none;color:#ad812d;margin-top:3px}
+/* Brain controls: current state and NEXT action are deliberately different. */
+.concept4 .brain-controls-guide{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-bottom:10px}
+.concept4 .brain-controls-guide>div{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:11px;display:flex;flex-direction:column;gap:6px;line-height:1.7}
+.concept4 .brain-controls-guide b{font-size:12px;color:var(--ink)}
+.concept4 .brain-controls-guide span{font-size:11px;color:var(--muted)}
+.concept4 .brain-control-states{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:12px}
+.concept4 .brain-control-states span{font-size:10px;background:var(--panel2);color:var(--muted);border:1px solid var(--border);padding:4px 7px;border-radius:5px}
+.concept4 .brain-control-states span.active{color:#16855b;border-color:#aad9bd}
+.concept4 .brain-control-states span.off{color:#a25b39}
+.concept4 .concept-brain-card-actions{margin-top:10px}
+.concept4 .concept-brain-card-actions button{font-size:11px!important;font-weight:600;padding:8px 6px!important;min-height:32px}
+.concept4 .concept-brain-controls .concept-brain-card-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+.concept4 .concept-brain-controls .concept-brain-card{padding:12px}
+@media(max-width:1320px){.concept4 .concept-brain-controls .concept-brain-card-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:1000px){.concept4 .study-tips,.concept4 .brain-controls-guide{grid-template-columns:1fr}.concept4 .study-two-column{grid-template-columns:1fr}.concept4 .study-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.concept4 .concept-brain-controls .concept-brain-card-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:620px){.concept4 .study-hero{flex-direction:column;align-items:flex-start}.concept4 .study-fields,.concept4 .study-metrics,.concept4 .study-compare,.concept4 .concept-brain-controls .concept-brain-card-grid{grid-template-columns:1fr}.concept4 .study-two-column{grid-template-columns:minmax(0,1fr)}.concept4 .study-state{flex-wrap:wrap}}
