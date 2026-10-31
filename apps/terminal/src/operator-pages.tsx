@@ -1,5 +1,6 @@
+import './operator-pages.css';
 import {useMemo,useState} from 'react';
-import {Activity,AlertTriangle,BarChart3,BookOpen,CalendarClock,ExternalLink,Filter,Layers3,LineChart,Newspaper,RefreshCw,Search,ShieldAlert} from 'lucide-react';
+import {Activity,BarChart3,BookOpen,ExternalLink,Filter,Layers3,LineChart,Newspaper,RefreshCw,Search,ShieldAlert} from 'lucide-react';
 import type {Position} from './types';
 
 type Row=Record<string,unknown>;
