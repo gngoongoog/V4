@@ -93,7 +93,7 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  const offlineCards=nodes(offline).filter(x=>x.type==='article'&&String(x.props.className).includes('concept-brain-card'));
  assert.equal(offlineCards.length,16,'offline directory shows the actual secondary brain identities');
  for(const card of offlineCards){
-  const controls=nodes(card).filter(x=>x.type==='button'&&String(x.props.children).includes(':'));
+  const controls=nodes(card).filter(x=>x.type==='button'&&/مشاركة|Paper/.test(String(x.props['aria-label']||'')));
   assert.equal(controls.length,2);assert(controls.every(b=>b.props.disabled),'offline controls must be disabled');
   assert(nodes(card).some(x=>x.props?.className==='concept-control-state '&&x.props.children==='غير موثق'));
  }
