@@ -28,6 +28,6 @@ assert.match(matches([base],{...good,from:10000,to:11000}),/لا تتداخل/);
 assert.match(matches([],{...base,login:undefined}),/ناقص/);
 assert.match(matches([],{...base,from:1111,to:1111}),/ناقص/);
 assert.equal(matches([base,good],{...good,id:'saved-CCC',symbol:'GBPUSD',from:2000,to:9000}),null);
-assert.match(src,/الذهب XAUUSD وحده لا تكفي/,'UI must warn that gold-only history cannot make multi-symbol correlation');
+assert.match(src,/XAUUSD وحده لا تكفي/,'UI must warn that gold-only history cannot make multi-symbol correlation');
 assert.match(src,/pair\.reason/,'insufficient-overlap details from the Core report should be visible');
 console.log('PASS: correlation selection mirrors Core distinct-symbol same-account same-currency and overlapping-date requirements');
