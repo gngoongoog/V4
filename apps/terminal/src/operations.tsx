@@ -211,6 +211,7 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
  const activeBrain=cards.some(b=>String(safeObject(safeObject(b).config).id||'')===selectedBrain)?selectedBrain:String(safeObject(safeObject(cards[0]).config).id||'');
  const selected=safeObject(cards.find(b=>String(safeObject(safeObject(b).config).id||'')===activeBrain));
  const selectedControl=safeObject(selected.control),selectedActivity=safeObject(selected.activity);
+ const selectedVerified=available&&typeof selectedControl.advisor==='boolean'&&typeof selectedControl.paper==='boolean';
  const canEdit=available&&!disabled&&!armed;
  const reason=armed?'أوقف START أولاً. لا نغيّر مشاركة المستشارين أثناء التداول.':
   !available?'بانتظار بيانات حساب MT5 المطابق والوضع الحالي من Core. لا تُغيّر الأزرار حالة عقول غير موثقة.':
@@ -259,7 +260,7 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
       </div>
     </article>;
   })}</div>
-  <div className="concept-brain-inspector" dir="rtl"><h3><ShieldAlert size={18}/> تفاصيل العقل المحدد</h3>{activeBrain&&Object.keys(selected).length?<div><strong>{BRAIN_DIRECTORY.find(item=>item[0]===activeBrain)?.[1]||String(selected.name||activeBrain)}</strong><p>المشاركة: {available?(selectedControl.advisor===false?'متوقفة':'مفعّلة'):'غير مؤكدة'} · Paper: {available?(selectedControl.paper===false?'متوقف':'مفعّل'):'غير مؤكد'}</p><p>فحوص التحليل: {available&&typeof selectedActivity.checks==='number'?selectedActivity.checks:'—'} · الإشارات المرصودة: {available&&typeof selectedActivity.signals==='number'?selectedActivity.signals:'—'}</p><small>الحالة تُقرأ من Core بعد الحفظ. هذه الأزرار لا تشغل تنفيذ MT5 منفرداً.</small></div>:<p>اختَر بطاقة عقل لعرض حالته الفعلية.</p>}</div>
+  <div className="concept-brain-inspector" dir="rtl"><h3><ShieldAlert size={18}/> تفاصيل العقل المحدد</h3>{activeBrain&&Object.keys(selected).length?<div><strong>{BRAIN_DIRECTORY.find(item=>item[0]===activeBrain)?.[1]||String(selected.name||activeBrain)}</strong><p>المشاركة: {selectedVerified?(selectedControl.advisor?'مفعّلة':'متوقفة'):'غير مؤكدة'} · Paper: {selectedVerified?(selectedControl.paper?'مفعّل':'متوقف'):'غير مؤكد'}</p><p>فحوص التحليل: {available&&typeof selectedActivity.checks==='number'?selectedActivity.checks:'—'} · الإشارات المرصودة: {available&&typeof selectedActivity.signals==='number'?selectedActivity.signals:'—'}</p><small>الحالة تُقرأ من Core بعد الحفظ. هذه الأزرار لا تشغل تنفيذ MT5 منفرداً.</small></div>:<p>اختَر بطاقة عقل لعرض حالته الفعلية.</p>}</div>
  </section>;
 }
 
