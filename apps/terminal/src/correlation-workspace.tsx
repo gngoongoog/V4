@@ -45,15 +45,12 @@ export function CorrelationWorkspace({source,preview,disabled,error,onAnalyze,on
  },[preview]);
  useEffect(()=>{void refresh()},[refresh]);
  const toggle=(id:string)=>{
-  setChosen(current=>{
-   if(current.includes(id))return current.filter(x=>x!==id);
-   const candidate=sources.find(x=>x.id===id);
-   if(!candidate||current.length>=8)return current;
-   const currentRows=sources.filter(x=>current.includes(String(x.id)));
-   const issue=sourceCompatibility(currentRows,candidate);
-   if(issue){setFailure(issue);return current}
-   setFailure('');return [...current,id];
-  });
+  if(chosen.includes(id)){setChosen(chosen.filter(x=>x!==id));setFailure('');return}
+  const candidate=sources.find(x=>x.id===id);
+  if(!candidate||chosen.length>=8)return;
+  const issue=sourceCompatibility(sources.filter(x=>chosen.includes(String(x.id))),candidate);
+  if(issue){setFailure(issue);return}
+  setFailure('');setChosen([...chosen,id]);
  };
  const analyze=async()=>{
   const n=Number(overlap);
