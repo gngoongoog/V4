@@ -392,6 +392,42 @@ fn news_action(action:String)->Result<Value,String>{
  Ok(response)
 }
 
+// Research-only Studio operations: no arbitrary path, order routing, or model promotion.
+fn studio_request(action:&str,timeframe:Option<&str>)->Result<(&'static str,Value),String>{
+ match action {
+  "run"=>{
+   let tf=timeframe.unwrap_or("ALL");
+   if tf!="ALL"&&!braintrade_domain::studio::TIMEFRAMES.contains(&tf){
+    return Err("الفريم المطلوب غير مدعوم".into());
+   }
+   Ok(("/v1/studio/run",json!({"timeframe":tf})))
+  },
+  "auto_enable"=>Ok(("/v1/studio/auto",json!({"enabled":true}))),
+  "auto_disable"=>Ok(("/v1/studio/auto",json!({"enabled":false}))),
+  "cancel"=>Ok(("/v1/studio/cancel",json!({}))),
+  _=>Err("إجراء استوديو غير مدعوم".into())
+ }
+}
+#[tauri::command]
+fn studio_action(action:String,timeframe:Option<String>)->Result<Value,String>{
+ let (route,body)=studio_request(&action,timeframe.as_deref())?;
+ let client=open_client()?;
+ let response=client.post(route,body).map_err(|e|format!("نتيجة الطلب البحثي غير مؤكدة؛ راجع حالة Core قبل التكرار: {e}"))?;
+ match action.as_str(){
+  "run" if !response["queued"].is_number()=>return Err("لم يرجع Core عدد التجارب المجدولة".into()),
+  "cancel" if response["cancelled"]!=true=>return Err("لم يؤكد Core إلغاء الدراسة".into()),
+  "auto_enable"|"auto_disable"=>{
+   let enabled=action=="auto_enable";
+   let current=client.get("/v1/studio").map_err(|e|format!("حالة الاستوديو بعد التغيير غير مؤكدة: {e}"))?;
+   if response["auto"].as_bool()!=Some(enabled)||current["auto"].as_bool()!=Some(enabled){
+    return Err("حالة التلقائي في Core لا تطابق التغيير المطلوب".into());
+   }
+  },
+  _=>{}
+ }
+ Ok(response)
+}
+
 #[tauri::command]
 fn bind_execution(target: String, deviation_points: u32, confirm_live_login: String) -> Result<Value,String> {
     if !matches!(target.as_str(),"demo" | "live") || deviation_points > 100_000 {
@@ -655,7 +691,7 @@ pub fn run() {
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore, save_excel_report,
-            backtest_action, study_action, news_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
+            backtest_action, study_action, news_action, studio_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");
@@ -683,6 +719,17 @@ mod tests {
         assert_eq!(news_request("disable").unwrap().1["enabled"],false);
         assert_eq!(news_request("refresh").unwrap().0,"/v1/news/refresh");
         for action in ["trade","../../v1/manual","refresh?token=1","settings"]{assert!(news_request(action).is_err());}
+    }
+    #[test]
+    fn studio_research_actions_are_scoped(){
+        let (route,data)=studio_request("run",Some("M5")).unwrap();
+        assert_eq!(route,"/v1/studio/run");
+        assert_eq!(data["timeframe"],"M5");
+        assert_eq!(studio_request("run",None).unwrap().1["timeframe"],"ALL");
+        assert_eq!(studio_request("auto_enable",None).unwrap().1["enabled"],true);
+        assert_eq!(studio_request("auto_disable",None).unwrap().1["enabled"],false);
+        assert!(studio_request("run",Some("XAUUSD")).is_err());
+        assert!(studio_request("trade",None).is_err());
     }
     #[test]
     fn full_exit_requires_a_valid_core_process_identity() {
