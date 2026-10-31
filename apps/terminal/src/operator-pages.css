@@ -41,3 +41,10 @@
 .concept4 .operator-table-scroll th{position:sticky;top:0;background:var(--panel2)}
 @media(max-width:1100px){.concept4 .operator-measures{grid-template-columns:repeat(2,minmax(0,1fr))}.concept4 .operator-source-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:650px){.concept4 .operator-workspace-head,.concept4 .operator-news-list article{flex-direction:column;align-items:stretch}.concept4 .operator-measures,.concept4 .operator-source-grid{grid-template-columns:1fr}.concept4 .operator-filters label{width:100%}.concept4 .operator-filters input[type=search],.concept4 .operator-filters select{max-width:none;flex:1}}
+
+.concept4 .operator-control-panel{border:1px solid var(--border);background:var(--panel);border-radius:9px;padding:15px;display:flex;flex-direction:column;gap:10px}
+.concept4 .operator-control-panel h4{margin:0}
+.concept4 .operator-control-panel>p{font-size:12px;color:var(--muted);margin:0;line-height:1.8}
+.concept4 .operator-advanced{border:1px solid var(--border);border-radius:9px;overflow:hidden;background:var(--panel)}
+.concept4 .operator-advanced>summary{padding:14px 16px;cursor:pointer;font-size:13px;font-weight:650}
+.concept4 .operator-advanced[open]>summary{border-bottom:1px solid var(--border)}
