@@ -179,6 +179,22 @@ export function CoreReadoutWorkspace({page,source,preview,error,disabled,onRefre
     <div className="operator-source-grid">{frames.filter(f=>!frameOnly||Number(f.bars)>0).map((f,i)=><article key={txt(f.timeframe,String(i))}><b>{txt(f.timeframe)}</b><span>{f.live===true?'التاريخ حديث':'التاريخ غير حديث أو لم يصل'}</span><small>شموع Core: {count(f.bars)}</small><small>آخر التقاط: {stamp(f.captured_ms)}</small>{txt(f.error,'')&&<small>{txt(f.error)}</small>}</article>)}</div>
     <h4>التجارب والرصد البحثي</h4><div className="operator-measures"><Measure label="نتائج محفوظة" value={count(reports.length)} detail="مقيدة بالحساب في Core"/><Measure label="فريمات ذات ملاحظات" value={count(learning.length)} detail="Wyckoff"/><Measure label="المهمة الجارية" value={txt(data.working,'لا توجد')} detail="الفريم الجاري"/><Measure label="آخر خطأ" value={txt(data.last_error,'لا يوجد خطأ مُبلغ')} detail="لا يعني ضمان خلو النظام من الأخطاء"/></div>
     {learning.length>0&&<div className="operator-source-grid">{learning.map((l,i)=><article key={i}><b>{txt(l.timeframe)} — Wyckoff</b><small>رصد: {count(l.observations)} · مكتمل: {count(l.scored)}</small><small>متوسط صافي افتراضي لكل لوت: {num(l.mean_net_per_lot)===null?'غير متاح':Number(l.mean_net_per_lot).toFixed(2)}</small><span>{l.research_evidence_positive===true?'أدلة بحثية أولية موجبة':'أدلة غير كافية لتقييم إيجابي'}</span></article>)}</div>}
+    <h4>نتائج الاستوديو المحفوظة — قراءة فقط</h4>
+    {!reports.length?<p className="operator-empty">لا توجد نتائج محفوظة من Core لهذا الحساب. التغطية وحدها لا تعني أن الاستراتيجية تدربت أو اختُبرت.</p>:
+     <div className="operator-source-grid">{reports.slice(0,12).map((run,i)=>{
+      const lab=object(run.report),test=object(lab.test),validation=object(lab.validation),selected=object(lab.selected);
+      return <article key={txt(run.id,String(i))} className="operator-lab-result">
+       <b>{txt(lab.timeframe,'فريم غير مسجل')} · {txt(selected.family,'عائلة استراتيجية غير مسجلة')}</b>
+       <small>تاريخ التسجيل: {stamp(run.created_ms)}</small>
+       <small>صفقات الاختبار المنفصل: {count(test.trades)}</small>
+       <small>صافي اختبار تاريخي بوحدة R: {num(test.net_r)===null?'غير متاح':Number(test.net_r).toFixed(2)}</small>
+       <small>تراجع اختبار تاريخي بوحدة R: {num(test.max_drawdown_r)===null?'غير متاح':Number(test.max_drawdown_r).toFixed(2)}</small>
+       <small>صفقات التحقق: {count(validation.trades)}</small>
+       <span>{lab.eligible_for_review===true?'مؤهّل للمراجعة البحثية فقط':'غير مؤهل للمراجعة أو لا يوجد إثبات'}</span>
+       {txt(lab.note,'')&&<small>ملاحظة Core: {txt(lab.note)}</small>}
+      </article>;
+     })}</div>}
+
    </>}
    {page==='correlation'&&<><div className="operator-measures"><Measure label="اختبارات تاريخية محفوظة" value={count(data.saved_backtests)} detail="مصادر محتملة للدراسة"/><Measure label="دراسات ارتباط محفوظة" value={count(data.saved_reports)} detail="تقارير في قاعدة Core"/><Measure label="نوع الاستخدام" value={data.research_only===true?'بحث فقط':'غير مؤكد'} detail="لا أوامر تداول"/><Measure label="إعادة النتائج" value={data.deterministic_replay===true?'حتمية':'غير مؤكدة'} detail="عند تطابق المدخلات"/></div>
       <p>الدراسة تحتاج تاريخاً محفوظاً قابلًا للمقارنة. تشغيل اختبارات جديدة يتم من المختبر التاريخي، وليس من هذه الصفحة العامة.</p>
