@@ -26,7 +26,7 @@ APPROVED_COMMANDS=(
     "execute_control", "update_risk", "update_portfolio", "update_settings",
     "priority_handoff", "shutdown_core", "close_terminal", "backup_action",
     "brain_snapshot_export", "brain_snapshot_import", "brain_snapshot_restore", "save_excel_report",
-    "backtest_action", "update_trading_settings", "update_brain_control", "update_brain_paper_all", "update_risk_master", "update_position_protection", "set_learning_frozen", "manual_market", "cancel_pending_order", "select_solo_brain", "close_owned_positions",
+    "backtest_action", "study_action", "update_trading_settings", "update_brain_control", "update_brain_paper_all", "update_risk_master", "update_position_protection", "set_learning_frozen", "manual_market", "cancel_pending_order", "select_solo_brain", "close_owned_positions",
     "bind_execution", "update_supervisor", "frozen_coordinator_action", "frozen_sniper_action", "frozen_classic_action",
     "read_panel", "read_trade_history", "get_status",
     "subscribe_status",
