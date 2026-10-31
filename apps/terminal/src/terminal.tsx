@@ -12,7 +12,8 @@ import {PanelReadFence} from './panel-guard';
 import SystemHealth,{buildHealth} from './system-health';
 import EnterpriseSupervisor from './enterprise-supervisor';
 import DataExplorer from './data-explorer';
-import {BacktestOperations,BackupOperations,TradingSettingsOperations,BrainControlsOperations,PaperAllControl,ExecutionBindingOperations} from './operations';
+import {BackupOperations,TradingSettingsOperations,BrainControlsOperations,PaperAllControl,ExecutionBindingOperations} from './operations';
+import {BacktestWorkspace,EvaluationWorkspace} from './study-workspaces';
 import {feedEvidence} from './feed';
 import {diagnoseMarketQuote} from './market-quote-diagnosis';
 import {approvalIsCurrent,canConfirmStart} from './operator-approval';
@@ -621,7 +622,7 @@ export default function Terminal(){
   }catch(e){if(writeFresh(mutation))sendNotice('تعذر تجهيز الاستعادة: '+String(e),true)}
   finally{finishWrite(mutation)}
  };
- const runBacktest=async(action:'start'|'cancel',request?:{from_date:string;to_date:string;initial_equity:number;spread_floor:number})=>{
+ const runBacktest=async(action:'start'|'cancel',request?:{from_date:string;to_date:string;initial_equity:number;spread_floor:number;strategy:string})=>{
   if(preview||!hasTauri())return sendNotice('الاختبارات التاريخية تتطلب Core وMT5',true);
   const mutation=beginWrite('backtest-'+action);if(!mutation)return;
   const serial=panelSerial();
@@ -1192,7 +1193,8 @@ export default function Terminal(){
         <ModeEvidenceOperations status={!preview&&feed.broker?status:null} report={modeEvidence} disabled={preview||busy}
           onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('modeEvidence');void readPanel('/v1/execution/mode-evidence').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setModeEvidence(unwrap(v))}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setModeEvidence(null)})}}/>
         <p className="safe-note">لا يعني الربط أن النظام جاهز للتداول؛ START يحتاج تأكيد Core وباقي شروط المنسق والمخاطر. STOP لا يغلق المراكز.</p><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/execution')}/></div>:
-        page==='backtest'?<div className="feature-zone"><BacktestOperations key={viewScope} disabled={busy||preview} active={['loading','running'].includes(String(unwrap(pageData).phase||unwrap(unwrap(pageData).job).phase||''))} onStart={r=>runBacktest('start',r)} onCancel={()=>runBacktest('cancel')}/><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/backtest')}/></div>:
+        page==='backtest'?<div className="feature-zone"><BacktestWorkspace key={viewScope} source={pageData} disabled={busy||preview||!hasTauri()} armed={status?.requested_run===true} onStart={r=>runBacktest('start',r)} onCancel={()=>runBacktest('cancel')} onRefresh={()=>refreshCurrentPanel('/v1/backtest')} onEvaluation={()=>open('evaluation')}/></div>:
+        page==='evaluation'?<div className="feature-zone"><EvaluationWorkspace key={viewScope} source={pageData} disabled={busy||preview||!hasTauri()} onRefresh={()=>refreshCurrentPanel('/v1/evaluation')} onBacktest={()=>open('backtest')}/></div>:
         page==='backups'?<div className="feature-zone"><BackupOperations disabled={busy||preview||!hasTauri()} armed={status?.requested_run===true} source={pageData} create={()=>runBackup('create')} exportBrain={runSnapshotExport} importBrain={runSnapshotImport} onRestore={chooseSnapshotRestore}/><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/backups')}/></div>:
         page==='journal'?<div className="feature-zone"><TradeJournalOperations key={viewScope} status={!preview&&feed.broker?status:null} scope={contextKey} preview={preview}/></div>:
         page==='reports'?<div className="feature-zone"><BrokerReportOperations key={viewScope} status={!preview&&feed.broker?status:null} scope={contextKey} preview={preview} onJournal={()=>open('journal')}/></div>:
