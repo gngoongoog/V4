@@ -191,23 +191,40 @@ export function PaperAllControl({source,disabled,armed,onSet}: {
    <span>Paper: {label}</span></div>;
 }
 
+function txtOwner(owner:unknown):string {
+ if(typeof owner!=='string'||!owner)return 'غير مؤكد';
+ if(owner==='system')return 'SYSTEM / المنسق';
+ return BRAIN_DIRECTORY.find(row=>row[0]===owner)?.[1]||owner;
+}
+
 export function BrainControlsOperations({source,disabled,armed,onSave}: {
  source:unknown;disabled:boolean;armed:boolean;onSave:(brain:string,advisor:boolean,paper:boolean)=>Promise<void>;
 }) {
  const view=safeObject(source);
  const brains=Array.isArray(view.brains)?view.brains:[];
- const actualBrains=brains.filter((b)=>safeObject(safeObject(b).config).id!=='system');
- const available=view.controls_available===true&&actualBrains.length>0;
- // Names are the identities shipped in this Core version. A directory entry is
- // deliberately not given a state or statistics until Core sends them.
+ const actualBrains=brains.filter(b=>safeObject(safeObject(b).config).id!=='system');
+ const verifiedAccount=view.controls_available===true&&view.account_matches===true;
+ const available=verifiedAccount&&actualBrains.length>0;
+ // Directory entries are labels only; never treat names as authenticated Core states.
  const cards=actualBrains.length?actualBrains:BRAIN_DIRECTORY.map(([id,name,description])=>({config:{id},name,description}));
  const [selectedBrain,setSelectedBrain]=useState<string|null>(null);
  const activeBrain=cards.some(b=>String(safeObject(safeObject(b).config).id||'')===selectedBrain)?selectedBrain:String(safeObject(safeObject(cards[0]).config).id||'');
  const selected=safeObject(cards.find(b=>String(safeObject(safeObject(b).config).id||'')===activeBrain));
  const selectedControl=safeObject(selected.control),selectedActivity=safeObject(selected.activity);
+ const selectedVerified=available&&typeof selectedControl.advisor==='boolean'&&typeof selectedControl.paper==='boolean';
+ const canEdit=available&&!disabled&&!armed;
+ const reason=armed?'أوقف START أولاً. لا نغيّر مشاركة المستشارين أثناء التداول.':
+  !available?'بانتظار بيانات حساب MT5 المطابق والوضع الحالي من Core. لا تُغيّر الأزرار حالة عقول غير موثقة.':
+  disabled?'التعديل غير متاح أثناء إجراء آخر أو وضع المعاينة.':
+  'يمكن تعديل المشاركة وPaper الآن. كل زر يُظهر الإجراء الذي سينفذه، وليس الحالة الحالية.';
  return <section className="operator-card concept-brain-controls" aria-label="Brain controls">
-  <p className="concept-brain-explanation">العقل المنفّذ المختار وحده يمكنه التداول بعد START؛ البقية للتحليل أو Paper. إيقاف Paper يمنع التجارب الجديدة، بينما تُسوّى التجارب المفتوحة؛ ولا يوقف التعلّم العام.</p>
-  {!actualBrains.length&&<p className="safe-note">الأسماء من قائمة العقول المرفقة بهذا الإصدار. بانتظار Core لتأكيد حالتها ونتائجها؛ الأزرار متوقفة حتى وصول البيانات.</p>}
+  <div className="brain-controls-guide" dir="rtl">
+    <div><b>١. المشاركة بالقرار</b><span>تشغيل/إيقاف دور العقل كمستشار في المنسق. لا يرسل أمر فتح صفقة مباشرة.</span></div>
+    <div><b>٢. تدريب Paper</b><span>السماح بتجارب ورقية جديدة أو إيقافها. لا يغلق صفقات MT5 ولا يوقف التعلّم العام.</span></div>
+    <div><b>٣. تنفيذ حقيقي</b><span>اختيار «تداول بعقل واحد» أعلاه منفصل عن المشاركة؛ وبدء التداول يحتاج START وشروط Core.</span></div>
+  </div>
+  <p className="safe-note" role="status">{reason}</p>
+  {view.selected_owner!==undefined&&<p className="safe-note">منفّذ الأوامر الحالي: <b>{txtOwner(view.selected_owner)}</b>. إذا كان عقل منفرد يملك التنفيذ، تغيير مشاركة بقية المستشارين لا يغيّر صفقاته إلى أن ترجع للمنسق.</p>}
   <div className="concept-brain-card-grid">{cards.map((b,i)=>{
     const row=safeObject(b),id=String(safeObject(row.config).id||'');
     if(!id)return null;
@@ -216,18 +233,34 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
     const directory=BRAIN_DIRECTORY.find(item=>item[0]===id);
     const Icon=id==='sniper_learner'?Target:id==='trend'||id==='trend_pullback'?TrendingUp:id==='momentum'||id==='kte'?Zap:id==='zones'||id==='structure'?Layers3:id==='profile'||id==='dom'?BarChart3:BrainCircuit;
     const count=Number(evidence.sample_count),rate=evidence.win_rate;
-    const verified=available&&view.account_matches===true&&evidence.source==='closed_costed_mt5_demo_deals_only'&&
+    const verified=available&&evidence.source==='closed_costed_mt5_demo_deals_only'&&
       evidence.scope==='current_demo_account_symbol_mode_brain'&&evidence.no_auto_promotion===true&&
       typeof rate==='number'&&Number.isFinite(rate)&&rate>=0&&rate<=1&&Number.isInteger(count)&&count>=30;
-    return <article key={`${id}-${i}`} className={'concept-brain-card '+(activeBrain===id?'selected':'')}>
-      <button type="button" className="concept-brain-card-head" onClick={()=>setSelectedBrain(id)} aria-pressed={activeBrain===id}><Icon size={27}/><span><b>{directory?.[1]||String(row.name||id)}</b><small>{directory?.[2]||String(row.name||id)}</small></span><span className={'concept-control-state '+(available&&state.advisor!==false?'on':'')}>{available?(state.advisor===false?'متوقف':'نشط'):'غير موثق'}</span></button>
-      <div className="concept-brain-card-metrics"><span>إشارات <b>{available&&view.account_matches===true&&typeof activity.signals==='number'?activity.signals:'—'}</b></span><span>تنفيذ موثق <b>{available&&view.account_matches===true&&typeof orders.fill_acknowledged==='number'?orders.fill_acknowledged:'—'}</b></span><span>نسبة النجاح <b>{verified?`${(rate*100).toFixed(1)}%`:'—'}</b></span></div>
-      <div className="concept-brain-card-actions"><button disabled={disabled||armed||!available} onClick={()=>void onSave(id,state.advisor===false,state.paper!==false)}>المشاركة: {available?(state.advisor===false?'إيقاف':'تشغيل'):'—'}</button>
-      <button disabled={disabled||armed||!available} onClick={()=>void onSave(id,state.advisor!==false,state.paper===false)}>Paper: {available?(state.paper===false?'إيقاف':'تشغيل'):'—'}</button></div>
+    const known=available&&typeof state.advisor==='boolean'&&typeof state.paper==='boolean';
+    const advisorOn=known&&state.advisor===true,paperOn=known&&state.paper===true;
+    // Desired advisor state is not necessarily effective: only the current
+    // Expert coordinator, or selected Sniper Learner, consumes advisor votes.
+    // A SOLO owner also supersedes the coordinator until explicitly restored.
+    const effective=row.participates_in_coordinator===true;
+    const effectiveKnown=known&&typeof row.participates_in_coordinator==='boolean';
+    const selectable=canEdit&&known;
+    return <article key={id} className={'concept-brain-card '+(activeBrain===id?'selected':'')}>
+      <button type="button" className="concept-brain-card-head" onClick={()=>setSelectedBrain(id)} aria-pressed={activeBrain===id}><Icon size={27}/><span><b>{directory?.[1]||String(row.name||id)}</b><small>{directory?.[2]||String(row.name||id)}</small></span><span className={'concept-control-state '+(advisorOn?'on':'')}>{known?(advisorOn?'مستشار مفعّل':'مستشار متوقف'):'غير موثق'}</span></button>
+      <div className="brain-control-states" dir="rtl">
+        <span className={advisorOn?'active':'off'}>المشاركة: {known?(advisorOn?'مفعّلة':'متوقفة'):'غير معروفة'}</span>
+        <span className={paperOn?'active':'off'}>Paper: {known?(paperOn?'مفعّل':'متوقف'):'غير معروف'}</span>
+        <span className={effective?'active':'off'}>تأثيره على قرار المنسق: {effectiveKnown?(effective?'يشارك الآن':'لا يشارك الآن'):'غير مؤكد'}</span>
+      </div>
+      <div className="concept-brain-card-metrics"><span>إشارات <b>{known&&typeof activity.signals==='number'?activity.signals:'—'}</b></span><span>تنفيذ موثق <b>{known&&typeof orders.fill_acknowledged==='number'?orders.fill_acknowledged:'—'}</b></span><span>نجاح موثق <b>{verified?`${(rate*100).toFixed(1)}%`:'—'}</b></span></div>
+      <div className="concept-brain-card-actions">
+        <button type="button" aria-label={`${advisorOn?'إيقاف':'تشغيل'} مشاركة ${id}`} title="تغيير المشاركة في قرارات المنسق فقط" disabled={!selectable}
+         onClick={()=>void onSave(id,!advisorOn,paperOn)}>{known?(advisorOn?'إيقاف المشاركة':'تشغيل المشاركة'):'انتظار Core'}</button>
+        <button type="button" aria-label={`${paperOn?'إيقاف':'تشغيل'} Paper ${id}`} title="تغيير قبول تجارب Paper الجديدة فقط" disabled={!selectable}
+         onClick={()=>void onSave(id,advisorOn,!paperOn)}>{known?(paperOn?'إيقاف Paper':'تشغيل Paper'):'انتظار Core'}</button>
+      </div>
     </article>;
   })}</div>
-  <div className="concept-brain-inspector"><h3><ShieldAlert size={18}/> تفاصيل العقل المختار</h3>{activeBrain&&Object.keys(selected).length?<div><strong>{BRAIN_DIRECTORY.find(item=>item[0]===activeBrain)?.[1]||String(selected.name||activeBrain)}</strong><p>المشاركة: {available?(selectedControl.advisor===false?'متوقفة':'مفعّلة'):'غير مؤكدة'} · Paper: {available?(selectedControl.paper===false?'متوقف':'مفعّل'):'غير مؤكد'}</p><p>فحوص التحليل: {available&&typeof selectedActivity.checks==='number'?selectedActivity.checks:'—'} · الإشارات المرصودة: {available&&typeof selectedActivity.signals==='number'?selectedActivity.signals:'—'}</p><small>تُطبّق التغييرات من أزرار المشاركة وPaper على البطاقة، ضمن الحساب والوضع الحاليين.</small></div>:<p>اختَر بطاقة عقل لعرض حالته الفعلية.</p>}</div>
-  <p className="safe-note">يتطلب التعديل Core متصلاً بحساب MT5 مطابقاً، وإيقاف START، وعدم وجود أوامر وسيط غير محسومة.</p>
+  <div className="concept-brain-inspector" dir="rtl"><h3><ShieldAlert size={18}/> تفاصيل العقل المحدد</h3>{activeBrain&&Object.keys(selected).length?<div><strong>{BRAIN_DIRECTORY.find(item=>item[0]===activeBrain)?.[1]||String(selected.name||activeBrain)}</strong><p>المشاركة: {selectedVerified?(selectedControl.advisor?'مفعّلة':'متوقفة'):'غير مؤكدة'} · Paper: {selectedVerified?(selectedControl.paper?'مفعّل':'متوقف'):'غير مؤكد'}</p><p>فحوص التحليل: {available&&typeof selectedActivity.checks==='number'?selectedActivity.checks:'—'} · الإشارات المرصودة: {available&&typeof selectedActivity.signals==='number'?selectedActivity.signals:'—'}</p><small>الحالة تُقرأ من Core بعد الحفظ. هذه الأزرار لا تشغل تنفيذ MT5 منفرداً.</small></div>:<p>اختَر بطاقة عقل لعرض حالته الفعلية.</p>}</div>
  </section>;
 }
 

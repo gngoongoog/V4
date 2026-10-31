@@ -69,7 +69,7 @@ for(const token of [
  "draftTelemetry.account_trade_mode,draftTelemetry.demo",
  "disabled={busy||preview||!feed.broker}",
  "await saveSettings(activeSettingsEdit,activeTelegramToken,activeClearTelegram)",
- "disabled={busy||preview||!activeSettingsEdit}",
+ "disabled={busy||preview||!activeSettingsEdit||settingsStale||status?.requested_run===true}",
  "key={contextKey} config={!preview&&safeConfig?",
  "loading={busy||preview}",
  "setTelegramToken('');setClearTelegram(false);setTelegramDraftScope(null);",

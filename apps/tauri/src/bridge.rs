@@ -309,9 +309,12 @@ fn backtest_action(action: String, request: Option<Value>) -> Result<Value, Stri
     let (route,body)=match action.as_str(){
         "start"=>{
             let input=request.ok_or("تفاصيل الاختبار التاريخي غير متاحة")?;
-            let allowed=["from_date","to_date","initial_equity","spread_floor"];
+            let allowed=["from_date","to_date","initial_equity","spread_floor","strategy"];
             if input.as_object().is_none_or(|m|m.keys().any(|k| !allowed.contains(&k.as_str()))) {
                 return Err("حقول الاختبار التاريخي غير صالحة".into());
+            }
+            if input.get("strategy").is_some_and(|v|!matches!(v.as_str(),Some("meta_v1"|"ces_v1"|"kte_v1"|"meta_v2"|"explore_v1"))) {
+                return Err("الاستراتيجية التاريخية المطلوبة غير مدعومة".into());
             }
             ("/v1/backtest/start",input)
         },
@@ -319,6 +322,146 @@ fn backtest_action(action: String, request: Option<Value>) -> Result<Value, Stri
         _=>return Err("هذا الإجراء التاريخي غير مسموح".into()),
     };
     open_client()?.post(route,body).map_err(|err|err.to_string())
+}
+
+// A strictly typed, allowlisted bridge to immutable research history.
+// Read-only reports and local exports do not submit broker orders.
+fn study_request(kind:&str,action:&str,id:Option<&str>,source_id:Option<&str>,plan:Option<&Value>)->Result<(&'static str,bool,Value),String>{
+    let valid_id=|s:&str|s.len()>=8&&s.len()<=100&&s.bytes().all(|c|c.is_ascii_alphanumeric()||c==b'-');
+    match (kind,action){
+        ("backtest","runs")=>Ok(("/v1/backtest/runs",false,json!({}))),
+        ("evaluation","runs")=>Ok(("/v1/evaluation/runs",false,json!({}))),
+        ("backtest","report")|("backtest","export")|("evaluation","report")|("evaluation","export")=>{
+            let id=id.filter(|v|valid_id(v)).ok_or("اختر نتيجة محفوظة صحيحة")?;
+            let route=match (kind,action){
+                ("backtest","report")=>"/v1/backtest/report",
+                ("backtest","export")=>"/v1/backtest/export",
+                ("evaluation","report")=>"/v1/evaluation/report",
+                _=>"/v1/evaluation/export",
+            };
+            Ok((route,true,json!({"id":id})))
+        },
+        ("evaluation","start")=>{
+            let source=source_id.filter(|v|valid_id(v)).ok_or("اختر اختباراً تاريخياً محفوظاً")?;
+            let plan=plan.ok_or("خطة التقييم مفقودة")?;
+            let valid=match plan.get("mode").and_then(Value::as_str){
+                Some("holdout")=>plan.as_object().is_some_and(|m|m.len()==2)&&
+                    plan.get("holdout_percent").and_then(Value::as_u64).is_some_and(|v|(10..=50).contains(&v)),
+                Some("rolling")=>plan.as_object().is_some_and(|m|m.len()==4)&&
+                    plan.get("development_days").and_then(Value::as_u64).is_some_and(|v|(2..=365).contains(&v))&&
+                    plan.get("holdout_days").and_then(Value::as_u64).is_some_and(|v|(1..=365).contains(&v))&&
+                    plan.get("step_days").and_then(Value::as_u64).is_some_and(|v|(1..=365).contains(&v)),
+                _=>false,
+            };
+            if !valid{return Err("قيم التقييم خارج الحدود أو الحقول غير معروفة".into());}
+            Ok(("/v1/evaluation/start",true,json!({"source_id":source,"plan":plan})))
+        },
+        ("evaluation","cancel")=>Ok(("/v1/evaluation/cancel",true,json!({}))),
+        _=>Err("عملية دراسة غير مسموحة".into()),
+    }
+}
+#[tauri::command]
+fn study_action(kind:String,action:String,id:Option<String>,source_id:Option<String>,plan:Option<Value>)->Result<Value,String>{
+    let (route,post,body)=study_request(&kind,&action,id.as_deref(),source_id.as_deref(),plan.as_ref())?;
+    let client=open_client()?;
+    if post{client.post(route,body)}else{client.get(route)}.map_err(|e|e.to_string())
+}
+
+// Fixed News RSS actions: no dynamic route, user URLs, or trade execution.
+fn news_request(action:&str)->Result<(&'static str,Value),String>{
+ match action{
+  "refresh"=>Ok(("/v1/news/refresh",json!({}))),
+  "enable"=>Ok(("/v1/news/settings",json!({"enabled":true}))),
+  "disable"=>Ok(("/v1/news/settings",json!({"enabled":false}))),
+  _=>Err("إجراء أخبار غير مدعوم".into())
+ }
+}
+#[tauri::command]
+fn news_action(action:String)->Result<Value,String>{
+ let (route,body)=news_request(&action)?;
+ let client=open_client()?;
+ let response=client.post(route,body).map_err(|e|format!("تأكيد أمر الأخبار غير متاح؛ أعد قراءة الحالة قبل إعادة الطلب: {e}"))?;
+ if response["ok"]!=true{return Err("Core لم يؤكد إجراء الأخبار".into());}
+ // Settings must be persisted and reflected in a fresh Core readback.
+ if action=="enable"||action=="disable"{
+  let actual=client.get("/v1/news").map_err(|e|format!("تم قبول الأمر لكن تعذر قراءة الحالة: {e}"))?;
+  if actual["enabled"].as_bool()!=Some(action=="enable"){
+   return Err("لم تتطابق حالة مصادر الأخبار مع الطلب؛ حدّث الصفحة".into());
+  }
+ }
+ Ok(response)
+}
+
+// Research-only Studio operations: no arbitrary path, order routing, or model promotion.
+fn studio_request(action:&str,timeframe:Option<&str>)->Result<(&'static str,Value),String>{
+ match action {
+  "run"=>{
+   let tf=timeframe.unwrap_or("ALL");
+   if tf!="ALL"&&!braintrade_domain::studio::TIMEFRAMES.contains(&tf){
+    return Err("الفريم المطلوب غير مدعوم".into());
+   }
+   Ok(("/v1/studio/run",json!({"timeframe":tf})))
+  },
+  "auto_enable"=>Ok(("/v1/studio/auto",json!({"enabled":true}))),
+  "auto_disable"=>Ok(("/v1/studio/auto",json!({"enabled":false}))),
+  "cancel"=>Ok(("/v1/studio/cancel",json!({}))),
+  _=>Err("إجراء استوديو غير مدعوم".into())
+ }
+}
+#[tauri::command]
+fn studio_action(action:String,timeframe:Option<String>)->Result<Value,String>{
+ let (route,body)=studio_request(&action,timeframe.as_deref())?;
+ let client=open_client()?;
+ let response=client.post(route,body).map_err(|e|format!("نتيجة الطلب البحثي غير مؤكدة؛ راجع حالة Core قبل التكرار: {e}"))?;
+ match action.as_str(){
+  "run" if !response["queued"].is_number()=>return Err("لم يرجع Core عدد التجارب المجدولة".into()),
+  "cancel" if response["cancelled"]!=true=>return Err("لم يؤكد Core إلغاء الدراسة".into()),
+  "auto_enable"|"auto_disable"=>{
+   let enabled=action=="auto_enable";
+   let current=client.get("/v1/studio").map_err(|e|format!("حالة الاستوديو بعد التغيير غير مؤكدة: {e}"))?;
+   if response["auto"].as_bool()!=Some(enabled)||current["auto"].as_bool()!=Some(enabled){
+    return Err("حالة التلقائي في Core لا تطابق التغيير المطلوب".into());
+   }
+  },
+  _=>{}
+ }
+ Ok(response)
+}
+
+// Saved historical correlation only. Never accepts arbitrary Core endpoints.
+fn correlation_request(action:&str,source_ids:Option<&[String]>,overlap:Option<u32>,report_id:Option<&str>)->Result<(&'static str,bool,Value),String>{
+ let valid_id=|id:&str|id.len()>=8&&id.len()<=100&&id.bytes().all(|c|c.is_ascii_alphanumeric()||c==b'-');
+ match action{
+  "sources"=>Ok(("/v1/research/correlation/sources",false,json!({}))),
+  "reports"=>Ok(("/v1/research/correlation/reports",false,json!({}))),
+  "report"=>{
+   let id=report_id.filter(|v|valid_id(v)).ok_or("معرّف تقرير ارتباط غير صالح")?;
+   Ok(("/v1/research/correlation/report",true,json!({"id":id})))
+  },
+  "analyze"=>{
+   let ids=source_ids.ok_or("اختر مصدرين تاريخيين على الأقل")?;
+   if ids.len()<2||ids.len()>8||ids.iter().any(|v|!valid_id(v)) {
+    return Err("يجب اختيار 2 إلى 8 مصادر تاريخية محفوظة بمعرّفات سليمة".into());
+   }
+   let mut unique=std::collections::BTreeSet::new();
+   if ids.iter().any(|id|!unique.insert(id)){return Err("تكرار مصدر تاريخي غير مسموح".into());}
+   let n=overlap.unwrap_or(30);
+   if !(2..=60_000).contains(&n){return Err("عدد دقائق التداخل خارج الحدود".into());}
+   Ok(("/v1/research/correlation/analyze",true,json!({"source_ids":ids,"min_overlap":n})))
+  },
+  _=>Err("عملية ارتباط غير مسموحة".into())
+ }
+}
+#[tauri::command]
+fn correlation_action(action:String,source_ids:Option<Vec<String>>,min_overlap:Option<u32>,report_id:Option<String>)->Result<Value,String>{
+ let (route,post,body)=correlation_request(&action,source_ids.as_deref(),min_overlap,report_id.as_deref())?;
+ let client=open_client()?;
+ let response=if post{client.post(route,body)}else{client.get(route)}
+  .map_err(|e|format!("تعذر تأكيد رد Core: {e}"))?;
+ if action=="analyze"&&(response["ok"]!=true||response["summary"]["id"].as_str().is_none()){
+  return Err("لم يؤكد Core حفظ تقرير الارتباط".into());
+ }
+ Ok(response)
 }
 
 #[tauri::command]
@@ -584,7 +727,7 @@ pub fn run() {
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore, save_excel_report,
-            backtest_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
+            backtest_action, study_action, news_action, studio_action, correlation_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");
@@ -593,6 +736,51 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn research_study_bridge_is_allowlisted_and_never_broker_execution(){
+        let (path,post,_)=study_request("evaluation","start",None,Some("source-run-2026"),Some(&json!({"mode":"holdout","holdout_percent":30}))).unwrap();
+        assert_eq!(path,"/v1/evaluation/start");assert!(post);
+        assert!(study_request("evaluation","start",None,Some("source-run-2026"),Some(&json!({"mode":"rolling","development_days":0,"holdout_days":2,"step_days":1}))).is_err());
+        assert!(study_request("evaluation","start",None,Some("source-run-2026"),Some(&json!({"mode":"holdout","holdout_percent":30,"trade_live":true}))).is_err());
+        assert!(study_request("backtest","start",None,None,None).is_err());
+        assert!(study_request("evaluation","../../v1/start",None,None,None).is_err());
+        let (path,post,_)=study_request("backtest","report",Some("saved-run-2026"),None,None).unwrap();
+        assert_eq!(path,"/v1/backtest/report");assert!(post);
+        assert!(study_request("backtest","report",Some("../etc/token"),None,None).is_err());
+    }
+    #[test]
+    fn news_actions_are_strictly_allowlisted(){
+        assert_eq!(news_request("enable").unwrap().0,"/v1/news/settings");
+        assert_eq!(news_request("enable").unwrap().1["enabled"],true);
+        assert_eq!(news_request("disable").unwrap().1["enabled"],false);
+        assert_eq!(news_request("refresh").unwrap().0,"/v1/news/refresh");
+        for action in ["trade","../../v1/manual","refresh?token=1","settings"]{assert!(news_request(action).is_err());}
+    }
+    #[test]
+    fn studio_research_actions_are_scoped(){
+        let (route,data)=studio_request("run",Some("M5")).unwrap();
+        assert_eq!(route,"/v1/studio/run");
+        assert_eq!(data["timeframe"],"M5");
+        assert_eq!(studio_request("run",None).unwrap().1["timeframe"],"ALL");
+        assert_eq!(studio_request("auto_enable",None).unwrap().1["enabled"],true);
+        assert_eq!(studio_request("auto_disable",None).unwrap().1["enabled"],false);
+        assert!(studio_request("run",Some("XAUUSD")).is_err());
+        assert!(studio_request("trade",None).is_err());
+    }
+    #[test]
+    fn historical_correlation_actions_are_bounded(){
+        let ids=vec!["saved-run-a".to_string(),"saved-run-b".to_string()];
+        let (route,post,body)=correlation_request("analyze",Some(&ids),Some(30),None).unwrap();
+        assert_eq!(route,"/v1/research/correlation/analyze");
+        assert!(post);
+        assert_eq!(body["min_overlap"],30);
+        assert!(correlation_request("analyze",Some(&ids),Some(1),None).is_err());
+        assert!(correlation_request("analyze",Some(&ids[..1]),Some(30),None).is_err());
+        let duplicate=vec![ids[0].clone(),ids[0].clone()];
+        assert!(correlation_request("analyze",Some(&duplicate),Some(30),None).is_err());
+        assert!(correlation_request("report",None,None,Some("../etc/secret")).is_err());
+        assert!(correlation_request("trade",None,None,None).is_err());
+    }
     #[test]
     fn full_exit_requires_a_valid_core_process_identity() {
         assert_eq!(process_identity(&json!({"core_process":{"pid":42,"instance_id":"session-a"}})).unwrap(),(42,"session-a".to_string()));

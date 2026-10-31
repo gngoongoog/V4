@@ -29,9 +29,9 @@ const stop=all.find(n=>n.type==='button'&&n.props.className==='action-btn stop')
 assert.equal(start.props.disabled,false);assert.equal(stop.props.disabled,false);
 start.props.onClick();stop.props.onClick();assert.deepEqual(actions,['start','stop']);
 const unsupported=all.filter(n=>n.type==='button'&&/غير مدعوم|أوامر .* غير متاحة/.test(n.props.title||''));
-assert.equal(unsupported.length,2);
-for(const button of unsupported)
- assert.equal(button.props.disabled,true,'Unsupported manual orders must never act as broker operations');
+assert.equal(unsupported.length,0,'Unsupported broker order types must not appear as fake interactive buttons');
+assert(fs.readFileSync(path.join(root,'concept-market.tsx'),'utf8').includes('إنشاء أوامر شراء/بيع معلقة غير مدعوم'),
+ 'Unavailable pending-order creation must be explained explicitly rather than simulated');
 assert.equal(moduleExports.manualDraft(1,'','','',2000,2000.1),null);
 assert.equal(moduleExports.manualDraft(1,'0.1','2001','2002',2000,2000.1),null);
 const validBuy=moduleExports.manualDraft(1,'0.1','1999','2002',2000,2000.1);
@@ -84,4 +84,4 @@ assert.equal(moduleExports.steppedDraftValue('',0.01,1),'','Do not invent an SL/
 const steppers=nodes(moduleExports.ConceptMarketDesk({...props,account:{...account,volume_step:0.01,volume_min:0.01,volume_max:2,leverage:500,point:0.01}}));
 assert(steppers.some(n=>n.type==='button'&&n.props['aria-label']==='زيادة اللوت'&&typeof n.props.onClick==='function'));
 assert(steppers.some(n=>n.type==='button'&&n.props.title?.includes('الرافعة يحددها الوسيط')&&typeof n.props.onClick==='function'));
-console.log('PASS: concept market scopes requested closes to exact owned tickets, protects preview/STOP/quotes, and leaves unsupported manual entries disabled');
+console.log('PASS: concept market scopes requested closes to exact owned tickets, protects preview/STOP/quotes, and never renders unsupported pending-order buttons');

@@ -12,7 +12,10 @@ import {PanelReadFence} from './panel-guard';
 import SystemHealth,{buildHealth} from './system-health';
 import EnterpriseSupervisor from './enterprise-supervisor';
 import DataExplorer from './data-explorer';
-import {BacktestOperations,BackupOperations,TradingSettingsOperations,BrainControlsOperations,PaperAllControl,ExecutionBindingOperations} from './operations';
+import {BackupOperations,TradingSettingsOperations,BrainControlsOperations,PaperAllControl,ExecutionBindingOperations} from './operations';
+import {BacktestWorkspace,EvaluationWorkspace} from './study-workspaces';
+import {NewsOperatorWorkspace,CoreReadoutWorkspace,PositionsOperatorWorkspace} from './operator-pages';
+import {CorrelationWorkspace} from './correlation-workspace';
 import {feedEvidence} from './feed';
 import {diagnoseMarketQuote} from './market-quote-diagnosis';
 import {approvalIsCurrent,canConfirmStart} from './operator-approval';
@@ -44,21 +47,11 @@ import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position,PendingOrder} from './types';
 import type {RiskRecovery,PositionProtectionPolicy} from './bridge';
 import {DESIGN_FIXTURE} from './mock';
-import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,updatePositionProtection,setLearningFrozen,manualMarket,cancelPendingOrder,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
+import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,newsAction,studioAction,correlationAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,updatePositionProtection,setLearningFrozen,manualMarket,cancelPendingOrder,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
 import {money,num,signed,up,valid} from './format';
 
 // Concept 4 visual comparison fixture, NEVER emitted as broker results.
 // Used solely inside clearly identified DESIGN PREVIEW.
-const CONCEPT4_PREVIEW_MODES={
- sniper:{trades:34,win:82.4},scalping:{trades:68,win:73.5},
- swing:{trades:41,win:70.7},expert:{trades:43,win:67.4}
-} as const;
-const CONCEPT4_PREVIEW_BRAINS=[
- {name:'عقل التحليل',score:78,activity:'تحليل الاتجاه والفرص'},
- {name:'عقل إدارة المخاطر',score:92,activity:'مراقبة المخاطر'},
- {name:'عقل التنفيذ',score:88,activity:'متابعة تنفيذ الأوامر'},
- {name:'عقل التعلّم',score:64,activity:'تحديث نماذج التعلّم'}
-] as const;
 type IconComponent=typeof Home;
 const PAGES:{id:PageId;title:string;en:string;icon:IconComponent;route?:string}[]=[
  {id:'dashboard',title:'نظرة عامة',en:'Overview',icon:Home},
@@ -85,6 +78,32 @@ const PAGES:{id:PageId;title:string;en:string;icon:IconComponent;route?:string}[
  {id:'events',title:'أحداث النظام',en:'System Events',icon:CalendarClock,route:'/v1/events'},
 ];
 const findPage=(id:PageId)=>PAGES.find(x=>x.id===id)!;
+// Explain the verified purpose and next step of each actual page (not a synthetic feature).
+const PAGE_GUIDE:Record<PageId,{purpose:string;step:string}>={
+ dashboard:{purpose:'ملخص حالة الحساب، إشارات النظام، والمعلومات المالية المتاحة من MT5 فقط.',step:'ابدأ من حالة الاتصال، ثم افحص التداول أو العقول قبل الضغط على START.'},
+ trading:{purpose:'شارت ودفتر تنفيذ مباشر للرمز المرتبط. الأوامر المعلقة الجديدة غير مدعومة هنا.',step:'تأكد من اتصال السعر والحساب، اضبط اللوت وSL/TP، ثم اقرأ نتيجة الأمر من Core وMT5.'},
+ execution:{purpose:'هوية حساب التنفيذ وجودة الربط وسبب رفض الأوامر.',step:'افحص Demo/Real ورقم الحساب، ثم راجع جودة الإرسال وحالات التسوية.'},
+ brains:{purpose:'العقول المسجلة فعلاً وحالة استشارتها وPaper، من Core للحساب الحالي.',step:'استخدم STOP أولاً، ثم غيّر مشاركة العقل وراجع الحالة المؤكدة بعد الحفظ.'},
+ brainControl:{purpose:'تشغيل/إيقاف مشورة كل عقل وتجارب Paper واختيار العقل المنفرد.',step:'اختر العقل المطلوب، وميّز بين Advisor وPaper وتنفيذ التداول الحقيقي.'},
+ sniper:{purpose:'تشخيص القناص وحالة تيكات EA ومحرك التنفيذ المخصص له.',step:'ابدأ بمصدر التيكات، ثم أسباب WAIT، ثم إعدادات القناص ونتيجة الأوامر.'},
+ risk:{purpose:'إعداد إدارة رأس المال، القاطع اليومي، الحساب الصغير، وحماية المراكز.',step:'راجع حالة Risk Master، وبعدها عدّل الحدود المطلوبة واحفظها لدى Core.'},
+ positions:{purpose:'مراكز MT5 المفتوحة التي وصلت من الحساب، والربح العائم قبل رسوم الإغلاق.',step:'فلتر حسب الرمز والاتجاه؛ للإغلاق انتقل إلى مركز التداول وراجع تأكيد MT5.'},
+ analysis:{purpose:'أرشيف فرص تحليلية لحظة أول تسجيل، وليس توصيات دخول جديدة.',step:'افتح أي فرصة لمعرفة الاتجاه والمنطقة وسبب عدم جاهزيتها.'},
+ journal:{purpose:'تاريخ الصفقات من سجل MT5 مع تفاصيل التكاليف إذا كانت متاحة.',step:'حدد الفترة وابحث في الصفقات، وتحقق من العمولة قبل تقييم الربح.'},
+ reports:{purpose:'إحصائيات مستندة إلى صفقات مغلقة موثقة؛ ليست توقعاً للأرباح القادمة.',step:'اختر الحساب والفترة وراجع حجم العينة والرسوم قبل تفسير نسبة النجاح.'},
+ telegram:{purpose:'إعداد تنبيهات Telegram وحالة الإرسال كما يبلغها Core.',step:'أدخل Chat ID والرمز السري، فعّل التنبيهات ثم احفظ؛ تحقق من وصول رسالة فعلية.'},
+ settings:{purpose:'اسم أداة الذهب ومسار MT5 المستخدمين للربط، وليس تغيير الرافعة عند الوسيط.',step:'طابق الرمز ومسار Terminal64.exe ثم احفظ في حالة STOP.'},
+ shadow:{purpose:'أرشيف قرارات ظل افتراضية للتعلّم والمراجعة؛ لا يمثل أوامر وسيط.',step:'افتح القرار لمعرفة السبب والأسعار المسجلة والقيود المانعة.'},
+ learning:{purpose:'أدلة التعلّم المرتبطة بحساب MT5 وعينات البيانات، لا نسب ذكاء متخيلة.',step:'افحص العينة والتغطية وأسباب نقص الدليل قبل الحكم على أي عقل.'},
+ backtest:{purpose:'تشغيل محاكاة تاريخية على شموع MT5 وتكاليف مفترضة، ثم حفظ التقرير.',step:'حدد الفترة والاستراتيجية والرصيد والسبريد، ثم اقرأ تقرير التجربة.'},
+ evaluation:{purpose:'اختبارات زمنية Holdout/Rolling لتقليل خداع الاختبار التاريخي.',step:'اختر نتيجة تاريخية محفوظة وخطة زمنية، وقارن النتائج خارج فترة التطوير.'},
+ correlation:{purpose:'تحليل ارتباط شموع M1 من نتائج تاريخية محفوظة، لا قياس حركة الذهب الحية.',step:'اختر 2–8 مصادر، اضبط الحد الأدنى للتداخل ثم راجع التقرير المحفوظ.'},
+ studio:{purpose:'بحث واستكشاف استراتيجيات على فريمات MT5 ومقاييس اختبار منفصل.',step:'تحقق من الشموع، شغّل تجربة فريم، ثم اقرأ التدريب والتحقق والاختبار.'},
+ news:{purpose:'مصادر أخبار اقتصادية رسمية منشورة وسياق Macro، بلا إشارات BUY/SELL.',step:'راجع حداثة المصدر، وفلتر الأخبار، ثم افتح الأصل الرسمي للتأكد.'},
+ backups:{purpose:'نسخ المحرك والعقول واستعادتها وفق تحقق Core وقواعده.',step:'أنشئ نسخة موثقة، وتأكد من اسمها قبل طلب الاستعادة؛ الاستعادة توقف Core.'},
+ events:{purpose:'تسلسل أحداث Rust Core وأسباب مشاكل الربط والتنفيذ.',step:'ابحث في الحدث، اقرأ وصفه ثم افتح تشخيص التنفيذ إذا ظهر خطأ.'}
+};
+
 const primaryNav:PageId[]=['dashboard','trading','brainControl','risk','reports','journal','news','settings'];
 const navLabel:Partial<Record<PageId,string>>={dashboard:'اللوحة الرئيسية',trading:'التداول المباشر',brainControl:'إعدادات العقول',risk:'إدارة المخاطر',reports:'التحليلات والتقارير',journal:'سجل العمليات',news:'السوق والأخبار',settings:'الإعدادات العامة'};
 const RISK_FIELDS=[['risk_percent','نسبة المخاطرة لكل صفقة','%'],['daily_loss_percent','الحد اليومي للخسارة','%'],['max_drawdown_percent','أقصى تراجع مسموح','%'],['max_spread_atr','سقف السبريد بالنسبة إلى ATR','ATR'],['max_lots','أقصى لوت','lot'],['commission_per_lot','العمولة لكل لوت كامل','/lot'],['slippage_ticks','انزلاق السعر','ticks'],['micro_real_recovery_equity','رصيد استعادة الحماية','equity'],['micro_real_cap_percent','سقف وضع الحساب الصغير','%']] as const;
@@ -463,16 +482,16 @@ export default function Terminal(){
  // Trading/quote actions MUST still require fresh market prices separately.
  const t=display?.telemetry;const trustworthy=preview||feed.quote;
  const accountFresh=preview||feed.broker;
- const account=accountFresh?t:null;const currency=account?.currency||'USD';const positions=account?.positions||[];
+ const account=accountFresh?t:null;const accountStats=preview?null:account;const currency=account?.currency||'USD';const positions=account?.positions||[];
  const extraChart=!preview&&feed.broker&&chartSlot?.scope===contextKey?chartHistory(chartSlot.report,status?.telemetry??null,Date.now()):{market:{},meta:{}};
  const chartMarket=account?{...account.market,...extraChart.market}:null;
  const buys=positions.filter(p=>up(p.side)).length;const sells=positions.length-buys;
  const brokerResults=preview||!feed.broker?null:brokerEvidence(brainReport,status);
- const win=preview?76:brokerResults?.winRate??null;
+ const win=preview?null:brokerResults?.winRate??null;
  // Core daily-loss estimate is NOT verified maximum drawdown.
- const drawdown=preview?4.2:null;
- const showLatency=preview?28:null; // quote age is NOT execution latency
- const visiblePositions=positions.filter(p=>filter==='all'||(filter==='buy'?up(p.side):!up(p.side)));
+ const drawdown=null; // No sourced equity history: never show a fabricated drawdown.
+ const showLatency=null; // Quote age is NOT execution latency; no synthetic latency.
+ const visiblePositions=(preview?[]:positions).filter(p=>filter==='all'||(filter==='buy'?up(p.side):!up(p.side)));
  useEffect(()=>{
   if(approval&&(approval.scope!==contextKey||preview||
     (approval.action==='start'&&!feed.broker))){
@@ -621,19 +640,94 @@ export default function Terminal(){
   }catch(e){if(writeFresh(mutation))sendNotice('تعذر تجهيز الاستعادة: '+String(e),true)}
   finally{finishWrite(mutation)}
  };
- const runBacktest=async(action:'start'|'cancel',request?:{from_date:string;to_date:string;initial_equity:number;spread_floor:number})=>{
-  if(preview||!hasTauri())return sendNotice('الاختبارات التاريخية تتطلب Core وMT5',true);
-  const mutation=beginWrite('backtest-'+action);if(!mutation)return;
+ const runBacktest=async(action:'start'|'cancel',request?:{from_date:string;to_date:string;initial_equity:number;spread_floor:number;strategy:string})=>{
+  if(preview||!hasTauri()){
+   const reason='الاختبارات التاريخية تتطلب Core وMT5، وليس وضع المعاينة';
+   sendNotice(reason,true);
+   throw new Error(reason);
+  }
+  const mutation=beginWrite('backtest-'+action);
+  if(!mutation)throw new Error('يوجد إجراء آخر قيد التنفيذ؛ لم يُرسل أمر الاختبار');
   const serial=panelSerial();
   try{
-   await backtestAction(action,request);
-   if(!writeFresh(mutation))return;
-   const data=await readPanel('/v1/backtest');
-   if(!writeFresh(mutation))return;
+   const reply=unwrap(await backtestAction(action,request));
+   if(reply.ok!==true)throw new Error('لم يؤكد Core قبول أمر الاختبار التاريخي');
+   if(!writeFresh(mutation))throw new Error('تغيّر نطاق الحساب أو الصفحة أثناء الأمر؛ تحقّق من Core قبل المحاولة مجدداً');
+   // The Core command has been acknowledged. A failed follow-up read must
+   // never be represented as proof that Core rejected the command.
+   try{
+    const data=await readPanel('/v1/backtest');
+    if(!writeFresh(mutation))throw new Error('تغيّر نطاق الحساب أو الصفحة بعد إرسال الأمر');
+    publishPanel(serial,data);
+    sendNotice(action==='start'?'أكد Core بدء مهمة الاختبار التاريخي':'أكد Core قبول إلغاء الاختبار');
+   }catch(e){
+    if(!writeFresh(mutation))throw e;
+    sendNotice('أكد Core قبول الأمر، لكن تعذر تحديث حالته: '+String(e),true);
+   }
+  }catch(e){
+   if(writeFresh(mutation))sendNotice('لم يتأكد تنفيذ أمر الاختبار: '+String(e),true);
+   throw e; // The child workspace must not display a false success notice.
+  }finally{finishWrite(mutation)}
+ };
+ const runNewsAction=async(action:'refresh'|'enable'|'disable')=>{
+  if(preview||!hasTauri())throw new Error('التحكم بالمصادر يتطلب تطبيق Windows المتصل');
+  const mutation=beginWrite('news-'+action);
+  if(!mutation)throw new Error('يوجد طلب آخر لم ينتهِ بعد');
+  const serial=panelSerial();
+  try{
+   const result=unwrap(await newsAction(action));
+   if(result.ok!==true)throw new Error('Core لم يؤكد استلام الإجراء');
+   if(!writeFresh(mutation))throw new Error('تغيّر سياق الواجهة أثناء العملية؛ تحقق من الحالة');
+   const data=await readPanel('/v1/news');
+   if(!writeFresh(mutation))throw new Error('تغيّر سياق الواجهة أثناء تحديث الأخبار');
+   if((action==='enable'||action==='disable')&&unwrap(data).enabled!==(action==='enable'))throw new Error('البيانات الجديدة لا تطابق إعداد مصادر الأخبار');
    publishPanel(serial,data);
-   sendNotice(action==='start'?'بدأت مهمة الاختبار التاريخي في Core':'استلم Core طلب إلغاء الاختبار');
-  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
-  finally{finishWrite(mutation)}
+   sendNotice('تم قبول أمر الأخبار وتحديث عرض Core');
+  }catch(e){
+   if(writeFresh(mutation))sendNotice('تعذر تأكيد التحكم بالأخبار: '+String(e),true);
+   throw e;
+  }finally{finishWrite(mutation)}
+ };
+ const runStudioAction=async(action:'run'|'auto_enable'|'auto_disable'|'cancel',timeframe?:string):Promise<unknown>=>{
+  if(preview||!hasTauri())throw new Error('تجارب الاستوديو تتطلب تطبيق Windows المتصل بـCore');
+  const mutation=beginWrite('studio-'+action);
+  if(!mutation)throw new Error('يوجد أمر آخر غير محسوم');
+  const serial=panelSerial();
+  try{
+   const response=unwrap(await studioAction(action,timeframe));
+   if(action==='run'&&!(typeof response.queued==='number'&&Number.isFinite(response.queued)))throw new Error('لم يؤكد Core عدد المهام البحثية');
+   if(action==='cancel'&&response.cancelled!==true)throw new Error('Core لم يؤكد الإلغاء');
+   if(!writeFresh(mutation))throw new Error('تغيّر الحساب أو الصفحة أثناء العملية، راجع حالة Core');
+   const data=unwrap(await readPanel('/v1/studio'));
+   if(!writeFresh(mutation))throw new Error('تغيّر الحساب أو الصفحة أثناء إعادة القراءة');
+   if(action==='auto_enable'||action==='auto_disable'){
+    if(data.auto!==(action==='auto_enable'))throw new Error('حالة التشغيل التلقائي لم تتطابق مع الطلب');
+   }
+   publishPanel(serial,data);
+   return response;
+  }catch(e){
+   if(writeFresh(mutation))sendNotice('تعذر تأكيد أمر الاستوديو: '+String(e),true);
+   throw e;
+  }finally{finishWrite(mutation)}
+ };
+ const runCorrelationAnalyze=async(ids:string[],overlap:number):Promise<unknown>=>{
+  if(preview||!hasTauri())throw new Error('تحليل الارتباط يتطلب Core حقيقياً');
+  const mutation=beginWrite('correlation-analyze');
+  if(!mutation)throw new Error('يوجد أمر تغيير آخر قيد التنفيذ');
+  const serial=panelSerial();
+  try{
+   const reply=unwrap(await correlationAction('analyze',ids,overlap));
+   if(reply.ok!==true||typeof unwrap(reply.summary).id!=='string')throw new Error('Core لم يؤكد حفظ تقرير الارتباط');
+   if(!writeFresh(mutation))throw new Error('تبدّل سياق Core أثناء الدراسة؛ تحقق من التقرير');
+   const fresh=unwrap(await readPanel('/v1/research/correlation'));
+   if(!writeFresh(mutation))throw new Error('تبدّل الحساب أثناء قراءة دراسة الارتباط');
+   if(fresh.research_only!==true||fresh.execution_effect!==false)throw new Error('لم يؤكد Core أن التقرير بحثي فقط');
+   publishPanel(serial,fresh);
+   return reply;
+  }catch(e){
+   if(writeFresh(mutation))sendNotice('تعذر تأكيد تحليل الارتباط: '+String(e),true);
+   throw e;
+  }finally{finishWrite(mutation)}
  };
  // Keep every new page anchored at its header, even after a long scroll.
  // The scroll container is persistent across React route changes.
@@ -910,13 +1004,21 @@ export default function Terminal(){
   finally{finishWrite(mutation)}
  };
  const runSaveBrain=async(brain:string,advisor:boolean,paper:boolean)=>{
-  if(preview||!hasTauri()||!status?.gateway_fresh||!status.telemetry||status.requested_run){sendNotice('أوقف التداول وانتظر اتصال MT5 حديث لإدارة العقول',true);return}
-  const t=status.telemetry;
-  if(t.account_trade_mode!==(t.demo?0:2)){sendNotice('نوع حساب MT5 غير مؤكّد؛ لا يمكن تغيير دور العقل',true);return}
+  if(preview||!hasTauri()||!status?.gateway_fresh||!status.telemetry||status.requested_run!==false){
+   sendNotice('يتطلب تغيير العقل STOP، حساب MT5 حديثاً، وعدم وجود إجراء جارٍ',true);return;
+  }
+  const t=status.telemetry,view=unwrap(pageData);
+  if(t.account_trade_mode!==(t.demo?0:2)){sendNotice('نوع حساب MT5 غير مؤكّد',true);return}
   const context=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
-  const savedContext=String(unwrap(pageData).context||'');
-  if(savedContext!==context){sendNotice('تغيّر الحساب؛ انتظر تحميل صفحة العقول للحساب الحالي',true);return}
-  const mode=String(unwrap(pageData).trading_mode||'');
+  if(view.context!==context||view.account_matches!==true||view.controls_available!==true){
+   sendNotice('بيانات العقول لا تطابق الحساب الحالي؛ حدّث الصفحة قبل أي تغيير',true);return;
+  }
+  const rows=array(view.brains),row=rows.find(r=>String(unwrap(unwrap(r).config).id||'')===brain);
+  const current=unwrap(unwrap(row).control);
+  if(!row||brain==='system'||typeof current.advisor!=='boolean'||typeof current.paper!=='boolean'){
+   sendNotice('العقل أو إعداداته غير موثّقة من Core، لم يُرسل أمر',true);return;
+  }
+  const mode=String(view.trading_mode||'');
   const mutation=beginWrite('brain-control');if(!mutation)return;
   const serial=panelSerial();
   try{
@@ -926,19 +1028,28 @@ export default function Terminal(){
    const ticket=scopedGeneration.current.beginRead('brains');
    const refreshed=unwrap(await readPanel('/v1/execution/brains'));
    if(!writeFresh(mutation))return;
+   const nextRow=array(refreshed.brains).find(r=>String(unwrap(unwrap(r).config).id||'')===brain);
+   const confirmed=unwrap(unwrap(nextRow).control);
+   if(refreshed.context!==context||refreshed.account_matches!==true||
+      String(refreshed.trading_mode)!==mode||confirmed.advisor!==advisor||confirmed.paper!==paper){
+    throw new Error('ردّ Core لا يطابق التغيير المطلوب؛ اقرأ الحالة الفعلية قبل المحاولة مجدداً');
+   }
    publishPanel(serial,refreshed);
    if(scopedGeneration.current.isCurrent(ticket))setBrainReport(refreshed);
-   sendNotice('تم حفظ مشاركة العقل في Core للحساب والوضع الحاليين');
+   sendNotice('تأكد حفظ '+brain+' من قراءة Core: المشاركة '+(advisor?'مفعّلة':'متوقفة')+'، Paper '+(paper?'مفعّل':'متوقف'));
   }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
   finally{finishWrite(mutation)}
  };
  const runPaperAll=async(paper:boolean)=>{
-  if(preview||!hasTauri()||!status?.gateway_fresh||!status.telemetry||status.requested_run){sendNotice('أوقف التداول وانتظر اتصال MT5 حديث لتغيير Paper',true);return}
-  const t=status.telemetry;
-  if(t.account_trade_mode!==(t.demo?0:2)){sendNotice('نوع حساب MT5 غير مؤكّد',true);return}
-  const context=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
-  if(unwrap(pageData).context!==context||unwrap(pageData).account_matches!==true){sendNotice('تغيّر الحساب؛ انتظر تحميل صفحة العقول للحساب الحالي',true);return}
-  const mode=String(unwrap(pageData).trading_mode||'');
+  if(preview||!hasTauri()||!status?.gateway_fresh||!status.telemetry||status.requested_run!==false){
+   sendNotice('أوقف التداول وانتظر اتصال MT5 حديث لتغيير Paper',true);return;
+  }
+  const t=status.telemetry,view=unwrap(pageData),context=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
+  if(t.account_trade_mode!==(t.demo?0:2)||view.context!==context||
+     view.account_matches!==true||view.controls_available!==true){
+   sendNotice('تغيّر حساب MT5 أو لم تصل بيانات العقول المعتمدة',true);return;
+  }
+  const mode=String(view.trading_mode||'');
   const mutation=beginWrite('brain-paper-all');if(!mutation)return;
   const serial=panelSerial();
   try{
@@ -948,9 +1059,14 @@ export default function Terminal(){
    const ticket=scopedGeneration.current.beginRead('brains');
    const refreshed=unwrap(await readPanel('/v1/execution/brains'));
    if(!writeFresh(mutation))return;
+   const rows=array(refreshed.brains).filter(r=>unwrap(unwrap(r).config).id!=='system');
+   if(refreshed.context!==context||refreshed.account_matches!==true||
+      String(refreshed.trading_mode)!==mode||!rows.length||rows.some(r=>unwrap(unwrap(r).control).paper!==paper)){
+    throw new Error('تغييرات Paper الجماعية غير مؤكدة من Core؛ لم نعرض نجاحاً وهمياً');
+   }
    publishPanel(serial,refreshed);
    if(scopedGeneration.current.isCurrent(ticket))setBrainReport(refreshed);
-   sendNotice(paper?'تم تشغيل Paper للعقول في الحساب والوضع الحاليين':'تم إيقاف تجارب Paper الجديدة للعقول؛ التجارب المفتوحة تُسوّى');
+   sendNotice(paper?'تأكد تفعيل Paper لكل العقول لدى Core':'تأكد إيقاف Paper الجديد لكل العقول؛ التجارب السابقة تستمر بالتسوية');
   }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
   finally{finishWrite(mutation)}
  };
@@ -1090,7 +1206,7 @@ export default function Terminal(){
     <div className="account-item broker-select"><label>Broker</label><button className="select-look" onClick={()=>open('settings')}><span className="broker-mark">MT5</span><strong>{account?.connected?'Connected broker':'Not connected'}</strong><span>⌄</span></button></div>
     <div className="account-item server-select"><label>Server</label><button className="select-look" onClick={()=>open('execution')}><strong>{account?.server||'—'}</strong><span>⌄</span></button></div>
     <div className="account-item account-switch"><label>Account · MT5</label><div className="switch-buttons"><span aria-label="حساب الوسيط المتصل فعلياً">{account?(account.demo?'DEMO متصل':'REAL متصل'):'غير متصل'}</span><button type="button" title="فتح إعدادات الربط، وليس تبديل حساب MT5 مباشرة" onClick={()=>open('execution')}>إدارة الربط ↗</button></div></div>
-    {[['Equity',money(account?.equity,currency)],['Balance',money(account?.balance,currency)],['Margin',money(account?.margin,currency)],['Free Margin',money(account?.margin_free,currency)],['Daily P&L',signed(account?.today_net,currency)],['Quote Age',preview?'28 ms':feed.quote?num(feed.quoteAgeMs,0)+' ms':'—']].map(([label,value])=><div key={label} className={'top-stat '+(label==='Daily P&L'?'daily':'')}><label>{label}</label><b>{value}</b></div>)}
+    {[['Equity',money(accountStats?.equity,currency)],['Balance',money(accountStats?.balance,currency)],['Margin',money(accountStats?.margin,currency)],['Free Margin',money(accountStats?.margin_free,currency)],['Daily P&L',signed(accountStats?.today_net,currency)],['Quote Age',preview?'—':feed.quote?num(feed.quoteAgeMs,0)+' ms':'—']].map(([label,value])=><div key={label} className={'top-stat '+(label==='Daily P&L'?'daily':'')}><label>{label}</label><b>{value}</b></div>)}
     <button className="connection-pill" onClick={()=>{if((status?.requested_run||positions.length>0)&&!window.confirm('ستتم إعادة تشغيل جسر MT5. لن تُغلق الصفقات المفتوحة، لكن إدارة خروجها قد تتأخر أثناء الاتصال. تابع فقط عند الضرورة.'))return;void runCommand('reconnect')}} disabled={busy||preview}><span className={'pulse-dot '+(accountFresh?'online':'')}></span><span>{preview?'معاينة':accountFresh?'متصل':'غير متصل'}</span><RefreshCw size={16}/></button>
    </header>
    {preview&&<div className="preview-banner">◈ معاينة التصميم فقط — أرقام وأسعار وصفقات غير حقيقية — لا أوامر مالية <button onClick={changePreview}>الخروج من المعاينة</button></div>}
@@ -1098,11 +1214,11 @@ export default function Terminal(){
    <main className="content">
     {page==='dashboard'?<div className="dashboard">
      <div className="kpi-row concept-kpis">
-      <button type="button" className="kpi" onClick={()=>open('execution')}><div className="kpi-glyph"><BriefcaseBusiness/></div><div className="kpi-copy"><div className="kpi-ar">الرصيد</div><strong>{money(account?.balance,currency)}</strong><div className="kpi-footer">{account?'حساب MT5 الحالي':'الحساب غير متصل'}</div></div></button>
-      <button type="button" className="kpi" onClick={()=>open('reports')}><div className="kpi-glyph"><BarChart3/></div><div className="kpi-copy"><div className="kpi-ar">الأرباح (اليوم)</div><strong>{signed(account?.today_net,currency)}</strong><div className="kpi-footer">نتيجة اليوم من MT5</div></div></button>
+      <button type="button" className="kpi" onClick={()=>open('execution')}><div className="kpi-glyph"><BriefcaseBusiness/></div><div className="kpi-copy"><div className="kpi-ar">الرصيد</div><strong>{money(accountStats?.balance,currency)}</strong><div className="kpi-footer">{account?'حساب MT5 الحالي':'الحساب غير متصل'}</div></div></button>
+      <button type="button" className="kpi" onClick={()=>open('reports')}><div className="kpi-glyph"><BarChart3/></div><div className="kpi-copy"><div className="kpi-ar">الأرباح (اليوم)</div><strong>{signed(accountStats?.today_net,currency)}</strong><div className="kpi-footer">نتيجة اليوم من MT5</div></div></button>
       <button type="button" className="kpi" onClick={()=>open('risk')}><div className="kpi-glyph"><ShieldCheck/></div><div className="kpi-copy"><div className="kpi-ar">المخاطرة للصفقة</div><strong>{!preview&&valid(unwrap(safeConfig?.risk).risk_percent)?num(unwrap(safeConfig?.risk).risk_percent,2)+'%':'—'}</strong><div className="kpi-footer">من إعدادات Core</div></div></button>
       <button type="button" className="kpi" onClick={()=>open('reports')}><div className="kpi-glyph"><Target/></div><div className="kpi-copy"><div className="kpi-ar">نسبة النجاح</div><strong>{valid(win)?num(win,1)+'%':'—'}</strong><div className="kpi-footer">{brokerResults?`${brokerResults.samples} نتيجة Demo مؤهلة`:'لا توجد عينة موثقة كافية'}</div></div></button>
-      <button type="button" className="kpi" onClick={()=>open('journal')}><div className="kpi-glyph"><NotebookTabs/></div><div className="kpi-copy"><div className="kpi-ar">صفقات اليوم</div><strong>{valid(account?.today_deals)?account?.today_deals:'—'}</strong><div className="kpi-footer">من سجل MT5 اليومي</div></div></button>
+      <button type="button" className="kpi" onClick={()=>open('journal')}><div className="kpi-glyph"><NotebookTabs/></div><div className="kpi-copy"><div className="kpi-ar">صفقات اليوم</div><strong>{valid(accountStats?.today_deals)?accountStats?.today_deals:'—'}</strong><div className="kpi-footer">من سجل MT5 اليومي</div></div></button>
       <button type="button" className="kpi" onClick={()=>open('execution')}><div className="kpi-glyph"><Wifi/></div><div className="kpi-copy"><div className="kpi-ar">الاتصال</div><strong>{preview?'معاينة':accountFresh?'متصل':'غير متصل'}</strong><div className="kpi-footer">{account?(account.demo?'MT5 · Demo':'MT5 · Real'):'بانتظار MT5'}</div></div><span className={'concept-led '+(accountFresh&&!preview?'on':'')}/></button>
      </div>
      <div className="hero-grid">
@@ -1124,22 +1240,22 @@ export default function Terminal(){
        <div className="brains-inline">{!preview&&feed.broker&&brainReport?.account_matches===true&&brainReport?.context===JSON.stringify([status?.telemetry?.server,status?.telemetry?.login,status?.telemetry?.symbol,status?.telemetry?.currency])&&array(brainReport?.brains).length?array(brainReport?.brains).slice(0,6).map((brain,i)=>{const activity=unwrap(brain.activity),orders=unwrap(brain.attributed_orders);return <button type="button" className="brain-line brain-link" key={String(unwrap(brain.config).id||i)} onClick={()=>open('brainControl')}><span className="brain-dot"/><span className="brain-name">{String(brain.name||unwrap(brain.config).id||'Brain')}</span><span className="brain-active">إشارات {displayCell(activity.signals)}</span><span className="brain-score">تنفيذ {displayCell(orders.fill_acknowledged)}</span></button>}):<div className="table-empty">{preview?'معاينة: بيانات العقول الحقيقية معطلة':'بانتظار سجل العقول الحقيقي من Core'}</div>}</div>
       </section>
      </div>
-     <section className="panel concept-modes"><div className="panel-title"><b>الأوضاع الأربعة</b><button type="button" onClick={()=>open('trading')}>إدارة الأوضاع ›</button></div><div className="concept-mode-grid">{([['sniper','Sniper','القناص'],['scalping','Scalping','السكالبينغ'],['swing','Swing','الاتجاه المتوسط'],['expert','Expert','المنسق المتكامل']] as const).map(([id,label,description])=>{const selected=preview?id==='sniper':unwrap(safeConfig?.trading).mode===id;return <button type="button" key={id} className={'concept-mode '+(selected?'active':'')} onClick={()=>open(id==='sniper'?'sniper':'trading')} title={'فتح إعدادات '+label}><span className="concept-mode-icon">{id==='sniper'?<Target/>:id==='scalping'?<Zap/>:id==='swing'?<BarChart3/>:<BrainCircuit/>}</span><strong>{label}</strong><small>{description}</small><em>{selected?'الوضع المختار':safeConfig?'غير مختار':'غير معروف'}</em><span>{preview?'صفقات المعاينة':'النتائج الموثقة'} <b>{preview?CONCEPT4_PREVIEW_MODES[id].trades:selected&&brokerResults?brokerResults.samples:'—'}</b></span><span>نسبة النجاح <b>{preview?CONCEPT4_PREVIEW_MODES[id].win.toFixed(1)+'%':selected&&valid(win)?num(win,1)+'%':'—'}</b></span></button>})}</div></section>
-     <section className="panel concept-brains"><div className="panel-title"><b>حالة العقول الذكية</b><button type="button" onClick={()=>open('brainControl')}>عرض الكل ›</button></div><div className="concept-brain-list">{preview?CONCEPT4_PREVIEW_BRAINS.map((brain,i)=><button type="button" key={brain.name} className="concept-brain-preview" onClick={()=>open('brainControl')} title="بيانات تصميم اصطناعية وليست أداء حقيقياً"><BrainCircuit size={19}/><span><b>{brain.name}</b><small>{brain.activity} • معاينة</small></span><span className="concept-preview-meter" aria-hidden="true"><i style={{width:brain.score+'%'}}/></span><strong>{brain.score}%</strong></button>):!preview&&feed.broker&&brainReport?.account_matches===true&&brainReport?.context===JSON.stringify([status?.telemetry?.server,status?.telemetry?.login,status?.telemetry?.symbol,status?.telemetry?.currency])&&array(brainReport?.brains).length?array(brainReport?.brains).slice(0,5).map((brain,i)=>{const control=unwrap(brain.control),activity=unwrap(brain.activity);return <button type="button" key={String(unwrap(brain.config).id||i)} onClick={()=>open('brainControl')}><BrainCircuit size={21}/><span><b>{String(brain.name||unwrap(brain.config).id||'Brain')}</b><small>{control.paper===false?'Paper متوقف':'إشارات مرصودة'}</small></span><strong>{displayCell(activity.signals)}</strong></button>}):<div className="table-empty">{preview?'معاينة التصميم فقط':'بانتظار سجل العقول الحقيقي من Core'}</div>}</div></section>
+     <section className="panel concept-modes"><div className="panel-title"><b>الأوضاع الأربعة</b><button type="button" onClick={()=>open('trading')}>إدارة الأوضاع ›</button></div><div className="concept-mode-grid">{([['sniper','Sniper','القناص'],['scalping','Scalping','السكالبينغ'],['swing','Swing','الاتجاه المتوسط'],['expert','Expert','المنسق المتكامل']] as const).map(([id,label,description])=>{const selected=!preview&&unwrap(safeConfig?.trading).mode===id;return <button type="button" key={id} className={'concept-mode '+(selected?'active':'')} onClick={()=>open(id==='sniper'?'sniper':'trading')} title={'فتح إعدادات '+label}><span className="concept-mode-icon">{id==='sniper'?<Target/>:id==='scalping'?<Zap/>:id==='swing'?<BarChart3/>:<BrainCircuit/>}</span><strong>{label}</strong><small>{description}</small><em>{selected?'الوضع المختار':safeConfig?'غير مختار':'غير معروف'}</em><span>{preview?'بدون بيانات تداول':'النتائج الموثقة'} <b>{selected&&brokerResults?brokerResults.samples:'—'}</b></span><span>نسبة النجاح <b>{selected&&valid(win)?num(win,1)+'%':'—'}</b></span></button>})}</div></section>
+     <section className="panel concept-brains"><div className="panel-title"><b>حالة العقول الذكية</b><button type="button" onClick={()=>open('brainControl')}>عرض الكل ›</button></div><div className="concept-brain-list">{preview?<div className="table-empty">معاينة تصميم فقط — لا نسب تعلّم أو أداء حقيقي بلا Core</div>:!preview&&feed.broker&&brainReport?.account_matches===true&&brainReport?.context===JSON.stringify([status?.telemetry?.server,status?.telemetry?.login,status?.telemetry?.symbol,status?.telemetry?.currency])&&array(brainReport?.brains).length?array(brainReport?.brains).slice(0,5).map((brain,i)=>{const control=unwrap(brain.control),activity=unwrap(brain.activity);return <button type="button" key={String(unwrap(brain.config).id||i)} onClick={()=>open('brainControl')}><BrainCircuit size={21}/><span><b>{String(brain.name||unwrap(brain.config).id||'Brain')}</b><small>{control.paper===false?'Paper متوقف':'إشارات مرصودة'}</small></span><strong>{displayCell(activity.signals)}</strong></button>}):<div className="table-empty">{preview?'معاينة التصميم فقط':'بانتظار سجل العقول الحقيقي من Core'}</div>}</div></section>
      <div className="activity-grid">
-      <section className="panel positions-panel"><div className="panel-title"><b>المراكز النشطة</b><div className="microtabs">{(['all','buy','sell'] as const).map(k=><button className={filter===k?'chosen':''} key={k} onClick={()=>setFilter(k)}>{k==='all'?`الكل (${account?positions.length:'—'})`:k==='buy'?'شراء':'بيع'}</button>)}</div></div><div className="table-scroll"><table><thead><tr>{['#','الرمز','النوع','الحجم','سعر الدخول','السعر الحالي','الربح / الخسارة','الإجراء'].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{visiblePositions.length?visiblePositions.map(p=><tr key={p.ticket}><td>{p.ticket}</td><td>{p.symbol}</td><td className={up(p.side)?'teal':'red'}>{p.side}</td><td>{num(p.volume,2)}</td><td>{num(p.price_open)}</td><td>{num(p.price_current)}</td><td className={p.profit>=0?'teal':'red'}>{signed(p.profit,currency)}</td><td><button className="row-action" onClick={()=>open('execution')}>التفاصيل ›</button></td></tr>):<tr><td colSpan={8} className="empty-row">لا توجد مراكز MT5 حالياً أو المصدر غير متاح</td></tr>}</tbody></table></div></section>
+      <section className="panel positions-panel"><div className="panel-title"><b>المراكز النشطة</b><div className="microtabs">{(['all','buy','sell'] as const).map(k=><button className={filter===k?'chosen':''} key={k} onClick={()=>setFilter(k)}>{k==='all'?`الكل (${accountStats?positions.length:'—'})`:k==='buy'?'شراء':'بيع'}</button>)}</div></div><div className="table-scroll"><table><thead><tr>{['#','الرمز','النوع','الحجم','سعر الدخول','السعر الحالي','الربح / الخسارة','الإجراء'].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{visiblePositions.length?visiblePositions.map(p=><tr key={p.ticket}><td>{p.ticket}</td><td>{p.symbol}</td><td className={up(p.side)?'teal':'red'}>{p.side}</td><td>{num(p.volume,2)}</td><td>{num(p.price_open)}</td><td>{num(p.price_current)}</td><td className={p.profit>=0?'teal':'red'}>{signed(p.profit,currency)}</td><td><button className="row-action" onClick={()=>open('execution')}>التفاصيل ›</button></td></tr>):<tr><td colSpan={8} className="empty-row">لا توجد مراكز MT5 حالياً أو المصدر غير متاح</td></tr>}</tbody></table></div></section>
       <DashboardTradeFeed status={!preview&&feed.broker?status:null} read={dashboardRead} scope={contextKey} now={Date.now()} preview={preview} onJournal={()=>open('journal')}/>
      </div>
      <div className="bottom-grid">
-      <section className="panel equity-history"><div className="panel-title"><b>أداء الحساب</b><small>رصيد • حقوق ملكية • تراجع</small></div><div className="equity-placeholder">{preview?<div className="decor-lines">╱╲╱╲╱╲╱╱╲╱╲╱</div>:<>غير متاح: تاريخ Equity الموثق غير محمّل <button onClick={()=>open('reports')}>عرض السجلات</button></>}</div></section>
-      <section className="panel trade-distribution"><div className="panel-title"><b>توزيع الصفقات</b><button onClick={()=>open('journal')}>السجلات ›</button></div><div className="distribution-body"><div className="large-donut"><strong>{preview?'450':brokerResults?.samples??'—'}</strong><small>{preview?'صفقة تجريبية':'Demo مغلقة'}</small></div><div className="dist-legend"><span>رابحة <b className="teal">{preview?'342':brokerResults?.wins??'—'}</b></span><span>خاسرة <b className="red">{preview?'108':brokerResults?.losses??'—'}</b></span></div></div></section>
+      <section className="panel equity-history"><div className="panel-title"><b>أداء الحساب</b><small>رصيد • حقوق ملكية • تراجع</small></div><div className="equity-placeholder"><>لا يوجد منحنى Equity موثق من Core حتى الآن. <button onClick={()=>open('reports')}>عرض التقارير الفعلية</button></></div></section>
+      <section className="panel trade-distribution"><div className="panel-title"><b>توزيع الصفقات</b><button onClick={()=>open('journal')}>السجلات ›</button></div><div className="distribution-body"><div className="large-donut"><strong>{preview?'—':brokerResults?.samples??'—'}</strong><small>{preview?'لا بيانات فعلية':'صفقات Demo مغلقة موثقة'}</small></div><div className="dist-legend"><span>رابحة <b className="teal">{preview?'—':brokerResults?.wins??'—'}</b></span><span>خاسرة <b className="red">{preview?'—':brokerResults?.losses??'—'}</b></span></div></div></section>
       <DashboardExecutionQuality status={!preview&&feed.broker?status:null} read={dashboardRead} scope={contextKey} now={Date.now()} preview={preview} onExecution={()=>open('execution')}/>
       <section className="panel sys-alerts"><div className="panel-title"><b>إشعارات النظام</b><button onClick={()=>open('events')}>عرض الكل ›</button></div><div className="alerts-list"><div>{status?.message||'بانتظار حالة Rust Core...'}</div><div>{status?.telegram_status||'Telegram: غير متاح'}</div><div>{preview?'Design preview — sample signals':trustworthy?'MT5 snapshot verified':'لم يصل تحديث MT5 حديث'}</div></div></section>
-      <section className="panel risk-stats"><div className="panel-title"><b>مقاييس المخاطر</b></div><div className="risk-bars">{[['Free Margin',account?.margin_free],['Drawdown',drawdown],['Position count',account?positions.length:null],['Risk limit',safeConfig?unwrap(safeConfig.risk).risk_percent:null]].map(([label,value],i)=><div className="risk-line" key={String(label)}><span>{String(label)}</span><div className="risk-meter"><i style={{width:valid(value)?`${Math.min(100,Math.abs(Number(value))*(i===0?.002:10))}%`:'0%'}}/></div><strong>{valid(value)?num(value,2):'—'}</strong></div>)}</div></section>
+      <section className="panel risk-stats"><div className="panel-title"><b>مقاييس المخاطر</b></div><div className="risk-bars">{[['الهامش الحر',account?.margin_free,currency],['أقصى تراجع حالي',drawdown,'%'],['عدد المراكز المفتوحة',accountStats?positions.length:null,'مركز'],['المخاطرة المضبوطة للصفقة',safeConfig?unwrap(safeConfig.risk).risk_percent:null,'%']].map(([label,value,unit])=><div className="risk-line" key={String(label)}><span>{String(label)}</span><strong>{valid(value)?num(value,2)+' '+String(unit):'غير متاح من المصدر'}</strong></div>)}</div></section>
      </div>
     </div>:<section className={'subpage subpage-'+page}>
-      <div className="subpage-header"><div className="sub-heading"><div className="sub-glyph"><PageIcon size={32}/></div><div><small>{pageMeta.en.toUpperCase()} • V4 RUST CORE</small><h1>{page==='brainControl'?'إعدادات العقول':pageMeta.title}</h1><p>{page==='risk'?'تحكم في مخاطر التداول وإعدادات حماية رأس المال':page==='brainControl'||page==='brains'?'إدارة العقول الذكية للتداول والتحليل':'صفحة تفاعلية مرتبطة بمحرك V4، والبيانات تُعرض فقط إذا وصلت من مصدر فعلي.'}</p></div></div>{page==='brainControl'||page==='brains'?<div className="concept-brains-toolbar"><SoloOperations key={viewScope} status={!preview&&feed.broker?status:null} source={pageData} disabled={busy||preview||!hasTauri()} armed={status?.requested_run===true} onSet={runSolo}/><PaperAllControl source={pageData} disabled={busy||preview||!hasTauri()} armed={status?.requested_run===true} onSet={runPaperAll}/><button type="button" disabled={busy||preview||!hasTauri()} onClick={()=>void runSnapshotExport()}><Database size={16}/> حفظ جميع العقول</button><button type="button" disabled={busy||preview||!hasTauri()} onClick={()=>void runSnapshotImport()}>تحميل نسخة العقول</button></div>:page==='risk'?<button type="button" className="concept-risk-connection" onClick={()=>open('execution')}><ShieldCheck size={25}/><span><b>{preview?'معاينة فقط':accountFresh?'حساب MT5 متصل':'حالة الحساب غير مؤكدة'}</b><small>{preview?'بيانات توضيحية غير حقيقية':account?account.demo?'حساب تجريبي DEMO':'حساب حقيقي REAL':'بانتظار اتصال الوسيط'}</small></span></button>:<ConnectionLine connectedNow={trustworthy} preview={preview}/>}</div>
-      {page==='risk'?<div className="concept-risk-kpis"><article><BriefcaseBusiness/><div><small>رصيد الحساب</small><strong>{money(account?.balance,currency)}</strong><span>من حساب MT5</span></div></article><article><BarChart3/><div><small>نتيجة اليوم</small><strong>{signed(account?.today_net,currency)}</strong><span>من حساب MT5</span></div></article><article><ShieldCheck/><div><small>السحب الحالي</small><strong>{valid(drawdown)?num(drawdown,1)+'%':'—'}</strong><span>{preview?'بيانات معاينة':'غير متاح دون سجل موثق'}</span></div></article><article><Activity/><div><small>المراكز المفتوحة</small><strong>{account?positions.length:'—'}</strong><span>من الحساب المتصل</span></div></article><article><Target/><div><small>المخاطرة للصفقة</small><strong>{!preview&&valid(unwrap(safeConfig?.risk).risk_percent)?num(unwrap(safeConfig?.risk).risk_percent,2)+'%':'—'}</strong><span>من إعدادات Core</span></div></article></div>:<div className="subpage-stats"><article><small>EQUITY</small><strong>{money(account?.equity,currency)}</strong><span>رأس المال في الحساب</span></article><article><small>DAILY P&L</small><strong className="teal">{signed(account?.today_net,currency)}</strong><span>نتيجة جلسة MT5</span></article><article><small>POSITIONS</small><strong>{account?positions.length:'—'}</strong><span>المراكز المفتوحة</span></article><article><small>ACCOUNT</small><strong>{account?.demo?'DEMO':account?'REAL':'OFFLINE'}</strong><span>حالة الاتصال بالوسيط</span></article></div>}
+      <div className="subpage-header"><div className="sub-heading"><div className="sub-glyph"><PageIcon size={32}/></div><div><small>{pageMeta.en.toUpperCase()} • V4 RUST CORE</small><h1>{page==='brainControl'?'إعدادات العقول':pageMeta.title}</h1><p>{PAGE_GUIDE[page].purpose}</p><details className="page-help-guide"><summary>شلون أستخدم هاي الصفحة؟</summary><p>{PAGE_GUIDE[page].step}</p></details></div></div>{page==='brainControl'||page==='brains'?<div className="concept-brains-toolbar"><SoloOperations key={viewScope} status={!preview&&feed.broker?status:null} source={pageData} disabled={busy||preview||!hasTauri()} armed={status?.requested_run===true} onSet={runSolo}/><PaperAllControl source={pageData} disabled={busy||preview||!hasTauri()} armed={status?.requested_run===true} onSet={runPaperAll}/><button type="button" disabled={busy||preview||!hasTauri()} onClick={()=>void runSnapshotExport()}><Database size={16}/> حفظ جميع العقول</button><button type="button" disabled={busy||preview||!hasTauri()} onClick={()=>void runSnapshotImport()}>تحميل نسخة العقول</button></div>:page==='risk'?<button type="button" className="concept-risk-connection" onClick={()=>open('execution')}><ShieldCheck size={25}/><span><b>{preview?'معاينة فقط':accountFresh?'حساب MT5 متصل':'حالة الحساب غير مؤكدة'}</b><small>{preview?'بيانات توضيحية غير حقيقية':account?account.demo?'حساب تجريبي DEMO':'حساب حقيقي REAL':'بانتظار اتصال الوسيط'}</small></span></button>:<ConnectionLine connectedNow={trustworthy} preview={preview}/>}</div>
+      {page==='risk'?<div className="concept-risk-kpis"><article><BriefcaseBusiness/><div><small>رصيد الحساب</small><strong>{money(accountStats?.balance,currency)}</strong><span>من حساب MT5</span></div></article><article><BarChart3/><div><small>نتيجة اليوم</small><strong>{signed(accountStats?.today_net,currency)}</strong><span>من حساب MT5</span></div></article><article><ShieldCheck/><div><small>السحب الحالي</small><strong>{valid(drawdown)?num(drawdown,1)+'%':'—'}</strong><span>{preview?'بيانات معاينة':'غير متاح دون سجل موثق'}</span></div></article><article><Activity/><div><small>المراكز المفتوحة</small><strong>{accountStats?positions.length:'—'}</strong><span>من الحساب المتصل</span></div></article><article><Target/><div><small>المخاطرة للصفقة</small><strong>{!preview&&valid(unwrap(safeConfig?.risk).risk_percent)?num(unwrap(safeConfig?.risk).risk_percent,2)+'%':'—'}</strong><span>من إعدادات Core</span></div></article></div>:<div className="subpage-stats"><article><small>EQUITY</small><strong>{money(accountStats?.equity,currency)}</strong><span>رأس المال في الحساب</span></article><article><small>DAILY P&L</small><strong className="teal">{signed(accountStats?.today_net,currency)}</strong><span>نتيجة جلسة MT5</span></article><article><small>POSITIONS</small><strong>{accountStats?positions.length:'—'}</strong><span>المراكز المفتوحة</span></article><article><small>ACCOUNT</small><strong>{account?.demo?'DEMO':account?'REAL':'OFFLINE'}</strong><span>حالة الاتصال بالوسيط</span></article></div>}
       <div className="subpage-layout">
       <section className="panel subpage-primary"><div className="panel-title"><b>{pageMeta.title} — بيانات وتشغيل</b><button onClick={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}} disabled={!pageMeta.route||preview||page==='journal'||page==='reports'}>تحديث ↻</button></div>
         {page==='risk'?<div className="feature-zone">
@@ -1148,36 +1264,57 @@ export default function Terminal(){
              monitor={safeRiskSnapshot} portfolio={unwrap(portfolioReport).portfolio} armed={status?.requested_run===true}
              disabled={busy||preview} onSavePortfolio={runSavePortfolio}/></div>
           <div className="concept-risk-daily"><DailyRiskOperations status={!preview&&feed.broker?status:null} monitor={safeRiskSnapshot} preview={preview}/></div>
-          <div className="concept-risk-extra"><PositionProtectionOperations key={contextKey} status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} onSet={runPositionProtection}/><h3>الإغلاق الطارئ للحساب</h3><div><label><input type="checkbox" disabled/> إغلاق كل الصفقات للطوارئ (Kill Switch)</label></div><p>الإغلاق الشامل للحساب غير متاح بعد؛ STOP يوقف الدخول الجديد ولا يغلق المراكز.</p></div></div>
-          <DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/risk/monitor')}/>
+          <div className="concept-risk-extra"><PositionProtectionOperations key={contextKey} status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} onSet={runPositionProtection}/><h3>حماية المراكز في الطوارئ</h3><p>ميزة إغلاق كل مراكز الحساب بضغطة واحدة غير مدعومة في Core حالياً، لذلك لا يوجد زر يوهمك بتنفيذها. زر STOP يوقف فتح الصفقات الجديدة فقط.</p><button type="button" onClick={()=>open('positions')}>عرض المراكز الفعلية</button></div></div>
+          <details className="operator-advanced"><summary>بيانات Core التفصيلية — افتحها عند التشخيص</summary><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/risk/monitor')}/></details>
          </div>:
-        page==='settings'||page==='telegram'?<div className="editor-panel"><p>إعدادات V4 المحفوظة محلياً لدى Rust Core — لا تُعرض بيانات Telegram السرية.</p>
-           <label>مسار MT5 Terminal64.exe<input value={String(activeSettingsEdit?.mt5_path||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('mt5_path',e.target.value)}/></label>
-           <label>رمز التداول<input value={String(activeSettingsEdit?.symbol||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('symbol',e.target.value)}/></label>
-           <label>Telegram Chat ID<input value={String(activeSettingsEdit?.telegram_chat_id||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('telegram_chat_id',e.target.value)}/></label>
-           <label>Telegram User ID<input value={String(activeSettingsEdit?.telegram_user_id||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('telegram_user_id',e.target.value)}/></label>
-           <label>Bot token (اكتب فقط عند الاستبدال)<input type="password" value={activeTelegramToken} disabled={!activeSettingsEdit||busy||preview} autoComplete="new-password" onChange={e=>{setTelegramDraftScope(draftAccountKey);setTelegramToken(e.target.value)}}/></label>
-           <label className="check-label"><input type="checkbox" checked={Boolean(activeSettingsEdit?.telegram_enabled)} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('telegram_enabled',e.target.checked)}/>تفعيل تنبيهات Telegram</label>
-           <label className="check-label"><input type="checkbox" disabled={!activeSettingsEdit||busy||preview} checked={activeClearTelegram} onChange={e=>{setTelegramDraftScope(draftAccountKey);setClearTelegram(e.target.checked)}}/>حذف رمز Telegram المحفوظ</label>
-           {settingsStale&&<p className="safe-note">تغيّرت الإعدادات المحفوظة؛ المسودة باقية، ولن تُحفظ حتى تراجعها.</p>}
-           {settingsStale&&<button disabled={!safeConfig||busy} onClick={()=>{if(safeConfig){setSettingsEdit(safeConfig);settingsSource.current=JSON.stringify(safeConfig);settingsDirty.current=false;setSettingsStale(false)}}}>استرجاع الإعدادات المحفوظة</button>}
-           <button className="save-button" disabled={busy||preview||!activeSettingsEdit} onClick={()=>void saveGeneral()}>حفظ وإعادة ربط MT5</button>
-          </div>:
-        page==='trading'||page==='sniper'?<div className="feature-zone">{page==='trading'&&<ConceptMarketDesk key={draftAccountKey+':'+String(preview)} account={account??null} status={status} accountMatches={!!account&&unwrap(portfolioReport).account_matches===true&&typeof unwrap(unwrap(portfolioReport).risk_master).enabled==='boolean'&&unwrap(portfolioReport).context===JSON.stringify([account.server,account.login,account.symbol,account.currency])} quoteFresh={feed.quote} preview={preview} busy={busy} native={hasTauri()} frame={chartFrame} onFrameChange={setChartFrame} theme={theme} market={chartMarket} frameMeta={extraChart.meta} open={open} onTradingSettings={()=>document.querySelector('[aria-label="Coordinator and costs"]')?.scrollIntoView({behavior:"smooth",block:"start"})} onStart={requestStart} onStop={requestStop} onClose={profitOnly=>void runCloseOwned(profitOnly)} onCloseTicket={ticket=>void runCloseOwned(false,ticket)} onManual={input=>void runManualMarket(input)} onCancelPending={order=>void runCancelPending(order)} pendingCancellations={unwrap(portfolioReport).pending_cancellations}/>}<div className="live-indicator"><strong>Sniper Priority</strong><span>{display?.analysis?.regime||'UNAVAILABLE'}</span><b>{display?.analysis?.action||'WAIT'}</b></div><p>العقل المنفّذ الوحيد يختاره Core، وأي تبديل أثناء التشغيل يحتاج أوامر MT5 مُسوّاة وعدم وجود مراكز مفتوحة.</p>{page==='sniper'&&<><QuoteClockEvidence status={status} preview={preview}/><SniperDiagnosis key={viewScope} status={status} preview={preview}/><SniperTickEvidence status={!preview&&feed.broker?status:null} report={activeSniperAudit} preview={preview} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperTickAudit');void readPanel('/v1/execution/sniper-tick-audit').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:null})})}}/><SniperFrozenOperations status={!preview&&feed.broker?status:null} page={pageData} report={activeSniperFrozen} preview={preview} disabled={busy} onAction={runFrozenSniper} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperFrozen');void readPanel('/v1/execution/frozen-sniper').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperFrozenSlot({scope:viewScope,report:null})})}}/><SniperClassicOperations status={!preview&&feed.broker?status:null} page={pageData} report={activeClassicFrozen} preview={preview} disabled={busy} onAction={runFrozenClassic} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('classicFrozen');void readPanel('/v1/execution/frozen-classic').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setClassicFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setClassicFrozenSlot({scope:viewScope,report:null})})}}/></>}<ReconciliationDiagnostics key={viewScope} preview={preview}/><TradingSettingsOperations source={pageData} brokerPoint={status?.telemetry?.point} key={JSON.stringify([page,draftAccountKey,preview])} disabled={busy||preview||!feed.broker} armed={status?.requested_run===true} apply={runSaveTrading}/><div className="quick-ops"><button disabled={busy||preview} onClick={()=>void runHandoff(true)}>تفعيل أولوية القناص</button><button disabled={busy||preview} onClick={()=>void runHandoff(false)}>تحويل التنفيذ للبديل</button></div><div className="safe-note">هذه الأزرار تستدعي قواعد التحويل الفعلية في Rust؛ لا يوجد تجاوز لفحوصات المحرك.</div><EnterpriseSupervisor preview={preview} key={contextKey} armed={status?.requested_run===true} onSave={runSaveSupervisor}/><Table rows={rows}/></div>:
+        page==='settings'||page==='telegram'?<div className="editor-panel operator-settings-page">
+          <div className="operator-settings-intro"><h3>{page==='telegram'?'تنبيهات Telegram':'الإعدادات العامة وربط MT5'}</h3>
+           <p>{page==='telegram'?'إعدادات الإشعارات العربية. لا يُعرض رمز البوت المحفوظ؛ اكتب رمزاً جديداً فقط عند تغييره.':'هذه الإعدادات تُحفظ لدى Rust Core وتخص ربط المنصة والرمز. إعدادات التداول والعمولة في مركز التداول.'}</p>
+           <span>{preview?'معاينة فقط':activeSettingsEdit?'تم تحميل إعدادات Core':'بانتظار الإعدادات المحفوظة'}</span>
+          </div>
+          {page==='settings'?<>
+           <label>المسار الكامل لبرنامج MT5 Terminal64.exe<input aria-label="مسار MT5" value={String(activeSettingsEdit?.mt5_path||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('mt5_path',e.target.value)}/></label>
+           <label>رمز الذهب كما يظهر عند الوسيط (مثلاً XAUUSD أو XAUUSDm)<input aria-label="رمز MT5" value={String(activeSettingsEdit?.symbol||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('symbol',e.target.value)}/></label>
+           <p className="safe-note">الرمز يجب أن يطابق اسم الأداة عند الوسيط تماماً. تغيير مسار MT5 أو الرمز قد يؤدي إلى إعادة ربط Gateway؛ استخدم STOP أولاً.</p>
+           <div className="quick-ops"><button type="button" onClick={()=>open('execution')}>فحص ربط حساب MT5</button><button type="button" onClick={()=>open('telegram')}>إعدادات Telegram</button></div>
+          </>:<>
+           <div className="operator-measures"><div className="operator-measure"><small>إرسال التنبيهات</small><b>{activeSettingsEdit?activeSettingsEdit.telegram_enabled===true?'مفعّل':'متوقف':'غير معروف'}</b><span>حالة الإعداد المحفوظ</span></div><div className="operator-measure"><small>حالة المرسل لدى Core</small><b>{preview?'معاينة':status?.telegram_status||'غير متاحة'}</b><span>آخر حالة مستلمة، ليست اختبار رسالة فعلية</span></div></div>
+           <label>Telegram Chat ID<input aria-label="Telegram Chat ID" value={String(activeSettingsEdit?.telegram_chat_id||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('telegram_chat_id',e.target.value)}/></label>
+           <label>Telegram User ID<input aria-label="Telegram User ID" value={String(activeSettingsEdit?.telegram_user_id||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('telegram_user_id',e.target.value)}/></label>
+           <label>Bot Token — اكتب رمزاً جديداً عند الاستبدال فقط<input aria-label="Telegram Bot Token" type="password" value={activeTelegramToken} disabled={!activeSettingsEdit||busy||preview} autoComplete="new-password" onChange={e=>{setTelegramDraftScope(draftAccountKey);setTelegramToken(e.target.value)}}/></label>
+           <label className="check-label"><input type="checkbox" checked={Boolean(activeSettingsEdit?.telegram_enabled)} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('telegram_enabled',e.target.checked)}/>تفعيل إرسال تنبيهات Telegram</label>
+           <label className="check-label"><input type="checkbox" disabled={!activeSettingsEdit||busy||preview} checked={activeClearTelegram} onChange={e=>{setTelegramDraftScope(draftAccountKey);setClearTelegram(e.target.checked)}}/>حذف رمز البوت المحفوظ عند الحفظ</label>
+           <p className="safe-note">التغيير في الخانات لا يُرسل شيئاً حتى تضغط حفظ. تفعيل الخدمة لا يثبت وصول الرسائل؛ افحص الحالة الفعلية والرسائل داخل التطبيق.</p>
+           <button type="button" onClick={()=>open('settings')}>الرجوع للإعدادات العامة</button>
+          </>}
+          {settingsStale&&<p className="safe-note" role="alert">تغيّرت إعدادات Core أثناء التعديل. المسودة باقية، لكن الحفظ مقفل حتى تعيد قراءتها.</p>}
+          {settingsStale&&<button type="button" disabled={!safeConfig||busy} onClick={()=>{if(safeConfig){setSettingsEdit(safeConfig);settingsSource.current=JSON.stringify(safeConfig);settingsDirty.current=false;setSettingsStale(false)}}}>استرجاع أحدث إعدادات Core</button>}
+          <button type="button" className="save-button" disabled={busy||preview||!activeSettingsEdit||settingsStale||status?.requested_run===true} onClick={()=>void saveGeneral()}>{page==='telegram'?'حفظ إعدادات Telegram لدى Core':'حفظ إعدادات MT5 وإعادة الربط'}</button>
+          {status?.requested_run===true&&<p className="safe-note">أوقف START قبل تعديل الإعدادات. الخانات الحالية لا تغيّر التداول النشط.</p>}
+         </div>:
+         page==='trading'||page==='sniper'?<div className="feature-zone">{page==='trading'&&<ConceptMarketDesk key={draftAccountKey+':'+String(preview)} account={account??null} status={status} accountMatches={!!account&&unwrap(portfolioReport).account_matches===true&&typeof unwrap(unwrap(portfolioReport).risk_master).enabled==='boolean'&&unwrap(portfolioReport).context===JSON.stringify([account.server,account.login,account.symbol,account.currency])} quoteFresh={feed.quote} preview={preview} busy={busy} native={hasTauri()} frame={chartFrame} onFrameChange={setChartFrame} theme={theme} market={chartMarket} frameMeta={extraChart.meta} open={open} onTradingSettings={()=>document.querySelector('[aria-label="Coordinator and costs"]')?.scrollIntoView({behavior:"smooth",block:"start"})} onStart={requestStart} onStop={requestStop} onClose={profitOnly=>void runCloseOwned(profitOnly)} onCloseTicket={ticket=>void runCloseOwned(false,ticket)} onManual={input=>void runManualMarket(input)} onCancelPending={order=>void runCancelPending(order)} pendingCancellations={unwrap(portfolioReport).pending_cancellations}/>}<div className="live-indicator"><strong>Sniper Priority</strong><span>{display?.analysis?.regime||'UNAVAILABLE'}</span><b>{display?.analysis?.action||'WAIT'}</b></div><p>العقل المنفّذ الوحيد يختاره Core، وأي تبديل أثناء التشغيل يحتاج أوامر MT5 مُسوّاة وعدم وجود مراكز مفتوحة.</p>{page==='sniper'&&<><QuoteClockEvidence status={status} preview={preview}/><SniperDiagnosis key={viewScope} status={status} preview={preview}/><SniperTickEvidence status={!preview&&feed.broker?status:null} report={activeSniperAudit} preview={preview} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperTickAudit');void readPanel('/v1/execution/sniper-tick-audit').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperAuditSlot({scope:viewScope,report:null})})}}/><SniperFrozenOperations status={!preview&&feed.broker?status:null} page={pageData} report={activeSniperFrozen} preview={preview} disabled={busy} onAction={runFrozenSniper} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('sniperFrozen');void readPanel('/v1/execution/frozen-sniper').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setSniperFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setSniperFrozenSlot({scope:viewScope,report:null})})}}/><SniperClassicOperations status={!preview&&feed.broker?status:null} page={pageData} report={activeClassicFrozen} preview={preview} disabled={busy} onAction={runFrozenClassic} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('classicFrozen');void readPanel('/v1/execution/frozen-classic').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setClassicFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setClassicFrozenSlot({scope:viewScope,report:null})})}}/></>}<ReconciliationDiagnostics key={viewScope} preview={preview}/><TradingSettingsOperations source={pageData} brokerPoint={status?.telemetry?.point} key={JSON.stringify([page,draftAccountKey,preview])} disabled={busy||preview||!feed.broker} armed={status?.requested_run===true} apply={runSaveTrading}/><div className="quick-ops"><button disabled={busy||preview} onClick={()=>void runHandoff(true)}>تفعيل أولوية القناص</button><button disabled={busy||preview} onClick={()=>void runHandoff(false)}>تحويل التنفيذ للبديل</button></div><div className="safe-note">هذه الأزرار تستدعي قواعد التحويل الفعلية في Rust؛ لا يوجد تجاوز لفحوصات المحرك.</div><EnterpriseSupervisor preview={preview} key={contextKey} armed={status?.requested_run===true} onSave={runSaveSupervisor}/><Table rows={rows}/></div>:
         page==='execution'?<div className="feature-zone"><ExecutionBindingOperations source={pageData} key={viewScope} telemetry={status?.telemetry??null} ready={!preview&&trustworthy} armed={status?.requested_run===true} disabled={busy||preview} onBind={runBrokerBind}/>
         <ExecutionQualityOperations status={!preview&&feed.broker?status:null} report={executionQuality} disabled={preview||busy}
           onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('executionQuality');void readPanel('/v1/execution/quality').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setExecutionQuality(unwrap(v))}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setExecutionQuality(null)})}}/>
         <ModeEvidenceOperations status={!preview&&feed.broker?status:null} report={modeEvidence} disabled={preview||busy}
           onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('modeEvidence');void readPanel('/v1/execution/mode-evidence').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setModeEvidence(unwrap(v))}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setModeEvidence(null)})}}/>
-        <p className="safe-note">لا يعني الربط أن النظام جاهز للتداول؛ START يحتاج تأكيد Core وباقي شروط المنسق والمخاطر. STOP لا يغلق المراكز.</p><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/execution')}/></div>:
-        page==='backtest'?<div className="feature-zone"><BacktestOperations key={viewScope} disabled={busy||preview} active={['loading','running'].includes(String(unwrap(pageData).phase||unwrap(unwrap(pageData).job).phase||''))} onStart={r=>runBacktest('start',r)} onCancel={()=>runBacktest('cancel')}/><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/backtest')}/></div>:
-        page==='backups'?<div className="feature-zone"><BackupOperations disabled={busy||preview||!hasTauri()} armed={status?.requested_run===true} source={pageData} create={()=>runBackup('create')} exportBrain={runSnapshotExport} importBrain={runSnapshotImport} onRestore={chooseSnapshotRestore}/><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/backups')}/></div>:
+        <p className="safe-note">لا يعني الربط أن النظام جاهز للتداول؛ START يحتاج تأكيد Core وباقي شروط المنسق والمخاطر. STOP لا يغلق المراكز.</p><details className="operator-advanced"><summary>بيانات Core التفصيلية — افتحها عند التشخيص</summary><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/execution')}/></details></div>:
+        page==='backtest'?<div className="feature-zone"><BacktestWorkspace key={viewScope} source={pageData} disabled={busy||preview||!hasTauri()} armed={status?.requested_run===true} onStart={r=>runBacktest('start',r)} onCancel={()=>runBacktest('cancel')} onRefresh={()=>refreshCurrentPanel('/v1/backtest')} onEvaluation={()=>open('evaluation')}/></div>:
+        page==='evaluation'?<div className="feature-zone"><EvaluationWorkspace key={viewScope} source={pageData} disabled={busy||preview||!hasTauri()} onRefresh={()=>refreshCurrentPanel('/v1/evaluation')} onBacktest={()=>open('backtest')}/></div>:
+        page==='backups'?<div className="feature-zone"><BackupOperations disabled={busy||preview||!hasTauri()} armed={status?.requested_run===true} source={pageData} create={()=>runBackup('create')} exportBrain={runSnapshotExport} importBrain={runSnapshotImport} onRestore={chooseSnapshotRestore}/><details className="operator-advanced"><summary>بيانات Core التفصيلية — افتحها عند التشخيص</summary><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/backups')}/></details></div>:
         page==='journal'?<div className="feature-zone"><TradeJournalOperations key={viewScope} status={!preview&&feed.broker?status:null} scope={contextKey} preview={preview}/></div>:
         page==='reports'?<div className="feature-zone"><BrokerReportOperations key={viewScope} status={!preview&&feed.broker?status:null} scope={contextKey} preview={preview} onJournal={()=>open('journal')}/></div>:
-        page==='learning'?<div className="feature-zone"><LearningAccountOperations key={viewScope} status={!preview&&feed.broker?status:null} scope={contextKey} preview={preview}/><h3>السجل البحثي العام — لا يمثل الحساب الحالي وحده</h3><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/learning')}/></div>:
-        page==='positions'?<div className="feature-zone"><h3>مراكز MT5 الحالية</h3><Table rows={account?positions.map(p=>({...p})):[]} empty="لا توجد مراكز موثقة"/></div>:
+        page==='learning'?<div className="feature-zone"><LearningAccountOperations key={viewScope} status={!preview&&feed.broker?status:null} scope={contextKey} preview={preview}/><h3>السجل البحثي العام — لا يمثل الحساب الحالي وحده</h3><details className="operator-advanced"><summary>بيانات Core التفصيلية — افتحها عند التشخيص</summary><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/learning')}/></details></div>:
+        page==='positions'?<div className="feature-zone"><PositionsOperatorWorkspace key={viewScope} positions={account?positions:[]} currency={currency} accountAvailable={!preview&&feed.broker&&!!account} onTrading={()=>open('trading')}/></div>:
         page==='brains'||page==='brainControl'?<div className="feature-zone"><BrainControlsOperations source={pageData} disabled={busy||preview} armed={status?.requested_run===true} onSave={runSaveBrain}/><FrozenCoordinatorOperations status={!preview&&feed.broker?status:null} source={activeFrozenCoordinator} currentMode={unwrap(pageData).trading_mode} brainContext={unwrap(pageData).context} armed={status?.requested_run===true} disabled={busy||preview} onAction={runFrozenCoordinator} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('frozenCoordinator');void readPanel('/v1/execution/frozen-coordinator').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setFrozenSlot({scope:viewScope,report:null})})}}/><p className="data-description">P1-A: نسب النجاح تظهر فقط بعد 30 نتيجة مغلقة موثّقة من MT5 DEMO بعد العمولة والسواب والرسوم، ومحددة بالعقل ووضع التداول. نتائج الورق ليست صفقات وسيط؛ لا توجد ترقية تلقائية ولا اعتماد على REAL.</p><Table rows={preview?[]:array(unwrap(pageData).brains).map(b=>({brain:b.name,checks:unwrap(b.activity).checks,signals:unwrap(b.activity).signals,broker_orders:unwrap(b.attributed_orders).requested,broker_fills:unwrap(b.attributed_orders).fill_acknowledged,paper_closed:unwrap(b.paper_stats).closed,verified_demo_closes:unwrap(unwrap(b.integrity).broker_evidence).sample_count,evidence_state:unwrap(unwrap(b.integrity).broker_evidence).status==='insufficient_evidence'?'INSUFFICIENT DATA':unwrap(unwrap(b.integrity).broker_evidence).status,winrate_costed:Number.isFinite(unwrap(unwrap(b.integrity).broker_evidence).win_rate)&&unwrap(unwrap(b.integrity).broker_evidence).win_rate!==null?((Number(unwrap(unwrap(b.integrity).broker_evidence).win_rate)*100).toFixed(1)+'%'):'—',net_after_costs:unwrap(unwrap(b.integrity).broker_evidence).net_booked??'—'}))} empty={pageError||'لا توجد إحصائيات عقول من المحرك'}/></div>:
-        <div className="feature-zone"><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}}/></div>}
+        <div className="feature-zone">
+         {page==='correlation'?<CorrelationWorkspace key={viewScope} source={pageData} preview={preview} disabled={busy||!hasTauri()} error={pageError} onAnalyze={runCorrelationAnalyze} onRefresh={()=>refreshCurrentPanel('/v1/research/correlation')} onBacktest={()=>open('backtest')}/>:
+          page==='news'?<NewsOperatorWorkspace key={viewScope} source={pageData} preview={preview} error={pageError} disabled={busy||!hasTauri()} onRefresh={()=>refreshCurrentPanel('/v1/news')} onAction={runNewsAction}/>:
+          page==='studio'||page==='analysis'||page==='shadow'||page==='events'?
+          <CoreReadoutWorkspace key={viewScope} page={page} source={pageData} preview={preview} error={pageError} disabled={busy||!hasTauri()} onRefresh={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}} onNavigate={open} onStudioAction={runStudioAction}/>:
+          null}
+         <details className="operator-advanced"><summary>البيانات التقنية التفصيلية من Rust Core</summary><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}}/></details>
+        </div>}
       </section>
       <section className="panel subpage-secondary"><div className="panel-title"><b>حالة المصدر والتنفيذ</b><span>{clock}</span></div>
        <div className="feature-zone"><div className={'live-indicator '+(!accountFresh?'offline':'')}><div><strong>{preview?'DESIGN PREVIEW':accountFresh?'MT5 CONNECTED':'MT5 OFFLINE'}</strong><p>{preview?'بيانات توضيحية فقط':feed.broker?(feed.quote?'ACCOUNT + QUOTES FRESH':'ACCOUNT CONNECTED · QUOTES STALE'):buttonLabel(status,false)}</p></div><div><span>State</span><b>{preview?'PREVIEW':display?.state||'UNAVAILABLE'}</b></div></div>
