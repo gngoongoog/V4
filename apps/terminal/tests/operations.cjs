@@ -75,6 +75,16 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
   assert(nodes(disabledBrain).filter(x=>x.type==='button'&&String(x.props['aria-label']||'').includes('trend')).every(x=>x.props.disabled),
     caseName+' must block broker control mutations');
  }
+ const missingFlags=exportsObj.BrainControlsOperations({source:{
+  controls_available:true,account_matches:true,brains:[{name:'Trend',config:{id:'trend'},control:{paper:true}}]
+ },disabled:false,armed:false,onSave:async()=>{throw Error('Unverified brain control must not save')}});
+ const missingButtons=nodes(missingFlags).filter(x=>x.type==='button'&&/مشاركة trend|Paper trend/.test(String(x.props['aria-label']||'')));
+ assert.equal(missingButtons.length,2);
+ assert(missingButtons.every(x=>x.props.disabled),'missing advisor flag must disable both control mutations');
+ const inspector=nodes(missingFlags).find(x=>x.props?.className==='concept-brain-inspector');
+ const inspectorText=JSON.stringify(inspector);
+ assert(inspectorText.includes('غير مؤكدة')&&inspectorText.includes('غير مؤكد'),
+  'missing Core flags must not be displayed as enabled in inspector');
  const allChanges=[];
  const paperSource=(trend,gann)=>({controls_available:true,account_matches:true,brains:[
   {config:{id:'system'}},{config:{id:'trend'},control:{paper:trend}},{config:{id:'gann'},control:{paper:gann}}
