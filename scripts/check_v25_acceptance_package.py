@@ -27,8 +27,8 @@ REQUIRED_TOOLS = (
     "runtime/gateway/order_cancellation.py",
 )
 SAFETY_CONTRACTS = {
-    "Run-MT5-Chart-Demo.cmd": ("runtime\\\\python\\\\python.exe",
-        "Tools\\\\check_mt5_chart_readonly.py", "READ ONLY", "DEMO"),
+    "Run-MT5-Chart-Demo.cmd": ("runtime\\python\\python.exe",
+        "Tools\\check_mt5_chart_readonly.py", "READ ONLY", "DEMO"),
     "Tools/check_mt5_chart_readonly.py": (
         "ACCOUNT_TRADE_MODE_DEMO", "copy_rates_from_pos",
         "symbol_info_tick", "execution_performed", "False",
