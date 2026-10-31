@@ -382,12 +382,30 @@ impl Service {
     fn report(db: &Connection, id: &str) -> Result<Value> {
         let (r, h) = Self::load(db, id)?;
         let comparison = comparison::load(db, id, &r, &h)?;
+        // Exact stored observations only. Downsample evenly to bound IPC payload,
+        // preserving the first and last recorded equity values without inventing points.
+        let n=r.equity.len();
+        let curve:Vec<Value>=(0..n.min(240)).map(|i|{
+            let index=if n<=240{i}else{i*(n-1)/239};
+            let v=&r.equity[index];
+            json!({"time":v.time,"equity":v.equity,"balance":v.balance})
+        }).collect();
+        let trades:Vec<Value>=r.trades.iter().rev().take(40).map(|t|json!({
+            "side":t.side,"entry_time":t.entry_time,"exit_bar":t.exit_bar,
+            "lots":t.lots,"entry":t.entry,"exit":t.exit,
+            "net":t.net,"commission":t.commission,"reason":t.reason,
+            "ambiguous":t.ambiguous
+        })).collect();
         Ok(json!({
             "report_id":id,
             "text":format!("{} → {}\n{}\n\n{}\n{}\n{}",utc(r.options.from),utc(r.options.to),r.text(),comparison.as_ref().map(comparison::text).unwrap_or_default(),audit::summary(&r.decisions),ledger_text(&r.trades)),
             "comparison":comparison,
             "summary":r.summary(),
-            "metrics":r.metrics
+            "metrics":r.metrics,
+            "equity_curve":curve,
+            "recent_trades":trades,
+            "recorded_equity_points":n,
+            "display_points_are_exact_saved_observations":true
         }))
     }
     fn runs(db: &Connection) -> Result<Value> {
