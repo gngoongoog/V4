@@ -25,6 +25,11 @@ export async function importBrainSnapshot():Promise<unknown>{return invoke('brai
 export async function restoreBrainSnapshot(name:string):Promise<unknown>{return invoke('brain_snapshot_restore',{name})}
 export async function saveExcelReport(bytes:Uint8Array,kind:'journal'|'report'):Promise<unknown>{return invoke('save_excel_report',{bytes:Array.from(bytes),kind})}
 export async function backtestAction(action:'start'|'cancel',request?:Record<string,unknown>):Promise<unknown>{return invoke('backtest_action',{action,request:request??null})}
+export type StudyKind='backtest'|'evaluation';
+export type StudyPlan={mode:'holdout';holdout_percent:number}|{mode:'rolling';development_days:number;holdout_days:number;step_days:number};
+export async function studyAction(kind:StudyKind,action:'runs'|'report'|'export'|'start'|'cancel',id?:string,sourceId?:string,plan?:StudyPlan):Promise<unknown>{
+ return invoke('study_action',{kind,action,id:id??null,sourceId:sourceId??null,plan:plan??null});
+}
 export async function updateBrainControl(context:string,brain:string,mode:string,advisor:boolean,paper:boolean):Promise<unknown>{return invoke('update_brain_control',{context,brain,mode,advisor,paper})}
 export async function updateBrainPaperAll(context:string,mode:string,paper:boolean):Promise<unknown>{return invoke('update_brain_paper_all',{context,mode,paper})}
 export type RiskRecovery={basis:'balance'|'equity';threshold:number};
