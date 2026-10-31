@@ -1,3 +1,4 @@
+import './operator-pages.css';
 import {useCallback,useEffect,useState} from 'react';
 import {BarChart3,BookOpen,RefreshCw,ShieldAlert} from 'lucide-react';
 import {correlationAction} from './bridge';
