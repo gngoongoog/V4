@@ -910,13 +910,21 @@ export default function Terminal(){
   finally{finishWrite(mutation)}
  };
  const runSaveBrain=async(brain:string,advisor:boolean,paper:boolean)=>{
-  if(preview||!hasTauri()||!status?.gateway_fresh||!status.telemetry||status.requested_run){sendNotice('أوقف التداول وانتظر اتصال MT5 حديث لإدارة العقول',true);return}
-  const t=status.telemetry;
-  if(t.account_trade_mode!==(t.demo?0:2)){sendNotice('نوع حساب MT5 غير مؤكّد؛ لا يمكن تغيير دور العقل',true);return}
+  if(preview||!hasTauri()||!status?.gateway_fresh||!status.telemetry||status.requested_run!==false){
+   sendNotice('يتطلب تغيير العقل STOP، حساب MT5 حديثاً، وعدم وجود إجراء جارٍ',true);return;
+  }
+  const t=status.telemetry,view=unwrap(pageData);
+  if(t.account_trade_mode!==(t.demo?0:2)){sendNotice('نوع حساب MT5 غير مؤكّد',true);return}
   const context=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
-  const savedContext=String(unwrap(pageData).context||'');
-  if(savedContext!==context){sendNotice('تغيّر الحساب؛ انتظر تحميل صفحة العقول للحساب الحالي',true);return}
-  const mode=String(unwrap(pageData).trading_mode||'');
+  if(view.context!==context||view.account_matches!==true||view.controls_available!==true){
+   sendNotice('بيانات العقول لا تطابق الحساب الحالي؛ حدّث الصفحة قبل أي تغيير',true);return;
+  }
+  const rows=array(view.brains),row=rows.find(r=>String(unwrap(unwrap(r).config).id||'')===brain);
+  const current=unwrap(unwrap(row).control);
+  if(!row||brain==='system'||typeof current.advisor!=='boolean'||typeof current.paper!=='boolean'){
+   sendNotice('العقل أو إعداداته غير موثّقة من Core، لم يُرسل أمر',true);return;
+  }
+  const mode=String(view.trading_mode||'');
   const mutation=beginWrite('brain-control');if(!mutation)return;
   const serial=panelSerial();
   try{
@@ -926,19 +934,28 @@ export default function Terminal(){
    const ticket=scopedGeneration.current.beginRead('brains');
    const refreshed=unwrap(await readPanel('/v1/execution/brains'));
    if(!writeFresh(mutation))return;
+   const nextRow=array(refreshed.brains).find(r=>String(unwrap(unwrap(r).config).id||'')===brain);
+   const confirmed=unwrap(unwrap(nextRow).control);
+   if(refreshed.context!==context||refreshed.account_matches!==true||
+      String(refreshed.trading_mode)!==mode||confirmed.advisor!==advisor||confirmed.paper!==paper){
+    throw new Error('ردّ Core لا يطابق التغيير المطلوب؛ اقرأ الحالة الفعلية قبل المحاولة مجدداً');
+   }
    publishPanel(serial,refreshed);
    if(scopedGeneration.current.isCurrent(ticket))setBrainReport(refreshed);
-   sendNotice('تم حفظ مشاركة العقل في Core للحساب والوضع الحاليين');
+   sendNotice('تأكد حفظ '+brain+' من قراءة Core: المشاركة '+(advisor?'مفعّلة':'متوقفة')+'، Paper '+(paper?'مفعّل':'متوقف'));
   }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
   finally{finishWrite(mutation)}
  };
  const runPaperAll=async(paper:boolean)=>{
-  if(preview||!hasTauri()||!status?.gateway_fresh||!status.telemetry||status.requested_run){sendNotice('أوقف التداول وانتظر اتصال MT5 حديث لتغيير Paper',true);return}
-  const t=status.telemetry;
-  if(t.account_trade_mode!==(t.demo?0:2)){sendNotice('نوع حساب MT5 غير مؤكّد',true);return}
-  const context=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
-  if(unwrap(pageData).context!==context||unwrap(pageData).account_matches!==true){sendNotice('تغيّر الحساب؛ انتظر تحميل صفحة العقول للحساب الحالي',true);return}
-  const mode=String(unwrap(pageData).trading_mode||'');
+  if(preview||!hasTauri()||!status?.gateway_fresh||!status.telemetry||status.requested_run!==false){
+   sendNotice('أوقف التداول وانتظر اتصال MT5 حديث لتغيير Paper',true);return;
+  }
+  const t=status.telemetry,view=unwrap(pageData),context=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
+  if(t.account_trade_mode!==(t.demo?0:2)||view.context!==context||
+     view.account_matches!==true||view.controls_available!==true){
+   sendNotice('تغيّر حساب MT5 أو لم تصل بيانات العقول المعتمدة',true);return;
+  }
+  const mode=String(view.trading_mode||'');
   const mutation=beginWrite('brain-paper-all');if(!mutation)return;
   const serial=panelSerial();
   try{
@@ -948,9 +965,14 @@ export default function Terminal(){
    const ticket=scopedGeneration.current.beginRead('brains');
    const refreshed=unwrap(await readPanel('/v1/execution/brains'));
    if(!writeFresh(mutation))return;
+   const rows=array(refreshed.brains).filter(r=>unwrap(unwrap(r).config).id!=='system');
+   if(refreshed.context!==context||refreshed.account_matches!==true||
+      String(refreshed.trading_mode)!==mode||!rows.length||rows.some(r=>unwrap(unwrap(r).control).paper!==paper)){
+    throw new Error('تغييرات Paper الجماعية غير مؤكدة من Core؛ لم نعرض نجاحاً وهمياً');
+   }
    publishPanel(serial,refreshed);
    if(scopedGeneration.current.isCurrent(ticket))setBrainReport(refreshed);
-   sendNotice(paper?'تم تشغيل Paper للعقول في الحساب والوضع الحاليين':'تم إيقاف تجارب Paper الجديدة للعقول؛ التجارب المفتوحة تُسوّى');
+   sendNotice(paper?'تأكد تفعيل Paper لكل العقول لدى Core':'تأكد إيقاف Paper الجديد لكل العقول؛ التجارب السابقة تستمر بالتسوية');
   }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
   finally{finishWrite(mutation)}
  };
