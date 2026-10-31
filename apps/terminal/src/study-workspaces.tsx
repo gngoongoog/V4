@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useState} from 'react';
-import type {FormEvent} from 'react';
+import type {FormEvent,ReactNode} from 'react';
 import {BarChart3,BookOpen,CalendarClock,CheckCircle2,Download,Play,RefreshCw,ShieldAlert,Square,TrendingUp} from 'lucide-react';
 import {studyAction} from './bridge';
 import type {StudyPlan} from './bridge';
@@ -14,7 +14,7 @@ const date=(days:number)=>new Date(Date.now()+days*86400000).toISOString().slice
 const running=(state:string)=>state==='loading'||state==='running';
 const stage=(value:string)=>({idle:'جاهز',loading:'جلب تاريخ الوسيط',running:'جاري الحساب',done:'اكتمل',completed:'اكتمل',cancelled:'ملغي',error:'فشل'} as Record<string,string>)[value]||value;
 
-function Tip({title,children}:{title:string;children:React.ReactNode}){
+function Tip({title,children}:{title:string;children:ReactNode}){
  return <div className="study-tip" dir="rtl"><b>{title}</b><span>{children}</span></div>;
 }
 function Metric({name,value,hint}:{name:string;value:string;hint:string}){
