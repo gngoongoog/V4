@@ -17,9 +17,10 @@ assert.equal(closed.quote,false,'trading must remain blocked without a fresh mar
 assert.match(code,/const trustworthy=preview\|\|feed\.quote;/,'price-dependent execution gates retain the 3-second quote requirement');
 assert.match(code,/const accountFresh=preview\|\|feed\.broker;/,'balance must depend on verified broker telemetry, not tick freshness');
 assert.match(code,/const account=accountFresh\?t:null;/,'stale market ticks must not erase an authenticated Demo account');
-assert.match(code,/\['Balance',money\(account\?\.balance,currency\)\]/);
-assert.match(code,/\['Equity',money\(account\?\.equity,currency\)\]/);
-assert.match(code,/\['Margin',money\(account\?\.margin,currency\)\]/,
+assert.match(code,/const accountStats=preview\?null:account;/,'preview cannot leak example account figures into live statistics');
+assert.match(code,/\['Balance',money\(accountStats\?\.balance,currency\)\]/);
+assert.match(code,/\['Equity',money\(accountStats\?\.equity,currency\)\]/);
+assert.match(code,/\['Margin',money\(accountStats\?\.margin,currency\)\]/,
   'never hardcode used margin to a dash, only show the MT5-reported value');
 assert.doesNotMatch(code,/\['Margin','—'\]/);
 const gateway=fs.readFileSync(path.join(__dirname,'../../../gateway/mt5_gateway.py'),'utf8');
