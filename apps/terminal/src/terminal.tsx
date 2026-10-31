@@ -46,7 +46,7 @@ import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position,PendingOrder} from './types';
 import type {RiskRecovery,PositionProtectionPolicy} from './bridge';
 import {DESIGN_FIXTURE} from './mock';
-import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,newsAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,updatePositionProtection,setLearningFrozen,manualMarket,cancelPendingOrder,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
+import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,newsAction,studioAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,updatePositionProtection,setLearningFrozen,manualMarket,cancelPendingOrder,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
 import {money,num,signed,up,valid} from './format';
 
 // Concept 4 visual comparison fixture, NEVER emitted as broker results.
@@ -671,6 +671,28 @@ export default function Terminal(){
    throw e;
   }finally{finishWrite(mutation)}
  };
+ const runStudioAction=async(action:'run'|'auto_enable'|'auto_disable'|'cancel',timeframe?:string):Promise<unknown>=>{
+  if(preview||!hasTauri())throw new Error('تجارب الاستوديو تتطلب تطبيق Windows المتصل بـCore');
+  const mutation=beginWrite('studio-'+action);
+  if(!mutation)throw new Error('يوجد أمر آخر غير محسوم');
+  const serial=panelSerial();
+  try{
+   const response=unwrap(await studioAction(action,timeframe));
+   if(action==='run'&&!(typeof response.queued==='number'&&Number.isFinite(response.queued)))throw new Error('لم يؤكد Core عدد المهام البحثية');
+   if(action==='cancel'&&response.cancelled!==true)throw new Error('Core لم يؤكد الإلغاء');
+   if(!writeFresh(mutation))throw new Error('تغيّر الحساب أو الصفحة أثناء العملية، راجع حالة Core');
+   const data=unwrap(await readPanel('/v1/studio'));
+   if(!writeFresh(mutation))throw new Error('تغيّر الحساب أو الصفحة أثناء إعادة القراءة');
+   if(action==='auto_enable'||action==='auto_disable'){
+    if(data.auto!==(action==='auto_enable'))throw new Error('حالة التشغيل التلقائي لم تتطابق مع الطلب');
+   }
+   publishPanel(serial,data);
+   return response;
+  }catch(e){
+   if(writeFresh(mutation))sendNotice('تعذر تأكيد أمر الاستوديو: '+String(e),true);
+   throw e;
+  }finally{finishWrite(mutation)}
+ };
  // Keep every new page anchored at its header, even after a long scroll.
  // The scroll container is persistent across React route changes.
  const resetContentScroll=()=>{const main=document.querySelector('main.content');if(main)main.scrollTop=0};
@@ -1239,7 +1261,7 @@ export default function Terminal(){
         <div className="feature-zone">
          {page==='news'?<NewsOperatorWorkspace key={viewScope} source={pageData} preview={preview} error={pageError} disabled={busy||!hasTauri()} onRefresh={()=>refreshCurrentPanel('/v1/news')} onAction={runNewsAction}/>:
           page==='studio'||page==='correlation'||page==='analysis'||page==='shadow'||page==='events'?
-          <CoreReadoutWorkspace key={viewScope} page={page} source={pageData} preview={preview} error={pageError} onRefresh={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}} onNavigate={open}/>:
+          <CoreReadoutWorkspace key={viewScope} page={page} source={pageData} preview={preview} error={pageError} disabled={busy||!hasTauri()} onRefresh={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}} onNavigate={open} onStudioAction={runStudioAction}/>:
           null}
          <details className="operator-advanced"><summary>البيانات التقنية التفصيلية من Rust Core</summary><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}}/></details>
         </div>}
