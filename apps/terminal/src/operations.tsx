@@ -191,6 +191,12 @@ export function PaperAllControl({source,disabled,armed,onSet}: {
    <span>Paper: {label}</span></div>;
 }
 
+function txtOwner(owner:unknown):string {
+ if(typeof owner!=='string'||!owner)return 'غير مؤكد';
+ if(owner==='system')return 'SYSTEM / المنسق';
+ return BRAIN_DIRECTORY.find(row=>row[0]===owner)?.[1]||owner;
+}
+
 export function BrainControlsOperations({source,disabled,armed,onSave}: {
  source:unknown;disabled:boolean;armed:boolean;onSave:(brain:string,advisor:boolean,paper:boolean)=>Promise<void>;
 }) {
@@ -217,6 +223,7 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
     <div><b>٣. تنفيذ حقيقي</b><span>اختيار «تداول بعقل واحد» أعلاه منفصل عن المشاركة؛ وبدء التداول يحتاج START وشروط Core.</span></div>
   </div>
   <p className="safe-note" role="status">{reason}</p>
+  {view.selected_owner!==undefined&&<p className="safe-note">منفّذ الأوامر الحالي: <b>{txtOwner(view.selected_owner)}</b>. إذا كان عقل منفرد يملك التنفيذ، تغيير مشاركة بقية المستشارين لا يغيّر صفقاته إلى أن ترجع للمنسق.</p>}
   <div className="concept-brain-card-grid">{cards.map((b,i)=>{
     const row=safeObject(b),id=String(safeObject(row.config).id||'');
     if(!id)return null;
@@ -230,12 +237,18 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
       typeof rate==='number'&&Number.isFinite(rate)&&rate>=0&&rate<=1&&Number.isInteger(count)&&count>=30;
     const known=available&&typeof state.advisor==='boolean'&&typeof state.paper==='boolean';
     const advisorOn=known&&state.advisor===true,paperOn=known&&state.paper===true;
+    // Desired advisor state is not necessarily effective: only the current
+    // Expert coordinator, or selected Sniper Learner, consumes advisor votes.
+    // A SOLO owner also supersedes the coordinator until explicitly restored.
+    const effective=row.participates_in_coordinator===true;
+    const effectiveKnown=known&&typeof row.participates_in_coordinator==='boolean';
     const selectable=canEdit&&known;
     return <article key={id} className={'concept-brain-card '+(activeBrain===id?'selected':'')}>
       <button type="button" className="concept-brain-card-head" onClick={()=>setSelectedBrain(id)} aria-pressed={activeBrain===id}><Icon size={27}/><span><b>{directory?.[1]||String(row.name||id)}</b><small>{directory?.[2]||String(row.name||id)}</small></span><span className={'concept-control-state '+(advisorOn?'on':'')}>{known?(advisorOn?'مستشار مفعّل':'مستشار متوقف'):'غير موثق'}</span></button>
       <div className="brain-control-states" dir="rtl">
         <span className={advisorOn?'active':'off'}>المشاركة: {known?(advisorOn?'مفعّلة':'متوقفة'):'غير معروفة'}</span>
         <span className={paperOn?'active':'off'}>Paper: {known?(paperOn?'مفعّل':'متوقف'):'غير معروف'}</span>
+        <span className={effective?'active':'off'}>تأثيره على قرار المنسق: {effectiveKnown?(effective?'يشارك الآن':'لا يشارك الآن'):'غير مؤكد'}</span>
       </div>
       <div className="concept-brain-card-metrics"><span>إشارات <b>{known&&typeof activity.signals==='number'?activity.signals:'—'}</b></span><span>تنفيذ موثق <b>{known&&typeof orders.fill_acknowledged==='number'?orders.fill_acknowledged:'—'}</b></span><span>نجاح موثق <b>{verified?`${(rate*100).toFixed(1)}%`:'—'}</b></span></div>
       <div className="concept-brain-card-actions">
