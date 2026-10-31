@@ -64,4 +64,10 @@ test('extra chart candles are scoped to the current account and validated before
  assert.deepEqual(chartHistory({...row,frames:{h1:{bars:[...bars].reverse(),captured_ms:now,live:true}}},account,now).market,{});
  assert.deepEqual(chartHistory({...row,frames:{h1:{bars:[{...bars[0],low:104},...bars.slice(1)],captured_ms:now,live:true}}},account,now).market,{});
  assert.deepEqual(chartHistory({...row,frames:{h1:{bars,captured_ms:now+3000,live:true}}},account,now).market,{});
+ // The raw history payload must not smuggle an active H1 candle into a
+ // broker-closed series. The Rust source is already stricter; this is a
+ // separate renderer trust boundary with its own regression.
+ const unfinished=[...bars.slice(0,2),{...bars[2],time:Math.floor(now/1000)-1800}];
+ assert.deepEqual(chartHistory({...row,frames:{h1:{bars:unfinished,captured_ms:now,live:true}}},account,now).market,{},
+   'Never display an H1 forming candle as already closed');
 });
