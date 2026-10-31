@@ -309,9 +309,12 @@ fn backtest_action(action: String, request: Option<Value>) -> Result<Value, Stri
     let (route,body)=match action.as_str(){
         "start"=>{
             let input=request.ok_or("تفاصيل الاختبار التاريخي غير متاحة")?;
-            let allowed=["from_date","to_date","initial_equity","spread_floor"];
+            let allowed=["from_date","to_date","initial_equity","spread_floor","strategy"];
             if input.as_object().is_none_or(|m|m.keys().any(|k| !allowed.contains(&k.as_str()))) {
                 return Err("حقول الاختبار التاريخي غير صالحة".into());
+            }
+            if input.get("strategy").is_some_and(|v|!matches!(v.as_str(),Some("meta_v1"|"ces_v1"|"kte_v1"|"meta_v2"|"explore_v1"))) {
+                return Err("الاستراتيجية التاريخية المطلوبة غير مدعومة".into());
             }
             ("/v1/backtest/start",input)
         },
