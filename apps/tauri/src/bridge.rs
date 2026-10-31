@@ -367,6 +367,31 @@ fn study_action(kind:String,action:String,id:Option<String>,source_id:Option<Str
     if post{client.post(route,body)}else{client.get(route)}.map_err(|e|e.to_string())
 }
 
+// Fixed News RSS actions: no dynamic route, user URLs, or trade execution.
+fn news_request(action:&str)->Result<(&'static str,Value),String>{
+ match action{
+  "refresh"=>Ok(("/v1/news/refresh",json!({}))),
+  "enable"=>Ok(("/v1/news/settings",json!({"enabled":true}))),
+  "disable"=>Ok(("/v1/news/settings",json!({"enabled":false}))),
+  _=>Err("إجراء أخبار غير مدعوم".into())
+ }
+}
+#[tauri::command]
+fn news_action(action:String)->Result<Value,String>{
+ let (route,body)=news_request(&action)?;
+ let client=open_client()?;
+ let response=client.post(route,body).map_err(|e|format!("تأكيد أمر الأخبار غير متاح؛ أعد قراءة الحالة قبل إعادة الطلب: {e}"))?;
+ if response["ok"]!=true{return Err("Core لم يؤكد إجراء الأخبار".into());}
+ // Settings must be persisted and reflected in a fresh Core readback.
+ if action=="enable"||action=="disable"{
+  let actual=client.get("/v1/news").map_err(|e|format!("تم قبول الأمر لكن تعذر قراءة الحالة: {e}"))?;
+  if actual["enabled"].as_bool()!=Some(action=="enable"){
+   return Err("لم تتطابق حالة مصادر الأخبار مع الطلب؛ حدّث الصفحة".into());
+  }
+ }
+ Ok(response)
+}
+
 #[tauri::command]
 fn bind_execution(target: String, deviation_points: u32, confirm_live_login: String) -> Result<Value,String> {
     if !matches!(target.as_str(),"demo" | "live") || deviation_points > 100_000 {
@@ -630,7 +655,7 @@ pub fn run() {
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore, save_excel_report,
-            backtest_action, study_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
+            backtest_action, study_action, news_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");
@@ -650,6 +675,14 @@ mod tests {
         let (path,post,_)=study_request("backtest","report",Some("saved-run-2026"),None,None).unwrap();
         assert_eq!(path,"/v1/backtest/report");assert!(post);
         assert!(study_request("backtest","report",Some("../etc/token"),None,None).is_err());
+    }
+    #[test]
+    fn news_actions_are_strictly_allowlisted(){
+        assert_eq!(news_request("enable").unwrap().0,"/v1/news/settings");
+        assert_eq!(news_request("enable").unwrap().1["enabled"],true);
+        assert_eq!(news_request("disable").unwrap().1["enabled"],false);
+        assert_eq!(news_request("refresh").unwrap().0,"/v1/news/refresh");
+        for action in ["trade","../../v1/manual","refresh?token=1","settings"]{assert!(news_request(action).is_err());}
     }
     #[test]
     fn full_exit_requires_a_valid_core_process_identity() {
