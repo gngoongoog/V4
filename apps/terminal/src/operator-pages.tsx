@@ -84,6 +84,56 @@ const DESCRIPTIONS:Record<Exclude<Page,'news'>,{title:string;description:string;
  shadow:{title:'سجل قرارات الظل',description:'قرارات تحليلية محفوظة؛ تُعرض بوصفها أحداث بحثية قديمة لا تداولاً منفذاً.',notice:'لا تفترض أن قرار الظل أغلق أو فتح مركزاً حقيقياً.'},
  events:{title:'أحداث وتشخيص النظام',description:'آخر الأحداث المسجلة بواسطة Rust Core، مع ترتيبها والتفاصيل الأصلية.',notice:'عدم وجود أحداث لا يعني ضمان سلامة المنظومة؛ حالة الوسيط وGateway تحتاج فحوصاً منفصلة.'}
 };
+// Read the actual research schemas. No inferred confidence or broker-executed trades.
+const moneyValue=(v:unknown)=>num(v)===null?'غير مسجل':Number(v).toLocaleString('en-US',{maximumFractionDigits:4});
+const direction=(v:unknown)=>v===1?'شراء افتراضي':v===-1?'بيع افتراضي':'غير محدد';
+const eventLabel=(kind:unknown)=>{
+ const known:Record<string,string>={gateway_connection:'تغير اتصال MT5',core_start:'بدء المحرك',shutdown:'طلب إيقاف',gateway_error:'خطأ جسر MT5',execution_error:'خطأ التنفيذ',config_updated:'تغيير إعدادات'};
+ const label=txt(kind,'حدث غير مصنف');
+ return known[label]||label;
+};
+function EventDetail({page,item}:{page:'analysis'|'shadow'|'events';item:Row}){
+ const record=page==='shadow'?object(item.decision):page==='analysis'?object(item.setup):object(item.detail);
+ const analysis=object(record.analysis);
+ const gates=page==='analysis'?Array.isArray(record.gates)?record.gates:[]:Array.isArray(analysis.gates)?analysis.gates:[];
+ const reasons=page==='analysis'?Array.isArray(record.reasons)?record.reasons:[]:[];
+ const row=(label:string,value:unknown)=><div className="operator-plain-row" key={label}><span>{label}</span><b>{value===undefined||value===null||value===''?'غير مسجل':String(value)}</b></div>;
+ if(page==='analysis')return <div className="operator-event-reading">
+  {row('الفرصة / النمط',txt(record.name,txt(record.pattern,'غير مسمى')))}
+  {row('الاتجاه المقترح',direction(record.side))}
+  {row('حالة التأهيل البحثي',txt(record.state,'غير موثقة'))}
+  {row('منطقة السعر',num(record.zone_low)!==null&&num(record.zone_high)!==null?moneyValue(record.zone_low)+' — '+moneyValue(record.zone_high):'غير متاحة')}
+  {row('الدخول المسجل',moneyValue(record.entry))}
+  {row('وقف الخسارة المسجل',moneyValue(record.stop))}
+  {row('الأهداف',Array.isArray(record.targets)&&record.targets.length?record.targets.filter(x=>num(x)!==null).map(moneyValue).join(' / '):'غير مسجلة')}
+  {row('نسبة العائد/المخاطرة بعد التكاليف التقديرية',moneyValue(record.net_rr))}
+  {reasons.length>0&&<p>ملاحظات الدراسة: {reasons.slice(0,5).map(String).join('؛ ')}</p>}
+  {gates.length>0&&<p>أسباب عدم الجاهزية أو القيود: {gates.slice(0,5).map(String).join('؛ ')}</p>}
+  <small>هذه لقطة لأول ظهور للفرصة وليست سعراً مباشراً. الأسعار قد تكون غائبة أو منتهية الصلاحية.</small>
+ </div>;
+ if(page==='shadow')return <div className="operator-event-reading">
+  {row('نتيجة قرار البحث',txt(analysis.action,'لا يوجد قرار'))}
+  {row('التفسير المسجل',txt(analysis.reason,'لم يرجع Core تفسيراً'))}
+  {row('حالة السوق وفق التحليل',txt(analysis.regime,'غير محددة'))}
+  {row('سعر Bid وقت تسجيل القرار',moneyValue(record.bid))}
+  {row('سعر Ask وقت تسجيل القرار',moneyValue(record.ask))}
+  {row('سعر دخول افتراضي',moneyValue(analysis.entry))}
+  {row('وقف افتراضي',moneyValue(analysis.stop))}
+  {row('هدف افتراضي',moneyValue(analysis.target))}
+  {gates.length>0&&<p>شروط حالت دون اتخاذ القرار: {gates.slice(0,5).map(String).join('؛ ')}</p>}
+  <small>سجل قرار بحثي، وليس دليلاً على إرسال أو قبول صفقة MT5.</small>
+ </div>;
+ return <div className="operator-event-reading">
+  {row('نوع الحدث',eventLabel(item.kind))}
+  {row('معرّف السجل',item.id)}
+  {Object.prototype.hasOwnProperty.call(record,'connected')&&row('اتصال Gateway',record.connected===true?'متصل':record.connected===false?'منقطع':'غير مؤكد')}
+  {typeof record.state==='string'&&row('الحالة',record.state)}
+  {typeof record.reason==='string'&&row('السبب',record.reason)}
+  {typeof record.error==='string'&&row('الخطأ المبلّغ',record.error)}
+  {typeof record.mode==='string'&&row('وضع التشغيل',record.mode)}
+  <small>قد يحتوي الحدث حقولاً تقنية أخرى؛ تعرضها أداة بيانات Core المتقدمة في الأسفل عند الحاجة للتشخيص.</small>
+ </div>;
+}
 export function CoreReadoutWorkspace({page,source,preview,error,disabled,onRefresh,onNavigate,onStudioAction}:{page:Exclude<Page,'news'>;source:unknown;preview:boolean;error:string;disabled:boolean;onRefresh:()=>void;onNavigate:(page:'backtest'|'evaluation'|'execution'|'brainControl'|'events')=>void;onStudioAction:(action:'run'|'auto_enable'|'auto_disable'|'cancel',timeframe?:string)=>Promise<unknown>}){
  const data=object(source),desc=DESCRIPTIONS[page];
  const [search,setSearch]=useState('');
@@ -137,9 +187,10 @@ export function CoreReadoutWorkspace({page,source,preview,error,disabled,onRefre
     <div className="operator-filters"><label><Search size={16}/> ابحث داخل السجل<input type="search" aria-label={'بحث '+desc.title} value={search} onChange={e=>setSearch(e.target.value)} placeholder="كلمة أو رمز أو نوع الحدث"/></label></div>
     <div className="operator-event-list">{filtered.length?filtered.slice(0,75).map((item,i)=>{
      const record=page==='shadow'?object(item.decision):page==='analysis'?object(item.setup):object(item.detail);
-     const label=page==='events'?txt(item.kind,'حدث'):page==='shadow'?txt(object(record.analysis).action,'قرار ظل'):txt(item.setup_id,'فرصة مسجلة');
+     const label=page==='events'?eventLabel(item.kind):page==='shadow'?txt(object(record.analysis).action,'قرار لم يُسجل'):txt(record.name,txt(record.pattern,'فرصة تاريخية'));
      const when=page==='events'?item.timestamp_ms:page==='analysis'?item.first_seen_ms:item.timestamp_ms;
-     return <details key={String(item.id??item.setup_id??i)}><summary><strong>{label}</strong><small>{stamp(when)} · {page==='events'?'Core event':page==='shadow'?'Shadow':'Opportunity'} </small></summary><pre dir="auto">{JSON.stringify(record,null,2).slice(0,3500)}</pre></details>;
+     const statusText=page==='events'?'حدث محرك':page==='shadow'?'بحث ظل غير منفذ':'فرصة تاريخية';
+     return <details key={String(item.id??item.setup_id??i)}><summary><strong>{label}</strong><small>{stamp(when)} · {statusText}</small></summary><EventDetail page={page} item={item}/></details>;
     }):<p className="operator-empty">لا توجد سجلات في رد Core أو لا توجد نتائج تطابق البحث.</p>}</div>
    </>}
    <div className="operator-links">{page==='studio'||page==='correlation'?<button onClick={()=>onNavigate('backtest')}><BookOpen size={16}/> الاختبار التاريخي</button>:null}
