@@ -130,7 +130,7 @@ export function EvaluationWorkspace({source,disabled,onRefresh,onBacktest}:{
   if(disabled)return;
   try{
    const [a,b]=await Promise.all([studyAction('backtest','runs'),studyAction('evaluation','runs')]);
-   setSources(arr(obj(a).runs));setRuns(arr(obj(b).runs));setError('');
+   setSources(arr(obj(a).runs).filter(r=>/^meta-v(?:1|2)/i.test(txt(r.algorithm,''))));setRuns(arr(obj(b).runs));setError('');
   }catch(e){setError('تعذر قراءة نتائج Core المحفوظة: '+String(e))}
  },[disabled]);
  useEffect(()=>{void refresh()},[refresh,txt(state.latest_id,'')]);
@@ -162,7 +162,7 @@ export function EvaluationWorkspace({source,disabled,onRefresh,onBacktest}:{
     <h3><CalendarClock size={18}/> إعداد تقييم جديد</h3>
     <label>مصدر التاريخ المحفوظ
       <select aria-label="اختيار مصدر الاختبار للتقييم" disabled={disabled||busy||running(phase)||!sources.length} value={chosen} onChange={e=>setSourceId(e.target.value)}>
-       {!sources.length&&<option value="">لا توجد نتائج محفوظة</option>}
+       {!sources.length&&<option value="">لا توجد نتائج Meta V1/V2 مؤهلة</option>}
        {sources.map(r=><option key={txt(r.id)} value={txt(r.id)}>{txt(r.label,txt(r.algorithm,'نتيجة تاريخية'))}</option>)}
       </select>
     </label>
