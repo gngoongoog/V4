@@ -321,6 +321,49 @@ fn backtest_action(action: String, request: Option<Value>) -> Result<Value, Stri
     open_client()?.post(route,body).map_err(|err|err.to_string())
 }
 
+// A strictly typed, allowlisted bridge to immutable research history.
+// Read-only reports and local exports do not submit broker orders.
+fn study_request(kind:&str,action:&str,id:Option<&str>,source_id:Option<&str>,plan:Option<&Value>)->Result<(&'static str,bool,Value),String>{
+    let valid_id=|s:&str|s.len()>=8&&s.len()<=100&&s.bytes().all(|c|c.is_ascii_alphanumeric()||c==b'-');
+    match (kind,action){
+        ("backtest","runs")=>Ok(("/v1/backtest/runs",false,json!({}))),
+        ("evaluation","runs")=>Ok(("/v1/evaluation/runs",false,json!({}))),
+        ("backtest","report")|("backtest","export")|("evaluation","report")|("evaluation","export")=>{
+            let id=id.filter(|v|valid_id(v)).ok_or("اختر نتيجة محفوظة صحيحة")?;
+            let route=match (kind,action){
+                ("backtest","report")=>"/v1/backtest/report",
+                ("backtest","export")=>"/v1/backtest/export",
+                ("evaluation","report")=>"/v1/evaluation/report",
+                _=>"/v1/evaluation/export",
+            };
+            Ok((route,true,json!({"id":id})))
+        },
+        ("evaluation","start")=>{
+            let source=source_id.filter(|v|valid_id(v)).ok_or("اختر اختباراً تاريخياً محفوظاً")?;
+            let plan=plan.ok_or("خطة التقييم مفقودة")?;
+            let valid=match plan.get("mode").and_then(Value::as_str){
+                Some("holdout")=>plan.as_object().is_some_and(|m|m.len()==2)&&
+                    plan.get("holdout_percent").and_then(Value::as_u64).is_some_and(|v|(10..=50).contains(&v)),
+                Some("rolling")=>plan.as_object().is_some_and(|m|m.len()==4)&&
+                    plan.get("development_days").and_then(Value::as_u64).is_some_and(|v|(2..=365).contains(&v))&&
+                    plan.get("holdout_days").and_then(Value::as_u64).is_some_and(|v|(1..=365).contains(&v))&&
+                    plan.get("step_days").and_then(Value::as_u64).is_some_and(|v|(1..=365).contains(&v)),
+                _=>false,
+            };
+            if !valid{return Err("قيم التقييم خارج الحدود أو الحقول غير معروفة".into());}
+            Ok(("/v1/evaluation/start",true,json!({"source_id":source,"plan":plan})))
+        },
+        ("evaluation","cancel")=>Ok(("/v1/evaluation/cancel",true,json!({}))),
+        _=>Err("عملية دراسة غير مسموحة".into()),
+    }
+}
+#[tauri::command]
+fn study_action(kind:String,action:String,id:Option<String>,source_id:Option<String>,plan:Option<Value>)->Result<Value,String>{
+    let (route,post,body)=study_request(&kind,&action,id.as_deref(),source_id.as_deref(),plan.as_ref())?;
+    let client=open_client()?;
+    if post{client.post(route,body)}else{client.get(route)}.map_err(|e|e.to_string())
+}
+
 #[tauri::command]
 fn bind_execution(target: String, deviation_points: u32, confirm_live_login: String) -> Result<Value,String> {
     if !matches!(target.as_str(),"demo" | "live") || deviation_points > 100_000 {
@@ -584,7 +627,7 @@ pub fn run() {
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore, save_excel_report,
-            backtest_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
+            backtest_action, study_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");
@@ -593,6 +636,18 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn research_study_bridge_is_allowlisted_and_never_broker_execution(){
+        let (path,post,_)=study_request("evaluation","start",None,Some("source-run-2026"),Some(&json!({"mode":"holdout","holdout_percent":30}))).unwrap();
+        assert_eq!(path,"/v1/evaluation/start");assert!(post);
+        assert!(study_request("evaluation","start",None,Some("source-run-2026"),Some(&json!({"mode":"rolling","development_days":0,"holdout_days":2,"step_days":1}))).is_err());
+        assert!(study_request("evaluation","start",None,Some("source-run-2026"),Some(&json!({"mode":"holdout","holdout_percent":30,"trade_live":true}))).is_err());
+        assert!(study_request("backtest","start",None,None,None).is_err());
+        assert!(study_request("evaluation","../../v1/start",None,None,None).is_err());
+        let (path,post,_)=study_request("backtest","report",Some("saved-run-2026"),None,None).unwrap();
+        assert_eq!(path,"/v1/backtest/report");assert!(post);
+        assert!(study_request("backtest","report",Some("../etc/token"),None,None).is_err());
+    }
     #[test]
     fn full_exit_requires_a_valid_core_process_identity() {
         assert_eq!(process_identity(&json!({"core_process":{"pid":42,"instance_id":"session-a"}})).unwrap(),(42,"session-a".to_string()));
