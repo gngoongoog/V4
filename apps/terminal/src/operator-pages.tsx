@@ -25,15 +25,31 @@ function Measure({label,value,detail}:{label:string;value:string;detail:string})
  return <div className="operator-measure"><small>{label}</small><b>{value}</b><span>{detail}</span></div>;
 }
 function ReadonlyNotice({children}:{children:string}){return <p className="operator-caveat"><ShieldAlert size={16}/>{children}</p>}
-export function NewsOperatorWorkspace({source,preview,error,onRefresh}:{source:unknown;preview:boolean;error:string;onRefresh:()=>void}){
+export function NewsOperatorWorkspace({source,preview,error,disabled,onRefresh,onAction}:{source:unknown;preview:boolean;error:string;disabled:boolean;onRefresh:()=>void;onAction:(action:'refresh'|'enable'|'disable')=>Promise<void>}){
  const data=object(source),feeds=rows(data.sources),headlines=rows(data.items);
  const [term,setTerm]=useState(''),[feed,setFeed]=useState('all'),[freshOnly,setFreshOnly]=useState(false);
+ const [actionBusy,setActionBusy]=useState(false),[actionError,setActionError]=useState(''),[actionSuccess,setActionSuccess]=useState('');
+ const act=async(action:'refresh'|'enable'|'disable')=>{
+  if(preview||disabled||actionBusy)return;
+  setActionBusy(true);setActionError('');setActionSuccess('');
+  try{
+   await onAction(action);
+   setActionSuccess(action==='refresh'?'Core قبل طلب تحديث المصادر؛ البيانات الفعلية تتحدث لاحقاً.':'أكد Core حفظ إعداد مصادر الأخبار. يمكن مراجعة الحالة أعلاه.');
+  }catch(e){setActionError('تعذر تأكيد عملية الأخبار: '+String(e))}
+  finally{setActionBusy(false)}
+ };
  const visible=useMemo(()=>headlines.filter(item=>(feed==='all'||item.source===feed)&&
   (!freshOnly||item.source_stale===false)&&
   (!term||[item.title,item.topic,item.source].some(v=>String(v||'').toLowerCase().includes(term.toLowerCase())))),[headlines,feed,freshOnly,term]);
  const macro=object(data.macro);
  return <section className="operator-workspace" dir="rtl" aria-label="غرفة أخبار السوق">
   <div className="operator-workspace-head"><div><h3><Newspaper size={20}/> مصادر أخبار الذهب والاقتصاد</h3><p>عناوين منشورة من مصادر رسمية فقط. هذه الصفحة ليست تقويم أخبار مستقبلية ولا تصدر إشارة شراء أو بيع.</p></div><button onClick={onRefresh} disabled={preview}><RefreshCw size={16}/> تحديث قراءة Core</button></div>
+  <div className="operator-links">
+   <button type="button" disabled={preview||disabled||actionBusy||data.offline===true||data.enabled!==true||data.refreshing===true} onClick={()=>void act('refresh')}><RefreshCw size={15}/> جلب الأخبار الآن من المصادر</button>
+   <button type="button" disabled={preview||disabled||actionBusy||data.enabled===undefined} onClick={()=>void act(data.enabled===true?'disable':'enable')}>{data.enabled===true?'إيقاف تحديث المصادر':'تفعيل تحديث المصادر'}</button>
+  </div>
+  {actionError&&<p className="operator-caveat" role="alert">{actionError}</p>}
+  {actionSuccess&&<p className="operator-evidence" role="status">{actionSuccess}</p>}
   <Evidence source={source} preview={preview} error={error}/>
   {!preview&&!error&&source!==null&&<>
    <div className="operator-measures">
