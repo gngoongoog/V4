@@ -623,18 +623,33 @@ export default function Terminal(){
   finally{finishWrite(mutation)}
  };
  const runBacktest=async(action:'start'|'cancel',request?:{from_date:string;to_date:string;initial_equity:number;spread_floor:number;strategy:string})=>{
-  if(preview||!hasTauri())return sendNotice('الاختبارات التاريخية تتطلب Core وMT5',true);
-  const mutation=beginWrite('backtest-'+action);if(!mutation)return;
+  if(preview||!hasTauri()){
+   const reason='الاختبارات التاريخية تتطلب Core وMT5، وليس وضع المعاينة';
+   sendNotice(reason,true);
+   throw new Error(reason);
+  }
+  const mutation=beginWrite('backtest-'+action);
+  if(!mutation)throw new Error('يوجد إجراء آخر قيد التنفيذ؛ لم يُرسل أمر الاختبار');
   const serial=panelSerial();
   try{
-   await backtestAction(action,request);
-   if(!writeFresh(mutation))return;
-   const data=await readPanel('/v1/backtest');
-   if(!writeFresh(mutation))return;
-   publishPanel(serial,data);
-   sendNotice(action==='start'?'بدأت مهمة الاختبار التاريخي في Core':'استلم Core طلب إلغاء الاختبار');
-  }catch(e){if(writeFresh(mutation))sendNotice(String(e),true)}
-  finally{finishWrite(mutation)}
+   const reply=unwrap(await backtestAction(action,request));
+   if(reply.ok!==true)throw new Error('لم يؤكد Core قبول أمر الاختبار التاريخي');
+   if(!writeFresh(mutation))throw new Error('تغيّر نطاق الحساب أو الصفحة أثناء الأمر؛ تحقّق من Core قبل المحاولة مجدداً');
+   // The Core command has been acknowledged. A failed follow-up read must
+   // never be represented as proof that Core rejected the command.
+   try{
+    const data=await readPanel('/v1/backtest');
+    if(!writeFresh(mutation))throw new Error('تغيّر نطاق الحساب أو الصفحة بعد إرسال الأمر');
+    publishPanel(serial,data);
+    sendNotice(action==='start'?'أكد Core بدء مهمة الاختبار التاريخي':'أكد Core قبول إلغاء الاختبار');
+   }catch(e){
+    if(!writeFresh(mutation))throw e;
+    sendNotice('أكد Core قبول الأمر، لكن تعذر تحديث حالته: '+String(e),true);
+   }
+  }catch(e){
+   if(writeFresh(mutation))sendNotice('لم يتأكد تنفيذ أمر الاختبار: '+String(e),true);
+   throw e; // The child workspace must not display a false success notice.
+  }finally{finishWrite(mutation)}
  };
  // Keep every new page anchored at its header, even after a long scroll.
  // The scroll container is persistent across React route changes.
