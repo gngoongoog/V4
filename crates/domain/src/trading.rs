@@ -82,6 +82,14 @@ impl Default for TradingConfig {
     }
 }
 impl TradingConfig {
+    /// The broker's actual point must agree with the two operator-supplied
+    /// pip representations; otherwise point labels and price targets conflict.
+    pub fn sniper_pip_points_match(&self, point:f64)->bool {
+        if !point.is_finite() || point<=0. || !self.pip_points.is_finite()
+            || !self.sniper_pip_price.is_finite() {return false;}
+        let actual=self.sniper_pip_price/point;
+        (actual-self.pip_points).abs() <= 1e-6_f64.max(self.pip_points.abs()*1e-7)
+    }
     pub fn priority_mode(&self) -> TradingMode {
         if !self.priority_enabled { self.mode }
         else if self.sniper_active { TradingMode::Sniper }
@@ -433,6 +441,15 @@ mod tests {
     }
 
     use super::*;
+    #[test]
+    fn sniper_pip_settings_must_match_broker_point() {
+        let mut c=TradingConfig::default();
+        c.pip_points=10.;c.sniper_pip_price=0.1;
+        assert!(c.sniper_pip_points_match(0.01));
+        c.pip_points=20.;
+        assert!(!c.sniper_pip_points_match(0.01));
+        assert!(!c.sniper_pip_points_match(0.));
+    }
     #[test]
     fn sniper_reacts_to_live_quote_without_a_new_bar() {
         let now=1_800_000_000_000;

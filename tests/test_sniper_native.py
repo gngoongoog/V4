@@ -46,6 +46,28 @@ class NativeSniperTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "quote"):
             native.parse_packet(f"BT2|{token}|77|XAUUSD|2000|{event_id}|2501|2500", token)
 
+    def test_native_pipe_bytearray_packet_from_partition_is_valid(self):
+        # Regression: the Windows pipe worker partitions a bytearray buffer.
+        # Prior to this fix the parser tried bytearray.encode() and crashed
+        # the braintrade-sniper-pipe thread, leaving the EA in WAITING.
+        token = "session-token-0123456789"
+        event_id = 2_000 * native.EVENT_FACTOR + 7
+        wire = f"BT2|{token}|77|XAUUSDr|2000|{event_id}|2500.10|2500.30\n"
+        pending = bytearray(wire.encode("ascii"))
+        line, separator, remainder = pending.partition(b"\n")
+        self.assertIsInstance(line, bytearray)
+        self.assertEqual(separator, bytearray(b"\n"))
+        self.assertEqual(remainder, bytearray())
+        parsed = native.parse_packet(line, token, received_ms=2004)
+        self.assertEqual(parsed["login"], 77)
+        self.assertEqual(parsed["symbol"], "XAUUSDr")
+        self.assertEqual(parsed["event_id"], event_id)
+        self.assertEqual(native.parse_packet(bytes(line), token, received_ms=2004), parsed)
+        source = (ROOT / "gateway" / "sniper_native.py").read_text(encoding="utf-8")
+        self.assertIn("parse_packet(bytes(line), self.token)", source)
+        with self.assertRaisesRegex(ValueError, "token"):
+            native.parse_packet(line, "wrong-session-token")
+
     def test_session_token_uses_selected_terminal_data_folder(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = native.write_session_token(tmp, "temporary-secret-token")
@@ -136,7 +158,7 @@ class NativeSniperTests(unittest.TestCase):
         self.assertIn("refresh_fast_tick", source)
         self.assertIn("advance_quote_clock", source)
         self.assertLess(source.index("packets=native.drain"), source.index("full_due=latest_snapshot"))
-        self.assertLess(source.index("native.wait(remaining)"), source.index("time.sleep(remaining)"))
+        self.assertLess(source.index("native.wait(remaining)"), source.index("stop_requested.wait(remaining)"))
 
     def test_mql5_bridge_recovers_cached_quote_ticks_and_never_trades(self):
         source = (ROOT / "mt5" / "BrainTradeSniperBridge.mq5").read_text(encoding="utf-8")
@@ -153,6 +175,13 @@ class NativeSniperTests(unittest.TestCase):
         self.assertNotIn("CTrade", source)
         self.assertNotIn("trade.Buy", source)
         self.assertNotIn("trade.Sell", source)
+
+    def test_ea_pipe_handle_is_not_presented_as_verified_tick_delivery(self):
+        source = (ROOT / "mt5" / "BrainTradeSniperBridge.mq5").read_text(encoding="utf-8")
+        status = source[source.index("void UpdateStatus()"):source.index("ulong TickEventId")]
+        self.assertIn('PIPE OPEN (UNVERIFIED)', status)
+        self.assertIn('Verify fresh native ticks in BrainTrade', status)
+        self.assertNotIn('"CONNECTED"', status)
 
     def test_windows_package_places_native_bridge_next_to_runtime(self):
         with tempfile.TemporaryDirectory() as tmp:

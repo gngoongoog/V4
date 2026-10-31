@@ -16,6 +16,7 @@
     "windows": [
       {
         "title": "BRAINTRADE V4 \u2014 Enterprise V25",
+        "decorations": false,
         "width": 1648,
         "height": 928,
         "minWidth": 1120,

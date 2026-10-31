@@ -68,33 +68,53 @@ try {
     }
   }
   Copy-Item -LiteralPath $source -Destination $dest -Force -ErrorAction Stop
-  $log=Join-Path $reportDir 'metaeditor.log'
+  # Use a new log for each attempt; an old successful log is not proof of a
+  # fresh compile. MetaEditor is a GUI executable, so invoking it with `&`
+  # does not reliably wait or populate $LASTEXITCODE in PowerShell.
+  $log=Join-Path $reportDir ('metaeditor-' + [DateTime]::UtcNow.ToString('yyyyMMddHHmmssfff') + '.log')
+  $previousEx5=if (Test-Path -LiteralPath $exe -PathType Leaf) { Get-Item -LiteralPath $exe } else { $null }
+  $previousWrite=if ($null -ne $previousEx5) { $previousEx5.LastWriteTimeUtc } else { $null }
   $started=[DateTime]::UtcNow
   # A stale EX5 from a prior compilation is not proof of success.
-  & $editor ("/compile:" + $dest) ("/log:" + $log)
-  $exitCode=$LASTEXITCODE
+  $arguments=@(('/compile:"' + $dest + '"'),('/log:"' + $log + '"'))
+  $compiler=Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
+  if (-not $compiler.WaitForExit(120000)) {
+    Stop-Process -Id $compiler.Id -Force -ErrorAction SilentlyContinue
+    throw 'MetaEditor compile timed out'
+  }
+  $exitCode=$compiler.ExitCode
   $compiled=(Test-Path -LiteralPath $exe -PathType Leaf)
   $file=if ($compiled) { Get-Item -LiteralPath $exe } else { $null }
   $fresh=($null -ne $file -and $file.Length -gt 1024 -and
-    $file.LastWriteTimeUtc -ge $started.AddSeconds(-2))
-  $logFailure=$false
-  if (Test-Path -LiteralPath $log -PathType Leaf) {
+    $file.LastWriteTimeUtc -ge $started.AddSeconds(-2) -and
+    ($null -eq $previousWrite -or $file.LastWriteTimeUtc -gt $previousWrite))
+  $logFound=(Test-Path -LiteralPath $log -PathType Leaf)
+  $logClean=$false
+  if ($logFound) {
     $raw=Get-Content -LiteralPath $log -Raw -ErrorAction Stop
-    if ($raw -match '[1-9][0-9]* errors?[,\s]') { $logFailure=$true }
+    $logClean=($raw -match '(?im)^\s*Result:\s*0\s+errors?\b' -and
+      $raw -notmatch '(?i)\b[1-9][0-9]*\s+errors?\b')
   }
-  $okay=($exitCode -eq 0 -and $fresh -and -not $logFailure)
+  # MetaEditor can exit with code 1 even after a successful compile. Trust the
+  # new explicit result log AND a fresh EX5, and record the code for diagnosis.
+  $okay=($fresh -and $logClean)
+  $report['compiler_exit_code']=$exitCode
+  $report['ex5_found']=$compiled
+  $report['ex5_fresh']=$fresh
+  $report['log_found']=$logFound
+  $report['log_zero_errors']=$logClean
   $report.metaeditor_compiled=if ($okay) {'PASS'}else{'FAIL'}
   $report.reason=if ($okay) {
     'Fresh nonempty EX5 compiled by supplied MetaEditor; OnTick/Gateway still require MT5 Demo validation'
   }else{
-    'MetaEditor failed or EX5 is stale/missing; inspect metaeditor.log'
+    'MetaEditor failed or EX5 is stale/missing; inspect this attempt log: ' + $log
   }
   $report['ex5_sha256']=if ($okay) {(Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash}else{$null}
-  $report['ex5_size_bytes']=if ($okay) {$file.Length}else{$null}
+  $report['ex5_size_bytes']=if ($null -ne $file) {$file.Length}else{$null}
   Save-Report
   if (-not $okay) { exit 1 }
   Write-Host 'MetaEditor compile PASS. Attach the generated Expert to an XAUUSD DEMO chart.'
-  Write-Host 'CONNECTED + Native/Poll acceptance remain NOT TESTED on this device.'
+  Write-Host 'Native/Poll delivery and MT5 Demo acceptance remain NOT TESTED on this device.'
   exit 0
 } catch {
   $report.metaeditor_compiled='FAIL'

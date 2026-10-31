@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import sys
+import threading
 import urllib.request
 from pathlib import Path
 import time
@@ -24,16 +26,30 @@ from datetime import datetime, timedelta, timezone
 
 from sniper_native import NativeTickBridge
 from transport import LoopbackCore
+from broker_costs import booked_trading_net
 
 BASE = "http://127.0.0.1:18741"
 BAGHDAD = timezone(timedelta(hours=3))
 SNIPER_LOOP_SECONDS = 0.005
 SNIPER_FULL_SNAPSHOT_SECONDS = 0.250
 SNIPER_BACKGROUND_SECONDS = 0.500
+BROKER_HISTORY_POLL_SECONDS = 5.0
 CONFIG_REFRESH_SECONDS = 0.500
 NORMAL_MIN_LOOP_SECONDS = 0.050
 NATIVE_RECENT_MS = 500
 NATIVE_BATCH_MAX = 512
+
+
+class BrokerHistoryScheduler:
+    """Keep normal broker work alive even when every loop handles a tick."""
+    def __init__(self):
+        self.next_poll = 0.0
+
+    def should_poll(self, command_polled: bool, now: float) -> bool:
+        if command_polled and now < self.next_poll:
+            return False
+        self.next_poll = now + BROKER_HISTORY_POLL_SECONDS
+        return True
 
 
 class MarketCache:
@@ -104,6 +120,33 @@ class DomCache:
             return False,[]
 
 
+def validated_closed_chart_bars(rows, seconds, now_s):
+    """Fail closed on malformed broker OHLC without repairing or inventing bars.
+
+    This is display/analysis history, not the live tick execution path.
+    Missing weekend/session intervals are allowed; duplicate and unordered
+    timestamps or non-finite prices invalidate the entire timeframe.
+    """
+    if not 100 <= len(rows) <= 180 or seconds not in (60, 300, 900):
+        return False
+    previous=0
+    for bar in rows:
+        stamp=bar['time']
+        if (not isinstance(stamp,int) or stamp<=previous or stamp<=0
+                or stamp%seconds or stamp+seconds>now_s):
+            return False
+        values=(bar['open'],bar['high'],bar['low'],bar['close'])
+        if (not all(math.isfinite(v) and v>0 for v in values)
+                or bar['high']<max(bar['open'],bar['close'])
+                or bar['low']>min(bar['open'],bar['close'])
+                or bar['high']<bar['low']
+                or not isinstance(bar['tick_volume'],int)
+                or bar['tick_volume']<0):
+            return False
+        previous=stamp
+    return True
+
+
 def collect_market(mt5,symbol,now):
     data=dict(captured_ms=int(now.timestamp()*1000),m1=[],m5=[],m15=[],error="")
     errors=[]
@@ -113,10 +156,10 @@ def collect_market(mt5,symbol,now):
             if rates is None or len(rates)<100:
                 errors.append(name.upper()+": waiting for 100 closed candles");continue
             rows=[dict(time=int(r['time']),open=float(r['open']),high=float(r['high']),low=float(r['low']),close=float(r['close']),tick_volume=int(r['tick_volume'])) for r in rates]
-            if any(r['time']+seconds>now.timestamp() for r in rows):
-                errors.append(name.upper()+": unfinished or future candle rejected");continue
+            if not validated_closed_chart_bars(rows,seconds,now.timestamp()):
+                errors.append(name.upper()+": invalid, unordered or unfinished broker OHLC rejected");continue
             data[name]=rows
-        except (AttributeError,TypeError,ValueError,RuntimeError):
+        except (AttributeError,TypeError,ValueError,RuntimeError,OverflowError):
             errors.append(name.upper()+": history unavailable")
     data['error']='; '.join(errors)
     return data
@@ -142,28 +185,42 @@ def day_range(now: datetime):
 def deal_summary(deals, mt5):
     if deals is None:
         return None, None
-    trading = [d for d in deals if d.type in (mt5.DEAL_TYPE_BUY, mt5.DEAL_TYPE_SELL)]
-    # A missing broker-reported cost is unknown, never equivalent to a
-    # zero-commission account. Likewise, NaN/Inf must not reach Core/UI as PnL.
-    booked = []
-    for deal in trading:
-        components = []
-        for key in ('profit', 'commission', 'swap', 'fee'):
-            value = getattr(deal, key, None)
-            if isinstance(value, bool):
-                return None, None
-            try:
-                amount = float(value)
-            except (ValueError, TypeError, OverflowError):
-                return None, None
-            if not math.isfinite(amount):
-                return None, None
-            components.append(amount)
-        booked.append(math.fsum(components))
-    net = math.fsum(booked)
-    if not math.isfinite(net):
+    try:
+        return booked_trading_net(deals, mt5)
+    except ValueError:
         return None, None
-    return net, len(trading)
+
+
+def active_order_details(orders):
+    """Return the complete MT5 order list, or None if any item is unreliable."""
+    try:
+        # Keep snapshots bounded well below the Core request size limit. A
+        # larger account is reported as unknown details, never truncated.
+        if len(orders)>1_000:
+            return None
+        result=[];tickets=set()
+        for order in orders:
+            integer_fields=('ticket','magic','type','time_setup_msc','time_expiration')
+            integer_values=[getattr(order,k) for k in integer_fields]
+            if any(isinstance(v,bool) or not isinstance(v,int) or not 0<=v<=9_007_199_254_740_991 for v in integer_values):
+                return None
+            ticket,magic,kind,setup,expiration=integer_values
+            symbol=getattr(order,'symbol')
+            raw=[getattr(order,k) for k in ('volume_initial','volume_current','price_open','sl','tp','price_stoplimit')]
+            if any(isinstance(v,bool) for v in raw):
+                return None
+            initial,current,price,sl,tp,stoplimit=map(float,raw)
+            if (ticket==0 or ticket in tickets or not isinstance(symbol,str) or not symbol or len(symbol)>80
+                    or kind>8 or not all(math.isfinite(v) for v in (initial,current,price,sl,tp,stoplimit))
+                    or initial<=0 or current<=0 or current>initial+1e-8 or price<=0 or min(sl,tp,stoplimit)<0):
+                return None
+            tickets.add(ticket)
+            result.append(dict(ticket=ticket,symbol=symbol,magic=magic,order_type=kind,
+                volume_initial=initial,volume_current=current,price_open=price,sl=sl,tp=tp,
+                price_stoplimit=stoplimit,time_setup_ms=setup,expiration=expiration))
+        return result
+    except (AttributeError,TypeError,ValueError,OverflowError):
+        return None
 
 
 def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, dom_cache=None) -> dict:
@@ -225,13 +282,13 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
     except (ValueError, TypeError, OverflowError):
         margin = None
     minimum_lot_margin = None
-    if (info is not None and tick is not None
-            and hasattr(mt5, "order_calc_margin") and hasattr(mt5, "ORDER_TYPE_BUY")):
+    if (info is not None and tick is not None and hasattr(mt5, "order_calc_margin")
+            and hasattr(mt5, "ORDER_TYPE_BUY") and hasattr(mt5, "ORDER_TYPE_SELL")):
         try:
-            raw = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, symbol,
-                                       float(info.volume_min), float(tick.ask))
-            if raw is not None and math.isfinite(float(raw)) and float(raw) >= 0:
-                minimum_lot_margin = float(raw)
+            margins = [mt5.order_calc_margin(side, symbol, float(info.volume_min), float(price))
+                       for side,price in ((mt5.ORDER_TYPE_BUY,tick.ask),(mt5.ORDER_TYPE_SELL,tick.bid))]
+            if all(v is not None and math.isfinite(float(v)) and float(v) >= 0 for v in margins):
+                minimum_lot_margin = max(float(v) for v in margins)
         except (ValueError, TypeError, OverflowError, RuntimeError):
             pass
     result = empty_snapshot(" ".join(errors))
@@ -247,7 +304,7 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
                                   side="BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL",
                                   volume=p.volume, price_open=p.price_open,
                                   price_current=p.price_current, profit=p.profit, sl=p.sl, tp=p.tp)
-                             for p in positions], pending_orders=len(orders), today_net=net,
+                             for p in positions], pending_orders=len(orders), pending_order_details=active_order_details(orders), today_net=net,
                   today_deals=count, report_day=report_day, symbol=symbol,
                   bid=tick.bid if tick else None, ask=tick.ask if tick else None,
                   quote_time_ms=tms,source_quote_time_ms=tms,
@@ -461,6 +518,48 @@ def lock_gateway(directory: Path):
     return handle
 
 
+def watch_parent_stdin(stream, wake):
+    """Ask the main loop to finish after the Core closes its private pipe.
+
+    EOF is a shutdown request, not a broker command. Only Core-launched
+    gateways opt in; no shared file can accidentally request an exit.
+    """
+    stopped = threading.Event()
+    def watch():
+        try:
+            while stream.read(1):
+                pass
+        except (OSError, ValueError):
+            pass
+        finally:
+            stopped.set()
+            wake()
+    threading.Thread(target=watch, name="braintrade-parent-watch", daemon=True).start()
+    return stopped
+
+
+def cleanup_gateway(transport, native, executor, mt5, dom_cache, lock):
+    """Attempt every cleanup step, and report incomplete cleanup to Core."""
+    failures = []
+    def run(name, action, require_true=False):
+        try:
+            result = action()
+            if require_true and result is not True:
+                failures.append(name)
+        except Exception:
+            failures.append(name)
+    if transport is not None:
+        run("transport", transport.close)
+    run("native pipe", native.close, require_true=True)
+    run("broker journal", executor.close)
+    if mt5 is not None:
+        run("market book", lambda: dom_cache.release(mt5))
+        run("MT5", mt5.shutdown)
+    run("gateway lock", lock.close)
+    if failures:
+        raise RuntimeError("Gateway cleanup incomplete: " + ", ".join(failures))
+
+
 def main():
     directory = Path(os.environ["BRAINTRADE_DATA_DIR"])
     token = os.environ.pop("BRAINTRADE_IPC_TOKEN")
@@ -490,10 +589,18 @@ def main():
     market_cache=MarketCache()
     dom_cache=DomCache()
     native=NativeTickBridge()
+    if os.environ.get("BRAINTRADE_GATEWAY_PARENT_STDIN") == "1":
+        if sys.stdin is None or not hasattr(sys.stdin, "buffer"):
+            raise RuntimeError("Parent shutdown pipe is unavailable")
+        stop_requested=watch_parent_stdin(sys.stdin.buffer,native.mailbox.wake)
+    else:
+        stop_requested=threading.Event()
     latest_snapshot=None
     next_full_snapshot=0.0
     next_background=0.0
     next_config_refresh=0.0
+    next_native_rebind=0.0
+    broker_history_schedule=BrokerHistoryScheduler()
     normal_poll_seconds=1.0
 
     def api(path, payload=None, method=None):
@@ -531,7 +638,7 @@ def main():
     from execution import BrokerExecutor
     executor=BrokerExecutor(directory / 'broker-journal.sqlite')
     try:
-        while True:
+        while not stop_requested.is_set():
             loop_started=time.perf_counter()
             mono=time.monotonic()
             command_polled=False
@@ -563,6 +670,13 @@ def main():
                         if initialized:
                             native.bind_terminal(mt5.terminal_info())
                     if initialized:
+                        # A worker can die after MT5 initialize() remains healthy.
+                        # Retrying once every two seconds recovers the Native EA pipe
+                        # without falsely claiming that ordinary MT5 polling is native.
+                        if mono >= next_native_rebind:
+                            next_native_rebind=mono+2.0
+                            if not native.available:
+                                native.bind_terminal(mt5.terminal_info())
                         # Drain authenticated quote events before slower account/candle work.
                         # Each distinct quote is evaluated through the execution-only pulse
                         # and any command is returned in that same localhost response.
@@ -659,7 +773,10 @@ def main():
 
             try:
                 if initialized and latest_snapshot and latest_snapshot.get('connected'):
-                    if not command_polled:
+                    # Pulse work deliberately skips history. During a sustained
+                    # tick stream there might never be an idle loop, so force
+                    # an occasional normal cycle for durable broker history.
+                    if broker_history_schedule.should_poll(command_polled,time.monotonic()):
                         try:
                             normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api)))
                         except (OSError,ValueError,RuntimeError):
@@ -685,16 +802,9 @@ def main():
                     # the maximum fallback polling interval, not a mandatory sleep.
                     native.wait(remaining)
                 else:
-                    time.sleep(remaining)
+                    stop_requested.wait(remaining)
     finally:
-        if transport is not None:
-            transport.close()
-        native.close()
-        executor.close()
-        if mt5 is not None:
-            dom_cache.release(mt5)
-            mt5.shutdown()
-        lock.close()
+        cleanup_gateway(transport, native, executor, mt5, dom_cache, lock)
 
 
 if __name__ == "__main__":

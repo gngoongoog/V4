@@ -14,14 +14,18 @@ struct SniperBrokerRow {
 }
 
 fn sniper_broker_rows(db:&Connection,context:&str)->Result<Vec<SniperBrokerRow>>{
+    sniper_broker_rows_at(db,context,None)
+}
+fn sniper_broker_rows_at(db:&Connection,context:&str,cutoff:Option<u64>)->Result<Vec<SniperBrokerRow>>{
     let mut st=db.prepare(
         "SELECT s.source,s.position_id,s.context,s.brain,s.closed_ms,s.payload,
                 a.context,a.brain,a.closed_ms,a.admitted_ms,a.payload_sha256,a.protocol
          FROM coordinator_broker_samples s LEFT JOIN coordinator_broker_admissions a
            ON a.source=s.source AND a.position_id=s.position_id
          WHERE s.context=?1 AND s.brain='sniper_learner'
+           AND (?2 IS NULL OR (a.admitted_ms<=?2 AND s.closed_ms<=?2))
          ORDER BY s.closed_ms DESC,s.position_id DESC LIMIT 2000")?;
-    let mapped=st.query_map([context],|r|Ok(SniperBrokerRow{
+    let mapped=st.query_map(rusqlite::params![context,cutoff],|r|Ok(SniperBrokerRow{
         source:r.get(0)?,position:r.get::<_,i64>(1).unwrap_or(-1),
         context:r.get(2)?,brain:r.get(3)?,
         closed:r.get::<_,i64>(4).unwrap_or(-1),raw:r.get(5)?,
@@ -65,16 +69,20 @@ fn verified_sniper_admission(row:&SniperBrokerRow,context:&str,now:u64)->Option<
 }
 
 pub fn refresh(engine: &mut Engine, db: &Connection, t: &Telemetry, now: u64) -> Result<()> {
+    refresh_gated(engine,db,t,now,None)
+}
+pub fn refresh_gated(engine: &mut Engine, db: &Connection, t: &Telemetry, now: u64, cutoff:Option<u64>) -> Result<()> {
+    let evidence_time=cutoff.unwrap_or(now);
     let context = crate::coordinator_learning::context(t);
     let mut models = Models::new();
     let mut targets=TargetModels::new();
     if t.demo && t.account_trade_mode == Some(0) {
-        for row in sniper_broker_rows(db,&context)?.into_iter().rev(){
+        for row in sniper_broker_rows_at(db,&context,cutoff)?.into_iter().rev(){
             let Some(closed)=u64::try_from(row.closed).ok().filter(|v|*v>0) else{continue;};
-            if closed>now || now.saturating_sub(closed)>30*24*60*60*1000{continue;}
+            if closed>evidence_time || evidence_time.saturating_sub(closed)>30*24*60*60*1000{continue;}
             // Never train a TP/policy from labels that did not exist at this
             // Core decision time. Corrupt JSON is skipped, not a fatal error.
-            let Some(p)=verified_sniper_admission(&row,&context,now) else{continue;};
+            let Some(p)=verified_sniper_admission(&row,&context,evidence_time) else{continue;};
             let s = &p["selection"];
             if s["brain"] != ID || s["policy"] != "sniper-ticks-v1" { continue; }
             let Some(policy) = POLICIES.iter().position(|name| s["sniper_policy"] == *name) else { continue; };
@@ -251,6 +259,28 @@ mod tests {
         let mut restarted=Engine::default();refresh(&mut restarted,&db,&t,2000).unwrap();
         assert_eq!(restarted.models.values().next().unwrap()[0].reward,e.models.values().next().unwrap()[0].reward);
         let mut live=t.clone();live.demo=false;live.account_trade_mode=Some(2);refresh(&mut e,&db,&live,2000).unwrap();assert!(e.models.is_empty());
+    }
+    #[test]
+    fn global_pause_excludes_late_admitted_broker_labels_until_resume(){
+        let db=Connection::open_in_memory().unwrap();
+        crate::coordinator_learning::Learner::new(&db).unwrap();
+        let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),login:17,
+            server:"Demo".into(),symbol:"XAUUSD".into(),currency:"USD".into(),..Default::default()};
+        let ctx=crate::coordinator_learning::context(&t);
+        let record=json!({"evidence_source":"mt5_demo_broker","trading_mode":"sniper",
+            "gross":2.0,"commission":-0.5,"swap":0.0,"fee":0.0,
+            "net":1.5,"net_per_lot":15.0,"closed_volume":0.1,
+            "risk_money":0.0,"r_multiple":0.0,"reward":0.25,
+            "selection":{"brain":ID,"policy":"sniper-ticks-v1",
+                "sniper_policy":"impulse","sniper_definition":"A","sniper_regime":"B"}});
+        db.execute("INSERT INTO coordinator_broker_samples VALUES('fixture',1,?1,'sniper_learner',1000,?2)",rusqlite::params![ctx,record.to_string()]).unwrap();
+        stamp_fixture_sniper(&db,&ctx,2000);
+        let mut e=Engine::default();
+        refresh_gated(&mut e,&db,&t,3000,Some(1500)).unwrap();assert!(e.models.is_empty());
+        let mut restarted=Engine::default();
+        refresh_gated(&mut restarted,&db,&t,4000,Some(1500)).unwrap();assert!(restarted.models.is_empty());
+        refresh(&mut restarted,&db,&t,4000).unwrap();
+        assert_eq!(restarted.models.values().next().unwrap()[0].samples,1);
     }
     #[test]
     fn invalid_legacy_broker_fee_can_neither_train_sniper_nor_be_frozen(){

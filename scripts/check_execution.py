@@ -142,7 +142,7 @@ def check(exe=None):
             broker.raise_send=False
             broker.deals=[N(ticket=77,magic=410600,symbol='XAUUSD',volume=.01,
                             type=broker.DEAL_TYPE_BUY,entry=broker.DEAL_ENTRY_IN,
-                            position_id=55,comment='BT:'+cmd['id'][:20])]
+                            position_id=55,price=broker.tick.ask,time_msc=clock_ms(),comment='BT:'+cmd['id'][:20])]
             result=submit(cmd)
             assert result['state']=='filled',result
             assert len(broker.sends)==1

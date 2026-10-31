@@ -25,7 +25,8 @@ FEATURED=("risk", "execution", "trading", "sniper", "backtest",
 APPROVED_COMMANDS=(
     "execute_control", "update_risk", "update_portfolio", "update_settings",
     "priority_handoff", "shutdown_core", "close_terminal", "backup_action",
-    "backtest_action", "update_trading_settings", "update_brain_control",
+    "brain_snapshot_export", "brain_snapshot_import", "brain_snapshot_restore", "save_excel_report",
+    "backtest_action", "update_trading_settings", "update_brain_control", "update_brain_paper_all", "update_risk_master", "update_position_protection", "set_learning_frozen", "manual_market", "cancel_pending_order", "select_solo_brain", "close_owned_positions",
     "bind_execution", "update_supervisor", "frozen_coordinator_action", "frozen_sniper_action", "frozen_classic_action",
     "read_panel", "read_trade_history", "get_status",
     "subscribe_status",
@@ -47,6 +48,8 @@ def check(root:Path=ROOT)->dict:
     type_ids=set(re.findall(r"'([^']+)'",typeblock))
     declared_commands=set(re.findall(r"invoke(?:<[^>]+>)?\('([^']+)'",bridge))
     registered=tauri.split("tauri::generate_handler![",1)[1].split("]",1)[0]
+    primary_match=re.search(r"const primaryNav:PageId\[\]=\[([^\]]+)\]",terminal)
+    primary_ids=re.findall(r"'([^']+)'",primary_match.group(1)) if primary_match else []
     checks={}
     def add(name:str,passed:bool,detail:str):
         checks[name]={"status":"PASS" if passed else "FAIL","detail":detail}
@@ -61,7 +64,11 @@ def check(root:Path=ROOT)->dict:
             for page,route in route_by_page.items()),
         "Dashboard uses live status; all other pages must read allowlisted Core GET routes")
     add("navigation_actions_for_all_pages",
-        "PAGES.filter((x,i)=>allOpen||i<11||x.id===page)" in terminal
+        bool(primary_ids) and len(primary_ids)==len(set(primary_ids))
+        and set(primary_ids).issubset(set(ids))
+        and "sidebarPages=[...primaryNav.map(findPage),...PAGES.filter(x=>!primaryNav.includes(x.id))]" in terminal
+        and "sidebarPages.filter((x,i)=>allOpen||i<11||x.id===page)" in terminal
+        and "!allOpen&&!primaryNav.includes(x.id)&&x.id!==page" in terminal
         and "onClick={()=>open(x.id)}" in terminal
         and "aria-current={page===x.id?'page':undefined}" in terminal,
         "All 22 pages reachable; collapsed navigation retains the active page")

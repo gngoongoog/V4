@@ -8,7 +8,7 @@ const item=(id,net,cost=true,closed=true)=>({
  positionId:id,symbol:'XAUUSD',side:'BUY',status:closed?'CLOSED':'OPEN',
  lotsOpen:.1,lotsClosed:closed?.1:0,remaining:closed?0:.1,
  net:cost?net:null,profit:cost?net+.7:null,commission:cost?-.7:null,
- fee:cost?0:null,swap:cost?0:null,provenCosts:cost,brain:'system',reason:'test',opened:'now'
+ fee:cost?0:null,swap:cost?0:null,provenCosts:cost,brain:'system',mode:'sniper',entryPrice:2000,latestDeal:'2026-10-29 12:00:00 UTC',reason:'test',opened:'now'
 });
 const make=(rows,total=rows.length)=>({ready:true,reason:'broker verified',
  rows,total,offset:0,limit:100,hasPrev:false,hasNext:total>100});
@@ -39,17 +39,30 @@ assert.equal(different.ready,false);assert.equal(different.net,null);
 const real=brokerReport({...status,telemetry:{...status.telemetry,demo:false,account_trade_mode:2}},make([item(1,5)]));
 assert.equal(real.mode,'REAL');
 const generated={};const jsx=(type,props)=>({type,props:props||{}});
+const series={};vm.runInNewContext(load('report-series.ts'),{exports:series,Number,Date,Array,Object});
+const csv={};vm.runInNewContext(load('journal-export.ts'),{exports:csv,String,TextEncoder,Uint8Array,DataView});
+let initialSlot=null;const saved=[];
 vm.runInNewContext(load('broker-report-operations.tsx'),{exports:generated,
  require:id=>{
-  if(id==='react')return {useState:init=>[init,()=>{}],useEffect:()=>{}};
+  if(id==='react')return {useState:init=>[init===null?initialSlot:init,()=>{}],useEffect:()=>{},useMemo:fn=>fn()};
   if(id==='react/jsx-runtime')return {jsx,jsxs:jsx};
+  if(id==='lucide-react')return Object.fromEntries(['BarChart3','CalendarDays','Download','FileText','Filter','Printer','RefreshCw','Target','TrendingUp'].map(x=>[x,x]));
   if(id==='./broker-report')return logic;
+  if(id==='./report-series')return series;
+  if(id==='./journal-export')return csv;
   if(id==='./journal-evidence')return {journalEvidence:()=>make(rows,152)};
-  if(id==='./bridge')return {readPanel:()=>Promise.reject(Error('offline')),readTradeHistory:()=>Promise.reject(Error('offline'))};
+  if(id==='./bridge')return {hasTauri:()=>true,saveExcelReport:async(bytes,kind)=>{saved.push({bytes,kind});return {saved:true}},readPanel:()=>Promise.reject(Error('offline')),readTradeHistory:()=>Promise.reject(Error('offline'))};
   throw Error('Unexpected module '+id);
  },Date,Number,Object,Array,console});
 const element=generated.BrokerReportOperations({status,scope:'verified',preview:false,onJournal:()=>{}});
 assert.equal(element.props['aria-label'],'Verified MT5 broker performance report');
+function nodes(n,out=[]){if(!n||typeof n!=='object')return out;if(Array.isArray(n)){n.forEach(v=>nodes(v,out));return out}out.push(n);nodes(n.props?.children,out);return out}
+initialSlot={scope:'verified',execution:{},journal:{}};
+const ready=generated.BrokerReportOperations({status,scope:'verified',preview:false,onJournal:()=>{}});
+const excel=nodes(ready).find(n=>n.type==='button'&&String(n.props.children).includes('تصدير Excel'));
+assert(excel&&!excel.props.disabled,'Verified sample must offer the native Excel export');
+excel.props.onClick();assert.equal(saved.length,1);assert.equal(saved[0].kind,'report');
+assert.equal(Buffer.from(saved[0].bytes).readUInt32LE(0),0x04034b50,'Native save receives an XLSX archive');
 const component=fs.readFileSync(path.join(root,'broker-report-operations.tsx'),'utf8');
 const main=fs.readFileSync(path.join(root,'terminal.tsx'),'utf8');
 assert(component.includes("readTradeHistory(0,100)")&&component.includes("journalEvidence(status,slot.execution,slot.journal,0,100)"));

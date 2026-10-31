@@ -54,7 +54,7 @@ export function MicroCapitalOperations({status,risk,portfolio,monitor,armed,disa
    </label>
    <label>أقل لوت عند الوسيط<strong>{shown(view.minimumLot,4)}</strong></label>
    <label>الهامش الحر الفعلي<strong>{shown(view.freeMargin)} {view.currency}</strong></label>
-   <label>هامش أقل لوت من MT5<strong>{shown(view.minimumLotMargin)} {view.currency}</strong></label>
+   <label>هامش أقل لوت من MT5 (الأعلى بين الشراء والبيع)<strong>{shown(view.minimumLotMargin)} {view.currency}</strong></label>
    <label>هامش أقل لوت عند رافعة المقارنة (تقريبي)<strong>{shown(view.scenarioMargin)} {view.currency}</strong></label>
    <label>ميزانية وقف الصفقة من إعداد Core (تقديرية)<strong>{shown(view.budget)} {view.currency} {view.budgetPercent===null?'':`(${view.budgetPercent}%)`}</strong></label>
   </div>
@@ -67,6 +67,7 @@ export function MicroCapitalOperations({status,risk,portfolio,monitor,armed,disa
    {audit.state==='recovered_latched'&&<p className="safe-note">تم بلوغ حد التعافي سابقاً؛ لا تعيد الإعدادات المفعّلة أو نزول Equity تصريح Micro لهذه الهوية.</p>}
   </div>
   <h3><SlidersHorizontal size={17}/> الحد الإجمالي للمحفظة (مستقل عن Risk لكل صفقة)</h3>
+  {p.risk_master_enabled===false&&<p className="safe-note">مفتاح إدارة المخاطر للحساب متوقف؛ القيم المحفوظة للمحفظة والصفقة وقاطع الخسارة غير مطبقة على المداخل الجديدة حالياً.</p>}
   <p>القيم أدناه يقرأها البرنامج مباشرة من Rust Core. إذا فعّلت الحد الإجمالي وكان أقل من مخاطرة Micro REAL، ممكن يرفض دخول جديد. تقدر تتحكم به وأنت بوضع STOP.</p>
   {stored?<form onSubmit={e=>void save(e)}>
    <div className="operator-grid">

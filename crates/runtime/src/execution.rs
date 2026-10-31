@@ -1,8 +1,9 @@
-//! Execution semantics wrapper: selected-mode coordinator exclusively owns MT5 entries; advisors are paper-only.
+//! Execution semantics wrapper: one account/mode-scoped coordinator or selected solo brain owns MT5 entries.
 //! Portfolio exposure v1 is a Core-side fail-closed entry gate across all BrainTrade identities.
 //! The previous 0.6 engine is preserved in execution_legacy.rs and still owns durable broker intents.
 #[path = "execution_legacy.rs"]
 mod legacy;
+pub(crate) use legacy::PENDING_BROKER_SQL;
 #[path = "execution_pulse.rs"]
 mod pulse;
 
@@ -94,7 +95,7 @@ impl Exposure {
             "estimated_stop_risk":if self.risk_known { Value::from(self.estimated_risk) } else { Value::Null },
             "estimated_stop_risk_percent_equity":risk_percent,
             "risk_known":self.risk_known,
-            "note":"Portfolio limits block new entries only. Existing positions, broker SL/TP, timed exits and reconciliation remain active."
+            "note":"Portfolio limits block new entries only. Broker SL/TP and reconciliation remain active; a timed close can be deferred while an order is unresolved."
         })
     }
 }
@@ -148,21 +149,18 @@ fn intent_risk(t: &Telemetry, c: &Config, request: &Value) -> Option<f64> {
     Some(stop / tick * tick_value * lots + braintrade_domain::commission::round_trip_charge(c.risk.commission_per_lot,lots).ok()?)
 }
 
-fn command_values(db: &Connection, key: &str, include_queued: bool) -> Result<Vec<Value>> {
-    let states = if include_queued {
-        "('queued','dispatched','unknown','placed','filled','partial')"
-    } else {
-        "('dispatched','unknown','placed','filled','partial')"
-    };
+fn command_values(db: &Connection, key: &str, include_queued: bool) -> Result<Vec<(Value,String,Value)>> {
+    let queued = if include_queued { "" } else { "AND state<>'queued'" };
     let sql = format!(
-        "SELECT json(payload) FROM broker_commands WHERE context=?1 AND kind='open' AND state IN {states} ORDER BY created_ms,id"
+        "SELECT payload,state,result FROM broker_commands WHERE context=?1 AND kind='open' AND {} {queued} ORDER BY created_ms,id",
+        PENDING_BROKER_SQL
     );
     let mut statement = db.prepare(&sql)?;
     let rows = statement
-        .query_map([key], |row| row.get::<_, String>(0))?
+        .query_map([key], |row| Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?,row.get::<_, String>(2)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|row| Ok(serde_json::from_str(&row)?))
+        .map(|(payload,state,result)| Ok((serde_json::from_str(&payload)?,state,serde_json::from_str(&result)?)))
         .collect()
 }
 
@@ -180,7 +178,7 @@ fn exposure(db: &Connection, t: &Telemetry, c: &Config, include_queued: bool) ->
         })
         .collect();
     let visible_magics: BTreeSet<u64> = owned.iter().map(|position| position.magic).collect();
-    for position in owned {
+    for position in &owned {
         result.open_positions = result.open_positions.saturating_add(1);
         result.lots += position.volume.max(0.0);
         match owned_position_risk(t, c, position) {
@@ -188,14 +186,41 @@ fn exposure(db: &Connection, t: &Telemetry, c: &Config, include_queued: bool) ->
             None => result.risk_known = false,
         }
     }
-    for request in command_values(db, &key, include_queued)? {
+    // An exact broker-history link may account for a visible filled slice once;
+    // the possible unfilled remainder still contributes lots and stop risk.
+    let mut credited_by_position=BTreeMap::<u64,f64>::new();
+    for (request,state,broker_result) in command_values(db, &key, include_queued)? {
         let magic = request["magic"].as_u64().unwrap_or(0);
-        // A filled/partial intent and its now-visible position are one exposure, not two.
-        if visible_magics.contains(&magic) {
+        if state=="filled" && visible_magics.contains(&magic) {
             continue;
         }
-        result.open_intents = result.open_intents.saturating_add(1);
         let lots = request["lots"].as_f64().unwrap_or(0.0);
+        let linked_position=broker_result["position_id"].as_u64().filter(|id|*id>0)
+            .and_then(|id|owned.iter().find(|p|p.magic==magic
+                && (p.identifier==id || p.identifier==0 && p.ticket==id)).map(|p|(id,*p)));
+        if matches!(state.as_str(),"partial"|"observed") && broker_result["recovered_from_history"]==true {
+            if let Some((id,position))=linked_position {
+                let filled=broker_result["volume"].as_f64().unwrap_or(f64::NAN);
+                if lots.is_finite() && lots>0. && filled.is_finite() && filled>0.
+                    && position.volume.is_finite() && position.volume>0. {
+                    let already=*credited_by_position.get(&id).unwrap_or(&0.);
+                    let credit=filled.min((position.volume-already).max(0.)).min(lots);
+                    *credited_by_position.entry(id).or_default()+=credit;
+                    let remainder=(lots-credit).max(0.);
+                    result.lots+=remainder;
+                    if remainder>0. {
+                        match intent_risk(t,c,&request) {
+                            Some(risk)=>result.estimated_risk+=risk*remainder/lots,
+                            None=>result.risk_known=false,
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
+        // Without an exact position/deal link, an unresolved command may be an
+        // additional exposure even when another position shares its magic.
+        result.open_intents = result.open_intents.saturating_add(1);
         if !lots.is_finite() || lots <= 0.0 {
             result.risk_known = false;
         } else {
@@ -306,6 +331,12 @@ pub struct Service {
     supervisor_policy_valid: bool,
     quality_circuit: crate::broker_quality_circuit::Snapshot,
     fast: Option<pulse::FastContext>,
+    learning_gate:crate::learning_control::Gate,
+    manual_blocked:bool,
+    // Only touched on full snapshots or when work exists; never scan the
+    // protection journal on every latency-sensitive Sniper quote.
+    protection_work:bool,
+    cancellation_work:bool,
 }
 
 impl Service {
@@ -316,10 +347,11 @@ impl Service {
         crate::matched_forward::init(db)?;
         crate::matched_trade::init(db)?;
         crate::sniper_opportunities::init(db)?;
+        crate::position_protection::init(db)?;
+        crate::pending_cancellation::init(db)?;
         let mut inner = legacy::Service::new(db)?;
-        // `system` is the coordinated main brain. It is controlled by global START/STOP,
-        // not by the per-brain SOLO switch. Keep it enabled in memory even when an older
-        // 0.6 checkpoint persisted it as false.
+        // Old per-brain flags do not choose an execution owner. A scoped solo
+        // selection is loaded only after a matching reconciled broker snapshot.
         for brain in &mut inner.brains {
             brain.enabled = brain.id == "system";
         }
@@ -361,7 +393,37 @@ impl Service {
             supervisor_policy_valid,
             quality_circuit: crate::broker_quality_circuit::Snapshot::default(),
             fast: None,
+            learning_gate:crate::learning_control::load(db)?,
+            manual_blocked:true,
+            protection_work:false,
+            cancellation_work:false,
         })
+    }
+
+    pub fn learning_frozen(&self)->bool{self.learning_gate.frozen}
+    pub fn learning_status(&self)->Value{
+        json!({"frozen":self.learning_gate.frozen,"valid":self.learning_gate.valid,
+            "cutoff_ms":self.learning_gate.cutoff(),"scope":"all_accounts_and_learning_services",
+            "broker_reconciliation_continues":true,"trading_unchanged":true})
+    }
+    pub fn set_learning_frozen(&mut self,db:&Connection,status:&Status,frozen:bool,now:u64)->Result<Value>{
+        if self.learning_gate.frozen==frozen && self.learning_gate.valid {
+            return Ok(self.learning_status());
+        }
+        let gate=if frozen {
+            let scoped=status.telemetry.as_ref().filter(|t|status.gateway_fresh && self.inner.matches_bound_telemetry(t));
+            let (quality,samples)=if scoped.is_some(){self.inner.weights.values().next()
+                .filter(|w|w.execution_history_quality.is_finite()&&(0.0..=1.0).contains(&w.execution_history_quality))
+                .map(|w|(w.execution_history_quality,w.execution_history_samples)).unwrap_or((0.5,0))
+            }else{(0.5,0)};
+            crate::learning_control::Gate{frozen:true,cutoff_ms:now,
+                quality_context:scoped.map(context).unwrap_or_default(),
+                quality_target:scoped.map(|t|if t.account_trade_mode==Some(0) {"demo"}else{"live"}).unwrap_or("").into(),
+                quality,quality_samples:samples,valid:true}
+        }else{crate::learning_control::Gate::default()};
+        crate::learning_control::save(db,&gate,now)?;
+        self.learning_gate=gate;
+        Ok(self.learning_status())
     }
 
     fn load_supervisor_fail_closed(db:&Connection)->(crate::enterprise_supervisor::Settings,bool) {
@@ -418,7 +480,15 @@ impl Service {
     /// Global broker execution is armed by START + a fresh bound account.
     /// Secondary-brain SOLO switches are optional overrides and are not the master arm.
     pub fn enabled(&self, status: &Status) -> bool {
-        status.requested_run && status.gateway_fresh && self.account_matches(status)
+        status.requested_run && status.gateway_fresh && self.account_matches(status) && !self.manual_blocked
+    }
+    pub fn risk_master_for_status(&self,status:&Status)->Option<bool>{
+        status.telemetry.as_ref().filter(|_|status.gateway_fresh&&self.account_matches(status))
+            .and_then(|t|self.inner.risk_master(t))
+    }
+    pub fn selected_owner_for_status<'a>(&'a self,status:&Status)->Option<&'a str>{
+        let t=status.telemetry.as_ref().filter(|_|status.gateway_fresh&&self.account_matches(status))?;
+        self.inner.active_mode.map(|mode|self.inner.solo_owner(t,mode))
     }
 
     /// Real-money START is independently acknowledged every time. Merely
@@ -446,17 +516,32 @@ impl Service {
                     && t.trade_allowed && t.trade_expert),
             "تعذر تشغيل LIVE: يجب مطابقة حساب MT5 الحقيقي وتحديث الاتصال والسماح بالتداول الآلي"
         );
-        anyhow::ensure!(self.portfolio.enabled,
+        let risk_master=status.telemetry.as_ref().and_then(|t|self.inner.risk_master(t)).unwrap_or(true);
+        anyhow::ensure!(!risk_master || self.portfolio.enabled,
             "تشغيل REAL يحتاج تفعيل حماية المحفظة أولاً (عدد الصفقات، اللوت الكلي، وخطر الوقف)"
         );
         Ok(())
     }
 
     pub fn pending(&self, db: &Connection) -> Result<bool> {
-        self.inner.pending(db)
+        Ok(self.inner.pending(db)? || crate::pending_cancellation::pending(db)?)
     }
 
-    pub fn cancel_entries(&self, db: &Connection) -> Result<()> {
+    fn manual_exposure(db:&Connection,t:Option<&Telemetry>)->Result<bool>{
+        let sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE brain='manual' AND {PENDING_BROKER_SQL})");
+        let pending:bool=db.query_row(&sql,[],|r|r.get(0))?;
+        Ok(pending || t.is_some_and(|t|t.positions.iter().any(|p|p.symbol==t.symbol&&p.magic==410_618)
+            || t.pending_orders>0 && t.pending_order_details.as_ref().is_none_or(|orders|
+                orders.iter().any(|o|o.symbol==t.symbol&&o.magic==410_618))))
+    }
+    pub fn validate_manual_handoff(&self,db:&Connection,status:&Status)->Result<()> {
+        anyhow::ensure!(!crate::pending_cancellation::pending(db)?,"انتظر تسوية طلب إلغاء الأمر المعلّق قبل START");
+        anyhow::ensure!(!Self::manual_exposure(db,status.telemetry.as_ref())?,
+            "أغلق المركز اليدوي وانتظر تسوية أوامره قبل تشغيل الوضع الآلي");
+        Ok(())
+    }
+
+    pub fn cancel_entries(&mut self, db: &Connection) -> Result<()> {
         self.inner.cancel_entries(db)
     }
 
@@ -471,6 +556,15 @@ impl Service {
             crate::broker_quality_circuit::Snapshot::unavailable(key,now)
         };
     }
+    fn apply_portfolio(&mut self,db:&Connection,t:&Telemetry,c:&Config)->Result<()> {
+        let master=self.inner.risk_master(t).unwrap_or(true);
+        let current=if master {enforce_portfolio(db,t,c,&self.portfolio)?}else{exposure(db,t,c,true)?};
+        self.portfolio_state=current.json(&self.portfolio,t.equity);
+        self.portfolio_state["risk_master_enabled"]=json!(master);
+        self.portfolio_state["effective_enabled"]=json!(master && self.portfolio.enabled);
+        if !master {self.portfolio_state["note"]=json!("حدود المحفظة محفوظة لكنها موقوفة عبر مفتاح مخاطر هذا الحساب؛ إدارة الصفقات الحالية والتسوية مستمرة.");}
+        Ok(())
+    }
 
     pub fn observe(
         &mut self,
@@ -481,12 +575,15 @@ impl Service {
         frames: &BTreeMap<String, Vec<FrameBar>>,
         now: u64,
     ) -> Result<()> {
-        if let Some(system) = self.inner.brains.iter_mut().find(|brain| brain.id == "system") {
-            system.enabled = true;
-        }
-        self.inner.controls = crate::brain_control::load(db, &context(telemetry), config.trading.mode)?;
+        self.inner.refresh_risk_master(db,telemetry)?;
+        self.inner.refresh_solo(db,telemetry,config.trading.mode)?;
+        self.manual_blocked=Self::manual_exposure(db,Some(telemetry)).unwrap_or(true);
+        self.inner.controls = crate::brain_control::load_account(db, &context(telemetry), config.trading.mode, telemetry.account_trade_mode)?;
         let available = crate::coordinator_learning::available_frames(telemetry, frames, now);
-        self.inner.weights = self.learner.observe(
+        let cutoff=self.learning_gate.cutoff();
+        let target=if telemetry.account_trade_mode==Some(0) {"demo"} else {"live"};
+        let frozen_quality=self.learning_gate.history_quality(&context(telemetry),target);
+        self.inner.weights = self.learner.observe_gated(
             db,
             telemetry,
             config,
@@ -494,12 +591,14 @@ impl Service {
             &available,
             run,
             now,
+            cutoff,
+            frozen_quality,
         )?;
-        crate::sniper_learning::refresh(&mut self.inner.sniper, db, telemetry, now)?;
-        self.student.observe(db,telemetry,now)?;
+        crate::sniper_learning::refresh_gated(&mut self.inner.sniper, db, telemetry, now,cutoff)?;
+        let learning_frozen=self.learning_frozen();
+        self.student.observe_gated(db,telemetry,now,learning_frozen)?;
         self.inner.student_policies=self.student.policies.clone();
-        // Legacy engine still owns durable broker intents/reconciliation. With `system`
-        // forced on, it represents coordinated execution; every other `enabled` flag means SOLO.
+        // Legacy engine still owns durable broker intents and reconciliation.
         // V20 institutional admission: never prevent already-open position exits
         // or broker reconciliation. The gate is explicit opt-in, persisted in
         // SQLite, and cannot transfer execution ownership to another brain.
@@ -507,7 +606,7 @@ impl Service {
         // management. Fail closed for fresh opens while reconciliation proceeds.
         // This check reads the durable Core journal only on reconciled snapshots.
         self.refresh_quality_circuit(db,telemetry,now);
-        let quality_allows=self.quality_circuit.entry_allowed(telemetry,self.is_live_target());
+        let quality_allows=self.quality_circuit.entry_allowed(telemetry,self.is_live_target()) && !self.manual_blocked;
         let entries_allowed=if run && quality_allows && self.supervisor_policy_valid {
             if !self.supervisor.enforce_entry_gate {true}
             else {
@@ -527,6 +626,15 @@ impl Service {
         self.sniper_frozen_tick.flush_research_events(db,telemetry);
         self.inner
             .observe(db, telemetry, config, entries_allowed, frames, now)?;
+        // Protection failures must not interrupt broker reconciliation or
+        // existing exit logic. A failed or corrupt policy simply creates no
+        // modification; the read-only report exposes the error to the UI.
+        self.protection_work=if self.inner.matches_bound_telemetry(telemetry) {
+            crate::position_protection::observe(db,telemetry,&self.inner.settings.target,now).unwrap_or(false)
+        } else {false};
+        self.cancellation_work=if self.inner.matches_bound_telemetry(telemetry) {
+            crate::pending_cancellation::ready(db,telemetry,&self.inner.settings.target,now).unwrap_or(false)
+        } else {false};
         // Separate read-only Classic forward cohort uses full M1 snapshots.
         // It never consumes or contaminates Learner Fast Pulse comparisons.
         self.sniper_classic_forward.observe(telemetry,config,frames,now);
@@ -554,15 +662,15 @@ impl Service {
                         "error":error.to_string().chars().take(240).collect::<String>()}).to_string()]);
           }
         }
-        self.student.capture_entries(self.inner.take_entries(), now);
-        if run {crate::student_learning::log_opportunities(db,telemetry,&self.inner.learning_decisions(),now)?;}
+        let entries=self.inner.take_entries();
+        if !self.learning_frozen(){self.student.capture_entries(entries, now);}
+        if run && !self.learning_frozen() {crate::student_learning::log_opportunities(db,telemetry,&self.inner.learning_decisions(),now)?;}
         // Apply one global entry budget after all brains have proposed their queued opens and
         // before the gateway can retrieve them. Exits and reconciliation states are untouched.
-        let current = enforce_portfolio(db, telemetry, config, &self.portfolio)?;
-        self.portfolio_state = current.json(&self.portfolio, telemetry.equity);
+        self.apply_portfolio(db,telemetry,config)?;
         // Diagnostic sampling uses normal reconciled snapshots only, after
         // broker intents and portfolio decisions. Never add this to Fast Pulse.
-        if self.inner.matches_bound_telemetry(telemetry) {
+        if self.inner.matches_bound_telemetry(telemetry) && self.inner.solo_owner(telemetry,config.trading.mode)=="system" {
             let decisions = self.inner.learning_decisions();
             let system = decisions.iter().find(|(id,_)| id == "system").map(|(_,d)| d);
             if let Err(error) = self.sniper_opportunities.observe(db,telemetry,config,run,system,now) {
@@ -579,22 +687,26 @@ impl Service {
         Ok(())
     }
 
-    fn enrich_roles(mut value: Value, db: &Connection, status: &Status) -> Result<Value> {
+    fn enrich_roles(&self,mut value: Value, db: &Connection, status: &Status) -> Result<Value> {
         let key = status
             .telemetry
             .as_ref()
             .map(crate::coordinator_learning::context)
             .unwrap_or_default();
 
+        let owner=status.telemetry.as_ref().filter(|_|status.gateway_fresh&&self.account_matches(status))
+            .and_then(|t|self.inner.active_mode.map(|mode|self.inner.solo_owner(t,mode).to_owned()));
+        value["selected_owner"]=json!(owner);
         if let Some(brains) = value.get_mut("brains").and_then(Value::as_array_mut) {
             for brain in brains {
                 let id = brain["config"]["id"]
                     .as_str()
                     .unwrap_or_default()
                     .to_owned();
-                let solo = false; // all non-system brains are paper/shadow only
+                let solo = id!="system" && owner.as_deref()==Some(id.as_str());
+                let sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND {})",PENDING_BROKER_SQL);
                 let in_flight: bool = db.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain=?2 AND state IN ('queued','dispatched','unknown','placed','filled','partial'))",
+                    &sql,
                     params![key, id],
                     |row| row.get(0),
                 )?;
@@ -605,8 +717,10 @@ impl Service {
                 });
                 let returning = id != "system" && !solo && (in_flight || open);
                 brain["return_pending"] = json!(returning);
-                brain["role"] = json!(if id == "system" {
+                brain["role"] = json!(if id == "system" && owner.as_deref()==Some("system") {
                     "coordinator"
+                } else if id == "system" {
+                    "observer"
                 } else if solo {
                     "solo"
                 } else if returning {
@@ -615,15 +729,13 @@ impl Service {
                     "advisor"
                 });
                 brain["solo_enabled"] = json!(solo);
-                brain["participates_in_coordinator"] = json!(id != "system" && !solo && !returning);
-                if id == "system" {
-                    brain["config"]["enabled"] = json!(true);
-                }
+                brain["participates_in_coordinator"] = json!(owner.as_deref()==Some("system") && id != "system" && !returning);
+                brain["config"]["enabled"] = json!(owner.as_deref()==Some(id.as_str()));
             }
         }
         value["learning_review"] = json!(crate::coordinator_learning::broker_review(db,&key)?);
-        value["execution_model"] = json!("adaptive-member-coordinator-v1");
-        value["note"] = json!("العقل الرئيسي يعمل مع START. العقول الثانوية تشارك كمستشارين افتراضياً؛ تفعيل SOLO يفصل العقل المختار فقط، وإطفاؤه يعيده بعد تسوية صفقة SOLO المفتوحة. الصفقات المغلقة على الديمو تحدّث الوزن من أول نتيجة، بعد التكاليف؛ تقييم 12 شمعة يبقى دليلاً افتراضياً منفصلاً. START/STOP منفصلان عن زر العضوية.");
+        value["execution_model"] = json!(match owner.as_deref(){None=>"unavailable",Some("system")=>"adaptive-member-coordinator-v1",Some(_)=>"single-brain-v1"});
+        value["note"] = json!("عقل واحد فقط هو المنفّذ المختار مع START؛ بقية العقول للتحليل أو Paper. تغيير المنفّذ يحتاج STOP وتسوية وإغلاق مراكز البرنامج للرمز الحالي.");
         Ok(value)
     }
 
@@ -662,12 +774,14 @@ impl Service {
             "الحساب أو الوضع تغيّر؛ أعد تحميل البيانات");
         match req.action.as_str(){
             "freeze"=>{
-                let controls=crate::brain_control::load(db,&req.context,req.mode)?;
+                anyhow::ensure!(self.inner.solo_owner(t,req.mode)=="system","أعد المنفّذ إلى المنسق قبل تجميد بحث المنسق");
+                let controls=crate::brain_control::load_account(db,&req.context,req.mode,t.account_trade_mode)?;
                 crate::frozen_coordinator::freeze(db,t,config,&self.inner.brains,
                     &self.inner.weights,&controls,&self.inner.student_policies,now)
             },
             "seal_candidate"=>{
-                let controls=crate::brain_control::load(db,&req.context,req.mode)?;
+                anyhow::ensure!(self.inner.solo_owner(t,req.mode)=="system","أعد المنفّذ إلى المنسق قبل ختم بحث المنسق");
+                let controls=crate::brain_control::load_account(db,&req.context,req.mode,t.account_trade_mode)?;
                 crate::g7_sealed_candidate::seal(db,t,config,&self.inner.brains,
                     &self.inner.weights,&controls,&self.inner.student_policies,now)
             },
@@ -726,6 +840,126 @@ impl Service {
         status: &Status,
         now: u64,
     ) -> Result<Value> {
+        if method=="POST" && path=="/v1/execution/settings" {
+            anyhow::ensure!(!crate::pending_cancellation::pending(db)?,"انتظر تسوية طلب إلغاء الأمر المعلّق قبل تغيير الحساب");
+        }
+        if method=="POST" && path=="/v1/execution/cancel-pending" {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request {context:String,order:braintrade_domain::PendingOrder}
+            let request:Request=serde_json::from_slice(body)?;
+            anyhow::ensure!(!status.requested_run && status.gateway_fresh && self.account_matches(status),
+                "أوقف الدخول واربط حساب MT5 الحديث قبل الإلغاء");
+            let t=status.telemetry.as_ref().context("حساب MT5 غير متاح")?;
+            anyhow::ensure!(request.context==context(t) && t.trade_allowed && t.trade_expert,"تغيّر الحساب أو التداول غير مسموح من MT5");
+            let result=crate::pending_cancellation::queue(db,t,&self.inner.settings.target,&request.order,now)?;
+            self.cancellation_work=true;
+            return Ok(result);
+        }
+        if method=="POST" && path=="/v1/execution/position-protection" {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request {context:String,policy:crate::position_protection::Policy,expected_policy_id:String,confirm_live_login:String}
+            let request:Request=serde_json::from_slice(body)?;
+            anyhow::ensure!(status.gateway_fresh && self.account_matches(status),"اربط الحساب الحالي وانتظر اتصال MT5 حديثاً");
+            let t=status.telemetry.as_ref().context("حساب MT5 غير متاح")?;
+            anyhow::ensure!(request.context==context(t),"الحساب أو الرمز تغيّر؛ أعد مراجعة الإعدادات");
+            if !t.demo && (request.policy.break_even_enabled || request.policy.trailing_enabled) {
+                anyhow::ensure!(request.confirm_live_login==t.login.to_string(),"اكتب رقم حساب REAL لتأكيد إعدادات حماية المراكز");
+            }
+            let value=crate::position_protection::save(db,t,&self.inner.settings.target,&request.policy,&request.expected_policy_id,now)?;
+            self.protection_work=false;
+            return Ok(value);
+        }
+        if method=="POST" && path=="/v1/execution/authorize" {
+            let packet:Value=serde_json::from_slice(body)?;
+            let id=packet["id"].as_str().context("Authorization id required")?;
+            if id.starts_with("pending-cancel-") {
+                let authorized=if !status.requested_run && status.gateway_fresh && self.account_matches(status) {
+                    status.telemetry.as_ref().is_some_and(|t|
+                        crate::pending_cancellation::authorize(db,t,&self.inner.settings.target,id,now).unwrap_or(false))
+                } else {false};
+                return Ok(json!({"authorized":authorized}));
+            }
+            if id.starts_with("protect-") {
+                let authorized=if status.gateway_fresh && self.account_matches(status) {
+                    status.telemetry.as_ref().is_some_and(|t|
+                        crate::position_protection::authorize(db,t,&self.inner.settings.target,id,now).unwrap_or(false))
+                } else {false};
+                return Ok(json!({"authorized":authorized}));
+            }
+        }
+        if method=="POST" && path=="/v1/execution/result" {
+            let packet:Value=serde_json::from_slice(body)?;
+            if packet["id"].as_str().is_some_and(|id|id.starts_with("pending-cancel-")) {
+                anyhow::ensure!(crate::pending_cancellation::result(db,&packet)?,"Unknown cancellation intent");
+                return Ok(json!({"ok":true}));
+            }
+            if packet["id"].as_str().is_some_and(|id|id.starts_with("protect-")) {
+                anyhow::ensure!(crate::position_protection::result(db,&packet)?,"Unknown protection intent");
+                return Ok(json!({"ok":true}));
+            }
+        }
+        if method=="POST" && path=="/v1/execution/manual-market" {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request{context:String,side:i8,lots:f64,stop:f64,target:f64,reference:f64,expected_risk_master:bool,confirm_live_login:String}
+            let request:Request=serde_json::from_slice(body)?;
+            anyhow::ensure!(!status.requested_run && !self.pending(db)?,"أوقف التداول وانتظر تسوية الأوامر قبل الطلب اليدوي");
+            let t=status.telemetry.as_ref().filter(|t|status.gateway_fresh && self.account_matches(status) && t.quote_is_fresh(now,3000))
+                .context("اربط حساب MT5 وانتظر سعراً حديثاً")?;
+            anyhow::ensure!(request.context==context(t) && t.trade_allowed && t.trade_expert,"تغيّر الحساب أو التداول الآلي غير مسموح من MT5");
+            anyhow::ensure!(matches!((t.demo,t.account_trade_mode),(true,Some(0))|(false,Some(2))),"نوع حساب MT5 غير مؤكّد");
+            anyhow::ensure!(self.inner.risk_master(t)==Some(request.expected_risk_master),"حالة إدارة المخاطر تغيّرت؛ حدّث البيانات وأعد مراجعة الأمر");
+            if self.is_live_target() {self.validate_start(status,&json!({"confirm_live_login":request.confirm_live_login}).to_string().into_bytes())?;}
+            anyhow::ensure!(!t.positions.iter().any(|p|p.symbol==t.symbol&&execution::brain_for_magic(p.magic).is_some()),
+                "أغلق مراكز البرنامج لهذا الرمز قبل التداول اليدوي");
+            let (c,manual_frames)={let fast=self.fast.as_ref().filter(|f|context(&f.telemetry)==context(t)
+                && f.telemetry.account_trade_mode==t.account_trade_mode && self.inner.active_mode==Some(f.config.trading.mode))
+                .context("انتظر مزامنة إعدادات الحساب والرمز")?;
+                (fast.config.clone(),fast.frames.clone())};
+            anyhow::ensure!(c.symbol==t.symbol,"الرمز تغير؛ انتظر مزامنة إعدادات التداول");
+            let (bid,ask)=t.bid.zip(t.ask).filter(|(b,a)|b.is_finite()&&a.is_finite()&&*b>0.&&*a>=*b).context("سعر الوسيط غير صالح")?;
+            let point=t.point.filter(|v|v.is_finite()&&*v>0.).context("نقطة الوسيط غير متاحة")?;
+            let tick=t.tick_size.filter(|v|v.is_finite()&&*v>0.).context("شبكة سعر الوسيط غير متاحة")?;
+            let (minimum,step,maximum)=t.volume_min.zip(t.volume_step).zip(t.volume_max).map(|((a,b),c)|(a,b,c))
+                .filter(|(a,b,c)|a.is_finite()&&b.is_finite()&&c.is_finite()&&*a>0.&&*b>0.&&*c>=*a).context("حدود حجم الوسيط غير متاحة")?;
+            anyhow::ensure!(matches!(request.side,-1|1) && [request.lots,request.stop,request.target,request.reference].iter().all(|v|v.is_finite()&&*v>0.),"قيم الأمر اليدوي غير صالحة");
+            anyhow::ensure!(request.lots>=minimum-1e-9 && request.lots<=maximum+1e-9
+                && (request.lots/step-(request.lots/step).round()).abs()<=1e-7,"اللوت لا يطابق حدود وخطوة الوسيط");
+            let live_price=if request.side==1 {ask} else {bid};let exit_price=if request.side==1 {bid}else{ask};
+            anyhow::ensure!((live_price-request.reference).abs()<=self.inner.settings.deviation_points as f64*point+tick*1e-8,
+                "تغير السعر أكثر من الانزلاق المسموح؛ راجع الطلب");
+            let worst_entry=request.reference+request.side as f64*self.inner.settings.deviation_points as f64*point;
+            anyhow::ensure!(worst_entry.is_finite()&&worst_entry>0. && (request.target-worst_entry)*request.side as f64>0.,
+                "حد الانزلاق يصل إلى الهدف أو يجعل السعر غير صالح");
+            anyhow::ensure!((exit_price-request.stop)*request.side as f64>0. && (request.target-exit_price)*request.side as f64>0.
+                && (request.stop/tick-(request.stop/tick).round()).abs()<=1e-6
+                && (request.target/tick-(request.target/tick).round()).abs()<=1e-6,
+                "الستوب والهدف يجب أن يكونا على شبكة الوسيط وباتجاه صحيح");
+            self.refresh_quality_circuit(db,t,now);
+            anyhow::ensure!(self.quality_circuit.entry_allowed(t,self.is_live_target()),"حماية جودة التنفيذ تمنع دخولاً جديداً حالياً");
+            anyhow::ensure!(self.supervisor_policy_valid,"إعدادات حماية التنفيذ غير صالحة");
+            if self.supervisor.enforce_entry_gate {
+                let frames:BTreeMap<String,Vec<braintrade_domain::Candle>>=manual_frames.iter().map(|(tf,bars)|
+                    (tf.clone(),bars.iter().map(|bar|bar.candle.clone()).collect())).collect();
+                anyhow::ensure!(self.supervisor_permits_entry(crate::enterprise_supervisor::assess(&self.supervisor,Some(t),&c,&frames,now).entry_allowed),"حماية التنفيذ تمنع الدخول اليدوي حالياً");
+            }
+            if self.inner.risk_master(t).unwrap_or(true) && self.portfolio.enabled {
+                let mut proposed=exposure(db,t,&c,true)?;proposed.open_intents+=1;proposed.lots+=request.lots;
+                let candidate=json!({"lots":request.lots,"signal":{"stop_distance":(worst_entry-request.stop).abs()}});
+                match intent_risk(t,&c,&candidate){Some(r)=>proposed.estimated_risk+=r,None=>proposed.risk_known=false};
+                if c.risk.slippage_ticks>0. {
+                    if let Some(value)=t.tick_value_loss.filter(|v|v.is_finite()&&*v>0.) {
+                        proposed.estimated_risk+=2.*c.risk.slippage_ticks*value*request.lots;
+                    }else{proposed.risk_known=false;}
+                }
+                if let Some(reason)=portfolio_reason(&self.portfolio,&proposed,t.equity){anyhow::bail!(reason);}
+            }
+            let command=self.inner.queue_manual(db,t,&c,request.side,request.lots,request.stop,request.target,request.reference,now)?;
+            self.manual_blocked=true;
+            return Ok(json!({"ok":true,"id":command["id"],"queued":true,"broker_execution_confirmed":false}));
+        }
         if path=="/v1/execution/frozen-classic" {
             let t=status.telemetry.as_ref().filter(|t|
                 status.gateway_fresh && self.account_matches(status)
@@ -744,6 +978,7 @@ impl Service {
                 "Classic research account/session drift");
             return match request.action.as_str(){
                 "freeze"=>{
+                    anyhow::ensure!(self.inner.solo_owner(t,braintrade_domain::trading::TradingMode::Sniper)=="system","أعد المنفّذ إلى المنسق قبل بحث القناص المجمد");
                     let fast=self.fast.as_ref()
                         .filter(|f|f.config.trading.mode==braintrade_domain::trading::TradingMode::Sniper
                             &&f.config.trading.sniper_brain==braintrade_domain::trading::SniperBrain::Classic
@@ -871,6 +1106,7 @@ impl Service {
                 "Sniper frozen research account/session drift");
             return match request.action.as_str(){
                 "freeze"=>{
+                    anyhow::ensure!(self.inner.solo_owner(t,braintrade_domain::trading::TradingMode::Sniper)=="system","أعد المنفّذ إلى المنسق قبل بحث القناص المجمد");
                     let fast=self.fast.as_ref()
                         .filter(|f|f.config.trading.mode==braintrade_domain::trading::TradingMode::Sniper
                             &&f.telemetry.login==t.login &&f.telemetry.server==t.server
@@ -900,11 +1136,84 @@ impl Service {
             anyhow::ensure!(self.inner.active_mode==Some(request.mode), "الوضع تغيّر؛ حدّث الصفحة قبل الحفظ");
             let key=context(status.telemetry.as_ref().unwrap());
             anyhow::ensure!(request.context==key, "الحساب أو الرمز تغيّر؛ حدّث الصفحة قبل الحفظ");
-            crate::brain_control::save(db,&key,request.mode,&request.brain,request.control)?;
+            crate::brain_control::save(db,&crate::brain_control::account_key(&key,status.telemetry.as_ref().unwrap().account_trade_mode),request.mode,&request.brain,request.control)?;
             self.inner.controls.insert(request.brain,request.control);
             self.fast=None;
             self.inner.set_mode(request.mode);
             return Ok(json!({"ok":true}));
+        }
+        if method=="POST" && path=="/v1/execution/solo" {
+            anyhow::ensure!(!status.requested_run && !self.pending(db)?,"أوقف التداول وانتظر تسوية الأوامر قبل تغيير العقل المنفّذ");
+            anyhow::ensure!(status.gateway_fresh && self.account_matches(status),"اربط حساب MT5 الحالي وانتظر بيانات حديثة");
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request{context:String,mode:braintrade_domain::trading::TradingMode,brain:String}
+            let request:Request=serde_json::from_slice(body)?;
+            let t=status.telemetry.as_ref().unwrap();
+            anyhow::ensure!(request.context==context(t) && self.inner.active_mode==Some(request.mode),"الحساب أو الرمز أو الوضع تغيّر؛ أعد الاختيار");
+            if request.brain==braintrade_domain::sniper::ID {
+                anyhow::ensure!(request.mode==braintrade_domain::trading::TradingMode::Sniper
+                    && self.fast.as_ref().is_some_and(|f|context(&f.telemetry)==request.context
+                        && f.telemetry.account_trade_mode==t.account_trade_mode
+                        && braintrade_domain::sniper::selected(&f.config)),
+                    "القناص المتعلّم يحتاج وضع Sniper واختيار Learner من إعدادات القناص أولاً");
+            }
+            anyhow::ensure!(!t.positions.iter().any(|p|p.symbol==t.symbol&&execution::brain_for_magic(p.magic).is_some()),
+                "أغلق مراكز البرنامج للرمز الحالي قبل تغيير العقل المنفّذ");
+            use braintrade_domain::trading::TradingMode;
+            if request.mode==TradingMode::Sniper {
+                anyhow::ensure!(self.sniper_frozen_tick.report(Some(t),now)["status"]!="active"
+                    && self.sniper_classic_forward.report(Some(t),now)["status"]!="active",
+                    "أوقف دراسة القناص المجمدة قبل تغيير العقل المنفّذ");
+            }else{
+                anyhow::ensure!(crate::frozen_coordinator::report(db,&request.context,request.mode)?["status"]!="active",
+                    "أوقف دراسة المنسق المجمدة قبل تغيير العقل المنفّذ");
+            }
+            self.inner.set_solo(db,t,request.mode,&request.brain,now)?;
+            self.fast=None;
+            return Ok(json!({"ok":true,"selected_owner":request.brain,"mode":request.mode,
+                "scope":"bound_account_symbol_mode","start_unchanged":true}));
+        }
+        if method=="POST" && path=="/v1/execution/risk-master" {
+            anyhow::ensure!(!status.requested_run && !self.pending(db)?,"أوقف التداول وانتظر تسوية أوامر الوسيط قبل تغيير إدارة المخاطر");
+            anyhow::ensure!(status.gateway_fresh && self.account_matches(status),"اربط الحساب الحالي وانتظر اتصال MT5 حديثاً");
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request{context:String,enabled:bool,confirm_live_login:String,recovery:Option<legacy::RiskRecovery>}
+            let request:Request=serde_json::from_slice(body)?;
+            let t=status.telemetry.as_ref().unwrap();
+            anyhow::ensure!(request.context==context(t),"الحساب أو الرمز تغيّر؛ أعد التأكيد");
+            anyhow::ensure!((t.demo && t.account_trade_mode==Some(0)) || (!t.demo && t.account_trade_mode==Some(2)),"نوع حساب MT5 غير مؤكّد");
+            if !request.enabled && !t.demo {
+                anyhow::ensure!(request.confirm_live_login==t.login.to_string(),"لتعطيل المخاطر على REAL، أدخل رقم حساب MT5 المطابق");
+            }
+            self.inner.set_risk_master_with_recovery(db,t,request.enabled,request.recovery.clone(),now)?;
+            self.fast=None;
+            self.portfolio_state["risk_master_enabled"]=json!(request.enabled);
+            self.portfolio_state["effective_enabled"]=json!(request.enabled && self.portfolio.enabled);
+            self.portfolio_state["note"]=if request.enabled {
+                json!("Portfolio limits block new entries only. Broker SL/TP and reconciliation remain active; a timed close can be deferred while an order is unresolved.")
+            }else{json!("حدود المحفظة محفوظة لكنها موقوفة عبر مفتاح مخاطر هذا الحساب؛ إدارة الصفقات الحالية والتسوية مستمرة.")};
+            return Ok(json!({"ok":true,"enabled":request.enabled,"recovery":request.recovery,"scope":"bound_broker_account_and_mode",
+                "broker_sl_tp_retained":true,"mt5_margin_and_execution_checks_retained":true}));
+        }
+        if method=="POST" && path=="/v1/execution/brain-paper-all" {
+            anyhow::ensure!(!status.requested_run && !self.pending(db)?, "أوقف النظام وانتظر تسوية الأوامر قبل تغيير Paper");
+            anyhow::ensure!(status.gateway_fresh && self.account_matches(status), "اربط الحساب الحالي وانتظر اتصالاً حديثاً");
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request {context:String, mode:braintrade_domain::trading::TradingMode, paper:bool}
+            let request:Request=serde_json::from_slice(body)?;
+            anyhow::ensure!(self.inner.active_mode==Some(request.mode), "الوضع تغيّر؛ حدّث الصفحة قبل الحفظ");
+            let t=status.telemetry.as_ref().unwrap();
+            let key=context(t);
+            anyhow::ensure!(request.context==key, "الحساب أو الرمز تغيّر؛ حدّث الصفحة قبل الحفظ");
+            let controls=crate::brain_control::set_all_paper(db,&key,request.mode,t.account_trade_mode,request.paper)?;
+            self.inner.controls=controls;
+            self.fast=None;
+            self.inner.set_mode(request.mode);
+            return Ok(json!({"ok":true,"paper":request.paper,"scope":"secondary_brains_current_account_and_mode",
+                "existing_paper_positions_settle":true,"global_learning_frozen":self.learning_frozen()}));
         }
         // P0-B: broker-journal diagnostics, not an order or an admission gate.
         // Never return any history for a stale, unbound or mismatched account.
@@ -943,7 +1252,11 @@ impl Service {
         if method=="GET" && path=="/v1/execution/brains" {
             let mut value=self.route("GET","/v1/execution",&[],db,status,now)?;
             let key=if status.gateway_fresh && self.account_matches(status) {context(status.telemetry.as_ref().unwrap())}else{String::new()};
-            crate::brain_control::enrich(&mut value,db,&key,self.inner.active_mode.unwrap_or_default())?;
+            let sniper_selected=self.fast.as_ref().filter(|f|!key.is_empty() && context(&f.telemetry)==key
+                && status.telemetry.as_ref().is_some_and(|t|t.account_trade_mode==f.telemetry.account_trade_mode))
+                .map(|f|braintrade_domain::sniper::selected(&f.config));
+            let account_mode=status.telemetry.as_ref().filter(|_|!key.is_empty()).and_then(|t|t.account_trade_mode);
+            crate::brain_control::enrich(&mut value,db,&key,self.inner.active_mode.unwrap_or_default(),account_mode,sniper_selected)?;
             crate::brain_integrity::enrich(&mut value,db,status,self.inner.active_mode.unwrap_or_default())?;
             value["controls_available"]=json!(!key.is_empty());
             return Ok(value);
@@ -969,14 +1282,12 @@ impl Service {
                 .as_ref()
                 .context("Sniper pulse cache is not ready")?
                 .apply(body, now)?;
-            if let Some(system) = self.inner.brains.iter_mut().find(|brain| brain.id == "system") {
-                system.enabled = true;
-            }
+            self.inner.sync_owner_flags(&next.telemetry,next.config.trading.mode);
             self.student.quote(&next.telemetry, now);
             // Fast Pulse MUST obey the exact same optional V20 entry guard.
             // No re-sending an unknown command, no bypass on lower latency.
             // Cached reconciled candles are reused; fresh pulse quote is overlaid.
-            let quality_allows=self.quality_circuit.entry_allowed(&next.telemetry,self.is_live_target());
+            let quality_allows=self.quality_circuit.entry_allowed(&next.telemetry,self.is_live_target()) && !self.manual_blocked;
             let enter=if status.requested_run && quality_allows && self.supervisor_policy_valid {
                 if !self.supervisor.enforce_entry_gate {true}
                 else {self.supervisor_permits_entry(crate::enterprise_supervisor::assess(&self.supervisor,Some(&next.telemetry),
@@ -995,9 +1306,9 @@ impl Service {
             // execution/portfolio gates. Research never creates a broker intent.
             self.sniper_frozen_tick.observe(&next.telemetry,&next.config,
                 self.inner.last_sniper_raw.as_ref(),body,now);
-            self.student.capture_entries(self.inner.take_entries(), now);
-            let current = enforce_portfolio(db, &next.telemetry, &next.config, &self.portfolio)?;
-            self.portfolio_state = current.json(&self.portfolio, next.telemetry.equity);
+            let entries=self.inner.take_entries();
+            if !self.learning_frozen(){self.student.capture_entries(entries, now);}
+            self.apply_portfolio(db,&next.telemetry,&next.config)?;
 
             let mut pulse_status = status.clone();
             pulse_status.telemetry = Some(next.telemetry.clone());
@@ -1014,6 +1325,15 @@ impl Service {
                 &pulse_status,
                 now,
             )?;
+            if self.cancellation_work && (work["command"].is_null()
+                || matches!(work["command"]["state"].as_str(),Some("unknown"|"placed"|"partial"|"observed"))) {
+                if let Some(command)=crate::pending_cancellation::next(db,pulse_status.telemetry.as_ref().unwrap(),&self.inner.settings.target,now).unwrap_or(None) {work["command"]=command;}
+                self.cancellation_work=false;
+            }
+            if self.protection_work && work["command"].is_null() {
+                work["command"]=json!(crate::position_protection::next(db,pulse_status.telemetry.as_ref().unwrap(),&self.inner.settings.target,now).unwrap_or(None));
+                self.protection_work=false;
+            }
             // No SQLite writes on Sniper hot path; this is bounded in-memory
             // accepted-pulse observation only. A failed Core pulse is not counted.
             self.sniper_tick_audit.observe(pulse_status.telemetry.as_ref().unwrap(),body,now);
@@ -1096,22 +1416,38 @@ impl Service {
                 let mut result = self
                     .inner
                     .route(method, path, &encoded, db, status, now)?;
+                if let (Some(t),Some(mode))=(status.telemetry.as_ref(),self.inner.active_mode){self.inner.sync_owner_flags(t,mode);}
                 result["start"] = json!(false);
-                result["role"] = json!("coordinator");
-                result["note"] = json!("العقل الرئيسي يتبع START/STOP ولا يحتاج زر تداول منفرد.");
+                result["role"] = json!("system_settings");
+                result["note"] = json!("إعدادات المنسق محفوظة؛ اختيار المنفّذ يتم من مفتاح العقل المنفرد ولا يشغّل START.");
                 return Ok(result);
             }
             anyhow::ensure!(!config.enabled,
-                "التداول المنفرد ملغى: الوضع المختار وحده ينفذ، وهذه العقول تراقب وتتعلم افتراضياً");
+                "استخدم اختيار العقل المنفّذ المخصص؛ لا يمكن تفعيل التنفيذ بتعديل الإعدادات وحده");
             let mut result = self.inner.route(method, path, body, db, status, now)?;
+            if let (Some(t),Some(mode))=(status.telemetry.as_ref(),self.inner.active_mode){self.inner.sync_owner_flags(t,mode);}
             result["start"] = json!(false);
-            result["role"] = json!("shadow");
-            result["solo_enabled"] = json!(false);
-            result["note"] = json!("العقل مراقب/تجريبي فقط ولا يرسل أوامر MT5؛ النظام الرئيسي للوضع المختار وحده ينفذ");
+            result["role"] = json!("brain_settings");
+            result["note"] = json!("الإعدادات لا تغيّر اختيار المنفّذ ولا تبدأ التداول.");
             return Ok(result);
         }
 
-        let value = self.inner.route(method, path, body, db, status, now)?;
+        let mut value = self.inner.route(method, path, body, db, status, now)?;
+        if method=="GET" && path=="/v1/execution/gateway" && self.cancellation_work
+            && (value["command"].is_null() || matches!(value["command"]["state"].as_str(),Some("unknown"|"placed"|"partial"|"observed")))
+            && status.gateway_fresh && self.account_matches(status) {
+            if let Some(t)=status.telemetry.as_ref() {
+                if let Some(command)=crate::pending_cancellation::next(db,t,&self.inner.settings.target,now).unwrap_or(None) {value["command"]=command;}
+                self.cancellation_work=false;
+            }
+        }
+        if method=="GET" && path=="/v1/execution/gateway" && self.protection_work
+            && value["command"].is_null() && status.gateway_fresh && self.account_matches(status) {
+            if let Some(t)=status.telemetry.as_ref() {
+                value["command"]=json!(crate::position_protection::next(db,t,&self.inner.settings.target,now).unwrap_or(None));
+                self.protection_work=false;
+            }
+        }
         // Final authorization is the last Core gate before Gateway calls MT5.
         // Read the committed journal independently here; never trust only a
         // previous tick's cached snapshot. Existing close/reconciliation intents
@@ -1120,9 +1456,14 @@ impl Service {
             && value["authorized"]==true {
             let request:Value=serde_json::from_slice(body)?;
             let id=request["id"].as_str().context("Authorization id required")?;
-            let (kind,cmd_context):(String,String)=db.query_row(
-                "SELECT kind,context FROM broker_commands WHERE id=?1",
-                [id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+            let (kind,cmd_context,raw):(String,String,String)=db.query_row(
+                "SELECT kind,context,payload FROM broker_commands WHERE id=?1",
+                [id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+            let command:Value=serde_json::from_str(&raw)?;
+            if kind=="open" && command["manual_open"]!=true && self.manual_blocked
+                && Self::manual_exposure(db,status.telemetry.as_ref()).unwrap_or(true) {
+                return Ok(json!({"authorized":false,"reason":"manual_position_or_intent_pending"}));
+            }
             if kind=="open" && self.is_live_target() {
                 let authorized_quality=status.telemetry.as_ref()
                     .filter(|t|status.gateway_fresh&&self.account_matches(status)
@@ -1141,14 +1482,27 @@ impl Service {
                 // Tick cannot race back into a just-breached quality circuit.
                 self.refresh_quality_circuit(db,t,now);
                 // Register acknowledged fill before the next quote pulse.
-                self.student.observe(db, t, now)?;
+                let learning_frozen=self.learning_frozen();
+                self.student.observe_gated(db, t, now,learning_frozen)?;
             } else {
                 self.quality_circuit=crate::broker_quality_circuit::Snapshot::default();
             }
         }
         if method == "GET" && path == "/v1/execution" {
-            let mut value = Self::enrich_roles(value, db, status)?;
+            let mut value = self.enrich_roles(value, db, status)?;
             value["portfolio"] = self.portfolio_state.clone();
+            let risk=self.risk_master_for_status(status);
+            value["risk_master"]=json!({"enabled":risk,"scope":"bound_broker_account_and_mode",
+                "recovery":status.telemetry.as_ref().and_then(|t|self.inner.risk_recovery(t)),
+                "note":"المفتاح يؤثر على ميزانية وقف الصفقة، وحدود المحفظة والخسارة اليومية والحدود الاختيارية. فحوص MT5 والهوية والتسوية وSL/TP تبقى فعالة."});
+            value["position_protection"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|crate::position_protection::report(db,t,&self.inner.settings.target)
+                    .unwrap_or_else(|e|json!({"error":e.to_string()}))).unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["pending_cancellations"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|crate::pending_cancellation::report(db,t,&self.inner.settings.target)
+                    .map(|rows|json!(rows)).unwrap_or(Value::Null)).unwrap_or(Value::Null)
+            } else {Value::Null};
             let context=status.telemetry.as_ref().map(|t|
                 serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)).unwrap_or_default()
             ).unwrap_or_default();
@@ -1286,6 +1640,31 @@ mod tests {
     }
 
     #[test]
+    fn partial_exposure_reserves_unfilled_remainder_without_inventing_position_links() {
+        let db=setup();
+        let mut t=telemetry();
+        t.positions.push(Position {magic:execution::magic("trend").unwrap(),
+            identifier:55,ticket:55,symbol:"XAUUSD".into(),side:"BUY".into(),
+            volume:0.04,price_open:2000.,price_current:2000.1,sl:1999.9,tp:2000.2,
+            ..Default::default()});
+        queue(&db,&t,"partial-a","trend",0.10,0.10,1);
+        let linked=json!({"state":"partial","recovered_from_history":true,
+            "position_id":55,"volume":0.04,"deal":801,"deals":[801]});
+        db.execute("UPDATE broker_commands SET state='partial',result=?1 WHERE id='partial-a'",
+            [linked.to_string()]).unwrap();
+        let view=exposure(&db,&t,&Config::default(),true).unwrap();
+        assert_eq!(view.open_positions,1);assert_eq!(view.open_intents,0);
+        assert!((view.lots-0.10).abs()<1e-9,"Visible 0.04 plus possible remaining 0.06");
+        let mut unlinked=linked;unlinked["position_id"]=json!(99);
+        db.execute("UPDATE broker_commands SET result=?1 WHERE id='partial-a'",
+            [unlinked.to_string()]).unwrap();
+        let conservative=exposure(&db,&t,&Config::default(),true).unwrap();
+        assert_eq!(conservative.open_intents,1);
+        assert!((conservative.lots-0.14).abs()<1e-9,
+            "Unlinked position cannot remove the command's possible exposure");
+    }
+
+    #[test]
     fn real_start_requires_new_exact_login_and_enabled_portfolio_protection() {
         let db=Connection::open_in_memory().unwrap();
         let mut svc=Service::new(&db).unwrap();
@@ -1408,6 +1787,411 @@ mod tests {
         let restarted=Service::new(&db).unwrap();
         assert!(restarted.portfolio.enabled);
         assert_eq!(restarted.portfolio.max_positions,2);
+    }
+
+    #[test]
+    fn bulk_paper_requires_fresh_bound_stopped_account_and_reconciled_orders() {
+        use braintrade_domain::trading::TradingMode;
+        let db=setup();
+        let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry(); t.demo=true; t.account_trade_mode=Some(0);
+        service.inner.settings.login=t.login; service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone(); service.inner.settings.target="demo".into();
+        service.inner.set_mode(TradingMode::Expert);
+        let key=context(&t);
+        let body=json!({"context":key,"mode":"expert","paper":false}).to_string();
+        let mut status=Status::default(); status.telemetry=Some(t.clone());
+        assert!(service.route("POST","/v1/execution/brain-paper-all",body.as_bytes(),&db,&status,1000).is_err());
+        status.gateway_fresh=true; status.requested_run=true;
+        assert!(service.route("POST","/v1/execution/brain-paper-all",body.as_bytes(),&db,&status,1000).is_err());
+        status.requested_run=false;
+        queue(&db,&t,"in-flight","trend",0.01,0.05,1000);
+        assert!(service.route("POST","/v1/execution/brain-paper-all",body.as_bytes(),&db,&status,1000).is_err());
+        db.execute("UPDATE broker_commands SET state='observed' WHERE id='in-flight'",[]).unwrap();
+        let wrong=json!({"context":"wrong-account","mode":"expert","paper":false}).to_string();
+        assert!(service.route("POST","/v1/execution/brain-paper-all",wrong.as_bytes(),&db,&status,1000).is_err());
+        let wrong=json!({"context":key,"mode":"sniper","paper":false}).to_string();
+        assert!(service.route("POST","/v1/execution/brain-paper-all",wrong.as_bytes(),&db,&status,1000).is_err());
+        let result=service.route("POST","/v1/execution/brain-paper-all",body.as_bytes(),&db,&status,1000).unwrap();
+        assert_eq!(result["global_learning_frozen"],false);
+        let persisted=crate::brain_control::load_account(&db,&key,TradingMode::Expert,Some(0)).unwrap();
+        assert_eq!(persisted.len(),braintrade_domain::execution::BRAINS.len()-1);
+        assert!(persisted.values().all(|c|!c.paper));
+        service.set_learning_frozen(&db,&status,true,1001).unwrap();
+        let result=service.route("POST","/v1/execution/brain-paper-all",body.as_bytes(),&db,&status,1002).unwrap();
+        assert_eq!(result["global_learning_frozen"],true,"Paper actions must report the independent global pause accurately");
+    }
+
+    #[test]
+    fn risk_master_is_account_and_broker_mode_scoped_and_requires_explicit_real_consent() {
+        let db=setup();let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();t.demo=true;t.account_trade_mode=Some(0);t.trade_allowed=true;t.trade_expert=true;
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();service.inner.settings.target="demo".into();
+        service.inner.refresh_risk_master(&db,&t).unwrap();
+        assert_eq!(service.inner.risk_master(&t),Some(true));
+        let key=context(&t);
+        let mut status=Status::default();status.telemetry=Some(t.clone());status.gateway_fresh=true;
+        let body=|enabled:bool,confirm:&str|json!({"context":key,"enabled":enabled,"confirm_live_login":confirm}).to_string();
+        status.requested_run=true;
+        assert!(service.route("POST","/v1/execution/risk-master",body(false,"").as_bytes(),&db,&status,1000).is_err());
+        status.requested_run=false;
+        service.route("POST","/v1/execution/risk-master",body(false,"").as_bytes(),&db,&status,1000).unwrap();
+        assert_eq!(service.inner.risk_master(&t),Some(false));
+        queue(&db,&t,"unresolved","system",0.01,0.05,1001);
+        assert!(service.route("POST","/v1/execution/risk-master",body(true,"").as_bytes(),&db,&status,1002).is_err());
+        db.execute("UPDATE broker_commands SET state='observed' WHERE id='unresolved'",[]).unwrap();
+        let mut real=t.clone();real.demo=false;real.account_trade_mode=Some(2);
+        service.inner.settings.target="live".into();service.inner.refresh_risk_master(&db,&real).unwrap();
+        assert_eq!(service.inner.risk_master(&real),Some(true),"Demo opt-out must never cross to REAL");
+        status.telemetry=Some(real.clone());
+        assert!(service.route("POST","/v1/execution/risk-master",body(false,"wrong").as_bytes(),&db,&status,1003).is_err());
+        service.route("POST","/v1/execution/risk-master",body(false,&real.login.to_string()).as_bytes(),&db,&status,1004).unwrap();
+        assert_eq!(service.inner.risk_master(&real),Some(false));
+        let start=json!({"confirm_live_login":real.login.to_string()}).to_string();
+        assert!(service.validate_start(&status,start.as_bytes()).is_ok(),"Explicit risk-off does not require a suspended portfolio guard");
+        let mut restored=Service::new(&db).unwrap();restored.inner.refresh_risk_master(&db,&real).unwrap();
+        assert_eq!(restored.inner.risk_master(&real),Some(false),"Account setting survives restart");
+        let mut other=real.clone();other.login+=1;
+        restored.inner.settings.login=other.login;restored.inner.refresh_risk_master(&db,&other).unwrap();
+        assert_eq!(restored.inner.risk_master(&other),Some(true),"New accounts default to risk on");
+    }
+
+    #[test]
+    fn risk_master_recovery_is_latched_per_account_and_cancels_stale_entries() {
+        let db=setup();let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();t.demo=true;t.account_trade_mode=Some(0);t.balance=50.;t.equity=30.;
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();service.inner.settings.target="demo".into();
+        let rule=legacy::RiskRecovery{basis:"balance".into(),threshold:500.};
+        service.inner.set_risk_master_with_recovery(&db,&t,false,Some(rule.clone()),1000).unwrap();
+        let old_revision=service.inner.settings.revision;
+        queue(&db,&t,"recovery-queued","system",0.01,0.05,1001);
+        queue(&db,&t,"recovery-dispatched","system",0.01,0.05,1002);
+        db.execute("UPDATE broker_commands SET state='dispatched' WHERE id='recovery-dispatched'",[]).unwrap();
+        t.balance=499.;t.equity=600.;service.inner.refresh_risk_master(&db,&t).unwrap();
+        assert_eq!(service.inner.risk_master(&t),Some(false),"Balance and equity are distinct");
+        t.balance=500.;service.inner.refresh_risk_master(&db,&t).unwrap();
+        assert_eq!(service.inner.risk_master(&t),Some(true));
+        assert_eq!(service.inner.risk_recovery(&t),None);
+        assert!(service.inner.settings.revision>old_revision,"Dispatched old intents lose final authorization");
+        assert_eq!(state(&db,"recovery-queued"),"cancelled");
+        assert_eq!(state(&db,"recovery-dispatched"),"dispatched","Already-dispatched intents remain reconcilable");
+        let events:i64=db.query_row("SELECT COUNT(*) FROM events WHERE kind='risk_master_changed' AND json_extract(detail,'$.reason')='recovery'",[],|r|r.get(0)).unwrap();
+        assert_eq!(events,1);
+        let mut restored=Service::new(&db).unwrap();t.balance=10.;
+        restored.inner.refresh_risk_master(&db,&t).unwrap();
+        assert_eq!(restored.inner.risk_master(&t),Some(true),"Recovery remains on after restart and a later drop");
+        let mut other=t.clone();other.login+=1;restored.inner.settings.login=other.login;
+        restored.inner.refresh_risk_master(&db,&other).unwrap();
+        assert_eq!(restored.inner.risk_master(&other),Some(true),"Account-specific rule cannot transfer");
+    }
+
+    #[test]
+    fn global_learning_pause_survives_restart_without_changing_trading_state(){
+        let db=setup();let mut service=Service::new(&db).unwrap();
+        let mut status=Status::default();status.requested_run=true;
+        let result=service.set_learning_frozen(&db,&status,true,1000).unwrap();
+        assert_eq!(result["frozen"],true);assert_eq!(result["trading_unchanged"],true);
+        assert!(status.requested_run,"Training pause must not issue STOP");
+        let mut restarted=Service::new(&db).unwrap();
+        assert!(restarted.learning_frozen());assert_eq!(restarted.learning_status()["cutoff_ms"],1000);
+        assert_eq!(restarted.set_learning_frozen(&db,&status,false,2000).unwrap()["frozen"],false);
+        assert!(!Service::new(&db).unwrap().learning_frozen());
+    }
+
+    #[test]
+    fn manual_pending_order_blocks_automatic_handoff_until_account_snapshot_is_clear(){
+        let db=setup();let _service=Service::new(&db).unwrap();let mut t=telemetry();
+        let mut order=braintrade_domain::PendingOrder{ticket:42,symbol:t.symbol.clone(),magic:410618,order_type:2,
+            volume_initial:0.1,volume_current:0.1,price_open:1999.,sl:1998.,tp:2001.,price_stoplimit:0.,time_setup_ms:1,expiration:0};
+        t.pending_orders=1;t.pending_order_details=Some(vec![order.clone()]);
+        assert!(Service::manual_exposure(&db,Some(&t)).unwrap());
+        order.symbol="EURUSD".into();t.pending_order_details=Some(vec![order]);
+        assert!(!Service::manual_exposure(&db,Some(&t)).unwrap(),"Another symbol does not own this one");
+        t.pending_order_details=None;assert!(Service::manual_exposure(&db,Some(&t)).unwrap(),"Unknown active orders cannot authorize handoff");
+        t.pending_orders=0;t.pending_order_details=Some(vec![]);assert!(!Service::manual_exposure(&db,Some(&t)).unwrap());
+    }
+
+    #[test]
+    fn cancel_pending_dispatch_is_stop_guarded_and_requires_explicit_reconciliation(){
+        let db=setup();let mut service=Service::new(&db).unwrap();let mut t=telemetry();
+        t.demo=true;t.account_trade_mode=Some(0);t.trade_allowed=true;t.trade_expert=true;
+        let order=braintrade_domain::PendingOrder{ticket:42,symbol:"EURUSD".into(),magic:410618,order_type:2,
+            volume_initial:0.1,volume_current:0.1,price_open:1.1,sl:1.,tp:1.2,price_stoplimit:0.,time_setup_ms:1,expiration:0};
+        t.pending_orders=1;t.pending_order_details=Some(vec![order.clone()]);
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();service.inner.settings.target="demo".into();
+        let mut status=Status::default();status.gateway_fresh=true;status.telemetry=Some(t.clone());
+        let body=json!({"context":context(&t),"order":order}).to_string();status.requested_run=true;
+        assert!(service.route("POST","/v1/execution/cancel-pending",body.as_bytes(),&db,&status,100_000).is_err());
+        status.requested_run=false;
+        let queued=service.route("POST","/v1/execution/cancel-pending",body.as_bytes(),&db,&status,100_000).unwrap();
+        let id=queued["id"].as_str().unwrap();assert!(service.validate_manual_handoff(&db,&status).is_err());
+        let work=service.route("GET","/v1/execution/gateway",b"",&db,&status,100_001).unwrap();
+        assert_eq!(work["command"]["id"],id);assert_eq!(work["command"]["order"],42);
+        let auth=json!({"id":id}).to_string();status.requested_run=true;
+        assert_eq!(service.route("POST","/v1/execution/authorize",auth.as_bytes(),&db,&status,100_002).unwrap()["authorized"],false);
+        status.requested_run=false;
+        assert_eq!(service.route("POST","/v1/execution/authorize",auth.as_bytes(),&db,&status,100_003).unwrap()["authorized"],true);
+        let outcome=json!({"id":id,"state":"unknown","reason":"synthetic uncertainty"}).to_string();
+        service.route("POST","/v1/execution/result",outcome.as_bytes(),&db,&status,100_004).unwrap();
+        assert!(service.validate_manual_handoff(&db,&status).is_err(),"Unknown cancellation must not permit START");
+        assert!(service.route("POST","/v1/execution/cancel-pending",body.as_bytes(),&db,&status,100_005).is_err(),"No second send for this ticket");
+    }
+
+    #[test]
+    fn manual_market_uses_distinct_owner_and_stop_revokes_dispatched_intent(){
+        use braintrade_domain::trading::TradingMode;
+        let db=setup();let mut service=Service::new(&db).unwrap();let now=1_800_000_000_000_u64;
+        let mut t=telemetry();t.demo=true;t.account_trade_mode=Some(0);t.trade_allowed=true;t.trade_expert=true;
+        t.bid=Some(2000.);t.ask=Some(2000.1);t.tick_age_ms=Some(0);t.quote_time_ms=Some(now);
+        t.point=Some(0.01);t.tick_size=Some(0.01);t.volume_min=Some(0.01);t.volume_step=Some(0.01);t.volume_max=Some(100.);
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();service.inner.settings.currency=t.currency.clone();service.inner.settings.target="demo".into();
+        let c=Config::default();service.inner.set_mode(TradingMode::Expert);
+        service.inner.set_risk_master(&db,&t,true,now-1).unwrap();
+        service.fast=Some(pulse::FastContext::new(&t,&c,&BTreeMap::new()));
+        let mut status=Status::default();status.telemetry=Some(t.clone());status.gateway_fresh=true;
+        let body=json!({"context":context(&t),"side":1,"lots":0.1,"stop":1999.,"target":2002.,"reference":2000.1,"expected_risk_master":true,"confirm_live_login":""}).to_string();
+        let mut bad:Value=serde_json::from_str(&body).unwrap();bad["context"]=json!("wrong account");
+        assert!(service.route("POST","/v1/execution/manual-market",bad.to_string().as_bytes(),&db,&status,now).is_err());
+        bad=serde_json::from_str(&body).unwrap();bad["expected_risk_master"]=json!(false);
+        assert!(service.route("POST","/v1/execution/manual-market",bad.to_string().as_bytes(),&db,&status,now).is_err());
+        bad=serde_json::from_str(&body).unwrap();bad["stop"]=json!(2001.);
+        assert!(service.route("POST","/v1/execution/manual-market",bad.to_string().as_bytes(),&db,&status,now).is_err());
+        let queued=service.route("POST","/v1/execution/manual-market",body.as_bytes(),&db,&status,now).unwrap();
+        assert_eq!(queued["queued"],true);assert_eq!(queued["broker_execution_confirmed"],false);
+        let id=queued["id"].as_str().unwrap();
+        assert!(service.validate_manual_handoff(&db,&status).is_err());
+        assert!(service.route("POST","/v1/execution/manual-market",body.as_bytes(),&db,&status,now).is_err(),"No duplicate while pending");
+        let work=service.route("GET","/v1/execution/gateway",&[],&db,&status,now).unwrap();
+        assert_eq!(work["command"]["id"],id);assert_eq!(work["command"]["brain"],"manual");assert_eq!(work["command"]["magic"],410618);
+        let authorization=json!({"id":id}).to_string();
+        assert_eq!(service.route("POST","/v1/execution/authorize",authorization.as_bytes(),&db,&status,now).unwrap()["authorized"],true);
+        service.cancel_entries(&db).unwrap();
+        assert_eq!(state(&db,id),"dispatched","Dispatched intent remains reconcilable");
+        assert_eq!(service.route("POST","/v1/execution/authorize",authorization.as_bytes(),&db,&status,now).unwrap()["authorized"],false);
+        let mut restarted=Service::new(&db).unwrap();restarted.inner.set_mode(TradingMode::Expert);
+        assert_eq!(restarted.route("POST","/v1/execution/authorize",authorization.as_bytes(),&db,&status,now).unwrap()["authorized"],false);
+        db.execute("UPDATE broker_commands SET state='cancelled' WHERE id=?1",[id]).unwrap();
+        status.telemetry.as_mut().unwrap().positions.push(Position{ticket:77,identifier:77,magic:410_618,
+            symbol:t.symbol.clone(),side:"BUY".into(),volume:0.1,price_open:2000.1,price_current:2000.,profit:-1.,sl:1999.,tp:2002.,..Default::default()});
+        assert!(service.validate_manual_handoff(&db,&status).is_err(),"Manual position blocks automatic owner");
+        let close=json!({"context":context(&t),"positions":[{"ticket":77,"magic":410618,"side":"BUY","volume":0.1}],"profit_only":false}).to_string();
+        let result=service.route("POST","/v1/execution/close-selected",close.as_bytes(),&db,&status,now).unwrap();
+        assert_eq!(result["queued"],1);
+        let close_id=result["ids"][0].as_str().unwrap();
+        let raw:String=db.query_row("SELECT payload FROM broker_commands WHERE id=?1",[close_id],|r|r.get(0)).unwrap();
+        let command:Value=serde_json::from_str(&raw).unwrap();
+        assert_eq!(command["brain"],"manual");assert_eq!(command["magic"],410618);
+    }
+
+    #[test]
+    fn manual_real_order_requires_its_own_exact_account_confirmation(){
+        use braintrade_domain::trading::TradingMode;
+        let db=setup();let mut service=Service::new(&db).unwrap();let now=1_800_000_000_000_u64;
+        let mut t=telemetry();t.demo=false;t.account_trade_mode=Some(2);t.trade_allowed=true;t.trade_expert=true;
+        t.bid=Some(2000.);t.ask=Some(2000.1);t.tick_age_ms=Some(0);t.quote_time_ms=Some(now);
+        t.point=Some(0.01);t.tick_size=Some(0.01);t.volume_min=Some(0.01);t.volume_step=Some(0.01);t.volume_max=Some(100.);
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();service.inner.settings.currency=t.currency.clone();service.inner.settings.target="live".into();
+        service.inner.set_mode(TradingMode::Expert);service.inner.set_risk_master(&db,&t,true,now-1).unwrap();
+        service.portfolio.enabled=true;
+        service.fast=Some(pulse::FastContext::new(&t,&Config::default(),&BTreeMap::new()));
+        let mut status=Status::default();status.telemetry=Some(t.clone());status.gateway_fresh=true;
+        let mut body=json!({"context":context(&t),"side":1,"lots":0.1,"stop":1999.,"target":2002.,"reference":2000.1,"expected_risk_master":true,"confirm_live_login":"wrong"});
+        assert!(service.route("POST","/v1/execution/manual-market",body.to_string().as_bytes(),&db,&status,now).is_err());
+        body["confirm_live_login"]=json!(t.login.to_string());
+        assert_eq!(service.route("POST","/v1/execution/manual-market",body.to_string().as_bytes(),&db,&status,now).unwrap()["queued"],true);
+    }
+
+    #[test]
+    fn risk_master_consumes_only_matching_durable_gateway_recovery_evidence() {
+        let db=setup();let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();t.demo=true;t.account_trade_mode=Some(0);t.balance=50.;t.equity=30.;
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();service.inner.settings.target="demo".into();
+        let rule=legacy::RiskRecovery{basis:"equity".into(),threshold:500.};
+        service.inner.set_risk_master_with_recovery(&db,&t,false,Some(rule.clone()),1000).unwrap();
+        let revision=service.inner.settings.revision;
+        let recovery_id:String=db.query_row("SELECT recovery_id FROM risk_master_recovery",[],|r|r.get(0)).unwrap();
+        let mut cmd=json!({"id":"gateway-crossing","revision":revision,"login":t.login,"server":t.server,
+            "currency":t.currency,"target":"demo","risk_master_enabled":false,"risk_master_recovery":rule,"risk_master_recovery_id":recovery_id});
+        let mut result=json!({"id":"gateway-crossing","state":"rejected","risk_master_recovery_reached":{"basis":"equity","threshold":500.,"value":100.}});
+        db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload,result) VALUES('gateway-crossing',?1,'system','open',1001,'rejected',?2,?3)",params![context(&t),cmd.to_string(),result.to_string()]).unwrap();
+        service.inner.refresh_risk_master(&db,&t).unwrap();
+        assert_eq!(service.inner.risk_master(&t),Some(false),"Sub-threshold evidence is rejected");
+        result["risk_master_recovery_reached"]["value"]=json!(501.);
+        cmd["login"]=json!(t.login+1);
+        db.execute("UPDATE broker_commands SET payload=?1,result=?2 WHERE id='gateway-crossing'",params![cmd.to_string(),result.to_string()]).unwrap();
+        service.inner.refresh_risk_master(&db,&t).unwrap();
+        assert_eq!(service.inner.risk_master(&t),Some(false),"Another account cannot restore this policy");
+        cmd["login"]=json!(t.login);
+        db.execute("UPDATE broker_commands SET payload=?1 WHERE id='gateway-crossing'",[cmd.to_string()]).unwrap();
+        service.inner.refresh_risk_master(&db,&t).unwrap();
+        assert_eq!(service.inner.risk_master(&t),Some(true),"A crossing between snapshots is latched");
+        let events:i64=db.query_row("SELECT COUNT(*) FROM events WHERE kind='risk_master_changed' AND json_extract(detail,'$.reason')='gateway_recovery'",[],|r|r.get(0)).unwrap();
+        assert_eq!(events,1);
+    }
+
+    #[test]
+    fn risk_recovery_rejects_invalid_or_already_reached_threshold() {
+        let db=setup();let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();t.demo=true;t.account_trade_mode=Some(0);t.balance=500.;
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();service.inner.settings.target="demo".into();
+        for rule in [legacy::RiskRecovery{basis:"balance".into(),threshold:500.},
+            legacy::RiskRecovery{basis:"other".into(),threshold:1000.},
+            legacy::RiskRecovery{basis:"balance".into(),threshold:f64::NAN}] {
+            assert!(service.inner.set_risk_master_with_recovery(&db,&t,false,Some(rule),1000).is_err());
+        }
+        service.inner.refresh_risk_master(&db,&t).unwrap();
+        assert_eq!(service.inner.risk_master(&t),Some(true));
+    }
+
+    #[test]
+    fn risk_master_off_suspends_portfolio_entry_gate_only_for_the_bound_account() {
+        let db=setup();let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();t.demo=true;t.account_trade_mode=Some(0);
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();service.inner.settings.target="demo".into();
+        service.inner.set_risk_master(&db,&t,false,100).unwrap();
+        service.portfolio=PortfolioLimits{enabled:true,max_positions:1,max_lots:1.,max_risk_percent:2.};
+        queue(&db,&t,"first-risk-off","system",0.01,0.05,1000);
+        queue(&db,&t,"second-risk-off","trend",0.01,0.05,1001);
+        service.apply_portfolio(&db,&t,&Config::default()).unwrap();
+        assert_eq!(state(&db,"first-risk-off"),"queued");assert_eq!(state(&db,"second-risk-off"),"queued");
+        assert_eq!(service.portfolio_state["effective_enabled"],false);
+        let mut other=t.clone();other.login+=1;
+        assert_eq!(service.inner.risk_master(&other),None,"Cached opt-out must not apply to another account");
+    }
+
+    #[test]
+    fn solo_owner_is_scoped_exclusive_and_requires_stopped_flat_settled_account(){
+        use braintrade_domain::{Position,trading::TradingMode};
+        let db=setup();let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry();t.demo=true;t.account_trade_mode=Some(0);
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();service.inner.settings.target="demo".into();
+        service.inner.set_mode(TradingMode::Expert);
+        service.inner.refresh_solo(&db,&t,TradingMode::Expert).unwrap();
+        let key=context(&t);
+        let body=|brain:&str|json!({"context":key,"mode":"expert","brain":brain}).to_string();
+        let mut status=Status::default();status.telemetry=Some(t.clone());status.gateway_fresh=true;
+        status.requested_run=true;
+        assert!(service.route("POST","/v1/execution/solo",body("trend").as_bytes(),&db,&status,100).is_err());
+        status.requested_run=false;
+        status.telemetry.as_mut().unwrap().positions.push(Position{ticket:9,magic:execution::magic("system").unwrap(),symbol:t.symbol.clone(),..Default::default()});
+        assert!(service.route("POST","/v1/execution/solo",body("trend").as_bytes(),&db,&status,101).is_err());
+        status.telemetry.as_mut().unwrap().positions.clear();
+        queue(&db,&t,"pending-solo-change","system",0.01,0.05,102);
+        assert!(service.route("POST","/v1/execution/solo",body("trend").as_bytes(),&db,&status,103).is_err());
+        db.execute("UPDATE broker_commands SET state='observed' WHERE id='pending-solo-change'",[]).unwrap();
+        assert!(service.route("POST","/v1/execution/solo",body("unknown").as_bytes(),&db,&status,104).is_err());
+        service.route("POST","/v1/execution/solo",body("trend").as_bytes(),&db,&status,105).unwrap();
+        assert_eq!(service.inner.solo_owner(&t,TradingMode::Expert),"trend");
+        assert_eq!(service.inner.brains.iter().filter(|b|b.enabled).map(|b|b.id.as_str()).collect::<Vec<_>>(),vec!["trend"]);
+        assert_eq!(service.inner.solo_owner(&t,TradingMode::Sniper),"system");
+        let mut other=t.clone();other.login+=1;
+        assert_eq!(service.inner.solo_owner(&other,TradingMode::Expert),"system");
+        let mut restarted=Service::new(&db).unwrap();
+        restarted.inner.refresh_solo(&db,&t,TradingMode::Expert).unwrap();
+        assert_eq!(restarted.inner.solo_owner(&t,TradingMode::Expert),"trend");
+        status.requested_run=true;
+        for brain in ["system","trend","gann"] {
+            let id=format!("authorize-{brain}");
+            let payload=json!({"id":id,"brain":brain,"trading_mode":"expert","kind":"open","target":"demo",
+                "revision":service.inner.settings.revision,"context":key,"expires_ms":10000,"created_ms":200});
+            db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload) VALUES(?1,?2,?3,'open',200,'dispatched',?4)",params![id,key,brain,payload.to_string()]).unwrap();
+            let result=service.route("POST","/v1/execution/authorize",json!({"id":id}).to_string().as_bytes(),&db,&status,201).unwrap();
+            assert_eq!(result["authorized"],brain=="trend","Only the selected owner can reach MT5");
+        }
+        status.requested_run=false;
+        db.execute("UPDATE broker_commands SET state='observed' WHERE id LIKE 'authorize-%'",[]).unwrap();
+        service.route("POST","/v1/execution/solo",body("system").as_bytes(),&db,&status,202).unwrap();
+        assert_eq!(service.inner.solo_owner(&t,TradingMode::Expert),"system");
+        let mut back=Service::new(&db).unwrap();back.inner.refresh_solo(&db,&t,TradingMode::Expert).unwrap();
+        assert_eq!(back.inner.solo_owner(&t,TradingMode::Expert),"system");
+    }
+
+    #[test]
+    fn selected_trend_brain_generates_and_authorizes_the_only_broker_intent(){
+        use braintrade_domain::{Candle,trading::TradingMode};
+        let db=setup();let mut service=Service::new(&db).unwrap();
+        let now=1_800_000_000_000u64;
+        let mut t=telemetry();t.demo=true;t.account_trade_mode=Some(0);t.margin_mode=Some(2);
+        t.trade_allowed=true;t.trade_expert=true;t.quote_time_ms=Some(now);t.tick_age_ms=Some(0);
+        t.bid=Some(2024.0);t.ask=Some(2024.01);t.point=Some(0.01);
+        service.inner.settings.login=t.login;service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone();service.inner.settings.target="demo".into();
+        service.inner.set_mode(TradingMode::Expert);
+        let key=context(&t);let mut status=Status::default();status.telemetry=Some(t.clone());status.gateway_fresh=true;
+        let choose=json!({"context":key,"mode":"expert","brain":"trend"}).to_string();
+        service.route("POST","/v1/execution/solo",choose.as_bytes(),&db,&status,now-100).unwrap();
+        let bars=(0..120).map(|i|{
+            let open=2000.+i as f64*0.2;let close=open+0.2;
+            FrameBar{candle:Candle{time:now/1000-(120-i)*60,open,high:close+0.1,low:open-0.1,close,tick_volume:100},spread_points:1,real_volume:0}
+        }).collect::<Vec<_>>();
+        let frames=BTreeMap::from([("M1".to_owned(),bars)]);
+        let mut config=Config::default();config.symbol=t.symbol.clone();config.trading.mode=TradingMode::Expert;
+        service.inner.observe(&db,&t,&config,true,&frames,now).unwrap();
+        let entries:Vec<String>={let mut stmt=db.prepare("SELECT brain FROM broker_commands WHERE kind='open'").unwrap();
+            let mapped=stmt.query_map([],|r|r.get(0)).unwrap();mapped.collect::<rusqlite::Result<Vec<_>>>().unwrap()};
+        assert_eq!(entries,vec!["trend"],"Only the explicitly selected ready strategy may queue an entry");
+        status.requested_run=true;
+        let work=service.route("GET","/v1/execution/gateway",b"",&db,&status,now+1).unwrap();
+        assert_eq!(work["command"]["brain"],"trend");
+        assert_eq!(work["command"]["magic"],execution::magic("trend").unwrap());
+        let auth=json!({"id":work["command"]["id"]}).to_string();
+        assert_eq!(service.route("POST","/v1/execution/authorize",auth.as_bytes(),&db,&status,now+2).unwrap()["authorized"],true);
+    }
+
+    #[test]
+    fn operator_close_queues_only_confirmed_owned_tickets_and_rechecks_stop() {
+        use braintrade_domain::Position;
+        let db=setup(); let mut service=Service::new(&db).unwrap();
+        let mut t=telemetry(); t.demo=true; t.account_trade_mode=Some(0);
+        service.inner.settings.login=t.login; service.inner.settings.server=t.server.clone();
+        service.inner.settings.currency=t.currency.clone(); service.inner.settings.target="demo".into();
+        t.positions=vec![
+            Position{ticket:101,magic:execution::magic("system").unwrap(),symbol:t.symbol.clone(),side:"BUY".into(),volume:0.1,profit:2.,..Default::default()},
+            Position{ticket:102,magic:execution::magic("trend").unwrap(),symbol:t.symbol.clone(),side:"SELL".into(),volume:0.1,profit:-1.,..Default::default()},
+            Position{ticket:103,magic:99,symbol:t.symbol.clone(),side:"BUY".into(),volume:0.1,profit:5.,..Default::default()},
+            Position{ticket:104,magic:execution::magic("system").unwrap(),symbol:"OTHER".into(),side:"BUY".into(),volume:0.1,profit:5.,..Default::default()},
+        ];
+        let key=context(&t);
+        let mut status=Status::default(); status.telemetry=Some(t.clone()); status.gateway_fresh=true;
+        let body=|tickets:Vec<u64>,profit_only:bool|{
+            let positions=tickets.iter().map(|ticket|t.positions.iter().find(|p|p.ticket==*ticket)
+                .map(|p|json!({"ticket":p.ticket,"magic":p.magic,"side":p.side,"volume":p.volume}))
+                .unwrap_or(json!({"ticket":ticket,"magic":410600,"side":"BUY","volume":0.1}))).collect::<Vec<_>>();
+            json!({"context":key,"positions":positions,"profit_only":profit_only}).to_string()
+        };
+        status.requested_run=true;
+        assert!(service.route("POST","/v1/execution/close-selected",body(vec![101],false).as_bytes(),&db,&status,1000).is_err());
+        status.requested_run=false;
+        for (tickets,profit_only) in [(vec![101,101],false),(vec![101,999],false),(vec![101,103],false),(vec![104],false),(vec![101,102],true)] {
+            assert!(service.route("POST","/v1/execution/close-selected",body(tickets,profit_only).as_bytes(),&db,&status,1000).is_err());
+        }
+        let mut wrong:Value=serde_json::from_str(&body(vec![101],false)).unwrap();
+        wrong["context"]=json!("old-account");
+        assert!(service.route("POST","/v1/execution/close-selected",wrong.to_string().as_bytes(),&db,&status,1000).is_err());
+        wrong["context"]=json!(key); wrong["positions"][0]["volume"]=json!(0.2);
+        assert!(service.route("POST","/v1/execution/close-selected",wrong.to_string().as_bytes(),&db,&status,1000).is_err());
+        db.execute_batch("CREATE TRIGGER block_close BEFORE INSERT ON broker_commands WHEN NEW.brain='trend' BEGIN SELECT RAISE(ABORT,'injected failure'); END;").unwrap();
+        assert!(service.route("POST","/v1/execution/close-selected",body(vec![101,102],false).as_bytes(),&db,&status,1000).is_err());
+        let count:i64=db.query_row("SELECT COUNT(*) FROM broker_commands",[],|r|r.get(0)).unwrap(); assert_eq!(count,0);
+        db.execute_batch("DROP TRIGGER block_close;").unwrap();
+        let result=service.route("POST","/v1/execution/close-selected",body(vec![101,102],false).as_bytes(),&db,&status,1000).unwrap();
+        assert_eq!(result["queued"],2);
+        assert_eq!(result["scope"],"owned_positions_current_symbol");
+        assert!(service.route("POST","/v1/execution/close-selected",body(vec![101],false).as_bytes(),&db,&status,1001).is_err());
+        let work=service.route("GET","/v1/execution/gateway",b"",&db,&status,1001).unwrap();
+        assert_eq!(work["command"]["manual_close"],true);
+        let auth=json!({"id":work["command"]["id"]}).to_string();
+        status.requested_run=true;
+        assert_eq!(service.route("POST","/v1/execution/authorize",auth.as_bytes(),&db,&status,1002).unwrap()["authorized"],false);
+        status.requested_run=false;
+        assert_eq!(service.route("POST","/v1/execution/authorize",auth.as_bytes(),&db,&status,1002).unwrap()["authorized"],true);
     }
 
     #[test]

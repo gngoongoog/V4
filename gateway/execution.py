@@ -16,15 +16,25 @@ import json
 import math
 import sqlite3
 import time
+from broker_costs import booked_trading_net
 from institutional_controls import (
     calendar_entry_blocked, initialise_quality_table, quality_entry_blocked,
     record_execution_quality,
 )
 
-MAGIC_MIN, MAGIC_MAX = 410600, 410617
+MAGIC_MIN, MAGIC_MAX = 410600, 410618
 # Reserved 410616 belongs to the unmerged Adaptive Learner, not this build.
-OWNED_MAGICS = frozenset(range(410600, 410616)) | {410617}
+OWNED_MAGICS = frozenset(range(410600, 410616)) | {410617, 410618}
+# Must match the durable Rust identity mapping. The reserved 410616 remains
+# unowned; adding SOLO must not let a brain borrow another brain's magic.
+BRAIN_MAGIC = dict(zip((
+    'system','gann','wyckoff','trend','momentum','structure','zones','dom',
+    'profile','gann_dom_profile','ces','kte','regime','generated','liquidity','trend_pullback'
+),range(410600,410616))) | {'sniper_learner':410617, 'manual':410618}
 FAST_QUEUE_TARGET_MS = 20
+# A final Core permission may not remain valid through a slow broker call.
+# Bound its age after the RPC; this is not an atomic cross-process STOP/MT5 lock.
+FINAL_AUTH_MAX_AGE_MS = 20
 
 
 def clock_ms():
@@ -32,7 +42,7 @@ def clock_ms():
 
 
 def account_identity(a):
-    return (a.login, a.server, a.currency) if a else None
+    return (getattr(a,'login',None),getattr(a,'server',None),getattr(a,'currency',None)) if a else None
 
 
 def expected(cmd):
@@ -46,12 +56,14 @@ def values(obj):
 def is_fast_path(cmd):
     """Return True only for latency-sensitive market actions.
 
-    Tick-keyed entries are the Sniper path. Closing an already-owned position is
-    also safe to dispatch without a separate order_check round trip because the
-    exact broker position is re-read and validated immediately before send.
+    Tick-keyed entries are the Sniper path. Automatic closes keep the existing
+    low-latency path. Operator-requested closes always use broker order_check
+    and re-read the exact position immediately before send.
     """
     if cmd.get('kind') == 'close':
-        return True
+        # Operator-requested bulk closes take the full broker order_check;
+        # the existing automatic Sniper exit path keeps its latency contract.
+        return cmd.get('manual_close') is not True
     signal = cmd.get('signal') or {}
     return cmd.get('kind') == 'open' and str(signal.get('key', '')).startswith('tick:')
 
@@ -80,6 +92,8 @@ def sniper_broker_geometry(info, tick, stop, target):
             f'Sniper exact pip TP {target:.5f} is not a multiple of broker tick size {step:.5f}; '
             'TP was NOT rounded or widened. Choose a tick-representable target.'
         )
+    if abs(stop / step - round(stop / step)) > 1e-6:
+        raise ValueError(f'Sniper exact SL {stop:.5f} is not a multiple of broker tick size {step:.5f}; SL was not widened.')
     min_stop = spread + minimum
     min_target = max(step, minimum - spread)
     if stop + step * 1e-7 < min_stop:
@@ -236,8 +250,54 @@ class BrokerExecutor:
         self.db.execute('CREATE TABLE IF NOT EXISTS sends(id TEXT PRIMARY KEY, request TEXT NOT NULL, result TEXT, created_ms INTEGER NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS micro_real_recovered(account_key TEXT PRIMARY KEY, reached_ms INTEGER NOT NULL, reached_equity REAL NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS daily_loss_locks(account_key TEXT NOT NULL, report_day TEXT NOT NULL, reached_ms INTEGER NOT NULL, loss_amount REAL NOT NULL, PRIMARY KEY(account_key,report_day))')
+        self.db.execute('CREATE TABLE IF NOT EXISTS risk_master_recoveries(account_key TEXT NOT NULL, recovery_id TEXT NOT NULL, basis TEXT NOT NULL, threshold REAL NOT NULL, reached_value REAL NOT NULL, PRIMARY KEY(account_key,recovery_id))')
+        self.db.execute('CREATE TABLE IF NOT EXISTS history_rescan(scope TEXT PRIMARY KEY, next_ms INTEGER NOT NULL, due_ms INTEGER NOT NULL)')
         initialise_quality_table(self.db)
         self.next_history = 0.0
+        self.last_daily_snapshot = None
+
+    def _risk_recovery(self, cmd, account):
+        """Latch a broker-observed recovery for this exact account and rule.
+
+        A later price drop or Gateway restart cannot allow another unprotected
+        entry before Core receives the evidence and re-enables the risk master.
+        A subsequent explicit operator change uses a new recovery identity.
+        """
+        if cmd.get('kind') != 'open' or cmd.get('risk_master_enabled') is not False:
+            return None
+        rule=cmd.get('risk_master_recovery')
+        if rule is None:
+            return None
+        if (type(rule) is not dict or set(rule)!={'basis','threshold'}
+                or rule['basis'] not in ('balance','equity')
+                or type(rule['threshold']) not in (int,float)
+                or not math.isfinite(rule['threshold'])
+                or not 0.01<=rule['threshold']<=1_000_000_000_000
+                or type(cmd.get('risk_master_recovery_id')) is not str
+                or len(cmd['risk_master_recovery_id'])!=32
+                or any(c not in '0123456789abcdef' for c in cmd['risk_master_recovery_id'])):
+            raise ValueError('Invalid risk-master recovery rule or identity')
+        recovery_id=cmd['risk_master_recovery_id']
+        key=json.dumps((*account_identity(account),int(account.trade_mode)),ensure_ascii=False,separators=(',',':'))
+        saved=self.db.execute('SELECT basis,threshold,reached_value FROM risk_master_recoveries WHERE account_key=? AND recovery_id=?',(key,recovery_id)).fetchone()
+        if saved:
+            if saved[0]!=rule['basis'] or saved[1]!=rule['threshold']:
+                raise ValueError('Risk-master recovery rule changed for this identity')
+            return dict(basis=saved[0],threshold=saved[1],value=saved[2])
+        try:value=float(getattr(account,rule['basis']))
+        except (AttributeError,TypeError,ValueError,OverflowError):
+            raise ValueError('Risk-master recovery needs a current broker account value')
+        if not math.isfinite(value) or value<=0:
+            raise ValueError('Risk-master recovery needs a positive finite broker account value')
+        if value<rule['threshold']:
+            return None
+        self.db.execute('INSERT OR IGNORE INTO risk_master_recoveries VALUES(?,?,?,?,?)',
+                        (key,recovery_id,rule['basis'],rule['threshold'],value))
+        self.db.commit()
+        saved=self.db.execute('SELECT basis,threshold,reached_value FROM risk_master_recoveries WHERE account_key=? AND recovery_id=?',(key,recovery_id)).fetchone()
+        if not saved or saved[0]!=rule['basis'] or saved[1]!=rule['threshold']:
+            raise ValueError('Risk-master recovery latch could not be verified')
+        return dict(basis=saved[0],threshold=saved[1],value=saved[2])
 
     def _daily_loss_blocked(self, mt5, cmd, account):
         """Daily equity circuit breaker across all symbols and external positions.
@@ -246,6 +306,7 @@ class BrokerExecutor:
         checks. Existing daily lock is retained and applies if re-enabled.
         """
         enabled = cmd.get('daily_breaker_enabled',cmd.get('target')=='live')
+        self.last_daily_snapshot = None
         if enabled is not True:
             return False
         try:
@@ -272,32 +333,15 @@ class BrokerExecutor:
             raise ValueError('Daily breaker: broker history/positions unavailable')
         # Positions_get() without a symbol deliberately verifies all symbols.
         # Account equity includes all floating PnL, swaps and external positions.
-        trading={mt5.DEAL_TYPE_BUY,mt5.DEAL_TYPE_SELL}
-        net=0.0
-        for d in deals:
-            if d.type not in trading:
-                continue
-            # No guessed zero commission / swap / fee in REAL risk decisions.
-            # Unknown cost data blocks NEW entries but never position closure.
-            components=[]
-            for k in ('profit','commission','swap','fee'):
-                raw=getattr(d,k,None)
-                if isinstance(raw,bool):
-                    raise ValueError('Daily breaker: invalid broker deal costs')
-                try:
-                    component=float(raw)
-                except (ValueError,TypeError,OverflowError) as exc:
-                    raise ValueError('Daily breaker: invalid broker deal costs') from exc
-                if not math.isfinite(component):
-                    raise ValueError('Daily breaker: invalid broker deal costs')
-                components.append(component)
-            net+=math.fsum(components)
-            if not math.isfinite(net):
-                raise ValueError('Daily breaker: invalid broker deal costs')
+        try:
+            net, _ = booked_trading_net(deals, mt5)
+        except ValueError as exc:
+            raise ValueError('Daily breaker: invalid broker deal costs') from exc
         baseline=balance-net
         if not math.isfinite(baseline) or baseline<=0:
             raise ValueError('Daily breaker: invalid start-of-day trading balance estimate')
         loss=baseline-equity
+        self.last_daily_snapshot=(key,day,balance,baseline,limit)
         if loss>=baseline*limit/100.0:
             self.db.execute('INSERT OR IGNORE INTO daily_loss_locks VALUES(?,?,?,?)',
                             (key,day,clock_ms(),loss))
@@ -338,12 +382,13 @@ class BrokerExecutor:
         # must never swallow/transform a real send acknowledgment.
         self.db.execute('UPDATE sends SET result=? WHERE id=?', (json.dumps(result, allow_nan=False), cmd['id']))
         self.db.commit()
-        try:
-            record_execution_quality(self.db, cmd, result, clock_ms())
-        except (sqlite3.Error, KeyError, TypeError, ValueError):
-            # This is observable by the read-only quality report (missing
-            # sample). It must never make a successful broker send 'unknown'.
-            pass
+        if cmd.get('kind') not in ('protect','cancel_pending'):
+            try:
+                record_execution_quality(self.db, cmd, result, clock_ms())
+            except (sqlite3.Error, KeyError, TypeError, ValueError):
+                # This is observable by the read-only quality report (missing
+                # sample). It must never make a successful broker send 'unknown'.
+                pass
         return result
 
     def _institutional_entry_guard(self, cmd):
@@ -357,6 +402,45 @@ class BrokerExecutor:
         reason = quality_entry_blocked(self.db, cmd, clock_ms())
         if reason:
             raise ValueError(reason)
+
+    def _terminal_partial_order(self, mt5, cmd, order, submitted_volume):
+        """Return exact broker history evidence that an unfilled remainder ended.
+
+        No missing history, live-order snapshot or deal alone certifies this.
+        The saved evidence is diagnostic; it never sends or cancels an order.
+        """
+        if order <= 0 or not callable(getattr(mt5, 'history_orders_get', None)):
+            return None
+        terminal = {getattr(mt5, name, None): label for name, label in (
+            ('ORDER_STATE_CANCELED', 'canceled'), ('ORDER_STATE_REJECTED', 'rejected'),
+            ('ORDER_STATE_EXPIRED', 'expired')) if getattr(mt5, name, None) is not None}
+        if not terminal:
+            return None
+        mode = 0 if cmd.get('target') == 'demo' else 2 if cmd.get('target') == 'live' else -1
+        def same_account():
+            account = mt5.account_info()
+            return account_identity(account) == expected(cmd) and getattr(account, 'trade_mode', None) == mode
+        try:
+            if not same_account():
+                return None
+            rows = mt5.history_orders_get(ticket=order)
+            if rows is None or len(rows) != 1 or not same_account():
+                return None
+            item = rows[0]
+            ticket = int(item.ticket)
+            initial = float(item.volume_initial)
+            remaining = float(item.volume_current)
+            state = terminal.get(item.state)
+            if (ticket != order or getattr(item, 'magic', None) != cmd['magic']
+                    or getattr(item, 'symbol', None) != cmd['symbol'] or state is None
+                    or not all(math.isfinite(v) for v in (initial, remaining, submitted_volume))
+                    or initial <= 0 or remaining < 0 or remaining > initial + 1e-8
+                    or abs(initial-submitted_volume) > max(1e-8, submitted_volume*1e-7)):
+                return None
+            return dict(confirmed=True, ticket=ticket, state=state,
+                        volume_initial=initial, volume_current=remaining)
+        except (AttributeError, TypeError, ValueError, OverflowError, OSError, RuntimeError):
+            return None
 
     def _reconcile(self, mt5, cmd, previous):
         result = previous or dict(id=cmd['id'], state='unknown', reason='Send was interrupted; no automatic retry')
@@ -379,18 +463,50 @@ class BrokerExecutor:
         # positive MT5 order ticket from the durable acknowledgement is a
         # stronger exact link than the comment. Keep magic/symbol/account checks
         # and never guess based solely on timing or trade direction.
-        acknowledged_order = int(result.get('order') or 0)
-        def matches_identity(item):
+        try:
+            acknowledged_order = int(result.get('order') or 0)
+        except (TypeError, ValueError, OverflowError):
+            return dict(result, reason='Invalid acknowledged order ticket; reconciliation pending')
+        if acknowledged_order < 0:
+            return dict(result, reason='Invalid acknowledged order ticket; reconciliation pending')
+        def matches_deal(item):
             if getattr(item, 'magic', 0)!=cmd['magic'] or getattr(item, 'symbol', '')!=cmd['symbol']:
                 return False
-            item_order = int(getattr(item, 'order', 0) or 0)
+            try:
+                item_order = int(getattr(item, 'order', 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                return False
             # If both sides expose an order ID, it must agree. A copied or
             # broker-reused comment must never override a conflicting ticket.
             if acknowledged_order>0 and item_order>0:
                 return item_order==acknowledged_order
             return getattr(item, 'comment', '')==tag
-        matches = [d for d in deals if matches_identity(d)]
-        pending = any(matches_identity(o) for o in orders)
+        def may_be_active_order(item):
+            # Active MT5 orders carry their identity in `ticket`, whereas a
+            # Deal links back to its order in `order`. A broker may strip the
+            # comment. An unidentifiable same-owner active order must therefore
+            # block finalizing rather than being mistaken for an absent order.
+            try:
+                ticket = int(getattr(item, 'ticket', 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                ticket = 0
+            if acknowledged_order>0 and ticket>0:
+                # An exact ticket is a blocker even if other returned fields
+                # are missing or inconsistent; never finalize on corruption.
+                return ticket==acknowledged_order
+            symbol = getattr(item, 'symbol', '')
+            if symbol and symbol!=cmd['symbol']:
+                return False
+            # With no usable ticket, missing/mismatched metadata is not proof
+            # that an acknowledged same-symbol order has disappeared.
+            if acknowledged_order>0:
+                return True
+            magic = getattr(item, 'magic', None)
+            if magic is not None and magic!=cmd['magic']:
+                return False
+            return True
+        matches = [d for d in deals if matches_deal(d)]
+        pending = any(may_be_active_order(o) for o in orders)
         # A journal is scoped to both broker identity and Demo/REAL mode.
         # A matching login tuple alone must never authorize cross-mode recovery.
         target_mode = 0 if cmd.get('target') == 'demo' else 2 if cmd.get('target') == 'live' else -1
@@ -398,6 +514,24 @@ class BrokerExecutor:
         if (account_identity(current_account) != expected(cmd)
                 or getattr(current_account, 'trade_mode', None) != target_mode):
             return result
+        # A placed order can terminate without any deal. Only exact broker
+        # history, matching ownership and the *entire* volume remaining proves
+        # that cancellation/expiry completed without a fill.
+        if not matches and not pending and acknowledged_order > 0:
+            submitted = result.get('request') or cmd.get('broker_request') or {}
+            try:
+                submitted_volume = float(submitted['volume'])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                submitted_volume = float('nan')
+            if math.isfinite(submitted_volume) and submitted_volume > 0:
+                terminal = self._terminal_partial_order(mt5, cmd, acknowledged_order, submitted_volume)
+                if terminal is not None and abs(terminal['volume_current']-submitted_volume) <= max(1e-8,submitted_volume*1e-7):
+                    final_account = mt5.account_info()
+                    if (account_identity(final_account) == expected(cmd)
+                            and getattr(final_account, 'trade_mode', None) == target_mode):
+                        return self._save(cmd, dict(result, state='cancelled',
+                            reason='Broker order history proves terminal cancellation with zero fills; no resend',
+                            broker_terminal_order=terminal, reconciled_ms=clock_ms()))
         if matches and not pending:
             submitted = result.get('request') or cmd.get('broker_request')
             if not submitted:
@@ -452,23 +586,53 @@ class BrokerExecutor:
                 return dict(result, reason='Broker deal entry/exit classification conflicts with intent; reconciliation pending')
             if any(pos <= 0 for pos in positions) or len(set(positions)) != 1:
                 return dict(result, reason='Broker fills have missing or conflicting physical position IDs; reconciliation pending')
+            try:
+                prices = [float(getattr(d, 'price', 0)) for d in matches]
+                times = [int(getattr(d, 'time_msc', 0)) for d in matches]
+            except (TypeError, ValueError, OverflowError):
+                return dict(previous or dict(id=cmd['id'], state='unknown'),
+                            reason='Invalid broker history price/time; reconciliation pending')
+            if not all(math.isfinite(p) and p > 0 for p in prices) or not all(t > 0 for t in times):
+                return dict(previous or dict(id=cmd['id'], state='unknown'),
+                            reason='Invalid broker history price/time; reconciliation pending')
             state = 'partial' if volume + 1e-8 < submitted_volume else 'filled'
             result = dict(result, state=state, reason='Broker history confirms fill; await Core position reconciliation; no resend',
                           request=submitted, deal=int(matches[0].ticket), deals=[int(d.ticket) for d in matches],
                           volume=volume, recovered_from_history=True)
-            prices = [float(getattr(d, 'price', 0)) for d in matches]
-            if all(math.isfinite(p) and p > 0 for p in prices):
-                result['price'] = sum(p * float(d.volume) for p, d in zip(prices, matches)) / volume
-            times = [int(getattr(d, 'time_msc', 0)) for d in matches]
-            if all(t > 0 for t in times):
-                result['fill_time_ms'] = min(times)
+            if state == 'partial':
+                terminal = self._terminal_partial_order(mt5, cmd, acknowledged_order, submitted_volume)
+                if terminal is not None:
+                    result['terminal_order'] = terminal
+            else:
+                result.pop('terminal_order', None)
+            result['price'] = sum(p * float(d.volume) for p, d in zip(prices, matches)) / volume
+            result['fill_time_ms'] = min(times)
             result['position_id'] = positions[0]
             # Recovery can restore booked evidence, never the unobserved quote path.
             result['reconciled_ms'] = clock_ms()
+            final_account = mt5.account_info()
+            if (account_identity(final_account) != expected(cmd)
+                    or getattr(final_account, 'trade_mode', None) != target_mode):
+                return previous or dict(id=cmd['id'], state='unknown', reason='Broker account changed during recovery')
+            # The same partial history can be polled repeatedly on the tick
+            # path. Do not rewrite the durable journal for a timestamp-only
+            # change; persist every new deal, terminal proof or other evidence.
+            if previous is not None:
+                comparable = lambda value: {k:v for k,v in value.items() if k != 'reconciled_ms'}
+                if comparable(result) == comparable(previous):
+                    return previous
             return self._save(cmd, result)
         return result
 
     def execute(self, mt5, cmd, authorize):
+        if cmd.get('kind') == 'cancel_pending':
+            from order_cancellation import execute_cancellation
+            return execute_cancellation(self,mt5,cmd,authorize,OWNED_MAGICS,BRAIN_MAGIC,FINAL_AUTH_MAX_AGE_MS)
+        if cmd.get('kind') == 'protect':
+            # Protective modifications have no deal/volume acknowledgement;
+            # reconcile actual SL/TP state separately from trade fills.
+            from position_protection import execute_protection
+            return execute_protection(self, mt5, cmd, authorize, OWNED_MAGICS, BRAIN_MAGIC, FINAL_AUTH_MAX_AGE_MS)
         row = self.db.execute('SELECT request,result FROM sends WHERE id=?', (cmd['id'],)).fetchone()
         if row:
             saved = json.loads(row[0])
@@ -476,10 +640,12 @@ class BrokerExecutor:
             # the broker account. Never reinterpret a saved order with new lot,
             # side, expiry, fees, risk permissions or Demo/REAL destination.
             # Mutable polling state and timing metadata are deliberately omitted.
-            immutable=('login','server','currency','target','symbol','magic',
+            immutable=('login','server','currency','target','symbol','magic','brain',
                        'kind','position','lots','signal','revision',
+                       'manual_open','manual_epoch','manual_reference_price','manual_stop_price','manual_target_price',
+                       'manual_close','profit_only','expected_position_volume','expected_position_side',
                        'deviation_points','created_ms','expires_ms',
-                       'commission_per_lot','slippage_ticks','risk_percent',
+                       'commission_per_lot','slippage_ticks','risk_percent','risk_master_enabled','risk_master_recovery','risk_master_recovery_id',
                        'demo_flexible','micro_demo_risk_opt_in',
                        'micro_real_temporary','micro_real_cap_percent',
                        'micro_real_recovery_equity','daily_breaker_enabled',
@@ -510,6 +676,8 @@ class BrokerExecutor:
         if cmd.get('_core_pulse_us') is not None:
             result['core_pulse_us'] = cmd['_core_pulse_us']
             result['prefetched_work'] = True
+        journaled=False
+        send_started=False
         try:
             if clock_ms()>cmd['expires_ms']:
                 raise ValueError('Intent expired before submission')
@@ -517,6 +685,14 @@ class BrokerExecutor:
             target_mode = 0 if cmd['target']=='demo' else 2 if cmd['target']=='live' else -1
             if account_identity(a)!=expected(cmd) or a.trade_mode!=target_mode:
                 raise ValueError('Bound account or Demo/Live mode changed')
+            risk_master=cmd.get('risk_master_enabled',True)
+            if type(risk_master) is not bool:
+                raise ValueError('Invalid Core account risk-master state')
+            if cmd.get('kind')=='open' and not risk_master and (cmd.get('daily_breaker_enabled') is not False or cmd.get('micro_real_temporary') is True):
+                raise ValueError('Inconsistent disabled-risk broker intent')
+            recovery=self._risk_recovery(cmd,a)
+            if recovery is not None:
+                return dict(result,state='rejected',reason='Risk-master recovery reached; wait for Core to restore risk',risk_master_recovery_reached=recovery)
             # Economic-event and measured-broker-quality gate. Closing an
             # owned position never waits on these optional external controls.
             self._institutional_entry_guard(cmd)
@@ -529,6 +705,10 @@ class BrokerExecutor:
                 raise ValueError('Enable Algo Trading and external Python trading in MT5; account must permit trading')
             if cmd['magic'] not in OWNED_MAGICS:
                 raise ValueError('Unknown brain ownership')
+            if 'brain' in cmd and (not isinstance(cmd['brain'],str) or BRAIN_MAGIC.get(cmd['brain'])!=cmd['magic']):
+                raise ValueError('Brain identity does not match its broker magic')
+            if cmd.get('kind')=='open' and ((cmd.get('brain')=='manual') != (cmd.get('manual_open') is True)):
+                raise ValueError('Manual entry identity or authorization is invalid')
 
             symbol=cmd['symbol']; info=mt5.symbol_info(symbol); tick=mt5.symbol_info_tick(symbol)
             if info is None or tick is None:
@@ -538,12 +718,27 @@ class BrokerExecutor:
             age=clock_ms()-tick.time_msc
             if age < -2000 or age>cmd.get('max_quote_age_ms',3000):
                 raise ValueError('Broker quote is stale')
+            quote_time_ms = int(tick.time_msc)
 
             positions=mt5.positions_get(symbol=symbol); orders=mt5.orders_get(symbol=symbol)
             if positions is None or orders is None:
                 raise ValueError('Position/order reconciliation unavailable')
+            if cmd.get('manual_open') is True and (any(p.magic in OWNED_MAGICS for p in positions)
+                    or any(o.magic in OWNED_MAGICS for o in orders)):
+                raise ValueError('A BrainTrade position or order already owns this symbol')
             closing=cmd['kind']=='close'
             if closing:
+                # A different close intent must not bypass an existing
+                # unresolved close of the same bound physical position.
+                prior = self.db.execute('''SELECT 1 FROM sends
+                    WHERE id<>? AND json_valid(request) AND json_extract(request,'$.kind')='close'
+                    AND json_extract(request,'$.login')=? AND json_extract(request,'$.server')=?
+                    AND json_extract(request,'$.currency')=? AND json_extract(request,'$.target')=?
+                    AND json_extract(request,'$.position')=?
+                    AND (result IS NULL OR (json_valid(result) AND json_extract(result,'$.state') IN ('unknown','placed','partial')))
+                    LIMIT 1''',(cmd['id'],cmd['login'],cmd['server'],cmd['currency'],cmd['target'],cmd['position'])).fetchone()
+                if prior:
+                    return dict(result,state='cancelled',reason='Existing unresolved close for this position; no second send')
                 owned=[p for p in positions if p.ticket==cmd['position'] and p.magic==cmd['magic'] and p.symbol==symbol]
                 if not owned:
                     # No close was sent. A flat or foreign-owned position
@@ -551,6 +746,16 @@ class BrokerExecutor:
                     return dict(result,state='cancelled',
                                 reason='Exact owned MT5 position absent; no close order sent. Verify exit from broker Deal history.')
                 p=owned[0]; lots=float(p.volume); side=-1 if p.type==mt5.POSITION_TYPE_BUY else 1
+                if cmd.get('manual_close') is True:
+                    if type(cmd.get('profit_only')) is not bool or p.type not in (mt5.POSITION_TYPE_BUY, getattr(mt5,'POSITION_TYPE_SELL',1)):
+                        raise ValueError('Manual close has invalid profit filter or position side')
+                    expected_volume=float(cmd.get('expected_position_volume',float('nan')))
+                    expected_side='BUY' if p.type==mt5.POSITION_TYPE_BUY else 'SELL'
+                    if (not math.isfinite(expected_volume) or abs(expected_volume-lots)>1e-8
+                            or cmd.get('expected_position_side')!=expected_side):
+                        raise ValueError('Approved position side or volume changed before broker validation')
+                    if cmd['profit_only'] and (not math.isfinite(float(getattr(p,'profit',float('nan')))) or float(p.profit)<=0):
+                        raise ValueError('Position is no longer profitable on MT5 floating P/L')
             else:
                 if any(p.magic==cmd['magic'] for p in positions) or any(o.magic==cmd['magic'] for o in orders):
                     raise ValueError('Brain already owns a position/order')
@@ -566,6 +771,7 @@ class BrokerExecutor:
                 raise ValueError('Volume/side does not match broker min/max/step')
 
             price=float(tick.ask if side==1 else tick.bid)
+            validated_bid,validated_ask=float(tick.bid),float(tick.ask)
             fill_flags=getattr(info,'filling_mode',0)
             if fill_flags & 1:
                 filling=mt5.ORDER_FILLING_FOK
@@ -583,6 +789,21 @@ class BrokerExecutor:
                 request['position']=cmd['position']
             else:
                 stop=float(cmd['signal']['stop_distance']);target=float(cmd['signal']['target_distance']);step=info.trade_tick_size
+                if cmd.get('manual_open') is True:
+                    reference=float(cmd.get('manual_reference_price',float('nan')))
+                    manual_stop=float(cmd.get('manual_stop_price',float('nan')))
+                    manual_target=float(cmd.get('manual_target_price',float('nan')))
+                    if (not all(math.isfinite(v) and v>0 for v in (reference,manual_stop,manual_target))
+                            or abs(price-reference)>int(cmd['deviation_points'])*info.point+step*1e-8
+                            or abs(manual_stop/step-round(manual_stop/step))>1e-6
+                            or abs(manual_target/step-round(manual_target/step))>1e-6):
+                        raise ValueError('Manual price moved beyond approved deviation or exact SL/TP is off broker grid')
+                    remaining=max(0.,int(cmd['deviation_points'])*info.point-abs(price-reference))
+                    request['deviation']=max(0,math.floor(remaining/info.point+1e-8))
+                    worst_manual_entry=reference+side*int(cmd['deviation_points'])*info.point
+                    if (not math.isfinite(worst_manual_entry) or worst_manual_entry<=0
+                            or (manual_target-worst_manual_entry)*side<=0):
+                        raise ValueError('Manual maximum deviation makes entry invalid or reaches the target')
                 if fast_path:
                     stop, target, minimum, spread = sniper_broker_geometry(info, tick, stop, target)
                     result['pricing'] = dict(
@@ -595,8 +816,21 @@ class BrokerExecutor:
                     )
                 if not all(math.isfinite(v) and v>0 for v in (stop,target)):
                     raise ValueError('Invalid stop/target geometry')
-                request['sl']=(math.floor((price-side*stop)/step) if side==1 else math.ceil((price-side*stop)/step))*step
-                request['tp']=(math.ceil((price+side*target)/step) if side==1 else math.floor((price+side*target)/step))*step
+                if cmd.get('manual_open') is True:
+                    request['sl']=manual_stop
+                    request['tp']=manual_target
+                elif fast_path:
+                    # All three values must lie on the broker grid. Integer tick
+                    # arithmetic avoids float ceil/floor widening an exact TP.
+                    base_steps = price / step
+                    if abs(base_steps-round(base_steps)) > 1e-6:
+                        raise ValueError('Sniper entry quote is not on broker tick grid')
+                    entry_steps = round(base_steps)
+                    request['sl']=(entry_steps-side*round(stop/step))*step
+                    request['tp']=(entry_steps+side*round(target/step))*step
+                else:
+                    request['sl']=(math.floor((price-side*stop)/step) if side==1 else math.ceil((price-side*stop)/step))*step
+                    request['tp']=(math.ceil((price+side*target)/step) if side==1 else math.floor((price+side*target)/step))*step
                 exit_price=tick.bid if side==1 else tick.ask
                 minimum=max(0,getattr(info,'trade_stops_level',0))*info.point
                 if request['sl']<=0 or request['tp']<=0 or (exit_price-request['sl'])*side+step*1e-8<minimum or (request['tp']-exit_price)*side+step*1e-8<minimum:
@@ -605,19 +839,26 @@ class BrokerExecutor:
                 # This check runs for every Core-issued opening order, including
                 # Sniper fast-path and REAL. Legacy REAL intents missing a risk
                 # budget are rejected instead of bypassing the safety layer.
-                if 'risk_percent' not in cmd:
+                if not risk_master:
+                    # Explicit, account-scoped operator setting carried by a
+                    # Core-authorized intent. Broker volume, stop/TP geometry,
+                    # account, margin, journal and authorization stay enforced.
+                    result['risk_sizing_disabled']=True
+                elif 'risk_percent' not in cmd:
                     if cmd['target']=='live':
                         raise ValueError('Risk sizing: REAL entry has no Core risk budget; rejected')
                 else:
                     risk_started=time.perf_counter()
                     lots,result['risk_sizing']=size_to_stop_risk(
-                        mt5,a,info,symbol,side,price,request['sl'],lots,
+                        mt5,a,info,symbol,side,worst_manual_entry if cmd.get('manual_open') is True else price,request['sl'],lots,
                         float(cmd['risk_percent']),
                         float(cmd.get('commission_per_lot',float('nan'))),
                         float(cmd.get('slippage_ticks',float('nan'))),
                         micro_demo_risk_opt_in=cmd.get('micro_demo_risk_opt_in') is True,
                         broker_demo=cmd['target']=='demo' and a.trade_mode==0,
                         micro_real_active=self._micro_real_active(cmd,a))
+                    if cmd.get('manual_open') is True and abs(lots-float(cmd['lots']))>1e-8:
+                        raise ValueError('Manual volume exceeds risk budget; no automatic lot reduction')
                     request['volume']=lots
                     result['risk_sizing_ms']=(time.perf_counter()-risk_started)*1000
                     if 'sizing' in result:
@@ -630,6 +871,11 @@ class BrokerExecutor:
             if not closing and cmd['target']=='live':
                 try:
                     margin=mt5.order_calc_margin(request['type'],symbol,request['volume'],price)
+                    if cmd.get('manual_open') is True:
+                        worst_margin=mt5.order_calc_margin(request['type'],symbol,request['volume'],worst_manual_entry)
+                        if worst_margin is None or not math.isfinite(float(worst_margin)) or float(worst_margin)<0:
+                            raise ValueError('REAL margin preflight: worst permitted manual price unavailable')
+                        margin=max(float(margin),float(worst_margin)) if margin is not None else None
                 except Exception as exc:
                     raise ValueError('REAL margin preflight: broker calculator failed') from exc
                 free=float(getattr(a,'margin_free',float('nan')))
@@ -668,6 +914,7 @@ class BrokerExecutor:
                 self.db.execute('INSERT INTO sends(id,request,result,created_ms) VALUES(?,?,NULL,?)',
                                 (cmd['id'],json.dumps(dict(cmd,broker_request=request),allow_nan=False),clock_ms()))
                 self.db.commit()
+                journaled=True
             except sqlite3.IntegrityError:
                 # Another gateway worker already committed the same intent.
                 # No second order_send is allowed.
@@ -754,21 +1001,155 @@ class BrokerExecutor:
                     result['total_ms']=(time.perf_counter()-started)*1000
                     return self._save(cmd,result)
 
+            # Do not leave potentially slow history/calendar checks between the
+            # final account/STOP checks and send. There is no cross-process
+            # atomic MT5 operation; the irreducible final race remains explicit.
+            final_account=mt5.account_info()
+            if account_identity(final_account)!=expected(cmd) or getattr(final_account,'trade_mode',None)!=target_mode:
+                result.update(state='cancelled',reason='Account changed during final broker checks; order not sent')
+                return self._save(cmd,result)
+            try:
+                still_authorized=bool(authorize(cmd['id']))
+            except Exception:
+                still_authorized=False
+            final_authorized_at=time.perf_counter()
+            # The authorization RPC itself can be delayed while the user
+            # changes MT5 accounts. Re-read account once it returns.
+            latest_account=mt5.account_info()
+            now=clock_ms()
+            quote_age=now-quote_time_ms
+            if (not still_authorized or account_identity(latest_account)!=expected(cmd)
+                    or getattr(latest_account,'trade_mode',None)!=target_mode
+                    or now>cmd['expires_ms'] or quote_age < -2000 or quote_age>cmd.get('max_quote_age_ms',3000)):
+                result.update(state='cancelled',reason='Final authorization, account, expiry or quote freshness failed; order not sent')
+                return self._save(cmd,result)
+            def final_number(name):
+                try:return float(getattr(latest_account,name,float('nan')))
+                except (TypeError,ValueError,OverflowError):return float('nan')
+            latest_equity=final_number('equity')
+            if not closing:
+                recovery=self._risk_recovery(cmd,latest_account)
+                if recovery is not None:
+                    result.update(state='cancelled',reason='Risk-master recovery reached before send; wait for Core to restore risk',risk_master_recovery_reached=recovery)
+                    return self._save(cmd,result)
+            if not closing and cmd.get('daily_breaker_enabled',cmd.get('target')=='live') is True:
+                snapshot=self.last_daily_snapshot
+                latest_balance=final_number('balance')
+                if (snapshot is None or not math.isfinite(latest_equity) or latest_equity<=0
+                        or not math.isfinite(latest_balance)
+                        or datetime.now(timezone(timedelta(hours=3))).date().isoformat()!=snapshot[1]
+                        or abs(latest_balance-snapshot[2])>max(1e-8,abs(snapshot[2])*1e-10)):
+                    result.update(state='cancelled',reason='Daily breaker account balance changed after history check; no entry sent')
+                    return self._save(cmd,result)
+                daily_key,day,_,baseline,limit=snapshot
+                daily_loss=baseline-latest_equity
+                if daily_loss>=baseline*limit/100.0:
+                    self.db.execute('INSERT OR IGNORE INTO daily_loss_locks VALUES(?,?,?,?)',(daily_key,day,clock_ms(),daily_loss))
+                    self.db.commit()
+                    result.update(state='cancelled',reason='Daily breaker reached during final checks; new entry not sent')
+                    return self._save(cmd,result)
+            # The last account read also has to back the sizing decision; do
+            # not send using an older, larger free-margin/equity budget.
+            if not closing and ('real_margin_check' in result or 'risk_sizing' in result):
+                latest_free=final_number('margin_free')
+                margin=result.get('real_margin_check')
+                sizing=result.get('risk_sizing')
+                insufficient_margin=margin is not None and (not math.isfinite(latest_free) or latest_free+1e-8<margin['required'])
+                budget=latest_equity*sizing['risk_percent']/100 if sizing is not None else 0.
+                insufficient_equity=sizing is not None and (not math.isfinite(latest_equity) or latest_equity<=0
+                    or sizing['estimated_stop_loss_including_costs']>budget+max(1e-8,abs(budget)*1e-10))
+                if insufficient_margin or insufficient_equity:
+                    result.update(state='cancelled',reason='Final broker equity or margin no longer permits the entry')
+                    return self._save(cmd,result)
+                if (cmd.get('micro_real_temporary') is True
+                        and latest_equity>=float(cmd.get('micro_real_recovery_equity',float('inf')))):
+                    self._micro_real_active(cmd,latest_account)  # Persist the crossed milestone before cancelling.
+                    result.update(state='cancelled',reason='Micro REAL recovery milestone reached during final checks')
+                    return self._save(cmd,result)
+            if not closing and cmd.get('manual_open') is True:
+                # Manual orders are less latency-sensitive than Sniper. Never
+                # send if another owner appeared or the quote used for exact
+                # stops/risk sizing changed during confirmation/authorization.
+                current_positions=mt5.positions_get(symbol=symbol)
+                current_orders=mt5.orders_get(symbol=symbol)
+                current_tick=mt5.symbol_info_tick(symbol)
+                current_age=clock_ms()-int(current_tick.time_msc) if current_tick is not None else 10**12
+                if (current_positions is None or current_orders is None or current_tick is None
+                        or any(p.magic in OWNED_MAGICS for p in current_positions)
+                        or any(o.magic in OWNED_MAGICS for o in current_orders)
+                        or float(current_tick.bid)!=validated_bid or float(current_tick.ask)!=validated_ask
+                        or current_age < -2000 or current_age>cmd.get('max_quote_age_ms',3000)):
+                    result.update(state='cancelled',reason='Manual quote or owned position changed during final checks; no order sent')
+                    return self._save(cmd,result)
+                current_account=mt5.account_info()
+                if account_identity(current_account)!=expected(cmd) or getattr(current_account,'trade_mode',None)!=target_mode:
+                    result.update(state='cancelled',reason='Manual account changed during final checks; no order sent')
+                    return self._save(cmd,result)
+                recovery=self._risk_recovery(cmd,current_account)
+                if recovery is not None:
+                    result.update(state='cancelled',reason='Risk-master recovery reached during manual checks',risk_master_recovery_reached=recovery)
+                    return self._save(cmd,result)
+                if any(float(getattr(current_account,k,float('nan')))!=final_number(k) for k in ('balance','equity','margin_free')):
+                    result.update(state='cancelled',reason='Manual account values changed during final checks; no order sent')
+                    return self._save(cmd,result)
+            if closing and cmd.get('manual_close') is True:
+                # Re-read the approved physical ticket immediately before send.
+                # The floating-profit filter is not a net-after-fees guarantee.
+                try:
+                    latest_positions=mt5.positions_get(symbol=symbol)
+                    same=[] if latest_positions is None else [p for p in latest_positions
+                        if p.ticket==cmd['position'] and p.magic==cmd['magic'] and p.symbol==symbol]
+                    if len(same)!=1:
+                        raise ValueError('Approved position no longer present')
+                    p=same[0]
+                    current_lots=float(p.volume)
+                    if (not math.isfinite(current_lots) or abs(current_lots-request['volume'])>1e-8
+                            or p.type not in (mt5.POSITION_TYPE_BUY,getattr(mt5,'POSITION_TYPE_SELL',1))
+                            or (-1 if p.type==mt5.POSITION_TYPE_BUY else 1)!=side):
+                        raise ValueError('Approved position volume or side changed')
+                    if cmd['profit_only'] and (not math.isfinite(float(getattr(p,'profit',float('nan')))) or float(p.profit)<=0):
+                        raise ValueError('Position no longer has positive MT5 floating P/L')
+                    final_manual_account=mt5.account_info()
+                    if account_identity(final_manual_account)!=expected(cmd) or getattr(final_manual_account,'trade_mode',None)!=target_mode:
+                        raise ValueError('Broker account changed during final position check')
+                except Exception as exc:
+                    result.update(state='cancelled',reason='Manual close pre-send check failed; order not sent: '+str(exc))
+                    return self._save(cmd,result)
+                now=clock_ms(); quote_age=now-quote_time_ms
+                if now>cmd['expires_ms'] or quote_age < -2000 or quote_age>cmd.get('max_quote_age_ms',3000):
+                    result.update(state='cancelled',reason='Manual close quote or intent became stale before send')
+                    return self._save(cmd,result)
+            if (time.perf_counter()-final_authorized_at)*1000 > FINAL_AUTH_MAX_AGE_MS:
+                result.update(state='cancelled',reason='Final Core authorization became stale during broker checks; order not sent')
+                return self._save(cmd,result)
             result['pre_send_ms']=(time.perf_counter()-started)*1000
             result['queue_to_send_ms']=max(0,clock_ms()-cmd['created_ms'])
             result['queue_to_send_target_met']=result['queue_to_send_ms']<=FAST_QUEUE_TARGET_MS
 
             sent=time.perf_counter()
+            send_started=True
             try:
                 response=mt5.order_send(request)
             except Exception as exc:
                 result.update(state='unknown',reason='MT5 send interrupted: '+type(exc).__name__)
             else:
                 code=getattr(response,'retcode',None)
-                known_rejects={10004,10006,10007,10013,10014,10015,10016,10017,10018,10019,10020,10021,10022,10024,10026,10027,10028,10029,10030,10032,10033,10034,10035,10036,10038,10039,10040,10042,10043,10044,10045,10046}
+                known_rejects={10004,10006,10007,10013,10014,10015,10016,10017,10018,10019,10020,10021,10022,10024,10026,10027,10029,10030,10032,10033,10034,10035,10036,10038,10040,10042,10043,10044,10045,10046}
                 state={10009:'filled',10010:'partial',10008:'placed'}.get(code,'rejected' if code in known_rejects else 'unknown')
-                order_id=int(getattr(response,'order',0) or 0)
-                deal_id=int(getattr(response,'deal',0) or 0)
+                try:
+                    order_id=int(getattr(response,'order',0) or 0)
+                    deal_id=int(getattr(response,'deal',0) or 0)
+                    response_volume=float(getattr(response,'volume',0))
+                    response_price=float(getattr(response,'price',0))
+                    if not math.isfinite(response_volume) or not math.isfinite(response_price):
+                        raise ValueError('non-finite acknowledgement')
+                except (TypeError, ValueError, OverflowError, AttributeError):
+                    result.update(state='unknown',retcode=code,
+                                  reason='Broker acknowledgement malformed after send; reconciliation required')
+                    result['acknowledged_ms']=clock_ms()
+                    result['send_ms']=(time.perf_counter()-sent)*1000
+                    result['total_ms']=(time.perf_counter()-started)*1000
+                    return self._save(cmd,result)
                 # A DONE/DONE_PARTIAL retcode without any deal ticket is not
                 # sufficient evidence of an exact fill/volume/price. Preserve
                 # the send journal and reconcile using subsequent MT5 history
@@ -777,16 +1158,22 @@ class BrokerExecutor:
                     state='placed'
                 result.update(state=state,retcode=code,reason=str(getattr(response,'comment','No broker acknowledgement')),
                               order=order_id,deal=deal_id,
-                              volume=float(getattr(response,'volume',0)),price=float(getattr(response,'price',0)))
+                              volume=response_volume,price=response_price)
                 if deal_id<=0 and code in (10009,10010):
                     result['reason']='Broker retcode acknowledges submission but deal ticket is unavailable; await exact MT5 history reconciliation'
             result['acknowledged_ms']=clock_ms()
             result['send_ms']=(time.perf_counter()-sent)*1000
             result['total_ms']=(time.perf_counter()-started)*1000
             return self._save(cmd,result)
-        except (ValueError,TypeError,AttributeError) as exc:
+        except (ValueError,TypeError,AttributeError,OverflowError,OSError,RuntimeError) as exc:
             result['reason']=str(exc)
             result['total_ms']=(time.perf_counter()-started)*1000
+            if journaled:
+                result['state']='unknown' if send_started else 'cancelled'
+                try:return self._save(cmd,result)
+                except (sqlite3.Error,TypeError,ValueError,OverflowError):
+                    # A failed post-send journal write is never a rejection.
+                    if send_started:result['state']='unknown'
             return result
 
     def cycle(self,mt5,api,work=None):
@@ -811,6 +1198,24 @@ class BrokerExecutor:
             # Older Core responses without trade_mode are not safe to sync.
             wanted=(identity.get('login'),identity.get('server'),identity.get('currency'))
             mode=identity.get('trade_mode')
+            # Periodically replay bounded historical pages from the original
+            # binding boundary. This catches broker receipts that become visible
+            # after the ordinary 120-second overlap; sync is idempotent in Core.
+            # Interleave pages with ordinary polling and never scan on the tick
+            # pulse path. Cursor advances only after a successful Core sync.
+            now=clock_ms()
+            floor=work.get('history_rescan_from_ms')
+            scope=work.get('history_scope')
+            rescan_key=None
+            if type(floor) is int and 0<floor<=now and isinstance(scope,str) and scope:
+                rescan_key=json.dumps([scope,*wanted,mode],ensure_ascii=False,separators=(',',':'))
+                self.db.execute('INSERT OR IGNORE INTO history_rescan VALUES(?,?,?)',(rescan_key,floor,now+60_000))
+                self.db.commit()
+                cursor,due=self.db.execute('SELECT next_ms,due_ms FROM history_rescan WHERE scope=?',(rescan_key,)).fetchone()
+                if now>=due:
+                    start=max(floor,min(cursor,now))
+                else:
+                    rescan_key=None
             until=min(clock_ms(),start+86_400_000)
             def same_broker_mode():
                 account=mt5.account_info()
@@ -842,4 +1247,9 @@ class BrokerExecutor:
                         deals.append(row)
                     if reliable and same_broker_mode():
                         api('/v1/execution/sync',dict(identity,deals=deals,until_ms=until))
+                        if rescan_key is not None:
+                            caught_up=until>=now-1000
+                            self.db.execute('UPDATE history_rescan SET next_ms=?,due_ms=? WHERE scope=?',
+                                (floor if caught_up else until+1,now+(300_000 if caught_up else 10_000),rescan_key))
+                            self.db.commit()
         return work.get('poll_ms',250)/1000

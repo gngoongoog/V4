@@ -33,6 +33,7 @@ pub const BRAINS: [(&str, &str); 17] = [
 ];
 pub fn magic(id: &str) -> Option<u64> {
     // 410616 is reserved by the unmerged adaptive-brain PR #58. Never reuse it.
+    if id == "manual" { return Some(410_618); }
     if id == "sniper_learner" { return Some(410_617); }
     BRAINS
         .iter()
@@ -40,6 +41,7 @@ pub fn magic(id: &str) -> Option<u64> {
         .map(|i| 410_600 + i as u64)
 }
 pub fn brain_for_magic(m: u64) -> Option<&'static str> {
+    if m == 410_618 { return Some("manual"); }
     if m == 410_617 { return Some("sniper_learner"); }
     if m >= 410_616 { return None; }
     m.checked_sub(410_600)
@@ -79,7 +81,7 @@ impl Default for BrainConfig {
 }
 impl BrainConfig {
     pub fn validate(&self) -> Result<(), String> {
-        if magic(&self.id).is_none()
+        if self.id=="manual" || magic(&self.id).is_none()
             || !crate::studio::TIMEFRAMES.contains(&self.timeframe.as_str())
         {
             return Err("Unknown brain or timeframe".into());

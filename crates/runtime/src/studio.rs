@@ -29,6 +29,7 @@ pub struct Service {
     auto: bool,
     next_request: u64,
     cursor: usize,
+    learning_frozen:bool,
 }
 impl Service {
     pub fn new(db: &Connection) -> Result<Self> {
@@ -62,6 +63,7 @@ CREATE TABLE IF NOT EXISTS wyckoff_observations(context TEXT NOT NULL,timeframe 
             auto,
             next_request: 0,
             cursor: 0,
+            learning_frozen:false,
         })
     }
     pub fn live_frames(&self, t: &Telemetry, now: u64) -> BTreeMap<String, Vec<Candle>> {
@@ -85,6 +87,13 @@ CREATE TABLE IF NOT EXISTS wyckoff_observations(context TEXT NOT NULL,timeframe 
             w.cancel.store(true, Ordering::Relaxed);
         }
         self.auto = false;
+    }
+    pub fn set_learning_frozen(&mut self,frozen:bool){
+        if frozen && !self.learning_frozen {
+            self.queue.clear();
+            if let Some(w)=&self.worker {w.cancel.store(true,Ordering::Relaxed);}
+        }
+        self.learning_frozen=frozen;
     }
     fn unseen(db: &Connection, f: &Frame) -> Result<bool> {
         if f.bars.len() < 400 || !f.error.is_empty() {
@@ -240,6 +249,34 @@ CREATE TABLE IF NOT EXISTS wyckoff_observations(context TEXT NOT NULL,timeframe 
             .as_ref()
             .filter(|t| t.connected && s.gateway_fresh && t.symbol == c.symbol);
         match (method, path) {
+            // These are the same account-scoped, closed MT5 frames already
+            // collected for Studio. Reading a chart never schedules a new MT5
+            // request or enters the latency-sensitive Sniper pulse path.
+            ("GET", "/v1/studio/chart-frames") => {
+                let Some(t) = t.filter(|t| t.login>0 && !t.server.is_empty()
+                    && !t.symbol.is_empty() && !t.currency.is_empty()) else {
+                    return Ok(json!({"schema":"chart-frames-v1","ready":false,"frames":{}}));
+                };
+                let key=context(t);
+                let mut frames=serde_json::Map::new();
+                for tf in ["M30","H1","H4","D1"] {
+                    let Some(frame)=self.frames.get(&(key.clone(),tf.to_owned())) else {continue};
+                    // Frames loaded from SQLite were validated at capture;
+                    // revalidate against that capture so older closed history
+                    // remains displayable, while identifying it as historical.
+                    if !frame.error.is_empty() || frame.context()!=key || frame.timeframe!=tf
+                        || frame.captured_ms>now.saturating_add(2000)
+                        || frame.validate(frame.captured_ms).is_err() {continue}
+                    let start=frame.bars.len().saturating_sub(180);
+                    let bars:Vec<_>=frame.bars[start..].iter().map(|bar|bar.candle.clone()).collect();
+                    frames.insert(tf.to_ascii_lowercase(),json!({"bars":bars,
+                        "captured_ms":frame.captured_ms,"live":frame.live(now)}));
+                }
+                Ok(json!({"schema":"chart-frames-v1","ready":true,
+                    "account":{"login":t.login,"server":t.server,"symbol":t.symbol,
+                        "currency":t.currency,"trade_mode":t.account_trade_mode},
+                    "frames":frames,"read_only":true}))
+            }
             ("GET", "/v1/gateway/research/request") => {
                 let poll_ms = if c.trading.mode == trading::TradingMode::Sniper {
                     250
@@ -285,13 +322,14 @@ CREATE TABLE IF NOT EXISTS wyckoff_observations(context TEXT NOT NULL,timeframe 
                 }
                 self.observe(db, &f, t, c, now)?;
                 db.execute("INSERT INTO studio_frames(context,timeframe,payload) VALUES(?1,?2,?3) ON CONFLICT(context,timeframe) DO UPDATE SET payload=excluded.payload",params![f.context(),f.timeframe,serde_json::to_string(&f)?])?;
-                if self.auto {
+                if self.auto && !self.learning_frozen {
                     self.enqueue(db, &f, &c.risk)?;
                 }
                 self.frames.insert((f.context(), f.timeframe.clone()), f);
                 Ok(json!({"ok":true}))
             }
             ("POST", "/v1/studio/run") => {
+                anyhow::ensure!(!self.learning_frozen,"التعلم مجمّد؛ استأنفه قبل تشغيل تدريب Studio");
                 let t = t.context("Connect MT5 before research")?;
                 let v: Value = serde_json::from_slice(body)?;
                 let tf = v["timeframe"].as_str().unwrap_or("ALL");
@@ -322,7 +360,9 @@ CREATE TABLE IF NOT EXISTS wyckoff_observations(context TEXT NOT NULL,timeframe 
             }
             ("POST", "/v1/studio/auto") => {
                 let v: Value = serde_json::from_slice(body)?;
-                self.auto = v["enabled"].as_bool().context("enabled must be boolean")?;
+                let enabled=v["enabled"].as_bool().context("enabled must be boolean")?;
+                anyhow::ensure!(!enabled || !self.learning_frozen,"التعلم مجمّد؛ استأنفه قبل تشغيل التدريب التلقائي");
+                self.auto = enabled;
                 db.execute("INSERT INTO studio_settings(id,auto) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET auto=excluded.auto",[self.auto])?;
                 Ok(json!({"auto":self.auto}))
             }
@@ -354,7 +394,7 @@ CREATE TABLE IF NOT EXISTS wyckoff_observations(context TEXT NOT NULL,timeframe 
                 let mut q=db.prepare("SELECT timeframe,COUNT(*),SUM(CASE WHEN outcome IS NULL THEN 1 ELSE 0 END),SUM(CASE WHEN json_extract(outcome,'$.state')='scored' THEN 1 ELSE 0 END),SUM(CASE WHEN json_extract(outcome,'$.net_per_lot')>0 THEN 1 ELSE 0 END),AVG(json_extract(outcome,'$.net_per_lot')) FROM wyckoff_observations WHERE context=?1 GROUP BY timeframe")?;
                 let learning=q.query_map([key.as_deref().unwrap_or("")],|r|{let n:i64=r.get(3)?;let wins:i64=r.get(4)?;let mean:Option<f64>=r.get(5)?;Ok(json!({"timeframe":r.get::<_,String>(0)?,"observations":r.get::<_,i64>(1)?,"pending":r.get::<_,i64>(2)?,"scored":n,"wins":wins,"smoothed_win_rate":(wins+1) as f64/(n+2) as f64,"mean_net_per_lot":mean,"research_evidence_positive":n>=20&&mean.is_some_and(|v|v>0.),"note":"Prospective 12-bar outcomes; frequency is not calibrated confidence"}))})?.collect::<std::result::Result<Vec<_>,_>>()?;
                 Ok(
-                    json!({"context":key,"connected":t.is_some(),"auto":self.auto,"working":self.worker.as_ref().map(|w|&w.frame.timeframe),"queued":self.queue.len(),"last_error":self.last_error,"frames":frames,"reports":reports,"wyckoff_learning":learning}),
+                    json!({"context":key,"connected":t.is_some(),"auto":self.auto,"learning_frozen":self.learning_frozen,"working":self.worker.as_ref().map(|w|&w.frame.timeframe),"queued":self.queue.len(),"last_error":self.last_error,"frames":frames,"reports":reports,"wyckoff_learning":learning}),
                 )
             }
             _ => bail!("Unknown studio route"),
@@ -440,6 +480,21 @@ mod tests {
         (f, t, Config::default())
     }
     #[test]
+    fn global_pause_cancels_worker_and_blocks_training_without_erasing_auto_setting(){
+        let db=Connection::open_in_memory().unwrap();let mut service=Service::new(&db).unwrap();
+        let(f,t,c)=fixture();let mut status=Status::default();status.telemetry=Some(t);status.gateway_fresh=true;
+        service.auto=true;service.queue.push_back((f.clone(),c.risk.clone()));
+        let(_tx,rx)=mpsc::channel();let cancel=Arc::new(AtomicBool::new(false));
+        service.worker=Some(Worker{rx,cancel:cancel.clone(),frame:f.clone()});
+        service.set_learning_frozen(true);
+        assert!(cancel.load(Ordering::Relaxed));assert!(service.queue.is_empty());assert!(service.auto);
+        assert!(service.route("POST","/v1/studio/run",b"{}",&db,&c,&status,f.captured_ms).is_err());
+        assert!(service.route("POST","/v1/studio/auto",br#"{"enabled":true}"#,&db,&c,&status,f.captured_ms).is_err());
+        service.set_learning_frozen(false);
+        assert!(service.auto,"Resume retains the operator's previous auto setting");
+        assert!(service.route("POST","/v1/studio/auto",br#"{"enabled":true}"#,&db,&c,&status,f.captured_ms).is_ok());
+    }
+    #[test]
     fn wyckoff_outcomes_are_prospective_unique_and_persisted() {
         let db = Connection::open_in_memory().unwrap();
         let service = Service::new(&db).unwrap();
@@ -480,5 +535,38 @@ mod tests {
         let o: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(o["state"], "scored");
         assert!((o["net_per_lot"].as_f64().unwrap() - 137.).abs() < 1e-7);
+    }
+    #[test]
+    fn chart_frames_are_closed_account_scoped_and_explicitly_historical() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        let (mut frame,t,mut config)=fixture();
+        let now=frame.captured_ms;
+        config.symbol=t.symbol.clone();
+        frame.timeframe="H1".into();
+        frame.current_open=(now/1000/3600)*3600;
+        for (i,bar) in frame.bars.iter_mut().enumerate() {
+            bar.candle.time=frame.current_open-(110-i as u64)*3600;
+        }
+        frame.validate(now).unwrap();
+        service.frames.insert((context(&t),"H1".into()),frame.clone());
+        let mut status=Status{gateway_fresh:true,telemetry:Some(t.clone()),..Default::default()};
+        let response=service.route("GET","/v1/studio/chart-frames",b"",&db,&config,&status,now).unwrap();
+        assert_eq!(response["ready"],true);
+        assert_eq!(response["account"]["login"],1);
+        assert_eq!(response["frames"]["h1"]["bars"].as_array().unwrap().len(),110);
+        assert_eq!(response["frames"]["h1"]["live"],true);
+        let historical=service.route("GET","/v1/studio/chart-frames",b"",&db,&config,&status,now+121_000).unwrap();
+        assert_eq!(historical["frames"]["h1"]["live"],false);
+        assert_eq!(historical["frames"]["h1"]["bars"].as_array().unwrap().len(),110);
+        status.telemetry.as_mut().unwrap().login=2;
+        let other=service.route("GET","/v1/studio/chart-frames",b"",&db,&config,&status,now).unwrap();
+        assert!(other["frames"].as_object().unwrap().is_empty(),"never expose the previous account's candles");
+        status.gateway_fresh=false;
+        assert_eq!(service.route("GET","/v1/studio/chart-frames",b"",&db,&config,&status,now).unwrap()["ready"],false);
+        frame.bars[0].candle.open=-1.;
+        service.frames.insert((context(&t),"H1".into()),frame);
+        status.gateway_fresh=true;status.telemetry=Some(t);
+        assert!(service.route("GET","/v1/studio/chart-frames",b"",&db,&config,&status,now).unwrap()["frames"].as_object().unwrap().is_empty());
     }
 }

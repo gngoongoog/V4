@@ -1,4 +1,5 @@
 mod backup;
+mod lifecycle;
 mod execution;
 mod execution_quality;
 mod broker_quality_circuit;
@@ -42,6 +43,9 @@ mod backtest;
 mod correlation;
 mod evaluation;
 mod learning;
+mod learning_control;
+mod position_protection;
+mod pending_cancellation;
 mod learning_inference;
 mod learning_performance_review;
 mod learning_review;
@@ -51,6 +55,7 @@ mod brain_integrity;
 mod mode_evidence;
 mod learning_forward_audit;
 mod trading_settings;
+mod reconciliation_audit;
 pub mod news;
 mod research;
 mod risk_monitor;
@@ -89,6 +94,88 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Err(e) = fs::rename(&tmp, path) { let _ = fs::remove_file(&tmp); return Err(e.into()); }
     Ok(())
 }
+
+#[derive(Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SettingsRollback { config:Option<Vec<u8>>, token:Option<Vec<u8>> }
+fn optional_file(path:&Path)->Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes)=>Ok(Some(bytes)),
+        Err(e) if e.kind()==std::io::ErrorKind::NotFound=>Ok(None),
+        Err(e)=>Err(e.into()),
+    }
+}
+fn restore_optional(path:&Path,bytes:&Option<Vec<u8>>)->Result<()> {
+    if let Some(bytes)=bytes { atomic_write(path,bytes)?; }
+    else if let Err(e)=fs::remove_file(path) {
+        if e.kind()!=std::io::ErrorKind::NotFound {return Err(e.into());}
+    }
+    Ok(())
+}
+/// An interrupted two-file save is rolled back before either file is read.
+/// The journal contains only the already-protected token bytes, never plaintext.
+fn recover_settings_transaction(dir:&Path)->Result<()> {
+    let marker=dir.join("settings-rollback.json");
+    let Some(raw)=optional_file(&marker)? else {return Ok(())};
+    let previous:SettingsRollback=serde_json::from_slice(&raw).context("Invalid settings rollback journal; refusing partial settings")?;
+    restore_optional(&dir.join("config.json"),&previous.config)?;
+    restore_optional(&dir.join("telegram.sealed"),&previous.token)?;
+    fs::remove_file(marker)?;
+    Ok(())
+}
+fn persist_settings_transaction(dir:&Path,config:&Config,token:&str,clear:bool)->Result<()> {
+    recover_settings_transaction(dir)?;
+    let marker=dir.join("settings-rollback.json");
+    let previous=SettingsRollback{config:optional_file(&dir.join("config.json"))?,token:optional_file(&dir.join("telegram.sealed"))?};
+    atomic_write(&marker,&serde_json::to_vec(&previous)?)?;
+    let operation=(||->Result<()>{
+        if !token.is_empty(){secrets::write(&dir.join("telegram.sealed"),token)?;}
+        atomic_write(&dir.join("config.json"),&serde_json::to_vec_pretty(config)?)?;
+        if clear {
+            match fs::remove_file(dir.join("telegram.sealed")) {
+                Ok(())=>{},Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},Err(e)=>return Err(e.into()),
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error)=operation {
+        recover_settings_transaction(dir).context("Settings failed and rollback is pending; restart is required")?;
+        return Err(error);
+    }
+    if let Err(error)=fs::remove_file(&marker) {
+        recover_settings_transaction(dir).context("Settings commit failed and rollback is pending")?;
+        return Err(error.into());
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod settings_transaction_tests {
+    use super::*;
+    #[test]
+    fn interrupted_two_file_save_restores_both_originals() {
+        let dir=std::env::temp_dir().join(format!("bt-settings-{}",uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let old=SettingsRollback{config:Some(b"original-config".to_vec()),token:Some(b"protected-token".to_vec())};
+        atomic_write(&dir.join("settings-rollback.json"),&serde_json::to_vec(&old).unwrap()).unwrap();
+        atomic_write(&dir.join("config.json"),b"new-config").unwrap();
+        atomic_write(&dir.join("telegram.sealed"),b"new-protected-token").unwrap();
+        recover_settings_transaction(&dir).unwrap();
+        assert_eq!(fs::read(dir.join("config.json")).unwrap(),b"original-config");
+        assert_eq!(fs::read(dir.join("telegram.sealed")).unwrap(),b"protected-token");
+        assert!(!dir.join("settings-rollback.json").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn corrupt_rollback_journal_never_silently_overwrites_settings() {
+        let dir=std::env::temp_dir().join(format!("bt-settings-{}",uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        atomic_write(&dir.join("settings-rollback.json"),b"broken").unwrap();
+        atomic_write(&dir.join("config.json"),b"keep").unwrap();
+        assert!(recover_settings_transaction(&dir).is_err());
+        assert_eq!(fs::read(dir.join("config.json")).unwrap(),b"keep");
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
 fn configure_database(db: &Connection) -> Result<()> {
     db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, timestamp_ms INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT NOT NULL); PRAGMA user_version=1;")?;
     let foreign_keys: i64 = db.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
@@ -121,13 +208,37 @@ pub fn read_ipc_key(dir:&Path)->Result<String>{
 }
 #[derive(Clone)]
 pub struct Client{http:reqwest::blocking::Client,key:String}
+/// A rejected shutdown is known not to have been accepted. A transport
+/// failure is different: the request may have reached Core despite a lost
+/// response, so a caller must not automatically restart it.
+pub enum ShutdownError { Rejected(String), Uncertain(String) }
+/// A timed-out mutation may still have reached Core; callers must distinguish
+/// that case from an explicit Core rejection before retrying or cleaning files.
+pub enum CheckedPostError { Rejected(String), Uncertain(String) }
 impl Client{
     pub fn new(dir:&Path)->Result<Self>{Ok(Self{http:reqwest::blocking::Client::builder().no_proxy().timeout(Duration::from_secs(4)).build()?,key:read_ipc_key(dir)?})}
     pub fn get(&self,path:&str)->Result<Value>{Ok(self.http.get(format!("{BASE}{path}")).bearer_auth(&self.key).send()?.error_for_status()?.json()?)}
     pub fn post(&self,path:&str,body:Value)->Result<Value>{let response=self.http.post(format!("{BASE}{path}")).bearer_auth(&self.key).json(&body).send()?;let code=response.status();let value:Value=response.json()?;if !code.is_success(){bail!("{}",value["error"].as_str().unwrap_or("Request failed"));}Ok(value)}
+    pub fn checked_post(&self,path:&str,body:Value,timeout:Duration)->std::result::Result<Value,CheckedPostError>{
+        let response=self.http.post(format!("{BASE}{path}")).bearer_auth(&self.key)
+            .timeout(timeout).json(&body).send().map_err(|e|CheckedPostError::Uncertain(e.to_string()))?;
+        let code=response.status();
+        let value:Value=response.json().map_err(|e|CheckedPostError::Uncertain(e.to_string()))?;
+        if !code.is_success(){return Err(CheckedPostError::Rejected(value["error"].as_str().unwrap_or("Request failed").to_string()));}
+        Ok(value)
+    }
+    pub fn shutdown(&self,instance:&str)->std::result::Result<Value,ShutdownError>{
+        let response=self.http.post(format!("{BASE}/v1/shutdown")).bearer_auth(&self.key)
+            .timeout(Duration::from_secs(30)).json(&json!({"expected_core_instance":instance})).send()
+            .map_err(|e|ShutdownError::Uncertain(e.to_string()))?;
+        let code=response.status();
+        let value:Value=response.json().map_err(|e|ShutdownError::Uncertain(e.to_string()))?;
+        if !code.is_success(){return Err(ShutdownError::Rejected(value["error"].as_str().unwrap_or("Shutdown rejected").to_string()));}
+        Ok(value)
+    }
 }
 pub(crate) struct Shared{pub status:Status,pub config:Config,pub token:Option<String>}
-struct Engine{dir:PathBuf,shared:Arc<Mutex<Shared>>,db:Connection,gateway:Option<Child>,gateway_retry_ms:u64,shutting_down:bool,research:research::Research,backtests:backtest::Service,evaluations:evaluation::Service,news:news::Service,learning:learning::Service,inference:learning_inference::Service,scoring:learning_scoring::Service,studio:studio::Service,execution:execution::Service}
+struct Engine{dir:PathBuf,shared:Arc<Mutex<Shared>>,db:Connection,gateway:Option<Child>,gateway_retry_ms:u64,shutting_down:bool,instance_id:String,shutdown_barrier:Option<lifecycle::ShutdownBarrier>,research:research::Research,backtests:backtest::Service,evaluations:evaluation::Service,news:news::Service,learning:learning::Service,inference:learning_inference::Service,scoring:learning_scoring::Service,studio:studio::Service,execution:execution::Service}
 #[derive(Deserialize)]
 struct ConfigRequest{config:Config,#[serde(default)]telegram_token:String,#[serde(default)]clear_telegram_token:bool}
 #[derive(Serialize)]
@@ -171,9 +282,35 @@ fn verify_safe_shutdown(status: &Status, unresolved: bool) -> Result<()> {
     }
     Ok(())
 }
+// An empty initial status after a restart is not evidence that a previously
+// connected MT5 account is flat. The same rule protects exit and restore.
+fn verify_initial_shutdown_evidence(status:&Status,gateway_running:bool,prior_session:bool)->Result<()> {
+    if status.telemetry.is_none() {
+        anyhow::ensure!(!gateway_running && !prior_session,
+            "تعذر إيقاف Core أو استعادة النسخة: انتظر حالة حساب MT5 حديثة للتحقق من المراكز");
+    }
+    Ok(())
+}
+fn apply_risk_master_to_monitor(view:&mut Value,master:Option<bool>){
+    view["risk_master_enabled"]=json!(master);
+    if master==Some(false) && view["account"].is_object() {
+        view["configured_enabled"]=view["enabled"].clone();
+        view["enabled"]=json!(false);
+        view["state"]=json!("disabled");
+        view["reason"]=json!("قاطع الخسارة موقوف بمفتاح إدارة المخاطر للحساب؛ إعداد القاطع والقفل السابق محفوظان");
+    }
+}
 
 impl Engine{
     fn event(&self,kind:&str,detail:Value)->Result<()>{self.db.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,?2,?3)",params![now_ms(),kind,detail.to_string()])?;Ok(())}
+    fn verify_shutdown_session(&mut self,status:&Status)->Result<()> {
+        if status.telemetry.is_none() {
+            let gateway_running=match self.gateway.as_mut(){Some(child)=>child.try_wait()?.is_none(),None=>false};
+            let prior_session:bool=self.db.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE kind='gateway_connection' AND json_extract(detail,'$.connected')=1)",[],|row|row.get(0))?;
+            verify_initial_shutdown_evidence(status,gateway_running,prior_session)?;
+        }
+        Ok(())
+    }
     fn launch_gateway(&mut self)->Result<()>{
         if std::env::var("BRAINTRADE_GATEWAY_DISABLED").as_deref()==Ok("1"){return Ok(());}
         if let Some(child)=self.gateway.as_mut(){if child.try_wait()?.is_none(){return Ok(());}}
@@ -198,13 +335,55 @@ impl Engine{
         command.env("PYTHONDONTWRITEBYTECODE","1");
         command.env("BRAINTRADE_DATA_DIR",&self.dir)
             .env("BRAINTRADE_IPC_TOKEN",read_ipc_key(&self.dir)?);
-        command.stdin(Stdio::null()).stdout(Stdio::null());let log=OpenOptions::new().append(true).create(true).open(self.dir.join("gateway.log"))?;command.stderr(log);
+        // Closing the parent end of stdin requests normal Python cleanup. The
+        // gateway opts into this protocol only when started by this Core.
+        command.env("BRAINTRADE_GATEWAY_PARENT_STDIN","1");
+        command.stdin(Stdio::piped()).stdout(Stdio::null());let log=OpenOptions::new().append(true).create(true).open(self.dir.join("gateway.log"))?;command.stderr(log);
         #[cfg(windows)] {use std::os::windows::process::CommandExt;command.creation_flags(0x08000000);}
         self.gateway=Some(command.spawn().context("Could not launch MT5 gateway")?);self.event("gateway_started",json!({}))?;Ok(())
     }
     fn stop_gateway(&mut self){if let Some(mut child)=self.gateway.take(){let _=child.kill();let _=child.wait();}}
-    fn tick(&mut self){let cfg=self.shared.lock().unwrap().config.clone();self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
+    fn stop_gateway_for_full_exit(&mut self)->Result<()> {
+        if let Some(child)=self.gateway.as_mut(){
+            drop(child.stdin.take());
+            let deadline=std::time::Instant::now()+Duration::from_secs(15);
+            loop {
+                if let Some(status)=child.try_wait().context("تعذر التحقق من انتهاء Gateway")? {
+                    anyhow::ensure!(status.success(),"تعذر تأكيد تنظيف Gateway؛ راجع gateway.log");
+                    break;
+                }
+                anyhow::ensure!(std::time::Instant::now()<deadline,
+                    "تعذر إيقاف Gateway طبيعياً ضمن المهلة؛ لم يُغلق Core");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            self.gateway=None;
+        }
+        // A gateway from an earlier Core may still own this account's lock.
+        // Never report complete shutdown while such an unknown owner exists.
+        let lock_path=self.dir.join("gateway.lock");
+        if lock_path.exists(){
+            let probe=OpenOptions::new().read(true).write(true).open(lock_path)?;
+            probe.try_lock_exclusive().context("تعذر تأكيد توقف Gateway سابق؛ ما زال قفل Gateway مشغولاً")?;
+            FileExt::unlock(&probe)?;
+        }
+        Ok(())
+    }
+    fn tick(&mut self){let cfg=self.shared.lock().unwrap().config.clone();self.studio.set_learning_frozen(self.execution.learning_frozen());self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
     fn route(&mut self,method:&str,path:&str,body:&[u8])->Result<Value>{
+        if path=="/v1/learning/control" {
+            if method=="GET" {return Ok(self.execution.learning_status());}
+            if method=="POST" {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Request {frozen:bool}
+                let request:Request=serde_json::from_slice(body)?;
+                let status={let mut shared=self.shared.lock().unwrap();shared.status.refresh(now_ms());shared.status.clone()};
+                let result=self.execution.set_learning_frozen(&self.db,&status,request.frozen,now_ms())?;
+                self.studio.set_learning_frozen(request.frozen);
+                return Ok(result);
+            }
+            bail!("Unknown learning control method");
+        }
         if path=="/v1/research/execution-lifecycle" && method=="POST" {
             return research_order_lifecycle::replay(body);
         }
@@ -220,7 +399,10 @@ impl Engine{
         if method=="GET" && path=="/v1/risk/monitor" {
             let (cfg,status)={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());
                 (s.config.clone(),s.status.clone())};
-            return risk_monitor::snapshot(&self.db,&cfg,&status,now_ms());
+            let mut view=risk_monitor::snapshot(&self.db,&cfg,&status,now_ms())?;
+            let master=self.execution.risk_master_for_status(&status);
+            apply_risk_master_to_monitor(&mut view,master);
+            return Ok(view);
         }
         if path=="/v1/execution/frozen-shadow" {
             let (cfg,status)={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());(s.config.clone(),s.status.clone())};
@@ -236,10 +418,43 @@ impl Engine{
             if method=="POST"{self.event("frozen_coordinator_policy_action",json!({"result":result}))?;}
             return Ok(result);
         }
+        // Read-only MT5 Demo Sniper diagnostics. Connectivity alone does not
+        // authorize entry; show actual sampled signal and execution blockers.
+        if method=="GET" && path=="/v1/execution/sniper-diagnosis" {
+            let (c,status)={let mut shared=self.shared.lock().unwrap();
+                shared.status.refresh(now_ms());
+                (shared.config.clone(),shared.status.clone())};
+            let t=status.telemetry.as_ref().filter(|t|status.gateway_fresh
+                &&t.connected&&t.demo&&t.account_trade_mode==Some(0)
+                &&t.login>0&&!t.server.is_empty()&&!t.symbol.is_empty()
+                &&!t.currency.is_empty()&&t.symbol==c.symbol);
+            let Some(t)=t else {
+                return Ok(json!({"schema":"sniper-diagnosis-v1",
+                    "status":"no_verified_demo_account",
+                    "requested_run":status.requested_run,
+                    "execution_enabled":status.execution_enabled,
+                    "mode":c.trading.mode,"read_only":true,
+                    "endpoint_submits_orders":false}));
+            };
+            let context=serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency))?;
+            return Ok(json!({"schema":"sniper-diagnosis-v1",
+                "status":"sampled_demo_only","context":context,
+                "mode":c.trading.mode,"priority_owner":c.trading.priority_mode(),
+                "requested_run":status.requested_run,
+                "execution_enabled":status.execution_enabled,
+                "observations":sniper_opportunities::report(&self.db,&context)?,
+                "blockers":sniper_blocker_review::report(&self.db,&context,now_ms())?,
+                "read_only":true,"endpoint_submits_orders":false,
+                "note":"This is a sampled retrospective diagnostic, not every Fast Pulse or broker order."}));
+        }
+        if method=="GET" && path=="/v1/execution/reconciliation" {
+            let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
+            return reconciliation_audit::report(&self.db,status.telemetry.as_ref(),status.gateway_fresh,now_ms());
+        }
         if path.starts_with("/v1/execution") {
             let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
             let result=self.execution.route(method,path,body,&self.db,&status,now_ms())?;
-            if method=="POST"&&!matches!(path,"/v1/execution/sync"|"/v1/execution/authorize"|"/v1/execution/trades") {self.event("broker_execution_action",json!({"path":path,"result":result}))?;}
+            if method=="POST"&&!matches!(path,"/v1/execution/sync"|"/v1/execution/authorize"|"/v1/execution/trades"|"/v1/execution/risk-master"|"/v1/execution/solo"|"/v1/execution/manual-market") {self.event("broker_execution_action",json!({"path":path,"result":result}))?;}
             let mut s=self.shared.lock().unwrap();s.status.execution_enabled=self.execution.enabled(&s.status);
             return Ok(result);
         }
@@ -324,10 +539,15 @@ impl Engine{
             if method=="POST" {
                 ensure_execution_mutation_stopped(&s.status,self.execution.pending(&self.db)?)?;
                 let c=trading_settings::update(&s.config,&s.status,body)?;
+                let detail=json!({"trading":c.trading,"commission_profiles":c.commission_profiles.len(),"default_commission_per_lot":c.risk.commission_per_lot});
+                // Audit failure before persistence rejects the request.
+                // After durable persistence, an optional audit insert must NEVER
+                // return a false 'save failed' or leave Core using old settings.
+                self.event("trading_mode_change_requested",detail.clone())?;
                 atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&c)?)?;
-                self.event("trading_mode_changed",json!({"trading":c.trading,"commission_profiles":c.commission_profiles.len(),"default_commission_per_lot":c.risk.commission_per_lot}))?;
                 self.execution.set_mode(c.trading.mode);
                 s.config=c;s.status.analysis=Default::default();
+                let _=self.event("trading_mode_changed",detail);
                 return Ok(trading_settings::view(&s.config,&s.status));
             }
         }
@@ -380,8 +600,14 @@ impl Engine{
             return Ok(result);
         }
         if method=="POST"&&path=="/v1/backup/restore/stage"{
-            if self.shared.lock().unwrap().status.requested_run{bail!("Stop the system before staging restore");}
-            if self.backtests.loading(){bail!("Cannot stage restore while broker history is loading");}if self.execution.pending(&self.db)?||self.shared.lock().unwrap().status.telemetry.as_ref().is_some_and(|t|t.positions.iter().any(|p|braintrade_domain::execution::brain_for_magic(p.magic).is_some())){bail!("Close owned broker positions and reconcile commands before restore");}
+            let request:Value=serde_json::from_slice(body)?;
+            if let Some(expected)=request["expected_core_instance"].as_str(){
+                anyhow::ensure!(expected==self.instance_id,"Core session changed; request restore again");
+            }
+            let status={let mut shared=self.shared.lock().unwrap();shared.status.refresh(now_ms());shared.status.clone()};
+            self.verify_shutdown_session(&status)?;
+            verify_safe_shutdown(&status,self.execution.pending(&self.db)?)?;
+            if self.backtests.loading(){bail!("Cannot stage restore while broker history is loading");}
             let config=self.shared.lock().unwrap().config.clone();
             let result=backup::stage(&self.db,&self.dir,&config,body,now_ms())?;
             self.event("backup_restore_staged",json!({"source":result["source"],"rollback":result["rollback"],"secrets_restored":false,"broker_effect":false}))?;
@@ -391,7 +617,7 @@ impl Engine{
             return Ok(result);
         }
         match(method,path){
-            ("GET","/v1/status")=>{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());Ok(serde_json::to_value(&s.status)?)},
+            ("GET","/v1/status")=>{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());let mut value=serde_json::to_value(&s.status)?;value["selected_owner"]=json!(self.execution.selected_owner_for_status(&s.status));value["learning_control"]=self.execution.learning_status();value["core_process"]=json!({"pid":std::process::id(),"instance_id":self.instance_id});Ok(value)},
             ("GET","/v1/config")=>{let s=self.shared.lock().unwrap();Ok(json!({"config":s.config,"token_saved":s.token.is_some()}))},
             ("GET","/v1/learning/account-evidence")=>{
                 let (telemetry,fresh)={
@@ -403,7 +629,7 @@ impl Engine{
             },
             ("GET","/v1/learning")=>{let base=self.learning.status(&self.db)?;let reviewed=learning_review::enrich_learning_status(&self.db,base)?;let inferred=self.inference.enrich_learning_status(&self.db,reviewed)?;let scored=self.scoring.enrich_learning_status(&self.db,inferred)?;let reviewed=learning_performance_review::enrich_learning_status(&self.db,scored)?;let mut result=reviewed;result["frozen_forward_audit"]=learning_forward_audit::audit(&self.db)?;Ok(result)},
             ("POST","/v1/learning/export")=>self.learning.export(&self.db,&self.dir,now_ms()),
-            ("POST","/v1/learning/register")=>{let artifact:Value=serde_json::from_slice(body)?;self.learning.register(&mut self.db,artifact,now_ms())},
+            ("POST","/v1/learning/register")=>{anyhow::ensure!(!self.execution.learning_frozen(),"التعلم مجمّد؛ استأنفه قبل تسجيل نموذج جديد");let artifact:Value=serde_json::from_slice(body)?;self.learning.register(&mut self.db,artifact,now_ms())},
             ("GET","/v1/decisions")=>research::decision_history(&self.db),
             ("GET","/v1/opportunities/history")=>research::opportunity_history(&self.db),
             ("POST","/v1/risk")=>{
@@ -412,9 +638,12 @@ impl Engine{
                 let mut s=self.shared.lock().unwrap();
                 ensure_execution_mutation_stopped(&s.status,pending)?;
                 let mut updated=s.config.clone();updated.risk=risk;
+                let detail=json!({"risk":updated.risk,"scope":"research_and_optional_broker_execution_limits"});
+                self.event("risk_settings_change_requested",detail.clone())?;
                 atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&updated)?)?;
-                self.event("risk_settings_changed",json!({"risk":updated.risk,"scope":"research_and_optional_broker_execution_limits"}))?;
-                s.config=updated;Ok(json!({"ok":true}))
+                s.config=updated;
+                let _=self.event("risk_settings_changed",detail);
+                Ok(json!({"ok":true}))
             },
             ("POST","/v1/export")=>{
                 let name=format!("research-{}-{}",now_ms(),uuid::Uuid::new_v4());let staging=self.dir.join("exports").join(format!(".{name}.tmp"));fs::create_dir_all(&staging)?;
@@ -430,19 +659,22 @@ impl Engine{
                 let current={let mut state=self.shared.lock().unwrap();state.status.refresh(now_ms());state.status.clone()};
                 verify_safe_reconfiguration(&current,pending)?;
                 self.execution.cancel_entries(&self.db)?;
-                if !token.is_empty(){secrets::write(&self.dir.join("telegram.sealed"),token)?;}atomic_write(&self.dir.join("config.json"),&serde_json::to_vec_pretty(&request.config)?)?;if request.clear_telegram_token&&self.dir.join("telegram.sealed").exists(){fs::remove_file(self.dir.join("telegram.sealed"))?;}
+                persist_settings_transaction(&self.dir,&request.config,token,request.clear_telegram_token)?;
                 {let mut s=self.shared.lock().unwrap();s.config=request.config;s.token=effective;s.status.gateway_fresh=false;s.status.last_received_ms=None;s.status.telemetry=None;s.status.analysis=Default::default();s.status.paper=Default::default();s.status.message="Settings saved; reconnecting MT5".into();}
-                self.event("settings_changed",json!({"secrets":"redacted"}))?;if self.backtests.loading(){self.backtests.cancel();}self.stop_gateway();self.gateway_retry_ms=0;Ok(json!({"ok":true}))
+                // Config and sealed-token changes have already committed.
+                // Never skip gateway restart because a post-save audit insert failed.
+                let _=self.event("settings_changed",json!({"secrets":"redacted"}));if self.backtests.loading(){self.backtests.cancel();}self.stop_gateway();self.gateway_retry_ms=0;Ok(json!({"ok":true}))
             },
             ("POST","/v1/start")=>{
                 if self.backtests.loading(){bail!("جلب التاريخ قيد العمل؛ انتظر أو ألغِ الاختبار قبل تشغيل المحاكاة");}
                 let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
+                self.execution.validate_manual_handoff(&self.db,&status)?;
                 self.execution.validate_start(&status,body)?;
                 self.event("monitoring_requested",json!({"broker_execution_possible":true,"requires_fresh_bound_account":true,
                     "real_login_confirmed":self.execution.is_live_target()}))?;
                 let mut s=self.shared.lock().unwrap();
                 s.status.requested_run=true;
-                s.status.message="بدأ النظام. منسّق الوضع المختار وحده يرسل أوامر إلى الحساب المرتبط الحديث.".into();
+                s.status.message="بدأ النظام. العقل المنفّذ المختار وحده يرسل الأوامر إلى الحساب المرتبط الحديث.".into();
                 s.status.refresh(now_ms());
                 Ok(serde_json::to_value(&s.status)?)
             },
@@ -468,12 +700,24 @@ impl Engine{
             },
             ("GET","/v1/events")=>{let mut statement=self.db.prepare("SELECT id,timestamp_ms,kind,detail FROM events ORDER BY id DESC LIMIT 100")?;let events=statement.query_map([],|r|Ok(Event{id:r.get(0)?,timestamp_ms:r.get(1)?,kind:r.get(2)?,detail:serde_json::from_str(&r.get::<_,String>(3)?).unwrap_or(Value::Null)}))?.collect::<std::result::Result<Vec<_>,_>>()?;Ok(json!({"events":events}))},
             ("POST","/v1/shutdown")=>{
+                let request:Value=serde_json::from_slice(body)?;
+                if let Some(expected)=request.get("expected_core_instance") {
+                    anyhow::ensure!(expected.as_str()==Some(self.instance_id.as_str()),"تغيرت جلسة Core؛ أعد طلب الخروج");
+                }
                 let unresolved=self.execution.pending(&self.db)?;
                 let current={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
+                self.verify_shutdown_session(&current)?;
                 verify_safe_shutdown(&current,unresolved)?;
                 self.event("core_shutdown_requested",json!({"safe":true,"positions":0,"pending_orders":0}))?;
+                let barrier=lifecycle::ShutdownBarrier::begin(&self.dir)?;
+                if let Err(error)=self.stop_gateway_for_full_exit(){
+                    barrier.cancel().context("تعذر إلغاء علامة الخروج بعد رفض إيقاف Gateway")?;
+                    return Err(error);
+                }
+                self.shutdown_barrier=Some(barrier);
+                self.backtests.cancel();self.evaluations.cancel();self.studio.cancel();
                 self.shutting_down=true;
-                Ok(json!({"ok":true,"safe":true}))
+                Ok(json!({"ok":true,"safe":true,"gateway_stopped":true,"core_process":{"pid":std::process::id(),"instance_id":self.instance_id}}))
             },
             _=>bail!("Unknown API route")
         }
@@ -483,9 +727,9 @@ impl Engine{
 pub fn run_core()->Result<()>{
     let dir=data_dir();fs::create_dir_all(&dir)?;
     #[cfg(unix)] {use std::os::unix::fs::PermissionsExt;fs::set_permissions(&dir,fs::Permissions::from_mode(0o700))?;}
-    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;correlation::init(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let mut engine=Engine{dir,shared:shared.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,research,backtests,evaluations,news,learning,inference,scoring,studio,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
+    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}recover_settings_transaction(&dir)?;let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;correlation::init(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let mut execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let mut engine=Engine{dir,shared:shared.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,instance_id:uuid::Uuid::new_v4().to_string(),shutdown_barrier:None,research,backtests,evaluations,news,learning,inference,scoring,studio,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
     while !engine.shutting_down{engine.tick();let Some(mut request)=server.recv_timeout(Duration::from_millis(250))? else{continue;};let authenticated=request.headers().iter().any(|h|h.field.equiv("Authorization")&&h.value.as_str()==format!("Bearer {key}"));let origin=request.headers().iter().any(|h|h.field.equiv("Origin"));if !authenticated||origin{let _=request.respond(tiny_http::Response::from_string("{\"error\":\"Unauthorized\"}").with_status_code(401));continue;}if request.body_length().is_none()&&request.method().as_str()=="POST"{let _=request.respond(tiny_http::Response::empty(411));continue;}if request.body_length().unwrap_or(0)>2_000_000{let _=request.respond(tiny_http::Response::empty(413));continue;}let mut body=Vec::new();if request.as_reader().read_to_end(&mut body).is_err(){continue;}let result=engine.route(request.method().as_str(),request.url(),&body);let(code,value)=match result{Ok(v)=>(200,v),Err(e)=>(400,json!({"error":e.to_string()}))};let response=tiny_http::Response::from_string(value.to_string()).with_status_code(code).with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());let _=request.respond(response);}
-    engine.stop_gateway();engine.backtests.cancel();engine.evaluations.cancel();engine.event("core_stopped",json!({}))?;drop(lock);Ok(())
+    engine.stop_gateway();engine.backtests.cancel();engine.evaluations.cancel();engine.studio.cancel();engine.event("core_stopped",json!({}))?;drop(lock);Ok(())
 }
 fn verify_core_identity(status:&Value)->Result<()> {
     let expected=braintrade_domain::build_identity();
@@ -495,10 +739,20 @@ fn verify_core_identity(status:&Value)->Result<()> {
     Ok(())
 }
 pub fn ensure_core()->Result<Client>{
-    let dir=data_dir();if let Ok(client)=Client::new(&dir){if let Ok(status)=client.get("/v1/status"){verify_core_identity(&status)?;return Ok(client);}}
+    let dir=data_dir();let _start_guard=lifecycle::start_guard(&dir)?;
+    if let Ok(client)=Client::new(&dir){if let Ok(status)=client.get("/v1/status"){verify_core_identity(&status)?;return Ok(client);}}
     let mut command=Command::new(std::env::current_exe()?);fs::create_dir_all(&dir)?;command.arg("--core").stdin(Stdio::null()).stdout(Stdio::null()).stderr(OpenOptions::new().append(true).create(true).open(dir.join("core.log"))?);
     #[cfg(windows)] {use std::os::windows::process::CommandExt;command.creation_flags(0x08000008);}
     command.spawn()?;for _ in 0..100{std::thread::sleep(Duration::from_millis(100));if let Ok(client)=Client::new(&dir){if let Ok(status)=client.get("/v1/status"){verify_core_identity(&status)?;return Ok(client);}}}bail!("Core did not become ready. See {}",dir.join("core.log").display())
+}
+/// Called once for an explicitly launched UI, never by a status poller.
+pub fn prepare_user_start()->Result<()>{lifecycle::user_start(&data_dir())}
+/// Connect only to an already running and matching Core; never spawn one.
+pub fn connect_existing_core()->Result<Client>{
+    let client=Client::new(&data_dir())?;
+    let status=client.get("/v1/status")?;
+    verify_core_identity(&status)?;
+    Ok(client)
 }
 
 #[cfg(test)]
@@ -521,6 +775,9 @@ mod tests{
     fn full_exit_is_blocked_if_monitoring_or_account_is_unverified(){
         let mut s=Status::default();
         assert!(verify_safe_shutdown(&s,false).is_ok());
+        assert!(verify_initial_shutdown_evidence(&s,false,false).is_ok());
+        assert!(verify_initial_shutdown_evidence(&s,true,false).is_err());
+        assert!(verify_initial_shutdown_evidence(&s,false,true).is_err());
         assert!(verify_safe_shutdown(&s,true).is_err());
         s.requested_run=true;
         assert!(verify_safe_shutdown(&s,false).is_err());
@@ -531,9 +788,26 @@ mod tests{
         assert!(verify_safe_shutdown(&s,false).is_err());
         s.gateway_fresh=true;
         s.telemetry.as_mut().unwrap().connected=true;
+        assert!(verify_initial_shutdown_evidence(&s,true,true).is_ok());
         assert!(verify_safe_shutdown(&s,false).is_ok());
         s.telemetry.as_mut().unwrap().pending_orders=1;
         assert!(verify_safe_shutdown(&s,false).is_err());
+        s.telemetry.as_mut().unwrap().pending_orders=0;
+        s.telemetry.as_mut().unwrap().positions.push(braintrade_domain::Position::default());
+        assert!(verify_safe_shutdown(&s,false).is_err());
+    }
+    #[test]
+    fn risk_monitor_exposes_suspended_breaker_without_erasing_persisted_lock(){
+        let mut view=json!({"account":{"login":17},"enabled":true,"state":"locked","locked":true});
+        apply_risk_master_to_monitor(&mut view,Some(false));
+        assert_eq!(view["risk_master_enabled"],false);
+        assert_eq!(view["configured_enabled"],true);
+        assert_eq!(view["enabled"],false);
+        assert_eq!(view["state"],"disabled");
+        assert_eq!(view["locked"],true);
+        let mut missing=json!({"state":"unavailable"});
+        apply_risk_master_to_monitor(&mut missing,Some(false));
+        assert_eq!(missing["state"],"unavailable");
     }
     #[test]
     fn account_reconfiguration_requires_flat_stopped_broker(){

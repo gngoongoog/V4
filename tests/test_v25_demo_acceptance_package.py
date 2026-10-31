@@ -26,6 +26,9 @@ class DemoAcceptancePortableContract(unittest.TestCase):
             destination.parent.mkdir(parents=True, exist_ok=True)
             source = {
                 "Run-Demo-Acceptance.cmd": ROOT / "scripts/Run-Demo-Acceptance.cmd",
+                "Run-MT5-Chart-Demo.cmd": ROOT / "Run-MT5-Chart-Demo.cmd",
+                "Tools/check_mt5_chart_readonly.py": ROOT / "scripts/check_mt5_chart_readonly.py",
+                "MT5_CHART_DEMO_ACCEPTANCE_AR.md": ROOT / "docs/v25/MT5_CHART_DEMO_ACCEPTANCE_AR.md",
                 "Tools/Run-Demo-Acceptance.ps1": ROOT / "scripts/Run-Demo-Acceptance.ps1",
                 "Tools/Run-Demo-Acceptance-GUI.ps1": ROOT / "scripts/Run-Demo-Acceptance-GUI.ps1",
                 "DEMO_ACCEPTANCE_AR.md": ROOT / "docs/DEMO_ACCEPTANCE_AR.md",
@@ -47,9 +50,12 @@ class DemoAcceptancePortableContract(unittest.TestCase):
         self.assertFalse(result["ready_for_real"])
 
     def test_missing_cli_gui_or_collector_fails_release(self):
-        for relative in ("Tools/Run-Demo-Acceptance.ps1",
+        for relative in ("Run-MT5-Chart-Demo.cmd", "Tools/check_mt5_chart_readonly.py",
+                         "MT5_CHART_DEMO_ACCEPTANCE_AR.md",
+                         "Tools/Run-Demo-Acceptance.ps1",
                          "Tools/Run-Demo-Acceptance-GUI.ps1",
-                         "runtime/gateway/check_runtime.py"):
+                         "runtime/gateway/check_runtime.py", "runtime/gateway/position_protection.py",
+                         "runtime/gateway/order_cancellation.py"):
             target = self.portable / relative
             previous = target.read_bytes()
             target.unlink()
@@ -71,10 +77,23 @@ class DemoAcceptancePortableContract(unittest.TestCase):
         self.assertEqual(check.verify(self.portable)["checks"][
             "contract:Tools/Run-Demo-Acceptance.ps1"]["status"], "PASS")
 
+    def test_mt5_chart_probe_does_not_expose_live_trading_actions(self):
+        script = (self.portable / "Tools/check_mt5_chart_readonly.py").read_text(encoding="utf-8")
+        for unsafe in ("order_send(", "order_check(", "positions_close(", "shutdown_core(", "/v1/start"):
+            self.assertNotIn(unsafe, script, unsafe)
+        # Never accept a forged launcher that changes the account or sends broker commands.
+        launcher = self.portable / "Run-MT5-Chart-Demo.cmd"
+        original = launcher.read_text(encoding="utf-8")
+        launcher.write_text(original + "\\r\\norder_send(user)\\r\\n", encoding="utf-8")
+        self.assertEqual(check.verify(self.portable)["checks"][
+            "contract:Run-MT5-Chart-Demo.cmd"]["status"], "FAIL")
+
     def test_staging_and_windows_build_include_release_gate(self):
         source = (ROOT / "scripts/package_v25.py").read_text("utf-8")
         windows = (ROOT / "scripts/Build-V25-Portable-Windows.ps1").read_text("utf-8")
-        for token in ("Run-Demo-Acceptance.cmd", "Run-Demo-Acceptance.ps1",
+        for token in ("Run-MT5-Chart-Demo.cmd", "check_mt5_chart_readonly.py",
+                      "MT5_CHART_DEMO_ACCEPTANCE_AR.md",
+                      "Run-Demo-Acceptance.cmd", "Run-Demo-Acceptance.ps1",
                       "Run-Demo-Acceptance-GUI.ps1", "DEMO_ACCEPTANCE_AR.md"):
             self.assertIn(token, source)
         self.assertIn("check_v25_acceptance_package.py", windows)

@@ -19,8 +19,24 @@ export async function handoff(sniperActive:boolean):Promise<unknown>{return invo
 export async function shutdownCore():Promise<unknown>{return invoke('shutdown_core')}
 export async function closeTerminal():Promise<void>{return invoke('close_terminal')}
 export async function backupAction(action:'create'|'brain_export'):Promise<unknown>{return invoke('backup_action',{action})}
+// Paths are chosen by native file dialogs, never supplied by the renderer.
+export async function exportBrainSnapshot():Promise<unknown>{return invoke('brain_snapshot_export')}
+export async function importBrainSnapshot():Promise<unknown>{return invoke('brain_snapshot_import')}
+export async function restoreBrainSnapshot(name:string):Promise<unknown>{return invoke('brain_snapshot_restore',{name})}
+export async function saveExcelReport(bytes:Uint8Array,kind:'journal'|'report'):Promise<unknown>{return invoke('save_excel_report',{bytes:Array.from(bytes),kind})}
 export async function backtestAction(action:'start'|'cancel',request?:Record<string,unknown>):Promise<unknown>{return invoke('backtest_action',{action,request:request??null})}
 export async function updateBrainControl(context:string,brain:string,mode:string,advisor:boolean,paper:boolean):Promise<unknown>{return invoke('update_brain_control',{context,brain,mode,advisor,paper})}
+export async function updateBrainPaperAll(context:string,mode:string,paper:boolean):Promise<unknown>{return invoke('update_brain_paper_all',{context,mode,paper})}
+export type RiskRecovery={basis:'balance'|'equity';threshold:number};
+export async function updateRiskMaster(context:string,enabled:boolean,confirmLiveLogin:string,recovery:RiskRecovery|null):Promise<unknown>{return invoke('update_risk_master',{context,enabled,confirmLiveLogin,recovery})}
+export type PositionProtectionPolicy={break_even_enabled:boolean;break_even_trigger_points:number;break_even_offset_points:number;trailing_enabled:boolean;trailing_distance_points:number;trailing_step_points:number};
+export async function updatePositionProtection(context:string,policy:PositionProtectionPolicy,expectedPolicyId:string,confirmLiveLogin:string):Promise<unknown>{return invoke('update_position_protection',{context,policy,expectedPolicyId,confirmLiveLogin})}
+export async function setLearningFrozen(frozen:boolean):Promise<unknown>{return invoke('set_learning_frozen',{frozen})}
+export async function manualMarket(request:Record<string,unknown>):Promise<unknown>{return invoke('manual_market',{request})}
+export async function cancelPendingOrder(context:string,order:import('./types').PendingOrder):Promise<unknown>{return invoke('cancel_pending_order',{context,order})}
+export async function selectSoloBrain(context:string,mode:string,brain:string):Promise<unknown>{return invoke('select_solo_brain',{context,mode,brain})}
+export type SelectedClosePosition={ticket:number;magic:number;side:string;volume:number};
+export async function closeOwnedPositions(context:string,positions:SelectedClosePosition[],profitOnly:boolean):Promise<unknown>{return invoke('close_owned_positions',{context,positions,profitOnly})}
 export async function bindExecution(target:'demo'|'live',deviationPoints:number,confirmLiveLogin:string):Promise<unknown>{return invoke('bind_execution',{target,deviationPoints,confirmLiveLogin})}
 // Channel is one-way backend -> renderer, and only carries trusted Core status.
 export async function subscribe(onChange:(update:StreamEvent)=>void):Promise<void>{

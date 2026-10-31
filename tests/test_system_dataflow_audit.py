@@ -45,7 +45,8 @@ class FullSystemDataflowAudit(unittest.TestCase):
             self.assertIn(f"root.{field}", self.ui)
 
     def test_normal_sniper_demo_trade_reaches_actual_specialist_model(self):
-        self.assertIn("sniper_learning::refresh(&mut self.inner.sniper", self.engine)
+        self.assertIn("sniper_learning::refresh_gated(&mut self.inner.sniper", self.engine)
+        self.assertIn("now,cutoff", self.engine)
         self.assertIn('owner == "system"', self.coordinator)
         self.assertIn('selected == Some(braintrade_domain::sniper::ID)', self.coordinator)
         self.assertIn('coordination["selection"]["policy"] == "sniper-ticks-v1"', self.coordinator)
@@ -57,7 +58,7 @@ class FullSystemDataflowAudit(unittest.TestCase):
         self.assertIn('p["sniper_tp_preserved"]==true', self.sniper)
         self.assertIn("ORDER BY s.closed_ms DESC", self.sniper)
         self.assertIn("LEFT JOIN coordinator_broker_admissions a", self.sniper)
-        self.assertIn("verified_sniper_admission(&row,&context,now)", self.sniper)
+        self.assertIn("verified_sniper_admission(&row,&context,evidence_time)", self.sniper)
         self.assertIn("admitted>now", self.sniper)
         self.assertIn("payload_sha256", self.sniper)
         self.assertIn("LIMIT 2000", self.sniper)
@@ -71,7 +72,7 @@ class FullSystemDataflowAudit(unittest.TestCase):
         self.assertIn("tick_age_ms", self.pulse)
         for item in ("max_quote_age_ms", "order_send"):
             self.assertIn(item, self.gateway_execution)
-        self.assertIn("self.student.observe(db,telemetry,now)?;", self.engine)
+        self.assertIn("self.student.observe_gated(db,telemetry,now,learning_frozen)?;", self.engine)
         self.assertIn("coordinator_learning::available_frames", self.legacy)
         self.assertIn("let sniper_signal = self.sniper.evaluate(t,c,now);", self.legacy)
 

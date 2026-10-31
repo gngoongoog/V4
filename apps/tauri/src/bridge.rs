@@ -1,14 +1,100 @@
 //! V4 engine remains authoritative. The browser NEVER reads ipc.key, obtains
 //! a broker token or connects directly to the Core's HTTP port.
-use braintrade_runtime::{ensure_core, Client};
+use braintrade_runtime::{connect_existing_core, ensure_core, Client, ShutdownError,CheckedPostError};
 use serde_json::{json, Value};
-use std::{thread, time::{Duration, Instant}, sync::{Arc,atomic::{AtomicBool,Ordering}}};
+use std::{thread, time::{Duration, Instant}, sync::{Arc,Mutex,OnceLock,atomic::{AtomicBool,AtomicU64,Ordering}}};
 use tauri::ipc::Channel;
 
-struct AppLifecycle { stopping: Arc<AtomicBool> }
+#[derive(Clone,Default)]
+struct AppLifecycle { stopping: Arc<AtomicBool>, start_gate: Arc<Mutex<()>> }
+static LIFECYCLE: OnceLock<AppLifecycle> = OnceLock::new();
+
+fn lifecycle() -> &'static AppLifecycle { LIFECYCLE.get_or_init(AppLifecycle::default) }
+
+fn with_start_permit<T>(state:&AppLifecycle, operation:impl FnOnce()->Result<T,String>)->Result<T,String>{
+    let _guard=state.start_gate.lock().map_err(|_|"تعذر قفل حالة بدء Core".to_string())?;
+    if state.stopping.load(Ordering::SeqCst) { return Err("طلب الخروج قيد التحقق؛ لن يُعاد تشغيل Core تلقائياً".into()); }
+    operation()
+}
 
 fn open_client() -> Result<Client, String> {
-    ensure_core().map_err(|err| err.to_string())
+    with_start_permit(lifecycle(),||ensure_core().map_err(|err| err.to_string()))
+}
+
+// Keep a Windows process HANDLE to the exact Core instance. A PID alone can
+// be recycled, and a closed HTTP port or released lock does not prove exit.
+#[cfg(windows)]
+mod tracked_core {
+    use std::{ffi::c_void, io, ptr};
+    #[link(name="kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(access:u32,inherit:i32,pid:u32)->*mut c_void;
+        fn WaitForSingleObject(handle:*mut c_void,millis:u32)->u32;
+        fn CloseHandle(handle:*mut c_void)->i32;
+    }
+    pub struct Handle(*mut c_void);
+    impl Handle {
+        pub fn open(pid:u32)->Result<Self,String>{
+            let handle=unsafe{OpenProcess(0x0010_0000,0,pid)}; // SYNCHRONIZE
+            if handle==ptr::null_mut(){return Err(format!("تعذر فتح مقبض عملية Core: {}",io::Error::last_os_error()));}
+            Ok(Self(handle))
+        }
+        fn wait_for(&self,millis:u32)->Result<(),String>{
+            match unsafe{WaitForSingleObject(self.0,millis)} {
+                0=>Ok(()),
+                258=>Err("انتهت مهلة انتظار عملية Core؛ لم يُؤكد الخروج".into()),
+                _=>Err(format!("تعذر التحقق من عملية Core: {}",io::Error::last_os_error())),
+            }
+        }
+        pub fn wait(&self)->Result<(),String>{self.wait_for(15_000)}
+        #[cfg(test)] pub fn is_running(&self)->bool{(unsafe{WaitForSingleObject(self.0,0)})==258}
+    }
+    impl Drop for Handle { fn drop(&mut self){unsafe{CloseHandle(self.0);}} }
+}
+
+#[cfg(not(windows))]
+mod tracked_core {
+    pub struct Handle;
+    impl Handle {
+        pub fn open(_:u32)->Result<Self,String>{Err("التحقق من عملية الخروج الكامل متاح على Windows فقط".into())}
+        pub fn wait(&self)->Result<(),String>{Err("التحقق من عملية الخروج الكامل متاح على Windows فقط".into())}
+    }
+}
+
+fn process_identity(status:&Value)->Result<(u32,String),String>{
+    let process=&status["core_process"];
+    let pid=process["pid"].as_u64().and_then(|v|u32::try_from(v).ok()).filter(|v|*v>0)
+        .ok_or("تعذر تحديد عملية Core الحالية")?;
+    let instance=process["instance_id"].as_str().filter(|v|!v.is_empty())
+        .ok_or("تعذر تحديد جلسة Core الحالية")?.to_string();
+    Ok((pid,instance))
+}
+
+fn confirm_full_exit(state:&AppLifecycle)->Result<Value,String>{
+    let _guard=state.start_gate.lock().map_err(|_|"تعذر قفل حالة بدء Core".to_string())?;
+    if state.stopping.load(Ordering::SeqCst) {return Err("طلب خروج سابق غير محسوم؛ تحقق من العمليات قبل إعادة فتح التطبيق".into());}
+    let client=connect_existing_core().map_err(|e|format!("تعذر الوصول إلى Core الحالي: {e}"))?;
+    let first=client.get("/v1/status").map_err(|e|e.to_string())?;
+    let (pid,instance)=process_identity(&first)?;
+    let process=tracked_core::Handle::open(pid)?;
+    let second=client.get("/v1/status").map_err(|e|e.to_string())?;
+    if process_identity(&second)?!=(pid,instance.clone()) {return Err("تغيرت جلسة Core؛ أعد طلب الخروج".into());}
+    // All auto-start paths acquire this same gate. Set the flag before the
+    // request, not after the acknowledgement, to close the respawn race.
+    state.stopping.store(true,Ordering::SeqCst);
+    let result=match client.shutdown(&instance){
+        Ok(value)=>value,
+        Err(ShutdownError::Rejected(reason))=>{
+            state.stopping.store(false,Ordering::SeqCst);
+            return Err(reason);
+        }
+        Err(ShutdownError::Uncertain(reason))=>return Err(format!("تعذر تأكيد نتيجة طلب الإغلاق؛ لن نعيد تشغيل Core تلقائياً: {reason}")),
+    };
+    if result["ok"]!=true || result["gateway_stopped"]!=true || process_identity(&result)?!=(pid,instance) {
+        return Err("رد الإغلاق لا يثبت إيقاف Gateway أو هوية Core؛ لم يُؤكد الخروج".into());
+    }
+    process.wait()?;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -22,9 +108,9 @@ fn allowed_read_route(route: &str) -> bool {
     matches!(route,
         "/v1/config" | "/v1/learning" | "/v1/learning/account-evidence" | "/v1/execution/brains" | "/v1/decisions" |
         "/v1/opportunities/history" | "/v1/events" | "/v1/risk/monitor" |
-        "/v1/trading/settings" | "/v1/studio" | "/v1/news" |
+        "/v1/trading/settings" | "/v1/studio" | "/v1/studio/chart-frames" | "/v1/news" |
         "/v1/evaluation" | "/v1/backtest" | "/v1/backups" |
-        "/v1/execution" | "/v1/execution/trades" | "/v1/execution/quality" | "/v1/execution/sniper-tick-audit" | "/v1/execution/frozen-sniper" | "/v1/execution/frozen-classic" | "/v1/execution/mode-evidence" | "/v1/execution/frozen-coordinator" |
+        "/v1/execution" | "/v1/execution/trades" | "/v1/execution/quality" | "/v1/execution/reconciliation" | "/v1/execution/sniper-diagnosis" | "/v1/execution/sniper-tick-audit" | "/v1/execution/frozen-sniper" | "/v1/execution/frozen-classic" | "/v1/execution/mode-evidence" | "/v1/execution/frozen-coordinator" |
         "/v1/research/correlation" | "/v1/enterprise/supervisor"
     )
 }
@@ -62,14 +148,10 @@ fn execute_control(action: String, confirm_live_login: Option<String>) -> Result
 }
 
 #[tauri::command]
-fn shutdown_core(lifecycle: tauri::State<AppLifecycle>) -> Result<Value, String> {
-    // Core checks STOPPED, broker freshness, empty positions and resolved intents.
-    // A rejected shutdown must never exit the terminal or kill a gateway.
-    let result=open_client()?.post("/v1/shutdown", json!({})).map_err(|err|err.to_string())?;
-    // Prevent the live-status worker from automatically respawning Core while
-    // the shutdown response is handed back to the renderer.
-    lifecycle.stopping.store(true,Ordering::SeqCst);
-    Ok(result)
+async fn shutdown_core(lifecycle: tauri::State<'_,AppLifecycle>) -> Result<Value, String> {
+    let state=lifecycle.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || confirm_full_exit(&state)).await
+        .map_err(|e|format!("تعذر إكمال تحقق الخروج: {e}"))?
 }
 
 #[tauri::command]
@@ -86,6 +168,140 @@ fn backup_action(action: String) -> Result<Value, String> {
         _=>return Err("هذا الإجراء الاحتياطي غير مسموح".into()),
     };
     open_client()?.post(route,json!({})).map_err(|err|err.to_string())
+}
+
+static SNAPSHOT_SEQUENCE:AtomicU64=AtomicU64::new(0);
+const MAX_SNAPSHOT_BYTES:u64=16*1024*1024*1024+11*1024*1024;
+
+// The file picker, not the renderer, chooses the path. Never overwrite an
+// existing user file or leave a partially copied file on an ordinary error.
+fn copy_snapshot_new(source:&std::path::Path,destination:&std::path::Path)->Result<(),String>{
+    use std::{fs::{self,OpenOptions},io};
+    let mut input=fs::File::open(source).map_err(|e|format!("تعذر فتح ملف النسخة: {e}"))?;
+    let meta=input.metadata().map_err(|e|e.to_string())?;
+    if !meta.is_file()||meta.len()==0||meta.len()>MAX_SNAPSHOT_BYTES{return Err("حجم ملف نسخة العقول غير صالح".into());}
+    let mut output=OpenOptions::new().write(true).create_new(true).open(destination)
+        .map_err(|e|format!("تعذر إنشاء الملف؛ اختر اسماً غير مستخدم: {e}"))?;
+    let copied=io::copy(&mut input,&mut output).and_then(|n|{output.sync_all()?;Ok(n)});
+    match copied {
+        Ok(n) if n==meta.len()=>Ok(()),
+        Ok(_)=>{drop(output);let _=fs::remove_file(destination);Err("تغير حجم الملف أثناء النسخ؛ أعد اختياره".into())},
+        Err(e)=>{drop(output);let _=fs::remove_file(destination);Err(format!("تعذر إكمال النسخ: {e}"))},
+    }
+}
+fn snapshot_name_valid(name:&str)->bool{
+    !name.is_empty()&&name.len()<=160&&name!="."&&name!=".."&&
+        name.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'-'|b'_'|b'.'))
+}
+fn export_brain_snapshot()->Result<Value,String>{
+    let Some(mut destination)=rfd::FileDialog::new().add_filter("BrainTrade Brain Snapshot",&["btbrain"])
+        .set_file_name("BrainTrade-Brain.btbrain").save_file() else{return Ok(json!({"cancelled":true}));};
+    if destination.extension().is_none(){destination.set_extension("btbrain");}
+    if !destination.extension().and_then(|x|x.to_str()).is_some_and(|x|x.eq_ignore_ascii_case("btbrain")){
+        return Err("اختر ملفاً بامتداد btbrain".into());
+    }
+    let client=open_client()?;
+    let result=match client.checked_post("/v1/brain-snapshot/export",json!({}),Duration::from_secs(300)){
+        Ok(v)=>v,
+        Err(CheckedPostError::Rejected(e))=>return Err(e),
+        Err(CheckedPostError::Uncertain(e))=>return Err(format!("تعذر تأكيد نتيجة إنشاء النسخة؛ راجع صفحة النسخ قبل الإعادة: {e}")),
+    };
+    let name=result["file_name"].as_str().filter(|n|snapshot_name_valid(n)&&n.ends_with(".btbrain"))
+        .ok_or("لم يرجع Core اسم نسخة صالحاً")?;
+    let source=braintrade_runtime::data_dir().join("brain_exports").join(name);
+    copy_snapshot_new(&source,&destination)?;
+    Ok(json!({"saved":true,"file_name":destination.file_name().and_then(|x|x.to_str()).unwrap_or("BrainTrade-Brain.btbrain"),
+        "checksum":result["checksum"],"bytes":result["bytes"],"secrets_included":false}))
+}
+fn import_brain_snapshot()->Result<Value,String>{
+    let Some(source)=rfd::FileDialog::new().add_filter("BrainTrade Brain Snapshot",&["btbrain"]).pick_file()
+        else{return Ok(json!({"cancelled":true}));};
+    if !source.extension().and_then(|x|x.to_str()).is_some_and(|x|x.eq_ignore_ascii_case("btbrain")){
+        return Err("اختر ملفاً بامتداد btbrain".into());
+    }
+    let client=open_client()?;
+    let inbox=braintrade_runtime::data_dir().join("brain_imports");
+    std::fs::create_dir_all(&inbox).map_err(|e|e.to_string())?;
+    let name=format!("tauri-{}-{}.btbrain",braintrade_runtime::now_ms(),SNAPSHOT_SEQUENCE.fetch_add(1,Ordering::Relaxed));
+    let target=inbox.join(&name);copy_snapshot_new(&source,&target)?;
+    match client.checked_post("/v1/brain-snapshot/import",json!({"name":name}),Duration::from_secs(300)){
+        Ok(v)=>Ok(v),
+        Err(CheckedPostError::Rejected(e))=>{let _=std::fs::remove_file(&target);Err(e)},
+        Err(CheckedPostError::Uncertain(e))=>Err(format!("تعذر تأكيد نتيجة فحص النسخة؛ راجع قائمة النسخ قبل إعادة الاستيراد: {e}")),
+    }
+}
+fn with_restore_barrier(state:&AppLifecycle,operation:impl FnOnce()->Result<Value,CheckedPostError>)->Result<Value,String>{
+    let _guard=state.start_gate.lock().map_err(|_|"تعذر قفل حالة Core".to_string())?;
+    if state.stopping.load(Ordering::SeqCst){return Err("إيقاف Core أو الاستعادة قيد التحقق".into());}
+    // Prevent background status workers from restarting Core after staging.
+    // Keep the barrier set when the response is lost, since Core may have
+    // accepted the request and stopped even though the UI did not see it.
+    state.stopping.store(true,Ordering::SeqCst);
+    match operation(){
+        Ok(v) if v["staged"]==true=>Ok(v),
+        Ok(_)=>Err("رد الاستعادة غير واضح؛ أغلق البرنامج وتحقق من حالة النسخة قبل إعادة المحاولة".into()),
+        Err(CheckedPostError::Rejected(e))=>{state.stopping.store(false,Ordering::SeqCst);Err(e)},
+        Err(CheckedPostError::Uncertain(e))=>Err(format!("تعذر تأكيد نتيجة تجهيز الاستعادة؛ أغلق البرنامج وافحص حالة النسخ قبل الإعادة: {e}")),
+    }
+}
+fn stage_snapshot_restore(state:&AppLifecycle,name:&str)->Result<Value,String>{
+    if !snapshot_name_valid(name){return Err("اسم النسخة غير صالح".into());}
+    with_restore_barrier(state,||{
+        let client=connect_existing_core().map_err(|e|CheckedPostError::Rejected(format!("تعذر الوصول إلى Core الحالي: {e}")))?;
+        let status=client.get("/v1/status").map_err(|e|CheckedPostError::Rejected(e.to_string()))?;
+        let (pid,instance)=process_identity(&status).map_err(CheckedPostError::Rejected)?;
+        let process=tracked_core::Handle::open(pid).map_err(CheckedPostError::Rejected)?;
+        let current=client.get("/v1/status").map_err(|e|CheckedPostError::Rejected(e.to_string()))?;
+        if process_identity(&current).map_err(CheckedPostError::Rejected)?!=(pid,instance.clone()){
+            return Err(CheckedPostError::Rejected("تغيّرت جلسة Core؛ أعد طلب الاستعادة".into()));
+        }
+        let result=client.checked_post("/v1/backup/restore/stage",json!({"name":name,"expected_core_instance":instance}),Duration::from_secs(300))?;
+        if result["staged"]==true {process.wait().map_err(CheckedPostError::Uncertain)?;}
+        Ok(result)
+    })
+}
+#[tauri::command]
+async fn brain_snapshot_export()->Result<Value,String>{
+    tauri::async_runtime::spawn_blocking(export_brain_snapshot).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
+async fn brain_snapshot_import()->Result<Value,String>{
+    tauri::async_runtime::spawn_blocking(import_brain_snapshot).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
+async fn brain_snapshot_restore(name:String,lifecycle:tauri::State<'_,AppLifecycle>)->Result<Value,String>{
+    let state=lifecycle.inner().clone();
+    tauri::async_runtime::spawn_blocking(move||stage_snapshot_restore(&state,&name)).await.map_err(|e|e.to_string())?
+}
+
+fn write_excel_new(destination:&std::path::Path,bytes:&[u8])->Result<(),String>{
+    use std::{fs::{self,OpenOptions},io::Write};
+    let mut file=OpenOptions::new().write(true).create_new(true).open(destination)
+        .map_err(|e|format!("تعذر إنشاء الملف؛ اختر اسماً غير مستخدم: {e}"))?;
+    if let Err(error)=file.write_all(bytes).and_then(|_|file.sync_all()) {
+        drop(file);let _=fs::remove_file(destination);
+        return Err(format!("تعذر حفظ ملف Excel: {error}"));
+    }
+    Ok(())
+}
+fn save_excel_file(bytes:Vec<u8>,kind:String)->Result<Value,String>{
+    if !matches!(kind.as_str(),"journal"|"report") || bytes.len()>2*1024*1024
+        || bytes.len()<22 || !bytes.starts_with(b"PK\x03\x04") {
+        return Err("بيانات ملف Excel غير صالحة".into());
+    }
+    let name=if kind=="journal"{"BrainTrade-Journal.xlsx"}else{"BrainTrade-Report.xlsx"};
+    let Some(mut destination)=rfd::FileDialog::new().add_filter("Excel workbook",&["xlsx"])
+        .set_file_name(name).save_file() else{return Ok(json!({"cancelled":true}));};
+    if destination.extension().is_none(){destination.set_extension("xlsx");}
+    if !destination.extension().and_then(|s|s.to_str()).is_some_and(|s|s.eq_ignore_ascii_case("xlsx")) {
+        return Err("اختر اسماً بامتداد xlsx".into());
+    }
+    write_excel_new(&destination,&bytes)?;
+    Ok(json!({"saved":true,"bytes":bytes.len()}))
+}
+#[tauri::command]
+async fn save_excel_report(bytes:Vec<u8>,kind:String)->Result<Value,String>{
+    tauri::async_runtime::spawn_blocking(move||save_excel_file(bytes,kind)).await.map_err(|e|e.to_string())?
 }
 
 #[tauri::command]
@@ -129,6 +345,100 @@ fn update_brain_control(context: String, brain: String, mode: String, advisor: b
         json!({"context":context,"brain":brain,"mode":mode,
                "control":{"advisor":advisor,"paper":paper}}))
         .map_err(|err|err.to_string())
+}
+
+#[tauri::command]
+fn update_brain_paper_all(context: String, mode: String, paper: bool) -> Result<Value,String> {
+    if !["scalping","swing","expert","sniper"].contains(&mode.as_str()) || context.len()>500 || context.is_empty() {
+        return Err("حساب MT5 أو وضع التشغيل غير مسموح".into());
+    }
+    // Core performs the account/mode/STOP/reconciliation checks and commits
+    // all secondary-brain settings atomically. This is not a trading command.
+    open_client()?.post("/v1/execution/brain-paper-all",
+        json!({"context":context,"mode":mode,"paper":paper}))
+        .map_err(|err|err.to_string())
+}
+
+#[tauri::command]
+fn update_risk_master(context:String,enabled:bool,confirm_live_login:String,recovery:Option<Value>)->Result<Value,String>{
+    if context.is_empty() || context.len()>500 || confirm_live_login.len()>32 {
+        return Err("حساب MT5 أو التأكيد غير صالح".into());
+    }
+    // Core requires STOP, no unresolved broker intents, the exact current
+    // account, and a separate REAL login confirmation when disabling.
+    open_client()?.post("/v1/execution/risk-master",
+        json!({"context":context,"enabled":enabled,"confirm_live_login":confirm_live_login,"recovery":recovery}))
+        .map_err(|err|err.to_string())
+}
+
+#[tauri::command]
+fn update_position_protection(context:String,policy:Value,expected_policy_id:String,confirm_live_login:String)->Result<Value,String>{
+    if context.is_empty() || context.len()>500 || expected_policy_id.len()>64 || confirm_live_login.len()>32 {
+        return Err("حساب MT5 أو التأكيد غير صالح".into());
+    }
+    open_client()?.post("/v1/execution/position-protection",
+        json!({"context":context,"policy":policy,"expected_policy_id":expected_policy_id,"confirm_live_login":confirm_live_login}))
+        .map_err(|err|err.to_string())
+}
+
+#[tauri::command]
+fn set_learning_frozen(frozen:bool)->Result<Value,String>{
+    open_client()?.post("/v1/learning/control",json!({"frozen":frozen}))
+        .map_err(|err|err.to_string())
+}
+
+#[tauri::command]
+fn manual_market(request:Value)->Result<Value,String>{
+    match open_client()?.checked_post("/v1/execution/manual-market",request,Duration::from_secs(8)) {
+        Ok(value)=>Ok(value),
+        Err(CheckedPostError::Rejected(error))=>Err(error),
+        Err(CheckedPostError::Uncertain(_))=>Err("نتيجة الطلب اليدوي غير مؤكدة. لا تكرر الطلب؛ راجع أوامر Core والمصالحة وMT5 أولاً.".into()),
+    }
+}
+
+#[tauri::command]
+fn cancel_pending_order(context:String,order:Value)->Result<Value,String>{
+    if context.is_empty() || context.len()>500 {return Err("حساب MT5 غير صالح".into());}
+    match open_client()?.checked_post("/v1/execution/cancel-pending",json!({"context":context,"order":order}),Duration::from_secs(8)) {
+        Ok(value)=>Ok(value),
+        Err(CheckedPostError::Rejected(error))=>Err(error),
+        Err(CheckedPostError::Uncertain(_))=>Err("نتيجة طلب الإلغاء غير مؤكدة. لا تكرره؛ راجع حالة الأمر وسجل MT5 أولاً.".into()),
+    }
+}
+
+#[tauri::command]
+fn select_solo_brain(context:String,mode:String,brain:String)->Result<Value,String>{
+    if context.is_empty() || context.len()>500 || !["scalping","swing","expert","sniper"].contains(&mode.as_str())
+        || brain.is_empty() || brain.len()>100 || !brain.bytes().all(|b|b.is_ascii_lowercase()||b==b'_') {
+        return Err("حساب MT5 أو الوضع أو هوية العقل غير صالحة".into());
+    }
+    // Core checks STOP, exact account/mode, flat owned positions and settled
+    // broker intents. Selecting an owner never starts trading.
+    open_client()?.post("/v1/execution/solo",json!({"context":context,"mode":mode,"brain":brain}))
+        .map_err(|err|err.to_string())
+}
+
+#[derive(serde::Deserialize,serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct SelectedClosePosition {ticket:u64,magic:u64,side:String,volume:f64}
+
+#[tauri::command]
+fn close_owned_positions(context:String,positions:Vec<SelectedClosePosition>,profit_only:bool)->Result<Value,String>{
+    let unique:std::collections::BTreeSet<_>=positions.iter().map(|p|p.ticket).collect();
+    if context.is_empty() || context.len()>500 || positions.is_empty() || positions.len()>20
+        || unique.len()!=positions.len() || unique.contains(&0)
+        || positions.iter().any(|p|p.ticket>9_007_199_254_740_991 || !p.volume.is_finite() || p.volume<=0.
+            || !matches!(p.side.as_str(),"BUY"|"SELL")) {
+        return Err("قائمة المراكز أو حساب MT5 غير صحيح".into());
+    }
+    // Only approved, exact owned tickets on the bound account and symbol may
+    // be queued. Core and Gateway independently recheck their current state.
+    match open_client()?.checked_post("/v1/execution/close-selected",
+        json!({"context":context,"positions":positions,"profit_only":profit_only}),Duration::from_secs(8)) {
+        Ok(value)=>Ok(value),
+        Err(CheckedPostError::Rejected(e))=>Err(e),
+        Err(CheckedPostError::Uncertain(_))=>Err("نتيجة طلب الإغلاق غير مؤكدة. لا تكرّر الطلب؛ راجع الأوامر والمراكز في MT5 وانتظر المصالحة.".into()),
+    }
 }
 
 #[tauri::command]
@@ -234,9 +544,9 @@ fn subscribe_status(channel: Channel<Value>, lifecycle: tauri::State<AppLifecycl
         let mut failures: u32 = 0;
         let mut last_send: Option<Instant> = None;
         loop {
-            if stopping.load(Ordering::SeqCst) { break; }
-            if client.is_none() { client = ensure_core().ok(); }
-            if stopping.load(Ordering::SeqCst) { break; }
+            if stopping.load(Ordering::SeqCst) { thread::sleep(Duration::from_millis(250)); continue; }
+            if client.is_none() { client = open_client().ok(); }
+            if stopping.load(Ordering::SeqCst) { continue; }
             let payload = client.as_ref().and_then(|c| c.get("/v1/status").ok());
             let next = match payload {
                 Some(status) => { failures = 0; json!({"ok":true,"status":status}) },
@@ -264,13 +574,17 @@ fn subscribe_status(channel: Channel<Value>, lifecycle: tauri::State<AppLifecycl
 }
 
 pub fn run() {
+    // Only a freshly launched UI clears a completed exit marker. Existing
+    // windows and background status workers must never clear it.
+    if let Err(error)=braintrade_runtime::prepare_user_start(){eprintln!("Could not prepare Core startup: {error}");}
     tauri::Builder::default()
-        .manage(AppLifecycle {stopping:Arc::new(AtomicBool::new(false))})
+        .manage(lifecycle().clone())
         .invoke_handler(tauri::generate_handler![
             get_status, read_panel, read_trade_history, execute_control,
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
-            backup_action, backtest_action, update_brain_control, bind_execution
+            backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore, save_excel_report,
+            backtest_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");
@@ -280,14 +594,155 @@ pub fn run() {
 mod tests {
     use super::*;
     #[test]
+    fn full_exit_requires_a_valid_core_process_identity() {
+        assert_eq!(process_identity(&json!({"core_process":{"pid":42,"instance_id":"session-a"}})).unwrap(),(42,"session-a".to_string()));
+        assert!(process_identity(&json!({"core_process":{"pid":0,"instance_id":"session-a"}})).is_err());
+        assert!(process_identity(&json!({"core_process":{"pid":42,"instance_id":""}})).is_err());
+        assert!(process_identity(&json!({})).is_err());
+    }
+    #[test]
+    fn shutdown_gate_blocks_a_concurrent_automatic_start() {
+        use std::sync::mpsc;
+        let state=AppLifecycle::default();
+        let guard=state.start_gate.lock().unwrap();
+        state.stopping.store(true,Ordering::SeqCst);
+        let child=state.clone();
+        let (tx,rx)=mpsc::channel();
+        let worker=std::thread::spawn(move ||{
+            let result=with_start_permit(&child,||{tx.send(()).unwrap();Ok(())});
+            assert!(result.is_err());
+        });
+        drop(guard);
+        worker.join().unwrap();
+        assert!(rx.try_recv().is_err(),"start was called during shutdown");
+        state.stopping.store(false,Ordering::SeqCst);
+        assert_eq!(with_start_permit(&state,||Ok(7)).unwrap(),7);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn tracked_core_handle_waits_for_a_real_process_exit() {
+        use std::process::{Command,Stdio};
+        let mut child=Command::new("cmd.exe").args(["/C","pause >NUL"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        let handle=tracked_core::Handle::open(child.id()).unwrap();
+        assert!(handle.is_running(),"Core-like process exited before its pipe was closed");
+        drop(child.stdin.take());
+        handle.wait().unwrap();
+        assert!(child.wait().unwrap().success());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn tauri_full_exit_waits_for_a_real_isolated_core() {
+        use std::{fs,process::{Child,Command,Stdio},time::{SystemTime,UNIX_EPOCH}};
+        struct Fixture { dir:std::path::PathBuf, child:Option<Child>, old:Vec<(&'static str,Option<std::ffi::OsString>)> }
+        impl Drop for Fixture {
+            fn drop(&mut self){
+                if let Some(child)=self.child.as_mut(){if child.try_wait().ok().flatten().is_none(){let _=child.kill();let _=child.wait();}}
+                for (key,value) in &self.old {unsafe{match value {Some(v)=>std::env::set_var(key,v),None=>std::env::remove_var(key)}}}
+                let _=fs::remove_dir_all(&self.dir);
+            }
+        }
+        let suffix=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir=std::env::temp_dir().join(format!("braintrade-tauri-exit-{}-{suffix}",std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let keys=["BRAINTRADE_DATA_DIR","BRAINTRADE_GATEWAY_DISABLED","BRAINTRADE_NEWS_OFFLINE"];
+        let mut fixture=Fixture{dir:dir.clone(),child:None,old:keys.iter().map(|k|(*k,std::env::var_os(k))).collect()};
+        unsafe{std::env::set_var(keys[0],&dir);std::env::set_var(keys[1],"1");std::env::set_var(keys[2],"1");}
+        let binary=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/braintrade-core.exe");
+        assert!(binary.is_file(),"Portable build must first compile the real debug Core: {}",binary.display());
+        // Do NOT hide the Core's startup error. On a loaded Windows runner the
+        // database initialization can take longer than a single HTTP attempt.
+        // A dead child must fail immediately with its stderr, not be reported
+        // as a mysterious readiness timeout 20 seconds later.
+        let startup_log=dir.join("isolated-core-startup.log");
+        let logfile=fs::File::create(&startup_log).unwrap();
+        fixture.child=Some(Command::new(binary).stdin(Stdio::null())
+            .stdout(Stdio::null()).stderr(Stdio::from(logfile)).spawn().unwrap());
+        let pid=fixture.child.as_ref().unwrap().id();
+        let deadline=Instant::now()+Duration::from_secs(60);
+        let mut last_probe=String::from("No Core response yet");
+        loop {
+            if let Some(exit)=fixture.child.as_mut().unwrap().try_wait().unwrap(){
+                panic!("Isolated Core PID {pid} exited before readiness ({exit}); last probe: {last_probe}; startup: {}",
+                    fs::read_to_string(&startup_log).unwrap_or_else(|_|"Startup log unreadable".into()));
+            }
+            match connect_existing_core(){
+                Ok(client)=>match client.get("/v1/status"){
+                    Ok(status)=>{
+                        if process_identity(&status).is_ok_and(|(observed,_)|observed==pid){break;}
+                        last_probe=format!("Core identity was not the expected isolated PID {pid}");
+                    }
+                    Err(error)=>last_probe=format!("Core status request: {error}"),
+                },
+                Err(error)=>last_probe=format!("Core connection: {error}"),
+            }
+            if Instant::now()>=deadline {
+                panic!("Isolated Core PID {pid} was not ready within 60 seconds; last probe: {last_probe}; startup: {}",
+                    fs::read_to_string(&startup_log).unwrap_or_else(|_|"Startup log unreadable".into()));
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        let state=AppLifecycle::default();
+        let response=confirm_full_exit(&state).unwrap();
+        assert_eq!(response["gateway_stopped"],true);
+        assert!(state.stopping.load(Ordering::SeqCst));
+        assert!(fixture.child.as_mut().unwrap().wait().unwrap().success());
+        assert!(dir.join("full-exit.requested").exists());
+    }
+    #[test]
     fn read_routes_are_strictly_scoped() {
         assert!(allowed_read_route("/v1/risk/monitor"));
         assert!(allowed_read_route("/v1/execution/brains"));
+        assert!(allowed_read_route("/v1/execution/reconciliation"));
         assert!(allowed_read_route("/v1/enterprise/supervisor"));
+        assert!(allowed_read_route("/v1/studio/chart-frames"));
         assert!(!allowed_read_route("/v1/gateway/snapshot"));
         assert!(!allowed_read_route("http://attacker.local"));
         assert!(!allowed_read_route("/v1/config/../../ipc.key"));
         assert!(!allowed_read_route("/v1/status?token=x"));
+    }
+    #[test]
+    fn snapshot_copy_never_overwrites_and_rejects_unsafe_names(){
+        use std::{fs,time::{SystemTime,UNIX_EPOCH}};
+        let unique=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir=std::env::temp_dir().join(format!("bt-snapshot-copy-{}-{unique}",std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let source=dir.join("source.btbrain");let dest=dir.join("dest.btbrain");
+        fs::write(&source,b"validated-snapshot").unwrap();
+        copy_snapshot_new(&source,&dest).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(),b"validated-snapshot");
+        fs::write(&source,b"replacement").unwrap();
+        assert!(copy_snapshot_new(&source,&dest).is_err());
+        assert_eq!(fs::read(&dest).unwrap(),b"validated-snapshot");
+        assert!(snapshot_name_valid("imported-brain-42-abc"));
+        for bad in ["","..","../outside","a/b","a\\b"] {assert!(!snapshot_name_valid(bad));}
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn excel_save_rejects_invalid_payload_and_never_overwrites(){
+        use std::{fs,time::{SystemTime,UNIX_EPOCH}};
+        assert!(save_excel_file(vec![],"journal".into()).is_err());
+        assert!(save_excel_file(vec![0;23],"report".into()).is_err());
+        assert!(save_excel_file(vec![0;23],"unknown".into()).is_err());
+        let unique=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir=std::env::temp_dir().join(format!("bt-xlsx-save-{}-{unique}",std::process::id()));
+        fs::create_dir_all(&dir).unwrap();let dest=dir.join("report.xlsx");
+        write_excel_new(&dest,b"first").unwrap();
+        assert!(write_excel_new(&dest,b"second").is_err());
+        assert_eq!(fs::read(&dest).unwrap(),b"first");
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn restore_barrier_only_reopens_after_an_explicit_rejection(){
+        let state=AppLifecycle::default();
+        assert!(with_restore_barrier(&state,||Err(CheckedPostError::Rejected("not flat".into()))).is_err());
+        assert!(!state.stopping.load(Ordering::SeqCst));
+        assert!(with_restore_barrier(&state,||Err(CheckedPostError::Uncertain("timeout".into()))).is_err());
+        assert!(state.stopping.load(Ordering::SeqCst));
+        assert!(with_start_permit(&state,||Ok(())).is_err());
+        state.stopping.store(false,Ordering::SeqCst);
+        assert!(with_restore_barrier(&state,||Ok(json!({"staged":true}))).is_ok());
+        assert!(state.stopping.load(Ordering::SeqCst));
+        assert!(with_start_permit(&state,||Ok(())).is_err());
     }
     #[test]
     fn journal_pagination_is_bounded_and_not_an_arbitrary_post_proxy() {

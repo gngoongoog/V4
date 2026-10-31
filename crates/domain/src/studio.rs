@@ -110,6 +110,14 @@ impl Frame {
             && now.saturating_sub(self.captured_ms) < 120_000
             && self.current_open <= now / 1000
             && now / 1000 - self.current_open < seconds(&self.timeframe).unwrap_or(0) + 20
+            // A fresh forming bar does not make arbitrarily old closed bars
+            // fresh. After a market closure wait for a newly closed bar rather
+            // than inferring the missing candles.
+            && self.bars.last().is_some_and(|b| {
+                let max_gap = seconds(&self.timeframe).unwrap_or(0).saturating_mul(2);
+                self.current_open > b.candle.time
+                    && self.current_open.saturating_sub(b.candle.time) <= max_gap
+            })
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -408,5 +416,14 @@ mod tests {
         f.bars.last_mut().unwrap().candle.time = f.current_open;
         assert!(f.validate(f.captured_ms).is_err());
         assert!(learn(&frame(), &RiskConfig::default(), &AtomicBool::new(true)).is_err());
+    }
+    #[test]
+    fn fresh_current_bar_does_not_make_old_history_live() {
+        let mut f=frame();
+        assert!(f.live(f.captured_ms));
+        f.current_open += 5*24*60*60;
+        f.captured_ms = f.current_open*1000;
+        assert!(f.validate(f.captured_ms).is_ok());
+        assert!(!f.live(f.captured_ms));
     }
 }

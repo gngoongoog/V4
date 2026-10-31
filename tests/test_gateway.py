@@ -88,6 +88,44 @@ class Tests(unittest.TestCase):
         d=gateway.collect_market(Bars(),'X',now)
         self.assertEqual(d['error'],'');self.assertEqual(len(d['m1']),180)
         self.assertTrue(all(p==1 and n==180 for _,p,n in calls))
+    def test_display_market_rejects_bad_ohlc_without_cross_contaminating_frames(self):
+        # The MT5 fixture returns genuine-looking closed bars in UTC order.
+        # Corrupt one M1 field at a time; M5/M15 remain independently valid.
+        now=datetime(2026,10,11,12,0,20,tzinfo=timezone.utc)
+        boundary=int(now.timestamp())//60*60
+        datasets={}
+        for timeframe in (1,5,15):
+            size=60*timeframe
+            end=int(now.timestamp())//size*size
+            datasets[timeframe]=[dict(time=end-(180-i)*size,open=2000.,
+                high=2001.,low=1999.,close=2000.5,tick_volume=100) for i in range(180)]
+        class Bars:
+            TIMEFRAME_M1=1;TIMEFRAME_M5=5;TIMEFRAME_M15=15
+            def copy_rates_from_pos(self,symbol,tf,pos,count):
+                return [dict(bar) for bar in datasets[tf]]
+        self.assertEqual(gateway.collect_market(Bars(),'X',now)['error'],'')
+        for kind in ('future','duplicate','reverse','bad_high','nan','negative_price',
+                     'negative_volume','misaligned'):
+            with self.subTest(kind=kind):
+                raw=[dict(bar) for bar in datasets[1]]
+                if kind=='future': raw[-1]['time']=boundary
+                elif kind=='duplicate': raw[55]['time']=raw[54]['time']
+                elif kind=='reverse': raw[55],raw[56]=raw[56],raw[55]
+                elif kind=='bad_high': raw[55]['high']=1999.5
+                elif kind=='nan': raw[55]['close']=float('nan')
+                elif kind=='negative_price': raw[55]['low']=-1.0
+                elif kind=='negative_volume': raw[55]['tick_volume']=-3
+                elif kind=='misaligned': raw[55]['time']+=1
+                datasets[1]=raw
+                result=gateway.collect_market(Bars(),'X',now)
+                self.assertEqual(result['m1'],[],kind)
+                self.assertIn('M1:',result['error'])
+                self.assertEqual(len(result['m5']),180)
+                self.assertEqual(len(result['m15']),180)
+                # Restore pristine MT5 bars for the next independent failure.
+                size=60
+                datasets[1]=[dict(time=boundary-(180-i)*size,open=2000.,
+                    high=2001.,low=1999.,close=2000.5,tick_volume=100) for i in range(180)]
     def test_market_cache_changes_with_account(self):
         from unittest.mock import patch
         cache=gateway.MarketCache();now=datetime.now(timezone.utc)
@@ -105,7 +143,7 @@ class Tests(unittest.TestCase):
         m=FakeMT5();m.deals=[NS(type=0,profit=10,commission=-2,swap=-1,fee=-0.5),NS(type=2,profit=500,commission=0,swap=0,fee=0)]
         s=gateway.collect(m,"XAUUSD");self.assertEqual(s["today_net"],6.5);self.assertEqual(s["today_deals"],1)
     def test_actual_broker_leverage_and_micro_margin_snapshot(self):
-        m=FakeMT5();m.ORDER_TYPE_BUY=0
+        m=FakeMT5();m.ORDER_TYPE_BUY=0;m.ORDER_TYPE_SELL=1
         m.order_calc_margin=lambda side,symbol,lots,price:25.0
         snapshot=gateway.collect(m,"XAUUSD")
         self.assertEqual(snapshot["leverage"],500)
@@ -122,6 +160,28 @@ class Tests(unittest.TestCase):
     def test_failed_positions_is_not_empty_positions(self):
         m=FakeMT5();m.positions=None
         self.assertFalse(gateway.collect(m,"XAUUSD")["connected"])
+    def test_active_order_details_are_complete_or_explicitly_unknown(self):
+        m=FakeMT5()
+        self.assertEqual(gateway.collect(m,'XAUUSD')['pending_order_details'],[])
+        order=NS(ticket=42,magic=410618,type=2,time_setup_msc=123000,time_expiration=0,
+                 symbol='EURUSD',volume_initial=.1,volume_current=.08,price_open=1.2,
+                 sl=1.1,tp=1.3,price_stoplimit=0.)
+        m.orders=[order]
+        snapshot=gateway.collect(m,'XAUUSD')
+        self.assertEqual(snapshot['pending_orders'],1)
+        detail=snapshot['pending_order_details'][0]
+        self.assertEqual((detail['ticket'],detail['symbol'],detail['order_type'],detail['volume_current']),
+                         (42,'EURUSD',2,.08))
+        m.orders=[order,order]
+        snapshot=gateway.collect(m,'XAUUSD')
+        self.assertEqual(snapshot['pending_orders'],2)
+        self.assertIsNone(snapshot['pending_order_details'],'Duplicate tickets cannot form a reliable list')
+        m.orders=[order];order.sl=float('nan')
+        self.assertIsNone(gateway.collect(m,'XAUUSD')['pending_order_details'])
+        order.sl=1.1;del order.price_stoplimit
+        self.assertIsNone(gateway.collect(m,'XAUUSD')['pending_order_details'])
+        order.price_stoplimit=0.;order.ticket=9_007_199_254_740_992
+        self.assertIsNone(gateway.collect(m,'XAUUSD')['pending_order_details'],'A ticket must survive the JavaScript boundary exactly')
     def test_account_switch_rejects_snapshot(self):
         m=FakeMT5();account=m.account;calls=[]
         def switch():

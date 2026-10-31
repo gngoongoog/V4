@@ -112,7 +112,7 @@ test('ui Core mutations are wired to a fence before sending and checking acknowl
   "const mutation=beginWrite('risk')",
   "<EnterpriseSupervisor preview={preview} key={contextKey}",
   "onSave={runSaveSupervisor}",
-  "<TradingSettingsOperations source={pageData} key={viewScope}",
+  "<TradingSettingsOperations source={pageData} brokerPoint={status?.telemetry?.point} key={JSON.stringify([page,draftAccountKey,preview])}",
   "<ExecutionBindingOperations source={pageData} key={viewScope}",
   "<MicroCapitalOperations status={!preview&&feed.broker?status:null} key={contextKey}",
   "<BacktestOperations key={viewScope}",

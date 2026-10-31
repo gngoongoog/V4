@@ -21,6 +21,11 @@ def stage():
     shutil.copy2(exe,DEST/exe.name)
     for name in ('runtime','mt5'):shutil.copytree(ROOT/'apps/tauri'/name,DEST/name)
     (DEST/'Tools').mkdir();shutil.copy2(ROOT/'scripts/v25_verify_system.py',DEST/'Tools/v25_verify_system.py')
+    # Ship the independent seven-timeframe DEMO read-only broker probe with the release.
+    # It is manually invoked only, never in startup or a trading hot path.
+    shutil.copy2(ROOT/'scripts/check_mt5_chart_readonly.py',DEST/'Tools/check_mt5_chart_readonly.py')
+    shutil.copy2(ROOT/'Run-MT5-Chart-Demo.cmd',DEST/'Run-MT5-Chart-Demo.cmd')
+    shutil.copy2(ROOT/'docs/v25/MT5_CHART_DEMO_ACCEPTANCE_AR.md',DEST/'MT5_CHART_DEMO_ACCEPTANCE_AR.md')
     for name in ('VERIFY_SYSTEM.cmd','V25_P0_DIAGNOSTICS_README_AR.txt'):
         shutil.copy2(ROOT/name,DEST/name)
     shutil.copy2(ROOT/'scripts/Create-V25-Shortcut.ps1',DEST/'DESKTOP_SHORTCUT.ps1')
@@ -65,6 +70,7 @@ def stage():
     shutil.copy2(ROOT/'docs/v25/G7H_NATIVE_DEMO_ACCEPTANCE_AR.md',DEST/'G7_H_ACCEPTANCE_AR.md')
     shutil.copy2(ROOT/'docs/v25/USER_MANUAL_V25_AR.md',DEST/'USER_MANUAL_V25_AR.md')
     shutil.copy2(ROOT/'docs/v25/USER_MANUAL_V25_AR.md',DEST/'USER_MANUAL_V25_AR.txt')
+    shutil.copy2(ROOT/'docs/v25/CONCEPT4_UI_AR.md',DEST/'CONCEPT4_UI_AR.md')
     # Redacted reports are written under Documents, outside the signed tree.
     # P0-E: ship source + a strictly explicit operator-side MetaEditor compile
     # path. Build CI has no installed MT5 and must never claim EA .ex5 passed.
@@ -78,7 +84,7 @@ def stage():
         shutil.copy2(ROOT/source,evidence/name)
     commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     (evidence/'build.json').write_text(json.dumps({**expected,'source_commit':commit,'exe_sha256':digest(exe),'dependency_resolution':'committed locks; cargo --locked; npm ci','broker_demo':'NOT TESTED','windows_gui_all_controls':'NOT TESTED','ea_compile':'NOT TESTED','ready_for_real':False},indent=2)+'\n','utf-8')
-    (DEST/'READ_ME_FIRST_AR.txt').write_text('BRAINTRADE V4 Enterprise V25 RC2 — 0.25.1\nفك المجلد كاملاً وشغّل BrainTradeNext.exe مباشرة. لا يوجد Setup إلزامي.\nيتطلب Windows x64 وWebView2. يحتاج التداول إلى MT5 وحسابك التجريبي.\nلإنشاء اختصار سطح المكتب شغّل CREATE_DESKTOP_ICON.cmd.\nضع مسار terminal64.exe من صفحة الإعدادات، ثم اربط DEMO من صفحة التنفيذ.\nشغّل VERIFY_SYSTEM.cmd لإنتاج تقرير HTML وJSON؛ هذه الأداة لا تفتح صفقات ولا ترسل بيانات.\nلجمع نتائج تنفيذ DEMO للقراءة فقط شغّل Run-Demo-Acceptance.cmd؛ لا يفعل START أو يرسل أوامر MT5.\nلإعداد تجربة G6 ومراجعة أسعار Demo ونتائج الوسيط الحقيقية شغّل Run-G6-Study.cmd واقرأ G6_STUDY_AR.md؛ لا يفتح MT5 أو أوامر.\nلترجمة Native EA على جهاز فيه MetaEditor افتح Compile-Sniper-EA.cmd واقرأ NATIVE_EA_ACCEPTANCE_AR.md؛ لا يوجد EX5 مثبت من CI.\nاقرأ USER_MANUAL_V25_AR.txt أو USER_MANUAL_V25_AR.md لجميع أوضاع التداول وصفحات V25.\nللتدقيق البحثي G7-H افتح Run-G7-Acceptance.cmd بعد وجود بيانات دراسة؛ لا يفتح صفقات.\nهذه نسخة تحقق مرحلية: اختبار MT5 Demo وEA وجميع أزرار Windows لم يُعتمد بعد.\nSTOP يمنع الدخول الجديد ويبقي إدارة المراكز؛ لا تغلق Core مع صفقات أو أوامر غير محسومة.\nلا تنقل EXE وحده ولا تحذف بيانات التطبيق عند التحديث. احتفظ بحزمة V24 للرجوع.\n','utf-8')
+    (DEST/'READ_ME_FIRST_AR.txt').write_text('BRAINTRADE V4 Enterprise V25 RC2 — 0.25.1\nفك المجلد كاملاً وشغّل BrainTradeNext.exe مباشرة. لا يوجد Setup إلزامي.\nيتطلب Windows x64 وWebView2. يحتاج التداول إلى MT5 وحسابك التجريبي.\nلإنشاء اختصار سطح المكتب شغّل CREATE_DESKTOP_ICON.cmd.\nضع مسار terminal64.exe من صفحة الإعدادات، ثم اربط DEMO من صفحة التنفيذ.\nشغّل VERIFY_SYSTEM.cmd لإنتاج تقرير HTML وJSON؛ هذه الأداة لا تفتح صفقات ولا ترسل بيانات.\nلجمع نتائج تنفيذ DEMO للقراءة فقط شغّل Run-Demo-Acceptance.cmd؛ لا يفعل START أو يرسل أوامر MT5.\nللتأكد من تاريخ وأسعار XAUUSD على MT5 Demo شغّل Run-MT5-Chart-Demo.cmd؛ استعمل --symbol XAUUSDm إذا كان اسم الرمز عند الوسيط مختلفاً، و--require-fresh وقت السوق المفتوح.\nلإعداد تجربة G6 ومراجعة أسعار Demo ونتائج الوسيط الحقيقية شغّل Run-G6-Study.cmd واقرأ G6_STUDY_AR.md؛ لا يفتح MT5 أو أوامر.\nلترجمة Native EA على جهاز فيه MetaEditor افتح Compile-Sniper-EA.cmd واقرأ NATIVE_EA_ACCEPTANCE_AR.md؛ لا يوجد EX5 مثبت من CI.\nاقرأ USER_MANUAL_V25_AR.txt أو USER_MANUAL_V25_AR.md لجميع أوضاع التداول وصفحات V25.\nللتدقيق البحثي G7-H افتح Run-G7-Acceptance.cmd بعد وجود بيانات دراسة؛ لا يفتح صفقات.\nهذه نسخة تحقق مرحلية: اختبار MT5 Demo وEA وجميع أزرار Windows لم يُعتمد بعد.\nSTOP يمنع الدخول الجديد ويبقي إدارة المراكز؛ لا تغلق Core مع صفقات أو أوامر غير محسومة.\nلا تنقل EXE وحده ولا تحذف بيانات التطبيق عند التحديث. احتفظ بحزمة V24 للرجوع.\n','utf-8')
 def archive():
     shutil.copytree(ROOT/'test-output/v25',DEST/'release-evidence/validation',dirs_exist_ok=True)
     manifest={p.relative_to(DEST).as_posix():digest(p) for p in sorted(DEST.rglob('*')) if p.is_file() and p.name!='SHA256SUMS.json'}

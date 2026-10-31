@@ -224,7 +224,8 @@ fn main() {
         }
         return;
     }
-    if let Err(e) = run_ui() {
+    let startup=braintrade_runtime::prepare_user_start().and_then(|_|run_ui());
+    if let Err(e) = startup {
         rfd::MessageDialog::new()
             .set_title("BrainTrade startup error")
             .set_description(format!("{e:#}"))

@@ -427,6 +427,9 @@ impl Student {
         }
     }
     pub fn observe(&mut self, db: &Connection, t: &Telemetry, now: u64) -> Result<()> {
+        self.observe_gated(db,t,now,false)
+    }
+    pub fn observe_gated(&mut self, db: &Connection, t: &Telemetry, now: u64, frozen:bool) -> Result<()> {
         if !t.connected || !t.demo || t.account_trade_mode != Some(0) {
             return Ok(());
         }
@@ -446,6 +449,15 @@ impl Student {
         for source in revoked {
             self.policies.remove(&source);
             self.attested_studies.remove(&source);
+        }
+        if frozen {
+            // Keep already-observed paths and revoke damaged policies, but do
+            // not consume outcomes, train studies or register new trials.
+            // Broker exit management and reconciliation are separate.
+            self.quote(t,now);
+            self.timing.persist(db)?;
+            self.flush(db)?;
+            return Ok(());
         }
         self.timing.restore(db, &key, now)?;
         // Register from acknowledged fills immediately, without waiting five seconds for history.
@@ -1220,6 +1232,9 @@ mod tests {
         stamp_student_fixture(&db,&key,2100);
         t.positions.clear();
         t.quote_time_ms = Some(2250);
+        student.observe_gated(&db,&t,2250,true).unwrap();
+        let pending_events:u64=db.query_row("SELECT COUNT(*) FROM student_study_events",[],|r|r.get(0)).unwrap();
+        assert_eq!(pending_events,0,"Paused Student must not train or consume a verified outcome");
         student.observe(&db, &t, 2250).unwrap();
         let v = view(&db, &key).unwrap();
         assert_eq!(v["usable_shadow_pairs"], 1);

@@ -16,6 +16,7 @@ import math
 import os
 from pathlib import Path
 import secrets
+import sys
 import threading
 import time
 
@@ -55,9 +56,9 @@ def write_session_token(data_path: str | os.PathLike[str], token: str) -> Path:
     return path
 
 
-def parse_packet(raw: bytes | str, token: str, received_ms: int | None = None) -> dict:
+def parse_packet(raw: bytes | bytearray | str, token: str, received_ms: int | None = None) -> dict:
     """Validate BT2 or the backwards-compatible BT1 native quote packet."""
-    if isinstance(raw, bytes):
+    if isinstance(raw, (bytes, bytearray)):
         if len(raw) > MAX_PACKET_BYTES:
             raise ValueError("Native tick packet is too large")
         try:
@@ -124,6 +125,7 @@ class NativeTickMailbox:
         self.connected = False
         self.dropped = 0
         self.last_received_ms = 0
+        self.last_quote_time_ms = 0
         self.last_login: int | None = None
         self.last_symbol: str | None = None
 
@@ -133,12 +135,20 @@ class NativeTickMailbox:
             self._items.clear()
             self.connected = False
             self.last_received_ms = 0
+            self.last_quote_time_ms = 0
             self.last_login = None
             self.last_symbol = None
         self._wake.set()
 
     def set_connected(self, value: bool) -> None:
         with self._lock:
+            # An open handle after a disconnect is not evidence that this
+            # connection has delivered an authenticated, fresh market quote.
+            if not value or not self.connected:
+                self.last_received_ms = 0
+                self.last_quote_time_ms = 0
+                self.last_login = None
+                self.last_symbol = None
             self.connected = bool(value)
         self._wake.set()
 
@@ -149,6 +159,7 @@ class NativeTickMailbox:
                 self.dropped += 1
             self._items.append(packet)
             self.last_received_ms = int(packet.get("received_ms", clock_ms()))
+            self.last_quote_time_ms = int(packet.get("time_msc", 0) or 0)
             self.last_login = packet.get("login")
             self.last_symbol = packet.get("symbol")
         self._wake.set()
@@ -170,9 +181,14 @@ class NativeTickMailbox:
         now_ms = clock_ms() if now_ms is None else int(now_ms)
         with self._lock:
             return (self.connected and self.last_received_ms > 0
+                    and self.last_quote_time_ms > 0
                     and (login is None or self.last_login == login)
                     and (symbol is None or self.last_symbol == symbol)
-                    and 0 <= now_ms - self.last_received_ms <= maximum_age_ms)
+                    and 0 <= now_ms - self.last_received_ms <= maximum_age_ms
+                    # The receipt clock alone can be fresh while its broker
+                    # quote is stale. Match the gateway's 2-second future-skew
+                    # limit and otherwise allow polling to resume promptly.
+                    and -2000 <= now_ms - self.last_quote_time_ms <= maximum_age_ms)
 
     def wait(self, timeout: float) -> None:
         self._wake.wait(max(0.0, float(timeout)))
@@ -198,6 +214,8 @@ class _WindowsPipeServer:
         self.pipe_name = pipe_name
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._last_problem: tuple[str, int] | None = None
+        self._last_problem_logged_at = 0.0
 
     @property
     def running(self) -> bool:
@@ -270,13 +288,33 @@ class _WindowsPipeServer:
         kernel.CloseHandle.restype = wintypes.BOOL
         return kernel, wintypes
 
+    def _log_problem(self, stage: str, error: int = 0) -> None:
+        # Never log packets, account tokens or secret pipe payloads.
+        now = time.monotonic()
+        issue = (stage, int(error))
+        if issue != self._last_problem or now - self._last_problem_logged_at >= 15.0:
+            print(f"Native Sniper pipe {stage}: WinError={int(error)}", file=sys.stderr, flush=True)
+            self._last_problem = issue
+            self._last_problem_logged_at = now
+
     def _run(self) -> None:
+        try:
+            self._serve()
+        except Exception as exc:
+            self._log_problem(type(exc).__name__, ctypes.get_last_error())
+            # Worker failure must not crash the whole MT5 gateway; its main loop
+            # supervises this thread and safely regenerates the session token.
+        finally:
+            self.mailbox.set_connected(False)
+
+    def _serve(self) -> None:
         kernel, wintypes = self._kernel()
         mode = self.PIPE_TYPE_BYTE | self.PIPE_READMODE_BYTE | self.PIPE_WAIT | self.PIPE_REJECT_REMOTE_CLIENTS
         while not self._stop.is_set():
             handle = kernel.CreateNamedPipeW(self.pipe_name, self.PIPE_ACCESS_DUPLEX, mode,
                                              1, 4096, 4096, 0, None)
             if handle == self.INVALID_HANDLE_VALUE:
+                self._log_problem('CreateNamedPipeW', ctypes.get_last_error())
                 if self._stop.wait(0.25):
                     break
                 continue
@@ -285,6 +323,9 @@ class _WindowsPipeServer:
                     continue
                 connected = bool(kernel.ConnectNamedPipe(handle, None))
                 if not connected and ctypes.get_last_error() != self.ERROR_PIPE_CONNECTED:
+                    error = ctypes.get_last_error()
+                    if not self._stop.is_set() and error not in (109, 232, 995):
+                        self._log_problem('ConnectNamedPipe', error)
                     continue
                 if self._stop.is_set():
                     continue
@@ -305,8 +346,9 @@ class _WindowsPipeServer:
                         line, _, remainder = pending.partition(b"\n")
                         pending = bytearray(remainder)
                         try:
-                            self.mailbox.push(parse_packet(line, self.token))
-                        except ValueError:
+                            self.mailbox.push(parse_packet(bytes(line), self.token))
+                        except ValueError as exc:
+                            self._log_problem('RejectedPacket'+type(exc).__name__)
                             continue
             finally:
                 self.mailbox.set_connected(False)
