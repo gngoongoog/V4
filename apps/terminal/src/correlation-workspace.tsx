@@ -67,7 +67,7 @@ export function CorrelationWorkspace({source,preview,disabled,error,onAnalyze,on
   <div className="operator-control-panel">
    <h4>١. حدد المصادر التاريخية</h4><p>اختَر من 2 إلى 8 نتائج تاريخية محفوظة. يجب أن تتقاطع فتراتها، وقد يرفض Core مصادر غير متوافقة.</p>
    {sources.length?<div className="operator-choose-grid">{sources.map((s,i)=>{
-    const id=txt(s.id,'');return <label key={id||String(i)}><input type="checkbox" disabled={!ready||(!chosen.includes(id)&&chosen.length>=8)} checked={chosen.includes(id)} onChange={()=>toggle(id)}/><span><b>{txt(s.symbol,'رمز غير متاح')}</b><small>{id.slice(0,8)} · تاريخ: {String(s.from??'—')} → {String(s.to??'—')}</small></span></label>;
+    const id=txt(s.id,'');return <label key={id||String(i)}><input type="checkbox" disabled={!ready||(!chosen.includes(id)&&chosen.length>=8)} checked={chosen.includes(id)} onChange={()=>toggle(id)}/><span><b>{txt(s.symbol,'رمز غير متاح')}</b><small>{id.slice(0,8)} · تاريخ: {value(s.from)!==null?new Date(Number(s.from)*1000).toISOString().slice(0,10):'—'} → {value(s.to)!==null?new Date(Number(s.to)*1000).toISOString().slice(0,10):'—'}</small></span></label>;
    })}</div>:<p className="operator-empty">{loading?'جاري تحميل المصادر...':'لا توجد اختبارات تاريخية محفوظة مؤهلة في Core.'}</p>}
    <div className="operator-filters"><label>التداخل الأدنى بين الشموع بالدقائق<input type="number" aria-label="حد التداخل بالارتباط" min="2" max="60000" step="1" value={overlap} onChange={e=>setOverlap(e.target.value)} disabled={!ready}/></label></div>
    {symbols.length===1&&chosen.length>=2&&<p className="safe-note">المصادر المختارة تخص الرمز نفسه ({symbols[0]})؛ قد تكون نتيجة ارتباط ذاتي لا تفيد تنويع المخاطر.</p>}
@@ -75,7 +75,7 @@ export function CorrelationWorkspace({source,preview,disabled,error,onAnalyze,on
   </div>
   <div className="operator-control-panel">
    <h4>٢. التقارير المحفوظة</h4>
-   {reports.length?<div className="operator-choose-grid">{reports.map((item,i)=>{const s=obj(item.summary),id=txt(s.id,'');return <button key={id||i} className={active===id?'selected':''} disabled={!ready||!id} onClick={()=>void openReport(id)}><b>{arr(s.symbols).map(String).join(' / ')||'ارتباط محفوظ'}</b><small>المعرف {id.slice(0,12)} · {stamp(item.created_ms)} · أزواج: {String(s.pair_count??'—')}</small></button>})}</div>:<p className="operator-empty">لا توجد دراسات ارتباط محفوظة لعرضها.</p>}
+   {reports.length?<div className="operator-choose-grid">{reports.map((item,i)=>{const s=obj(item.summary),id=txt(s.id,'');return <button key={id||i} className={active===id?'selected':''} disabled={!ready||!id} onClick={()=>void openReport(id)}><b>{(Array.isArray(s.symbols)?s.symbols.filter(x=>typeof x==='string').join(' / '):'')||'ارتباط محفوظ'}</b><small>المعرف {id.slice(0,12)} · {stamp(item.created_ms)} · أزواج: {String(s.pair_count??'—')}</small></button>})}</div>:<p className="operator-empty">لا توجد دراسات ارتباط محفوظة لعرضها.</p>}
   </div>
   {failure&&<p role="alert" className="operator-caveat">{failure}</p>}
   {message&&<p role="status" className="operator-evidence">{message}</p>}
