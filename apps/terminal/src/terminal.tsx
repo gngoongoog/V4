@@ -46,7 +46,7 @@ import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position,PendingOrder} from './types';
 import type {RiskRecovery,PositionProtectionPolicy} from './bridge';
 import {DESIGN_FIXTURE} from './mock';
-import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,updatePositionProtection,setLearningFrozen,manualMarket,cancelPendingOrder,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
+import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,newsAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,updatePositionProtection,setLearningFrozen,manualMarket,cancelPendingOrder,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
 import {money,num,signed,up,valid} from './format';
 
 // Concept 4 visual comparison fixture, NEVER emitted as broker results.
@@ -652,6 +652,25 @@ export default function Terminal(){
    throw e; // The child workspace must not display a false success notice.
   }finally{finishWrite(mutation)}
  };
+ const runNewsAction=async(action:'refresh'|'enable'|'disable')=>{
+  if(preview||!hasTauri())throw new Error('التحكم بالمصادر يتطلب تطبيق Windows المتصل');
+  const mutation=beginWrite('news-'+action);
+  if(!mutation)throw new Error('يوجد طلب آخر لم ينتهِ بعد');
+  const serial=panelSerial();
+  try{
+   const result=unwrap(await newsAction(action));
+   if(result.ok!==true)throw new Error('Core لم يؤكد استلام الإجراء');
+   if(!writeFresh(mutation))throw new Error('تغيّر سياق الواجهة أثناء العملية؛ تحقق من الحالة');
+   const data=await readPanel('/v1/news');
+   if(!writeFresh(mutation))throw new Error('تغيّر سياق الواجهة أثناء تحديث الأخبار');
+   if((action==='enable'||action==='disable')&&unwrap(data).enabled!==(action==='enable'))throw new Error('البيانات الجديدة لا تطابق إعداد مصادر الأخبار');
+   publishPanel(serial,data);
+   sendNotice('تم قبول أمر الأخبار وتحديث عرض Core');
+  }catch(e){
+   if(writeFresh(mutation))sendNotice('تعذر تأكيد التحكم بالأخبار: '+String(e),true);
+   throw e;
+  }finally{finishWrite(mutation)}
+ };
  // Keep every new page anchored at its header, even after a long scroll.
  // The scroll container is persistent across React route changes.
  const resetContentScroll=()=>{const main=document.querySelector('main.content');if(main)main.scrollTop=0};
@@ -1218,7 +1237,7 @@ export default function Terminal(){
         page==='positions'?<div className="feature-zone"><PositionsOperatorWorkspace key={viewScope} positions={account?positions:[]} currency={currency} accountAvailable={!preview&&feed.broker&&!!account} onTrading={()=>open('trading')}/></div>:
         page==='brains'||page==='brainControl'?<div className="feature-zone"><BrainControlsOperations source={pageData} disabled={busy||preview} armed={status?.requested_run===true} onSave={runSaveBrain}/><FrozenCoordinatorOperations status={!preview&&feed.broker?status:null} source={activeFrozenCoordinator} currentMode={unwrap(pageData).trading_mode} brainContext={unwrap(pageData).context} armed={status?.requested_run===true} disabled={busy||preview} onAction={runFrozenCoordinator} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('frozenCoordinator');void readPanel('/v1/execution/frozen-coordinator').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setFrozenSlot({scope:viewScope,report:null})})}}/><p className="data-description">P1-A: نسب النجاح تظهر فقط بعد 30 نتيجة مغلقة موثّقة من MT5 DEMO بعد العمولة والسواب والرسوم، ومحددة بالعقل ووضع التداول. نتائج الورق ليست صفقات وسيط؛ لا توجد ترقية تلقائية ولا اعتماد على REAL.</p><Table rows={preview?[]:array(unwrap(pageData).brains).map(b=>({brain:b.name,checks:unwrap(b.activity).checks,signals:unwrap(b.activity).signals,broker_orders:unwrap(b.attributed_orders).requested,broker_fills:unwrap(b.attributed_orders).fill_acknowledged,paper_closed:unwrap(b.paper_stats).closed,verified_demo_closes:unwrap(unwrap(b.integrity).broker_evidence).sample_count,evidence_state:unwrap(unwrap(b.integrity).broker_evidence).status==='insufficient_evidence'?'INSUFFICIENT DATA':unwrap(unwrap(b.integrity).broker_evidence).status,winrate_costed:Number.isFinite(unwrap(unwrap(b.integrity).broker_evidence).win_rate)&&unwrap(unwrap(b.integrity).broker_evidence).win_rate!==null?((Number(unwrap(unwrap(b.integrity).broker_evidence).win_rate)*100).toFixed(1)+'%'):'—',net_after_costs:unwrap(unwrap(b.integrity).broker_evidence).net_booked??'—'}))} empty={pageError||'لا توجد إحصائيات عقول من المحرك'}/></div>:
         <div className="feature-zone">
-         {page==='news'?<NewsOperatorWorkspace key={viewScope} source={pageData} preview={preview} error={pageError} onRefresh={()=>refreshCurrentPanel('/v1/news')}/>:
+         {page==='news'?<NewsOperatorWorkspace key={viewScope} source={pageData} preview={preview} error={pageError} disabled={busy||!hasTauri()} onRefresh={()=>refreshCurrentPanel('/v1/news')} onAction={runNewsAction}/>:
           page==='studio'||page==='correlation'||page==='analysis'||page==='shadow'||page==='events'?
           <CoreReadoutWorkspace key={viewScope} page={page} source={pageData} preview={preview} error={pageError} onRefresh={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}} onNavigate={open}/>:
           null}
