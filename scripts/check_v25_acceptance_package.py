@@ -12,6 +12,9 @@ import sys
 
 REQUIRED_TOOLS = (
     "Run-Demo-Acceptance.cmd",
+    "Run-MT5-Chart-Demo.cmd",
+    "Tools/check_mt5_chart_readonly.py",
+    "MT5_CHART_DEMO_ACCEPTANCE_AR.md",
     "Tools/Run-Demo-Acceptance.ps1",
     "Tools/Run-Demo-Acceptance-GUI.ps1",
     "DEMO_ACCEPTANCE_AR.md",
@@ -24,6 +27,12 @@ REQUIRED_TOOLS = (
     "runtime/gateway/order_cancellation.py",
 )
 SAFETY_CONTRACTS = {
+    "Run-MT5-Chart-Demo.cmd": ("runtime\\\\python\\\\python.exe",
+        "Tools\\\\check_mt5_chart_readonly.py", "READ ONLY", "DEMO"),
+    "Tools/check_mt5_chart_readonly.py": (
+        "ACCOUNT_TRADE_MODE_DEMO", "copy_rates_from_pos",
+        "symbol_info_tick", "execution_performed", "False",
+        "DEMO_ACCOUNT_REQUIRED", "ACCOUNT_SWITCHED_DURING_READ"),
     "Run-Demo-Acceptance.cmd": (
         'Tools\\Run-Demo-Acceptance.ps1', 'Tools\\Run-Demo-Acceptance-GUI.ps1',
         'powershell.exe', 'if "%~1"==""',
