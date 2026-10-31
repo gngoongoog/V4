@@ -15,6 +15,7 @@ export function chartHistory(input:unknown,account:Telemetry|null,now:number):Ch
     who.login!==account.login||who.server!==account.server||who.symbol!==account.symbol||
     who.currency!==account.currency||who.trade_mode!==(account.account_trade_mode??null))return empty;
  const result:ChartHistory={market:{},meta:{}};
+ const seconds={m30:1800,h1:3600,h4:14400,d1:86400} as const;
  for(const name of ['m30','h1','h4','d1'] as const){
   const data=object(frames[name]),bars=data.bars;
   if(!Array.isArray(bars)||bars.length<3||bars.length>180||typeof data.captured_ms!=='number'||
@@ -22,7 +23,8 @@ export function chartHistory(input:unknown,account:Telemetry|null,now:number):Ch
   let previous=0;const candles:Candle[]=[];let valid=true;
   for(const candidate of bars){
    const b=object(candidate);
-   if(typeof b.time!=='number'||!Number.isSafeInteger(b.time)||b.time<=previous||b.time*1000>data.captured_ms+2000||
+   if(typeof b.time!=='number'||!Number.isSafeInteger(b.time)||b.time<=previous||
+      (b.time+seconds[name])*1000>data.captured_ms+2000||
       !['open','high','low','close'].every(k=>typeof b[k]==='number'&&Number.isFinite(b[k])&&(b[k] as number)>0)||
       typeof b.tick_volume!=='number'||!Number.isSafeInteger(b.tick_volume)||b.tick_volume<0||
       (b.low as number)>Math.min(b.open as number,b.close as number)||
