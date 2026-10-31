@@ -503,3 +503,19 @@ body[data-theme=smoke] .terminal-v15.concept4 .chart-diagnostics pre{
 @media(max-width:1320px){.concept4 .concept-brain-controls .concept-brain-card-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:1000px){.concept4 .study-tips,.concept4 .brain-controls-guide{grid-template-columns:1fr}.concept4 .study-two-column{grid-template-columns:1fr}.concept4 .study-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.concept4 .concept-brain-controls .concept-brain-card-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:620px){.concept4 .study-hero{flex-direction:column;align-items:flex-start}.concept4 .study-fields,.concept4 .study-metrics,.concept4 .study-compare,.concept4 .concept-brain-controls .concept-brain-card-grid{grid-template-columns:1fr}.concept4 .study-two-column{grid-template-columns:minmax(0,1fr)}.concept4 .study-state{flex-wrap:wrap}}
+
+
+/* Historical reporting charts use only saved Core observations; never mock filled financial data. */
+.concept4 .study-visual-layout{display:grid;grid-template-columns:1fr;gap:12px;margin:12px 0}
+.concept4 .study-equity-panel,.concept4 .study-trades-panel{padding:16px;border:1px solid var(--border);border-radius:10px;background:var(--panel);min-width:0}
+.concept4 .study-visual-layout h4{font-size:15px;margin:0 0 8px;color:var(--ink)}
+.concept4 .study-visual-layout .study-row small{font-size:11px;color:var(--muted)}
+.concept4 .study-equity-svg{width:100%;height:235px;display:block;margin:12px auto;color:var(--ink);background:var(--panel2);border:1px solid var(--border);border-radius:8px}
+.concept4 .study-equity-legend{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;font-weight:650;color:var(--ink)}
+.concept4 .study-trades-scroll{overflow:auto;max-height:315px;max-width:100%;border:1px solid var(--border);border-radius:7px}
+.concept4 .study-trades-scroll table{width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap}
+.concept4 .study-trades-scroll th{position:sticky;top:0;padding:10px 12px;background:var(--panel2);border-bottom:1px solid var(--border);color:var(--muted);text-align:right}
+.concept4 .study-trades-scroll td{padding:9px 12px;border-bottom:1px solid var(--border);color:var(--ink)}
+.concept4 .study-trades-scroll td:last-child{white-space:normal;min-width:180px;line-height:1.5}
+.concept4 .study-trades-scroll .study-profit{color:#16855b;font-weight:800}
+.concept4 .study-trades-scroll .study-loss{color:#ce4d47;font-weight:800}
