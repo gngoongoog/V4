@@ -66,8 +66,23 @@ export function chartSourceEvidence(frame:ChartFrame,market:Market|null|undefine
    !Number.isFinite(nowMs)||captured>nowMs+2000)
   return {state:'unknown',capturedMs:null,ageMs:null};
  const age=Math.max(0,nowMs-captured);
- const recent=extended?frameMeta?.[frame as keyof ChartFrameMeta]?.live===true&&age<120000:age<15000;
- return {state:recent?'recent':'cached',capturedMs:captured,ageMs:age};
+ const bars=market?.[frame];
+ // A fresh Gateway snapshot is NOT evidence of fresh candles: at weekends
+ // the Gateway may capture the same old closed bars every five seconds.
+ // Require an actual broker bar with a plausible close time.
+ if(!Array.isArray(bars)||bars.length<3)
+  return {state:'unknown',capturedMs:captured,ageMs:age};
+ const last=bars[bars.length-1];
+ const closeMs=last.time*1000+FRAME_SECONDS[frame]*1000;
+ const valid=Number.isSafeInteger(last.time)&&last.time>0&&
+  Number.isFinite(closeMs)&&closeMs<=nowMs+2000;
+ if(!valid)return {state:'unknown',capturedMs:captured,ageMs:age};
+ const closeAge=Math.max(0,nowMs-closeMs);
+ const recentlyClosed=closeAge<=FRAME_SECONDS[frame]*2000+20000;
+ const recentlyCaptured=extended
+  ?frameMeta?.[frame as keyof ChartFrameMeta]?.live===true&&age<120000
+  :age<15000;
+ return {state:recentlyCaptured&&recentlyClosed?'recent':'cached',capturedMs:captured,ageMs:age};
 }
 export function chartDiagnosticReport(symbol:string,frame:ChartFrame,source:ChartSourceEvidence,
  bars:Candle[],quote:number|null,preview:boolean):string{

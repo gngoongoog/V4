@@ -94,9 +94,20 @@ assert.equal(nowClosed.at(-1).time,nowSec-60);
 
 
 const observedAt=1800000000000;
-const recentMarket={captured_ms:observedAt-5000,m1:[],m5:[],m15:[]};
+const recentBars=(seconds)=>{
+ const anchor=Math.floor(observedAt/1000/seconds)*seconds-seconds;
+ return [2,1,0].map(i=>candle(anchor-i*seconds,2450,2451,2452,2449));
+};
+const recentMarket={captured_ms:observedAt-5000,
+ m1:recentBars(60),m5:recentBars(300),m15:recentBars(900),
+ h1:recentBars(3600),h4:recentBars(14400),d1:recentBars(86400)};
 assert.equal(out.chartSourceEvidence('m1',recentMarket,undefined,observedAt,false).state,'recent',
- 'Fresh Core heartbeat alone is not proof; rely on broker capture time');
+ 'An actually recent closed bar AND a new broker capture are required');
+assert.equal(out.chartSourceEvidence('m1',{...recentMarket,m1:[]},undefined,observedAt,false).state,'unknown',
+ 'Fresh broker capture with missing M1 bars cannot be labelled recent');
+const weekendBars=recentBars(60).map(bar=>({...bar,time:bar.time-86400*2}));
+assert.equal(out.chartSourceEvidence('m1',{...recentMarket,m1:weekendBars},undefined,observedAt,false).state,'cached',
+ 'A freshly fetched weekend quote does not make two-day-old M1 bars current');
 assert.equal(out.chartSourceEvidence('m15',{...recentMarket,captured_ms:observedAt-20000},undefined,observedAt,false).state,'cached',
  'An unchanged broker OHLC snapshot must be marked cached');
 assert.equal(out.chartSourceEvidence('m1',undefined,undefined,observedAt,false).state,'unknown',

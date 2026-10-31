@@ -57,11 +57,20 @@ test('extra chart candles are scoped to the current account and validated before
  const bars=[1,2,3].map(i=>({time:Math.floor(now/1000)-i*3600,open:100,high:102,low:99,close:101,tick_volume:12})).reverse();
  const row={schema:'chart-frames-v1',ready:true,read_only:true,account:{login:7,server:'Demo',symbol:'XAUUSD',currency:'USD',trade_mode:0},frames:{h1:{bars,captured_ms:now,live:true}}};
  assert.equal(chartHistory(row,account,now).market.h1.length,3);
- assert.equal(chartHistory({...row,frames:{h1:{bars,captured_ms:now-121000,live:false}}},account,now).meta.h1.live,false);
- assert.equal(chartHistory({...row,frames:{h1:{bars,captured_ms:now-121000,live:true}}},account,now).meta.h1.live,false,'Cached live flags must expire');
+ const cachedBars=bars.map(bar=>({...bar,time:bar.time-3600}));
+ assert.equal(chartHistory({...row,frames:{h1:{bars:cachedBars,captured_ms:now-121000,live:false}}},account,now).meta.h1.live,false);
+ assert.equal(chartHistory({...row,frames:{h1:{bars:cachedBars,captured_ms:now-121000,live:true}}},account,now).meta.h1.live,false,'Cached live flags must expire');
+ assert.deepEqual(chartHistory({...row,frames:{h1:{bars,captured_ms:now-121000,live:true}}},account,now).market,{},
+  'A previously captured OHLC snapshot must reject bars that would have closed after its timestamp');
  assert.deepEqual(chartHistory(row,{...account,login:8},now).market,{});
  assert.deepEqual(chartHistory(row,{...account,account_trade_mode:2},now).market,{});
  assert.deepEqual(chartHistory({...row,frames:{h1:{bars:[...bars].reverse(),captured_ms:now,live:true}}},account,now).market,{});
  assert.deepEqual(chartHistory({...row,frames:{h1:{bars:[{...bars[0],low:104},...bars.slice(1)],captured_ms:now,live:true}}},account,now).market,{});
  assert.deepEqual(chartHistory({...row,frames:{h1:{bars,captured_ms:now+3000,live:true}}},account,now).market,{});
+ // The raw history payload must not smuggle an active H1 candle into a
+ // broker-closed series. The Rust source is already stricter; this is a
+ // separate renderer trust boundary with its own regression.
+ const unfinished=[...bars.slice(0,2),{...bars[2],time:Math.floor(now/1000)-1800}];
+ assert.deepEqual(chartHistory({...row,frames:{h1:{bars:unfinished,captured_ms:now,live:true}}},account,now).market,{},
+   'Never display an H1 forming candle as already closed');
 });
