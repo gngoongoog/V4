@@ -16,6 +16,7 @@ import {BackupOperations,TradingSettingsOperations,BrainControlsOperations,Paper
 import {BacktestWorkspace,EvaluationWorkspace} from './study-workspaces';
 import {NewsOperatorWorkspace,CoreReadoutWorkspace,PositionsOperatorWorkspace} from './operator-pages';
 import {CorrelationWorkspace} from './correlation-workspace';
+import {HvnWorkspace} from './hvn-workspace';
 import {connectionStatusMessage,feedEvidence} from './feed';
 import {diagnoseMarketQuote} from './market-quote-diagnosis';
 import {approvalIsCurrent,canConfirmStart} from './operator-approval';
@@ -88,7 +89,7 @@ const PAGE_GUIDE:Record<PageId,{purpose:string;step:string}>={
  sniper:{purpose:'تشخيص القناص وحالة تيكات EA ومحرك التنفيذ المخصص له.',step:'ابدأ بمصدر التيكات، ثم أسباب WAIT، ثم إعدادات القناص ونتيجة الأوامر.'},
  risk:{purpose:'إعداد إدارة رأس المال، القاطع اليومي، الحساب الصغير، وحماية المراكز.',step:'راجع حالة Risk Master، وبعدها عدّل الحدود المطلوبة واحفظها لدى Core.'},
  positions:{purpose:'مراكز MT5 المفتوحة التي وصلت من الحساب، والربح العائم قبل رسوم الإغلاق.',step:'فلتر حسب الرمز والاتجاه؛ للإغلاق انتقل إلى مركز التداول وراجع تأكيد MT5.'},
- analysis:{purpose:'أرشيف فرص تحليلية لحظة أول تسجيل، وليس توصيات دخول جديدة.',step:'افتح أي فرصة لمعرفة الاتجاه والمنطقة وسبب عدم جاهزيتها.'},
+ analysis:{purpose:'أرشيف فرص تاريخية وغرفة HVN البحثية من تيكات MT5، بدون تنفيذ صفقات.',step:'راجع الفرص، أو أوقف START وأفرغ الحساب ثم قِس HVN من بيانات الوسيط وحدد مصدر النشاط.'},
  journal:{purpose:'تاريخ الصفقات من سجل MT5 مع تفاصيل التكاليف إذا كانت متاحة.',step:'حدد الفترة وابحث في الصفقات، وتحقق من العمولة قبل تقييم الربح.'},
  reports:{purpose:'إحصائيات مستندة إلى صفقات مغلقة موثقة؛ ليست توقعاً للأرباح القادمة.',step:'اختر الحساب والفترة وراجع حجم العينة والرسوم قبل تفسير نسبة النجاح.'},
  telegram:{purpose:'إعداد تنبيهات Telegram وحالة الإرسال كما يبلغها Core.',step:'أدخل Chat ID والرمز السري، فعّل التنبيهات ثم احفظ؛ تحقق من وصول رسالة فعلية.'},
@@ -1335,7 +1336,8 @@ export default function Terminal(){
          {page==='correlation'?<CorrelationWorkspace key={viewScope} source={pageData} preview={preview} disabled={busy||!hasTauri()} error={pageError} onAnalyze={runCorrelationAnalyze} onRefresh={()=>refreshCurrentPanel('/v1/research/correlation')} onBacktest={()=>open('backtest')}/>:
           page==='news'?<NewsOperatorWorkspace key={viewScope} source={pageData} preview={preview} error={pageError} disabled={busy||!hasTauri()} onRefresh={()=>refreshCurrentPanel('/v1/news')} onAction={runNewsAction}/>:
           page==='studio'||page==='analysis'||page==='shadow'||page==='events'?
-          <CoreReadoutWorkspace key={viewScope} page={page} source={pageData} preview={preview} error={pageError} disabled={busy||!hasTauri()} onRefresh={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}} onNavigate={open} onStudioAction={runStudioAction}/>:
+          <><CoreReadoutWorkspace key={viewScope} page={page} source={pageData} preview={preview} error={pageError} disabled={busy||!hasTauri()} onRefresh={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}} onNavigate={open} onStudioAction={runStudioAction}/>
+          {page==='analysis'&&<HvnWorkspace key={'hvn-'+viewScope} status={status} connected={feed.broker} preview={preview} disabled={busy||!hasTauri()}/>}</>:
           null}
          <details className="operator-advanced"><summary>البيانات التقنية التفصيلية من Rust Core</summary><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>{if(pageMeta.route)refreshCurrentPanel(pageMeta.route)}}/></details>
         </div>}
