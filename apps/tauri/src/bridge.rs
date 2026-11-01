@@ -125,7 +125,7 @@ fn get_status() -> Result<Value, String> {
 // browser proxy, secret file, or POST to gateway endpoints can be requested.
 fn allowed_read_route(route: &str) -> bool {
     matches!(route,
-        "/v1/config" | "/v1/learning" | "/v1/learning/account-evidence" | "/v1/execution/brains" | "/v1/decisions" |
+        "/v1/config" | "/v1/hvn" | "/v1/learning" | "/v1/learning/account-evidence" | "/v1/execution/brains" | "/v1/decisions" |
         "/v1/opportunities/history" | "/v1/events" | "/v1/risk/monitor" |
         "/v1/trading/settings" | "/v1/studio" | "/v1/studio/chart-frames" | "/v1/news" |
         "/v1/evaluation" | "/v1/backtest" | "/v1/backups" |
@@ -138,6 +138,14 @@ fn allowed_read_route(route: &str) -> bool {
 fn read_panel(route: String) -> Result<Value, String> {
     if !allowed_read_route(&route) { return Err("غير مسموح بهذا المسار".into()); }
     open_client()?.get(&route).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn hvn_research_request(window_ms:u64)->Result<Value,String>{
+    if !(60_000..=900_000).contains(&window_ms){
+        return Err("نافذة HVN يجب أن تكون بين دقيقة و15 دقيقة".into());
+    }
+    open_client()?.post("/v1/hvn/request",json!({"window_ms":window_ms})).map_err(|e|e.to_string())
 }
 
 /// Pagination is read-only, even though Core exposes this specific query as
@@ -742,7 +750,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(lifecycle().clone())
         .invoke_handler(tauri::generate_handler![
-            get_status, read_panel, read_trade_history, execute_control,
+            get_status, read_panel, hvn_research_request, read_trade_history, execute_control,
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore, save_excel_report,
