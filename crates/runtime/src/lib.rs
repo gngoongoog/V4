@@ -343,31 +343,53 @@ impl Engine{
         self.gateway=Some(command.spawn().context("Could not launch MT5 gateway")?);self.event("gateway_started",json!({}))?;Ok(())
     }
     fn stop_gateway(&mut self){if let Some(mut child)=self.gateway.take(){let _=child.kill();let _=child.wait();}}
-    fn stop_gateway_for_full_exit(&mut self)->Result<()> {
+    fn stop_gateway_for_full_exit(&mut self)->Result<&'static str> {
+        // Only called AFTER STOP, a verified flat MT5 portfolio, no pending
+        // broker orders and no unresolved durable intent. It must never be
+        // used as a shortcut around those conditions.
+        let mut mode="already_stopped";
         if let Some(child)=self.gateway.as_mut(){
             drop(child.stdin.take());
-            let deadline=std::time::Instant::now()+Duration::from_secs(15);
+            let deadline=std::time::Instant::now()+Duration::from_secs(12);
             loop {
                 if let Some(status)=child.try_wait().context("تعذر التحقق من انتهاء Gateway")? {
-                    anyhow::ensure!(status.success(),"تعذر تأكيد تنظيف Gateway؛ راجع gateway.log");
+                    mode=if status.success(){"graceful"}else{"exited_nonzero"};
                     break;
                 }
-                anyhow::ensure!(std::time::Instant::now()<deadline,
-                    "تعذر إيقاف Gateway طبيعياً ضمن المهلة؛ لم يُغلق Core");
+                if std::time::Instant::now()>=deadline {
+                    // The owned gateway can be stuck in an MT5 DLL or in a
+                    // Python cleanup hook. Once the broker-flat gate has
+                    // already passed, terminate ONLY this exact owned Child,
+                    // never MetaTrader or a process found by name/PID scan.
+                    if let Err(error)=child.kill(){
+                        anyhow::ensure!(child.try_wait()?.is_some(),
+                            "تعذر إيقاف Gateway العالق بعد مهلة التنظيف: {error}");
+                    }
+                    let kill_deadline=std::time::Instant::now()+Duration::from_secs(3);
+                    loop {
+                        if child.try_wait()?.is_some(){mode="forced_after_grace_timeout";break;}
+                        anyhow::ensure!(std::time::Instant::now()<kill_deadline,
+                            "لم يتأكد توقف Gateway حتى بعد طلب إنهاء العملية المملوكة");
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    break;
+                }
                 std::thread::sleep(Duration::from_millis(50));
             }
             self.gateway=None;
         }
         // A gateway from an earlier Core may still own this account's lock.
-        // Never report complete shutdown while such an unknown owner exists.
+        // A stopped child is NOT enough; never certify full exit while any
+        // gateway holds the lock used by this exact configured data directory.
         let lock_path=self.dir.join("gateway.lock");
         if lock_path.exists(){
             let probe=OpenOptions::new().read(true).write(true).open(lock_path)?;
             probe.try_lock_exclusive().context("تعذر تأكيد توقف Gateway سابق؛ ما زال قفل Gateway مشغولاً")?;
             FileExt::unlock(&probe)?;
         }
-        Ok(())
+        Ok(mode)
     }
+
     fn tick(&mut self){let cfg=self.shared.lock().unwrap().config.clone();self.studio.set_learning_frozen(self.execution.learning_frozen());self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
     fn route(&mut self,method:&str,path:&str,body:&[u8])->Result<Value>{
         if path=="/v1/learning/control" {
@@ -710,14 +732,18 @@ impl Engine{
                 verify_safe_shutdown(&current,unresolved)?;
                 self.event("core_shutdown_requested",json!({"safe":true,"positions":0,"pending_orders":0}))?;
                 let barrier=lifecycle::ShutdownBarrier::begin(&self.dir)?;
-                if let Err(error)=self.stop_gateway_for_full_exit(){
-                    barrier.cancel().context("تعذر إلغاء علامة الخروج بعد رفض إيقاف Gateway")?;
-                    return Err(error);
-                }
+                let gateway_stop_mode=match self.stop_gateway_for_full_exit(){
+                    Ok(mode)=>mode,
+                    Err(error)=>{
+                        barrier.cancel().context("تعذر إلغاء علامة الخروج بعد رفض إيقاف Gateway")?;
+                        return Err(error);
+                    }
+                };
+                self.event("gateway_full_exit_stopped",json!({"mode":gateway_stop_mode}))?;
                 self.shutdown_barrier=Some(barrier);
                 self.backtests.cancel();self.evaluations.cancel();self.studio.cancel();
                 self.shutting_down=true;
-                Ok(json!({"ok":true,"safe":true,"gateway_stopped":true,"core_process":{"pid":std::process::id(),"instance_id":self.instance_id}}))
+                Ok(json!({"ok":true,"safe":true,"gateway_stopped":true,"gateway_stop_mode":gateway_stop_mode,"core_process":{"pid":std::process::id(),"instance_id":self.instance_id}}))
             },
             _=>bail!("Unknown API route")
         }
