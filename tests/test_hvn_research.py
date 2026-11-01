@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gateway"))
-from hvn_research import calculate_hvn
+from hvn_research import calculate_hvn, collect_mt5_hvn
 
 NOW = 1_800_000_000_000
 KW = dict(server="Broker-Demo", login=42, symbol="XAUUSDm", currency="USD",
@@ -104,6 +104,52 @@ class HvnResearch(unittest.TestCase):
         self.assertEqual(out["identity"]["symbol"],"XAUUSDm")
         self.assertTrue(out["broker_only"])
         self.assertFalse(out["exchange_wide"])
+
+    def test_read_only_mt5_collect_checks_identity_before_and_after_history(self):
+        from types import SimpleNamespace
+        class Broker:
+            COPY_TICKS_ALL = 0
+            def __init__(self):
+                self.calls = []
+                self.server = KW["server"]
+            def account_info(self):
+                self.calls.append("account")
+                return SimpleNamespace(login=42, server=self.server, currency="USD")
+            def symbol_info(self, symbol):
+                self.calls.append(("symbol", symbol))
+                return SimpleNamespace(trade_tick_size=0.01)
+            def copy_ticks_range(self, symbol, start, end, flags):
+                self.calls.append(("ticks",symbol,flags,start.utcoffset(),end.utcoffset()))
+                return quotes()
+        broker = Broker()
+        out = collect_mt5_hvn(broker, **{k:KW[k] for k in
+            ("server","login","symbol","currency","now_ms")})
+        self.assertTrue(out["available"], out)
+        self.assertEqual(broker.calls.count("account"),2)
+        self.assertEqual(out["identity"]["symbol"],"XAUUSDm")
+        self.assertIn(("ticks","XAUUSDm",0,
+                       broker.calls[2][3],broker.calls[2][4]),broker.calls)
+        self.assertEqual(broker.calls[2][3].total_seconds(),0)
+        self.assertEqual(broker.calls[2][4].total_seconds(),0)
+
+    def test_changing_mt5_account_while_reading_withdraws_all_hvn_levels(self):
+        from types import SimpleNamespace
+        class Switched:
+            COPY_TICKS_ALL = 0
+            calls = 0
+            def account_info(self):
+                self.calls += 1
+                return SimpleNamespace(login=42 if self.calls==1 else 43,
+                    server="Broker-Demo",currency="USD")
+            def symbol_info(self,symbol):
+                return SimpleNamespace(trade_tick_size=0.01)
+            def copy_ticks_range(self,*args):
+                return quotes()
+        out=collect_mt5_hvn(Switched(), **{k:KW[k] for k in
+            ("server","login","symbol","currency","now_ms")})
+        self.assertFalse(out["available"])
+        self.assertEqual(out["nodes"],[])
+        self.assertIn("changed",out["reason"])
 
     def test_no_executable_broker_in_hvn_research_module(self):
         source=(Path(__file__).resolve().parents[1]/"gateway"/"hvn_research.py").read_text()
