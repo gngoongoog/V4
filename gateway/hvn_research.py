@@ -84,15 +84,25 @@ def calculate_hvn(ticks, *, server, login, symbol, currency, tick_size,
             # Do not allow a broker clock ahead of the decision to leak future data.
             continue
 
+        raw_flags = _field(row, "flags")
+        try:
+            flags = int(raw_flags) if raw_flags is not None else None
+        except (ValueError, TypeError, OverflowError):
+            return _unavailable("Invalid MT5 tick change flags", identity, window_ms)
         last = _number(_field(row, "last"))
         real_volume = _number(_field(row, "volume_real"))
-        if last is not None and last > 0 and real_volume is not None and real_volume > 0:
+        # A quote-only MT5 tick can carry the PREVIOUS Last/volume_real value;
+        # the flags must show a NEW trade change or it would double count.
+        trade_change = flags is None or bool(flags & (8 | 16 | 32 | 64))
+        quote_change = flags is None or bool(flags & (2 | 4))
+        if (trade_change and last is not None and last > 0
+                and real_volume is not None and real_volume > 0):
             trades.append((timestamp, last, real_volume))
-        else:
+        elif quote_change:
             bid = _number(_field(row, "bid"))
             ask = _number(_field(row, "ask"))
             if bid is not None and ask is not None and bid > 0 and ask >= bid:
-                # ONE observation of a quoted midpoint, not a completed trade.
+                # ONE changed quote, not a transaction. Never infer buyer/seller.
                 quotes.append((timestamp, (bid + ask) / 2.0, 1.0))
 
     if len(trades) >= min_events:
