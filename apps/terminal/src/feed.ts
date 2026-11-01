@@ -18,3 +18,13 @@ export function feedEvidence(status:Status|null,online:boolean,lastStatusAt:numb
  }
  return {core,broker,quote:broker&&quoteAgeMs!==null&&quoteAgeMs<=3000,quoteAgeMs};
 }
+
+/** Connection-first operator status. A cached Core message is not broker
+ * connectivity evidence, even if it once said that MT5 was connected. */
+export function connectionStatusMessage(status:Status|null,feed:FeedEvidence,preview:boolean):string{
+ if(preview)return 'معاينة التصميم فقط — لا اتصال أو تنفيذ MT5 حقيقي';
+ if(!feed.core)return 'Rust Core غير متاح أو انتهت مهلة تحديثه؛ حالة اتصال MT5 غير مؤكدة';
+ if(!feed.broker)return 'Rust Core متصل، لكن اتصال MT5 غير مؤكد أو لقطة الحساب قديمة — لا تعتمد على آخر رسالة اتصال';
+ if(!feed.quote)return 'حساب MT5 متصل، لكن آخر سعر غير حديث أو غير متاح — التداول بسعر قديم ممنوع';
+ return status?.message?.trim()||'اتصال Core وحساب MT5 والسعر حديث ومؤكد';
+}
