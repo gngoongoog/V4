@@ -301,6 +301,34 @@ fn apply_risk_master_to_monitor(view:&mut Value,master:Option<bool>){
     }
 }
 
+/// Owned Child only. This is invoked only AFTER the caller passes the flat
+/// broker / reconciled journal gates; it must not be used for emergency close.
+fn stop_owned_gateway(child:&mut Child,grace:Duration)->Result<&'static str>{
+    drop(child.stdin.take());
+    let deadline=std::time::Instant::now()+grace;
+    loop {
+        if let Some(status)=child.try_wait().context("تعذر التحقق من انتهاء Gateway")? {
+            return Ok(if status.success(){"graceful"}else{"exited_nonzero"});
+        }
+        if std::time::Instant::now()>=deadline {
+            // Never scan/kill by name. The exact Child handle was obtained by
+            // this Core at spawn and cannot target an unrelated user process.
+            if let Err(error)=child.kill(){
+                anyhow::ensure!(child.try_wait()?.is_some(),
+                    "تعذر إيقاف Gateway العالق بعد مهلة التنظيف: {error}");
+            }
+            let stop_deadline=std::time::Instant::now()+Duration::from_secs(3);
+            loop {
+                if child.try_wait()?.is_some(){return Ok("forced_after_grace_timeout");}
+                anyhow::ensure!(std::time::Instant::now()<stop_deadline,
+                    "لم يتأكد توقف Gateway حتى بعد طلب إنهاء العملية المملوكة");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 impl Engine{
     fn event(&self,kind:&str,detail:Value)->Result<()>{self.db.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,?2,?3)",params![now_ms(),kind,detail.to_string()])?;Ok(())}
     fn verify_shutdown_session(&mut self,status:&Status)->Result<()> {
@@ -343,31 +371,27 @@ impl Engine{
         self.gateway=Some(command.spawn().context("Could not launch MT5 gateway")?);self.event("gateway_started",json!({}))?;Ok(())
     }
     fn stop_gateway(&mut self){if let Some(mut child)=self.gateway.take(){let _=child.kill();let _=child.wait();}}
-    fn stop_gateway_for_full_exit(&mut self)->Result<()> {
-        if let Some(child)=self.gateway.as_mut(){
-            drop(child.stdin.take());
-            let deadline=std::time::Instant::now()+Duration::from_secs(15);
-            loop {
-                if let Some(status)=child.try_wait().context("تعذر التحقق من انتهاء Gateway")? {
-                    anyhow::ensure!(status.success(),"تعذر تأكيد تنظيف Gateway؛ راجع gateway.log");
-                    break;
-                }
-                anyhow::ensure!(std::time::Instant::now()<deadline,
-                    "تعذر إيقاف Gateway طبيعياً ضمن المهلة؛ لم يُغلق Core");
-                std::thread::sleep(Duration::from_millis(50));
-            }
+    fn stop_gateway_for_full_exit(&mut self)->Result<&'static str> {
+        // Only called AFTER STOP, a verified flat MT5 portfolio, no pending
+        // broker orders and no unresolved durable intent. It must never be
+        // used as a shortcut around those conditions.
+        let mode=if let Some(child)=self.gateway.as_mut(){
+            let outcome=stop_owned_gateway(child,Duration::from_secs(12))?;
             self.gateway=None;
-        }
+            outcome
+        }else{"already_stopped"};
         // A gateway from an earlier Core may still own this account's lock.
-        // Never report complete shutdown while such an unknown owner exists.
+        // A stopped child is NOT enough; never certify full exit while any
+        // gateway holds the lock used by this exact configured data directory.
         let lock_path=self.dir.join("gateway.lock");
         if lock_path.exists(){
             let probe=OpenOptions::new().read(true).write(true).open(lock_path)?;
             probe.try_lock_exclusive().context("تعذر تأكيد توقف Gateway سابق؛ ما زال قفل Gateway مشغولاً")?;
             FileExt::unlock(&probe)?;
         }
-        Ok(())
+        Ok(mode)
     }
+
     fn tick(&mut self){let cfg=self.shared.lock().unwrap().config.clone();self.studio.set_learning_frozen(self.execution.learning_frozen());self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
     fn route(&mut self,method:&str,path:&str,body:&[u8])->Result<Value>{
         if path=="/v1/learning/control" {
@@ -710,14 +734,22 @@ impl Engine{
                 verify_safe_shutdown(&current,unresolved)?;
                 self.event("core_shutdown_requested",json!({"safe":true,"positions":0,"pending_orders":0}))?;
                 let barrier=lifecycle::ShutdownBarrier::begin(&self.dir)?;
-                if let Err(error)=self.stop_gateway_for_full_exit(){
-                    barrier.cancel().context("تعذر إلغاء علامة الخروج بعد رفض إيقاف Gateway")?;
-                    return Err(error);
+                let gateway_stop_mode=match self.stop_gateway_for_full_exit(){
+                    Ok(mode)=>mode,
+                    Err(error)=>{
+                        barrier.cancel().context("تعذر إلغاء علامة الخروج بعد رفض إيقاف Gateway")?;
+                        return Err(error);
+                    }
+                };
+                // Diagnostic SQLite logging must not strand an already
+                // stopped Gateway behind a live Core and an exit marker.
+                if let Err(error)=self.event("gateway_full_exit_stopped",json!({"mode":gateway_stop_mode})){
+                    eprintln!("Gateway full-exit audit log unavailable: {error}");
                 }
                 self.shutdown_barrier=Some(barrier);
                 self.backtests.cancel();self.evaluations.cancel();self.studio.cancel();
                 self.shutting_down=true;
-                Ok(json!({"ok":true,"safe":true,"gateway_stopped":true,"core_process":{"pid":std::process::id(),"instance_id":self.instance_id}}))
+                Ok(json!({"ok":true,"safe":true,"gateway_stopped":true,"gateway_stop_mode":gateway_stop_mode,"core_process":{"pid":std::process::id(),"instance_id":self.instance_id}}))
             },
             _=>bail!("Unknown API route")
         }
@@ -771,6 +803,41 @@ mod tests{
         let mut old=valid;old["version"]=json!("0.7.4");
         assert!(verify_core_identity(&old).is_err());
     }
+    // The ignored fixtures are launched as independent child processes using
+    // the current Rust test binary, without MetaTrader, Python or shells.
+    #[test]
+    #[ignore]
+    fn owned_gateway_hang_fixture(){
+        std::thread::sleep(Duration::from_secs(30));
+    }
+    #[test]
+    #[ignore]
+    fn owned_gateway_quick_fixture(){}
+
+    #[test]
+    fn full_exit_reaps_an_owned_hung_gateway_without_touching_other_processes(){
+        let executable=std::env::current_exe().unwrap();
+        let mut child=Command::new(executable)
+            .args(["--ignored","--exact","tests::owned_gateway_hang_fixture"])
+            .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null())
+            .spawn().unwrap();
+        let pid=child.id();
+        let mode=stop_owned_gateway(&mut child,Duration::from_millis(400)).unwrap();
+        assert_eq!(mode,"forced_after_grace_timeout");
+        assert!(child.try_wait().unwrap().is_some(),"owned Gateway PID {pid} remained alive");
+    }
+
+    #[test]
+    fn full_exit_reaps_a_clean_owned_gateway_without_forcing_it(){
+        let executable=std::env::current_exe().unwrap();
+        let mut child=Command::new(executable)
+            .args(["--ignored","--exact","tests::owned_gateway_quick_fixture"])
+            .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null())
+            .spawn().unwrap();
+        assert_eq!(stop_owned_gateway(&mut child,Duration::from_secs(5)).unwrap(),"graceful");
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
     #[test]
     fn full_exit_is_blocked_if_monitoring_or_account_is_unverified(){
         let mut s=Status::default();

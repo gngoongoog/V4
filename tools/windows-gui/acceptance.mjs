@@ -93,7 +93,32 @@ async function stopFixture(){
   child.kill();await until(()=>child.exitCode!==null||child.signalCode!==null,10000);
  }
 }
-async function exitSafely(){await page.getByRole('button',{name:'خروج كامل آمن',exact:true}).click();await page.getByRole('dialog',{name:'خروج كامل آمن'}).getByRole('button',{name:'طلب الخروج الآمن'}).click();await until(()=>app.exitCode!==null);await until(async()=>!await portOpen(18741)&&!await portOpen(port));browser=undefined;page=undefined}
+async function exitSafely({fromHeaderX=false}={}){
+ const pid=app.pid;
+ const before=await invoke('get_status');
+ const corePid=Number(before?.core_process?.pid);
+ assert(Number.isSafeInteger(corePid)&&corePid>0,
+  'Must know exact Core PID before claiming that full exit reaped it');
+ const open=fromHeaderX
+  ?page.getByRole('button',{name:'خيارات إغلاق التطبيق',exact:true})
+  :page.getByRole('button',{name:'خروج كامل آمن',exact:true});
+ await open.click();
+ const dialog=page.getByRole('dialog',{name:'خروج كامل آمن'});
+ await dialog.waitFor();
+ assert(await dialog.getByRole('button',{name:'إغلاق الواجهة فقط — إبقاء Core',exact:true}).isVisible(),
+  'Full exit must distinguish presentation-only close from stopping Core');
+ await dialog.getByRole('button',{name:'وقف الدخول والخروج الكامل',exact:true}).click();
+ await until(()=>app.exitCode!==null||app.signalCode!==null,45000);
+ assert.equal(app.exitCode,0,'Packaged application must exit cleanly on confirmed full exit');
+ await until(async()=>!await portOpen(18741)&&!await portOpen(port),15000);
+ // A dead TCP port does not prove that Core stopped. Inspect the child tree
+ // independently; this is an isolated hosted runner with an exact PID.
+ const live=spawnSync('powershell.exe',['-NoProfile','-Command',
+  `$core=Get-Process -Id ${corePid} -ErrorAction SilentlyContinue; $children=Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "braintrade-core|python" }; if($core -or $children){ @($core,$children) | Where-Object { $_ } | Select-Object Id,ProcessId,ProcessName,Name | ConvertTo-Json -Compress; exit 23 }`],
+  {encoding:'utf8',timeout:10000});
+ assert.equal(live.status,0,'Full exit left the exact Core PID or an owned Gateway alive: '+(live.stdout||live.stderr));
+ browser=undefined;page=undefined;
+}
 
 try{
  // Elevated Windows runners ignore environment-only overrides. Policies are
@@ -327,7 +352,7 @@ try{
   assert.equal(s.config.trading.mode,'sniper');assert.equal(s.config.trading.sniper_brain,'learner');assert.equal(s.commission_editor.amount,7);
  });
  await stopFixture();
- await check('final safe full exit',exitSafely);
+ await check('header X confirms full exit without leaving Core',()=>exitSafely({fromHeaderX:true}));
  await check('native staged restore waits for Core and applies on explicit relaunch',async()=>{
   await launch();await status();
   const backup=await invoke('backup_action',{action:'create'});

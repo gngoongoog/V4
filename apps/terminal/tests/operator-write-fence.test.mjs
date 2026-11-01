@@ -115,10 +115,31 @@ test('ui Core mutations are wired to a fence before sending and checking acknowl
   "<TradingSettingsOperations source={pageData} brokerPoint={status?.telemetry?.point} key={JSON.stringify([page,draftAccountKey,preview])}",
   "<ExecutionBindingOperations source={pageData} key={viewScope}",
   "<MicroCapitalOperations status={!preview&&feed.broker?status:null} key={contextKey}",
-  "<BacktestOperations key={viewScope}",
+  "<BacktestWorkspace key={viewScope}",
+   "onStart={r=>runBacktest('start',r)}",
  ])assert(ui.includes(marker),'missing safe writer/scope isolation: '+marker);
  const supervisor=fs.readFileSync(path.resolve(import.meta.dirname,'../src/enterprise-supervisor.tsx'),'utf8');
  assert(supervisor.includes('const observed=await onSave(settings)'),'supervisor must not bypass scoped parent mutation');
  assert(!supervisor.includes('await saveSupervisor('),'child must not send unmanaged IPC mutations');
  assert(ui.includes('if(!fresh)sendNotice('));
+});
+
+test('historical study commands require an explicit Core acknowledgement and return failures to the workspace',()=>{
+ const ui=fs.readFileSync(path.resolve(import.meta.dirname,'../src/terminal.tsx'),'utf8');
+ const start=ui.indexOf(' const runBacktest=async(');
+ const end=ui.indexOf(' // Keep every new page anchored',start);
+ assert(start>=0&&end>start,'backtest handler must remain inspectable');
+ const writer=ui.slice(start,end);
+ assert.match(writer,/if\(!mutation\)throw new Error\(/,'overlapping write cannot be mistaken for an accepted request');
+ assert.match(writer,/const reply=unwrap\(await backtestAction\(action,request\)\)/);
+ assert.match(writer,/if\(reply\.ok!==true\)throw new Error\(/,'Core must confirm receipt before any success');
+ assert.match(writer,/throw e; \/\/ The child workspace must not display a false success notice\./,
+  'the parent must propagate a rejected study command to the child');
+ const study=fs.readFileSync(path.resolve(import.meta.dirname,'../src/study-workspaces.tsx'),'utf8');
+ const child=study.slice(study.indexOf('export function BacktestWorkspace'),study.indexOf('export function EvaluationWorkspace'));
+ assert.match(child,/try\{await onStart\(/,'start action must wait for Core');
+ assert.match(child,/catch\(e\)\{setError\(String\(e\)\)\}/,'start rejection must be visible');
+ assert.match(child,/try\{\s*await onCancel\(\);[\s\S]*?\}catch\(e\)\{\s*setError\(/,
+  'cancel rejection must be handled without unhandled promises');
+ assert.match(child,/onClick=\{\(\)=>void cancelBacktest\(\)\}/,'Cancel must use the guarded handler');
 });

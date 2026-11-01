@@ -37,10 +37,12 @@ console.log('PASS: UI-16 real-data System Health replaces robot across sidebar a
 // must match the connected broker + freshly queried page generation.
 assert.match(terminal,/const contextKey=`[^`]*account_trade_mode/);
 assert.match(terminal,/const contextKey=`[^`]*currency/);
-assert.match(terminal,/if\(savedContext!==context\)/);
+assert.match(terminal,/view\.context!==context\|\|view\.account_matches!==true/);
 assert.match(terminal,/account_trade_mode!==\(t\.demo\?0:2\)/);
 assert.match(terminal,/\|\|status\.requested_run/);
-console.log('PASS: P0-G context scoped dashboard panels and protected brain controls');
+assert.match(terminal,/confirmed\.advisor!==advisor\|\|confirmed\.paper!==paper/);
+assert.match(terminal,/rows\.some\(r=>unwrap\(unwrap\(r\)\.control\)\.paper!==paper\)/);
+console.log('PASS: P0-G strict broker-scoped toggles and verified Core readback');
 
 // P0-H: a late IPC response cannot overwrite a different page/account.
 assert.match(terminal,/const viewGeneration=useRef\(new PanelReadFence\(\)\)/);

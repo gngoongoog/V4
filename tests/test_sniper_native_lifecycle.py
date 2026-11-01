@@ -100,6 +100,11 @@ class NativeSniperLifecycleTests(unittest.TestCase):
         started = time.monotonic()
         self.assertTrue(first.stop())
         self.assertLess(time.monotonic() - started, 1.5)
+        self.assertFalse(first.running, "Full exit may not retain a Native EA pipe worker")
+        self.assertIsNone(first._thread, "Stopped pipe must release its Python worker reference")
+        self.assertFalse(first.mailbox.connected, "Closing Gateway must invalidate old tick evidence")
+        with self.assertRaises(OSError, msg="The stopped Gateway must release its named-pipe endpoint"):
+            open(pipe_name, "wb", buffering=0)
 
         second = native._WindowsPipeServer("token-b", native.NativeTickMailbox(), pipe_name)
         second.start()
