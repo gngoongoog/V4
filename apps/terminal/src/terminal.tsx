@@ -202,6 +202,22 @@ export default function Terminal(){
  const showStartConfirm=approvalIsCurrent(approval,'start',contextKey)&&!preview&&feed.broker;
  const showStopConfirm=approvalIsCurrent(approval,'stop',contextKey)&&!preview;
  const showExitConfirm=approvalIsCurrent(approval,'exit',contextKey)&&!preview;
+ // Native Windows caption close / Alt+F4 must not silently leave a trading
+ // Core behind. It opens the same choice as the custom header X.
+ // Calling close_terminal through Tauri AppHandle exits intentionally; this
+ // listener only intercepts user Window.close requests.
+ useEffect(()=>{
+  if(preview||!hasTauri())return;
+  let active=true;
+  let unlisten:(()=>void)|null=null;
+  void getCurrentWindow().onCloseRequested(event=>{
+   event.preventDefault();
+   if(active)setApproval({action:'exit',scope:contextKey});
+  }).then(off=>{if(active)unlisten=off;else off()}).catch(e=>{
+   console.error('تعذر تثبيت نافذة تأكيد الإغلاق',e);
+  });
+  return()=>{active=false;unlisten?.()};
+ },[contextKey,preview]);
  const showSnapshotConfirm=Boolean(snapshotApproval&&snapshotApproval.scope===contextKey&&!preview);
  // Any page, broker-account or preview transition revokes unresolved manual reads.
  const viewGeneration=useRef(new PanelReadFence());
