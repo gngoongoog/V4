@@ -67,7 +67,7 @@ for(const x of [
 assert(bridge.includes("invoke('read_trade_history',{offset,limit})"));
 assert(native.includes('open_client()?.post("/v1/execution/trades",json!({"offset":offset,"limit":limit}))'));
 assert(native.includes('offset<=1_000_000 && (1..=100).contains(&limit)'));
-assert(native.includes('get_status, read_panel, read_trade_history, execute_control'));
+assert(/get_status, read_panel, (?:hvn_research_request, )?read_trade_history, execute_control/.test(native),'Tauri must retain the existing pagination and control command handlers');;
 assert(core.includes('"context":context,"total":total'));
 assert(terminal.includes('<TradeJournalOperations key={viewScope}'));
 assert(terminal.includes("page==='journal'?"));
