@@ -54,6 +54,18 @@ class HvnResearch(unittest.TestCase):
         self.assertAlmostEqual(result["total_activity"], 225.0)
         self.assertFalse(result["exchange_wide"])
 
+    def test_quote_only_flags_cannot_recount_old_last_trade_volume(self):
+        rows = quotes()
+        for row in rows:
+            row["last"] = 2000.20
+            row["volume_real"] = 500
+            row["flags"] = 6  # Only bid/ask changed; old Last is carried forward.
+        result = calculate_hvn(rows, **KW)
+        self.assertTrue(result["available"], result)
+        self.assertEqual(result["source"], "mt5_quote_tick_activity")
+        self.assertEqual(result["observations"], len(rows))
+        self.assertEqual(result["total_activity"], len(rows))
+
     def test_illiquid_or_missing_or_bad_contract_has_no_nodes(self):
         for ticks in [[],quotes(22),None]:
             result=calculate_hvn(ticks, **KW)
