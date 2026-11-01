@@ -3,6 +3,10 @@ import type {Status,StreamEvent} from './types';
 export const hasTauri=()=>typeof window!=='undefined'&&('__TAURI_INTERNALS__' in window);
 export async function coreStatus():Promise<Status>{return invoke<Status>('get_status')}
 export async function readPanel(route:string):Promise<unknown>{return invoke('read_panel',{route})}
+export async function requestHvnResearch(windowMs:number):Promise<unknown>{
+ if(!Number.isSafeInteger(windowMs)||windowMs<60000||windowMs>900000)throw new Error('HVN history window out of bounds');
+ return invoke('hvn_research_request',{windowMs});
+}
 // Exact read-only native pagination: no arbitrary HTTP methods or destinations.
 export async function readTradeHistory(offset:number,limit:number):Promise<unknown>{
  if(!Number.isSafeInteger(offset)||offset<0||offset>1000000||
