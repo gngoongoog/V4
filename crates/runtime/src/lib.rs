@@ -741,7 +741,11 @@ impl Engine{
                         return Err(error);
                     }
                 };
-                self.event("gateway_full_exit_stopped",json!({"mode":gateway_stop_mode}))?;
+                // Diagnostic SQLite logging must not strand an already
+                // stopped Gateway behind a live Core and an exit marker.
+                if let Err(error)=self.event("gateway_full_exit_stopped",json!({"mode":gateway_stop_mode})){
+                    eprintln!("Gateway full-exit audit log unavailable: {error}");
+                }
                 self.shutdown_barrier=Some(barrier);
                 self.backtests.cancel();self.evaluations.cancel();self.studio.cancel();
                 self.shutting_down=true;
