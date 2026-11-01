@@ -80,8 +80,27 @@ fn confirm_full_exit(state:&AppLifecycle)->Result<Value,String>{
     let second=client.get("/v1/status").map_err(|e|e.to_string())?;
     if process_identity(&second)?!=(pid,instance.clone()) {return Err("تغيرت جلسة Core؛ أعد طلب الخروج".into());}
     // All auto-start paths acquire this same gate. Set the flag before the
-    // request, not after the acknowledgement, to close the respawn race.
+    // first control request, not after it, to close the respawn race.
     state.stopping.store(true,Ordering::SeqCst);
+    // Full exit is a single confirmed operator action: STOP new entries first.
+    // This does NOT close any position or override Core's independent flat
+    // portfolio, pending-intent and recent-broker-evidence shutdown checks.
+    if second["requested_run"]==true {
+        match client.checked_post("/v1/stop",json!({}),Duration::from_secs(8)) {
+            Ok(stopped)=>{
+                if stopped["requested_run"]!=false {
+                    return Err("لم يؤكد Core وقف الدخول؛ لن نكمل الخروج الكامل".into());
+                }
+            }
+            Err(CheckedPostError::Rejected(reason))=>{
+                state.stopping.store(false,Ordering::SeqCst);
+                return Err(format!("تعذر وقف الدخول قبل الخروج الكامل: {reason}"));
+            }
+            Err(CheckedPostError::Uncertain(reason))=>{
+                return Err(format!("نتيجة STOP غير مؤكدة؛ لن نعيد تشغيل Core تلقائياً: {reason}"));
+            }
+        }
+    }
     let result=match client.shutdown(&instance){
         Ok(value)=>value,
         Err(ShutdownError::Rejected(reason))=>{
