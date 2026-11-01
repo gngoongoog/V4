@@ -73,7 +73,7 @@ export function HvnWorkspace({status,connected,preview,disabled}:{
     pending?'طلب البحث قيد التنفيذ لدى Gateway':'البحث منفصل تماماً عن تنفيذ الصفقات وإدارة العقول الحالية'}</p>}
   {error&&<p role="alert" className="hvn-error">{error}</p>}
   {notice&&<p role="status" className="hvn-caption">{notice}</p>}
-  {!preview&&data?.note&&<p className="hvn-caption">{String(data.note)}</p>}
+  {!preview&&typeof data?.note==='string'&&data.note.length>0&&<p className="hvn-caption">{data.note}</p>}
   {!preview&&report.available===false&&connected&&
    <p className="hvn-warning">لا توجد عقد صالحة: {String(report.reason||'البيانات غير كافية')}</p>}
   {resultAvailable&&contextVerified?
