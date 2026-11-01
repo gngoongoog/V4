@@ -624,6 +624,18 @@ def main():
 
     def background_work():
         try:
+            # Explicit STOP + flat-account research. This consumes no automatic
+            # full-market tick scans and is never part of Sniper OnTick/pulse.
+            hvn_job = api('/v1/gateway/hvn/request').get('job')
+            if hvn_job is not None:
+                from hvn_research import collect_mt5_hvn
+                report = collect_mt5_hvn(
+                    mt5, server=hvn_job['server'], login=hvn_job['login'],
+                    symbol=hvn_job['symbol'], currency=hvn_job['currency'],
+                    now_ms=hvn_job['now_ms'], window_ms=hvn_job['window_ms'])
+                api('/v1/gateway/hvn/result',
+                    {'id':hvn_job['id'], 'report':report})
+                return
             job = api('/v1/gateway/history/request').get('job')
             if job is not None:
                 api('/v1/gateway/history/chunk', collect_history_chunk(mt5, job))
