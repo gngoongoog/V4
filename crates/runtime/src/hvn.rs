@@ -1,0 +1,180 @@
+//! Read-only, account-bound MT5 tick HVN research handoff.
+//! No broker orders, magic identity, learning weight or trading signals.
+use anyhow::{anyhow,ensure,Result};
+use braintrade_domain::Status;
+use serde_json::{json,Value};
+use uuid::Uuid;
+
+const EXPIRY_MS:u64=25_000;
+#[derive(Clone)]
+struct Pending{
+    id:String,
+    context:String,
+    requested_ms:u64,
+    window_ms:u64,
+    dispatched:bool,
+}
+#[derive(Default)]
+pub struct Service{
+    pending:Option<Pending>,
+    last:Option<(String,u64,Value)>,
+    note:String,
+}
+fn context(s:&Status)->Option<String>{
+    let t=s.telemetry.as_ref()?;
+    if !s.gateway_fresh || !t.connected || t.login==0 ||
+        t.server.is_empty() || t.symbol.is_empty() || t.currency.is_empty(){return None;}
+    Some(serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)).ok()?)
+}
+fn valid_result(report:&Value, pending:&Pending, s:&Status)->Result<()>{
+    let t=s.telemetry.as_ref().ok_or_else(||anyhow!("Broker unavailable"))?;
+    ensure!(report["read_only"]==true && report["trade_authorized"]==false &&
+        report["broker_only"]==true && report["exchange_wide"]==false,
+        "HVN provenance and no-trade contract mismatch");
+    let id=&report["identity"];
+    ensure!(id["server"]==t.server && id["login"]==t.login &&
+        id["symbol"]==t.symbol && id["currency"]==t.currency,
+        "MT5 account identity changed during HVN calculation");
+    ensure!(report["window_ms"]==pending.window_ms,"HVN window mismatch");
+    let source=report["source"].as_str().unwrap_or("");
+    ensure!(matches!(source,"mt5_quote_tick_activity"|"mt5_broker_trade_volume_real"|"none"),
+        "Unsupported HVN source");
+    let available=report["available"].as_bool().ok_or_else(||anyhow!("HVN availability missing"))?;
+    if available {
+        ensure!(source!="none","Available HVN cannot have no source");
+        let nodes=report["nodes"].as_array().ok_or_else(||anyhow!("HVN nodes missing"))?;
+        ensure!(!nodes.is_empty() && nodes.len()<=8, "HVN node count invalid");
+        ensure!(report["observed_to_ms"].as_u64().is_some_and(|v|v<=pending.requested_ms),
+            "HVN used future ticks");
+        ensure!(report["observed_from_ms"].as_u64().is_some_and(|v|
+            v<=report["observed_to_ms"].as_u64().unwrap_or(0)),"HVN source timestamps invalid");
+        for node in nodes {
+            let price=node["price"].as_f64().unwrap_or(0.);
+            let amount=node["activity"].as_f64().unwrap_or(0.);
+            let share=node["share"].as_f64().unwrap_or(-1.);
+            ensure!(price.is_finite()&&price>0.&&amount.is_finite()&&amount>0.
+                &&share.is_finite()&&(0.0..=1.0).contains(&share),
+                "HVN node has invalid or fabricated values");
+        }
+    } else {
+        ensure!(source=="none" && report["nodes"].as_array().is_some_and(|v|v.is_empty()),
+            "Unavailable HVN must contain no nodes and no source");
+    }
+    Ok(())
+}
+impl Service{
+    pub fn pending(&self,now:u64)->bool {
+        self.pending.as_ref().is_some_and(|p|now.saturating_sub(p.requested_ms)<=EXPIRY_MS)
+    }
+    pub fn route(&mut self,method:&str,path:&str,body:&[u8],s:&Status,now:u64)->Result<Value>{
+        if self.pending.as_ref().is_some_and(|p|now.saturating_sub(p.requested_ms)>EXPIRY_MS){
+            self.pending=None; self.note="مهلة قياس HVN انتهت دون وصول رد مطابق".into();
+        }
+        let ctx=context(s);
+        if self.pending.as_ref().is_some_and(|p|ctx.as_ref()!=Some(&p.context)){
+            self.pending=None;self.note="تغيّر حساب MT5 أو انقطع الاتصال أثناء قياس HVN".into();
+        }
+        match(method,path){
+            ("GET","/v1/hvn")=>{
+                let report=self.last.as_ref().and_then(|(k,_,r)|
+                    if ctx.as_ref()==Some(k){Some(r.clone())}else{None});
+                Ok(json!({"schema":"hvn-research-v1","read_only":true,
+                    "trade_authorized":false,"connected":ctx.is_some(),
+                    "pending":self.pending.is_some(),
+                    "report":report,"note":self.note}))
+            }
+            ("POST","/v1/hvn/request")=>{
+                ensure!(!s.requested_run,"أوقف الدخول STOP قبل قراءة تيكات HVN البحثية");
+                let t=s.telemetry.as_ref().ok_or_else(||anyhow!("MT5 not connected"))?;
+                let key=ctx.ok_or_else(||anyhow!("MT5 account needs verified fresh identity"))?;
+                ensure!(t.positions.is_empty() && t.pending_orders==0,
+                    "HVN research requires a flat, order-free broker account");
+                ensure!(self.pending.is_none(),"HVN research request already pending");
+                let v:Value=serde_json::from_slice(body)?;
+                let window=v["window_ms"].as_u64().unwrap_or(600_000);
+                ensure!((60_000..=900_000).contains(&window),"HVN window must be 1 to 15 minutes");
+                let id=Uuid::new_v4().to_string();
+                self.pending=Some(Pending{id:id.clone(),context:key,requested_ms:now,
+                    window_ms:window,dispatched:false});
+                self.note="تم طلب قراءة Tick تاريخية من وسيط MT5؛ بحث فقط بلا أوامر".into();
+                Ok(json!({"queued":true,"id":id,"read_only":true,"trade_authorized":false}))
+            }
+            ("GET","/v1/gateway/hvn/request")=>{
+                let Some(p)=self.pending.as_mut() else{return Ok(json!({"job":null}));};
+                if p.dispatched || s.requested_run {return Ok(json!({"job":null}));}
+                let t=s.telemetry.as_ref().ok_or_else(||anyhow!("MT5 not ready"))?;
+                p.dispatched=true;
+                Ok(json!({"job":{"id":p.id,"server":t.server,"login":t.login,
+                    "symbol":t.symbol,"currency":t.currency,"now_ms":p.requested_ms,
+                    "window_ms":p.window_ms},"read_only":true}))
+            }
+            ("POST","/v1/gateway/hvn/result")=>{
+                let pending=self.pending.as_ref().ok_or_else(||anyhow!("No outstanding HVN request"))?;
+                ensure!(pending.dispatched,"HVN job not yet dispatched");
+                ensure!(!s.requested_run && ctx.as_ref()==Some(&pending.context),
+                    "HVN result rejected after START, disconnect or account change");
+                let v:Value=serde_json::from_slice(body)?;
+                ensure!(v["id"].as_str()==Some(pending.id.as_str()),"HVN job ID mismatch");
+                let report=v.get("report").ok_or_else(||anyhow!("HVN report missing"))?;
+                valid_result(report,pending,s)?;
+                self.last=Some((pending.context.clone(),now,report.clone()));
+                self.pending=None;
+                self.note="استلم Core نتيجة بحث HVN المطابقة لهوية الوسيط، دون تحويلها إلى إشارة تداول".into();
+                Ok(json!({"ok":true,"read_only":true}))
+            }
+            _=>Err(anyhow!("Unknown HVN research route"))
+        }
+    }
+}
+#[cfg(test)]
+mod tests{
+    use super::*;
+    use braintrade_domain::Telemetry;
+    fn status()->Status{Status{gateway_fresh:true,requested_run:false,
+        telemetry:Some(Telemetry{connected:true,server:"Demo".into(),login:42,
+            currency:"USD".into(),symbol:"XAUUSDm".into(),..Default::default()}),
+        ..Default::default()}}
+    #[test]fn request_is_strictly_stopped_flat_broker_only(){
+        let mut h=Service::default();let now=10_000;
+        let mut s=status();s.requested_run=true;
+        assert!(h.route("POST","/v1/hvn/request",b"{}",&s,now).is_err());
+        s.requested_run=false;s.telemetry.as_mut().unwrap().pending_orders=1;
+        assert!(h.route("POST","/v1/hvn/request",b"{}",&s,now).is_err());
+        s.telemetry.as_mut().unwrap().pending_orders=0;
+        assert_eq!(h.route("POST","/v1/hvn/request",b"{}",&s,now).unwrap()["queued"],true);
+        assert!(h.pending(now));
+        assert!(h.route("POST","/v1/hvn/request",b"{}",&s,now).is_err());
+    }
+    #[test]fn account_change_and_future_nodes_never_enter_report(){
+        let now=100_000;let mut h=Service::default();let s=status();
+        let id=h.route("POST","/v1/hvn/request",b"{}",&s,now).unwrap()["id"].as_str().unwrap().to_string();
+        assert!(h.route("GET","/v1/gateway/hvn/request",b"",&s,now).unwrap()["job"].is_object());
+        let report=json!({"available":true,"read_only":true,"trade_authorized":false,
+            "broker_only":true,"exchange_wide":false,"source":"mt5_quote_tick_activity",
+            "window_ms":600000,"identity":{"server":"Demo","login":42,"currency":"USD","symbol":"XAUUSDm"},
+            "nodes":[{"price":2000.0,"activity":10.0,"share":0.2}],
+            "observed_from_ms":1000,"observed_to_ms":now+1});
+        let body=json!({"id":id,"report":report}).to_string();
+        assert!(h.route("POST","/v1/gateway/hvn/result",body.as_bytes(),&s,now).is_err());
+        assert!(h.route("GET","/v1/hvn",b"",&s,now).unwrap()["report"].is_null());
+        let mut other=s.clone();other.telemetry.as_mut().unwrap().login=99;
+        assert!(h.route("POST","/v1/gateway/hvn/result",body.as_bytes(),&other,now).is_err());
+        assert!(!h.pending(now));
+    }
+    #[test]fn success_is_read_only_and_context_scoped(){
+        let now=100_000;let mut h=Service::default();let s=status();
+        let id=h.route("POST","/v1/hvn/request",b"{}",&s,now).unwrap()["id"].as_str().unwrap().to_string();
+        h.route("GET","/v1/gateway/hvn/request",b"",&s,now).unwrap();
+        let report=json!({"available":true,"read_only":true,"trade_authorized":false,
+            "broker_only":true,"exchange_wide":false,"source":"mt5_quote_tick_activity",
+            "window_ms":600000,"identity":{"server":"Demo","login":42,"currency":"USD","symbol":"XAUUSDm"},
+            "nodes":[{"price":2000.0,"activity":10.0,"share":0.2}],
+            "observed_from_ms":1000,"observed_to_ms":now});
+        assert!(h.route("POST","/v1/gateway/hvn/result",json!({"id":id,"report":report}).to_string().as_bytes(),&s,now).is_ok());
+        let result=h.route("GET","/v1/hvn",b"",&s,now).unwrap();
+        assert_eq!(result["report"]["nodes"][0]["price"],2000.);
+        assert_eq!(result["trade_authorized"],false);
+        let mut other=s.clone();other.telemetry.as_mut().unwrap().symbol="XAUUSD".into();
+        assert!(h.route("GET","/v1/hvn",b"",&other,now).unwrap()["report"].is_null());
+    }
+}
