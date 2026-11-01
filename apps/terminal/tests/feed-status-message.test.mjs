@@ -57,3 +57,12 @@ test('dashboard uses evidence-based labels instead of cached status.message',()=
  assert.match(ui,/feed\.broker\?'Connected broker':'Not verified'/);
  assert.doesNotMatch(ui,/\{status\?\.message\|\|'بانتظار حالة Rust Core/);
 });
+
+test('every secondary page distinguishes Core/broker connectivity from an actual fresh quote',()=>{
+ const ui=readFileSync(fileURLToPath(new URL('../src/terminal.tsx',import.meta.url)),'utf8');
+ assert.match(ui,/MT5 ACCOUNT CONNECTED • QUOTES STALE/);
+ assert.match(ui,/RUST CORE ONLINE • BROKER UNVERIFIED/);
+ assert.match(ui,/RUST CORE OFFLINE/);
+ assert.match(ui,/<ConnectionLine feed=\{feed\} preview=\{preview\}\/>/);
+ assert.doesNotMatch(ui,/ConnectionLine connectedNow=\{trustworthy\}/);
+});
