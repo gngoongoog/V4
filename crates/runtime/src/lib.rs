@@ -396,6 +396,13 @@ impl Engine{
     fn tick(&mut self){let cfg=self.shared.lock().unwrap().config.clone();self.studio.set_learning_frozen(self.execution.learning_frozen());self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
     fn route(&mut self,method:&str,path:&str,body:&[u8])->Result<Value>{
         if path=="/v1/hvn" || path.starts_with("/v1/hvn/") || path.starts_with("/v1/gateway/hvn/") {
+            // Historical MT5 tick reads may delay Gateway's regular cycle.
+            // Never start one while *any* durable broker intent needs
+            // reconciliation, even when the visible position list is flat.
+            if method=="POST" && path=="/v1/hvn/request" {
+                anyhow::ensure!(!self.execution.pending(&self.db)?,
+                    "لا يمكن بدء HVN أثناء وجود أمر وسيط لم تُحسم تسويته");
+            }
             let status={let mut shared=self.shared.lock().unwrap();shared.status.refresh(now_ms());shared.status.clone()};
             return self.hvn.route(method,path,body,&status,now_ms());
         }
