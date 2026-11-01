@@ -157,3 +157,43 @@ def calculate_hvn(ticks, *, server, login, symbol, currency, tick_size,
         "note": note,
         "reason": "Read-only research evidence; not validated for MT5 order execution",
     }
+
+def collect_mt5_hvn(mt5, *, server, login, symbol, currency,
+                    now_ms, window_ms=600_000):
+    """One explicitly requested broker-scoped read; never in the Sniper hot path.
+
+    Caller owns the MT5 terminal and must ensure trading is unaffected.
+    This function does not initialize, change symbols, send orders or shut MT5.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    identity = {"server": server, "login": login,
+                "symbol": symbol, "currency": currency}
+    if not isinstance(now_ms, int) or now_ms <= 0 or not isinstance(window_ms, int) or not 60_000 <= window_ms <= MAX_WINDOW_MS:
+        return _unavailable("Invalid bounded MT5 tick research interval", identity, window_ms)
+
+    def same_account():
+        account = mt5.account_info()
+        return (account is not None
+                and getattr(account, "login", None) == login
+                and getattr(account, "server", None) == server
+                and getattr(account, "currency", None) == currency)
+
+    try:
+        if not same_account():
+            return _unavailable("MT5 account changed or identity mismatched", identity, window_ms)
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            return _unavailable("Broker symbol not found; check exact symbol suffix", identity, window_ms)
+        end = datetime.fromtimestamp(now_ms / 1000, timezone.utc)
+        start = end - timedelta(milliseconds=window_ms)
+        ticks = mt5.copy_ticks_range(symbol, start, end, mt5.COPY_TICKS_ALL)
+        if not same_account():
+            return _unavailable("MT5 account changed during tick history read", identity, window_ms)
+        return calculate_hvn(ticks, server=server, login=login, symbol=symbol,
+                             currency=currency,
+                             tick_size=getattr(info, "trade_tick_size", None),
+                             now_ms=now_ms, window_ms=window_ms)
+    except (AttributeError, OSError, RuntimeError, ValueError, TypeError, OverflowError) as error:
+        return _unavailable("MT5 tick history read failed: " + str(error)[:140],
+                            identity, window_ms)
