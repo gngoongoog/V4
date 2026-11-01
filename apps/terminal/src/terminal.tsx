@@ -16,7 +16,7 @@ import {BackupOperations,TradingSettingsOperations,BrainControlsOperations,Paper
 import {BacktestWorkspace,EvaluationWorkspace} from './study-workspaces';
 import {NewsOperatorWorkspace,CoreReadoutWorkspace,PositionsOperatorWorkspace} from './operator-pages';
 import {CorrelationWorkspace} from './correlation-workspace';
-import {feedEvidence} from './feed';
+import {connectionStatusMessage,feedEvidence} from './feed';
 import {diagnoseMarketQuote} from './market-quote-diagnosis';
 import {approvalIsCurrent,canConfirmStart} from './operator-approval';
 import type {OperatorApproval} from './operator-approval';
@@ -1222,7 +1222,7 @@ export default function Terminal(){
  </aside>
  <section className="main">
    <header className="account-strip">
-    <div className="account-item broker-select"><label>Broker</label><button className="select-look" onClick={()=>open('settings')}><span className="broker-mark">MT5</span><strong>{account?.connected?'Connected broker':'Not connected'}</strong><span>⌄</span></button></div>
+    <div className="account-item broker-select"><label>Broker</label><button className="select-look" onClick={()=>open('settings')}><span className="broker-mark">MT5</span><strong>{feed.broker?'Connected broker':'Not verified'}</strong><span>⌄</span></button></div>
     <div className="account-item server-select"><label>Server</label><button className="select-look" onClick={()=>open('execution')}><strong>{account?.server||'—'}</strong><span>⌄</span></button></div>
     <div className="account-item account-switch"><label>Account · MT5</label><div className="switch-buttons"><span aria-label="حساب الوسيط المتصل فعلياً">{account?(account.demo?'DEMO متصل':'REAL متصل'):'غير متصل'}</span><button type="button" title="فتح إعدادات الربط، وليس تبديل حساب MT5 مباشرة" onClick={()=>open('execution')}>إدارة الربط ↗</button></div></div>
     {[['Equity',money(accountStats?.equity,currency)],['Balance',money(accountStats?.balance,currency)],['Margin',money(accountStats?.margin,currency)],['Free Margin',money(accountStats?.margin_free,currency)],['Daily P&L',signed(accountStats?.today_net,currency)],['Quote Age',preview?'—':feed.quote?num(feed.quoteAgeMs,0)+' ms':'—']].map(([label,value])=><div key={label} className={'top-stat '+(label==='Daily P&L'?'daily':'')}><label>{label}</label><b>{value}</b></div>)}
@@ -1269,7 +1269,7 @@ export default function Terminal(){
       <section className="panel equity-history"><div className="panel-title"><b>أداء الحساب</b><small>رصيد • حقوق ملكية • تراجع</small></div><div className="equity-placeholder"><>لا يوجد منحنى Equity موثق من Core حتى الآن. <button onClick={()=>open('reports')}>عرض التقارير الفعلية</button></></div></section>
       <section className="panel trade-distribution"><div className="panel-title"><b>توزيع الصفقات</b><button onClick={()=>open('journal')}>السجلات ›</button></div><div className="distribution-body"><div className="large-donut"><strong>{preview?'—':brokerResults?.samples??'—'}</strong><small>{preview?'لا بيانات فعلية':'صفقات Demo مغلقة موثقة'}</small></div><div className="dist-legend"><span>رابحة <b className="teal">{preview?'—':brokerResults?.wins??'—'}</b></span><span>خاسرة <b className="red">{preview?'—':brokerResults?.losses??'—'}</b></span></div></div></section>
       <DashboardExecutionQuality status={!preview&&feed.broker?status:null} read={dashboardRead} scope={contextKey} now={Date.now()} preview={preview} onExecution={()=>open('execution')}/>
-      <section className="panel sys-alerts"><div className="panel-title"><b>إشعارات النظام</b><button onClick={()=>open('events')}>عرض الكل ›</button></div><div className="alerts-list"><div>{status?.message||'بانتظار حالة Rust Core...'}</div><div>{status?.telegram_status||'Telegram: غير متاح'}</div><div>{preview?'Design preview — sample signals':trustworthy?'MT5 snapshot verified':'لم يصل تحديث MT5 حديث'}</div></div></section>
+      <section className="panel sys-alerts"><div className="panel-title"><b>إشعارات النظام</b><button onClick={()=>open('events')}>عرض الكل ›</button></div><div className="alerts-list"><div>{connectionStatusMessage(status,feed,preview)}</div><div>{feed.core?status?.telegram_status||'Telegram: غير متاح':'Telegram: حالة Core غير مؤكدة'}</div><div>{preview?'Design preview — sample signals':trustworthy?'MT5 snapshot verified':'لم يصل تحديث MT5 حديث'}</div></div></section>
       <section className="panel risk-stats"><div className="panel-title"><b>مقاييس المخاطر</b></div><div className="risk-bars">{[['الهامش الحر',account?.margin_free,currency],['أقصى تراجع حالي',drawdown,'%'],['عدد المراكز المفتوحة',accountStats?positions.length:null,'مركز'],['المخاطرة المضبوطة للصفقة',safeConfig?unwrap(safeConfig.risk).risk_percent:null,'%']].map(([label,value,unit])=><div className="risk-line" key={String(label)}><span>{String(label)}</span><strong>{valid(value)?num(value,2)+' '+String(unit):'غير متاح من المصدر'}</strong></div>)}</div></section>
      </div>
     </div>:<section className={'subpage subpage-'+page}>
