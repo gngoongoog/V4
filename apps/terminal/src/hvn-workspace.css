@@ -1,0 +1,19 @@
+.hvn-workspace{display:grid;gap:15px;background:var(--panel-bg,rgba(120,120,120,.055));border:1px solid var(--border-color,rgba(130,130,130,.3));border-radius:15px;padding:20px;margin-bottom:20px;color:inherit}
+.hvn-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:15px}
+.hvn-head h3{font-size:19px;margin:5px 0}.hvn-head p{max-width:720px;line-height:1.7;margin:0;opacity:.8}
+.hvn-head small{font-size:11px;letter-spacing:1px;opacity:.7}
+.hvn-controls{display:flex;align-items:end;gap:10px;flex-wrap:wrap}.hvn-controls label{font-size:12px;display:grid;gap:6px}
+.hvn-controls select,.hvn-controls button{border-radius:8px;border:1px solid #8c9299;padding:10px;color:inherit;background:transparent;cursor:pointer}
+.hvn-controls button{background:#3f7770;color:white;border:0;font-weight:700}
+.hvn-controls button:disabled,.hvn-controls select:disabled{opacity:.5;cursor:not-allowed}
+.hvn-caption{font-size:13px;line-height:1.7;opacity:.8;margin:0}
+.hvn-warning{border-right:3px solid #ba8b41;padding:9px 12px;border-radius:3px;background:rgba(171,130,52,.10);font-size:12px;line-height:1.8;margin:0}
+.hvn-error{border-right:3px solid #b94b51;padding:10px;background:rgba(180,60,60,.09);font-size:13px;margin:0}
+.hvn-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.hvn-metrics>div,.hvn-grid{border:1px solid rgba(130,130,130,.26);border-radius:10px;padding:12px}
+.hvn-metrics>div{display:grid;gap:6px}.hvn-metrics span,.hvn-grid-head small{font-size:11px;opacity:.75}.hvn-metrics strong{font-size:13px;overflow-wrap:anywhere}
+.hvn-grid{display:grid;gap:10px}.hvn-grid-head{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.hvn-scroll{overflow-x:auto}.hvn-scroll table{width:100%;border-collapse:collapse;font-size:13px;min-width:350px}
+.hvn-scroll th,.hvn-scroll td{padding:10px;border-bottom:1px solid rgba(130,130,130,.2);text-align:right}
+.hvn-scroll th{opacity:.7}.hvn-empty{text-align:center;padding:25px 5px;opacity:.7;font-size:13px}
+@media(max-width:700px){.hvn-workspace{padding:12px}.hvn-head{align-items:stretch}.hvn-controls{width:100%}}
