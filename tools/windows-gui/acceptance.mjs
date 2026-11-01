@@ -95,6 +95,10 @@ async function stopFixture(){
 }
 async function exitSafely({fromHeaderX=false}={}){
  const pid=app.pid;
+ const before=await invoke('get_status');
+ const corePid=Number(before?.core_process?.pid);
+ assert(Number.isSafeInteger(corePid)&&corePid>0,
+  'Must know exact Core PID before claiming that full exit reaped it');
  const open=fromHeaderX
   ?page.getByRole('button',{name:'خيارات إغلاق التطبيق',exact:true})
   :page.getByRole('button',{name:'خروج كامل آمن',exact:true});
@@ -110,9 +114,9 @@ async function exitSafely({fromHeaderX=false}={}){
  // A dead TCP port does not prove that Core stopped. Inspect the child tree
  // independently; this is an isolated hosted runner with an exact PID.
  const live=spawnSync('powershell.exe',['-NoProfile','-Command',
-  `$p=Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "braintrade-core|python" }; if($p){$p | Select-Object ProcessId,Name | ConvertTo-Json -Compress; exit 23}`],
+  `$core=Get-Process -Id ${corePid} -ErrorAction SilentlyContinue; $children=Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "braintrade-core|python" }; if($core -or $children){ @($core,$children) | Where-Object { $_ } | Select-Object Id,ProcessId,ProcessName,Name | ConvertTo-Json -Compress; exit 23 }`],
   {encoding:'utf8',timeout:10000});
- assert.equal(live.status,0,'Full exit left owned Core/Gateway children alive: '+(live.stdout||live.stderr));
+ assert.equal(live.status,0,'Full exit left the exact Core PID or an owned Gateway alive: '+(live.stdout||live.stderr));
  browser=undefined;page=undefined;
 }
 
