@@ -124,6 +124,9 @@ pub fn enrich(value:&mut Value,db:&Connection,key:&str,mode:TradingMode,account_
     let activity_key=account_key(key,account_mode);
     value["trading_mode"]=json!(mode);
     value["activity_note"]=json!("الإشارات: رصد جاهزية بعينة واحدة/ثانية مع حذف تكرار مفتاح الإشارة. ليست عدداً لكل نبضة سعر ولا أوامر منفذة. الإحصاءات أدناه للحساب والرمز والوضع الحالي فقط.");
+    let mut decision_eligible=0u64;
+    let mut paper_enabled=0u64;
+    let mut visible_secondary=0u64;
     for b in value["brains"].as_array_mut().into_iter().flatten() {
         let id=b["config"]["id"].as_str().unwrap_or("").to_owned();
         let control=controls.get(&id).copied().unwrap_or_default();
@@ -134,6 +137,11 @@ pub fn enrich(value:&mut Value,db:&Connection,key:&str,mode:TradingMode,account_
         b["decision_participation"]=json!({"status":status,"reason":reason,
             "eligible_for_mode_decision":eligible,
             "note":"أهلية المشاركة ليست إشارة جاهزة أو صفقة وسيط أو تدريباً مثبتاً"});
+        if id!="system" {
+            visible_secondary+=1;
+            if eligible==Some(true) {decision_eligible+=1;}
+            if control.paper {paper_enabled+=1;}
+        }
         let activity:Option<(u64,u64,u64)>=db.query_row("SELECT checks,signals,last_ms FROM brain_activity WHERE context=?1 AND mode=?2 AND brain=?3",params![activity_key,mode_key(mode),id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
         let (checks,signals,last)=activity.unwrap_or_default();
         b["activity"]=json!({"checks":checks,"signals":signals,"last_ms":last});
@@ -160,6 +168,28 @@ pub fn enrich(value:&mut Value,db:&Connection,key:&str,mode:TradingMode,account_
         let (orders,fills):(u64,u64)=db.query_row("SELECT COUNT(*),COALESCE(SUM(CASE WHEN CAST(json_extract(result,'$.deal') AS INTEGER)>0 THEN 1 ELSE 0 END),0) FROM broker_commands WHERE context=?1 AND kind='open' AND json_extract(payload,'$.trading_mode')=?2 AND COALESCE(json_extract(payload,'$.signal.coordination.selection.brain'),brain)=?3",params![key,serde_json::to_value(mode)?.as_str().unwrap(),id],|r|Ok((r.get(0)?,r.get(1)?)))?;
         b["attributed_orders"]=json!({"requested":orders,"fill_acknowledged":fills});
     }
+    let issue=if selected_owner.is_none(){
+        "هوية المنفّذ غير موثقة؛ لا نعرض جاهزية عقول"
+    }else if selected_owner.as_deref()!=Some("system"){
+        "وضع SOLO: العقل المنفرد فقط يملك فتح الصفقات؛ مشاركة المستشارين لا تتحكم به"
+    }else if mode==TradingMode::Expert && decision_eligible==0 {
+        "لا يوجد مستشار مؤهل لتصويت Expert؛ لن يكون هناك قرار دخول من إجماع العقول"
+    }else if mode==TradingMode::Sniper && sniper_selected==Some(true) && decision_eligible==0 {
+        "القناص المتعلّم مختار لكن مشاركته غير مؤهلة؛ لن يفتح الصفقات عبر Learner"
+    }else if matches!(mode,TradingMode::Scalping|TradingMode::Swing){
+        "Scalping/Swing يعملان بإشارة الوضع الرئيسي؛ المستشارون تشخيصيون ولا يغيّرون الإشارة"
+    }else if mode==TradingMode::Sniper && sniper_selected==Some(false){
+        "القناص الكلاسيكي هو مصدر إشارة Sniper؛ العقول الفرعية تشخيصية"
+    }else{
+        "أهلية المشاركة مضبوطة؛ هذا ليس تأكيداً لجاهزية إشارة أو تنفيذ MT5"
+    };
+    value["mode_participation_summary"]=json!({
+        "mode":mode,"selected_owner":selected_owner,
+        "secondary_brains":visible_secondary,"eligible_for_decision":decision_eligible,
+        "paper_enabled":paper_enabled,
+        "source":"current_broker_account_mode_and_core_controls",
+        "no_pnl_claim":true,"note":issue
+    });
     Ok(())
 }
 #[cfg(test)] mod tests {
