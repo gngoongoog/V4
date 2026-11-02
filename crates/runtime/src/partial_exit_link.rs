@@ -201,7 +201,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
 mod tests{
     use super::*;
     use braintrade_domain::Position;
-    fn t()->Telemetry{
+    fn sample_telemetry()->Telemetry{
         Telemetry{connected:true,demo:true,account_trade_mode:Some(0),login:222,
             server:"DemoA".into(),currency:"USD".into(),symbol:"XAUUSDm".into(),
             volume_min:Some(0.01),volume_step:Some(0.01),volume_max:Some(100.),
@@ -220,7 +220,7 @@ mod tests{
                 brain TEXT,payload TEXT,PRIMARY KEY(context,ticket));
             CREATE TABLE broker_history_sync(context TEXT,target TEXT,until_ms INTEGER,
                 synced_ms INTEGER,PRIMARY KEY(context,target));").unwrap();
-        let tt=t();
+        let tt=sample_telemetry();
         crate::partial_exit_ledger::observe(&d,&tt,"demo",100).unwrap();
         crate::partial_exit_stage::observe(&d,&tt,"demo",100).unwrap();
         d
@@ -253,7 +253,7 @@ mod tests{
     }
     #[test]
     fn exact_original_command_and_mt5_order_and_deals_can_be_audited_without_executing(){
-        let d=db();let t=t();
+        let d=db();let t=sample_telemetry();
         assert_eq!(e(&d,&t)["state"],"no_core_stage_command");
         seed(&d,&t);
         let x=e(&d,&t);
@@ -266,7 +266,7 @@ mod tests{
     }
     #[test]
     fn ack_only_wrong_order_or_missing_deal_cannot_verify_stage(){
-        let d=db();let t=t();seed(&d,&t);
+        let d=db();let t=sample_telemetry();seed(&d,&t);
         d.execute("UPDATE broker_commands SET result=json_set(result,'$.recovered_from_history',false)",[]).unwrap();
         assert_eq!(e(&d,&t)["state"],"gateway_history_proof_missing");
         d.execute("UPDATE broker_commands SET result=json_set(result,'$.recovered_from_history',true)",[]).unwrap();
@@ -277,7 +277,7 @@ mod tests{
     }
     #[test]
     fn altered_core_command_or_competing_command_cannot_claim_tp(){
-        let d=db();let t=t();seed(&d,&t);
+        let d=db();let t=sample_telemetry();seed(&d,&t);
         let original:String=d.query_row("SELECT payload FROM broker_commands",[],|r|r.get(0)).unwrap();
         d.execute("UPDATE broker_commands SET payload=json_set(payload,'$.lots',0.06)",[]).unwrap();
         assert_eq!(e(&d,&t)["state"],"command_identity_mismatch");
@@ -290,7 +290,7 @@ mod tests{
     }
     #[test]
     fn broker_volume_and_duplicate_ticket_proof_are_not_inferred(){
-        let d=db();let t=t();seed(&d,&t);
+        let d=db();let t=sample_telemetry();seed(&d,&t);
         d.execute("UPDATE broker_commands SET result=json_set(result,'$.deals',json_array(901,901))",[]).unwrap();
         assert_eq!(e(&d,&t)["state"],"duplicate_gateway_deal_ticket");
         d.execute("UPDATE broker_commands SET result=json_set(result,'$.deals',json_array(901))",[]).unwrap();
@@ -299,12 +299,12 @@ mod tests{
     }
     #[test]
     fn foreign_account_or_real_mode_does_not_inherit_stage_proof(){
-        let d=db();let mut t=t();seed(&d,&t);
+        let d=db();let mut t=sample_telemetry();seed(&d,&t);
         t.login+=1;
         assert!(report(&d,&t,"demo").unwrap()["rows"].as_array().unwrap().is_empty());
         t.connected=false;
         assert_eq!(report(&d,&t,"demo").unwrap()["status"],"unverified_account");
-        t=t();
+        t=sample_telemetry();
         t.demo=false;t.account_trade_mode=Some(2);
         assert!(report(&d,&t,"live").unwrap()["rows"].as_array().unwrap().is_empty());
     }
