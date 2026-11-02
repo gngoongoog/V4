@@ -23,6 +23,16 @@ assert.match(hvn,/t\.positions\.is_empty\(\) && t\.pending_orders==0/);
 assert.match(hvn,/trade_authorized.*false/s);
 assert.match(hvn,/report\["observed_to_ms"\]/);
 assert.match(hvn,/"report_age_ms":age_ms,"report_stale":stale/,'Core must expose actual observed tick age');
+assert.match(py,/"trade_events_observed": len\(trades\)/,'Trade counts must remain distinct');
+assert.match(py,/"quote_events_observed": len\(quotes\)/,'Quote counts must remain distinct');
+assert.match(py,/if quote_change:/,'Mixed trade-and-quote ticks must not lose quote updates');
+assert.doesNotMatch(py,/elif quote_change:/,'Quote changes must be counted independently');
+assert.match(hvn,/HVN selected observations disagree with source-specific evidence/,
+  'Core must reject inconsistent source-specific counts');
+assert.match(hvn,/HVN node activity\/share cannot be reconciled with source total/,
+  'Core must reject fabricated HVN node shares');
+assert.match(workspace,/report\.trade_events_observed/);
+assert.match(workspace,/report\.quote_events_observed/);
 assert.match(workspace,/reportStale&&<p role="status"/,'Outdated source must be visibly identified');
 assert.match(workspace,/pending&&<p role="status"/,'In-progress read must distinguish older cached research');
 assert.match(hvn,/ctx\.as_ref\(\)!=Some\(&pending\.context\)/,'Wrong-account HVN result must be discarded, never credited');
