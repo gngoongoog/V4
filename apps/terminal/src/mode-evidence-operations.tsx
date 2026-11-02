@@ -5,6 +5,13 @@ const labels:Record<string,string>={
  sniper:'القناص Sniper',scalping:'سكالبينغ Scalping',
  swing:'السوينغ Swing',expert:'الخبير Expert'
 };
+const modes=['sniper','scalping','swing','expert'];
+const shadowState:Record<string,string>={
+ tick_native_not_supported:'يتطلب فحص تيكات القناص؛ لا نختلق تدريب شموع',
+ no_prospective_samples:'لا توجد عينات Forward مسجلة',
+ recent_historical_observation:'عينات بحثية سابقة حديثة',
+ historical_observation_stale:'عينات بحثية سابقة قديمة'
+};
 const problems:Record<string,string>={
  cross_mode_position_collision:'صفقة منسوبة لأكثر من وضع',
  malformed_account_broker_evidence:'سجل وسيط تالف',
@@ -18,6 +25,20 @@ export function ModeEvidenceOperations({status,report,disabled,onRefresh}:{
  status:Status|null;report:unknown;disabled:boolean;onRefresh:()=>void;
 }){
  const view=fourModeObservation(status,report,Date.now());
+ const raw=report!==null&&typeof report==='object'&&!Array.isArray(report)
+  ?report as Record<string,unknown>:{};
+ const shadow=raw.inactive_forward!==null&&typeof raw.inactive_forward==='object'&&!Array.isArray(raw.inactive_forward)
+  ?raw.inactive_forward as Record<string,unknown>:{};
+ const shadowRows=view.available&&shadow.source==='prospective_inactive_mode_candle_forward_only'&&
+  shadow.broker_orders===false&&shadow.can_promote_to_live===false&&Array.isArray(shadow.modes)
+  ?shadow.modes.filter((entry:unknown)=>{
+   if(entry===null||typeof entry!=='object'||Array.isArray(entry))return false;
+   const r=entry as Record<string,unknown>;
+   return modes.includes(String(r.mode))&&r.broker_orders===false&&r.demo_broker_fills===false&&
+    r.independent_frozen_oos===false&&typeof r.samples==='number'&&Number.isInteger(r.samples)&&r.samples>=0&&
+    typeof r.scored_after_future_bars==='number'&&Number.isInteger(r.scored_after_future_bars)&&
+    r.scored_after_future_bars>=0&&r.scored_after_future_bars<=r.samples;
+  }) as Record<string,unknown>[]:[];
  return <section className="operator-card" aria-label="Four trading mode broker evidence">
   <h3>أدلة الأوضاع الأربعة — إغلاقات MT5 Demo بعد التكاليف</h3>
   <p>تقرير المقارنة هذا يقرأ صفقات Demo المصالحة والمنسوبة للمنسق الرئيسي فقط؛
@@ -40,6 +61,21 @@ export function ModeEvidenceOperations({status,report,disabled,onRefresh}:{
     </tr>)}</tbody>
    </table></div>
   </div>:<p className="safe-note" role="status">{view.reason}</p>}
+  {view.available&&<div>
+   <h4>مراقبة Forward للأوضاع غير النشطة — بدون صفقات MT5</h4>
+   <p className="safe-note">هذه عينات تجريبية من الشموع المكتملة لحساب Demo المطابق، تُقيّم بعد وصول شموع لاحقة.
+      لا تُضاف لإغلاقات الوسيط، ولا تمثل تعلّم Sniper بالتيك، ولا اختبار OOS مجمداً.
+      لا تُنتج أوامر تداول أو تفويض تشغيل REAL.</p>
+   {shadowRows.length===4?<div className="table-scroll"><table>
+    <thead><tr>{['الوضع','العينات المستقبلية','نضج تقييمها','الحالة'].map(x=><th key={x}>{x}</th>)}</tr></thead>
+    <tbody>{shadowRows.map(row=><tr key={String(row.mode)}>
+     <td>{labels[String(row.mode)]||String(row.mode)}</td>
+     <td>{Number(row.samples)}</td>
+     <td>{Number(row.scored_after_future_bars)}</td>
+     <td>{shadowState[String(row.status)]||'غير مؤكدة'}</td>
+    </tr>)}</tbody>
+   </table></div>:<p className="safe-note">لا تتوفر بيانات Forward موثقة للأوضاع غير النشطة من Core بعد.</p>}
+  </div>}
   <p className="safe-note">عرض كل وضع لا يزيد عن أحدث 240 عينة موثقة. حتى 30 صفقة لا تثبت الأفضلية المستقبلية، والمقارنة بين الأوضاع ليست متكافئة زمنياً أو في ظروف السوق إلا بتجربة مستقلة مجمدة.</p>
   <div className="quick-ops"><button type="button" disabled={disabled} onClick={onRefresh}>تحديث أدلة الأوضاع من Rust Core</button></div>
  </section>;
