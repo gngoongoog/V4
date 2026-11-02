@@ -51,6 +51,30 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
   dealAudit.target===(t?.demo?'demo':'live')&&dealAudit.read_only===true&&
   dealAudit.orders_enabled===false&&dealAudit.tp_stage_execution_supported===false;
  const dealRows=dealAuditBound&&Array.isArray(dealAudit.rows)?dealAudit.rows.slice(0,25).map(object):[];
+ const commandLinks=object(view.partial_exit_command_links);
+ const commandLinksBound=verified&&commandLinks.schema==='partial-exit-stage-command-links-v1'&&
+  commandLinks.status==='broker_stage_links_read_only'&&commandLinks.context===context&&
+  commandLinks.target===(t?.demo?'demo':'live')&&
+  commandLinks.read_only===true&&commandLinks.orders_enabled===false&&
+  commandLinks.stage_execution_supported===false;
+ const linkedRows=commandLinksBound&&Array.isArray(commandLinks.rows)?
+  commandLinks.rows.slice(0,75).map(object):[];
+ const linkState:Record<string,string>={
+  no_core_stage_command:'لا يوجد أمر إغلاق لهذه المرحلة صادر من Core بعد',
+  conflicting_stage_commands:'أكثر من أمر مرتبط بنفس المرحلة — مرفوض',
+  command_not_broker_reconciled:'أمر المرحلة لم تتم مصالحته مع الوسيط بعد',
+  command_identity_mismatch:'بيانات أمر المرحلة لا تطابق الخطة والحساب',
+  gateway_history_proof_missing:'تأكيد Gateway غير مدعوم بتاريخ التنفيذ النهائي',
+  gateway_order_ticket_missing:'رقم أمر MT5 الفعلي مفقود',
+  gateway_request_not_matching_stage:'الحجم أو الاتجاه المرسل لا يطابق المرحلة',
+  broker_order_claimed_by_multiple_stages:'رقم أمر الوسيط مرتبط بأكثر من مرحلة',
+  gateway_deal_ticket_list_missing:'تذاكر صفقات تنفيذ الأمر غير متوفرة',
+  matching_broker_deal_not_yet_synced:'الصفقات المقابلة لم تُحفظ في Core بعد',
+  broker_deal_order_or_identity_mismatch:'الصفقات لا تطابق رقم الأمر أو هوية المركز',
+  broker_fill_lots_do_not_cover_stage:'كميات الإغلاق المسجلة لا تغطي حجم المرحلة',
+  broker_deal_history_not_synced:'تاريخ الوسيط لم يُصالح بعد',
+  broker_order_deals_exactly_linked:'رقم الأمر والصفقات متطابقة في التاريخ — تحقق تاريخي فقط، لا تنفيذ آلي للمرحلة',
+ };
  const dealState:Record<string,string>={
   invalid_deal_history:'السجل يتضمن صفقة أو قيمة غير صالحة — لا تعتمد على الحجم',
   incomplete_or_ambiguous_open_history:'صفقات فتح المركز ناقصة أو غير مؤكدة',
@@ -106,6 +130,20 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
        <span>الحجم الأصلي {volume(d.initial_volume)} لوت</span>
       </div>)}
     </div>:null}
+   {commandLinksBound?<details className="operator-advanced" aria-label="سلسلة دليل ربط مراحل TP بالأوامر">
+     <summary>مطابقة مرحلة TP مع أمر Core وصفقات MT5 — للقراءة فقط</summary>
+     <p className="safe-note">نجاح المطابقة التاريخية يحتاج هوية الخطة وأمر Core الأصلي ورقم أمر MT5 وتذاكر Deals الفعلية وحجمها. لا يُفعّل هذا العرض المرحلة التالية أو ينقل وقف الخسارة للتعادل.</p>
+     {linkedRows.length===0?<p>لا توجد مراحل TP مؤهلة للتدقيق.</p>:
+      linkedRows.map((r,i)=>{const e=object(r.evidence);
+       const exact=e.state==='broker_order_deals_exactly_linked'&&e.stage_completed===false&&e.orders_enabled===false;
+       return <div className="brain-control-row" key={String(r.plan_id)+'-'+i}>
+        <div><b>TP{[1,2,3].includes(Number(r.stage))?String(r.stage):'؟'} — مركز {Number.isSafeInteger(r.position_identifier)?String(r.position_identifier):'—'}</b>
+         <small style={{display:'block',marginTop:4}}>{linkState[String(e.state)]||'دليل التنفيذ غير مكتمل أو غير صالح'}</small>
+        </div>
+        <span>{exact&&valid(e.matched_broker_lots)?volume(e.matched_broker_lots)+' لوت موثق':'غير مؤكد'}</span>
+       </div>;
+      })}
+    </details>:null}
    {dealAuditBound?<details className="operator-advanced" aria-label="دليل الإغلاقات الفعلية من MT5">
      <summary>مراجعة إغلاقات MT5 الموثقة — لا تثبت تحقق TP</summary>
      <p className="safe-note">المبالغ هنا من سجل Broker Deals المحفوظ في Core، وليست أرقام الشادو أو المحاكاة. إغلاق المركز بحد ذاته لا يثبت أنه نُفّذ ضمن TP1/2/3؛ لا توجد أي مرحلة مذكورة كمنفذة.</p>
