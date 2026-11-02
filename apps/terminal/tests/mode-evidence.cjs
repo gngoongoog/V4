@@ -103,6 +103,8 @@ shadowReport.inactive_forward={
   mode,source:i===0?'not_studied_from_candle_snapshots':'inactive_mode_forward_on_bound_demo_completed_bars',
   status:i===0?'tick_native_not_supported':'recent_historical_observation',
   samples:i===0?0:i*2,scored_after_future_bars:i===0?0:i,
+  horizon:['tick_native_not_studied','12_completed_M1_bars_approx_12_minutes',
+   '12_completed_H4_bars_approx_48_hours','12_completed_advisor_timeframe_bars'][i],
   broker_orders:false,demo_broker_fills:false,independent_frozen_oos:false
  }))
 };
@@ -111,6 +113,8 @@ assert(nodes(shadowPanel).filter(x=>x.type==='tr').length>=10,
  'Four mode shadow evidence rows must appear separately from actual Demo booked fills');
 assert(JSON.stringify(shadowPanel).includes('لا نختلق تدريب شموع'),
  'Sniper native tick training must not be represented by a synthetic candle study');
+assert(JSON.stringify(shadowPanel).includes('48 ساعة'),
+ 'Swing shadow evidence must disclose its actual H4 12-bar research horizon');
 const forged=clone(shadowReport);
 forged.inactive_forward.broker_orders=true;
 assert(!JSON.stringify(component.ModeEvidenceOperations({status,report:forged,disabled:false,onRefresh:()=>{}}))
