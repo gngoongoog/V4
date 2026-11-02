@@ -274,14 +274,17 @@ mod tests{
             let kind=if mode=="expert" {"inactive_expert_advisor_signal_not_consensus"}
                 else{"inactive_primary_mode_signal"};
             let value=json!({"observation_origin":origin,"study_kind":kind,
-                "observed_ms":bar*1000u64,"live_broker_orders":false});
+                "timeframe":timeframe,"observed_ms":bar*1000u64,
+                "live_broker_orders":false});
             db.execute("INSERT INTO coordinator_samples VALUES(?1,?2,?3,?4)",
                 params![source,bar,value.to_string(),outcome.map(|v|v.to_string())]).unwrap();
         }
         let v=report(&db,Some(&t),125_000).unwrap();
         assert_eq!(v["inactive_forward"]["modes"][2]["mode"],"swing");
         assert_eq!(v["inactive_forward"]["modes"][2]["samples"],2);
-        assert_eq!(v["inactive_forward"]["modes"][2]["scored_after_future_bars"],1);
+        assert_eq!(v["inactive_forward"]["modes"][2]["scored_after_future_bars"],0,
+            "Claiming scored without a complete forward horizon/cost receipt proves nothing");
+        assert_eq!(v["inactive_forward"]["modes"][2]["rejected_or_unverifiable_scored"],1);
         assert_eq!(v["inactive_forward"]["modes"][2]["broker_orders"],false);
         assert_eq!(v["inactive_forward"]["modes"][3]["samples"],0,
             "Current active-mode observations must never masquerade as background learning");
@@ -303,6 +306,53 @@ mod tests{
         assert_eq!(v["modes"][2]["closed_costed_samples"],0,
             "Forward candle outcomes must not become booked MT5 Demo fills");
     }
+    #[test]
+    fn scored_inactive_forward_requires_h4_horizon_costs_and_causal_receipt(){
+        let db=db();let t=telemetry(true);
+        db.execute_batch("CREATE TABLE coordinator_samples(source TEXT NOT NULL,
+            bar INTEGER NOT NULL,payload TEXT NOT NULL,outcome TEXT,
+            PRIMARY KEY(source,bar));").unwrap();
+        let ctx=serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)).unwrap();
+        let source=serde_json::to_string(&(ctx.as_str(),"inactive-mode-forward-v1",
+            "swing","system","H4","")).unwrap();
+        let bar=1_700_000_000u64;
+        let step=4*3600u64;
+        let exit=bar+12*step;
+        let now=(exit+step+1)*1000;
+        let p=json!({"observation_origin":"inactive_mode_forward",
+            "study_kind":"inactive_primary_mode_signal","timeframe":"H4",
+            "live_broker_orders":false,"side":1,"observed_ms":(bar+step)*1000,
+            "entry":2000.,"tick":0.01,"profit":1.,"loss":1.,
+            "spread":0.1,"slippage":0.,"commission":7.});
+        let good=json!({"state":"scored","net":5.,"risk_per_lot":10.,
+            "r_multiple":0.5,"reward":0.5_f64.tanh(),
+            "exit_bar":exit,"scored_ms":(exit+step)*1000,
+            "horizon_bars":12,"horizon_seconds":12*step,"horizon_contiguous":true});
+        db.execute("INSERT INTO coordinator_samples VALUES(?1,?2,?3,?4)",
+            params![source,bar,p.to_string(),good.to_string()]).unwrap();
+        let valid=report(&db,Some(&t),now).unwrap();
+        assert_eq!(valid["inactive_forward"]["modes"][2]["samples"],1);
+        assert_eq!(valid["inactive_forward"]["modes"][2]["scored_after_future_bars"],1);
+        assert_eq!(valid["inactive_forward"]["modes"][2]["rejected_or_unverifiable_scored"],0);
+        let bad=json!({"state":"scored","net":50.,"risk_per_lot":10.,
+            "r_multiple":5.,"reward":5.0_f64.tanh(),
+            "exit_bar":exit+step,"scored_ms":(exit+step)*1000,
+            "horizon_bars":12,"horizon_seconds":12*step,"horizon_contiguous":true});
+        db.execute("UPDATE coordinator_samples SET outcome=?1 WHERE source=?2 AND bar=?3",
+            params![bad.to_string(),source,bar]).unwrap();
+        let rejected=report(&db,Some(&t),now).unwrap();
+        assert_eq!(rejected["inactive_forward"]["modes"][2]["samples"],1);
+        assert_eq!(rejected["inactive_forward"]["modes"][2]["scored_after_future_bars"],0,
+            "Changing exit-bar time after the fact cannot manufacture a better outcome");
+        assert_eq!(rejected["inactive_forward"]["modes"][2]["rejected_or_unverifiable_scored"],1);
+        // A source claiming M1 swing cannot impersonate the real H4 study.
+        let fake_source=serde_json::to_string(&(ctx.as_str(),"inactive-mode-forward-v1",
+            "swing","system","M1","")).unwrap();
+        db.execute("INSERT INTO coordinator_samples VALUES(?1,?2,?3,?4)",
+            params![fake_source,bar,p.to_string(),good.to_string()]).unwrap();
+        assert_eq!(report(&db,Some(&t),now).unwrap()["inactive_forward"]["modes"][2]["samples"],1);
+    }
+
     #[test]
     fn cross_mode_same_position_rejects_all_modes_as_independent_evidence(){
         let db=db();let t=telemetry(true);
