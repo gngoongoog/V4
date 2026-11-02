@@ -115,6 +115,22 @@ impl Service {
             .as_ref()
             .is_some_and(|j| j.phase == "loading" || j.phase == "running")
     }
+    /// Expensive synchronous historical studies must not monopolize the
+    /// Core actor while START/market execution or another study is active.
+    /// Reading an old report remains available when trading is running.
+    fn research_replay_allowed(&self,status:&Status,open_paper:bool)->Result<()>{
+        if status.requested_run || status.execution_enabled {
+            bail!("اضغط STOP قبل مقارنة العقول؛ دراسة التاريخ الثقيلة قد تؤخر تيكات وأوامر التداول")
+        }
+        if open_paper {
+            bail!("انتظر إغلاق الصفقة الورقية قبل تشغيل مقارنة تاريخية ثقيلة")
+        }
+        if self.active() {
+            bail!("يوجد اختبار قيد الجلب أو الحساب؛ أوقفه أو انتظر اكتماله أولاً")
+        }
+        Ok(())
+    }
+
     pub fn cancel(&mut self) {
         if let Some(j) = self.job.as_mut() {
             if j.phase == "loading" || j.phase == "running" {
@@ -493,6 +509,7 @@ impl Service {
                 Self::report(db, &serde_json::from_slice::<Selection>(body)?.id)
             }
             ("POST", "/v1/backtest/brain-ablation") => {
+                self.research_replay_allowed(status,open_paper)?;
                 // Fixed four-policy signal study from the exact saved broker
                 // history. The historical fill emulator is shared across
                 // candidates; no execution/advisor weights can be changed.
@@ -508,6 +525,7 @@ impl Service {
                     "automatic_promotion":false,"independently_frozen_oos":false}))
             }
             ("POST", "/v1/backtest/ces-ablation") => {
+                self.research_replay_allowed(status,open_paper)?;
                 // Replay BOTH predefined CES hypotheses on the exact same
                 // immutable saved broker history/contract/settings. Research
                 // only: no MT5 orders or automatic promotion.
@@ -903,6 +921,46 @@ mod tests {
             assert_eq!(selected.time,baseline.time);
         }
     }
+    #[test]
+    fn expensive_historical_ablation_rejected_during_start_or_paper_and_keeps_reports_readable(){
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let clean=Status::default();
+        assert!(svc.research_replay_allowed(&clean,false).is_ok());
+        for (status,paper) in [
+            (Status{requested_run:true,..Status::default()},false),
+            (Status{execution_enabled:true,..Status::default()},false),
+            (Status::default(),true),
+        ]{
+            assert!(svc.research_replay_allowed(&status,paper).is_err());
+            let err=svc.route("POST","/v1/backtest/brain-ablation",
+                br#"{"id":"missing"}"#,&db,Path::new("."),
+                &Config::default(),&status,paper).unwrap_err().to_string();
+            assert!(!err.contains("النتيجة غير موجودة"),
+                "Request must fail BEFORE saved data replay during START/Paper");
+            let err=svc.route("POST","/v1/backtest/ces-ablation",
+                br#"{"id":"missing"}"#,&db,Path::new("."),
+                &Config::default(),&status,paper).unwrap_err().to_string();
+            assert!(!err.contains("النتيجة غير موجودة"));
+        }
+        // Historical list/report access stays available even when START is
+        // running; only the heavy computation path is prohibited.
+        let started=Status{requested_run:true,..Status::default()};
+        assert!(svc.route("GET","/v1/backtest/runs",b"{}",&db,
+            Path::new("."),&Config::default(),&started,false).is_ok());
+        svc.job=Some(Job{
+            id:"active".into(),created_ms:1,updated_ms:1,phase:"running".into(),
+            message:String::new(),
+            options:Options{strategy:Strategy::MetaV1,from:DAY*10,
+                to:DAY*11,initial_equity:1000.,spread_floor:0.2,
+                risk:Default::default()},
+            history:None,cursor:0,history_start:0,comparison_source:None,
+            cancel:Arc::new(AtomicBool::new(false)),
+            progress:Arc::new(AtomicUsize::new(0)),
+        });
+        assert!(svc.research_replay_allowed(&Status::default(),false).is_err());
+    }
+
     #[test]
     fn cancelled_or_timed_out_jobs_never_accept_late_data() {
         let db = Connection::open_in_memory().unwrap();
