@@ -927,6 +927,10 @@ impl Learner {
                         "brain":b.id,
                         "timeframe":b.timeframe,
                         "observation_origin":if inactive_shadow {"inactive_mode_forward"} else {"active_mode_forward"},
+                        "study_kind":if inactive_shadow {
+                            if b.id=="system" {"inactive_primary_mode_signal"}
+                            else {"inactive_expert_advisor_signal_not_consensus"}
+                        }else{"active_mode_forward_signal"},
                         "live_broker_orders":false,
                         "side":signal.side,
                         "entry":entry,
@@ -982,6 +986,8 @@ mod tests {
             "SELECT payload FROM coordinator_samples WHERE source=?1",[&source],|r|r.get(0)).unwrap();
         let original:Value=serde_json::from_str(&original).unwrap();
         assert_eq!(original["observation_origin"],"inactive_mode_forward");
+        assert_eq!(original["study_kind"],"inactive_expert_advisor_signal_not_consensus",
+            "This direct test asks for an advisor: it is not a true Swing mode entry rule");
         assert_eq!(original["live_broker_orders"],false);
         assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_samples",[],|r|r.get::<_,u64>(0)).unwrap(),1);
         now+=12*60_000;
