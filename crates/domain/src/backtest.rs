@@ -857,13 +857,14 @@ fn finish(history: &History, options: &Options, ledger: Ledger, equity: Vec<Equi
     if m.trades == 0 {
         warnings.push("لم تتكون صفقات. راجع عدد شموع الإحماء وأسباب عدم الدخول؛ هذه ليست نتيجة نجاح أو فشل للاستراتيجية.".into());
     }
-    if options.strategy.is_ces() {
-        warnings.push("CES يحاكي ATR20 ووقف 0.5 وهدف 1.5 من TR3 وخروج EG موجب أو 8 دقائق؛ شموع bid وتكاليف تاريخية تقديرية؛ لا تطابق تلقائياً Pine.".into());
-        if options.strategy==Strategy::CesRangeResearch {
-            warnings.push("CES Range EPI هو بديل بحثي فقط عن نسخة tick-volume الأصلية؛ يستخدم نفس كلفة/تنفيذ CES v1، ولا يدخل أوامر ولا يرث سجلات نجاحها. لا توجد أفضلية مثبتة أو ترقية آلية.".into());
-        } else {
-            warnings.push("CES v1 التنفيذية الأصلية تستخدم tick-volume EPI؛ لا تتغير أوزانها أو صفقاتها بسبب تجربة Range EPI.".into());
-        }
+    if options.strategy == Strategy::CesV1 {
+        // Legacy report text is part of a stored hash contract. Do not
+        // change any content or its order when adding a research policy.
+        warnings.push("CES يستخدم حجم ticks وATR20 من الإحماء المتاح؛ وقف 0.5 وهدف 1.5 من TR3 وخروج EG موجب أو 8 دقائق. الدخول بالافتتاح التالي يختلف عن Pine process_orders_on_close؛ لا ادعاء تطابق النتائج.".into());
+    }
+    if options.strategy == Strategy::CesRangeResearch {
+        warnings.push("CES Range EPI هو بديل بحثي فقط عن نسخة tick-volume الأصلية؛ يستخدم نفس كلفة/تنفيذ CES v1، ولا يدخل أوامر ولا يرث سجلات نجاحها. لا توجد أفضلية مثبتة أو ترقية آلية.".into());
+        warnings.push("إشارة البحث تستخدم مدى الشمعة/متوسط 20 بدلاً من نشاط tick؛ لا توجد نتائج Broker أو اختبار مجمد مستقل. منع الترقية أو التداول الآلي.".into());
     }
     if options.strategy == Strategy::MetaV2 {
         warnings.push("Meta v2 candidate v1: بوابات الاتجاه والنظام والبنية والزخم والتذبذب؛ سجل decisions يحفظ مرشح كل دقيقة وسبب منع الدخول. الوقف 1.5 ATR والهدف 2R والخروج 30 دقيقة مثل Meta v1؛ المحاكاة المباشرة تبقى Meta v1.".into());
