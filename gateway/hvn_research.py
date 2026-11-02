@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from math import floor, isfinite
+from numbers import Integral
 from statistics import median
 
 MAX_TICKS = 40_000
@@ -85,16 +86,18 @@ def calculate_hvn(ticks, *, server, login, symbol, currency, tick_size,
             continue
 
         raw_flags = _field(row, "flags")
-        try:
-            flags = int(raw_flags) if raw_flags is not None else None
-        except (ValueError, TypeError, OverflowError):
-            return _unavailable("Invalid MT5 tick change flags", identity, window_ms)
+        # Last/volume_real can be carried forward on a quote-only tick. Missing,
+        # coerced or unknown flags cannot prove a *new* broker trade/quote;
+        # reject the entire report rather than invent measured transactions.
+        if (isinstance(raw_flags, bool) or not isinstance(raw_flags, Integral)
+                or int(raw_flags) < 0 or int(raw_flags) & ~(2 | 4 | 8 | 16 | 32 | 64)):
+            return _unavailable("Missing or invalid MT5 tick change flags; provenance unverified",
+                                identity, window_ms)
+        flags = int(raw_flags)
         last = _number(_field(row, "last"))
         real_volume = _number(_field(row, "volume_real"))
-        # A quote-only MT5 tick can carry the PREVIOUS Last/volume_real value;
-        # the flags must show a NEW trade change or it would double count.
-        trade_change = flags is None or bool(flags & (8 | 16 | 32 | 64))
-        quote_change = flags is None or bool(flags & (2 | 4))
+        trade_change = bool(flags & (8 | 16 | 32 | 64))
+        quote_change = bool(flags & (2 | 4))
         if (trade_change and last is not None and last > 0
                 and real_volume is not None and real_volume > 0):
             trades.append((timestamp, last, real_volume))
