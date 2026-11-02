@@ -1,0 +1,66 @@
+import type {Status} from './types';
+
+const object=(v:unknown):Record<string,unknown> =>
+ v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
+const valid=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v)&&v>=0;
+const volume=(v:unknown)=>valid(v)?v.toLocaleString('en-US',{maximumFractionDigits:8}):'—';
+const reasons:Record<string,string>={
+ broker_volume_rules_unavailable:'حد اللوت أو خطوته أو سقفه غير متاح من الوسيط',
+ missing_or_invalid_broker_volume_rules:'قيم حجم العقد عند الوسيط غير صالحة',
+ volume_exceeds_reported_broker_range:'حجم المركز خارج النطاق الذي أثبته الوسيط',
+ unverified_minimum_volume_grid:'الحد الأدنى لا يتطابق مع شبكة خطوات حجم الوسيط',
+ unverified_maximum_volume_grid:'أقصى حجم لا يتطابق مع شبكة خطوات حجم الوسيط',
+ position_volume_off_broker_step:'حجم المركز لا يطابق خطوة الحجم المتاحة',
+ position_volume_outside_broker_grid:'حجم المركز خارج شبكة الأحجام الموثقة',
+ too_small_for_three_broker_valid_exits:'حجم الصفقة أصغر من ثلاثة إغلاقات بالحد الأدنى',
+ untradeable_final_residual:'سيبقى حجم غير قابل للإغلاق وفق قواعد الوسيط',
+ volume_unit_overflow:'عدد خطوات الحجم كبير أو غير موثوق'
+};
+/** Read-only plan from Rust domain: never sends an MT5 close. */
+export function PartialExitPreview({status,source}:{status:Status|null;source:unknown}){
+ const t=status?.telemetry,view=object(source),settings=object(view.settings);
+ const p=object(view.partial_exit_preview);
+ const context=t?JSON.stringify([t.server,t.login,t.symbol,t.currency]):'';
+ const verified=status?.gateway_fresh===true&&t?.connected===true&&
+  t.login>0&&!!t.server&&!!t.symbol&&!!t.currency&&
+  t.account_trade_mode===(t.demo?0:2)&&
+  view.account_matches===true&&view.context===context&&
+  settings.login===t.login&&settings.server===t.server&&
+  settings.currency===t.currency&&settings.target===(t.demo?'demo':'live')&&
+  p.schema==='partial-exit-volume-preview-v1'&&
+  p.scope==='owned_positions_current_broker_account_symbol'&&
+  p.context===context&&p.target===(t.demo?'demo':'live')&&
+  p.status==='read_only_geometry'&&p.read_only===true&&
+  p.orders_enabled===false;
+ const rows=verified&&Array.isArray(p.rows)?p.rows.slice(0,25).map(object):[];
+ return <section className="operator-card" aria-label="معاينة أهداف TP الجزئية للوت">
+  <h3>معاينة توزيع حجم TP1 / TP2 / TP3</h3>
+  <p>تقسيم حسابي للوت فقط وفق بيانات MT5: 50%، 30%، 20%. لا تُنشأ أهداف سعرية ولا تُرسل أوامر إغلاق. هذه ليست خاصية TP جزئي جاهزة للتداول.</p>
+  {!verified?<p className="safe-note">المعاينة غير متاحة: يجب التحقق من حساب MT5 والرمز وإعدادات الحجم الحالية لدى Core.</p>:
+   <>
+    <p className="safe-note">حد اللوت: <b>{volume(p.volume_min)}</b> · خطوة الحجم: <b>{volume(p.volume_step)}</b> · الحد الأعلى: <b>{volume(p.volume_max)}</b></p>
+    {rows.length===0?<p className="safe-note">لا توجد مراكز BrainTrade مؤهلة للمعاينة في الرمز الحالي. لا تُعرض مراكز الحساب اليدوية أو الرموز الأخرى.</p>:
+     <div className="table-scroll"><table><thead><tr>
+      {['مركز MT5','الحجم','TP1 (50%)','TP2 (30%)','TP3 (المتبقي)','التحقق'].map(label=><th key={label}>{label}</th>)}
+     </tr></thead><tbody>
+      {rows.map((r,i)=>{
+       const l=object(r.lots);
+       const amounts=[l.tp1,l.tp2,l.tp3];
+       const consistent=r.state==='geometry_valid'&&
+        valid(r.position_volume)&&valid(p.volume_step)&&p.volume_step>0&&
+        amounts.every(valid)&&
+        Math.abs(amounts.reduce<number>((a,b)=>a+(b as number),0)-r.position_volume)<=(p.volume_step as number)*1e-6;
+       return <tr key={String(r.position)+'-'+String(i)}>
+        <td>{Number.isSafeInteger(r.position)?String(r.position):'—'}</td>
+        <td>{volume(r.position_volume)}</td>
+        <td>{consistent?volume(l.tp1):'—'}</td>
+        <td>{consistent?volume(l.tp2):'—'}</td>
+        <td>{consistent?volume(l.tp3):'—'}</td>
+        <td>{consistent?'تقسيم حجم صالح حسابياً فقط':reasons[String(r.reason)]||'لم يتم توثيق صلاحية التقسيم'}</td>
+       </tr>;
+      })}
+     </tbody></table></div>}
+   </>}
+  <p className="safe-note">حتى إذا صلح تقسيم اللوت، التنفيذ يحتاج مدير إغلاقات جزئية منفصل، ومصالحة حجم الصفقة الفعلي بعد كل هدف، واختبار Hedging/Netting والسبريد والانزلاق وحدود الوسيط. لا تعتبر هذه الشاشة موافقة على LIVE.</p>
+ </section>;
+}
