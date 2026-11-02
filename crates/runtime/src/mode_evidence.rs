@@ -119,8 +119,9 @@ fn inactive_mode_forward(db:&Connection,context:&str,now:u64)->Result<Value>{
         let (count,scored,last):(u64,u64,Option<u64>)=if exists && mode!=TradingMode::Sniper {
             db.query_row(
                 "SELECT COUNT(*),
-                    COALESCE(SUM(CASE WHEN outcome IS NOT NULL AND json_valid(outcome)
-                        AND json_extract(outcome,'$.state')='scored' THEN 1 ELSE 0 END),0),
+                    COALESCE(SUM(CASE WHEN
+                        (CASE WHEN json_valid(outcome) THEN json_extract(outcome,'$.state') END)='scored'
+                        THEN 1 ELSE 0 END),0),
                     MAX(CASE WHEN json_valid(payload)
                         THEN CAST(json_extract(payload,'$.observed_ms') AS INTEGER) END)
                 FROM coordinator_samples
@@ -201,6 +202,37 @@ mod tests{
         assert_eq!(v["modes"][3]["closed_costed_samples"],0);
         assert_eq!(v["independent_oos"],false);
         assert_eq!(v["automatic_promotion"],false);
+    }
+    #[test]
+    fn inactive_mode_forward_samples_are_scoped_and_never_counted_as_demo_broker_fills(){
+        let db=db();let t=telemetry(true);
+        db.execute_batch("CREATE TABLE coordinator_samples(source TEXT NOT NULL,
+            bar INTEGER NOT NULL,payload TEXT NOT NULL,outcome TEXT,
+            PRIMARY KEY(source,bar));").unwrap();
+        let key=serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency)).unwrap();
+        let other=serde_json::to_string(&(&t.server,999u64,&t.symbol,&t.currency)).unwrap();
+        for (context,mode,bar,origin,outcome) in [
+            (key.as_str(),"swing",110u64,"inactive_mode_forward",Some(json!({"state":"scored","net":3.}))),
+            (key.as_str(),"swing",120u64,"inactive_mode_forward",None),
+            (key.as_str(),"expert",100u64,"active_mode_forward",Some(json!({"state":"scored"}))),
+            (other.as_str(),"swing",130u64,"inactive_mode_forward",Some(json!({"state":"scored"}))),
+        ]{
+            let source=serde_json::to_string(&(context,"adaptive-member-v1",mode,"trend","M1","")).unwrap();
+            let value=json!({"observation_origin":origin,"observed_ms":bar*1000u64,
+                "live_broker_orders":false});
+            db.execute("INSERT INTO coordinator_samples VALUES(?1,?2,?3,?4)",
+                params![source,bar,value.to_string(),outcome.map(|v|v.to_string())]).unwrap();
+        }
+        let v=report(&db,Some(&t),125_000).unwrap();
+        assert_eq!(v["inactive_forward"]["modes"][2]["mode"],"swing");
+        assert_eq!(v["inactive_forward"]["modes"][2]["samples"],2);
+        assert_eq!(v["inactive_forward"]["modes"][2]["scored_after_future_bars"],1);
+        assert_eq!(v["inactive_forward"]["modes"][2]["broker_orders"],false);
+        assert_eq!(v["inactive_forward"]["modes"][3]["samples"],0,
+            "Current active-mode observations must never masquerade as background learning");
+        assert_eq!(v["inactive_forward"]["modes"][0]["status"],"tick_native_not_supported");
+        assert_eq!(v["modes"][2]["closed_costed_samples"],0,
+            "Forward candle outcomes must not become booked MT5 Demo fills");
     }
     #[test]
     fn cross_mode_same_position_rejects_all_modes_as_independent_evidence(){
