@@ -23,6 +23,13 @@ pub enum Strategy {
     /// Same cost/entry/exit emulator as CES v1; only the EPI uses candle
     /// range instead of MT5 tick-volume. Backtest/research ONLY.
     CesRangeResearch,
+    /// Advisor signal-only ablation: actual deterministic rule via Core
+    /// evaluate(), common 1.5 ATR stop / 2R target and the same ledger.
+    /// This intentionally does not impersonate live broker execution.
+    BrainTrendResearch,
+    BrainWyckoffResearch,
+    BrainLiquidityResearch,
+    BrainPullbackResearch,
     KteV1,
     MetaV2,
     ExploreV1,
@@ -32,11 +39,24 @@ impl Strategy {
     pub fn is_ces(self)->bool {
         matches!(self,Self::CesV1|Self::CesRangeResearch)
     }
+    pub fn research_brain(self)->Option<&'static str>{
+        match self {
+            Self::BrainTrendResearch=>Some("trend"),
+            Self::BrainWyckoffResearch=>Some("wyckoff"),
+            Self::BrainLiquidityResearch=>Some("liquidity"),
+            Self::BrainPullbackResearch=>Some("trend_pullback"),
+            _=>None,
+        }
+    }
     pub fn algorithm(self) -> &'static str {
         match self {
             Self::MetaV1 => "meta-v1 / M1-OHLC-conservative-v1",
             Self::CesV1 => "ces-v1 / M1-OHLC-conservative-v1",
             Self::CesRangeResearch => "ces-range-epi-research-v1 / M1-OHLC-conservative-v1",
+            Self::BrainTrendResearch => "brain-trend-signal-research-v1 / M1-OHLC-conservative-v1",
+            Self::BrainWyckoffResearch => "brain-wyckoff-signal-research-v1 / M1-OHLC-conservative-v1",
+            Self::BrainLiquidityResearch => "brain-liquidity-signal-research-v1 / M1-OHLC-conservative-v1",
+            Self::BrainPullbackResearch => "brain-trend-pullback-signal-research-v1 / M1-OHLC-conservative-v1",
             Self::MetaV2 => "meta-v2-candidate-v1 / M1-OHLC-conservative-v1",
             Self::KteV1 => "kte-v1 / M1-partials-conservative-v1",
             Self::ExploreV1 => "explore-v1 / online-bandit-research-only-v1",
@@ -502,6 +522,51 @@ impl Ledger {
         reason
     }
 }
+/// Only completed bar history is used to compute an advisor's actual
+/// executable direction; the quote is a labelled proxy reconstructed from
+/// the last finished candle, not the market's next live tick. Thus this is a
+/// signal ablation under an identical OHLC fill/cost/risk model, not an
+/// assertion of exact broker-side entry/structural stops.
+fn research_brain_side(
+    history:&History,index:usize,strategy:Strategy,spread:f64
+)->Option<i8>{
+    let brain=strategy.research_brain()?;
+    // Require 240 consecutive completed M1 candles. Never interpolate
+    // weekend/gap bars or mix another broker/account into a signal.
+    if index<240{return None}
+    let window=&history.bars[index-240..index];
+    if window.windows(2).any(|w|
+        w[1].candle.time!=w[0].candle.time.saturating_add(60)
+    ){return None}
+    let last=&window.last()?.candle;
+    let now=last.time.saturating_add(60).saturating_mul(1000);
+    let mut config=crate::Config::default();
+    config.symbol=history.symbol.clone();
+    let telemetry=crate::Telemetry{
+        connected:true,symbol:history.symbol.clone(),
+        login:history.login,server:history.server.clone(),
+        currency:history.currency.clone(),demo:true,
+        quote_time_ms:Some(now),tick_age_ms:Some(0),
+        bid:Some(last.close),ask:Some(last.close+spread),
+        point:Some(history.contract.point),
+        tick_size:Some(history.contract.tick_size),
+        tick_value_loss:Some(history.contract.tick_loss),
+        tick_value_profit:Some(history.contract.tick_profit),
+        ..Default::default()
+    };
+    let cfg=crate::execution::BrainConfig{
+        id:brain.into(),timeframe:"M1".into(),..Default::default()
+    };
+    let series=window.iter().map(|bar|crate::studio::FrameBar{
+        candle:bar.candle.clone(),
+        spread_points:bar.spread_points,
+        real_volume:0, // M1 history has tick counts; no volume-at-price/tape
+    }).collect::<Vec<_>>();
+    let frames=std::collections::BTreeMap::from([("M1".to_string(),series)]);
+    let decision=crate::execution::evaluate(&cfg,&telemetry,&config,&frames,None,now);
+    Some(if decision.ready{decision.side}else{0})
+}
+
 pub fn run(
     history: &History,
     options: &Options,
@@ -619,7 +684,11 @@ pub fn run(
             outcome = ledger.skip("حد خسارة أو تراجع");
         } else {
             let (current, side, atr, stop_distance, ces_target) =
-                if options.strategy.is_ces() {
+                if options.strategy.research_brain().is_some() {
+                    let side=research_brain_side(history,i,options.strategy,spread);
+                    let a=crate::trading::volatility(&m1[i.saturating_sub(60)..i]);
+                    (side.is_some()&&a.is_finite()&&a>0.,side.unwrap_or(0),a,1.5*a,None)
+                } else if options.strategy.is_ces() {
                     match ces[i - 1].as_ref() {
                         Some(f) => (
                             true,
@@ -664,6 +733,8 @@ pub fn run(
                     "عدم اتفاق العقول"
                 } else if options.strategy == Strategy::MetaV2 {
                     "لم تجتز بوابات Meta v2"
+                } else if options.strategy.research_brain().is_some() {
+                    "لا توجد إشارة مكتملة مؤهلة من العقل البحثي"
                 } else {
                     "لم تتحقق شروط CES"
                 });
@@ -865,6 +936,9 @@ fn finish(history: &History, options: &Options, ledger: Ledger, equity: Vec<Equi
     if options.strategy == Strategy::CesRangeResearch {
         warnings.push("CES Range EPI هو بديل بحثي فقط عن نسخة tick-volume الأصلية؛ يستخدم نفس كلفة/تنفيذ CES v1، ولا يدخل أوامر ولا يرث سجلات نجاحها. لا توجد أفضلية مثبتة أو ترقية آلية.".into());
         warnings.push("إشارة البحث تستخدم مدى الشمعة/متوسط 20 بدلاً من نشاط tick؛ لا توجد نتائج Broker أو اختبار مجمد مستقل. منع الترقية أو التداول الآلي.".into());
+    }
+    if let Some(id)=options.strategy.research_brain(){
+        warnings.push(format!("Brain {id} RESEARCH signal-only: 240 consecutive completed M1 candles, quote proxy = previous close + prior spread; actual advisor rule is called through Core, but all policies share 1.5 ATR/2R stops and 30m timeout for fair signal comparison. Liquidity and Pullback structural stop geometry, actual MT5 fills, session-specific book depth and broker real volume are NOT reproduced. Not approved for trading or independent frozen OOS."));
     }
     if options.strategy == Strategy::MetaV2 {
         warnings.push("Meta v2 candidate v1: بوابات الاتجاه والنظام والبنية والزخم والتذبذب؛ سجل decisions يحفظ مرشح كل دقيقة وسبب منع الدخول. الوقف 1.5 ATR والهدف 2R والخروج 30 دقيقة مثل Meta v1؛ المحاكاة المباشرة تبقى Meta v1.".into());
