@@ -31,12 +31,13 @@ pub fn init(db:&Connection)->Result<()>{
             stage INTEGER NOT NULL CHECK(stage BETWEEN 1 AND 3),
             plan_id TEXT NOT NULL UNIQUE,
             command_id TEXT NOT NULL UNIQUE,
-            broker_order INTEGER NOT NULL UNIQUE CHECK(broker_order>0),
+            broker_order INTEGER NOT NULL CHECK(broker_order>0),
             matched_volume REAL NOT NULL CHECK(matched_volume>0),
             remaining_volume REAL NOT NULL CHECK(remaining_volume>=0),
             evidence_json TEXT NOT NULL,
             settled_ms INTEGER NOT NULL CHECK(settled_ms>0),
-            PRIMARY KEY(context,target,position_identifier,stage)
+            PRIMARY KEY(context,target,position_identifier,stage),
+            UNIQUE(context,target,broker_order)
          );
          CREATE INDEX IF NOT EXISTS partial_exit_settlements_account
             ON partial_exit_stage_settlements(context,target,position_identifier);")?;
