@@ -2395,6 +2395,49 @@ mod execution_persistence_tests {
     }
 
     #[test]
+    fn all_four_modes_authorize_only_the_selected_broker_entry_owner() {
+        for (mode,mode_name) in [
+            (TradingMode::Sniper,"sniper"),
+            (TradingMode::Scalping,"scalping"),
+            (TradingMode::Swing,"swing"),
+            (TradingMode::Expert,"expert"),
+        ] {
+            for owner in ["system","trend"] {
+                let db=Connection::open_in_memory().unwrap();
+                let mut service=Service::new(&db).unwrap();
+                let t=demo();
+                service.bind(&db,&t,50).unwrap();
+                service.set_mode(mode);
+                if owner!="system" {
+                    service.set_solo(&db,&t,mode,owner,60).unwrap();
+                }
+                let mut status=Status::default();
+                status.telemetry=Some(t.clone());
+                status.gateway_fresh=true;
+                status.requested_run=true;
+                let context=ctx(&t);
+                for brain in ["system","trend","gann"] {
+                    let id=format!("{mode_name}-{owner}-{brain}");
+                    let payload=json!({
+                        "id":id,"brain":brain,"trading_mode":mode_name,
+                        "kind":"open","target":"demo",
+                        "revision":service.settings.revision,
+                        "context":context,"expires_ms":10_000,"created_ms":100
+                    });
+                    db.execute(
+                        "INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload) VALUES (?1,?2,?3,'open',100,'dispatched',?4)",
+                        params![id,context,payload.to_string()]
+                    ).unwrap();
+                    let response=service.route("POST","/v1/execution/authorize",
+                        json!({"id":id}).to_string().as_bytes(),&db,&status,200).unwrap();
+                    assert_eq!(response["authorized"],brain==owner,
+                        "mode={mode_name} owner={owner} candidate={brain}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn real_account_requires_exact_login_confirmation_and_fresh_telemetry_to_bind() {
         let db=Connection::open_in_memory().unwrap();
         let mut service=Service::new(&db).unwrap();
