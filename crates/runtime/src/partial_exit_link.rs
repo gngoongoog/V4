@@ -269,7 +269,7 @@ mod tests{
         let d=db();let t=sample_telemetry();seed(&d,&t);
         d.execute("UPDATE broker_commands SET result=json_set(result,'$.recovered_from_history',false)",[]).unwrap();
         assert_eq!(e(&d,&t)["state"],"gateway_history_proof_missing");
-        d.execute("UPDATE broker_commands SET result=json_set(result,'$.recovered_from_history',true)",[]).unwrap();
+        d.execute("UPDATE broker_commands SET result=json_set(result,'$.recovered_from_history',json('true'))",[]).unwrap();
         d.execute("UPDATE broker_deals SET payload=json_set(payload,'$.order',999)",[]).unwrap();
         assert_eq!(e(&d,&t)["state"],"broker_deal_order_or_identity_mismatch");
         d.execute("DELETE FROM broker_deals",[]).unwrap();
