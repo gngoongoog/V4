@@ -22,6 +22,19 @@ fn near(a:f64,b:f64,step:f64)->bool{
     a.is_finite()&&b.is_finite()&&step.is_finite()&&step>0.
         &&(a-b).abs()<=step*1e-6
 }
+// Re-validate a latched settlement against the current immutable broker
+// receipts. Historical storage must not become proof after source corruption.
+fn receipt_matches(ev:&Value,volume:f64,step:f64,plan:&str,
+    id:&str,order:u64,old:&Value)->bool{
+    ev["state"]=="broker_order_deals_exactly_linked"
+        &&ev["stage_completed"]==false&&ev["orders_enabled"]==false
+        &&ev["core_command_id"]==id&&ev["broker_order_ticket"].as_u64()==Some(order)
+        &&near(ev["matched_broker_lots"].as_f64().unwrap_or(f64::NAN),volume,step)
+        &&old["schema"]=="partial-exit-settlement-v1"&&old["plan_id"]==plan
+        &&old["command_id"]==id&&old["broker_order"].as_u64()==Some(order)
+        &&old["deal_tickets"]==ev["broker_deal_tickets"]
+        &&near(old["matched_volume"].as_f64().unwrap_or(f64::NAN),volume,step)
+}
 pub fn init(db:&Connection)->Result<()>{
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS partial_exit_stage_settlements(
@@ -79,14 +92,20 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
             let Some(plan)=row["plan_id"].as_str()else{break};
             let Some(volume)=row["planned_volume"].as_f64()
                 .filter(|n|n.is_finite()&&*n>0.)else{break};
-            let prior:Option<(String,f64)>=db.query_row(
-                "SELECT plan_id,matched_volume FROM partial_exit_stage_settlements
+            let prior:Option<(String,f64,String,String,u64)>=db.query_row(
+                "SELECT plan_id,matched_volume,evidence_json,command_id,broker_order
+                 FROM partial_exit_stage_settlements
                  WHERE context=?1 AND target='demo'
                      AND position_identifier=?2 AND stage=?3",
-                params![key,pid,stage],|r|Ok((r.get(0)?,r.get(1)?))
+                params![key,pid,stage],|r|Ok((
+                    r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?
+                ))
             ).optional()?;
-            if let Some((old_plan,old_volume))=prior{
-                if old_plan!=plan||!near(old_volume,volume,step){break}
+            if let Some((old_plan,old_volume,old_raw,old_id,old_order))=prior{
+                let old=serde_json::from_str::<Value>(&old_raw).unwrap_or(Value::Null);
+                if old_plan!=plan||!near(old_volume,volume,step)||
+                    !receipt_matches(&row["evidence"],volume,step,plan,
+                        &old_id,old_order,&old) {break}
                 completed+=volume;
                 continue
             }
@@ -155,7 +174,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
     let mut st=db.prepare(
         "SELECT p.position_identifier,p.stage,p.plan_id,p.planned_volume,
                 s.command_id,s.broker_order,s.matched_volume,s.remaining_volume,
-                s.settled_ms
+                s.settled_ms,s.evidence_json
          FROM partial_exit_stage_plans p
          LEFT JOIN partial_exit_stage_settlements s
            ON p.context=s.context AND p.target=s.target
@@ -167,13 +186,28 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
         r.get::<_,u64>(0)?,r.get::<_,u32>(1)?,r.get::<_,String>(2)?,
         r.get::<_,f64>(3)?,r.get::<_,Option<String>>(4)?,
         r.get::<_,Option<u64>>(5)?,r.get::<_,Option<f64>>(6)?,
-        r.get::<_,Option<f64>>(7)?,r.get::<_,Option<u64>>(8)?
+        r.get::<_,Option<f64>>(7)?,r.get::<_,Option<u64>>(8)?,
+        r.get::<_,Option<String>>(9)?
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let links=crate::partial_exit_link::report(db,t,target)?;
+    let current=links["rows"].as_array();
     let mut result=Vec::new();
-    for (pid,stage,plan,lot,id,order,filled,left,settled) in rows{
+    for (pid,stage,plan,lot,id,order,filled,left,settled,old_raw) in rows{
+        let still_proven=if let (Some(id),Some(order),Some(old_raw),
+            Some(step))=(&id,order,&old_raw,t.volume_step){
+            let old=serde_json::from_str::<Value>(old_raw).unwrap_or(Value::Null);
+            current.and_then(|rows|rows.iter().find(|r|
+                r["position_identifier"].as_u64()==Some(pid)
+                &&r["stage"].as_u64()==Some(stage as u64)
+                &&r["plan_id"]==plan)).is_some_and(|r|
+                    receipt_matches(&r["evidence"],lot,step,&plan,id,order,&old))
+        }else{false};
+        let state=if settled.is_some(){
+            if still_proven{"historical_stage_sealed"}else{"sealed_evidence_needs_review"}
+        }else{"unsettled"};
         result.push(json!({"position_identifier":pid,"stage":stage,"plan_id":plan,
             "planned_volume":lot,
-            "state":if settled.is_some(){"historical_stage_sealed"}else{"unsettled"},
+            "state":state,
             "core_command_id":id,"broker_order":order,"matched_volume":filled,
             "remaining_volume_at_seal":left,"sealed_ms":settled,
             "next_stage_authorized":false,"breakeven_triggered":false}));
@@ -315,6 +349,20 @@ mod tests{
         t.positions[0].magic=999;
         snapshot(&d,&t,300);
         assert_eq!(row(&d,&t,0)["state"],"unsettled");
+    }
+    #[test]
+    fn previously_sealed_stage_cannot_unlock_next_when_history_was_corrupted(){
+        let d=Connection::open_in_memory().unwrap();fixture(&d);
+        let mut t=tele();seed(&d,1);t.positions[0].volume=0.05;
+        snapshot(&d,&t,200);
+        assert_eq!(row(&d,&t,0)["state"],"historical_stage_sealed");
+        d.execute("UPDATE broker_deals SET payload=json_set(payload,'$.order',999)",[]).unwrap();
+        assert_eq!(row(&d,&t,0)["state"],"sealed_evidence_needs_review");
+        seed(&d,2);t.positions[0].volume=0.02;
+        snapshot(&d,&t,300);
+        assert_eq!(row(&d,&t,1)["state"],"unsettled",
+            "TP2 may not be sealed when TP1 broker order proof is now corrupted");
+        assert_eq!(row(&d,&t,0)["state"],"sealed_evidence_needs_review");
     }
     #[test]
     fn immutable_seal_survives_file_restart_and_foreign_identity_cannot_read(){
