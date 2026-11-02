@@ -14,6 +14,10 @@ const workspace=file('apps/terminal/src/hvn-workspace.tsx');
 assert.match(core,/mod hvn;/);
 assert.match(core,/self\.hvn\.route\(method,path,body,&status,now_ms\(\)\)/);
 assert.match(core,/!self\.hvn\.pending\(now_ms\(\)\)/,'Cannot START while MT5 tick-history read is active');
+assert.match(core,/ensure_hvn_gateway_reconfiguration_idle\(self\.hvn\.pending\(now_ms\(\)\)\)/,
+  'Do not destroy Gateway with an unresolved HVN tick-history request');
+assert.match(core,/"\/v1\/config"\|"\/v1\/reconnect"\|"\/v1\/backup\/restore\/stage"/,
+  'Config, reconnect and staged restore must all be fenced');
 assert.match(hvn,/ensure!\(!s\.requested_run/);
 assert.match(hvn,/t\.positions\.is_empty\(\) && t\.pending_orders==0/);
 assert.match(hvn,/trade_authorized.*false/s);
@@ -22,6 +26,9 @@ assert.match(hvn,/ctx\.as_ref\(\)!=Some\(&pending\.context\)/,'Wrong-account HVN
 assert.match(py,/def collect_mt5_hvn\(/);
 assert.match(py,/copy_ticks_range\(symbol, start, end, mt5\.COPY_TICKS_ALL\)/);
 assert.match(py,/if not same_account\(\)/);
+assert.match(py,/not isinstance\(raw_flags, Integral\)/,
+  'Broker volume requires an authentic integer MT5 change-flag source');
+assert.match(py,/trade_change = bool\(flags & \(8 \| 16 \| 32 \| 64\)\)/);
 assert.doesNotMatch(py,/order_send\(/);
 assert.match(gateway,/api\('\/v1\/gateway\/hvn\/request'\)/);
 assert.match(gateway,/api\('\/v1\/gateway\/hvn\/result'/);
