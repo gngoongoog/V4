@@ -20,6 +20,12 @@ const problems:Record<string,string>={
  mixed_or_unverified_strategy_sources:'تعدّد نسخ استراتيجية غير متجانسة',
  descriptive_evidence_only:'دليل وصفي فقط، ليس اختبار OOS مستقلاً'
 };
+const horizons:Record<string,string>={
+ tick_native_not_studied:'تيكات Sniper — غير مدروسة هنا',
+ '12_completed_M1_bars_approx_12_minutes':'12 شمعة M1 (~12 دقيقة)',
+ '12_completed_H4_bars_approx_48_hours':'12 شمعة H4 (~48 ساعة)',
+ '12_completed_advisor_timeframe_bars':'12 شمعة من فريم المستشار'
+};
 const fmt=(v:number|null,decimal=2)=>v===null?'—':v.toLocaleString('en-US',{maximumFractionDigits:decimal});
 export function ModeEvidenceOperations({status,report,disabled,onRefresh}:{
  status:Status|null;report:unknown;disabled:boolean;onRefresh:()=>void;
@@ -37,7 +43,8 @@ export function ModeEvidenceOperations({status,report,disabled,onRefresh}:{
    return modes.includes(String(r.mode))&&r.broker_orders===false&&r.demo_broker_fills===false&&
     r.independent_frozen_oos===false&&typeof r.samples==='number'&&Number.isInteger(r.samples)&&r.samples>=0&&
     typeof r.scored_after_future_bars==='number'&&Number.isInteger(r.scored_after_future_bars)&&
-    r.scored_after_future_bars>=0&&r.scored_after_future_bars<=r.samples;
+    r.scored_after_future_bars>=0&&r.scored_after_future_bars<=r.samples&&
+    typeof r.horizon==='string'&&typeof horizons[r.horizon]==='string';
   }) as Record<string,unknown>[]:[];
  return <section className="operator-card" aria-label="Four trading mode broker evidence">
   <h3>أدلة الأوضاع الأربعة — إغلاقات MT5 Demo بعد التكاليف</h3>
@@ -67,11 +74,12 @@ export function ModeEvidenceOperations({status,report,disabled,onRefresh}:{
       لا تُضاف لإغلاقات الوسيط، ولا تمثل تعلّم Sniper بالتيك، ولا اختبار OOS مجمداً.
       لا تُنتج أوامر تداول أو تفويض تشغيل REAL.</p>
    {shadowRows.length===4?<div className="table-scroll"><table>
-    <thead><tr>{['الوضع','العينات المستقبلية','نضج تقييمها','الحالة'].map(x=><th key={x}>{x}</th>)}</tr></thead>
+    <thead><tr>{['الوضع','العينات المستقبلية','نضج تقييمها','نافذة الدراسة','الحالة'].map(x=><th key={x}>{x}</th>)}</tr></thead>
     <tbody>{shadowRows.map(row=><tr key={String(row.mode)}>
      <td>{labels[String(row.mode)]||String(row.mode)}</td>
      <td>{Number(row.samples)}</td>
      <td>{Number(row.scored_after_future_bars)}</td>
+     <td>{horizons[String(row.horizon)]}</td>
      <td>{shadowState[String(row.status)]||'غير مؤكدة'}</td>
     </tr>)}</tbody>
    </table></div>:<p className="safe-note">لا تتوفر بيانات Forward موثقة للأوضاع غير النشطة من Core بعد.</p>}
