@@ -25,6 +25,11 @@ assert.equal(o.rejects,1);
 assert.equal(o.unknown,1);
 assert.equal(o.unresolved,2);
 assert.equal(o.sendP95,5);
+assert.equal(o.queueSamples,1);
+assert.equal(o.sendSamples,1);
+assert.equal(o.totalSamples,1);
+assert.equal(qualityObservation(status,{...baseReport,send:{samples:3,p95_ms:17}},NOW).sendSamples,3);
+assert.equal(qualityObservation(status,{...baseReport,send:{samples:4,p95_ms:17}},NOW).sendP95,null,'Cannot claim timings from more commands than sampled');
 assert.equal(o.rows[0].retcode,10019);
 assert.equal(o.circuit,null,'legacy reports must not invent an active Rust circuit');
 const monitored={...baseReport,entry_circuit:{
