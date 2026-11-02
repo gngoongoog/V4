@@ -61,6 +61,9 @@ def is_fast_path(cmd):
     and re-read the exact position immediately before send.
     """
     if cmd.get('kind') == 'close':
+        if cmd.get('tp_stage_plan_id') is not None:
+            # Stage closes are deliberately NOT on Sniper's no-order_check path.
+            return False
         # Operator-requested bulk closes take the full broker order_check;
         # the existing automatic Sniper exit path keeps its latency contract.
         return cmd.get('manual_close') is not True
@@ -644,6 +647,7 @@ class BrokerExecutor:
                        'kind','position','lots','signal','revision',
                        'manual_open','manual_epoch','manual_reference_price','manual_stop_price','manual_target_price',
                        'manual_close','profit_only','expected_position_volume','expected_position_side',
+                       'tp_stage_plan_id','tp_stage','expected_position_identifier',
                        'deviation_points','created_ms','expires_ms',
                        'commission_per_lot','slippage_ticks','risk_percent','risk_master_enabled','risk_master_recovery','risk_master_recovery_id',
                        'demo_flexible','micro_demo_risk_opt_in',
@@ -746,6 +750,9 @@ class BrokerExecutor:
                     return dict(result,state='cancelled',
                                 reason='Exact owned MT5 position absent; no close order sent. Verify exit from broker Deal history.')
                 p=owned[0]; lots=float(p.volume); side=-1 if p.type==mt5.POSITION_TYPE_BUY else 1
+                if cmd.get('tp_stage_plan_id') is not None:
+                    from tp_partial_close import stage_volume
+                    lots, side = stage_volume(cmd, a, mt5, p, info)
                 if cmd.get('manual_close') is True:
                     if type(cmd.get('profit_only')) is not bool or p.type not in (mt5.POSITION_TYPE_BUY, getattr(mt5,'POSITION_TYPE_SELL',1)):
                         raise ValueError('Manual close has invalid profit filter or position side')
@@ -1092,7 +1099,7 @@ class BrokerExecutor:
                 if any(float(getattr(current_account,k,float('nan')))!=final_number(k) for k in ('balance','equity','margin_free')):
                     result.update(state='cancelled',reason='Manual account values changed during final checks; no order sent')
                     return self._save(cmd,result)
-            if closing and cmd.get('manual_close') is True:
+            if closing and (cmd.get('manual_close') is True or cmd.get('tp_stage_plan_id') is not None):
                 # Re-read the approved physical ticket immediately before send.
                 # The floating-profit filter is not a net-after-fees guarantee.
                 try:
@@ -1103,17 +1110,22 @@ class BrokerExecutor:
                         raise ValueError('Approved position no longer present')
                     p=same[0]
                     current_lots=float(p.volume)
-                    if (not math.isfinite(current_lots) or abs(current_lots-request['volume'])>1e-8
+                    if cmd.get('tp_stage_plan_id') is not None:
+                        from tp_partial_close import stage_volume
+                        checked_lots, checked_side = stage_volume(cmd, mt5.account_info(), mt5, p, info)
+                        if abs(checked_lots-request['volume'])>1e-8 or checked_side!=side:
+                            raise ValueError('TP stage approved volume or side changed')
+                    elif (not math.isfinite(current_lots) or abs(current_lots-request['volume'])>1e-8
                             or p.type not in (mt5.POSITION_TYPE_BUY,getattr(mt5,'POSITION_TYPE_SELL',1))
                             or (-1 if p.type==mt5.POSITION_TYPE_BUY else 1)!=side):
                         raise ValueError('Approved position volume or side changed')
-                    if cmd['profit_only'] and (not math.isfinite(float(getattr(p,'profit',float('nan')))) or float(p.profit)<=0):
+                    if cmd.get('manual_close') is True and cmd['profit_only'] and (not math.isfinite(float(getattr(p,'profit',float('nan')))) or float(p.profit)<=0):
                         raise ValueError('Position no longer has positive MT5 floating P/L')
                     final_manual_account=mt5.account_info()
                     if account_identity(final_manual_account)!=expected(cmd) or getattr(final_manual_account,'trade_mode',None)!=target_mode:
                         raise ValueError('Broker account changed during final position check')
                 except Exception as exc:
-                    result.update(state='cancelled',reason='Manual close pre-send check failed; order not sent: '+str(exc))
+                    result.update(state='cancelled',reason='Protected close pre-send check failed; order not sent: '+str(exc))
                     return self._save(cmd,result)
                 now=clock_ms(); quote_age=now-quote_time_ms
                 if now>cmd['expires_ms'] or quote_age < -2000 or quote_age>cmd.get('max_quote_age_ms',3000):
