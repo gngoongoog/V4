@@ -85,7 +85,11 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  assert(JSON.stringify(diagnostic).includes('ردود تعبئة MT5'),
   'An acknowledged MT5 Deal must not be called certified completed execution');
  const expert=exportsObj.BrainControlsOperations({
-  source:{...scopedBrain,trading_mode:'expert',selected_owner:'system',brains:[
+  source:{...scopedBrain,trading_mode:'expert',selected_owner:'system',
+   mode_participation_summary:{source:'current_broker_account_mode_and_core_controls',
+    eligible_for_decision:1,secondary_brains:16,paper_enabled:5,
+    note:'One eligible Expert advisor; actual signals not yet observed'},
+   brains:[
    {name:'system',config:{id:'system'}},
    {name:'Trend',config:{id:'trend'},control:{advisor:true,paper:true},
     participates_in_coordinator:true,decision_participation:{
@@ -93,6 +97,8 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
   disabled:false,armed:false,onSave:async()=>{}
  });
  assert(JSON.stringify(expert).includes('Expert eligible if ready'));
+ assert(JSON.stringify(expert).includes('One eligible Expert advisor; actual signals not yet observed'),
+  'Brain-room summary must show Core-backed eligibility and never invent trading outcomes');
  const expertAdvisor=nodes(expert).find(x=>x.type==='button'&&String(x.props['aria-label']||'').includes('مشاركة trend'));
  assert(expertAdvisor&&!expertAdvisor.props.disabled,'Expert advisor changes affect the real coordinator');
  assert(JSON.stringify(expert).includes('تُفترض مشاركة')===false);
