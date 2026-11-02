@@ -1106,6 +1106,29 @@ mod tests {
         );
     }
     #[test]
+    fn ces_range_research_uses_same_cost_emulator_but_rejects_tick_spike(){
+        let mut h=fixture(150);
+        h.bars=crate::ces::tests::pressure_fixture().into_iter()
+            .map(|candle|HistoryBar{candle,spread_points:2}).collect();
+        for b in &mut h.bars[138..]{
+            b.candle.high=2000.03;b.candle.low=1999.99;
+            b.candle.close=2000.01;
+        }
+        let mut o=options(150);o.from=BASE+100*60;o.strategy=Strategy::CesV1;
+        let legacy=execute(&h,&o);
+        assert_eq!(legacy.trades.len(),1,"CES v1 executable signal remains unchanged");
+        o.strategy=Strategy::CesRangeResearch;
+        let candidate=execute(&h,&o);
+        assert_eq!(candidate.trades.len(),0,
+            "A huge tick-count spike without matching range must not trigger range EPI");
+        assert!(candidate.algorithm.contains("research"));
+        assert!(candidate.warnings.iter().any(|v|v.contains("بحثي فقط")));
+        assert_eq!(serde_json::to_string(&candidate).unwrap(),
+            serde_json::to_string(&execute(&h,&o)).unwrap(),
+            "Research variant must be deterministic");
+    }
+
+    #[test]
     fn complete_aggregation_never_fills_holes() {
         let mut h = fixture(30);
         assert_eq!(aggregate(&h.bars, 900).len(), 2);
