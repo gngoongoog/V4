@@ -76,11 +76,34 @@ const foreignLedger=render({status,source:{...view,partial_exit_draft_ledger:{..
 assert(!shown(foreignLedger).includes('سجل مسودات TP المحفوظة'),'Never show another account draft');
 const forgedLedger=render({status,source:{...view,partial_exit_draft_ledger:{...scopedLedger,orders_enabled:true}}});
 assert(!shown(forgedLedger).includes('سجل مسودات TP المحفوظة'),'Never show an executable ledger as read-only');
+const stageResponse={schema:'partial-exit-stage-plans-v1',
+ status:'draft_identities_only',context,target:'demo',
+ read_only:true,orders_enabled:false,stage_execution_supported:false,
+ rows:[{position_identifier:42,stage:1,planned_volume:0.05,state:'prepared_only'},
+       {position_identifier:42,stage:2,planned_volume:0.03,state:'review_required'}]};
+const withStages=render({status,source:{
+ ...view,partial_exit_draft_ledger:scopedLedger,partial_exit_stage_plans:stageResponse}});
+assert(shown(withStages).includes('هويات مراحل TP المحفوظة'));
+assert(shown(withStages).includes('أُلغي اعتماد الخطة'));
+assert(!collect(withStages).some(x=>x.type==='button'),'TP stage plans are diagnostics only');
+const mismatchedStages=render({status,source:{
+ ...view,partial_exit_draft_ledger:scopedLedger,
+ partial_exit_stage_plans:{...stageResponse,context:'other'}}});
+assert(!shown(mismatchedStages).includes('هويات مراحل TP المحفوظة'));
+const executableStages=render({status,source:{
+ ...view,partial_exit_draft_ledger:scopedLedger,
+ partial_exit_stage_plans:{...stageResponse,stage_execution_supported:true}}});
+assert(!shown(executableStages).includes('هويات مراحل TP المحفوظة'));
 const core=file('../../crates/runtime/src/execution.rs');
 const domain=file('../../crates/domain/src/partial_exit.rs');
 const terminal=file('src/terminal.tsx');
 assert(core.includes('value["partial_exit_preview"]=if status.gateway_fresh && self.account_matches(status)'));
 assert(core.includes('value["partial_exit_draft_ledger"]=if status.gateway_fresh && self.account_matches(status)'));
+assert(core.includes('value["partial_exit_stage_plans"]=if status.gateway_fresh && self.account_matches(status)'));
+const stageSource=file('../../crates/runtime/src/partial_exit_stage.rs');
+assert(stageSource.includes('PRIMARY KEY(context,target,position_identifier,stage)'));
+assert(stageSource.includes('review_required'));
+assert(!stageSource.includes('order_send('));
 const ledgerSource=file('../../crates/runtime/src/partial_exit_ledger.rs');
 assert(ledgerSource.includes('position_missing_unverified'));
 assert(ledgerSource.includes('volume_changed_unverified'));
