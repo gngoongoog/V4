@@ -103,6 +103,8 @@ shadowReport.inactive_forward={
   mode,source:i===0?'not_studied_from_candle_snapshots':'inactive_mode_forward_on_bound_demo_completed_bars',
   status:i===0?'tick_native_not_supported':'recent_historical_observation',
   samples:i===0?0:i*2,scored_after_future_bars:i===0?0:i,
+  rejected_or_unverifiable_scored:0,
+  scoring_validation:'same_causal_cost_horizon_validator_as_learning_core',
   horizon:['tick_native_not_studied','12_completed_M1_bars_approx_12_minutes',
    '12_completed_H4_bars_approx_48_hours','12_completed_advisor_timeframe_bars'][i],
   broker_orders:false,demo_broker_fills:false,independent_frozen_oos:false
@@ -118,7 +120,17 @@ assert(JSON.stringify(shadowPanel).includes('48 ساعة'),
 const forged=clone(shadowReport);
 forged.inactive_forward.broker_orders=true;
 assert(!JSON.stringify(component.ModeEvidenceOperations({status,report:forged,disabled:false,onRefresh:()=>{}}))
- .includes('نضج تقييمها'),'Forge claiming broker orders must not display background learning');
+ .includes('نتائج تحقّق منها Core'),'Forge claiming broker orders must not display background learning');
+const falseReceipt=clone(shadowReport);
+falseReceipt.inactive_forward.modes[2].rejected_or_unverifiable_scored=25;
+assert(!JSON.stringify(component.ModeEvidenceOperations({status,report:falseReceipt,disabled:false,onRefresh:()=>{}}))
+ .includes('نتائج تحقّق منها Core'),
+ 'Impossible valid+invalid score totals must not appear as verified model evidence');
+const oldValidator=clone(shadowReport);
+delete oldValidator.inactive_forward.modes[2].scoring_validation;
+assert(!JSON.stringify(component.ModeEvidenceOperations({status,report:oldValidator,disabled:false,onRefresh:()=>{}}))
+ .includes('نتائج تحقّق منها Core'),
+ 'Old reports without Core causal-cost validation cannot be presented as trustworthy scores');
 
 const stale=component.ModeEvidenceOperations({status:{...status,gateway_fresh:false},report:poor,disabled:false,onRefresh:()=>{}});
 assert.equal(nodes(stale).filter(x=>x.type==='tr').length,0,'stale account never paints mode scores');
