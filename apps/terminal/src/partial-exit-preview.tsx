@@ -51,6 +51,15 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
   dealAudit.target===(t?.demo?'demo':'live')&&dealAudit.read_only===true&&
   dealAudit.orders_enabled===false&&dealAudit.tp_stage_execution_supported===false;
  const dealRows=dealAuditBound&&Array.isArray(dealAudit.rows)?dealAudit.rows.slice(0,25).map(object):[];
+ const settlements=object(view.partial_exit_stage_settlements);
+ const settlementsBound=verified&&t?.demo===true&&
+  settlements.schema==='partial-exit-stage-settlements-v1'&&
+  settlements.status==='account_scoped_historical_settlements'&&
+  settlements.context===context&&settlements.target==='demo'&&
+  settlements.read_only===true&&settlements.orders_enabled===false&&
+  settlements.next_stage_authorized===false&&settlements.breakeven_enabled===false;
+ const settlementRows=settlementsBound&&Array.isArray(settlements.rows)?
+  settlements.rows.slice(0,75).map(object):[];
  const commandLinks=object(view.partial_exit_command_links);
  const commandLinksBound=verified&&commandLinks.schema==='partial-exit-stage-command-links-v1'&&
   commandLinks.status==='broker_stage_links_read_only'&&commandLinks.context===context&&
@@ -132,6 +141,23 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
        <span>الحجم الأصلي {volume(d.initial_volume)} لوت</span>
       </div>)}
     </div>:null}
+   {settlementsBound?<details className="operator-advanced" aria-label="تسوية مراحل TP الموثقة مع المركز">
+     <summary>تسوية TP1/TP2/TP3 مع حجم المركز الحقيقي — قراءة فقط</summary>
+     <p className="safe-note">التسوية تحتاج سجل أمر الوسيط وصفقات Deal مطابقة مع لقطة مركز MT5 الكاملة بعد كل مرحلة، بالتسلسل. توثيق مرحلة سابقة لا يسمح بتنفيذ التالية ولا ينقل الوقف إلى التعادل.</p>
+     {settlementRows.length===0?<p>لا توجد خطط TP محفوظة للتسوية في هذا الحساب.</p>:
+      settlementRows.map((r,i)=>{
+       const sealed=r.state==='historical_stage_sealed'&&
+        r.next_stage_authorized===false&&r.breakeven_triggered===false&&
+        Number.isSafeInteger(r.broker_order)&&valid(r.matched_volume);
+       return <div className="brain-control-row" key={String(r.plan_id)+'-'+i}>
+        <div><b>TP{[1,2,3].includes(Number(r.stage))?String(r.stage):'؟'} — مركز {Number.isSafeInteger(r.position_identifier)?String(r.position_identifier):'—'}</b>
+         <small style={{display:'block',marginTop:4}}>{sealed?
+          'مطابقة تاريخية محفوظة: أمر MT5 والـDeals وحجم المركز المتبقي':'بانتظار إثبات سجل الوسيط ولقطة المركز المتبقية'}</small>
+        </div>
+        <span>{sealed?volume(r.matched_volume)+' لوت مُصالح':'غير مُصالح'}</span>
+       </div>;
+      })}
+    </details>:null}
    {commandLinksBound?<details className="operator-advanced" aria-label="سلسلة دليل ربط مراحل TP بالأوامر">
      <summary>مطابقة مرحلة TP مع أمر Core وصفقات MT5 — للقراءة فقط</summary>
      <p className="safe-note">نجاح المطابقة التاريخية يحتاج هوية الخطة وأمر Core الأصلي ورقم أمر MT5 وتذاكر Deals الفعلية وحجمها. لا يُفعّل هذا العرض المرحلة التالية أو ينقل وقف الخسارة للتعادل.</p>
