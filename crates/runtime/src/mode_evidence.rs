@@ -126,6 +126,7 @@ fn inactive_mode_forward(db:&Connection,context:&str,now:u64)->Result<Value>{
                         THEN CAST(json_extract(payload,'$.observed_ms') AS INTEGER) END)
                 FROM coordinator_samples
                 WHERE CASE WHEN json_valid(source) THEN json_extract(source,'$[0]') END=?1
+                    AND CASE WHEN json_valid(source) THEN json_extract(source,'$[1]') END='inactive-mode-forward-v1'
                     AND CASE WHEN json_valid(source) THEN json_extract(source,'$[2]') END=?2
                     AND CASE WHEN json_valid(payload) THEN
                         json_extract(payload,'$.observation_origin') END='inactive_mode_forward'
@@ -154,12 +155,12 @@ fn inactive_mode_forward(db:&Connection,context:&str,now:u64)->Result<Value>{
             "source":if mode==TradingMode::Sniper {"not_studied_from_candle_snapshots"}
                 else{"inactive_mode_forward_on_bound_demo_completed_bars"},
             "broker_orders":false,"demo_broker_fills":false,
-            "independent_frozen_oos":false
+            "independent_frozen_oos":false,"promoted_to_execution":false
         }));
     }
     Ok(json!({"modes":modes,"source":"prospective_inactive_mode_candle_forward_only",
         "scope":"exact_current_demo_account_symbol_not_real_account",
-        "training_note":"Forward samples are matured with later completed bars; not broker fills, tick-native Sniper, or independently held-out proof.",
+        "training_note":"Forward samples are matured with later completed bars and isolated in inactive-mode-forward-v1; not broker fills, tick-native Sniper, frozen OOS proof or automatic execution model promotion.",
         "broker_orders":false,"can_promote_to_live":false}))
 }
 
@@ -228,7 +229,9 @@ mod tests{
             (key.as_str(),"expert",100u64,"active_mode_forward",Some(json!({"state":"scored"}))),
             (other.as_str(),"swing",130u64,"inactive_mode_forward",Some(json!({"state":"scored"}))),
         ]{
-            let source=serde_json::to_string(&(context,"adaptive-member-v1",mode,"trend","M1","")).unwrap();
+            let source=serde_json::to_string(&(context,
+                if origin=="active_mode_forward" {"adaptive-member-v1"}else{"inactive-mode-forward-v1"},
+                mode,"trend","M1","")).unwrap();
             let kind=if mode=="expert" {"inactive_expert_advisor_signal_not_consensus"}
                 else{"inactive_primary_mode_signal"};
             let value=json!({"observation_origin":origin,"study_kind":kind,
@@ -245,7 +248,7 @@ mod tests{
             "Current active-mode observations must never masquerade as background learning");
         // Changing the declared study kind cannot make a Trend advisor a
         // valid primary-mode observation (nor vice versa).
-        let wrong=serde_json::to_string(&(key.as_str(),"adaptive-member-v1","scalping","trend","M1","")).unwrap();
+        let wrong=serde_json::to_string(&(key.as_str(),"inactive-mode-forward-v1","scalping","trend","M1","")).unwrap();
         let fake=json!({"observation_origin":"inactive_mode_forward",
             "study_kind":"inactive_primary_mode_signal","observed_ms":125000,
             "live_broker_orders":false}).to_string();
