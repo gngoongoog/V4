@@ -152,6 +152,12 @@ fn inactive_mode_forward(db:&Connection,context:&str,now:u64)->Result<Value>{
                     {"recent_historical_observation"}else{"historical_observation_stale"},
             "samples":count,"scored_after_future_bars":scored,
             "last_observed_ms":last,
+            "horizon":match mode{
+                TradingMode::Sniper=>"tick_native_not_studied",
+                TradingMode::Scalping=>"12_completed_M1_bars_approx_12_minutes",
+                TradingMode::Swing=>"12_completed_H4_bars_approx_48_hours",
+                TradingMode::Expert=>"12_completed_advisor_timeframe_bars",
+            },
             "source":if mode==TradingMode::Sniper {"not_studied_from_candle_snapshots"}
                 else{"inactive_mode_forward_on_bound_demo_completed_bars"},
             "broker_orders":false,"demo_broker_fills":false,
