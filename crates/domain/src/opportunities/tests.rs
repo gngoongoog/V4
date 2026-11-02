@@ -72,6 +72,50 @@ fn dom_requires_two_valid_uncrossed_sides() {
     t.dom.pop();assert!(!dom::assess(&t,120_000).available);
 }
 #[test]
+fn dom_fails_closed_on_missing_receipt_stale_book_or_stale_bid_ask(){
+    let mut t=quote();t.dom_available=true;
+    t.dom=vec![DomLevel{side:"buy".into(),price:100.,volume:5.},
+               DomLevel{side:"sell".into(),price:100.1,volume:1.}];
+    t.quote_time_ms=Some(120_000);t.tick_age_ms=Some(0);
+    assert!(!dom::assess(&t,120_000).available,
+        "Legacy snapshots with no DOM receipt must not trade");
+    t.dom_observed_ms=Some(117_000);
+    assert!(!dom::assess(&t,120_000).available,
+        "A stale broker book must not vote");
+    t.dom_observed_ms=Some(120_000);t.quote_time_ms=Some(117_000);
+    assert!(!dom::assess(&t,120_000).available,
+        "A fresh book with stale executable quote is not sufficient");
+    t.quote_time_ms=Some(120_000);
+    assert!(dom::assess(&t,120_000).available);
+    t.dom_observed_ms=Some(200_000);
+    assert!(!dom::assess(&t,120_000).available,
+        "Future-dated receipt must be rejected");
+}
+
+#[test]
+fn the_entry_profile_baseline_excludes_current_breakout_candle(){
+    let mut prior=(0..119u64).map(|i|Candle{
+        time:1_700_000_000+i*60,open:100.,high:101.,low:99.,
+        close:100.,tick_volume:100,
+    }).collect::<Vec<_>>();
+    let baseline=features::profile(&prior);
+    assert!(baseline.available);
+    let mut buy=prior.clone();
+    buy.push(Candle{time:1_700_000_000+119*60,open:101.,high:125.,low:100.,
+        close:124.,tick_volume:1_000_000});
+    let correct=features::profile(&buy[..buy.len()-1]);
+    assert_eq!(baseline.poc,correct.poc);
+    assert_eq!(baseline.value_low,correct.value_low);
+    assert_eq!(baseline.value_high,correct.value_high);
+    let contaminated=features::profile(&buy);
+    assert_ne!(contaminated.value_high,correct.value_high,
+        "Including breakout candle in the profile shifts its own threshold");
+    prior.push(Candle{time:1_700_000_000+119*60,open:100.,high:101.,low:99.,
+        close:100.,tick_volume:100});
+    assert_eq!(features::profile(&prior[..prior.len()-1]).value_high,correct.value_high);
+}
+
+#[test]
 fn short_series_never_fabricates_a_scan() {
     let out=scan(&MarketData::default(),"TEST",&TrendBrain::default(),&RegimeBrain::default(),120_000);
     assert!(!out.current && out.setups.is_empty() && out.gann.is_empty());
