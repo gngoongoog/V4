@@ -1092,8 +1092,12 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     }
                     if b.id == "generated" {
                         let raw:Option<String>=db.query_row("SELECT payload FROM studio_runs WHERE id=?1 AND context=?2 AND timeframe=?3",params![b.report_id,key,b.timeframe],|r|r.get(0)).optional()?;
-                        if raw.is_none() {
+                        let Some(raw)=raw else {
                             bail!("اختر تقريراً محفوظاً لنفس الحساب والرمز والفريم");
+                        };
+                        let report:braintrade_domain::studio::LabReport=serde_json::from_str(&raw)?;
+                        if !report.eligible_for_review {
+                            bail!("الاستراتيجية المولّدة لم تجتز أهلية مراجعة المختبر؛ تبقى للبحث/Paper ولا يسمح لها بإرسال أوامر MT5");
                         }
                     }
                 }
