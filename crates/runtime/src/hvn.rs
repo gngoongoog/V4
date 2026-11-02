@@ -153,9 +153,20 @@ impl Service{
                 Ok(json!({"queued":true,"id":id,"read_only":true,"trade_authorized":false}))
             }
             ("GET","/v1/gateway/hvn/request")=>{
-                let Some(p)=self.pending.as_mut() else{return Ok(json!({"job":null}));};
+                let Some(p)=self.pending.as_ref() else{return Ok(json!({"job":null}));};
                 if p.dispatched || s.requested_run {return Ok(json!({"job":null}));}
+                // An operator can open a manual MT5 position AFTER pressing
+                // "measure" but BEFORE the Gateway next fetches this job.
+                // Recheck the latest broker snapshot at actual dispatch.
+                // The request was not handed to copy_ticks_range, so cancel
+                // it without ever creating a trading START fence.
                 let t=s.telemetry.as_ref().ok_or_else(||anyhow!("MT5 not ready"))?;
+                if !t.positions.is_empty() || t.pending_orders!=0 {
+                    self.pending=None;
+                    self.note="تغيّرت حالة مراكز أو أوامر MT5 قبل قراءة HVN؛ أُلغي الطلب دون قراءة تيكات".into();
+                    return Ok(json!({"job":null,"read_only":true}));
+                }
+                let p=self.pending.as_mut().expect("queued HVN request");
                 p.dispatched=true;
                 Ok(json!({"job":{"id":p.id,"server":t.server,"login":t.login,
                     "symbol":t.symbol,"currency":t.currency,"now_ms":p.requested_ms,
@@ -214,6 +225,29 @@ mod tests{
         assert_eq!(h.route("POST","/v1/hvn/request",b"{}",&s,now).unwrap()["queued"],true);
         assert!(h.pending(now));
         assert!(h.route("POST","/v1/hvn/request",b"{}",&s,now).is_err());
+    }
+    #[test]fn manual_position_or_order_between_request_and_gateway_dispatch_cancels_read(){
+        let now=100_000;
+        for case in 0..2 {
+            let mut h=Service::default();
+            let s=status();
+            let reply=h.route("POST","/v1/hvn/request",b"{}",&s,now).unwrap();
+            assert_eq!(reply["queued"],true);
+            let mut changed=s.clone();
+            if case==0 {
+                changed.telemetry.as_mut().unwrap().positions.push(Default::default());
+            }else{
+                changed.telemetry.as_mut().unwrap().pending_orders=1;
+            }
+            let next=h.route("GET","/v1/gateway/hvn/request",b"",&changed,now+500).unwrap();
+            assert!(next["job"].is_null(),"An account with new broker exposure must not start MT5 tick history");
+            assert!(!h.pending(now+500),"Unsent request must be retired");
+            let audit=h.route("GET","/v1/hvn",b"",&changed,now+500).unwrap();
+            assert!(audit["note"].as_str().unwrap_or("").contains("أُلغي"));
+            assert_eq!(h.route("GET","/v1/gateway/hvn/request",b"",&changed,now+1000).unwrap()["job"],Value::Null);
+            assert!(h.route("POST","/v1/hvn/request",b"{}",&s,now+1000).is_ok(),
+                "Flat broker can submit a fresh explicit request");
+        }
     }
     #[test]fn account_change_and_future_nodes_never_enter_report(){
         let now=100_000;let mut h=Service::default();let s=status();
