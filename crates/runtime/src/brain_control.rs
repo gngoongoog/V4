@@ -68,19 +68,64 @@ pub fn sample(db:&Connection,key:&str,mode:TradingMode,id:&str,s:&Signal,now:u64
         params![key,mode_key(mode),id,mark,now])?;
     Ok(())
 }
+/// What the CURRENT coordinator really does with this brain. These fields
+/// describe *decision eligibility*, not whether a market signal exists, was
+/// filled, or produced valid out-of-sample learning evidence.
+fn participation(
+    mode:TradingMode,id:&str,owner:Option<&str>,
+    control:Control,return_pending:bool,sniper_selected:Option<bool>,
+)->(Option<bool>,&'static str,&'static str) {
+    if owner.is_none() {
+        return (None,"unverified","حساب التنفيذ أو الوضع غير مؤكد؛ لا ننسب للعقل مشاركة فعلية");
+    }
+    if id=="system" {
+        return (Some(false),"system_owner","هذا منسق التنفيذ وليس مستشاراً فرعياً");
+    }
+    if owner==Some(id) {
+        return (Some(false),"solo_owner","هذا العقل هو المنفّذ المنفرد؛ زر المشاركة لا يتحكم بصلاحية SOLO");
+    }
+    if owner!=Some("system") {
+        return (Some(false),"solo_other","عقل آخر يملك تنفيذ SOLO؛ بقية المستشارين للمراقبة وPaper");
+    }
+    if return_pending {
+        return (Some(false),"return_pending","أوامر أو مركز قديم لهذا العقل لم تُسوَّ بعد؛ لا ينضم للمنسق");
+    }
+    if !control.advisor {
+        return (Some(false),"advisor_disabled","المشاركة متوقفة لهذا العقل في الحساب والوضع الحاليين");
+    }
+    match mode {
+        TradingMode::Expert =>
+            (Some(true),"expert_eligible","مؤهل للتصويت في Expert إذا أعطى إشارة جاهزة؛ هذا ليس تنفيذ صفقة أو إثبات ربح"),
+        TradingMode::Sniper if id=="sniper_learner" => match sniper_selected {
+            Some(true)=>(Some(true),"sniper_learner_eligible","القناص المتعلّم مختار ومشارك؛ تبقى بوابات الإشارة والمخاطر والتنفيذ مستقلة"),
+            Some(false)=>(Some(false),"sniper_classic_selected","القناص الكلاسيكي مختار؛ إشارات Learner لا تفتح صفقات بهذا الإعداد"),
+            None=>(None,"sniper_selection_unverified","اختيار القناص Classic/Learner غير مؤكد من Core؛ لا ننسب مشاركة"),
+        },
+        TradingMode::Sniper =>
+            (Some(false),"sniper_diagnostic","هذا العقل تشخيصي في وضع Sniper، وليس مصدراً لتغيير قرار القناص"),
+        TradingMode::Scalping =>
+            (Some(false),"scalping_diagnostic","العقول الفرعية تشخيصية في Scalping؛ إشارة الوضع الرئيسي لا تُحجب بتصويتها"),
+        TradingMode::Swing =>
+            (Some(false),"swing_diagnostic","العقول الفرعية تشخيصية في Swing؛ إشارة الوضع الرئيسي لا تُحجب بتصويتها"),
+    }
+}
+
 pub fn enrich(value:&mut Value,db:&Connection,key:&str,mode:TradingMode,account_mode:Option<i32>,sniper_selected:Option<bool>)->Result<()> {
     let controls=load_account(db,key,mode,account_mode)?;
-    let coordinator_active=value["selected_owner"]=="system";
+    let selected_owner=value["selected_owner"].as_str().map(str::to_owned);
     let activity_key=account_key(key,account_mode);
     value["trading_mode"]=json!(mode);
     value["activity_note"]=json!("الإشارات: رصد جاهزية بعينة واحدة/ثانية مع حذف تكرار مفتاح الإشارة. ليست عدداً لكل نبضة سعر ولا أوامر منفذة. الإحصاءات أدناه للحساب والرمز والوضع الحالي فقط.");
     for b in value["brains"].as_array_mut().into_iter().flatten() {
         let id=b["config"]["id"].as_str().unwrap_or("").to_owned();
-        b["control"]=json!(controls.get(&id).copied().unwrap_or_default());
-        let eligible=coordinator_active && id!="system" && controls.get(&id).is_none_or(|c|c.advisor) && b["return_pending"]!=true;
-        b["participates_in_coordinator"]=if mode==TradingMode::Sniper && id=="sniper_learner" && eligible {
-            sniper_selected.map_or(Value::Null,|selected|json!(selected))
-        }else{json!(eligible && mode==TradingMode::Expert)};
+        let control=controls.get(&id).copied().unwrap_or_default();
+        b["control"]=json!(control);
+        let (eligible,status,reason)=participation(mode,&id,selected_owner.as_deref(),
+            control,b["return_pending"]==true,sniper_selected);
+        b["participates_in_coordinator"]=json!(eligible);
+        b["decision_participation"]=json!({"status":status,"reason":reason,
+            "eligible_for_mode_decision":eligible,
+            "note":"أهلية المشاركة ليست إشارة جاهزة أو صفقة وسيط أو تدريباً مثبتاً"});
         let activity:Option<(u64,u64,u64)>=db.query_row("SELECT checks,signals,last_ms FROM brain_activity WHERE context=?1 AND mode=?2 AND brain=?3",params![activity_key,mode_key(mode),id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
         let (checks,signals,last)=activity.unwrap_or_default();
         b["activity"]=json!({"checks":checks,"signals":signals,"last_ms":last});
@@ -111,6 +156,25 @@ pub fn enrich(value:&mut Value,db:&Connection,key:&str,mode:TradingMode,account_
 }
 #[cfg(test)] mod tests {
     use super::*;
+    #[test] fn decision_roles_are_truthful_across_all_four_modes_and_solo() {
+        let on=Control{advisor:true,paper:true};
+        let off=Control{advisor:false,paper:true};
+        for mode in [TradingMode::Scalping,TradingMode::Swing] {
+            let (effective,status,_)=participation(mode,"trend",Some("system"),on,false,Some(true));
+            assert_eq!(effective,Some(false));
+            assert!(status.ends_with("_diagnostic"));
+        }
+        assert_eq!(participation(TradingMode::Expert,"trend",Some("system"),on,false,None).0,Some(true));
+        assert_eq!(participation(TradingMode::Expert,"trend",Some("system"),off,false,None).1,"advisor_disabled");
+        assert_eq!(participation(TradingMode::Expert,"trend",Some("system"),on,true,None).1,"return_pending");
+        assert_eq!(participation(TradingMode::Expert,"gann",Some("trend"),on,false,None).1,"solo_other");
+        assert_eq!(participation(TradingMode::Expert,"trend",Some("trend"),off,false,None).1,"solo_owner");
+        assert_eq!(participation(TradingMode::Expert,"trend",None,on,false,None).0,None);
+        assert_eq!(participation(TradingMode::Sniper,"sniper_learner",Some("system"),on,false,Some(true)).0,Some(true));
+        assert_eq!(participation(TradingMode::Sniper,"sniper_learner",Some("system"),on,false,Some(false)).0,Some(false));
+        assert_eq!(participation(TradingMode::Sniper,"sniper_learner",Some("system"),on,false,None).0,None);
+        assert_eq!(participation(TradingMode::Sniper,"gann",Some("system"),on,false,Some(true)).0,Some(false));
+    }
     #[test] fn demo_and_real_controls_separate_after_legacy_seed() {
         let db=Connection::open_in_memory().unwrap();init(&db).unwrap();
         save(&db,"same",TradingMode::Expert,"trend",Control{advisor:false,paper:true}).unwrap();
