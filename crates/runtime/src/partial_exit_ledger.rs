@@ -277,9 +277,9 @@ mod tests{
         observe(&d,&t,"demo",500).unwrap();
         t.positions.clear();
         observe(&d,&t,"demo",400).unwrap();
-        let report=report(&d,&t,"demo").unwrap();
-        assert_eq!(report["rows"][0]["state"],"draft_only");
-        assert_eq!(report["rows"][0]["last_seen_ms"],500);
+        let snapshot=report(&d,&t,"demo").unwrap();
+        assert_eq!(snapshot["rows"][0]["state"],"draft_only");
+        assert_eq!(snapshot["rows"][0]["last_seen_ms"],500);
         observe(&d,&t,"demo",600).unwrap();
         assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["state"],
             "position_missing_unverified");
