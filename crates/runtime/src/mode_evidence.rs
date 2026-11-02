@@ -88,13 +88,15 @@ pub(crate) fn report(db:&Connection,telemetry:Option<&Telemetry>,now:u64)->Resul
             "independent_oos":false,"promotion_authorized":false,
         }));
     }
+    let inactive_forward=inactive_mode_forward(db,&context,now)?;
     Ok(json!({
         "schema":"p1h-four-mode-evidence-v1","state":"observed",
         "verified_demo_account":true,"observed_ms":now,
         "context":context,
         "account":{"login":t.login,"server":t.server,"symbol":t.symbol,
             "currency":t.currency,"mode":0},
-        "modes":modes,"total_attributed_samples_not_independent":total,
+        "modes":modes,"inactive_forward":inactive_forward,
+        "total_attributed_samples_not_independent":total,
         "cross_mode_position_collisions":cross_mode_positions,
         "malformed_broker_samples":malformed_rows,
         "minimum_samples_per_mode":MIN_CLOSED,"sample_cap_per_mode":240,
@@ -102,6 +104,51 @@ pub(crate) fn report(db:&Connection,telemetry:Option<&Telemetry>,now:u64)->Resul
         "automatic_promotion":false,"independent_oos":false,
         "caveat":"Only closed Demo coordinator samples, by exact account, symbol and trading mode. These are online-trained historical results, NOT frozen policy forward-OOS, true-tick backtests or permission to trade REAL."
     }))
+}
+
+/// Shadow observations are prospective candle estimates, not booked MT5
+/// PnL, not a broker trade, and not independent frozen/OOS proof. Scope to
+/// exact Demo account context and source tuple mode, never fuzzy SQL LIKE.
+fn inactive_mode_forward(db:&Connection,context:&str,now:u64)->Result<Value>{
+    let exists:bool=db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='coordinator_samples')",
+        [],|r|r.get(0))?;
+    let mut modes=Vec::new();
+    for mode in [TradingMode::Sniper,TradingMode::Scalping,TradingMode::Swing,TradingMode::Expert] {
+        let label=serde_json::to_value(mode)?.as_str().unwrap_or("").to_owned();
+        let (count,scored,last):(u64,u64,Option<u64>)=if exists && mode!=TradingMode::Sniper {
+            db.query_row(
+                "SELECT COUNT(*),
+                    COALESCE(SUM(CASE WHEN outcome IS NOT NULL AND json_valid(outcome)
+                        AND json_extract(outcome,'$.state')='scored' THEN 1 ELSE 0 END),0),
+                    MAX(CASE WHEN json_valid(payload)
+                        THEN CAST(json_extract(payload,'$.observed_ms') AS INTEGER) END)
+                FROM coordinator_samples
+                WHERE CASE WHEN json_valid(source) THEN json_extract(source,'$[0]') END=?1
+                    AND CASE WHEN json_valid(source) THEN json_extract(source,'$[2]') END=?2
+                    AND CASE WHEN json_valid(payload) THEN
+                        json_extract(payload,'$.observation_origin') END='inactive_mode_forward'",
+                params![context,label],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))
+            )?
+        } else {(0,0,None)};
+        modes.push(json!({
+            "mode":label,
+            "status":if mode==TradingMode::Sniper {"tick_native_not_supported"}
+                else if count==0 {"no_prospective_samples"}
+                else if last.is_some_and(|ms|now.saturating_sub(ms)<=300_000)
+                    {"recent_historical_observation"}else{"historical_observation_stale"},
+            "samples":count,"scored_after_future_bars":scored,
+            "last_observed_ms":last,
+            "source":if mode==TradingMode::Sniper {"not_studied_from_candle_snapshots"}
+                else{"inactive_mode_forward_on_bound_demo_completed_bars"},
+            "broker_orders":false,"demo_broker_fills":false,
+            "independent_frozen_oos":false
+        }));
+    }
+    Ok(json!({"modes":modes,"source":"prospective_inactive_mode_candle_forward_only",
+        "scope":"exact_current_demo_account_symbol_not_real_account",
+        "training_note":"Forward samples are matured with later completed bars; not broker fills, tick-native Sniper, or independently held-out proof.",
+        "broker_orders":false,"can_promote_to_live":false}))
 }
 
 #[cfg(test)]
