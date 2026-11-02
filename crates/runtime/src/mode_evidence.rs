@@ -128,7 +128,15 @@ fn inactive_mode_forward(db:&Connection,context:&str,now:u64)->Result<Value>{
                 WHERE CASE WHEN json_valid(source) THEN json_extract(source,'$[0]') END=?1
                     AND CASE WHEN json_valid(source) THEN json_extract(source,'$[2]') END=?2
                     AND CASE WHEN json_valid(payload) THEN
-                        json_extract(payload,'$.observation_origin') END='inactive_mode_forward'",
+                        json_extract(payload,'$.observation_origin') END='inactive_mode_forward'
+                    AND CASE WHEN json_valid(payload) THEN
+                        json_extract(payload,'$.study_kind') END=
+                        CASE WHEN ?2='expert' THEN 'inactive_expert_advisor_signal_not_consensus'
+                        ELSE 'inactive_primary_mode_signal' END
+                    AND (CASE WHEN json_valid(source) THEN json_extract(source,'$[3]') END)
+                        IS NOT NULL
+                    AND ((?2='expert' AND json_extract(source,'$[3]') NOT IN ('system','sniper_learner'))
+                      OR (?2 IN ('scalping','swing') AND json_extract(source,'$[3]')='system'))",
                 params![context,label],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))
             )?
         } else {(0,0,None)};
@@ -218,8 +226,10 @@ mod tests{
             (other.as_str(),"swing",130u64,"inactive_mode_forward",Some(json!({"state":"scored"}))),
         ]{
             let source=serde_json::to_string(&(context,"adaptive-member-v1",mode,"trend","M1","")).unwrap();
-            let value=json!({"observation_origin":origin,"observed_ms":bar*1000u64,
-                "live_broker_orders":false});
+            let kind=if mode=="expert" {"inactive_expert_advisor_signal_not_consensus"}
+                else{"inactive_primary_mode_signal"};
+            let value=json!({"observation_origin":origin,"study_kind":kind,
+                "observed_ms":bar*1000u64,"live_broker_orders":false});
             db.execute("INSERT INTO coordinator_samples VALUES(?1,?2,?3,?4)",
                 params![source,bar,value.to_string(),outcome.map(|v|v.to_string())]).unwrap();
         }
@@ -230,6 +240,17 @@ mod tests{
         assert_eq!(v["inactive_forward"]["modes"][2]["broker_orders"],false);
         assert_eq!(v["inactive_forward"]["modes"][3]["samples"],0,
             "Current active-mode observations must never masquerade as background learning");
+        // Changing the declared study kind cannot make a Trend advisor a
+        // valid primary-mode observation (nor vice versa).
+        let wrong=serde_json::to_string(&(key.as_str(),"adaptive-member-v1","scalping","trend","M1","")).unwrap();
+        let fake=json!({"observation_origin":"inactive_mode_forward",
+            "study_kind":"inactive_primary_mode_signal","observed_ms":125000,
+            "live_broker_orders":false}).to_string();
+        db.execute("INSERT INTO coordinator_samples VALUES(?1,125,?2,NULL)",
+            params![wrong,fake]).unwrap();
+        let checked=report(&db,Some(&t),125_000).unwrap();
+        assert_eq!(checked["inactive_forward"]["modes"][1]["samples"],0,
+            "A secondary advisor cannot impersonate Scalping's primary entry policy");
         assert_eq!(v["inactive_forward"]["modes"][0]["status"],"tick_native_not_supported");
         assert_eq!(v["modes"][2]["closed_costed_samples"],0,
             "Forward candle outcomes must not become booked MT5 Demo fills");
