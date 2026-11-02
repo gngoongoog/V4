@@ -91,9 +91,9 @@ fn evaluate(db:&Connection,t:&Telemetry,target:&str,key:&str,pid:u64,stage:u32,
     {return Ok(json!({"state":"gateway_request_not_matching_stage"}))}
     let other_claims:u64=db.query_row(
         "SELECT COUNT(*) FROM broker_commands WHERE context=?1 AND id<>?2
-         AND kind='close' AND json_valid(result) AND json_valid(payload)
-         AND CAST(json_extract(result,'$.order') AS INTEGER)=?3
-         AND json_extract(payload,'$.tp_stage_plan_id') IS NOT NULL",
+         AND kind='close'
+         AND CAST(CASE WHEN json_valid(result) THEN json_extract(result,'$.order') ELSE NULL END AS INTEGER)=?3
+         AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.tp_stage_plan_id') ELSE NULL END IS NOT NULL",
         params![key,id,order],|r|r.get(0))?;
     if other_claims>0{return Ok(json!({"state":"broker_order_claimed_by_multiple_stages"}))}
     let Some(tickets)=receipt["deals"].as_array().filter(|v|!v.is_empty()&&v.len()<=50) else{
@@ -296,6 +296,13 @@ mod tests{
         d.execute("UPDATE broker_commands SET result=json_set(result,'$.deals',json_array(901))",[]).unwrap();
         d.execute("UPDATE broker_deals SET payload=json_set(payload,'$.volume',0.04)",[]).unwrap();
         assert_eq!(e(&d,&t)["state"],"broker_fill_lots_do_not_cover_stage");
+    }
+    #[test]
+    fn corrupt_unrelated_command_journal_does_not_crash_stage_proof(){
+        let d=db();let t=sample_telemetry();seed(&d,&t);
+        d.execute("INSERT INTO broker_commands VALUES ('bad',?1,'gann','close',140,'unknown',
+            'not valid json','not valid json')",[ctx(&t)]).unwrap();
+        assert_eq!(e(&d,&t)["state"],"broker_order_deals_exactly_linked");
     }
     #[test]
     fn older_broker_history_without_order_id_cannot_be_claimed_as_tp_proof(){
