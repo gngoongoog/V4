@@ -257,7 +257,7 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
     // Scalping/Swing (and classic Sniper), these votes are only diagnostic.
     // Keep Paper independent and actionable even for research-only brains.
     const votingMode=modeName==='expert'||(modeName==='sniper'&&id==='sniper_learner'&&
-      decision.status!=='sniper_classic_selected'&&decision.status!=='sniper_selection_unverified');
+      (decision.status==='sniper_learner_eligible'||decision.status==='advisor_disabled'));
     const advisorSelectable=canEdit&&known&&votingMode&&view.selected_owner==='system';
     const paperSelectable=canEdit&&known;
     return <article key={id} className={'concept-brain-card '+(activeBrain===id?'selected':'')}>
