@@ -101,11 +101,15 @@ def calculate_hvn(ticks, *, server, login, symbol, currency, tick_size,
         if (trade_change and last is not None and last > 0
                 and real_volume is not None and real_volume > 0):
             trades.append((timestamp, last, real_volume))
-        elif quote_change:
+        # MT5 can report bid/ask AND trade changes on the SAME tick. These are
+        # two independent evidence streams, never added together. Count every
+        # changed quote in the quote proxy, even if a trade was also observed.
+        # Only ONE stream is selected for the resulting HVN source below.
+        if quote_change:
             bid = _number(_field(row, "bid"))
             ask = _number(_field(row, "ask"))
             if bid is not None and ask is not None and bid > 0 and ask >= bid:
-                # ONE changed quote, not a transaction. Never infer buyer/seller.
+                # ONE changed quote event; NOT a transaction or buyer/seller.
                 quotes.append((timestamp, (bid + ask) / 2.0, 1.0))
 
     if len(trades) >= min_events:
