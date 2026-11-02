@@ -22,6 +22,12 @@ def check(api, snapshot):
     rejected('/v1/backtest/start',dict(request,to_date='2024-02-30'))
     rejected('/v1/backtest/start',dict(request,to_date='2099-01-01'))
     api('/v1/backtest/start',request)
+    # A live Gateway history import must fence out read-only HVN tick
+    # research; the two read types share one broker background worker.
+    try: api('/v1/hvn/request',{'window_ms':60_000})
+    except urllib.error.HTTPError as error:
+        assert error.code==400 and b'Backtest' in error.read()
+    else: raise AssertionError('HVN was admitted during MT5 Backtest history import')
     old=api('/v1/gateway/history/request')['job']
     api('/v1/backtest/cancel',{})
     rejected('/v1/gateway/history/chunk',dict(old,bars=[],error=''))
