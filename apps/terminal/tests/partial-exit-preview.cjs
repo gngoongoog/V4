@@ -118,6 +118,23 @@ assert(!shown(forgedFill).includes('صافي قيود الوسيط المحفو�
  'Never show costed trade performance from a forged TP completion');
 assert(!shown(forgedFill).includes('0.04 لوت مُغلق'),
  'TP completion asserted without an executable command must never get credit');
+const linked={schema:'partial-exit-stage-command-links-v1',
+ status:'broker_stage_links_read_only',context,target:'demo',
+ read_only:true,orders_enabled:false,stage_execution_supported:false,
+ rows:[{position_identifier:907,stage:1,plan_id:'tp-plan-a',
+ evidence:{state:'broker_order_deals_exactly_linked',matched_broker_lots:0.05,
+          stage_completed:false,orders_enabled:false}}]};
+const linkView=render({status,source:{...view,partial_exit_command_links:linked}});
+assert(shown(linkView).includes('مطابقة مرحلة TP مع أمر Core'));
+assert(shown(linkView).includes('0.05 لوت موثق'));
+assert(!collect(linkView).some(x=>x.type==='button'));
+const badLinked=render({status,source:{...view,partial_exit_command_links:{...linked,context:'foreign'}}});
+assert(!shown(badLinked).includes('مطابقة مرحلة TP مع أمر Core'));
+const stagedFalseProof=render({status,source:{...view,partial_exit_command_links:{
+ ...linked,rows:[{position_identifier:907,stage:1,plan_id:'tp-plan-a',
+ evidence:{state:'broker_order_deals_exactly_linked',matched_broker_lots:0.05,
+ stage_completed:true,orders_enabled:true}}]}}});
+assert(!shown(stagedFalseProof).includes('0.05 لوت موثق'));
 const core=file('../../crates/runtime/src/execution.rs');
 const domain=file('../../crates/domain/src/partial_exit.rs');
 const terminal=file('src/terminal.tsx');
@@ -125,6 +142,12 @@ assert(core.includes('value["partial_exit_preview"]=if status.gateway_fresh && s
 assert(core.includes('value["partial_exit_draft_ledger"]=if status.gateway_fresh && self.account_matches(status)'));
 assert(core.includes('value["partial_exit_stage_plans"]=if status.gateway_fresh && self.account_matches(status)'));
 assert(core.includes('value["partial_exit_deal_evidence"]=if status.gateway_fresh && self.account_matches(status)'));
+assert(core.includes('value["partial_exit_command_links"]=if status.gateway_fresh && self.account_matches(status)'));
+const linkRust=file('../../crates/runtime/src/partial_exit_link.rs');
+assert(linkRust.includes('broker_order_deals_exactly_linked'));
+assert(linkRust.includes('d["order"].as_u64()!=Some(order)'));
+assert(!linkRust.includes('order_send('));
+
 const evidenceSrc=file('../../crates/runtime/src/partial_exit_evidence.rs');
 assert(evidenceSrc.includes('tp_stage_attribution_verified'));
 assert(evidenceSrc.includes('broker_partial_exit_unattributed'));
