@@ -18,12 +18,24 @@ pub struct DomBrain {
 
 /// Reads broker-provided MT5 Market Book depth only. This is resting depth, not executed
 /// order flow, footprint delta, hidden liquidity or exchange-wide volume.
-pub fn assess(t: &Telemetry) -> DomBrain {
+pub fn assess(t: &Telemetry,now:u64) -> DomBrain {
     let mut out = DomBrain {
         note: "DOM غير متاح من الوسيط/الرمز؛ لا يتم تعويضه ببيانات شموع مصطنعة.".into(),
         ..Default::default()
     };
     if !t.connected || !t.dom_available || t.dom.is_empty() {
+        return out;
+    }
+    // This attests only that the Gateway READ the book recently, NOT that
+    // its liquidity providers updated their book. No receipt or stale quote
+    // => fail closed, even when the bool and levels claim "available".
+    if t.dom_observed_ms.is_none_or(|ms| ms==0 || ms>now.saturating_add(2_000)
+        || now.saturating_sub(ms)>1_500)
+        || t.tick_age_ms.is_none_or(|age|age>1_500)
+        || t.broker_quote_time_ms().is_none_or(|ms|ms>now.saturating_add(2_000)
+            || now.saturating_sub(ms)>1_500)
+    {
+        out.note="DOM غير موثق الحداثة: قراءة دفتر الوسيط أو سعره أقدم من 1500ms؛ لا قرار تداول.".into();
         return out;
     }
 
@@ -46,7 +58,7 @@ pub fn assess(t: &Telemetry) -> DomBrain {
 
     let best_bid = bids[0].price;
     let best_ask = asks[0].price;
-    if best_ask < best_bid || !best_bid.is_finite() || !best_ask.is_finite() {
+    if best_ask <= best_bid || !best_bid.is_finite() || !best_ask.is_finite() {
         out.note = "أفضل أسعار DOM غير صالحة أو متقاطعة؛ القراءة مرفوضة.".into();
         return out;
     }
