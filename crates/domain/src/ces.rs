@@ -19,6 +19,15 @@ pub struct Frame {
     pub negative_three: bool,
     pub side: i8,
 }
+impl Frame {
+    /// Alternative research-only policy. Uses the EXACT same entropy,
+    /// direction-bias and compression gates as the shipped CES tick-volume
+    /// policy; only the definition of EPI changes. Do not route this to
+    /// order execution or merge its evidence with ces-v1.
+    pub fn candle_range_side(&self)->i8{
+        direction(self.compressed,self.negative_three,self.epi_candle_range,self.dbd)
+    }
+}
 fn class(c: &Candle, tr: f64, atr: f64) -> usize {
     let r = if atr > 0.0 { tr / atr } else { 0.0 };
     let size = if r < 0.5 {
@@ -206,6 +215,21 @@ pub(crate) mod tests {
         assert_eq!(f.side, 1);
         assert!(f.epi_candle_range < f.epi,
             "A huge broker tick-volume spike is not a huge candle-price range");
+    }
+    #[test]
+    fn spike_changes_only_legacy_epi_without_rewriting_range_policy(){
+        let mut c=pressure_fixture();
+        let old=frames(&c).unwrap()[137].clone().unwrap();
+        assert_eq!(old.side,1);
+        assert_eq!(old.candle_range_side(),0);
+        // Turning down the extreme tick volume must not change candle-range
+        // EPI or its side when OHLC and prior candle ranges are unchanged.
+        c[137].tick_volume=1;
+        let changed=frames(&c).unwrap()[137].clone().unwrap();
+        assert_eq!(changed.candle_range_side(),old.candle_range_side());
+        assert!((changed.epi_candle_range-old.epi_candle_range).abs()<1e-12);
+        assert_ne!(changed.side,old.side,
+            "Extreme broker tick spike can make legacy CES trade alone");
     }
     #[test]
     fn entropy_volume_and_strict_thresholds() {
