@@ -59,7 +59,8 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
   broker_flat_by_deals_unattributed:'حجم الفتح والإغلاق متساويان في سجل MT5؛ لم يُثبت أي هدف TP',
   broker_history_not_synced:'لم يكتمل مزامنة سجل الوسيط لهذا الحساب',
   too_many_deals_to_audit:'عدد سجلات المركز تجاوز حد الفحص',
-  invalid_draft_geometry:'خطوة اللوت أو حجم المسودة غير صالح'
+  invalid_draft_geometry:'خطوة اللوت أو حجم المسودة غير صالح',
+  invalid_draft_identity:'هوية مسودة الصفقة الأصلية أو اتجاهها غير مطابقة — لا تعتمد على التاريخ'
  };
  const draftState:Record<string,string>={
   draft_only:'مسودة محفوظة فقط — لم يُرسل أي أمر',
