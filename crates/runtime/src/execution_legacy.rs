@@ -2426,7 +2426,7 @@ mod execution_persistence_tests {
                     });
                     db.execute(
                         "INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload) VALUES (?1,?2,?3,'open',100,'dispatched',?4)",
-                        params![id,context,payload.to_string()]
+                        params![id,context,brain,payload.to_string()]
                     ).unwrap();
                     let response=service.route("POST","/v1/execution/authorize",
                         json!({"id":id}).to_string().as_bytes(),&db,&status,200).unwrap();
