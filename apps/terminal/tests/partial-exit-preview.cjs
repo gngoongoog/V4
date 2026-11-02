@@ -97,11 +97,15 @@ assert(!shown(executableStages).includes('هويات مراحل TP المحفو�
 const audit={schema:'partial-exit-deal-evidence-v1',status:'broker_history_audit_only',
  context,target:'demo',read_only:true,orders_enabled:false,tp_stage_execution_supported:false,
  rows:[{position_identifier:42,evidence:{state:'broker_partial_exit_unattributed',
-   broker_closed_lots:0.04,tp_stage_attribution_verified:false,stage_completed:false}}]};
+   broker_closed_lots:0.04,booked_net_account_currency:-0.27,
+   tp_stage_attribution_verified:false,stage_completed:false}}]};
 const observed=render({status,source:{...view,partial_exit_deal_evidence:audit}});
 assert(shown(observed).includes('مراجعة إغلاقات MT5 الموثقة'));
 assert(shown(observed).includes('غير منسوب إلى أي هدف TP'));
 assert(shown(observed).includes('0.04 لوت مُغلق'));
+assert(shown(observed).includes('صافي قيود الوسيط المحفوظة'));
+assert(shown(observed).includes('-0.27'));
+assert(shown(observed).includes('ليس ربح TP'));
 assert(!collect(observed).some(x=>x.type==='button'));
 const wrongAudit=render({status,source:{...view,
  partial_exit_deal_evidence:{...audit,context:'other'}}});
@@ -110,6 +114,8 @@ const forgedFill=render({status,source:{...view,
  partial_exit_deal_evidence:{...audit,rows:[{position_identifier:42,evidence:{
  state:'broker_partial_exit_unattributed',broker_closed_lots:0.04,
  tp_stage_attribution_verified:true,stage_completed:true}}]}}});
+assert(!shown(forgedFill).includes('صافي قيود الوسيط المحفوظة'),
+ 'Never show costed trade performance from a forged TP completion');
 assert(!shown(forgedFill).includes('0.04 لوت مُغلق'),
  'TP completion asserted without an executable command must never get credit');
 const core=file('../../crates/runtime/src/execution.rs');
