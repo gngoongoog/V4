@@ -73,9 +73,11 @@ class HvnResearch(unittest.TestCase):
 
     def test_mixed_flags_never_add_quote_counts_to_actual_trade_volume(self):
         rows = quotes(150)
-        for row in rows[:90]:
+        for i, row in enumerate(rows[:90]):
             row["flags"] = 6 | 8 | 16
-            row["last"] = 2000.05
+            # Keep multiple observed Last levels; a single level would
+            # correctly fail HVN's minimum distinct-price evidence gate.
+            row["last"] = 2000 + (5 if i % 3 else i % 10) * 0.01
             row["volume_real"] = 2.5
         result = calculate_hvn(rows, **KW)
         self.assertTrue(result["available"], result)
