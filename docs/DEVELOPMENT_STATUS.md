@@ -1,3 +1,15 @@
+# Enterprise V25 RC2 — current source status (2026-11-02)
+
+**Release metadata:** `release.json` = `0.25.1`, `Enterprise V25 RC2`, `release_candidate`, `ready_for_real=false`. Runtime source is React/Tauri `BrainTradeNext.exe`, Rust Core, MT5 Python Gateway, native EA tick/Named Pipe. Main operator start/stop, four modes, account-bound SOLO/Expert and 17 durable brain IDs must be understood through the [current root README](../README.md) and [V25 Arabic manual](v25/USER_MANUAL_V25_AR.md), NOT the superseded development narrative below.
+
+**Scope of V25 branch:** Complete code-level V25 inspection and experimental repair of Gann (square-root grid, historical ATR fan, bar cycles), broker-only DOM freshness, Profile prior-candle baseline, CES dual EPI policies (legacy unchanged), Wyckoff/Liquidity/Pullback signal ablations vs Trend, GENERATED eligibility gates, account-validated Demo learning evidence, native UI/full-exit diagnostics. Experimental math is **not a proven profitable edge**; historical holdouts are **not independently prospective**. No core weight promotion from these research ablations.
+
+**Current CI policy:** Only same-head GitHub Actions checks count. Earlier results (including passing synthetic domain/runtime/EA/GUI) never prove the final documentation or promoted main commit; the build must be checked on its exact SHA and portable manifest. Native real MT5 Demo orders, broker reconciliation, fill costs, EA data rate, session shutdown and G7-H acceptance require an on-device test, and remain unverified until that evidence is collected. The source intentionally says `ready_for_real=false`. See [V25 brain audit](v25/BRAIN_BY_BRAIN_LOGIC_AUDIT_AR_20261102.md), [repair contract](v25/BRAIN_REPAIR_GATES_20261102_AR.md), [CES comparison](v25/CES_EPI_CHRONOLOGICAL_ABLATION_AR.md) and [four-brain study](v25/BRAIN_SIGNAL_ABLATION_WYCKOFF_LIQUIDITY_PULLBACK_AR.md).
+
+---
+
+## Archived development notes (0.7.x and earlier; not current release instructions)
+
 # BrainTrade OS — verified 0.7.0 Development Preview
 
 ## 2026-10-19 status supersedes the historical PR #38 report below
