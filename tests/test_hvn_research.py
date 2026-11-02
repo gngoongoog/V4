@@ -66,6 +66,29 @@ class HvnResearch(unittest.TestCase):
         self.assertEqual(result["observations"], len(rows))
         self.assertEqual(result["total_activity"], len(rows))
 
+    def test_missing_or_malformed_flags_never_create_reported_trade_volume(self):
+        # Broker/adapter rows without reliable MT5 flags must not turn a
+        # carried-forward Last/volume_real into transactions or quote events.
+        for invalid_flags in (None, "24", 24.0, 24.8, True, -1, 128):
+            with self.subTest(flags=invalid_flags):
+                rows = quotes()
+                for row in rows:
+                    row["last"] = 2000.05
+                    row["volume_real"] = 500.0
+                    row["flags"] = invalid_flags
+                result = calculate_hvn(rows, **KW)
+                self.assertFalse(result["available"], result)
+                self.assertEqual(result["nodes"], [])
+                self.assertIn("flags", result["reason"])
+        # A syntactically valid flag with no trade or quote bits must also
+        # never count previously stored Last values as new broker executions.
+        rows = quotes()
+        for row in rows:
+            row.update(last=2000.05, volume_real=500.0, flags=0)
+        result = calculate_hvn(rows, **KW)
+        self.assertFalse(result["available"], result)
+        self.assertEqual(result["source"], "none")
+
     def test_illiquid_or_missing_or_bad_contract_has_no_nodes(self):
         for ticks in [[],quotes(22),None]:
             result=calculate_hvn(ticks, **KW)
