@@ -500,7 +500,7 @@ mod tests {
             quote_time_ms:Some(now),tick_age_ms:Some(0),..Default::default()};
         let brain=BrainConfig{id:"gann".into(),..Default::default()};
         let c=Config::default();
-        let valid=evaluate(&brain,&t,&c,&frames(candles.clone()),now);
+        let valid=evaluate(&brain,&t,&c,&frames(candles.clone()),None,now);
         assert!(valid.ready,"Confirmed low pivot plus bullish candle must allow Gann");
         assert_eq!(valid.side,1);
         assert!(valid.reason.contains("Square9"));
@@ -509,11 +509,11 @@ mod tests {
         // candle, or a pivot that never existed in completed history.
         let mut red=candles.clone();
         red.last_mut().unwrap().open=2012.5;
-        let rejected=evaluate(&brain,&t,&c,&frames(red),now);
+        let rejected=evaluate(&brain,&t,&c,&frames(red),None,now);
         assert!(!rejected.ready);
         let mut without_low=candles;
         without_low[109].low=2011.;
-        assert!(!evaluate(&brain,&t,&c,&frames(without_low),now).ready);
+        assert!(!evaluate(&brain,&t,&c,&frames(without_low),None,now).ready);
     }
     #[test]
     fn trend_has_no_other_brain_vote_dependency() {
