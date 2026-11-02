@@ -991,6 +991,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn generated_report_needs_explicit_lab_review_eligibility_before_broker_execution(){
+        use braintrade_domain::{studio::{LabReport,Genome,Metrics},backtest::Contract,RiskConfig};
+        let db=Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE studio_runs(id TEXT PRIMARY KEY,context TEXT NOT NULL,
+            timeframe TEXT NOT NULL,test_end INTEGER NOT NULL,created_ms INTEGER NOT NULL,
+            payload TEXT NOT NULL,dataset TEXT NOT NULL);").unwrap();
+        let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            login:17,server:"Demo".into(),symbol:"XAUUSD".into(),currency:"USD".into(),
+            ..Default::default()};
+        let mut brain=BrainConfig{id:"generated".into(),timeframe:"M1".into(),
+            report_id:"report".into(),..Default::default()};
+        let candidate=Genome{family:"breakout".into(),lookback:12,stop_atr:1.5,reward:2.};
+        let mut report=LabReport{algorithm:"rule-synthesis-purged-v1".into(),
+            context:context(&t),timeframe:"M1".into(),captured_ms:1000,
+            first_bar:1,last_bar:600,train_end:300,validation_start:324,
+            validation_end:400,test_start:424,test_end:600,purge_bars:24,trials:40,
+            selected:candidate.clone(),training:Metrics::default(),
+            validation:Metrics::default(),test:Metrics::default(),
+            eligible_for_review:false,note:"research only".into(),
+            risk:RiskConfig::default(),
+            contract:Contract{point:0.01,tick_size:0.01,tick_loss:1.,
+                tick_profit:1.,volume_min:0.01,volume_step:0.01,volume_max:100.}};
+        db.execute("INSERT INTO studio_runs VALUES(?1,?2,?3,600,1000,?4,'test')",
+            params![brain.report_id,context(&t),brain.timeframe,
+                serde_json::to_string(&report).unwrap()]).unwrap();
+        assert!(genome(&db,&brain,&t).unwrap().is_none(),
+            "Saving a failed lab report cannot make it a broker trading strategy");
+        report.eligible_for_review=true;
+        db.execute("UPDATE studio_runs SET payload=?1 WHERE id=?2",
+            params![serde_json::to_string(&report).unwrap(),brain.report_id]).unwrap();
+        assert_eq!(genome(&db,&brain,&t).unwrap().unwrap(),candidate);
+        brain.report_id="missing".into();
+        assert!(genome(&db,&brain,&t).unwrap().is_none());
+        brain.report_id="report".into();
+        let other=Telemetry{login:18,..t};
+        assert!(genome(&db,&brain,&other).unwrap().is_none(),
+            "A saved strategy must never cross MT5 broker accounts");
+    }
+
+    #[test]
     fn inactive_mode_forward_creates_and_matures_scoped_signal_without_broker_orders() {
         let db=Connection::open_in_memory().unwrap();
         let mut learner=Learner::new(&db).unwrap();
