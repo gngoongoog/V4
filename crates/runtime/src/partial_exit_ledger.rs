@@ -185,7 +185,7 @@ mod tests{
     use super::*;
     use braintrade_domain::Position;
     fn db()->Connection{let d=Connection::open_in_memory().unwrap();init(&d).unwrap();d}
-    fn t()->Telemetry{
+    fn sample_telemetry()->Telemetry{
         Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
             login:15,server:"D".into(),currency:"USD".into(),symbol:"XAUUSDm".into(),
             volume_min:Some(0.01),volume_step:Some(0.01),volume_max:Some(100.),
@@ -195,7 +195,7 @@ mod tests{
     }
     #[test]
     fn persists_draft_without_commands_and_restarts_idempotently(){
-        let d=db();let t=t();
+        let d=db();let t=sample_telemetry();
         observe(&d,&t,"demo",100).unwrap();
         observe(&d,&t,"demo",101).unwrap();
         let p=report(&d,&t,"demo").unwrap();
@@ -211,13 +211,13 @@ mod tests{
     }
     #[test]
     fn position_change_or_disappearance_can_never_be_interpreted_as_filled(){
-        let d=db();let mut t=t();
+        let d=db();let mut t=sample_telemetry();
         observe(&d,&t,"demo",100).unwrap();
         t.positions[0].volume=0.05;observe(&d,&t,"demo",200).unwrap();
         assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["state"],"volume_changed_unverified");
         t.positions[0].volume=0.1;observe(&d,&t,"demo",300).unwrap();
         assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["state"],"volume_changed_unverified");
-        let d=db();let mut t=t();observe(&d,&t,"demo",100).unwrap();
+        let d=db();let mut t=sample_telemetry();observe(&d,&t,"demo",100).unwrap();
         t.positions.clear();observe(&d,&t,"demo",300).unwrap();
         assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["state"],"position_missing_unverified");
         t.positions.push(t_zero_position());
@@ -225,10 +225,10 @@ mod tests{
         assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["state"],
             "position_missing_unverified","Reappearing position does not prove why it vanished");
     }
-    fn t_zero_position()->Position{t().positions.remove(0)}
+    fn t_zero_position()->Position{sample_telemetry().positions.remove(0)}
     #[test]
     fn cross_account_unverified_and_ineligible_small_volume_do_not_leak(){
-        let d=db();let mut t=t();t.positions[0].volume=0.02;
+        let d=db();let mut t=sample_telemetry();t.positions[0].volume=0.02;
         observe(&d,&t,"demo",100).unwrap();
         assert!(report(&d,&t,"demo").unwrap()["rows"].as_array().unwrap().is_empty());
         t.positions[0].volume=0.1;observe(&d,&t,"demo",200).unwrap();
@@ -244,7 +244,7 @@ mod tests{
     fn file_backed_restart_retains_first_draft_and_never_rearms_a_changed_position(){
         let path=std::env::temp_dir().join(format!(
             "bt-v25-tp-draft-{}.sqlite",uuid::Uuid::new_v4().simple()));
-        let mut t=t();
+        let mut t=sample_telemetry();
         {
             let d=Connection::open(&path).unwrap();init(&d).unwrap();
             observe(&d,&t,"demo",100).unwrap();
@@ -272,7 +272,7 @@ mod tests{
     }
     #[test]
     fn invalid_and_mismatched_source_does_not_mutate_journal(){
-        let d=db();let mut t=t();t.volume_step=None;
+        let d=db();let mut t=sample_telemetry();t.volume_step=None;
         observe(&d,&t,"demo",100).unwrap();
         assert!(report(&d,&t,"demo").unwrap()["rows"].as_array().unwrap().is_empty());
         t.volume_step=Some(0.01);t.connected=false;
