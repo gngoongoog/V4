@@ -79,7 +79,7 @@ export function qualityObservation(status:QualityStatus|null,source:unknown,nowM
      reason:String(rawCircuit.reason),unknown:Number(rawCircuit.unknown_open_intents),
      rejections:Number(rawCircuit.recent_broker_rejections)}:null;
  const qMetric=(key:string)=>{const m=obj(q[key]);const samples=m.samples;
-  return nonNegativeInt(samples)&&samples<=q.sample_size?
+  return nonNegativeInt(samples)&&samples<=Number(q.sample_size)?
     {samples,p95:samples>0?measured(m.p95_ms):null}:{samples:null,p95:null};
  };
  const queue=qMetric('queue_to_send'),send=qMetric('send'),total=qMetric('total');
