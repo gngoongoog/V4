@@ -185,3 +185,162 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
         "breakeven_enabled":false,
         "note":"A sealed stage confirms exact broker Deal history AND a reconciled full position snapshot. It does not issue any future order or activate breakeven."}))
 }
+
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    use braintrade_domain::Position;
+    fn tele()->Telemetry{
+        Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            login:222,server:"DemoA".into(),currency:"USD".into(),
+            symbol:"XAUUSDm".into(),volume_min:Some(0.01),
+            volume_step:Some(0.01),volume_max:Some(100.),
+            positions:vec![Position{ticket:87,identifier:907,magic:410601,
+                symbol:"XAUUSDm".into(),side:"BUY".into(),volume:0.10,
+                ..Default::default()}],..Default::default()}
+    }
+    fn fixture(d:&Connection){
+        crate::partial_exit_ledger::init(d).unwrap();
+        crate::partial_exit_stage::init(d).unwrap();
+        init(d).unwrap();
+        d.execute_batch(
+            "CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT,brain TEXT,
+                kind TEXT,created_ms INTEGER,state TEXT,payload TEXT,result TEXT);
+             CREATE TABLE broker_deals(context TEXT,ticket INTEGER,position_id INTEGER,
+                brain TEXT,payload TEXT,PRIMARY KEY(context,ticket));
+             CREATE TABLE broker_history_sync(context TEXT,target TEXT,until_ms INTEGER,
+                synced_ms INTEGER,PRIMARY KEY(context,target));").unwrap();
+        let t=tele();
+        crate::partial_exit_ledger::observe(d,&t,"demo",100).unwrap();
+        crate::partial_exit_stage::observe(d,&t,"demo",100).unwrap();
+        d.execute("INSERT INTO broker_history_sync VALUES(?1,'demo',1000,1001)",
+            [context(&t)]).unwrap();
+    }
+    fn seed(d:&Connection,stage:u32){
+        let t=tele();let key=context(&t);
+        let plans=crate::partial_exit_stage::report(d,&t,"demo").unwrap();
+        let row=&plans["rows"][(stage-1) as usize];
+        let plan=row["plan_id"].as_str().unwrap();
+        let quantity=[0.05,0.03,0.02][(stage-1) as usize];
+        let expected=[0.1,0.05,0.02][(stage-1) as usize];
+        let cmd_id=format!("core-close-{stage}");
+        let order=700+stage as u64;
+        let ticket=900+stage as u64;
+        let cmd=json!({"id":cmd_id,"kind":"close","context":key,
+            "target":"demo","login":222,"server":"DemoA","currency":"USD",
+            "symbol":"XAUUSDm","brain":"gann","magic":410601,
+            "position":87,"tp_stage":stage,"tp_stage_plan_id":plan,
+            "lots":quantity,"created_ms":150+stage as u64,
+            "expected_position_identifier":907,
+            "expected_position_volume":expected,"expected_position_side":"BUY"});
+        let receipt=json!({"state":"filled","recovered_from_history":true,
+            "volume":quantity,"position_id":907,"order":order,
+            "deal":ticket,"deals":[ticket],
+            "request":{"volume":quantity,"position":87,"type":1,
+                "magic":410601,"symbol":"XAUUSDm"}});
+        d.execute("INSERT INTO broker_commands VALUES(?1,?2,'gann','close',?3,
+                'observed',?4,?5)",
+            params![cmd_id,key,150+stage as u64,cmd.to_string(),receipt.to_string()]).unwrap();
+        let deal=json!({"ticket":ticket,"order":order,"position_id":907,
+            "symbol":"XAUUSDm","magic":410601,"entry":1,"type":1,
+            "time_msc":200+stage as u64,"price":2000.0,"volume":quantity,
+            "profit":1.0,"commission":-0.03,"swap":0.0,"fee":0.0});
+        d.execute("INSERT INTO broker_deals VALUES(?1,?2,907,'gann',?3)",
+            params![key,ticket,deal.to_string()]).unwrap();
+    }
+    fn snapshot(d:&Connection,t:&Telemetry,now:u64){
+        crate::partial_exit_ledger::observe(d,t,"demo",now).unwrap();
+        crate::partial_exit_stage::observe(d,t,"demo",now).unwrap();
+        observe(d,t,"demo",now).unwrap();
+    }
+    fn row(d:&Connection,t:&Telemetry,i:usize)->Value{
+        report(d,t,"demo").unwrap()["rows"][i].clone()
+    }
+    #[test]
+    fn sequential_stage_seals_require_actual_remaining_broker_position(){
+        let d=Connection::open_in_memory().unwrap();fixture(&d);
+        let mut t=tele();seed(&d,1);
+        observe(&d,&t,"demo",200).unwrap();
+        assert_eq!(row(&d,&t,0)["state"],"unsettled",
+            "An exact broker Deal without a changed full position cannot seal TP1");
+        t.positions[0].volume=0.06;
+        snapshot(&d,&t,210);
+        assert_eq!(row(&d,&t,0)["state"],"unsettled");
+        t.positions[0].volume=0.05;
+        snapshot(&d,&t,220);
+        assert_eq!(row(&d,&t,0)["state"],"historical_stage_sealed");
+        assert_eq!(row(&d,&t,0)["remaining_volume_at_seal"],0.05);
+        assert_eq!(row(&d,&t,1)["state"],"unsettled");
+        seed(&d,2);
+        observe(&d,&t,"demo",230).unwrap();
+        assert_eq!(row(&d,&t,1)["state"],"unsettled");
+        t.positions[0].volume=0.02;
+        snapshot(&d,&t,240);
+        assert_eq!(row(&d,&t,1)["state"],"historical_stage_sealed");
+        seed(&d,3);
+        observe(&d,&t,"demo",250).unwrap();
+        assert_eq!(row(&d,&t,2)["state"],"unsettled");
+        t.positions.clear();
+        snapshot(&d,&t,260);
+        assert_eq!(row(&d,&t,2)["state"],"historical_stage_sealed");
+        assert_eq!(row(&d,&t,2)["remaining_volume_at_seal"],0.0);
+        let v=report(&d,&t,"demo").unwrap();
+        assert_eq!(v["orders_enabled"],false);
+        assert_eq!(v["next_stage_authorized"],false);
+        assert_eq!(v["breakeven_enabled"],false);
+        assert!(v["rows"].as_array().unwrap().iter()
+            .all(|r|r["next_stage_authorized"]==false
+                &&r["breakeven_triggered"]==false));
+    }
+    #[test]
+    fn absent_intermediate_snapshot_never_skips_to_later_stage(){
+        let d=Connection::open_in_memory().unwrap();fixture(&d);
+        seed(&d,1);seed(&d,2);
+        let mut t=tele();t.positions[0].volume=0.02;
+        snapshot(&d,&t,300);
+        assert_eq!(row(&d,&t,0)["state"],"unsettled");
+        assert_eq!(row(&d,&t,1)["state"],"unsettled");
+        assert_eq!(d.query_row("SELECT COUNT(*) FROM partial_exit_stage_settlements",[],
+            |r|r.get::<_,u32>(0)).unwrap(),0);
+    }
+    #[test]
+    fn invalid_broker_deal_or_wrong_owner_never_seals(){
+        let d=Connection::open_in_memory().unwrap();fixture(&d);
+        let mut t=tele();seed(&d,1);t.positions[0].volume=0.05;
+        d.execute("UPDATE broker_deals SET payload=json_set(payload,'$.order',12345)",[]).unwrap();
+        snapshot(&d,&t,200);
+        assert_eq!(row(&d,&t,0)["state"],"unsettled");
+        d.execute("UPDATE broker_deals SET payload=json_set(payload,'$.order',701)",[]).unwrap();
+        t.positions[0].magic=999;
+        snapshot(&d,&t,300);
+        assert_eq!(row(&d,&t,0)["state"],"unsettled");
+    }
+    #[test]
+    fn immutable_seal_survives_file_restart_and_foreign_identity_cannot_read(){
+        let path=std::env::temp_dir().join(format!("bt-tp-seal-{}.sqlite",
+            uuid::Uuid::new_v4().simple()));
+        let mut t=tele();t.positions[0].volume=0.05;
+        {
+            let d=Connection::open(&path).unwrap();fixture(&d);
+            seed(&d,1);
+            snapshot(&d,&t,200);
+            assert_eq!(row(&d,&t,0)["state"],"historical_stage_sealed");
+        }
+        {
+            let d=Connection::open(&path).unwrap();
+            init(&d).unwrap();
+            assert_eq!(row(&d,&t,0)["state"],"historical_stage_sealed");
+            let mut other=t.clone();other.login+=1;
+            assert!(report(&d,&other,"demo").unwrap()["rows"].as_array().unwrap().is_empty());
+            other=t.clone();other.demo=false;other.account_trade_mode=Some(2);
+            assert_eq!(report(&d,&other,"live").unwrap()["status"],
+                "unverified_demo_account");
+            let before=row(&d,&t,0);
+            snapshot(&d,&t,300);
+            assert_eq!(row(&d,&t,0),before,
+                "Repeated snapshots must not rewrite immutable broker evidence");
+        }
+        let _=std::fs::remove_file(path);
+    }
+}
