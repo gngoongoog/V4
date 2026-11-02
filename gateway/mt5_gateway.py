@@ -40,6 +40,39 @@ NATIVE_RECENT_MS = 500
 NATIVE_BATCH_MAX = 512
 
 
+class HvnResultOutbox:
+    """Retry only a completed read-only receipt, never a second MT5 tick read.
+
+    A timeout can mean Core committed the result but the HTTP response was
+    lost. The next delivery then receives 400 (no outstanding matching job);
+    retire that receipt rather than spinning or repeating copy_ticks_range.
+    Any transport outage remains fail-closed until a receipt is acknowledged.
+    """
+    def __init__(self):
+        self.payload = None
+
+    def submit(self, api, payload):
+        if self.payload is not None:
+            raise RuntimeError("Previous HVN completion has not been reconciled")
+        self.payload = payload
+        return self.flush(api)
+
+    def flush(self, api):
+        if self.payload is None:
+            return False
+        try:
+            api('/v1/gateway/hvn/result', self.payload)
+        except urllib.error.HTTPError as error:
+            if error.code == 400:
+                # Core rejects invalid/duplicate results with HTTP 400. The
+                # job ID and selected report never become a trading signal.
+                self.payload = None
+                return False
+            raise
+        self.payload = None
+        return True
+
+
 class BrokerHistoryScheduler:
     """Keep normal broker work alive even when every loop handles a tick."""
     def __init__(self):
@@ -651,13 +684,22 @@ def main():
         with legacy_opener.open(request,timeout=4) as response:
             response.read()
 
+    hvn_outbox = HvnResultOutbox()
+
     def background_work():
         try:
+            # An interrupted HTTP reply must not strand the Core START fence.
+            # Resend the exact finished report; never repeat MT5 tick history.
+            if hvn_outbox.payload is not None:
+                hvn_outbox.flush(api)
+                return
             # Explicit STOP + flat-account research. This consumes no automatic
             # full-market tick scans and is never part of Sniper OnTick/pulse.
             hvn_job = api('/v1/gateway/hvn/request').get('job')
             if hvn_job is not None:
-                complete_hvn_job(mt5, api, hvn_job)
+                complete_hvn_job(mt5,
+                    lambda _route, receipt: hvn_outbox.submit(api, receipt),
+                    hvn_job)
                 return
             job = api('/v1/gateway/history/request').get('job')
             if job is not None:
