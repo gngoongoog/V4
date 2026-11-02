@@ -7,6 +7,10 @@ pub struct Frame {
     pub highest_pae: f64,
     pub eg: f64,
     pub epi: f64,
+    /// Original candle-range variant of EPI, calculated prospectively but
+    /// kept observational until a frozen, out-of-sample comparison exists.
+    #[serde(default)]
+    pub epi_candle_range: f64,
     pub dbd: f64,
     pub volume_ratio: f64,
     pub atr: f64,
@@ -122,6 +126,12 @@ pub fn frames(candles: &[Candle]) -> Result<Vec<Option<Frame>>, String> {
             0.0
         };
         let epi = gradient.abs() * volume_ratio;
+        let candle_range=(c.high-c.low).max(0.);
+        let avg_candle_range=candles[i-19..=i].iter()
+            .map(|bar|(bar.high-bar.low).max(0.)).sum::<f64>()/20.;
+        let epi_candle_range=if avg_candle_range>0. {
+            gradient.abs()*(candle_range/avg_candle_range)
+        } else {0.};
         let bulls = candles[i - 9..=i]
             .iter()
             .filter(|c| c.close >= c.open)
@@ -133,6 +143,7 @@ pub fn frames(candles: &[Candle]) -> Result<Vec<Option<Frame>>, String> {
             highest_pae: highest,
             eg: gradient,
             epi,
+            epi_candle_range,
             dbd,
             volume_ratio,
             atr: atr[i],
@@ -193,6 +204,8 @@ pub(crate) mod tests {
         assert_eq!(f.dbd, 1.0);
         assert!(f.compressed && f.negative_three);
         assert_eq!(f.side, 1);
+        assert!(f.epi_candle_range < f.epi,
+            "A huge broker tick-volume spike is not a huge candle-price range");
     }
     #[test]
     fn entropy_volume_and_strict_thresholds() {
