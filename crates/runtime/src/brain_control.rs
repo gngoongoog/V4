@@ -122,6 +122,8 @@ fn participation(
 /// profitable, trained or connected to exchange-wide order flow.
 fn data_provenance(id:&str)->(&'static str,&'static str) {
     match id {
+        "gann"=>("confirmed_pivots_atr_fan_square9_fixed_quote_scale_and_predeclared_bar_cycles",
+            "قواعد جان بحثية من شموع مكتملة ومحاور مؤكدة: أثمان، مروحة ATR مُثبّتة بالمحور، شبكة جذر السعر بوحدة 1.0، دورات بالشموع؛ لا توجد أفضلية تداول أو دورة سعر/زمن مثبتة"),
         "dom"=>("mt5_broker_market_book",
             "عمق أوامر MT5 المقدم من الوسيط فقط؛ لا يثبت سيولة COMEX أو الصفقات المنفذة"),
         "profile"=>("candle_tick_volume_proxy",
@@ -221,6 +223,9 @@ pub fn enrich(value:&mut Value,db:&Connection,key:&str,mode:TradingMode,account_
 #[cfg(test)] mod tests {
     use super::*;
     #[test] fn brain_source_labels_never_pretend_to_be_exchange_wide_order_flow() {
+        assert_eq!(data_provenance("gann").0,
+            "confirmed_pivots_atr_fan_square9_fixed_quote_scale_and_predeclared_bar_cycles");
+        assert!(data_provenance("gann").1.contains("لا توجد أفضلية"));
         assert_eq!(data_provenance("dom").0,"mt5_broker_market_book");
         assert!(data_provenance("dom").1.contains("COMEX"));
         assert_eq!(data_provenance("profile").0,"candle_tick_volume_proxy");
