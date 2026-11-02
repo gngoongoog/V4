@@ -39,6 +39,7 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
  const [equity,setEquity]=useState('1000'),[spread,setSpread]=useState('0.20'),[strategy,setStrategy]=useState('meta_v1');
  const [runs,setRuns]=useState<RecordValue[]>([]),[selected,setSelected]=useState(''),[report,setReport]=useState<RecordValue|null>(null);
  const [cesComparison,setCesComparison]=useState<RecordValue|null>(null);
+ const [brainComparison,setBrainComparison]=useState<RecordValue|null>(null);
  const [busy,setBusy]=useState(false),[loading,setLoading]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const state=obj(source),phase=txt(state.state,'idle'),active=running(phase);
  const refresh=useCallback(async()=>{
@@ -53,7 +54,7 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
  useEffect(()=>{void refresh()},[refresh,txt(state.latest_id,'')]);
  const openReport=async(id:string)=>{
   if(!id||disabled)return;
-  setBusy(true);setReport(null);setCesComparison(null);setError('');
+  setBusy(true);setReport(null);setCesComparison(null);setBrainComparison(null);setError('');
   try{const response=obj(await studyAction('backtest','report',id));setReport(response);setSelected(id)}
   catch(e){setError('تعذر قراءة نتيجة الاختبار: '+String(e))}
   finally{setBusy(false)}
@@ -96,6 +97,23 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
   }catch(e){setError('تعذرت مقارنة CES: '+String(e))}
   finally{setBusy(false)}
  };
+ const compareBrains=async()=>{
+  if(!selected||disabled||busy)return;
+  setBusy(true);setError('');setNotice('');setBrainComparison(null);
+  try {
+   const response=obj(await studyAction('backtest','brain_ablation',selected));
+   const comparison=obj(response.comparison);
+   if(response.research_only!==true||response.broker_effect!==false||
+      response.automatic_promotion!==false||response.independently_frozen_oos!==false||
+      comparison.research_only!==true||comparison.broker_orders!==false||
+      comparison.automatic_promotion!==false||comparison.independently_frozen_oos!==false){
+     throw new Error('Core did not confirm research-only provenance');
+   }
+   setBrainComparison(comparison);
+   setNotice('تمت دراسة إشارات العقول الثلاثة مقابل Trend على التاريخ نفسه. ليست نتائج MT5 الحقيقية.');
+  }catch(e){setError('فشلت مقارنة العقول: '+String(e))}
+  finally{setBusy(false)}
+ };
  const exportReport=async()=>{
   if(!selected)return;setBusy(true);
   try{const result=obj(await studyAction('backtest','export',selected));setNotice('حفظ Core ملف التصدير في مجلد بياناته: '+txt(result.path,txt(result.directory,'راجع مجلد exports')))}
@@ -103,6 +121,7 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
  };
  const metrics=obj(report?.metrics);
  const cesWindows=arr(cesComparison?.windows);
+ const brainWindows=arr(brainComparison?.windows);
  const outcome=report!==null;
  // Every plotted point is one immutable Core result; no fabricated interpolation,
  // prices or trader PnL. SVG is a visual connection of source observations.
@@ -150,7 +169,7 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
   {error&&<div className="operator-error" role="alert">{error}</div>}
   {notice&&<p className="study-notice" role="status">{notice}</p>}
   {outcome?<div className="operator-card study-results">
-    <div className="study-row"><div><small>تقرير محفوظ من Core</small><h3><TrendingUp size={18}/> قراءة نتيجة المحاكاة</h3></div><div className="study-actions"><button type="button" onClick={()=>void exportReport()} disabled={busy||disabled}><Download size={15}/> تصدير التقرير</button><button type="button" onClick={()=>void compareCes()} disabled={busy||disabled||!selected}><BarChart3 size={15}/> مقارنة معادلتي CES</button><button type="button" onClick={onEvaluation}>تقييم خارج العينة</button></div></div>
+    <div className="study-row"><div><small>تقرير محفوظ من Core</small><h3><TrendingUp size={18}/> قراءة نتيجة المحاكاة</h3></div><div className="study-actions"><button type="button" onClick={()=>void exportReport()} disabled={busy||disabled}><Download size={15}/> تصدير التقرير</button><button type="button" onClick={()=>void compareCes()} disabled={busy||disabled||!selected}><BarChart3 size={15}/> مقارنة معادلتي CES</button><button type="button" onClick={()=>void compareBrains()} disabled={busy||disabled||!selected}><BarChart3 size={15}/> مقارنة العقول مقابل Trend</button><button type="button" onClick={onEvaluation}>تقييم خارج العينة</button></div></div>
     <div className="study-metrics"><Metric name="صافي النتيجة" value={show(metrics.net,2)} hint="بعد التكاليف المحاكية"/><Metric name="عدد الصفقات" value={show(metrics.trades,0)} hint="داخل التاريخ المختبر"/><Metric name="نسبة الفوز" value={show(metrics.win_rate,1,'%')} hint="لا تكفي وحدها للحكم"/><Metric name="Profit Factor" value={show(metrics.profit_factor)} hint="غير معرّف دون خسائر"/><Metric name="أقصى تراجع" value={show(metrics.max_drawdown_percent,2,'%')} hint="داخل العينة المختبرة"/><Metric name="العمولات" value={show(metrics.commissions,2)} hint="محسوبة تقديرياً"/></div>
     <div className="study-visual-layout">
       <div className="study-equity-panel"><div className="study-row"><h4>منحنى رأس المال الافتراضي</h4><small>{curve.length} نقطة معروضة من {show(report?.recorded_equity_points,0)} مسجلة لدى Core</small></div>
@@ -173,6 +192,27 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
        <small className="study-help">التقرير لا يساوي سجلات MT5. الصفقة الملتبسة قد تشمل لمس وقف وهدف داخل شمعة واحدة.</small>
       </div>
     </div>
+    {brainComparison&&<div className="study-trades-panel" aria-label="Causal four-brain signal study">
+      <h4>العقول الأربعة — مقارنة الإشارة بنفس التكاليف</h4>
+      <p className="safe-note">Trend هو خط الأساس. Wyckoff وLiquidity Sweep وTrend Pullback تستخدم قواعدها الفعلية على شموع مكتملة، لكن الوقف 1.5 ATR والهدف 2R والمهلة 30 دقيقة موحدة للعدالة، والاقتباس سعري تقريبي من آخر إغلاق؛ **ليس تنفيذ MT5 فعلياً ولا إثبات OOS مستقل**.</p>
+      {brainWindows.length===0?<p className="study-empty">لم يرجع Core نوافذ صالحة للمقارنة.</p>:
+      <div className="study-trades-scroll"><table><thead><tr><th>الفترة</th><th>العقل</th><th>الصفقات</th><th>الصافي بعد التكاليف</th><th>أقصى تراجع</th></tr></thead><tbody>
+       {brainWindows.flatMap((w,i)=>{
+        const time=obj(w.window);
+        return ([
+         ['trend_baseline','Trend — الأساس'],
+         ['wyckoff','Wyckoff'],
+         ['liquidity_sweep','Liquidity Sweep'],
+         ['trend_pullback','Trend Pullback']
+        ] as const).map(([key,label])=>{
+         const result=obj(w[key]),stats=obj(result.metrics);
+         return <tr key={i+'-'+key}><td>{time.role==='holdout'?'فترة لاحقة':'تطوير'}</td>
+          <td>{label}</td><td>{show(stats.trades,0)}</td>
+          <td>{show(stats.net)}</td><td>{show(stats.max_drawdown_percent,2,'%')}</td></tr>
+        });
+       })}</tbody></table></div>}
+      <p className="study-help">صفر صفقات يعني بيانات غير كافية للحكم، مو نجاح. لا تستخدم هذه النتائج لتشغيل أو اختيار عقل على حساب حقيقي.</p>
+    </div>}
     {cesComparison&&<div className="study-trades-panel" aria-label="CES EPI chronological comparison">
       <h4>مقارنة CES: نشاط التيكات مقابل مدى الشمعة</h4>
       <p className="safe-note">نفس تاريخ الوسيط والعقد والتكاليف، ومجموعتان زمنيتان منفصلتان. المقارنة تاريخية وليست اختباراً مستقلاً مجمداً أو إثباتاً أن إحدى الصيغتين أفضل. لا تغيّر صفقات النظام.</p>
