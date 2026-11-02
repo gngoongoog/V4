@@ -194,6 +194,43 @@ mod tests{
             .iter().all(|r|r["state"]=="review_required"));
     }
     #[test]
+    fn stage_plan_identifiers_survive_file_restart_and_uncertainty_is_irreversible(){
+        let path=std::env::temp_dir().join(format!(
+            "bt-v25-tp-plans-{}.sqlite",uuid::Uuid::new_v4().simple()));
+        let mut t=tele();
+        let original;
+        {
+            let d=Connection::open(&path).unwrap();
+            crate::partial_exit_ledger::init(&d).unwrap();init(&d).unwrap();
+            capture(&d,&t,100);
+            original=report(&d,&t,"demo").unwrap();
+            assert_eq!(original["rows"].as_array().unwrap().len(),3);
+        }
+        {
+            let d=Connection::open(&path).unwrap();
+            crate::partial_exit_ledger::init(&d).unwrap();init(&d).unwrap();
+            capture(&d,&t,200);
+            assert_eq!(original["rows"],report(&d,&t,"demo").unwrap()["rows"]);
+            t.positions.clear();
+            capture(&d,&t,300);
+            assert!(report(&d,&t,"demo").unwrap()["rows"].as_array().unwrap()
+                .iter().all(|row|row["state"]=="review_required"));
+        }
+        {
+            let d=Connection::open(&path).unwrap();
+            crate::partial_exit_ledger::init(&d).unwrap();init(&d).unwrap();
+            t.positions=tele().positions;
+            capture(&d,&t,400);
+            let after=report(&d,&t,"demo").unwrap();
+            assert!(after["rows"].as_array().unwrap().iter()
+                .all(|row|row["state"]=="review_required"));
+            for (i,row) in after["rows"].as_array().unwrap().iter().enumerate(){
+                assert_eq!(row["plan_id"],original["rows"][i]["plan_id"]);
+            }
+        }
+        let _=std::fs::remove_file(&path);
+    }
+    #[test]
     fn small_position_and_foreign_account_do_not_gain_stage_plans(){
         let d=db();let mut t=tele();t.positions[0].volume=0.02;
         capture(&d,&t,100);
