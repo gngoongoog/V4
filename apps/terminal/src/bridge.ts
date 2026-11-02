@@ -34,7 +34,7 @@ export async function studioAction(action:'run'|'auto_enable'|'auto_disable'|'ca
 export async function correlationAction(action:'sources'|'reports'|'report'|'analyze',sourceIds?:string[],minOverlap?:number,reportId?:string):Promise<unknown>{return invoke('correlation_action',{action,sourceIds:sourceIds??null,minOverlap:minOverlap??null,reportId:reportId??null})}
 export type StudyKind='backtest'|'evaluation';
 export type StudyPlan={mode:'holdout';holdout_percent:number}|{mode:'rolling';development_days:number;holdout_days:number;step_days:number};
-export async function studyAction(kind:StudyKind,action:'runs'|'report'|'export'|'start'|'cancel'|'ces_ablation',id?:string,sourceId?:string,plan?:StudyPlan):Promise<unknown>{
+export async function studyAction(kind:StudyKind,action:'runs'|'report'|'export'|'start'|'cancel'|'ces_ablation'|'brain_ablation',id?:string,sourceId?:string,plan?:StudyPlan):Promise<unknown>{
  return invoke('study_action',{kind,action,id:id??null,sourceId:sourceId??null,plan:plan??null});
 }
 export async function updateBrainControl(context:string,brain:string,mode:string,advisor:boolean,paper:boolean):Promise<unknown>{return invoke('update_brain_control',{context,brain,mode,advisor,paper})}
