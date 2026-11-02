@@ -492,6 +492,21 @@ impl Service {
             ("POST", "/v1/backtest/report") => {
                 Self::report(db, &serde_json::from_slice::<Selection>(body)?.id)
             }
+            ("POST", "/v1/backtest/brain-ablation") => {
+                // Fixed four-policy signal study from the exact saved broker
+                // history. The historical fill emulator is shared across
+                // candidates; no execution/advisor weights can be changed.
+                let id=serde_json::from_slice::<Selection>(body)?.id;
+                let (saved,history)=Self::load(db,&id)?;
+                let comparison=braintrade_domain::evaluation::compare_brain_signals(
+                    &history,&saved.options,
+                    &braintrade_domain::evaluation::EvaluationPlan::Holdout{holdout_percent:30},
+                    &AtomicBool::new(false),&AtomicUsize::new(0)
+                ).map_err(anyhow::Error::msg)?;
+                Ok(json!({"source_report_id":id,"comparison":comparison,
+                    "research_only":true,"broker_effect":false,
+                    "automatic_promotion":false,"independently_frozen_oos":false}))
+            }
             ("POST", "/v1/backtest/ces-ablation") => {
                 // Replay BOTH predefined CES hypotheses on the exact same
                 // immutable saved broker history/contract/settings. Research
