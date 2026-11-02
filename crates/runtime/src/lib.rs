@@ -249,6 +249,14 @@ fn ensure_execution_mutation_stopped(status:&Status,pending:bool)->Result<()> {
     if pending { bail!("Wait for broker command reconciliation before changing execution-affecting risk or trading costs"); }
     Ok(())
 }
+// Changing MT5 identity or killing Gateway while a dispatched copy_ticks_range
+// read is outstanding would strand HVN's START fence with no result producer.
+// Keep the operator's safe full exit path available for recovery.
+fn ensure_hvn_gateway_reconfiguration_idle(hvn_pending:bool)->Result<()> {
+    anyhow::ensure!(!hvn_pending,
+        "انتظر اكتمال بحث HVN قبل تغيير اتصال MT5 أو إعادة الربط أو الاستعادة؛ إذا تعلّق Gateway استخدم خروج كامل آمن");
+    Ok(())
+}
 // Fail-closed operator shutdown gate. STOP only prevents NEW entries. Shutting
 // down the Core would abandon timed management/reconciliation for open trades.
 fn verify_safe_reconfiguration(status: &Status, unresolved: bool) -> Result<()> {
@@ -395,6 +403,14 @@ impl Engine{
 
     fn tick(&mut self){let cfg=self.shared.lock().unwrap().config.clone();self.studio.set_learning_frozen(self.execution.learning_frozen());self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
     fn route(&mut self,method:&str,path:&str,body:&[u8])->Result<Value>{
+        // Reconfiguration/reconnect/restore can terminate the exact Gateway
+        // process that owns an outstanding HVN tick-history read. Reject these
+        // operations until its result is reconciled; leave STOP and safe full
+        // exit available rather than silently breaking the START fence.
+        if method=="POST" && matches!(path,
+            "/v1/config"|"/v1/reconnect"|"/v1/backup/restore/stage") {
+            ensure_hvn_gateway_reconfiguration_idle(self.hvn.pending(now_ms()))?;
+        }
         if path=="/v1/hvn" || path.starts_with("/v1/hvn/") || path.starts_with("/v1/gateway/hvn/") {
             // Historical MT5 tick reads may delay Gateway's regular cycle.
             // Never start one while *any* durable broker intent needs
@@ -910,6 +926,14 @@ mod tests{
         s.telemetry=None;
         s.last_received_ms=Some(123);
         assert!(verify_safe_reconfiguration(&s,false).is_err(),"Lost portfolio after reconnect must not authorize account switch");
+    }
+    #[test]
+    fn hvn_dispatched_read_blocks_gateway_reconfig_but_not_safe_exit() {
+        assert!(ensure_hvn_gateway_reconfiguration_idle(false).is_ok());
+        assert!(ensure_hvn_gateway_reconfiguration_idle(true).is_err(),
+            "Do not kill/reconnect the source of a dispatched history job");
+        // Full exit deliberately has its own broker-flat, no-intent proof.
+        // This helper is applied to only the 3 Gateway-destructive routes.
     }
     #[test]
     fn atomic_config_replacement(){let dir=std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());fs::create_dir_all(&dir).unwrap();let p=dir.join("config.json");atomic_write(&p,b"first").unwrap();atomic_write(&p,b"second").unwrap();assert_eq!(fs::read(&p).unwrap(),b"second");fs::remove_dir_all(dir).unwrap();}
