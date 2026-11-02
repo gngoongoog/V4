@@ -374,6 +374,12 @@ pub struct BrainWindow {
     pub wyckoff: StrategyWindowResult,
     pub liquidity_sweep: StrategyWindowResult,
     pub trend_pullback: StrategyWindowResult,
+    /// Descriptive sample quality, not a statistical significance or OOS
+    /// certificate. All four arms need 30 CLOSED virtual trades to avoid
+    /// treating one lucky winner as a validated improvement.
+    pub evidence_status: String,
+    pub minimum_trades_per_arm: usize,
+    pub evidence_reason: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BrainAblation {
@@ -420,9 +426,20 @@ pub fn compare_brain_signals(
             reports.push(summarized(run(history,&child,cancel,&AtomicUsize::new(0))?));
             progress.store((i*4+j+1)*100/total,Ordering::Relaxed);
         }
+        let incomplete=reports.iter().any(|r|r.gaps>0);
+        let smallest=reports.iter().map(|r|r.metrics.trades).min().unwrap_or(0);
+        let (quality,reason)=if incomplete {
+            ("data_gaps","One or more policies were simulated across missing minutes; execution path is not a complete tick sequence")
+        }else if smallest<30{
+            ("insufficient_trades","At least one advisor has fewer than 30 completed hypothetical trades; relative PnL is descriptive, not evidence of improvement")
+        }else{
+            ("descriptive_only","At least 30 hypothetical closed trades per policy; still no independent frozen OOS or broker order proof")
+        };
         rows.push(BrainWindow{window,trend_baseline:reports.remove(0),
             wyckoff:reports.remove(0),liquidity_sweep:reports.remove(0),
-            trend_pullback:reports.remove(0)});
+            trend_pullback:reports.remove(0),
+            evidence_status:quality.into(),minimum_trades_per_arm:30,
+            evidence_reason:reason.into()});
     }
     let summary=|strategy,fn_row:fn(&BrainWindow)->StrategyWindowResult|{
         aggregate(strategy,rows.iter().map(fn_row))
@@ -634,6 +651,9 @@ mod tests {
         assert!(!result.independently_frozen_oos);
         assert_eq!(result.windows.len(),2);
         assert_eq!(result.windows[0].window.to,result.windows[1].window.from);
+        assert!(result.windows.iter().all(|w|w.minimum_trades_per_arm==30));
+        assert!(result.windows.iter().all(|w|w.evidence_status=="insufficient_trades"),
+            "Sparse advisor events must never be framed as a proven winner");
         for w in &result.windows {
             for p in [&w.trend_baseline,&w.wyckoff,&w.liquidity_sweep,&w.trend_pullback]{
                 assert!(p.first_test_bar>=w.window.from&&p.last_test_bar<w.window.to);
