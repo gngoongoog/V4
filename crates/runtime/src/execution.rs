@@ -382,6 +382,7 @@ impl Service {
         crate::sniper_opportunities::init(db)?;
         crate::position_protection::init(db)?;
         crate::partial_exit_ledger::init(db)?;
+        crate::partial_exit_stage::init(db)?;
         crate::pending_cancellation::init(db)?;
         let mut inner = legacy::Service::new(db)?;
         // Old per-brain flags do not choose an execution owner. A scoped solo
@@ -667,8 +668,11 @@ impl Service {
         // Read-only durable TP lot drafts only on complete broker snapshots.
         // This never opens/closes a position and never runs on Fast Pulse.
         if self.inner.matches_bound_telemetry(telemetry) {
-            let _=crate::partial_exit_ledger::observe(
-                db,telemetry,&self.inner.settings.target,now);
+            if crate::partial_exit_ledger::observe(
+                db,telemetry,&self.inner.settings.target,now).is_ok(){
+                let _=crate::partial_exit_stage::observe(
+                    db,telemetry,&self.inner.settings.target,now);
+            }
         }
         // Protection failures must not interrupt broker reconciliation or
         // existing exit logic. A failed or corrupt policy simply creates no
@@ -1584,6 +1588,12 @@ impl Service {
             // into an executable broker authorization.
             value["partial_exit_preview"]=if status.gateway_fresh && self.account_matches(status) {
                 status.telemetry.as_ref().map(braintrade_domain::partial_exit::preview)
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["partial_exit_stage_plans"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_stage::report(db,t,&self.inner.settings.target)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
                     .unwrap_or(Value::Null)
             } else {Value::Null};
             value["partial_exit_draft_ledger"]=if status.gateway_fresh && self.account_matches(status) {
