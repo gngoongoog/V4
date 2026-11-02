@@ -57,6 +57,12 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  assert.equal(saved.trading.max_cost_fraction,0.45);
  assert.equal(saved.account.login,123,'explicit MT5 account must be sent for commission binding');
  assert(nodes(settings).some(x=>x.props?.['aria-label']==='sniper fixed target pips'));
+ assert(JSON.stringify(settings).includes('Expert: منسق إجماع/اختيار'),
+  'Mode editor must describe the actual Expert source of broker decisions');
+ const classicStyle=nodes(settings).find(x=>x.type==='select'&&
+   x.props.children?.some?.(n=>n?.props?.value==='confirmed'));
+ assert(classicStyle?.props.disabled,
+  'Classic Sniper selection must not offer a no-op learner-only style control');
  assert(nodes(settings).some(x=>x.props?.['aria-label']==='sniper cooldown seconds'));
  let brainState=null;
  const scopedBrain={controls_available:true,account_matches:true,trading_mode:'expert',selected_owner:'system',
