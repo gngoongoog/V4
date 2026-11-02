@@ -64,10 +64,12 @@ fn only_one_ready_candidate_and_risk_gate_never_bypassed() {
 #[test]
 fn dom_requires_two_valid_uncrossed_sides() {
     let mut t=quote();t.dom_available=true;
+    t.dom_observed_ms=Some(120_000);t.quote_time_ms=Some(120_000);
+    t.tick_age_ms=Some(0);
     t.dom=vec![DomLevel{side:"buy".into(),price:100.0,volume:5.0},DomLevel{side:"sell".into(),price:100.1,volume:1.0}];
-    assert!(dom::assess(&t).available);assert_eq!(dom::assess(&t).direction,1);
-    t.dom[1].price=99.0;assert!(!dom::assess(&t).available);
-    t.dom.pop();assert!(!dom::assess(&t).available);
+    assert!(dom::assess(&t,120_000).available);assert_eq!(dom::assess(&t,120_000).direction,1);
+    t.dom[1].price=99.0;assert!(!dom::assess(&t,120_000).available);
+    t.dom.pop();assert!(!dom::assess(&t,120_000).available);
 }
 #[test]
 fn short_series_never_fabricates_a_scan() {
