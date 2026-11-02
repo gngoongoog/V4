@@ -196,8 +196,16 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
     {brainComparison&&<div className="study-trades-panel" aria-label="Causal four-brain signal study">
       <h4>العقول الأربعة — مقارنة الإشارة بنفس التكاليف</h4>
       <p className="safe-note">Trend هو خط الأساس. Wyckoff وLiquidity Sweep وTrend Pullback تستخدم قواعدها الفعلية على شموع مكتملة، لكن الوقف 1.5 ATR والهدف 2R والمهلة 30 دقيقة موحدة للعدالة، والاقتباس سعري تقريبي من آخر إغلاق؛ **ليس تنفيذ MT5 فعلياً ولا إثبات OOS مستقل**.</p>
-      {brainWindows.length===0?<p className="study-empty">لم يرجع Core نوافذ صالحة للمقارنة.</p>:
-      <div className="study-trades-scroll"><table><thead><tr><th>الفترة</th><th>العقل</th><th>الصفقات</th><th>الصافي بعد التكاليف</th><th>أقصى تراجع</th></tr></thead><tbody>
+      {brainWindows.length===0?<p className="study-empty">لم يرجع Core نوافذ صالحة للمقارنة.</p>:<>
+      {brainWindows.map((w,i)=><p className="safe-note" key={'grade-'+i}>
+       {obj(w.window).role==='holdout'?'الفترة اللاحقة':'فترة التطوير'} — {
+        w.evidence_status==='data_gaps'?'توجد فجوات زمنية؛ النتائج غير مكتملة للمقارنة الدقيقة':
+        w.evidence_status==='insufficient_trades'?'العينة غير كافية: أحد العقول لديه أقل من 30 صفقة افتراضية مغلقة':
+        w.evidence_status==='descriptive_only'?'مقارنة وصفية فقط؛ لا يوجد دليل مستقل مجمّد على أفضلية عقل':
+        'حالة جودة العينات غير موثقة'
+       }
+      </p>)}
+      <div className="study-trades-scroll"><table><thead><tr><th>الفترة</th><th>العقل</th><th>الصفقات</th><th>الصافي بعد التكاليف</th><th>العمولة</th><th>أقصى تراجع</th><th>فجوات M1</th></tr></thead><tbody>
        {brainWindows.flatMap((w,i)=>{
         const time=obj(w.window);
         return ([
@@ -209,9 +217,9 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
          const result=obj(w[key]),stats=obj(result.metrics);
          return <tr key={i+'-'+key}><td>{time.role==='holdout'?'فترة لاحقة':'تطوير'}</td>
           <td>{label}</td><td>{show(stats.trades,0)}</td>
-          <td>{show(stats.net)}</td><td>{show(stats.max_drawdown_percent,2,'%')}</td></tr>
+          <td>{show(stats.net)}</td><td>{show(stats.commissions)}</td><td>{show(stats.max_drawdown_percent,2,'%')}</td><td>{show(result.gaps,0)}</td></tr>
         });
-       })}</tbody></table></div>}
+       })}</tbody></table></div></>}
       <p className="study-help">صفر صفقات يعني بيانات غير كافية للحكم، مو نجاح. لا تستخدم هذه النتائج لتشغيل أو اختيار عقل على حساب حقيقي.</p>
     </div>}
     {cesComparison&&<div className="study-trades-panel" aria-label="CES EPI chronological comparison">
