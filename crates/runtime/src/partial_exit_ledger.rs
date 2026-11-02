@@ -126,8 +126,8 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
             tx.execute(
                 "UPDATE partial_exit_drafts SET status='position_missing_unverified'
                  WHERE context=?1 AND target=?2 AND position_identifier=?3
-                   AND status='draft_only'",
-                params![key,target,id])?;
+                   AND status='draft_only' AND last_seen_ms<=?4",
+                params![key,target,id,now])?;
         }
     }
     tx.commit()?;
@@ -269,6 +269,20 @@ mod tests{
             assert_eq!(report["rows"].as_array().unwrap().len(),1);
         }
         let _=std::fs::remove_file(&path);
+    }
+    #[test]
+    fn stale_empty_snapshot_cannot_mark_a_newer_seen_position_missing(){
+        let d=db();let mut t=sample_telemetry();
+        observe(&d,&t,"demo",100).unwrap();
+        observe(&d,&t,"demo",500).unwrap();
+        t.positions.clear();
+        observe(&d,&t,"demo",400).unwrap();
+        let report=report(&d,&t,"demo").unwrap();
+        assert_eq!(report["rows"][0]["state"],"draft_only");
+        assert_eq!(report["rows"][0]["last_seen_ms"],500);
+        observe(&d,&t,"demo",600).unwrap();
+        assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["state"],
+            "position_missing_unverified");
     }
     #[test]
     fn invalid_and_mismatched_source_does_not_mutate_journal(){
