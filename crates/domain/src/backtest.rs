@@ -20,15 +20,23 @@ pub enum Strategy {
     #[default]
     MetaV1,
     CesV1,
+    /// Same cost/entry/exit emulator as CES v1; only the EPI uses candle
+    /// range instead of MT5 tick-volume. Backtest/research ONLY.
+    CesRangeResearch,
     KteV1,
     MetaV2,
     ExploreV1,
 }
 impl Strategy {
+    /// Keep execution fill/cost policy identical between both CES hypotheses.
+    pub fn is_ces(self)->bool {
+        matches!(self,Self::CesV1|Self::CesRangeResearch)
+    }
     pub fn algorithm(self) -> &'static str {
         match self {
             Self::MetaV1 => "meta-v1 / M1-OHLC-conservative-v1",
             Self::CesV1 => "ces-v1 / M1-OHLC-conservative-v1",
+            Self::CesRangeResearch => "ces-range-epi-research-v1 / M1-OHLC-conservative-v1",
             Self::MetaV2 => "meta-v2-candidate-v1 / M1-OHLC-conservative-v1",
             Self::KteV1 => "kte-v1 / M1-partials-conservative-v1",
             Self::ExploreV1 => "explore-v1 / online-bandit-research-only-v1",
@@ -515,7 +523,7 @@ pub fn run(
     let risk = &options.risk;
     let slip = risk.slippage_ticks * spec.tick_size;
     let m1: Vec<_> = history.bars.iter().map(|b| b.candle.clone()).collect();
-    let ces = if options.strategy == Strategy::CesV1 {
+    let ces = if options.strategy.is_ces() {
         crate::ces::frames(&m1)?
     } else {
         vec![]
@@ -611,11 +619,13 @@ pub fn run(
             outcome = ledger.skip("حد خسارة أو تراجع");
         } else {
             let (current, side, atr, stop_distance, ces_target) =
-                if options.strategy == Strategy::CesV1 {
+                if options.strategy.is_ces() {
                     match ces[i - 1].as_ref() {
                         Some(f) => (
                             true,
-                            f.side,
+                            if options.strategy==Strategy::CesRangeResearch {
+                                f.candle_range_side()
+                            }else{f.side},
                             f.atr,
                             0.5 * f.pressure_range,
                             Some(1.5 * f.pressure_range),
@@ -699,7 +709,7 @@ pub fn run(
                         risk.max_lots.min(spec.volume_max),
                     ) {
                         let p = Position {
-                            time_limit: if options.strategy == Strategy::CesV1 {
+                            time_limit: if options.strategy.is_ces() {
                                 8 * 60
                             } else {
                                 30 * 60
@@ -847,8 +857,13 @@ fn finish(history: &History, options: &Options, ledger: Ledger, equity: Vec<Equi
     if m.trades == 0 {
         warnings.push("لم تتكون صفقات. راجع عدد شموع الإحماء وأسباب عدم الدخول؛ هذه ليست نتيجة نجاح أو فشل للاستراتيجية.".into());
     }
-    if options.strategy == Strategy::CesV1 {
-        warnings.push("CES يستخدم حجم ticks وATR20 من الإحماء المتاح؛ وقف 0.5 وهدف 1.5 من TR3 وخروج EG موجب أو 8 دقائق. الدخول بالافتتاح التالي يختلف عن Pine process_orders_on_close؛ لا ادعاء تطابق النتائج.".into());
+    if options.strategy.is_ces() {
+        warnings.push("CES يحاكي ATR20 ووقف 0.5 وهدف 1.5 من TR3 وخروج EG موجب أو 8 دقائق؛ شموع bid وتكاليف تاريخية تقديرية؛ لا تطابق تلقائياً Pine.".into());
+        if options.strategy==Strategy::CesRangeResearch {
+            warnings.push("CES Range EPI هو بديل بحثي فقط عن نسخة tick-volume الأصلية؛ يستخدم نفس كلفة/تنفيذ CES v1، ولا يدخل أوامر ولا يرث سجلات نجاحها. لا توجد أفضلية مثبتة أو ترقية آلية.".into());
+        } else {
+            warnings.push("CES v1 التنفيذية الأصلية تستخدم tick-volume EPI؛ لا تتغير أوزانها أو صفقاتها بسبب تجربة Range EPI.".into());
+        }
     }
     if options.strategy == Strategy::MetaV2 {
         warnings.push("Meta v2 candidate v1: بوابات الاتجاه والنظام والبنية والزخم والتذبذب؛ سجل decisions يحفظ مرشح كل دقيقة وسبب منع الدخول. الوقف 1.5 ATR والهدف 2R والخروج 30 دقيقة مثل Meta v1؛ المحاكاة المباشرة تبقى Meta v1.".into());
