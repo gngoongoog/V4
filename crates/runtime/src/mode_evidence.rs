@@ -116,15 +116,11 @@ fn inactive_mode_forward(db:&Connection,context:&str,now:u64)->Result<Value>{
     let mut modes=Vec::new();
     for mode in [TradingMode::Sniper,TradingMode::Scalping,TradingMode::Swing,TradingMode::Expert] {
         let label=serde_json::to_value(mode)?.as_str().unwrap_or("").to_owned();
-        let (count,scored,last):(u64,u64,Option<u64>)=if exists && mode!=TradingMode::Sniper {
-            db.query_row(
-                "SELECT COUNT(*),
-                    COALESCE(SUM(CASE WHEN
-                        (CASE WHEN json_valid(outcome) THEN json_extract(outcome,'$.state') END)='scored'
-                        THEN 1 ELSE 0 END),0),
-                    MAX(CASE WHEN json_valid(payload)
-                        THEN CAST(json_extract(payload,'$.observed_ms') AS INTEGER) END)
-                FROM coordinator_samples
+        // Counts and "scored" feedback are deliberately different. A JSON
+        // outcome claiming state=scored is NOT evidence that 12 future bars,
+        // the fixed cost inputs or the causal timestamps were valid.
+        let (count,scored,rejected_scored,last)=if exists && mode!=TradingMode::Sniper {
+            let sql="SELECT bar,source,payload,outcome FROM coordinator_samples
                 WHERE CASE WHEN json_valid(source) THEN json_extract(source,'$[0]') END=?1
                     AND CASE WHEN json_valid(source) THEN json_extract(source,'$[1]') END='inactive-mode-forward-v1'
                     AND CASE WHEN json_valid(source) THEN json_extract(source,'$[2]') END=?2
@@ -134,16 +130,50 @@ fn inactive_mode_forward(db:&Connection,context:&str,now:u64)->Result<Value>{
                         json_extract(payload,'$.study_kind') END=
                         CASE WHEN ?2='expert' THEN 'inactive_expert_advisor_signal_not_consensus'
                         ELSE 'inactive_primary_mode_signal' END
-                    AND (CASE WHEN json_valid(source) THEN json_extract(source,'$[3]') END)
-                        IS NOT NULL
                     AND ((?2='expert' AND
                         (CASE WHEN json_valid(source) THEN json_extract(source,'$[3]') END)
                             NOT IN ('system','sniper_learner'))
                       OR (?2 IN ('scalping','swing') AND
-                        (CASE WHEN json_valid(source) THEN json_extract(source,'$[3]') END)='system'))",
-                params![context,label],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))
-            )?
-        } else {(0,0,None)};
+                        (CASE WHEN json_valid(source) THEN json_extract(source,'$[3]') END)='system'))";
+            let mut query=db.prepare(sql)?;
+            let rows=query.query_map(params![context,label],|r|Ok((
+                r.get::<_,u64>(0)?,r.get::<_,String>(1)?,
+                r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,
+            )))?;
+            let (mut count,mut scored,mut rejected,mut last)=(0u64,0u64,0u64,None::<u64>);
+            for row in rows {
+                let (bar,source,raw,outcome)=row?;
+                let (Ok(source),Ok(payload))=(
+                    serde_json::from_str::<Value>(&source),serde_json::from_str::<Value>(&raw)
+                ) else {continue};
+                let frame=source.get(4).and_then(Value::as_str);
+                let matching_frame=match mode{
+                    TradingMode::Scalping=>frame==Some("M1"),
+                    TradingMode::Swing=>frame==Some("H4"),
+                    TradingMode::Expert=>frame.is_some_and(|tf|!tf.is_empty()),
+                    TradingMode::Sniper=>false,
+                };
+                if !matching_frame || payload["timeframe"].as_str()!=frame
+                    || payload["live_broker_orders"]!=false {continue}
+                count+=1;
+                if let Some(observed)=payload["observed_ms"].as_u64().filter(|ms|*ms<=now) {
+                    last=Some(last.map_or(observed,|v|v.max(observed)));
+                }
+                if let Some(outcome)=outcome {
+                    match serde_json::from_str::<Value>(&outcome) {
+                        Ok(parsed) if parsed["state"]=="scored" => {
+                            if crate::coordinator_learning::verified_forward_feedback(
+                                bar,&payload,&parsed,now).is_some(){
+                                scored+=1;
+                            }else{rejected+=1;}
+                        }
+                        Ok(parsed) if parsed["state"]=="expired"||parsed["state"]=="invalid"=>{}
+                        _=>{rejected+=1;}
+                    }
+                }
+            }
+            (count,scored,rejected,last)
+        }else{(0,0,0,None)};
         modes.push(json!({
             "mode":label,
             "status":if mode==TradingMode::Sniper {"tick_native_not_supported"}
@@ -151,6 +181,8 @@ fn inactive_mode_forward(db:&Connection,context:&str,now:u64)->Result<Value>{
                 else if last.is_some_and(|ms|now.saturating_sub(ms)<=300_000)
                     {"recent_historical_observation"}else{"historical_observation_stale"},
             "samples":count,"scored_after_future_bars":scored,
+            "rejected_or_unverifiable_scored":rejected_scored,
+            "scoring_validation":"same_causal_cost_horizon_validator_as_learning_core",
             "last_observed_ms":last,
             "horizon":match mode{
                 TradingMode::Sniper=>"tick_native_not_studied",
