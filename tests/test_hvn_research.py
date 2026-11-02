@@ -266,6 +266,46 @@ class HvnResearch(unittest.TestCase):
         self.assertEqual(result["nodes"],[])
         self.assertIn("nonflat",result["reason"])
 
+    def test_gateway_reports_unavailable_on_unexpected_collector_exception(self):
+        from unittest.mock import patch
+        from mt5_gateway import complete_hvn_job
+        job = dict(id="test-job", server=KW["server"], login=42,
+                   symbol=KW["symbol"], currency="USD", now_ms=NOW,
+                   window_ms=600_000)
+        receipts = []
+        def api(path, payload):
+            receipts.append((path, payload))
+        with patch("hvn_research.collect_mt5_hvn",
+                   side_effect=RuntimeError("Unexpected internal MT5 failure")):
+            complete_hvn_job(None, api, job)
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(receipts[0][0], "/v1/gateway/hvn/result")
+        self.assertEqual(receipts[0][1]["id"], job["id"])
+        result = receipts[0][1]["report"]
+        self.assertEqual(result["identity"]["login"], 42)
+        self.assertEqual(result["window_ms"], job["window_ms"])
+        self.assertEqual(result["source"], "none")
+        self.assertFalse(result["available"])
+        self.assertTrue(result["read_only"])
+        self.assertFalse(result["trade_authorized"])
+        self.assertEqual(result["nodes"], [])
+        self.assertIn("RuntimeError", result["reason"])
+        self.assertNotIn("Unexpected internal MT5 failure", result["reason"])
+
+    def test_gateway_normal_hvn_completion_preserves_verified_report(self):
+        from unittest.mock import patch
+        from mt5_gateway import complete_hvn_job
+        job = dict(id="normal-job", server=KW["server"], login=42,
+                   symbol=KW["symbol"], currency="USD", now_ms=NOW,
+                   window_ms=600_000)
+        source_report = calculate_hvn(quotes(), **KW)
+        receipts = []
+        with patch("hvn_research.collect_mt5_hvn", return_value=source_report) as collector:
+            complete_hvn_job(None, lambda path, payload: receipts.append((path, payload)), job)
+        collector.assert_called_once()
+        self.assertEqual(receipts[0][0], "/v1/gateway/hvn/result")
+        self.assertIs(receipts[0][1]["report"], source_report)
+
     def test_no_executable_broker_in_hvn_research_module(self):
         source=(Path(__file__).resolve().parents[1]/"gateway"/"hvn_research.py").read_text()
         self.assertNotIn("order_send(", source)
