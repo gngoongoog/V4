@@ -205,6 +205,12 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
  const actualBrains=brains.filter(b=>safeObject(safeObject(b).config).id!=='system');
  const verifiedAccount=view.controls_available===true&&view.account_matches===true;
  const available=verifiedAccount&&actualBrains.length>0;
+ const modeName=String(view.trading_mode||'');
+ const modeCaption=modeName==='expert'?'Expert: العقول المشاركة تصوّت على اتجاه القرار':
+  modeName==='sniper'?'Sniper: القناص المتعلّم يشارك فقط عند اختياره؛ بقية العقول تشخيصية':
+  modeName==='scalping'?'Scalping: العقول الفرعية تشخيصية ولا تغير إشارة السكالبينغ':
+  modeName==='swing'?'Swing: العقول الفرعية تشخيصية ولا تغير إشارة السوينغ':
+  'لم يتحقق Core من الوضع الحالي';
  // Directory entries are labels only; never treat names as authenticated Core states.
  const cards=actualBrains.length?actualBrains:BRAIN_DIRECTORY.map(([id,name,description])=>({config:{id},name,description}));
  const [selectedBrain,setSelectedBrain]=useState<string|null>(null);
@@ -225,6 +231,7 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
   </div>
   <p className="safe-note" role="status">{reason}</p>
   {view.selected_owner!==undefined&&<p className="safe-note">منفّذ الأوامر الحالي: <b>{txtOwner(view.selected_owner)}</b>. إذا كان عقل منفرد يملك التنفيذ، تغيير مشاركة بقية المستشارين لا يغيّر صفقاته إلى أن ترجع للمنسق.</p>}
+  <p className="safe-note" role="status">منطق الوضع الفعلي: <b>{modeCaption}</b>. المشاركة لا تعني أن إشارة العقل جاهزة ولا أن صفقة أُرسلت أو أن التعلّم أثبت ربحاً.</p>
   <div className="concept-brain-card-grid">{cards.map((b,i)=>{
     const row=safeObject(b),id=String(safeObject(row.config).id||'');
     if(!id)return null;
@@ -243,15 +250,19 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
     // A SOLO owner also supersedes the coordinator until explicitly restored.
     const effective=row.participates_in_coordinator===true;
     const effectiveKnown=known&&typeof row.participates_in_coordinator==='boolean';
+    const decision=safeObject(row.decision_participation);
+    const decisionReason=available&&typeof decision.reason==='string'?decision.reason:
+      'السبب الفعلي غير متاح من Core؛ لا تُفترض مشاركة أو نتائج';
     const selectable=canEdit&&known;
     return <article key={id} className={'concept-brain-card '+(activeBrain===id?'selected':'')}>
       <button type="button" className="concept-brain-card-head" onClick={()=>setSelectedBrain(id)} aria-pressed={activeBrain===id}><Icon size={27}/><span><b>{directory?.[1]||String(row.name||id)}</b><small>{directory?.[2]||String(row.name||id)}</small></span><span className={'concept-control-state '+(advisorOn?'on':'')}>{known?(advisorOn?'مستشار مفعّل':'مستشار متوقف'):'غير موثق'}</span></button>
       <div className="brain-control-states" dir="rtl">
         <span className={advisorOn?'active':'off'}>المشاركة: {known?(advisorOn?'مفعّلة':'متوقفة'):'غير معروفة'}</span>
         <span className={paperOn?'active':'off'}>Paper: {known?(paperOn?'مفعّل':'متوقف'):'غير معروف'}</span>
-        <span className={effective?'active':'off'}>تأثيره على قرار المنسق: {effectiveKnown?(effective?'يشارك الآن':'لا يشارك الآن'):'غير مؤكد'}</span>
+        <span className={effective?'active':'off'}>تأثيره على قرار المنسق: {effectiveKnown?(effective?'مؤهل للمشاركة':'غير مشارك'):'غير مؤكد'}</span>
       </div>
-      <div className="concept-brain-card-metrics"><span>إشارات <b>{known&&typeof activity.signals==='number'?activity.signals:'—'}</b></span><span>تنفيذ موثق <b>{known&&typeof orders.fill_acknowledged==='number'?orders.fill_acknowledged:'—'}</b></span><span>نجاح موثق <b>{verified?`${(rate*100).toFixed(1)}%`:'—'}</b></span></div>
+      <p className="safe-note" data-brain-decision-reason={id}>سبب الحالة: {decisionReason}</p>
+      <div className="concept-brain-card-metrics"><span>إشارات <b>{known&&typeof activity.signals==='number'?activity.signals:'—'}</b></span><span title="رد تعبئة برقم Deal من الوسيط؛ قد يكون جزئياً وليس إغلاقاً مُسوّى">ردود تعبئة MT5 <b>{known&&typeof orders.fill_acknowledged==='number'?orders.fill_acknowledged:'—'}</b></span><span>نجاح موثق <b>{verified?`${(rate*100).toFixed(1)}%`:'—'}</b></span></div>
       <div className="concept-brain-card-actions">
         <button type="button" aria-label={`${advisorOn?'إيقاف':'تشغيل'} مشاركة ${id}`} title="تغيير المشاركة في قرارات المنسق فقط" disabled={!selectable}
          onClick={()=>void onSave(id,!advisorOn,paperOn)}>{known?(advisorOn?'إيقاف المشاركة':'تشغيل المشاركة'):'انتظار Core'}</button>
@@ -260,7 +271,7 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
       </div>
     </article>;
   })}</div>
-  <div className="concept-brain-inspector" dir="rtl"><h3><ShieldAlert size={18}/> تفاصيل العقل المحدد</h3>{activeBrain&&Object.keys(selected).length?<div><strong>{BRAIN_DIRECTORY.find(item=>item[0]===activeBrain)?.[1]||String(selected.name||activeBrain)}</strong><p>المشاركة: {selectedVerified?(selectedControl.advisor?'مفعّلة':'متوقفة'):'غير مؤكدة'} · Paper: {selectedVerified?(selectedControl.paper?'مفعّل':'متوقف'):'غير مؤكد'}</p><p>فحوص التحليل: {available&&typeof selectedActivity.checks==='number'?selectedActivity.checks:'—'} · الإشارات المرصودة: {available&&typeof selectedActivity.signals==='number'?selectedActivity.signals:'—'}</p><small>الحالة تُقرأ من Core بعد الحفظ. هذه الأزرار لا تشغل تنفيذ MT5 منفرداً.</small></div>:<p>اختَر بطاقة عقل لعرض حالته الفعلية.</p>}</div>
+  <div className="concept-brain-inspector" dir="rtl"><h3><ShieldAlert size={18}/> تفاصيل العقل المحدد</h3>{activeBrain&&Object.keys(selected).length?<div><strong>{BRAIN_DIRECTORY.find(item=>item[0]===activeBrain)?.[1]||String(selected.name||activeBrain)}</strong><p>المشاركة: {selectedVerified?(selectedControl.advisor?'مفعّلة':'متوقفة'):'غير مؤكدة'} · Paper: {selectedVerified?(selectedControl.paper?'مفعّل':'متوقف'):'غير مؤكد'}</p><p>فحوص التحليل: {available&&typeof selectedActivity.checks==='number'?selectedActivity.checks:'—'} · الإشارات المرصودة: {available&&typeof selectedActivity.signals==='number'?selectedActivity.signals:'—'}</p><p>دوره في القرار: {selectedVerified&&typeof safeObject(selected.decision_participation).reason==='string'?String(safeObject(selected.decision_participation).reason):'لم يؤكد Core دور العقل'}</p><small>الحالة تُقرأ من Core بعد الحفظ. هذه الأزرار لا تشغل تنفيذ MT5 منفرداً ولا تثبت التعلّم.</small></div>:<p>اختَر بطاقة عقل لعرض حالته الفعلية.</p>}</div>
  </section>;
 }
 
