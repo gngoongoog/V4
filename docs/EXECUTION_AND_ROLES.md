@@ -1,3 +1,15 @@
+# Current V25 execution ownership — read before historical material
+
+**Enterprise V25 RC2 uses the Rust Core as the only authority for broker execution.** Trading requires the global START gate, matched MT5 account/symbol/mode, current quote, reconciled durable intent and broker authorization. There are 17 historically stable brain IDs/magic mappings: never reuse them for a different strategy.
+
+**SOLO can be selected** for an individual brain with its explicit ownership/reconciliation gates; it is **not globally disabled** in current V25. Expert can use eligible advisor votes; neither an advisor toggle nor a saved research report grants MT5 permission by itself. Generated reports failing `eligible_for_review` are not broker-executable. Sniper tick EA is transport only and cannot independently trade. Inactive/shadow/forward evidence must not be mistaken for a broker deal. START is initially OFF; STOP prevents new entries, not necessarily broker-managed exits, and Full Exit must be tested for app-owned process termination without implying that MT5 positions were forcibly closed.
+
+**Data semantics:** DOM is broker-only and requires a recent local Gateway read receipt plus a current quote. The profile is candle tick-activity proxy, not centralized volume at price; combined Gann+DOM+Profile obeys standalone Gann entry eligibility. The new historical study and CES ablations are blocked during START/active Paper and have **no** automatic promotion or broker path. Native REAL broker acceptance/profitability is unverified; see [README](../README.md), [V25 manual](v25/USER_MANUAL_V25_AR.md), [audit](v25/BRAIN_BY_BRAIN_LOGIC_AUDIT_AR_20261102.md).
+
+---
+
+## Archived 0.7.x execution design (DO NOT use as V25 operating instructions)
+
 # Historical BrainTrade 0.7.0 execution design — superseded by 0.7.1
 
 > **Do not use the old SOLO/veto/target-compensation descriptions below as operating instructions.** In v0.7.1 and its October 21 audit, SOLO broker entries are disabled; the selected-mode `system` coordinator alone submits new MT5 entries. Expert advisor consensus cannot veto Scalping, Swing or Sniper decisions; MT5 journal and Paper observations are separate; fixed Sniper TP is never widened silently. For current details see [brain controls](BRAIN_CONTROL_SNIPER_AR.md) and [the execution integrity audit](AUDIT_2026_10_21_EXECUTION_LEARNING_INTEGRITY.md).
