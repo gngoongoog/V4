@@ -560,6 +560,35 @@ def cleanup_gateway(transport, native, executor, mt5, dom_cache, lock):
         raise RuntimeError("Gateway cleanup incomplete: " + ", ".join(failures))
 
 
+def complete_hvn_job(mt5, api, hvn_job):
+    """Always acknowledge an issued HVN job, even if the MT5 reader fails.
+
+    The authenticated Core is authoritative: a failure carries no nodes,
+    cannot authorize an order, and only frees the matched history fence.
+    Transport failure stays fail-closed (safe full exit remains available).
+    """
+    try:
+        from hvn_research import collect_mt5_hvn
+        report = collect_mt5_hvn(
+            mt5, server=hvn_job['server'], login=hvn_job['login'],
+            symbol=hvn_job['symbol'], currency=hvn_job['currency'],
+            now_ms=hvn_job['now_ms'], window_ms=hvn_job['window_ms'])
+    except Exception as error:
+        report = {
+            'available': False, 'read_only': True,
+            'trade_authorized': False, 'broker_only': True,
+            'exchange_wide': False, 'source': 'none', 'unit': 'none',
+            'identity': {
+                'server': hvn_job['server'], 'login': hvn_job['login'],
+                'symbol': hvn_job['symbol'], 'currency': hvn_job['currency'],
+            },
+            'window_ms': hvn_job['window_ms'], 'nodes': [],
+            'reason': 'MT5 HVN collector failed: ' + type(error).__name__,
+        }
+    api('/v1/gateway/hvn/result',
+        {'id':hvn_job['id'], 'report':report})
+
+
 def main():
     directory = Path(os.environ["BRAINTRADE_DATA_DIR"])
     token = os.environ.pop("BRAINTRADE_IPC_TOKEN")
@@ -621,34 +650,6 @@ def main():
             headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
         with legacy_opener.open(request,timeout=4) as response:
             response.read()
-
-    def complete_hvn_job(mt5, api, hvn_job):
-        """Always acknowledge an issued HVN job, even if the MT5 reader fails.
-
-        The authenticated Core is authoritative: a failure carries no nodes,
-        cannot authorize an order, and only frees the matched history fence.
-        Transport failure stays fail-closed (safe full exit remains available).
-        """
-        try:
-            from hvn_research import collect_mt5_hvn
-            report = collect_mt5_hvn(
-                mt5, server=hvn_job['server'], login=hvn_job['login'],
-                symbol=hvn_job['symbol'], currency=hvn_job['currency'],
-                now_ms=hvn_job['now_ms'], window_ms=hvn_job['window_ms'])
-        except Exception as error:
-            report = {
-                'available': False, 'read_only': True,
-                'trade_authorized': False, 'broker_only': True,
-                'exchange_wide': False, 'source': 'none', 'unit': 'none',
-                'identity': {
-                    'server': hvn_job['server'], 'login': hvn_job['login'],
-                    'symbol': hvn_job['symbol'], 'currency': hvn_job['currency'],
-                },
-                'window_ms': hvn_job['window_ms'], 'nodes': [],
-                'reason': 'MT5 HVN collector failed: ' + type(error).__name__,
-            }
-        api('/v1/gateway/hvn/result',
-            {'id':hvn_job['id'], 'report':report})
 
     def background_work():
         try:
