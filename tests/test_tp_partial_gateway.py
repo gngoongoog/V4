@@ -24,7 +24,8 @@ def stage_command(stage=1,held=0.1,lots=0.05):
     c=command()
     c.update(id="tp-req-"+str(stage)+"-"+"b"*24,kind="close",position=91,
         brain="gann",magic=410601,lots=lots,signal=None,
-        tp_stage_plan_id=PLAN,tp_stage=stage,
+        tp_stage_plan_id="tp-plan-"+{1:"a",2:"b",3:"c"}.get(stage,"a")*32,
+        tp_stage=stage,
         expected_position_identifier=917,
         expected_position_volume=held,expected_position_side="BUY")
     return c
