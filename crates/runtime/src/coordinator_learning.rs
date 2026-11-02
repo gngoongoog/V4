@@ -765,7 +765,29 @@ impl Learner {
         frames:&BTreeMap<String,Vec<FrameBar>>,run:bool,now:u64,cutoff:Option<u64>,
         frozen_quality:(f64,u64),
     )->Result<BTreeMap<String,LearnedWeight>> {
-        if cutoff.is_none(){sync_demo_broker_evidence(db,t,now)?;}
+        self.observe_gated_impl(db,t,c,brains,frames,run,now,cutoff,frozen_quality,false)
+    }
+
+    /// Prospective-only evidence from a DIFFERENT, inactive trading mode.
+    /// Never imports broker deals, never submits broker commands, and shares
+    /// no in-memory policy cache with the active execution learner.
+    pub fn observe_inactive_forward(
+        &mut self,db:&Connection,t:&Telemetry,c:&Config,brains:&[BrainConfig],
+        frames:&BTreeMap<String,Vec<FrameBar>>,now:u64,
+    )->Result<BTreeMap<String,LearnedWeight>> {
+        anyhow::ensure!(t.connected&&t.demo&&t.account_trade_mode==Some(0),
+            "Inactive mode forward observations require verified MT5 Demo");
+        anyhow::ensure!(c.trading.mode!=TradingMode::Sniper,
+            "Sniper requires tick-native research, not candle shadow learning");
+        self.observe_gated_impl(db,t,c,brains,frames,true,now,None,(0.5,0),true)
+    }
+
+    fn observe_gated_impl(
+        &mut self,db:&Connection,t:&Telemetry,c:&Config,brains:&[BrainConfig],
+        frames:&BTreeMap<String,Vec<FrameBar>>,run:bool,now:u64,cutoff:Option<u64>,
+        frozen_quality:(f64,u64),inactive_shadow:bool,
+    )->Result<BTreeMap<String,LearnedWeight>> {
+        if cutoff.is_none() && !inactive_shadow {sync_demo_broker_evidence(db,t,now)?;}
         let evidence_time=cutoff.unwrap_or(now);
         let mut out = BTreeMap::new();
         let key = context(t);
@@ -904,6 +926,8 @@ impl Learner {
                     let p = json!({
                         "brain":b.id,
                         "timeframe":b.timeframe,
+                        "observation_origin":if inactive_shadow {"inactive_mode_forward"} else {"active_mode_forward"},
+                        "live_broker_orders":false,
                         "side":signal.side,
                         "entry":entry,
                         "quote_ms":t.quote_time_ms,
