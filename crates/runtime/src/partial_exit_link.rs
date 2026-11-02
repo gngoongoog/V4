@@ -69,6 +69,7 @@ fn evaluate(db:&Connection,t:&Telemetry,target:&str,key:&str,pid:u64,stage:u32,
         cmd["position"].as_u64()!=Some(ticket)||
         cmd["expected_position_identifier"].as_u64()!=Some(pid)||
         cmd["expected_position_side"]!=draft["side"]||
+        !cmd["created_ms"].as_u64().is_some_and(|ms|ms>0)||
         !close_to(cmd["lots"].as_f64().unwrap_or(f64::NAN),plan_lots,step)||
         !close_to(cmd["expected_position_volume"].as_f64().unwrap_or(f64::NAN),expected,step)
     {return Ok(json!({"state":"command_identity_mismatch"}))}
@@ -87,6 +88,8 @@ fn evaluate(db:&Connection,t:&Telemetry,target:&str,key:&str,pid:u64,stage:u32,
     if receipt["position_id"].as_u64()!=Some(pid)||
        !close_to(receipt["request"]["volume"].as_f64().unwrap_or(f64::NAN),plan_lots,step)||
        receipt["request"]["position"].as_u64()!=Some(ticket)||
+       receipt["request"]["magic"].as_u64()!=Some(magic)||
+       receipt["request"]["symbol"]!=t.symbol||
        receipt["request"]["type"].as_i64()!=Some(1-side)
     {return Ok(json!({"state":"gateway_request_not_matching_stage"}))}
     let other_claims:u64=db.query_row(
@@ -106,6 +109,12 @@ fn evaluate(db:&Connection,t:&Telemetry,target:&str,key:&str,pid:u64,stage:u32,
     let (until,synced)=match watermark{
         Ok(x) if x.0>0&&x.1>0=>x,_=>return Ok(json!({"state":"broker_deal_history_not_synced"}))
     };
+    let Some(primary_deal)=receipt["deal"].as_u64().filter(|n|*n>0) else{
+        return Ok(json!({"state":"gateway_primary_deal_ticket_missing"}))
+    };
+    if !tickets.iter().any(|d|d.as_u64()==Some(primary_deal)){
+        return Ok(json!({"state":"gateway_primary_deal_not_in_fill_batch"}))
+    }
     let mut seen=BTreeSet::new();
     let mut booked=0.0_f64;
     let mut lots=0.0_f64;
@@ -128,7 +137,10 @@ fn evaluate(db:&Connection,t:&Telemetry,target:&str,key:&str,pid:u64,stage:u32,
            !matches!(d["entry"].as_i64(),Some(1|3))||
            d["type"].as_i64()!=Some(1-side)||
            !d["magic"].as_u64().is_some_and(|n|n==0||n==magic)||
-           !d["time_msc"].as_u64().is_some_and(|n|n>0&&n<=until.saturating_add(2000))
+           !d["time_msc"].as_u64().is_some_and(|n|
+               n>0&&n<=until.saturating_add(2000)&&
+               n.saturating_add(2000)>=cmd["created_ms"].as_u64().unwrap_or(u64::MAX))||
+           !d["price"].as_f64().is_some_and(|p|p.is_finite()&&p>0.)
         {return Ok(json!({"state":"broker_deal_order_or_identity_mismatch"}))}
         let Some(v)=positive(&d["volume"])else{return Ok(json!({"state":"invalid_broker_fill_volume"}))};
         lots+=v;
@@ -232,18 +244,19 @@ mod tests{
             "target":"demo","login":222,"server":"DemoA","currency":"USD",
             "symbol":"XAUUSDm","brain":"gann","magic":410601,
             "position":87,"tp_stage":1,"tp_stage_plan_id":plan,
-            "lots":0.05,"expected_position_identifier":907,
+            "lots":0.05,"created_ms":120,"expected_position_identifier":907,
             "expected_position_volume":0.10,"expected_position_side":"BUY"});
         let receipt=json!({"state":"filled","recovered_from_history":true,
-            "volume":0.05,"position_id":907,"order":777,"deals":[901],
-            "request":{"volume":0.05,"position":87,"type":1}});
+            "volume":0.05,"position_id":907,"order":777,"deal":901,"deals":[901],
+            "request":{"volume":0.05,"position":87,"type":1,
+                "magic":410601,"symbol":"XAUUSDm"}});
         d.execute("INSERT INTO broker_commands VALUES (?1,?2,'gann','close',120,'filled',?3,?4)",
             params!["core-close-1",ctx(t),command.to_string(),receipt.to_string()]).unwrap();
         d.execute("INSERT INTO broker_history_sync VALUES (?1,'demo',1000,1001)",
             [ctx(t)]).unwrap();
         let deal=json!({"ticket":901,"order":777,"position_id":907,
             "symbol":"XAUUSDm","magic":410601,"entry":1,"type":1,
-            "time_msc":200,"volume":0.05,"profit":1.0,
+            "time_msc":200,"volume":0.05,"price":2000.0,"profit":1.0,
             "commission":-0.03,"swap":0.0,"fee":0.0});
         d.execute("INSERT INTO broker_deals VALUES (?1,901,907,'gann',?2)",
             params![ctx(t),deal.to_string()]).unwrap();
@@ -274,6 +287,19 @@ mod tests{
         assert_eq!(e(&d,&t)["state"],"broker_deal_order_or_identity_mismatch");
         d.execute("DELETE FROM broker_deals",[]).unwrap();
         assert_eq!(e(&d,&t)["state"],"matching_broker_deal_not_yet_synced");
+    }
+    #[test]
+    fn missing_deal_price_wrong_primary_ticket_and_ancient_order_are_rejected(){
+        let d=db();let t=sample_telemetry();seed(&d,&t);
+        d.execute("UPDATE broker_deals SET payload=json_remove(payload,'$.price')",[]).unwrap();
+        assert_eq!(e(&d,&t)["state"],"broker_deal_order_or_identity_mismatch");
+        d.execute("UPDATE broker_deals SET payload=json_set(payload,'$.price',2000.0)",[]).unwrap();
+        d.execute("UPDATE broker_commands SET result=json_set(result,'$.deal',999)",[]).unwrap();
+        assert_eq!(e(&d,&t)["state"],"gateway_primary_deal_not_in_fill_batch");
+        d.execute("UPDATE broker_commands SET result=json_set(result,'$.deal',901)",[]).unwrap();
+        d.execute("UPDATE broker_deals SET payload=json_set(payload,'$.time_msc',1)",[]).unwrap();
+        d.execute("UPDATE broker_commands SET payload=json_set(payload,'$.created_ms',10000)",[]).unwrap();
+        assert_eq!(e(&d,&t)["state"],"broker_deal_order_or_identity_mismatch");
     }
     #[test]
     fn altered_core_command_or_competing_command_cannot_claim_tp(){
