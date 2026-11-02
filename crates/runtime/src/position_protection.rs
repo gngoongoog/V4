@@ -194,7 +194,17 @@ pub fn next(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Option<Valu
 }
 
 pub fn authorize(db:&Connection,t:&Telemetry,target:&str,id:&str,now:u64)->Result<bool> {
-    if !mode(t,target){return Ok(false)}
+    // Gateway dispatch may happen after observe() and next(): do not authorize
+    // a stale stop update merely because the position and policy still match.
+    // This also applies while START is off; position protection remains active
+    // only if MT5 trading and a fresh executable quote are available.
+    if !mode(t,target) || !t.trade_allowed || !t.trade_expert
+        || !t.broker_quote_time_ms().is_some_and(|q|
+            q<=now.saturating_add(2_000) && now.saturating_sub(q)<=3_000)
+        || !matches!((t.bid,t.ask),(Some(bid),Some(ask))
+            if bid.is_finite() && ask.is_finite() && bid>0. && ask>=bid)
+        || !t.tick_size.is_some_and(|tick|tick.is_finite()&&tick>0.)
+    {return Ok(false)}
     let row:Option<(String,String)>=db.query_row("SELECT payload,state FROM position_protection_commands WHERE id=?1 AND context=?2 AND target=?3",
         params![id,context(t),target],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
     let Some((raw,state))=row else{return Ok(false)};
@@ -209,7 +219,18 @@ pub fn authorize(db:&Connection,t:&Telemetry,target:&str,id:&str,now:u64)->Resul
         && Some(p.identifier)==cmd["expected_position_identifier"].as_u64() && Some(p.magic)==cmd["magic"].as_u64()
         && p.symbol==t.symbol && cmd["expected_position_side"].as_str()==Some(p.side.as_str())
         && cmd["expected_position_volume"].as_f64().is_some_and(|v|(p.volume-v).abs()<=1e-8)
-        && cmd["expected_position_sl"].as_f64()==Some(p.sl) && cmd["expected_position_tp"].as_f64()==Some(p.tp)))
+        && cmd["expected_position_sl"].as_f64()==Some(p.sl) && cmd["expected_position_tp"].as_f64()==Some(p.tp)
+        // The stop is still on the correct side of the *current* exit price.
+        // The broker remains authoritative on stops/freeze levels and filling.
+        && cmd["protect_stop"].as_f64().is_some_and(|wanted|{
+            let exit=if p.side=="BUY"{t.bid.unwrap_or(0.)}else{t.ask.unwrap_or(0.)};
+            let tick=t.tick_size.unwrap_or(0.);
+            wanted.is_finite() && wanted>0. && match p.side.as_str(){
+                "BUY"=>wanted<exit-tick*1e-7 && (p.sl<=0. || wanted>p.sl+tick*1e-7),
+                "SELL"=>wanted>exit+tick*1e-7 && (p.sl<=0. || wanted<p.sl-tick*1e-7),
+                _=>false,
+            }
+        })))
 }
 
 pub fn result(db:&Connection,packet:&Value)->Result<bool> {
@@ -332,6 +353,31 @@ mod tests {
         t.positions[0].magic=12345;
         assert!(!observe(&db,&t,"demo",100_000).unwrap());
         assert_eq!(db.query_row("SELECT COUNT(*) FROM position_protection_commands",[],|r|r.get::<_,u32>(0)).unwrap(),0);
+    }
+
+    #[test]
+    fn dispatch_rechecks_quote_permissions_and_stop_geometry_not_only_policy_id() {
+        let db=setup();let t=telemetry(100_000);
+        save(&db,&t,"demo",&enabled(),"",100_000).unwrap();
+        assert!(observe(&db,&t,"demo",100_000).unwrap());
+        let cmd=next(&db,&t,"demo",100_001).unwrap().unwrap();
+        let id=cmd["id"].as_str().unwrap();
+        assert!(authorize(&db,&t,"demo",id,100_001).unwrap());
+
+        let mut stale=t.clone();
+        assert!(!authorize(&db,&stale,"demo",id,104_001).unwrap(),
+            "Quote valid at planning must not authorize a late dispatch");
+        stale=t.clone();stale.trade_allowed=false;
+        assert!(!authorize(&db,&stale,"demo",id,100_001).unwrap());
+        stale=t.clone();stale.trade_expert=false;
+        assert!(!authorize(&db,&stale,"demo",id,100_001).unwrap());
+        stale=t.clone();stale.ask=Some(stale.bid.unwrap()-0.01);
+        assert!(!authorize(&db,&stale,"demo",id,100_001).unwrap());
+        stale=t.clone();stale.bid=Some(1999.00);stale.ask=Some(1999.02);
+        assert!(!authorize(&db,&stale,"demo",id,100_001).unwrap(),
+            "Out-of-market trailing stop must not be dispatched");
+        assert!(authorize(&db,&t,"demo",id,100_002).unwrap(),
+            "Failed transient authorization should not mutate a broker intent");
     }
 
     #[test]
