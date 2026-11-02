@@ -111,8 +111,13 @@ pub fn genome(
             |r| r.get(0),
         )
         .optional()?;
-    raw.map(|s| Ok(serde_json::from_str::<LabReport>(&s)?.selected))
-        .transpose()
+    // The lab always remains available for research, but an unqualified
+    // historical run is not an executable Genome just because it was saved.
+    // This is only an eligibility FLOOR, never independent OOS proof.
+    raw.map(|s| {
+        let report:LabReport=serde_json::from_str(&s)?;
+        Ok(if report.eligible_for_review {Some(report.selected)} else {None})
+    }).transpose().map(Option::flatten)
 }
 
 #[derive(Clone, Debug, Default)]
