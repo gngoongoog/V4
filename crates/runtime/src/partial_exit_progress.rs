@@ -143,12 +143,15 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
                     &&near(existing[0].volume,remaining,step)
             };
             if !position_proven {break}
+            // Floating representation may leave 3e-18 after 0.10-0.05-0.03-0.02.
+            // Normalize only if demonstrably zero on the broker's lot grid.
+            let certified_remaining=if near(remaining,0.,step){0.0}else{remaining};
             // Latching creates no trading permission. It merely remembers the
             // independent historical + full-snapshot evidence through restart.
             let evidence=json!({"schema":"partial-exit-settlement-v1",
                 "plan_id":plan,"stage":stage,"command_id":id,"broker_order":order,
                 "deal_tickets":ev["broker_deal_tickets"],
-                "matched_volume":volume,"remaining_volume":remaining.max(0.),
+                "matched_volume":volume,"remaining_volume":certified_remaining,
                 "history_until_ms":ev["broker_history_until_ms"],
                 "broker_snapshot_ms":now,
                 "authorizes_next_stage":false,"breakeven_triggered":false});
@@ -157,7 +160,7 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
                  context,target,position_identifier,stage,plan_id,command_id,
                  broker_order,matched_volume,remaining_volume,evidence_json,settled_ms)
                  VALUES(?1,'demo',?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-                params![key,pid,stage,plan,id,order,volume,remaining.max(0.),
+                params![key,pid,stage,plan,id,order,volume,certified_remaining,
                     evidence.to_string(),now])?;
             completed+=volume;
         }
