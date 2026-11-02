@@ -622,19 +622,41 @@ def main():
         with legacy_opener.open(request,timeout=4) as response:
             response.read()
 
+    def complete_hvn_job(mt5, api, hvn_job):
+        """Always acknowledge an issued HVN job, even if the MT5 reader fails.
+
+        The authenticated Core is authoritative: a failure carries no nodes,
+        cannot authorize an order, and only frees the matched history fence.
+        Transport failure stays fail-closed (safe full exit remains available).
+        """
+        try:
+            from hvn_research import collect_mt5_hvn
+            report = collect_mt5_hvn(
+                mt5, server=hvn_job['server'], login=hvn_job['login'],
+                symbol=hvn_job['symbol'], currency=hvn_job['currency'],
+                now_ms=hvn_job['now_ms'], window_ms=hvn_job['window_ms'])
+        except Exception as error:
+            report = {
+                'available': False, 'read_only': True,
+                'trade_authorized': False, 'broker_only': True,
+                'exchange_wide': False, 'source': 'none', 'unit': 'none',
+                'identity': {
+                    'server': hvn_job['server'], 'login': hvn_job['login'],
+                    'symbol': hvn_job['symbol'], 'currency': hvn_job['currency'],
+                },
+                'window_ms': hvn_job['window_ms'], 'nodes': [],
+                'reason': 'MT5 HVN collector failed: ' + type(error).__name__,
+            }
+        api('/v1/gateway/hvn/result',
+            {'id':hvn_job['id'], 'report':report})
+
     def background_work():
         try:
             # Explicit STOP + flat-account research. This consumes no automatic
             # full-market tick scans and is never part of Sniper OnTick/pulse.
             hvn_job = api('/v1/gateway/hvn/request').get('job')
             if hvn_job is not None:
-                from hvn_research import collect_mt5_hvn
-                report = collect_mt5_hvn(
-                    mt5, server=hvn_job['server'], login=hvn_job['login'],
-                    symbol=hvn_job['symbol'], currency=hvn_job['currency'],
-                    now_ms=hvn_job['now_ms'], window_ms=hvn_job['window_ms'])
-                api('/v1/gateway/hvn/result',
-                    {'id':hvn_job['id'], 'report':report})
+                complete_hvn_job(mt5, api, hvn_job)
                 return
             job = api('/v1/gateway/history/request').get('job')
             if job is not None:
