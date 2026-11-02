@@ -320,6 +320,12 @@ fn enforce_portfolio(
 pub struct Service {
     inner: legacy::Service,
     learner: crate::coordinator_learning::Learner,
+    // Separate research-only learner. Active execution reads its own policy
+    // cache, but can learn from these causally matured per-mode forward rows
+    // after an explicit mode switch.
+    inactive_forward_learner: crate::coordinator_learning::Learner,
+    inactive_forward_last_ms: u64,
+    inactive_forward_context: String,
     student: crate::student_learning::Student,
     sniper_opportunities: crate::sniper_opportunities::Recorder,
     sniper_tick_audit: crate::sniper_tick_audit::Audit,
@@ -380,6 +386,9 @@ impl Service {
         Ok(Self {
             inner,
             learner: crate::coordinator_learning::Learner::new(db)?,
+            inactive_forward_learner: crate::coordinator_learning::Learner::new(db)?,
+            inactive_forward_last_ms:0,
+            inactive_forward_context:String::new(),
             student: crate::student_learning::Student::new(db)?,
             sniper_opportunities: crate::sniper_opportunities::Recorder::default(),
             sniper_tick_audit: crate::sniper_tick_audit::Audit::default(),
@@ -452,6 +461,7 @@ impl Service {
 
     pub fn set_mode(&mut self, mode: braintrade_domain::trading::TradingMode) {
         self.inner.set_mode(mode);
+        self.inactive_forward_last_ms=0;
         self.fast = None; // Never execute a new selection using a previous cached config.
         self.sniper_tick_audit=crate::sniper_tick_audit::Audit::default();
         self.sniper_frozen_tick.clear_on_mode_change();
@@ -668,6 +678,44 @@ impl Service {
         // Apply one global entry budget after all brains have proposed their queued opens and
         // before the gateway can retrieve them. Exits and reconciliation states are untouched.
         self.apply_portfolio(db,telemetry,config)?;
+        // P1: Inactive advisor modes collect *prospective forward* evidence
+        // while a different coordinator is running on a bound MT5 Demo account.
+        // Do not call on Fast Pulse; do not modify active weights, add broker
+        // intents, infer Sniper tick performance from candles, or mix REAL data.
+        // A research exception cannot prevent real position reconciliation.
+        if run && !self.learning_frozen() && telemetry.demo
+            && telemetry.account_trade_mode==Some(0)
+            && self.inner.matches_bound_telemetry(telemetry)
+        {
+            let scope=context(telemetry);
+            if self.inactive_forward_context!=scope
+                || now.saturating_sub(self.inactive_forward_last_ms)>=30_000
+                || self.inactive_forward_last_ms==0
+            {
+                self.inactive_forward_context=scope.clone();
+                self.inactive_forward_last_ms=now;
+                let advisors=self.inner.brains.iter()
+                    .filter(|b|b.id!="system"&&b.id!=braintrade_domain::sniper::ID)
+                    .cloned().collect::<Vec<_>>();
+                for mode in [
+                    braintrade_domain::trading::TradingMode::Scalping,
+                    braintrade_domain::trading::TradingMode::Swing,
+                    braintrade_domain::trading::TradingMode::Expert,
+                ] {
+                    if mode==config.trading.mode {continue;}
+                    let mut study=config.clone();
+                    study.trading.priority_enabled=false;
+                    study.trading.mode=mode;
+                    if let Err(error)=self.inactive_forward_learner.observe_inactive_forward(
+                        db,telemetry,&study,&advisors,frames,now)
+                    {
+                        let _=db.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,'inactive_mode_forward_error',?2)",
+                            params![now,json!({"context":scope,"mode":mode,
+                                "error":error.to_string().chars().take(240).collect::<String>()}).to_string()]);
+                    }
+                }
+            }
+        }
         // Diagnostic sampling uses normal reconciled snapshots only, after
         // broker intents and portfolio decisions. Never add this to Fast Pulse.
         if self.inner.matches_bound_telemetry(telemetry) && self.inner.solo_owner(telemetry,config.trading.mode)=="system" {
