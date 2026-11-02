@@ -62,6 +62,33 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  const scopedBrain={controls_available:true,account_matches:true,brains:[{name:'system',config:{id:'system'}},{name:'Trend',config:{id:'trend'},control:{advisor:true,paper:false}}]};
  const brains=exportsObj.BrainControlsOperations({source:scopedBrain,disabled:false,armed:false,onSave:async(...v)=>{brainState=v}});
  const brainButtons=nodes(brains).filter(x=>x.type==='button');
+ // Render truthful Core-provided decision roles, never infer that an ON
+ // toggle means a ready signal, selected execution owner, or broker fill.
+ const diagnostic=exportsObj.BrainControlsOperations({
+  source:{...scopedBrain,trading_mode:'scalping',selected_owner:'system',brains:[
+   {name:'system',config:{id:'system'}},
+   {name:'Trend',config:{id:'trend'},control:{advisor:true,paper:true},
+    participates_in_coordinator:false,decision_participation:{
+     status:'scalping_diagnostic',reason:'Scalping diagnostic only'}}]},
+  disabled:false,armed:false,onSave:async()=>{}
+ });
+ assert(JSON.stringify(diagnostic).includes('Scalping diagnostic only'),
+  'Expert-only votes must not be presented as active Scalping participation');
+ assert(JSON.stringify(diagnostic).includes('العقول الفرعية تشخيصية'),
+  'Scalping must explain the primary-signal ownership boundary');
+ assert(JSON.stringify(diagnostic).includes('ردود تعبئة MT5'),
+  'An acknowledged MT5 Deal must not be called certified completed execution');
+ const expert=exportsObj.BrainControlsOperations({
+  source:{...scopedBrain,trading_mode:'expert',selected_owner:'system',brains:[
+   {name:'system',config:{id:'system'}},
+   {name:'Trend',config:{id:'trend'},control:{advisor:true,paper:true},
+    participates_in_coordinator:true,decision_participation:{
+     status:'expert_eligible',reason:'Expert eligible if ready'}}]},
+  disabled:false,armed:false,onSave:async()=>{}
+ });
+ assert(JSON.stringify(expert).includes('Expert eligible if ready'));
+ assert(JSON.stringify(expert).includes('تُفترض مشاركة')===false);
+
  const advisor=brainButtons.find(x=>String(x.props['aria-label']||'').includes('مشاركة trend'));
  const paper=brainButtons.find(x=>String(x.props['aria-label']||'').includes('Paper trend'));
  assert(advisor&&!advisor.props.disabled&&paper&&!paper.props.disabled,'Core-scoped advisor and Paper controls are actionable');
