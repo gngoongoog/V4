@@ -1572,6 +1572,13 @@ impl Service {
                 status.telemetry.as_ref().map(|t|crate::position_protection::report(db,t,&self.inner.settings.target)
                     .unwrap_or_else(|e|json!({"error":e.to_string()}))).unwrap_or(Value::Null)
             } else {Value::Null};
+            // Source-only, never a close command. Uses the verified MT5
+            // volume grid for owned positions; cannot promote a simulation
+            // into an executable broker authorization.
+            value["partial_exit_preview"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(braintrade_domain::partial_exit::preview)
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
             value["pending_cancellations"]=if status.gateway_fresh && self.account_matches(status) {
                 status.telemetry.as_ref().map(|t|crate::pending_cancellation::report(db,t,&self.inner.settings.target)
                     .map(|rows|json!(rows)).unwrap_or(Value::Null)).unwrap_or(Value::Null)
