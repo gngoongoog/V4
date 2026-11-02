@@ -1,0 +1,311 @@
+//! Read-only audit of a TP stage -> durable Core command -> exact MT5 order
+//! -> immutable broker Deal tickets. This does NOT queue, send or advance TP.
+//! A plan, an ACK or matching exit volume alone is never proof of TP execution.
+use anyhow::Result;
+use braintrade_domain::{execution,Telemetry};
+use rusqlite::{params,Connection};
+use serde_json::{json,Value};
+use std::collections::BTreeSet;
+
+fn ctx(t:&Telemetry)->String {
+    serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency))
+        .unwrap_or_default()
+}
+fn bound(t:&Telemetry,target:&str)->bool{
+    t.connected&&t.validate()&&t.login>0&&!t.server.is_empty()&&
+    !t.symbol.is_empty()&&!t.currency.is_empty()&&
+    matches!((target,t.demo,t.account_trade_mode),
+        ("demo",true,Some(0))|("live",false,Some(2)))
+}
+fn positive(v:&Value)->Option<f64>{
+    v.as_f64().filter(|n|n.is_finite()&&*n>0.)
+}
+fn close_to(a:f64,b:f64,step:f64)->bool{
+    a.is_finite()&&b.is_finite()&&step.is_finite()&&step>0.
+        &&(a-b).abs()<=step*1e-6
+}
+fn evaluate(db:&Connection,t:&Telemetry,target:&str,key:&str,pid:u64,stage:u32,
+    plan:&str,plan_lots:f64,draft:&Value,ticket:u64,magic:u64,
+    initial:f64,step:f64)->Result<Value>
+{
+    let prior:f64=db.query_row(
+        "SELECT COALESCE(SUM(planned_volume),0) FROM partial_exit_stage_plans
+         WHERE context=?1 AND target=?2 AND position_identifier=?3 AND stage<?4",
+        params![key,target,pid,stage],|r|r.get(0))?;
+    let expected=initial-prior;
+    if ticket==0||magic==0||!close_to(draft["entry_volume"].as_f64().unwrap_or(f64::NAN),initial,step)
+       ||draft["schema"]!="partial-exit-draft-v1"||
+       draft["ticket"].as_u64()!=Some(ticket)||draft["position_identifier"].as_u64()!=Some(pid)
+       ||draft["magic"].as_u64()!=Some(magic)||draft["symbol"]!=t.symbol||
+       draft["broker_orders_created"]!=false||!positive(&json!(plan_lots)).is_some()||
+       !close_to(draft["volume_step"].as_f64().unwrap_or(f64::NAN),step,step)
+    {
+        return Ok(json!({"state":"invalid_original_plan"}))
+    }
+    let side=match draft["side"].as_str(){Some("BUY")=>0,Some("SELL")=>1,
+        _=>return Ok(json!({"state":"invalid_original_side"}))};
+    let mut statement=db.prepare(
+        "SELECT id,state,payload,result FROM broker_commands
+         WHERE context=?1 AND kind='close' AND json_valid(payload)
+         AND json_extract(payload,'$.tp_stage_plan_id')=?2
+         ORDER BY created_ms,id LIMIT 3")?;
+    let commands=statement.query_map(params![key,plan],|r|Ok((
+        r.get::<_,String>(0)?,r.get::<_,String>(1)?,
+        r.get::<_,String>(2)?,r.get::<_,String>(3)?
+    )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    if commands.is_empty(){return Ok(json!({"state":"no_core_stage_command"}))}
+    if commands.len()!=1 {return Ok(json!({"state":"conflicting_stage_commands"}))}
+    let (id,command_state,raw,raw_result)=&commands[0];
+    let Ok(cmd)=serde_json::from_str::<Value>(raw) else{
+        return Ok(json!({"state":"corrupt_core_command"}))
+    };
+    let owner=execution::brain_for_magic(magic);
+    if owner.is_none()||cmd["id"]!=*id||cmd["kind"]!="close"||
+        cmd["context"]!=key||cmd["target"]!=target||
+        cmd["login"].as_u64()!=Some(t.login)||cmd["server"]!=t.server||
+        cmd["currency"]!=t.currency||cmd["symbol"]!=t.symbol||
+        cmd["magic"].as_u64()!=Some(magic)||cmd["brain"].as_str()!=owner||
+        cmd["tp_stage_plan_id"]!=plan||cmd["tp_stage"].as_u64()!=Some(stage as u64)||
+        cmd["position"].as_u64()!=Some(ticket)||
+        cmd["expected_position_identifier"].as_u64()!=Some(pid)||
+        cmd["expected_position_side"]!=draft["side"]||
+        !close_to(cmd["lots"].as_f64().unwrap_or(f64::NAN),plan_lots,step)||
+        !close_to(cmd["expected_position_volume"].as_f64().unwrap_or(f64::NAN),expected,step)
+    {return Ok(json!({"state":"command_identity_mismatch"}))}
+    if !matches!(command_state.as_str(),"filled"|"partial"|"observed"){
+        return Ok(json!({"state":"command_not_broker_reconciled"}))
+    }
+    let Ok(receipt)=serde_json::from_str::<Value>(raw_result) else{
+        return Ok(json!({"state":"corrupt_gateway_receipt"}))
+    };
+    if receipt["recovered_from_history"]!=true||receipt["state"]!="filled"||
+        !close_to(receipt["volume"].as_f64().unwrap_or(f64::NAN),plan_lots,step)
+    {return Ok(json!({"state":"gateway_history_proof_missing"}))}
+    let Some(order)=receipt["order"].as_u64().filter(|n|*n>0) else {
+        return Ok(json!({"state":"gateway_order_ticket_missing"}))
+    };
+    if receipt["position_id"].as_u64()!=Some(pid)||
+       !close_to(receipt["request"]["volume"].as_f64().unwrap_or(f64::NAN),plan_lots,step)||
+       receipt["request"]["position"].as_u64()!=Some(ticket)||
+       receipt["request"]["type"].as_i64()!=Some(1-side)
+    {return Ok(json!({"state":"gateway_request_not_matching_stage"}))}
+    let other_claims:u64=db.query_row(
+        "SELECT COUNT(*) FROM broker_commands WHERE context=?1 AND id<>?2
+         AND kind='close' AND json_valid(result) AND json_valid(payload)
+         AND CAST(json_extract(result,'$.order') AS INTEGER)=?3
+         AND json_extract(payload,'$.tp_stage_plan_id') IS NOT NULL",
+        params![key,id,order],|r|r.get(0))?;
+    if other_claims>0{return Ok(json!({"state":"broker_order_claimed_by_multiple_stages"}))}
+    let Some(tickets)=receipt["deals"].as_array().filter(|v|!v.is_empty()&&v.len()<=50) else{
+        return Ok(json!({"state":"gateway_deal_ticket_list_missing"}))
+    };
+    let watermark:rusqlite::Result<(u64,u64)>=db.query_row(
+        "SELECT until_ms,synced_ms FROM broker_history_sync
+         WHERE context=?1 AND target=?2",params![key,target],
+        |r|Ok((r.get(0)?,r.get(1)?)));
+    let (until,synced)=match watermark{
+        Ok(x) if x.0>0&&x.1>0=>x,_=>return Ok(json!({"state":"broker_deal_history_not_synced"}))
+    };
+    let mut seen=BTreeSet::new();
+    let mut booked=0.0_f64;
+    let mut lots=0.0_f64;
+    for ticket_id in tickets{
+        let Some(deal_ticket)=ticket_id.as_u64().filter(|n|*n>0) else{
+            return Ok(json!({"state":"invalid_gateway_deal_ticket"}))
+        };
+        if !seen.insert(deal_ticket){return Ok(json!({"state":"duplicate_gateway_deal_ticket"}))}
+        let deal:rusqlite::Result<String>=db.query_row(
+            "SELECT payload FROM broker_deals
+             WHERE context=?1 AND position_id=?2 AND ticket=?3",
+            params![key,pid,deal_ticket],|r|r.get(0));
+        let Ok(raw)=deal else{return Ok(json!({"state":"matching_broker_deal_not_yet_synced"}))};
+        let Ok(d)=serde_json::from_str::<Value>(&raw) else{
+            return Ok(json!({"state":"invalid_matching_broker_deal"}))
+        };
+        if d["ticket"].as_u64()!=Some(deal_ticket)||
+           d["order"].as_u64()!=Some(order)||d["position_id"].as_u64()!=Some(pid)||
+           d["symbol"]!=t.symbol||
+           !matches!(d["entry"].as_i64(),Some(1|3))||
+           d["type"].as_i64()!=Some(1-side)||
+           !d["magic"].as_u64().is_some_and(|n|n==0||n==magic)||
+           !d["time_msc"].as_u64().is_some_and(|n|n>0&&n<=until.saturating_add(2000))
+        {return Ok(json!({"state":"broker_deal_order_or_identity_mismatch"}))}
+        let Some(v)=positive(&d["volume"])else{return Ok(json!({"state":"invalid_broker_fill_volume"}))};
+        lots+=v;
+        for name in ["profit","commission","swap","fee"]{
+            let Some(value)=d[name].as_f64().filter(|v|v.is_finite())else{
+                return Ok(json!({"state":"broker_booked_costs_missing"}))
+            };
+            booked+=value;
+        }
+        if !lots.is_finite()||!booked.is_finite(){
+            return Ok(json!({"state":"invalid_broker_totals"}))
+        }
+    }
+    if !close_to(lots,plan_lots,step){
+        return Ok(json!({"state":"broker_fill_lots_do_not_cover_stage"}))
+    }
+    Ok(json!({
+        "state":"broker_order_deals_exactly_linked",
+        "core_command_id":id,"broker_order_ticket":order,
+        "broker_deal_tickets":seen,
+        "matched_broker_lots":lots,"booked_net_account_currency":booked,
+        "broker_history_until_ms":until,"broker_history_synced_ms":synced,
+        "stage_completed":false,"orders_enabled":false,
+        "note":"Historical proof is read-only; it never advances stage sequence, enables another stage or triggers breakeven."
+    }))
+}
+
+/// No stage transitions or broker sends. Exact one-command, one-order and
+/// persisted Deal proof is independently visible for future reconciliation.
+pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
+    if !bound(t,target) {
+        return Ok(json!({"schema":"partial-exit-stage-command-links-v1",
+            "status":"unverified_account","read_only":true,
+            "orders_enabled":false,"rows":[]}))
+    }
+    let key=ctx(t);
+    let mut statement=db.prepare(
+        "SELECT s.position_identifier,s.stage,s.plan_id,s.planned_volume,s.status,
+                d.ticket,d.magic,d.initial_volume,d.step,d.payload
+         FROM partial_exit_stage_plans s
+         LEFT JOIN partial_exit_drafts d ON d.context=s.context AND d.target=s.target
+            AND d.position_identifier=s.position_identifier
+         WHERE s.context=?1 AND s.target=?2
+         ORDER BY s.created_ms DESC,s.position_identifier DESC,s.stage ASC LIMIT 75")?;
+    let stages=statement.query_map(params![key,target],|r|Ok((
+        r.get::<_,u64>(0)?,r.get::<_,u32>(1)?,r.get::<_,String>(2)?,
+        r.get::<_,f64>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<u64>>(5)?,
+        r.get::<_,Option<u64>>(6)?,r.get::<_,Option<f64>>(7)?,
+        r.get::<_,Option<f64>>(8)?,r.get::<_,Option<String>>(9)?
+    )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    let mut rows=Vec::new();
+    for (pid,stage,plan,lots,state,ticket,magic,initial,step,raw) in stages{
+        let evidence=if let (Some(ticket),Some(magic),Some(initial),Some(step),Some(raw))=
+            (ticket,magic,initial,step,raw){
+            let draft=serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null);
+            evaluate(db,t,target,&key,pid,stage,&plan,lots,&draft,
+                ticket,magic,initial,step)?
+        } else {json!({"state":"missing_original_draft"})};
+        rows.push(json!({"position_identifier":pid,"stage":stage,"plan_id":plan,
+            "planned_volume":lots,"plan_state":state,"evidence":evidence}));
+    }
+    Ok(json!({"schema":"partial-exit-stage-command-links-v1",
+        "status":"broker_stage_links_read_only","context":key,"target":target,
+        "read_only":true,"orders_enabled":false,"stage_execution_supported":false,
+        "rows":rows}))
+}
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    use braintrade_domain::Position;
+    fn t()->Telemetry{
+        Telemetry{connected:true,demo:true,account_trade_mode:Some(0),login:222,
+            server:"DemoA".into(),currency:"USD".into(),symbol:"XAUUSDm".into(),
+            volume_min:Some(0.01),volume_step:Some(0.01),volume_max:Some(100.),
+            positions:vec![Position{ticket:87,identifier:907,magic:410601,
+                symbol:"XAUUSDm".into(),side:"BUY".into(),volume:0.10,
+                ..Default::default()}],..Default::default()
+        }
+    }
+    fn db()->Connection{
+        let d=Connection::open_in_memory().unwrap();
+        crate::partial_exit_ledger::init(&d).unwrap();
+        crate::partial_exit_stage::init(&d).unwrap();
+        d.execute_batch("CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT,
+            brain TEXT,kind TEXT,created_ms INTEGER,state TEXT,payload TEXT,result TEXT);
+            CREATE TABLE broker_deals(context TEXT,ticket INTEGER,position_id INTEGER,
+                brain TEXT,payload TEXT,PRIMARY KEY(context,ticket));
+            CREATE TABLE broker_history_sync(context TEXT,target TEXT,until_ms INTEGER,
+                synced_ms INTEGER,PRIMARY KEY(context,target));").unwrap();
+        let tt=t();
+        crate::partial_exit_ledger::observe(&d,&tt,"demo",100).unwrap();
+        crate::partial_exit_stage::observe(&d,&tt,"demo",100).unwrap();
+        d
+    }
+    fn seed(d:&Connection,t:&Telemetry){
+        let v=crate::partial_exit_stage::report(d,t,"demo").unwrap();
+        let plan=v["rows"][0]["plan_id"].as_str().unwrap();
+        let command=json!({"id":"core-close-1","kind":"close","context":ctx(t),
+            "target":"demo","login":222,"server":"DemoA","currency":"USD",
+            "symbol":"XAUUSDm","brain":"gann","magic":410601,
+            "position":87,"tp_stage":1,"tp_stage_plan_id":plan,
+            "lots":0.05,"expected_position_identifier":907,
+            "expected_position_volume":0.10,"expected_position_side":"BUY"});
+        let receipt=json!({"state":"filled","recovered_from_history":true,
+            "volume":0.05,"position_id":907,"order":777,"deals":[901],
+            "request":{"volume":0.05,"position":87,"type":1}});
+        d.execute("INSERT INTO broker_commands VALUES (?1,?2,'gann','close',120,'filled',?3,?4)",
+            params!["core-close-1",ctx(t),command.to_string(),receipt.to_string()]).unwrap();
+        d.execute("INSERT INTO broker_history_sync VALUES (?1,'demo',1000,1001)",
+            [ctx(t)]).unwrap();
+        let deal=json!({"ticket":901,"order":777,"position_id":907,
+            "symbol":"XAUUSDm","magic":410601,"entry":1,"type":1,
+            "time_msc":200,"volume":0.05,"profit":1.0,
+            "commission":-0.03,"swap":0.0,"fee":0.0});
+        d.execute("INSERT INTO broker_deals VALUES (?1,901,907,'gann',?2)",
+            params![ctx(t),deal.to_string()]).unwrap();
+    }
+    fn e(d:&Connection,t:&Telemetry)->Value{
+        report(d,t,"demo").unwrap()["rows"][0]["evidence"].clone()
+    }
+    #[test]
+    fn exact_original_command_and_mt5_order_and_deals_can_be_audited_without_executing(){
+        let d=db();let t=t();
+        assert_eq!(e(&d,&t)["state"],"no_core_stage_command");
+        seed(&d,&t);
+        let x=e(&d,&t);
+        assert_eq!(x["state"],"broker_order_deals_exactly_linked");
+        assert_eq!(x["matched_broker_lots"],0.05);
+        assert_eq!(x["booked_net_account_currency"],0.97);
+        assert_eq!(x["stage_completed"],false);
+        assert_eq!(report(&d,&t,"demo").unwrap()["orders_enabled"],false);
+        assert_eq!(e(&d,&t),x,"Repeated audits cannot mutate broker state");
+    }
+    #[test]
+    fn ack_only_wrong_order_or_missing_deal_cannot_verify_stage(){
+        let d=db();let t=t();seed(&d,&t);
+        d.execute("UPDATE broker_commands SET result=json_set(result,'$.recovered_from_history',false)",[]).unwrap();
+        assert_eq!(e(&d,&t)["state"],"gateway_history_proof_missing");
+        d.execute("UPDATE broker_commands SET result=json_set(result,'$.recovered_from_history',true)",[]).unwrap();
+        d.execute("UPDATE broker_deals SET payload=json_set(payload,'$.order',999)",[]).unwrap();
+        assert_eq!(e(&d,&t)["state"],"broker_deal_order_or_identity_mismatch");
+        d.execute("DELETE FROM broker_deals",[]).unwrap();
+        assert_eq!(e(&d,&t)["state"],"matching_broker_deal_not_yet_synced");
+    }
+    #[test]
+    fn altered_core_command_or_competing_command_cannot_claim_tp(){
+        let d=db();let t=t();seed(&d,&t);
+        let original:String=d.query_row("SELECT payload FROM broker_commands",[],|r|r.get(0)).unwrap();
+        d.execute("UPDATE broker_commands SET payload=json_set(payload,'$.lots',0.06)",[]).unwrap();
+        assert_eq!(e(&d,&t)["state"],"command_identity_mismatch");
+        d.execute("UPDATE broker_commands SET payload=?1",[original.clone()]).unwrap();
+        let plan=serde_json::from_str::<Value>(&original).unwrap()["tp_stage_plan_id"].as_str().unwrap().to_string();
+        let other=json!({"tp_stage_plan_id":plan,"kind":"close"});
+        d.execute("INSERT INTO broker_commands VALUES ('other',?1,'gann','close',130,'filled',?2,'{}')",
+            params![ctx(&t),other.to_string()]).unwrap();
+        assert_eq!(e(&d,&t)["state"],"conflicting_stage_commands");
+    }
+    #[test]
+    fn broker_volume_and_duplicate_ticket_proof_are_not_inferred(){
+        let d=db();let t=t();seed(&d,&t);
+        d.execute("UPDATE broker_commands SET result=json_set(result,'$.deals',json_array(901,901))",[]).unwrap();
+        assert_eq!(e(&d,&t)["state"],"duplicate_gateway_deal_ticket");
+        d.execute("UPDATE broker_commands SET result=json_set(result,'$.deals',json_array(901))",[]).unwrap();
+        d.execute("UPDATE broker_deals SET payload=json_set(payload,'$.volume',0.04)",[]).unwrap();
+        assert_eq!(e(&d,&t)["state"],"broker_fill_lots_do_not_cover_stage");
+    }
+    #[test]
+    fn foreign_account_or_real_mode_does_not_inherit_stage_proof(){
+        let d=db();let mut t=t();seed(&d,&t);
+        t.login+=1;
+        assert!(report(&d,&t,"demo").unwrap()["rows"].as_array().unwrap().is_empty());
+        t.connected=false;
+        assert_eq!(report(&d,&t,"demo").unwrap()["status"],"unverified_account");
+        t=t();
+        t.demo=false;t.account_trade_mode=Some(2);
+        assert!(report(&d,&t,"live").unwrap()["rows"].as_array().unwrap().is_empty());
+    }
+}
