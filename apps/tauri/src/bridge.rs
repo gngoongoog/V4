@@ -358,11 +358,12 @@ fn study_request(kind:&str,action:&str,id:Option<&str>,source_id:Option<&str>,pl
     match (kind,action){
         ("backtest","runs")=>Ok(("/v1/backtest/runs",false,json!({}))),
         ("evaluation","runs")=>Ok(("/v1/evaluation/runs",false,json!({}))),
-        ("backtest","report")|("backtest","export")|("backtest","ces_ablation")|("evaluation","report")|("evaluation","export")=>{
+        ("backtest","report")|("backtest","export")|("backtest","ces_ablation")|("backtest","brain_ablation")|("evaluation","report")|("evaluation","export")=>{
             let id=id.filter(|v|valid_id(v)).ok_or("اختر نتيجة محفوظة صحيحة")?;
             let route=match (kind,action){
                 ("backtest","report")=>"/v1/backtest/report",
                 ("backtest","ces_ablation")=>"/v1/backtest/ces-ablation",
+                ("backtest","brain_ablation")=>"/v1/backtest/brain-ablation",
                 ("backtest","export")=>"/v1/backtest/export",
                 ("evaluation","report")=>"/v1/evaluation/report",
                 _=>"/v1/evaluation/export",
@@ -773,6 +774,11 @@ mod tests {
         assert!(study_request("backtest","start",None,None,None).is_err());
         assert!(study_request("evaluation","../../v1/start",None,None,None).is_err());
         let (path,post,_)=study_request("backtest","report",Some("saved-run-2026"),None,None).unwrap();
+        let (brain_path,brain_post,brain_body)=study_request("backtest","brain_ablation",Some("saved-run-2026"),None,None).unwrap();
+        assert_eq!(brain_path,"/v1/backtest/brain-ablation");
+        assert!(brain_post);
+        assert_eq!(brain_body["id"],"saved-run-2026");
+        assert!(study_request("backtest","brain_ablation",Some("../etc/token"),None,None).is_err());
         let (ces_path,ces_post,body)=study_request("backtest","ces_ablation",Some("saved-run-2026"),None,None).unwrap();
         assert_eq!(ces_path,"/v1/backtest/ces-ablation");
         assert!(ces_post);
