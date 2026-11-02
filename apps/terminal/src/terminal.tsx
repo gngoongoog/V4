@@ -34,6 +34,7 @@ import type {OperatorWriteTicket} from './operator-write-fence';
 import {MicroCapitalOperations} from './micro-capital-operations';
 import {RiskMasterOperations} from './risk-master-operations';
 import {PositionProtectionOperations} from './position-protection-operations';
+import {PartialExitPreview} from './partial-exit-preview';
 import {SoloOperations} from './solo-operations';
 import {ExecutionQualityOperations} from './execution-quality-operations';
 import {ModeEvidenceOperations} from './mode-evidence-operations';
@@ -1289,7 +1290,7 @@ export default function Terminal(){
              monitor={safeRiskSnapshot} portfolio={unwrap(portfolioReport).portfolio} armed={status?.requested_run===true}
              disabled={busy||preview} onSavePortfolio={runSavePortfolio}/></div>
           <div className="concept-risk-daily"><DailyRiskOperations status={!preview&&feed.broker?status:null} monitor={safeRiskSnapshot} preview={preview}/></div>
-          <div className="concept-risk-extra"><PositionProtectionOperations key={contextKey} status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} onSet={runPositionProtection}/><h3>حماية المراكز في الطوارئ</h3><p>ميزة إغلاق كل مراكز الحساب بضغطة واحدة غير مدعومة في Core حالياً، لذلك لا يوجد زر يوهمك بتنفيذها. زر STOP يوقف فتح الصفقات الجديدة فقط.</p><button type="button" onClick={()=>open('positions')}>عرض المراكز الفعلية</button></div></div>
+          <div className="concept-risk-extra"><PositionProtectionOperations key={contextKey} status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} onSet={runPositionProtection}/><PartialExitPreview status={!preview&&feed.broker?status:null} source={portfolioReport}/><h3>حماية المراكز في الطوارئ</h3><p>ميزة إغلاق كل مراكز الحساب بضغطة واحدة غير مدعومة في Core حالياً، لذلك لا يوجد زر يوهمك بتنفيذها. زر STOP يوقف فتح الصفقات الجديدة فقط.</p><button type="button" onClick={()=>open('positions')}>عرض المراكز الفعلية</button></div></div>
           <details className="operator-advanced"><summary>بيانات Core التفصيلية — افتحها عند التشخيص</summary><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/risk/monitor')}/></details>
          </div>:
         page==='settings'||page==='telegram'?<div className="editor-panel operator-settings-page">
