@@ -179,9 +179,19 @@ def collect_mt5_hvn(mt5, *, server, login, symbol, currency,
                 and getattr(account, "server", None) == server
                 and getattr(account, "currency", None) == currency)
 
+    def flat_account():
+        # Live MT5 read, independent of the earlier Core snapshot. None from
+        # the broker is UNKNOWN, never equivalent to zero open positions.
+        positions = mt5.positions_get()
+        orders = mt5.orders_get()
+        return (positions is not None and orders is not None
+                and len(positions) == 0 and len(orders) == 0)
+
     try:
         if not same_account():
             return _unavailable("MT5 account changed or identity mismatched", identity, window_ms)
+        if not flat_account():
+            return _unavailable("MT5 has open positions, orders, or an unknown order book; historical tick read withheld", identity, window_ms)
         info = mt5.symbol_info(symbol)
         if info is None:
             return _unavailable("Broker symbol not found; check exact symbol suffix", identity, window_ms)
@@ -190,6 +200,8 @@ def collect_mt5_hvn(mt5, *, server, login, symbol, currency,
         ticks = mt5.copy_ticks_range(symbol, start, end, mt5.COPY_TICKS_ALL)
         if not same_account():
             return _unavailable("MT5 account changed during tick history read", identity, window_ms)
+        if not flat_account():
+            return _unavailable("MT5 became nonflat or broker order state unknown during tick history read", identity, window_ms)
         return calculate_hvn(ticks, server=server, login=login, symbol=symbol,
                              currency=currency,
                              tick_size=getattr(info, "trade_tick_size", None),
