@@ -39,6 +39,12 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
   ledger.target===(t?.demo?'demo':'live')&&ledger.read_only===true&&
   ledger.orders_enabled===false;
  const drafts=ledgerBound&&Array.isArray(ledger.rows)?ledger.rows.slice(0,25).map(object):[];
+ const stages=object(view.partial_exit_stage_plans);
+ const stagesBound=ledgerBound&&stages.schema==='partial-exit-stage-plans-v1'&&
+  stages.status==='draft_identities_only'&&stages.context===context&&
+  stages.target===(t?.demo?'demo':'live')&&stages.read_only===true&&
+  stages.orders_enabled===false&&stages.stage_execution_supported===false;
+ const stageRows=stagesBound&&Array.isArray(stages.rows)?stages.rows.slice(0,75).map(object):[];
  const draftState:Record<string,string>={
   draft_only:'مسودة محفوظة فقط — لم يُرسل أي أمر',
   volume_changed_unverified:'تغيّر حجم المركز أو هويته — يحتاج مراجعة',
@@ -83,6 +89,17 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
        <span>الحجم الأصلي {volume(d.initial_volume)} لوت</span>
       </div>)}
     </div>:null}
+   {stagesBound?<details className="operator-advanced" aria-label="هويات مراحل TP المخطط لها">
+     <summary>هويات مراحل TP المحفوظة (عدد {stageRows.length}) — غير قابلة للتنفيذ</summary>
+     <p className="safe-note">كل مرحلة لديها هوية ثابتة تمنع تكرار التخطيط عند إعادة التشغيل؛ هذه ليست تذكرة MT5، ولا تعني أن السعر وصل للهدف أو أُغلق أي لوت.</p>
+     {stageRows.map((r,i)=><div className="brain-control-row" key={String(r.position_identifier)+'-'+String(r.stage)+'-'+i}>
+      <div><b>TP{[1,2,3].includes(Number(r.stage))?String(r.stage):'؟'} — مركز {Number.isSafeInteger(r.position_identifier)?String(r.position_identifier):'—'}</b>
+       <small style={{display:'block',marginTop:4}}>{r.state==='prepared_only'?'هوية خطة محفوظة فقط — لم يحدث تنفيذ':
+         r.state==='review_required'?'أُلغي اعتماد الخطة بعد تغير بيانات MT5 — يحتاج مراجعة':
+         'حالة غير موثقة — لا تعتمد عليها'}</small>
+      </div><span>{volume(r.planned_volume)} لوت</span>
+     </div>)}
+    </details>:null}
    </>}
   <p className="safe-note">حتى إذا صلح تقسيم اللوت، التنفيذ يحتاج مدير إغلاقات جزئية منفصل، ومصالحة حجم الصفقة الفعلي بعد كل هدف، واختبار Hedging/Netting والسبريد والانزلاق وحدود الوسيط. لا تعتبر هذه الشاشة موافقة على LIVE.</p>
  </section>;
