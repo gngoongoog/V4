@@ -112,11 +112,19 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
      {dealRows.length===0?<p>لا توجد مراكز مخططة يمكن فحص سجل إغلاقاتها.</p>:
       dealRows.map((r,i)=>{const e=object(r.evidence);
        const usable=e.tp_stage_attribution_verified===false&&e.stage_completed===false;
+       const booked=usable&&
+        (e.state==='broker_partial_exit_unattributed'||e.state==='broker_flat_by_deals_unattributed')&&
+        typeof e.booked_net_account_currency==='number'&&Number.isFinite(e.booked_net_account_currency);
        return <div className="brain-control-row" key={String(r.position_identifier)+'-'+i}>
         <div><b>مركز {Number.isSafeInteger(r.position_identifier)?String(r.position_identifier):'—'}</b>
          <small style={{display:'block',marginTop:4}}>
           {usable?(dealState[String(e.state)]||'نتيجة السجل غير موثقة'):'نتيجة غير آمنة أو مجهولة — لا يمكن تأكيد تنفيذ TP'}
          </small>
+         {booked?<small style={{display:'block',marginTop:4}}>
+          صافي قيود الوسيط المحفوظة (ربح/خسارة + عمولة + سواب + رسوم):
+          {' '}{(e.booked_net_account_currency as number).toLocaleString('en-US',{maximumFractionDigits:2})}
+          {' '}{t?.currency||''} — ليس ربح TP
+         </small>:null}
         </div>
         <span>{usable&&valid(e.broker_closed_lots)?volume(e.broker_closed_lots)+' لوت مُغلق في السجل':'غير موثق'}</span>
        </div>;
