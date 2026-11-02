@@ -1,3 +1,17 @@
+# Current V25 RC2 handoff — 2026-11-02 (authoritative)
+
+Repository `gngoongoog/V4`. **Current integration source**: `feature/v25-hvn-mt5-tick-research-20261102`; `main` promotion is only valid once the latest exact source head passes required CI, README/docs have been updated, and GitHub accepts an audited non-force fast-forward/PR merge. Do not go back to historical v0.7.x or the older V25 RC2 base.
+
+Version `0.25.1`, label `Enterprise V25 RC2`, `ready_for_real=false`. Windows launcher: `BrainTradeNext.exe`, NOT legacy `BrainTrade.exe`. Reference manuals: [README](README.md), [V25 Arabic manual](docs/v25/USER_MANUAL_V25_AR.md), [Demo G7-H](docs/v25/G7H_NATIVE_DEMO_ACCEPTANCE_AR.md).
+
+**Last work completed:** original CES vs range EPI ablation, broker-book receipt age/previous-bar Profile fixes, combined Gann gate, generated-lab eligibility, SOLO role telemetry, actual four-brain entry-signal comparison (Trend/Wyckoff/Liquidity/Pullback) with costed 1.5ATR/2R/30-minute uniform exits, per-window sample quality and research-only STOP gating. The latest build and portable are to be verified against **their own** commit SHA and release manifest; do not reuse a previous CI green status or ZIP. No real MT5 Demo broker-fill or independent OOS claim has been established.
+
+**Next operating acceptance:** download exact-source Windows portable only after its CI finishes successfully; run `VERIFY_SYSTEM.cmd`, launch `BrainTradeNext.exe`, check broker Demo account/symbol/EA ticks, save settings/restart, deliberately place/close an authorized small Demo test trade when safe, check deal reconciliation/commission, verify Full Exit stops app-owned processes; preserve G7-H evidence and check broker fills. Do not approve REAL based on CI. Do not delete user DB/backup/journal files.
+
+---
+
+## Archived handoffs below (not current branch/release instructions)
+
 # Current V25 RC2 continuation — 2026-10-26 (0.25.1)
 
 Continue from `feature/v25-rc2-build-identity-g7-ui-20261026`.
