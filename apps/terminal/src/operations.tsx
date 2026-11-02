@@ -253,7 +253,13 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
     const decision=safeObject(row.decision_participation);
     const decisionReason=available&&typeof decision.reason==='string'?decision.reason:
       'السبب الفعلي غير متاح من Core؛ لا تُفترض مشاركة أو نتائج';
-    const selectable=canEdit&&known;
+    // The advisor button must actually affect the chosen coordinator. In
+    // Scalping/Swing (and classic Sniper), these votes are only diagnostic.
+    // Keep Paper independent and actionable even for research-only brains.
+    const votingMode=modeName==='expert'||(modeName==='sniper'&&id==='sniper_learner'&&
+      decision.status!=='sniper_classic_selected'&&decision.status!=='sniper_selection_unverified');
+    const advisorSelectable=canEdit&&known&&votingMode&&view.selected_owner==='system';
+    const paperSelectable=canEdit&&known;
     return <article key={id} className={'concept-brain-card '+(activeBrain===id?'selected':'')}>
       <button type="button" className="concept-brain-card-head" onClick={()=>setSelectedBrain(id)} aria-pressed={activeBrain===id}><Icon size={27}/><span><b>{directory?.[1]||String(row.name||id)}</b><small>{directory?.[2]||String(row.name||id)}</small></span><span className={'concept-control-state '+(advisorOn?'on':'')}>{known?(advisorOn?'مستشار مفعّل':'مستشار متوقف'):'غير موثق'}</span></button>
       <div className="brain-control-states" dir="rtl">
@@ -264,9 +270,11 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
       <p className="safe-note" data-brain-decision-reason={id}>سبب الحالة: {decisionReason}</p>
       <div className="concept-brain-card-metrics"><span>إشارات <b>{known&&typeof activity.signals==='number'?activity.signals:'—'}</b></span><span title="رد تعبئة برقم Deal من الوسيط؛ قد يكون جزئياً وليس إغلاقاً مُسوّى">ردود تعبئة MT5 <b>{known&&typeof orders.fill_acknowledged==='number'?orders.fill_acknowledged:'—'}</b></span><span>نجاح موثق <b>{verified?`${(rate*100).toFixed(1)}%`:'—'}</b></span></div>
       <div className="concept-brain-card-actions">
-        <button type="button" aria-label={`${advisorOn?'إيقاف':'تشغيل'} مشاركة ${id}`} title="تغيير المشاركة في قرارات المنسق فقط" disabled={!selectable}
+        <button type="button" aria-label={`${advisorOn?'إيقاف':'تشغيل'} مشاركة ${id}`}
+         title={advisorSelectable?'تغيير المشاركة في القرار الفعلي للمنسق':'هذا العقل لا يغيّر قرار الوضع الحالي؛ غيّر الوضع أو المنفّذ أولاً'}
+         disabled={!advisorSelectable}
          onClick={()=>void onSave(id,!advisorOn,paperOn)}>{known?(advisorOn?'إيقاف المشاركة':'تشغيل المشاركة'):'انتظار Core'}</button>
-        <button type="button" aria-label={`${paperOn?'إيقاف':'تشغيل'} Paper ${id}`} title="تغيير قبول تجارب Paper الجديدة فقط" disabled={!selectable}
+        <button type="button" aria-label={`${paperOn?'إيقاف':'تشغيل'} Paper ${id}`} title="تغيير قبول تجارب Paper الجديدة فقط" disabled={!paperSelectable}
          onClick={()=>void onSave(id,advisorOn,!paperOn)}>{known?(paperOn?'إيقاف Paper':'تشغيل Paper'):'انتظار Core'}</button>
       </div>
     </article>;
