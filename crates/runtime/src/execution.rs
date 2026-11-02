@@ -671,8 +671,11 @@ impl Service {
         if self.inner.matches_bound_telemetry(telemetry) {
             if crate::partial_exit_ledger::observe(
                 db,telemetry,&self.inner.settings.target,now).is_ok(){
-                let _=crate::partial_exit_stage::observe(
-                    db,telemetry,&self.inner.settings.target,now);
+                if crate::partial_exit_stage::observe(
+                    db,telemetry,&self.inner.settings.target,now).is_ok(){
+                    let _=crate::partial_exit_progress::observe(
+                        db,telemetry,&self.inner.settings.target,now);
+                }
             }
         }
         // Protection failures must not interrupt broker reconciliation or
