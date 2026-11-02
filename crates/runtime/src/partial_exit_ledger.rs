@@ -241,6 +241,36 @@ mod tests{
         assert!(report(&d,&other,"live").unwrap()["rows"].as_array().unwrap().is_empty());
     }
     #[test]
+    fn file_backed_restart_retains_first_draft_and_never_rearms_a_changed_position(){
+        let path=std::env::temp_dir().join(format!(
+            "bt-v25-tp-draft-{}.sqlite",uuid::Uuid::new_v4().simple()));
+        let mut t=t();
+        {
+            let d=Connection::open(&path).unwrap();init(&d).unwrap();
+            observe(&d,&t,"demo",100).unwrap();
+            assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["state"],"draft_only");
+        }
+        {
+            let d=Connection::open(&path).unwrap();init(&d).unwrap();
+            assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["state"],"draft_only");
+            t.positions[0].volume=0.07;
+            observe(&d,&t,"demo",200).unwrap();
+            assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["state"],
+                "volume_changed_unverified");
+        }
+        {
+            let d=Connection::open(&path).unwrap();init(&d).unwrap();
+            t.positions[0].volume=0.1;
+            observe(&d,&t,"demo",250).unwrap();
+            observe(&d,&t,"demo",150).unwrap();
+            let report=report(&d,&t,"demo").unwrap();
+            assert_eq!(report["rows"][0]["state"],"volume_changed_unverified");
+            assert_eq!(report["rows"][0]["last_seen_ms"],250);
+            assert_eq!(report["rows"].as_array().unwrap().len(),1);
+        }
+        let _=std::fs::remove_file(&path);
+    }
+    #[test]
     fn invalid_and_mismatched_source_does_not_mutate_journal(){
         let d=db();let mut t=t();t.volume_step=None;
         observe(&d,&t,"demo",100).unwrap();
