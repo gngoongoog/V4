@@ -103,6 +103,20 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
   disabled:false,armed:false,onSave:async()=>{}
  });
  assert(JSON.stringify(expert).includes('Expert eligible if ready'));
+ const brokerDepth=exportsObj.BrainControlsOperations({
+  source:{controls_available:true,account_matches:true,trading_mode:'expert',
+   selected_owner:'system',brains:[
+    {config:{id:'system'}},
+    {config:{id:'dom'},control:{advisor:true,paper:true},
+     decision_participation:{status:'expert_eligible',reason:'Ready only with DOM'},
+     data_evidence:{source:'mt5_broker_market_book',exchange_wide:false,
+      note:'MT5 broker book, not COMEX consolidated depth'}}]},
+  disabled:false,armed:false,onSave:async()=>{}
+ });
+ assert(JSON.stringify(brokerDepth).includes('MT5 broker book, not COMEX consolidated depth'),
+  'Brain management must disclose broker-only DOM provenance');
+ assert(catalog.BRAIN_DIRECTORY.find(row=>row[0]==='profile')[2].includes('tick_volume'),
+  'Candle-derived price profile must never be advertised as true executed volume');
  assert(JSON.stringify(expert).includes('One eligible Expert advisor; actual signals not yet observed'),
   'Brain-room summary must show Core-backed eligibility and never invent trading outcomes');
  const expertAdvisor=nodes(expert).find(x=>x.type==='button'&&String(x.props['aria-label']||'').includes('مشاركة trend'));
