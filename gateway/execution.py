@@ -251,6 +251,9 @@ class BrokerExecutor:
         self.db.execute('PRAGMA synchronous=FULL')
         self.db.execute('PRAGMA busy_timeout=50')
         self.db.execute('CREATE TABLE IF NOT EXISTS sends(id TEXT PRIMARY KEY, request TEXT NOT NULL, result TEXT, created_ms INTEGER NOT NULL)')
+        # One physical stage plan may own only one Gateway send ID for life.
+        # This claim and its send journal row commit in the SAME transaction.
+        self.db.execute('CREATE TABLE IF NOT EXISTS tp_stage_claims(plan_id TEXT PRIMARY KEY, send_id TEXT NOT NULL UNIQUE, created_ms INTEGER NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS micro_real_recovered(account_key TEXT PRIMARY KEY, reached_ms INTEGER NOT NULL, reached_equity REAL NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS daily_loss_locks(account_key TEXT NOT NULL, report_day TEXT NOT NULL, reached_ms INTEGER NOT NULL, loss_amount REAL NOT NULL, PRIMARY KEY(account_key,report_day))')
         self.db.execute('CREATE TABLE IF NOT EXISTS risk_master_recoveries(account_key TEXT NOT NULL, recovery_id TEXT NOT NULL, basis TEXT NOT NULL, threshold REAL NOT NULL, reached_value REAL NOT NULL, PRIMARY KEY(account_key,recovery_id))')
@@ -731,6 +734,10 @@ class BrokerExecutor:
                     or any(o.magic in OWNED_MAGICS for o in orders)):
                 raise ValueError('A BrainTrade position or order already owns this symbol')
             closing=cmd['kind']=='close'
+            if any(key in cmd for key in ('tp_stage','expected_position_identifier')) and cmd.get('tp_stage_plan_id') is None:
+                raise ValueError('Incomplete TP stage marker; a full position close is forbidden')
+            if cmd.get('tp_stage_plan_id') is not None and not closing:
+                raise ValueError('TP stage marker is allowed on a close only')
             if closing:
                 # A different close intent must not bypass an existing
                 # unresolved close of the same bound physical position.
@@ -743,6 +750,13 @@ class BrokerExecutor:
                     LIMIT 1''',(cmd['id'],cmd['login'],cmd['server'],cmd['currency'],cmd['target'],cmd['position'])).fetchone()
                 if prior:
                     return dict(result,state='cancelled',reason='Existing unresolved close for this position; no second send')
+                if cmd.get('tp_stage_plan_id') is not None:
+                    used=self.db.execute(
+                        'SELECT send_id FROM tp_stage_claims WHERE plan_id=?',
+                        (cmd['tp_stage_plan_id'],)).fetchone()
+                    if used and used[0]!=cmd['id']:
+                        return dict(result,state='unknown',
+                                    reason='Stage plan already claimed by another durable Gateway send; never resend')
                 owned=[p for p in positions if p.ticket==cmd['position'] and p.magic==cmd['magic'] and p.symbol==symbol]
                 if not owned:
                     # No close was sent. A flat or foreign-owned position
@@ -918,14 +932,25 @@ class BrokerExecutor:
 
             journal_start=time.perf_counter()
             try:
+                if cmd.get('tp_stage_plan_id') is not None:
+                    self.db.execute('INSERT INTO tp_stage_claims(plan_id,send_id,created_ms) VALUES(?,?,?)',
+                                    (cmd['tp_stage_plan_id'],cmd['id'],clock_ms()))
                 self.db.execute('INSERT INTO sends(id,request,result,created_ms) VALUES(?,?,NULL,?)',
                                 (cmd['id'],json.dumps(dict(cmd,broker_request=request),allow_nan=False),clock_ms()))
                 self.db.commit()
                 journaled=True
             except sqlite3.IntegrityError:
-                # Another gateway worker already committed the same intent.
-                # No second order_send is allowed.
+                # Both stage claims and sends are one SQLite transaction.
+                # A stage used by a different ID is NEVER retried.
                 self.db.rollback()
+                if cmd.get('tp_stage_plan_id') is not None:
+                    row=self.db.execute('SELECT send_id FROM tp_stage_claims WHERE plan_id=?',
+                                        (cmd['tp_stage_plan_id'],)).fetchone()
+                    if row and row[0]!=cmd['id']:
+                        return dict(result,state='unknown',
+                                    reason='Conflicting durable TP stage claim; never send another order')
+                # Exact same ID may already have been journaled. Normal
+                # replay path will reconcile, never send the same ID twice.
                 return self.execute(mt5,cmd,authorize)
             except sqlite3.OperationalError:
                 # A locked/unwritable journal cannot guarantee idempotency.
