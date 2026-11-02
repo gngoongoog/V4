@@ -962,6 +962,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn inactive_mode_forward_requires_demo_and_rejects_sniper_tick_simulation() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut learner=Learner::new(&db).unwrap();
+        let mut t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            login:17,server:"Demo".into(),symbol:"XAUUSD".into(),currency:"USD".into(),
+            ..Default::default()};
+        let mut c=Config::default();
+        c.trading.mode=TradingMode::Scalping;
+        let frames=BTreeMap::new();
+        assert!(learner.observe_inactive_forward(&db,&t,&c,&[],&frames,1000).unwrap().is_empty());
+        let count:u64=db.query_row("SELECT COUNT(*) FROM coordinator_samples",[],|r|r.get(0)).unwrap();
+        assert_eq!(count,0,"Unavailable completed frames must not invent forward learning");
+        c.trading.mode=TradingMode::Sniper;
+        assert!(learner.observe_inactive_forward(&db,&t,&c,&[],&frames,2000).is_err(),
+            "Classic or Learner Sniper needs native quote/tick evidence");
+        c.trading.mode=TradingMode::Expert;
+        t.demo=false;t.account_trade_mode=Some(2);
+        assert!(learner.observe_inactive_forward(&db,&t,&c,&[],&frames,3000).is_err(),
+            "No inactive-mode learning from a real-money broker account");
+        t.connected=false;t.demo=true;t.account_trade_mode=Some(0);
+        assert!(learner.observe_inactive_forward(&db,&t,&c,&[],&frames,4000).is_err(),
+            "Disconnected broker identity must fail closed");
+    }
+
+    #[test]
     fn pending_forward_payload_requires_real_finite_inputs() {
         assert!(!valid_pending_forward_payload(&json!({})));
         let mut p=json!({"side":1,"point":0.01,"entry":2000.,"tick":0.01,
