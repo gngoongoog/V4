@@ -114,6 +114,39 @@ def main():
             try:api('/v1/risk',dict(risk,max_lots=0))
             except urllib.error.HTTPError as e:assert e.code==400
             else:raise AssertionError('Invalid risk settings accepted')
+            # End-to-end HTTP boundary for read-only HVN using a SYNTHETIC
+            # flat demo snapshot. There is no real MT5, trading or PnL here.
+            hvn_request=api('/v1/hvn/request',{'window_ms':60_000})
+            assert hvn_request['queued'] and not hvn_request['trade_authorized']
+            hvn_job=api('/v1/gateway/hvn/request')['job']
+            assert hvn_job['id']==hvn_request['id']
+            assert hvn_job['login']==123 and hvn_job['symbol']=='XAUUSD'
+            for path,body in (('/v1/start',{}),('/v1/reconnect',{}),
+                              ('/v1/config',{'config':config})):
+                try:api(path,body)
+                except urllib.error.HTTPError as error:
+                    assert error.code==400 and b'HVN' in error.read(),path
+                else:raise AssertionError('HVN pending read failed to fence '+path)
+            assert api('/v1/hvn')['pending']
+            hvn_report={
+                'available':True,'read_only':True,'trade_authorized':False,
+                'broker_only':True,'exchange_wide':False,
+                'source':'mt5_quote_tick_activity','unit':'observed_quote_events',
+                'identity':{'server':hvn_job['server'],'login':hvn_job['login'],
+                            'symbol':hvn_job['symbol'],'currency':hvn_job['currency']},
+                'window_ms':hvn_job['window_ms'],'observations':80,
+                'trade_events_observed':0,'quote_events_observed':80,
+                'distinct_levels':10,'total_activity':80.0,
+                'observed_from_ms':hvn_job['now_ms']-30_000,
+                'observed_to_ms':hvn_job['now_ms']-1_000,
+                'nodes':[{'price':2000.0,'activity':16.0,'share':0.2}],
+            }
+            complete=api('/v1/gateway/hvn/result',{'id':hvn_job['id'],'report':hvn_report})
+            assert complete['ok'] and not complete['trade_authorized']
+            hvn_result=api('/v1/hvn')
+            assert not hvn_result['pending'] and hvn_result['report']==hvn_report
+            assert not hvn_result['report_stale'] and hvn_result['report_age_ms']>=1000
+            assert api('/v1/status')['requested_run'] is False
             snapshot.update(bid=target+.1,ask=target+.2);api('/v1/gateway/snapshot',snapshot)
             paper=api('/v1/status')['paper'];assert paper['trades']==1 and paper['realized']>0
             assert isinstance(api('/v1/opportunities/history')['setups'], list)
