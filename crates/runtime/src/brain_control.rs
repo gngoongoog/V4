@@ -118,6 +118,29 @@ fn participation(
     }
 }
 
+/// Descriptive input provenance only; NEVER a claim that a member is
+/// profitable, trained or connected to exchange-wide order flow.
+fn data_provenance(id:&str)->(&'static str,&'static str) {
+    match id {
+        "dom"=>("mt5_broker_market_book",
+            "عمق أوامر MT5 المقدم من الوسيط فقط؛ لا يثبت سيولة COMEX أو الصفقات المنفذة"),
+        "profile"=>("candle_tick_volume_proxy",
+            "توزيع تقديري لـ tick_volume الشموع على نطاق OHLC؛ ليس حجم تداول فعلياً عند كل سعر"),
+        "gann_dom_profile"=>("mixed_gann_broker_book_candle_proxy",
+            "قواعد جان + دفتر أوامر الوسيط + تقدير نشاط الشموع؛ ليس Order Flow مركزياً"),
+        "wyckoff"=>("completed_candles_and_tick_volume",
+            "قواعد أحداث وايكوف اعتماداً على الشموع ونشاط تيكات الوسيط؛ ليست قراءة مؤسسات مباشرة"),
+        "sniper_learner"=>("mt5_quote_ticks_and_matched_demo_deals",
+            "إشارات من أسعار MT5 اللحظية؛ تحديث الأوزان يتطلب صفقات Demo مغلقة ومطابقة"),
+        "generated"=>("operator_selected_saved_strategy",
+            "قاعدة محفوظة اختارها المشغل من مختبر الاستراتيجيات؛ لا تعني اختراعاً تلقائياً مربحاً"),
+        "system"=>("selected_mode_coordinator",
+            "منسق الوضع المختار؛ يحق له التنفيذ فقط عند تحقق START وبوابات Core"),
+        _=>("deterministic_completed_candle_rules",
+            "قواعد مؤشرات وأسعار شموع مكتملة؛ ليست نموذج تعلم عميق موثقاً بذاتها"),
+    }
+}
+
 pub fn enrich(value:&mut Value,db:&Connection,key:&str,mode:TradingMode,account_mode:Option<i32>,sniper_selected:Option<bool>)->Result<()> {
     let controls=load_account(db,key,mode,account_mode)?;
     let selected_owner=value["selected_owner"].as_str().map(str::to_owned);
@@ -131,6 +154,9 @@ pub fn enrich(value:&mut Value,db:&Connection,key:&str,mode:TradingMode,account_
         let id=b["config"]["id"].as_str().unwrap_or("").to_owned();
         let control=controls.get(&id).copied().unwrap_or_default();
         b["control"]=json!(control);
+        let (source,source_note)=data_provenance(&id);
+        b["data_evidence"]=json!({"source":source,"note":source_note,
+            "exchange_wide":false,"validated_trading_edge":false});
         let (eligible,status,reason)=participation(mode,&id,selected_owner.as_deref(),
             control,b["return_pending"]==true,sniper_selected);
         b["participates_in_coordinator"]=json!(eligible);
@@ -194,6 +220,17 @@ pub fn enrich(value:&mut Value,db:&Connection,key:&str,mode:TradingMode,account_
 }
 #[cfg(test)] mod tests {
     use super::*;
+    #[test] fn brain_source_labels_never_pretend_to_be_exchange_wide_order_flow() {
+        assert_eq!(data_provenance("dom").0,"mt5_broker_market_book");
+        assert!(data_provenance("dom").1.contains("COMEX"));
+        assert_eq!(data_provenance("profile").0,"candle_tick_volume_proxy");
+        assert!(data_provenance("profile").1.contains("OHLC"));
+        assert_eq!(data_provenance("gann_dom_profile").0,
+            "mixed_gann_broker_book_candle_proxy");
+        assert_eq!(data_provenance("generated").0,"operator_selected_saved_strategy");
+        assert_eq!(data_provenance("sniper_learner").0,
+            "mt5_quote_ticks_and_matched_demo_deals");
+    }
     #[test] fn decision_roles_are_truthful_across_all_four_modes_and_solo() {
         let on=Control{advisor:true,paper:true};
         let off=Control{advisor:false,paper:true};
