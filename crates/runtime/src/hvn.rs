@@ -63,10 +63,12 @@ fn valid_result(report:&Value, pending:&Pending, s:&Status)->Result<()>{
     Ok(())
 }
 impl Service{
-    pub fn pending(&self,_now:u64)->bool {
+    pub fn pending(&self,now:u64)->bool {
         // A dispatched MT5 history read may still be executing *after* the
-        // UI deadline. Never fail open into START without Gateway completion.
-        self.pending.is_some()
+        // deadline. An unsent timed-out request is harmless to retire, but an
+        // acknowledged Gateway dispatch must never fail open into START.
+        self.pending.as_ref().is_some_and(|p|
+            p.dispatched || now.saturating_sub(p.requested_ms)<=EXPIRY_MS)
     }
     pub fn route(&mut self,method:&str,path:&str,body:&[u8],s:&Status,now:u64)->Result<Value>{
         if self.pending.as_ref().is_some_and(|p|now.saturating_sub(p.requested_ms)>EXPIRY_MS){
@@ -179,7 +181,7 @@ mod tests{
         let now=100_000;let mut h=Service::default();let s=status();
         h.route("POST","/v1/hvn/request",b"{}",&s,now).unwrap();
         let late=now+EXPIRY_MS+1;
-        assert!(h.pending(late),"START must not bypass a request without checking its state");
+        assert!(!h.pending(late),"Unsent expired request must not block START");
         h.route("GET","/v1/hvn",b"",&s,late).unwrap();
         assert!(!h.pending(late),"Unsent expired request can be cancelled safely");
         assert!(h.route("POST","/v1/hvn/request",b"{}",&s,late).is_ok());
