@@ -81,6 +81,18 @@ class StageDemoTests(unittest.TestCase):
         self.assertEqual(self.ex.db.execute(
             "SELECT send_id FROM tp_stage_claims WHERE plan_id=?",
             (PLAN,)).fetchone(),(first_id,))
+    def test_orphaned_stage_claim_cannot_loop_or_emit_order(self):
+        # Simulate a corrupted legacy database where a claim survives but
+        # its matching sends row is gone. No recursive execute/retry allowed.
+        self.ex.db.execute(
+            "INSERT INTO tp_stage_claims(plan_id,send_id,created_ms) VALUES(?,?,1)",
+            (PLAN,self.cmd["id"]))
+        self.ex.db.commit()
+        result=self.send()
+        self.assertEqual(result["state"],"unknown",result)
+        self.assertIn("claim collision",result["reason"])
+        self.assertFalse(self.mt.sends)
+
     def test_incomplete_stage_fields_must_never_fall_back_to_full_close(self):
         for idx,missing in enumerate(("tp_stage_plan_id","tp_stage","expected_position_identifier")):
             self.cmd=stage_command()
