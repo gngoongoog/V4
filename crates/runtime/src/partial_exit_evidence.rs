@@ -24,7 +24,7 @@ struct Totals {
     open:f64,close:f64,net_cost:f64,
     entry_deals:u32,exit_deals:u32
 }
-fn calculate(deals:&[(u64,String)],pid:u64,magic:u64,symbol:&str,volume:f64,step:f64)
+fn calculate(deals:&[(u64,String)],pid:u64,magic:u64,symbol:&str,volume:f64,step:f64,history_until:u64)
     -> Result<Value>
 {
     let mut seen=BTreeSet::new();
@@ -38,7 +38,8 @@ fn calculate(deals:&[(u64,String)],pid:u64,magic:u64,symbol:&str,volume:f64,step
             || d["position_id"].as_u64()!=Some(pid)
             || d["symbol"].as_str()!=Some(symbol)
             || !matches!(d["type"].as_i64(),Some(0|1))
-            || !d["time_msc"].as_u64().is_some_and(|n|n>0)
+            || !d["time_msc"].as_u64().is_some_and(|n|
+                n>0 && n<=history_until.saturating_add(2000))
             || !number(&d,"price").is_some_and(|n|n>0.)
             || !number(&d,"volume").is_some_and(|n|n>0.)
             || ["profit","commission","swap","fee"].iter()
@@ -107,8 +108,9 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
         "SELECT until_ms,synced_ms FROM broker_history_sync WHERE context=?1 AND target=?2",
         params![key,target],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,u64>(1)?)));
     let watermark=match sync{
-        Ok(v)=>Some(v),
-        Err(rusqlite::Error::QueryReturnedNoRows)=>None,
+        Ok((until,synced)) if until>0 && synced>0 && synced.saturating_add(2000)>=until =>
+            Some((until,synced)),
+        Ok(_)|Err(rusqlite::Error::QueryReturnedNoRows)=>None,
         Err(e)=>return Err(e.into())
     };
     let mut stmt=db.prepare(
@@ -139,7 +141,8 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
             json!({"state":"invalid_draft_geometry","stage_completed":false,
                 "tp_stage_attribution_verified":false})
         }else{
-            calculate(&deals,pid,magic,&t.symbol,volume,step)?
+            calculate(&deals,pid,magic,&t.symbol,volume,step,
+                watermark.map(|(until,_)|until).unwrap_or(0))?
         };
         rows.push(json!({
             "position_identifier":pid,
@@ -254,6 +257,35 @@ mod tests{
             [context_for(&t)]).unwrap();
         assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["evidence"]["state"],
             "incomplete_or_ambiguous_open_history");
+    }
+    #[test]
+    fn stale_watermark_and_broker_history_beyond_sync_horizon_are_not_authoritative(){
+        let d=fixture();let t=t();
+        crate::partial_exit_ledger::observe(&d,&t,"demo",120).unwrap();
+        d.execute("INSERT INTO broker_history_sync VALUES(?1,'demo',0,0)",
+            [context_for(&t)]).unwrap();
+        store(&d,&t,deal(100,0,0,410601,0.1));
+        store(&d,&t,deal(101,1,1,0,0.04));
+        assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["evidence"]["state"],
+            "broker_history_not_synced");
+        d.execute("UPDATE broker_history_sync SET until_ms=30,synced_ms=31",[]).unwrap();
+        assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["evidence"]["state"],
+            "invalid_deal_history",
+            "Never count an exit booked after the claimed broker history horizon");
+    }
+    #[test]
+    fn exit_deal_must_match_position_id_and_opposite_side(){
+        let d=fixture();let t=t();init_evidence(&d,&t);
+        store(&d,&t,deal(100,0,0,410601,0.1));
+        store(&d,&t,deal(101,1,0,0,0.04));
+        assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["evidence"]["state"],
+            "invalid_deal_history","A same-side deal is not an exit");
+        d.execute("DELETE FROM broker_deals WHERE ticket=101",[]).unwrap();
+        let mut wrong=deal(101,1,1,0,0.04);
+        wrong["position_id"]=json!(999);
+        store(&d,&t,wrong);
+        assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["evidence"]["state"],
+            "invalid_deal_history","A forged payload position ID cannot claim a stored position");
     }
     #[test]
     fn cross_account_and_target_are_strictly_isolated(){
