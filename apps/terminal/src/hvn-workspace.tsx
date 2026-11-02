@@ -9,6 +9,8 @@ const rows=(v:unknown):Obj[]=>Array.isArray(v)?v.map(obj).slice(0,8):[];
 const value=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)?v:null;
 const format=(v:unknown,places=3)=>value(v)===null?'—':Number(v).toLocaleString('en-US',{maximumFractionDigits:places});
 const showDate=(v:unknown)=>value(v)!==null&&Number(v)>0?new Date(Number(v)).toLocaleString('ar-IQ'):'غير مسجل';
+const showAge=(v:unknown)=>value(v)===null?'غير معروف':
+ Number(v)<60000?`${Math.floor(Number(v)/1000)} ثانية`:`${Math.floor(Number(v)/60000)} دقيقة`;
 export function HvnWorkspace({status,connected,preview,disabled}:{
  status:Status|null;connected:boolean;preview:boolean;disabled:boolean;
 }){
@@ -19,6 +21,7 @@ export function HvnWorkspace({status,connected,preview,disabled}:{
  const [notice,setNotice]=useState('');
  const report=obj(data?.report);
  const pending=data?.pending===true;
+ const reportStale=data?.report_stale===true;
  const account=status?.telemetry;
  const allowed=!preview&&!disabled&&connected&&status?.requested_run===false&&
     account?.positions?.length===0&&account?.pending_orders===0;
@@ -77,11 +80,14 @@ export function HvnWorkspace({status,connected,preview,disabled}:{
   {!preview&&report.available===false&&connected&&
    <p className="hvn-warning">لا توجد عقد صالحة: {String(report.reason||'البيانات غير كافية')}</p>}
   {resultAvailable&&contextVerified?
-   <><div className="hvn-metrics">
+   <>{pending&&<p role="status" className="hvn-warning">قياس جديد جارٍ؛ المستويات المعروضة تخص نتيجة سابقة ولا تمثل القراءة التي لم تكتمل بعد.</p>}
+   {reportStale&&<p role="status" className="hvn-warning">بيانات HVN قديمة حسب وقت آخر Tick من الوسيط. هذه مستويات تاريخية للبحث فقط، وليست قراءة سوق حالية.</p>}
+   <div className="hvn-metrics">
     <div><span>نوع البيانات</span><strong>{source}</strong></div>
     <div><span>أحداث مرصودة</span><strong>{format(report.observations,0)}</strong></div>
     <div><span>مستويات سعرية</span><strong>{format(report.distinct_levels,0)}</strong></div>
     <div><span>آخر Tick مستخدم</span><strong>{showDate(report.observed_to_ms)}</strong></div>
+    <div><span>عمر أحدث Tick</span><strong>{showAge(data?.report_age_ms)} — {reportStale?'تاريخي':'بحسب وقت الوسيط'}</strong></div>
    </div>
    <div className="hvn-grid"><div className="hvn-grid-head"><b>مستويات HVN المرصودة</b><small>مرتبة حسب النشاط؛ أدلة وصفية لا احتمالات دخول</small></div>
     <div className="hvn-scroll"><table><thead><tr><th>السعر</th><th>النشاط</th><th>الحصة من العينة</th></tr></thead>
