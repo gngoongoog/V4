@@ -104,10 +104,11 @@ pub fn assess(series: &[Candle], timeframe: &str, swings: &[Swing]) -> GannFrame
         return out;
     }
 
-    let index = series
-        .iter()
-        .position(|bar| bar.time == anchor.time)
-        .unwrap_or(series.len().saturating_sub(1));
+    let Some(index) = series.iter().position(|bar| bar.time == anchor.time) else {
+        // A swing anchor outside the actual completed-bar window has no
+        // observable elapsed time. Never treat it as the newest bar.
+        return out;
+    };
     let bars_since = series.len().saturating_sub(1 + index).max(1);
     let atr_per_bar = (last.close - anchor.price) / (a * bars_since as f64);
 
@@ -178,4 +179,81 @@ pub fn assess(series: &[Candle], timeframe: &str, swings: &[Swing]) -> GannFrame
     out.time_distance_bars=age.abs_diff(cycle);
     out.time_cycle_near=out.time_distance_bars<=2;
     out
+}
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+
+    fn series() -> Vec<Candle> {
+        (0..140).map(|i|Candle{
+            time:i*60,open:2011.9,high:2013.,low:2011.,
+            close:2012.,tick_volume:100,
+        }).collect()
+    }
+    fn pivots()->Vec<Swing>{
+        vec![
+            Swing{timeframe:"M1".into(),time:70*60,confirmed_at:73*60,
+                side:-1,price:2020.},
+            Swing{timeframe:"M1".into(),time:109*60,confirmed_at:112*60,
+                side:1,price:2000.},
+        ]
+    }
+    #[test]
+    fn square_nine_explicit_root_scale_and_input_validation(){
+        // sqrt(2025)=45, a +45° convention shift is +0.25 root units.
+        let target=45.25_f64.powi(2);
+        let (steps,level,distance)=square9_nearest(2025.,target,2.).unwrap();
+        assert_eq!(steps,1);
+        assert!((level-target).abs()<1e-10);
+        assert!(distance<1e-10);
+        assert_eq!(square9_nearest(2025.,2025.,2.).unwrap().0,0);
+        for (anchor,price,vol) in [
+            (-1.,2025.,2.),(2025.,0.,2.),(2025.,2025.,0.),
+            (f64::NAN,2025.,2.),(2025.,f64::INFINITY,2.)
+        ] {assert!(square9_nearest(anchor,price,vol).is_none());}
+    }
+    #[test]
+    fn confirmed_pivot_drives_time_cycles_and_price_time_fan_without_future(){
+        let candles=series();
+        let p=pivots();
+        let g=assess(&candles,"M1",&p);
+        assert!(g.available);
+        assert_eq!(g.anchor_time,109*60);
+        assert_eq!(g.anchor_side,1);
+        assert_eq!(g.bars_since_anchor,30);
+        assert_eq!(g.time_nearest_cycle_bars,30);
+        assert_eq!(g.time_distance_bars,0);
+        assert!(g.time_cycle_near);
+        assert!(g.square9_available);
+        assert_eq!(g.square9_quote_unit,1.);
+        assert!(g.fan_anchor_atr>0.);
+        assert!(g.fan_2x1>g.fan_1x1&&g.fan_1x1>g.fan_1x2);
+        assert_eq!(g.direction,1);
+        let mut edited=candles.clone();
+        // A later tick/bar volatility revision must not move the fan scale
+        // that was known at the confirmed pivot.
+        for c in edited.iter_mut().skip(113) {c.high+=5.;c.low-=5.;}
+        let later=assess(&edited,"M1",&p);
+        assert!((later.fan_anchor_atr-g.fan_anchor_atr).abs()<1e-12);
+        assert!((later.fan_1x1-g.fan_1x1).abs()<1e-12);
+        // A pivot not confirmed yet or an anchor missing from the completed
+        // history must not supply observational future information.
+        let mut not_confirmed=p.clone();
+        not_confirmed[1].confirmed_at=candles.last().unwrap().time+60;
+        let early=assess(&candles,"M1",&not_confirmed);
+        assert_eq!(early.anchor_time,70*60);
+        let mut foreign=p;
+        foreign[1].time=999_999;
+        assert!(!assess(&candles,"M1",&foreign).available);
+    }
+    #[test]
+    fn unsupported_insufficient_and_flat_market_never_fabricates_levels(){
+        let candles=series();
+        assert!(!assess(&candles[..20],"M1",&pivots()).available);
+        assert!(!assess(&candles,"M1",&[]).available);
+        let mut flat=candles;
+        for bar in &mut flat {bar.high=bar.close;bar.low=bar.close;}
+        assert!(!assess(&flat,"M1",&pivots()).available);
+    }
 }
