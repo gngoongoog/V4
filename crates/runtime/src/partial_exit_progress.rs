@@ -192,8 +192,13 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
         r.get::<_,Option<f64>>(7)?,r.get::<_,Option<u64>>(8)?,
         r.get::<_,Option<String>>(9)?
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    let links=crate::partial_exit_link::report(db,t,target)?;
-    let current=links["rows"].as_array();
+    // Most accounts have no TP stage settlements yet. Do not repeat a
+    // potentially heavy per-Deal audit on each dashboard GET unless a
+    // previous broker seal actually needs source-evidence revalidation.
+    let links=if rows.iter().any(|r|r.8.is_some()){
+        Some(crate::partial_exit_link::report(db,t,target)?)
+    }else{None};
+    let current=links.as_ref().and_then(|l|l["rows"].as_array());
     let mut result=Vec::new();
     for (pid,stage,plan,lot,id,order,filled,left,settled,old_raw) in rows{
         let still_proven=if let (Some(id),Some(order),Some(old_raw),
