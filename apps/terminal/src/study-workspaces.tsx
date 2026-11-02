@@ -38,6 +38,7 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
  const [from,setFrom]=useState(date(-16)),[to,setTo]=useState(date(-1));
  const [equity,setEquity]=useState('1000'),[spread,setSpread]=useState('0.20'),[strategy,setStrategy]=useState('meta_v1');
  const [runs,setRuns]=useState<RecordValue[]>([]),[selected,setSelected]=useState(''),[report,setReport]=useState<RecordValue|null>(null);
+ const [cesComparison,setCesComparison]=useState<RecordValue|null>(null);
  const [busy,setBusy]=useState(false),[loading,setLoading]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const state=obj(source),phase=txt(state.state,'idle'),active=running(phase);
  const refresh=useCallback(async()=>{
@@ -52,7 +53,7 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
  useEffect(()=>{void refresh()},[refresh,txt(state.latest_id,'')]);
  const openReport=async(id:string)=>{
   if(!id||disabled)return;
-  setBusy(true);setReport(null);setError('');
+  setBusy(true);setReport(null);setCesComparison(null);setError('');
   try{const response=obj(await studyAction('backtest','report',id));setReport(response);setSelected(id)}
   catch(e){setError('تعذر قراءة نتيجة الاختبار: '+String(e))}
   finally{setBusy(false)}
@@ -63,7 +64,7 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
   if(from>=to||to>date(0)||!Number.isFinite(amount)||amount<=0||!Number.isFinite(floor)||floor<0){
    setError('الفترة تحتاج بداية قبل النهاية، ورصيداً موجباً، وسبريداً لا يقل عن الصفر');return;
   }
-  if(!['meta_v1','meta_v2','ces_v1','kte_v1','explore_v1'].includes(strategy)){setError('استراتيجية غير مدعومة');return}
+  if(!['meta_v1','meta_v2','ces_v1','ces_range_research','kte_v1','explore_v1'].includes(strategy)){setError('استراتيجية غير مدعومة');return}
   setBusy(true);setError('');setNotice('');
   try{await onStart({from_date:from,to_date:to,initial_equity:amount,spread_floor:floor,strategy});setNotice('أُرسل طلب الاختبار إلى Core. راقب حالة الجلب والحساب أعلاه.')}
   catch(e){setError(String(e))}
@@ -79,12 +80,29 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
    setError('لم يتأكد قبول إلغاء الاختبار: '+String(e));
   }finally{setBusy(false)}
  };
+ const compareCes=async()=>{
+  if(!selected||disabled||busy)return;
+  setBusy(true);setError('');setNotice('');setCesComparison(null);
+  try{
+   const result=obj(await studyAction('backtest','ces_ablation',selected));
+   const comparison=obj(result.comparison);
+   if(result.research_only!==true||result.broker_effect!==false||
+      result.automatic_promotion!==false||result.independently_frozen_oos!==false||
+      comparison.research_only!==true||comparison.independently_frozen_oos!==false){
+     throw new Error('Core returned unsupported provenance for CES research');
+   }
+   setCesComparison(comparison);
+   setNotice('تمّت مقارنة سياستي CES على نفس بيانات MT5 المحفوظة. النتيجة بحث تاريخي وليست إثبات ربحية.');
+  }catch(e){setError('تعذرت مقارنة CES: '+String(e))}
+  finally{setBusy(false)}
+ };
  const exportReport=async()=>{
   if(!selected)return;setBusy(true);
   try{const result=obj(await studyAction('backtest','export',selected));setNotice('حفظ Core ملف التصدير في مجلد بياناته: '+txt(result.path,txt(result.directory,'راجع مجلد exports')))}
   catch(e){setError(String(e))}finally{setBusy(false)}
  };
  const metrics=obj(report?.metrics);
+ const cesWindows=arr(cesComparison?.windows);
  const outcome=report!==null;
  // Every plotted point is one immutable Core result; no fabricated interpolation,
  // prices or trader PnL. SVG is a visual connection of source observations.
@@ -108,7 +126,8 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
      <select value={strategy} onChange={e=>setStrategy(e.target.value)} disabled={disabled||active||busy} aria-label="الاستراتيجية التاريخية">
       <option value="meta_v1">Meta V1 — الاستراتيجية الأساسية</option>
       <option value="meta_v2">Meta V2 — التحليل المرشّح</option>
-      <option value="ces_v1">CES — الانتروبيا الحرجة</option>
+      <option value="ces_v1">CES v1 — نشاط تيكات الوسيط (النسخة الأصلية)</option>
+      <option value="ces_range_research">CES Range — صيغة مدى الشمعة (بحث فقط)</option>
       <option value="kte_v1">KTE — Kinetic Time Echo</option>
       <option value="explore_v1">Explore — استكشاف بحثي فقط</option>
      </select>
@@ -131,7 +150,7 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
   {error&&<div className="operator-error" role="alert">{error}</div>}
   {notice&&<p className="study-notice" role="status">{notice}</p>}
   {outcome?<div className="operator-card study-results">
-    <div className="study-row"><div><small>تقرير محفوظ من Core</small><h3><TrendingUp size={18}/> قراءة نتيجة المحاكاة</h3></div><div className="study-actions"><button type="button" onClick={()=>void exportReport()} disabled={busy||disabled}><Download size={15}/> تصدير التقرير</button><button type="button" onClick={onEvaluation}>تقييم خارج العينة</button></div></div>
+    <div className="study-row"><div><small>تقرير محفوظ من Core</small><h3><TrendingUp size={18}/> قراءة نتيجة المحاكاة</h3></div><div className="study-actions"><button type="button" onClick={()=>void exportReport()} disabled={busy||disabled}><Download size={15}/> تصدير التقرير</button><button type="button" onClick={()=>void compareCes()} disabled={busy||disabled||!selected}><BarChart3 size={15}/> مقارنة معادلتي CES</button><button type="button" onClick={onEvaluation}>تقييم خارج العينة</button></div></div>
     <div className="study-metrics"><Metric name="صافي النتيجة" value={show(metrics.net,2)} hint="بعد التكاليف المحاكية"/><Metric name="عدد الصفقات" value={show(metrics.trades,0)} hint="داخل التاريخ المختبر"/><Metric name="نسبة الفوز" value={show(metrics.win_rate,1,'%')} hint="لا تكفي وحدها للحكم"/><Metric name="Profit Factor" value={show(metrics.profit_factor)} hint="غير معرّف دون خسائر"/><Metric name="أقصى تراجع" value={show(metrics.max_drawdown_percent,2,'%')} hint="داخل العينة المختبرة"/><Metric name="العمولات" value={show(metrics.commissions,2)} hint="محسوبة تقديرياً"/></div>
     <div className="study-visual-layout">
       <div className="study-equity-panel"><div className="study-row"><h4>منحنى رأس المال الافتراضي</h4><small>{curve.length} نقطة معروضة من {show(report?.recorded_equity_points,0)} مسجلة لدى Core</small></div>
@@ -154,6 +173,19 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
        <small className="study-help">التقرير لا يساوي سجلات MT5. الصفقة الملتبسة قد تشمل لمس وقف وهدف داخل شمعة واحدة.</small>
       </div>
     </div>
+    {cesComparison&&<div className="study-trades-panel" aria-label="CES EPI chronological comparison">
+      <h4>مقارنة CES: نشاط التيكات مقابل مدى الشمعة</h4>
+      <p className="safe-note">نفس تاريخ الوسيط والعقد والتكاليف، ومجموعتان زمنيتان منفصلتان. المقارنة تاريخية وليست اختباراً مستقلاً مجمداً أو إثباتاً أن إحدى الصيغتين أفضل. لا تغيّر صفقات النظام.</p>
+      {cesWindows.length===0?<p className="study-empty">لم يُرجع Core نوافذ قابلة للمقارنة.</p>:
+      <div className="study-trades-scroll"><table><thead><tr><th>الفترة</th><th>CES تيكات: صفقات</th><th>صافي تيكات</th><th>CES مدى: صفقات</th><th>صافي مدى</th><th>الفارق بعد التكاليف</th></tr></thead>
+       <tbody>{cesWindows.map((row,i)=>{
+        const legacy=obj(row.tick_volume_policy),range=obj(row.candle_range_policy),a=obj(legacy.metrics),b=obj(range.metrics),window=obj(row.window);
+        return <tr key={i}><td>{window.role==='holdout'?'الفترة اللاحقة':'فترة التطوير'}</td>
+          <td>{show(a.trades,0)}</td><td>{show(a.net)}</td><td>{show(b.trades,0)}</td>
+          <td>{show(b.net)}</td><td>{show(row.net_difference_range_minus_tick)}</td></tr>
+       })}</tbody></table></div>}
+      <p className="study-help">إذا العينات قليلة أو لا توجد صفقات، فالفرق غير كافٍ للحكم. لا انتقال تلقائي للتعلّم أو أوامر MT5 من هذه المقارنة.</p>
+    </div>}
     <details className="study-raw"><summary>التقرير التفصيلي وأسباب الدخول والخروج</summary><pre dir="auto">{txt(report?.text,txt(report?.summary,'لا توجد تفاصيل أخرى'))}</pre></details>
   </div>:<div className="study-empty study-prompt">اختر اختباراً محفوظاً من القائمة لتظهر هنا قراءة مفهومة للنتائج، بدلاً من عرض JSON خام.</div>}
   <Warning/>
