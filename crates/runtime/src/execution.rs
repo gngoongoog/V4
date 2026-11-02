@@ -317,6 +317,21 @@ fn enforce_portfolio(
     Ok(current)
 }
 
+/// An inactive mode must not produce the same secondary-brain signal under
+/// three cosmetic mode labels. Scalping/Swing use their actual primary mode
+/// entry policy; Expert studies its voting members, NOT a fake consensus.
+fn inactive_study_members(brains:&[BrainConfig],mode:braintrade_domain::trading::TradingMode)->Vec<BrainConfig>{
+    match mode {
+        braintrade_domain::trading::TradingMode::Scalping
+        |braintrade_domain::trading::TradingMode::Swing=>
+            brains.iter().filter(|b|b.id=="system").cloned().collect(),
+        braintrade_domain::trading::TradingMode::Expert=>
+            brains.iter().filter(|b|b.id!="system"&&b.id!="sniper_learner")
+                .cloned().collect(),
+        braintrade_domain::trading::TradingMode::Sniper=>Vec::new(),
+    }
+}
+
 pub struct Service {
     inner: legacy::Service,
     learner: crate::coordinator_learning::Learner,
@@ -694,9 +709,6 @@ impl Service {
             {
                 self.inactive_forward_context=scope.clone();
                 self.inactive_forward_last_ms=now;
-                let advisors=self.inner.brains.iter()
-                    .filter(|b|b.id!="system"&&b.id!=braintrade_domain::sniper::ID)
-                    .cloned().collect::<Vec<_>>();
                 for mode in [
                     braintrade_domain::trading::TradingMode::Scalping,
                     braintrade_domain::trading::TradingMode::Swing,
@@ -706,8 +718,9 @@ impl Service {
                     let mut study=config.clone();
                     study.trading.priority_enabled=false;
                     study.trading.mode=mode;
+                    let members=inactive_study_members(&self.inner.brains,mode);
                     if let Err(error)=self.inactive_forward_learner.observe_inactive_forward(
-                        db,telemetry,&study,&advisors,frames,now)
+                        db,telemetry,&study,&members,&available,now)
                     {
                         let _=db.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(?1,'inactive_mode_forward_error',?2)",
                             params![now,json!({"context":scope,"mode":mode,
@@ -1933,6 +1946,26 @@ mod tests {
         let mut other=t.clone();other.login+=1;restored.inner.settings.login=other.login;
         restored.inner.refresh_risk_master(&db,&other).unwrap();
         assert_eq!(restored.inner.risk_master(&other),Some(true),"Account-specific rule cannot transfer");
+    }
+
+    #[test]
+    fn inactive_mode_member_selection_is_real_policy_not_duplicate_advisor_labels(){
+        use braintrade_domain::trading::TradingMode;
+        let brains=["system","trend","gann","sniper_learner"].iter()
+            .map(|id|BrainConfig{id:(*id).to_owned(),..Default::default()})
+            .collect::<Vec<_>>();
+        for mode in [TradingMode::Scalping,TradingMode::Swing] {
+            let members=inactive_study_members(&brains,mode);
+            assert_eq!(members.len(),1);
+            assert_eq!(members[0].id,"system",
+                "Inactive Scalp/Swing must use the real mode-specific primary signal");
+        }
+        let members=inactive_study_members(&brains,TradingMode::Expert);
+        assert_eq!(members.iter().map(|b|b.id.as_str()).collect::<Vec<_>>(),
+            vec!["trend","gann"],
+            "Expert can study advisor signals but cannot forge a consensus entry");
+        assert!(inactive_study_members(&brains,TradingMode::Sniper).is_empty(),
+            "Sniper background must not use candle-only fake tick policy");
     }
 
     #[test]
