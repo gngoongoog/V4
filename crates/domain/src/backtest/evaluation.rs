@@ -278,6 +278,92 @@ pub fn evaluate(
     })
 }
 
+/// Side-by-side CES hypotheses on the SAME broker history, contract, risk
+/// settings, cost assumptions and non-overlapping chronological windows.
+////
+/// This is historical research, NOT a frozen/prespecified independent OOS
+/// certificate. The candidate never executes MT5 broker orders or auto-promotes.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CesEpiWindow {
+    pub window: EvaluationWindow,
+    pub tick_volume_policy: StrategyWindowResult,
+    pub candle_range_policy: StrategyWindowResult,
+    pub net_difference_range_minus_tick: f64,
+    pub return_difference_range_minus_tick: f64,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CesEpiComparison {
+    pub version: String,
+    pub source: String,
+    pub symbol: String,
+    pub server: String,
+    pub login: u64,
+    pub currency: String,
+    pub captured_ms: u64,
+    pub plan: EvaluationPlan,
+    pub options_template: Options,
+    pub windows: Vec<CesEpiWindow>,
+    pub tick_volume_policy: StrategyAggregate,
+    pub candle_range_policy: StrategyAggregate,
+    pub research_only: bool,
+    pub broker_orders: bool,
+    pub automatic_promotion: bool,
+    pub independently_frozen_oos: bool,
+    pub note: String,
+}
+pub fn compare_ces_epi(
+    history:&History, options:&Options,plan:&EvaluationPlan,
+    cancel:&AtomicBool,progress:&AtomicUsize
+)->Result<CesEpiComparison,String>{
+    history.validate()?;
+    options.validate()?;
+    let first=history.bars.first().unwrap().candle.time;
+    if options.from.saturating_sub(first)<MIN_WARMUP {
+        return Err("CES comparison requires two real UTC days of warmup".into());
+    }
+    let windows=windows(options,plan)?;
+    let total=windows.len()*2;
+    let mut rows=Vec::with_capacity(windows.len());
+    for (i,window) in windows.into_iter().enumerate(){
+        if cancel.load(Ordering::Relaxed){return Err("CES comparison cancelled".into());}
+        let mut reports=Vec::with_capacity(2);
+        for (j,strategy) in [Strategy::CesV1,Strategy::CesRangeResearch].into_iter().enumerate(){
+            let mut child=options.clone();
+            child.strategy=strategy;
+            child.from=window.from;
+            child.to=window.to;
+            let child_progress=AtomicUsize::new(0);
+            reports.push(summarized(run(history,&child,cancel,&child_progress)?));
+            progress.store((i*2+j+1)*100/total,Ordering::Relaxed);
+        }
+        let legacy=reports.remove(0);
+        let range=reports.remove(0);
+        rows.push(CesEpiWindow {
+            net_difference_range_minus_tick:range.metrics.net-legacy.metrics.net,
+            return_difference_range_minus_tick:
+                range.metrics.return_percent-legacy.metrics.return_percent,
+            window,
+            tick_volume_policy:legacy,
+            candle_range_policy:range,
+        });
+    }
+    let legacy=aggregate(Strategy::CesV1,rows.iter().map(|w|w.tick_volume_policy.clone()));
+    let range=aggregate(Strategy::CesRangeResearch,rows.iter().map(|w|w.candle_range_policy.clone()));
+    progress.store(100,Ordering::Relaxed);
+    Ok(CesEpiComparison{
+        version:"ces-two-epi-chronological-research-v1".into(),
+        source:"same_saved_mt5_history_and_contract_costs".into(),
+        symbol:history.symbol.clone(),server:history.server.clone(),
+        login:history.login,currency:history.currency.clone(),
+        captured_ms:history.captured_ms,
+        plan:plan.clone(),options_template:options.clone(),windows:rows,
+        tick_volume_policy:legacy,candle_range_policy:range,
+        research_only:true,broker_orders:false,automatic_promotion:false,
+        independently_frozen_oos:false,
+        note:"Historical comparison of two FIXED CES definitions on the same completed M1 history and cost emulator. Holdout is chronological but already observable: no independent frozen OOS or broker execution. Each window resets capital; no automatic selection or weight promotion. Very few trades cannot establish an edge.".into(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,6 +492,54 @@ mod tests {
         assert_eq!(rows[2].from, BASE + 5 * DAY);
         assert_eq!(rows[5].to, BASE + 10 * DAY);
         assert!(rows.windows(2).all(|w| w[0].cycle <= w[1].cycle));
+    }
+
+    #[test]
+    fn ces_abatement_comparison_keeps_time_windows_costs_and_legacy_policy(){
+        let h=fixture(12);
+        let o=options();
+        let plan=EvaluationPlan::Holdout{holdout_percent:30};
+        let first=compare_ces_epi(&h,&o,&plan,&AtomicBool::new(false),
+            &AtomicUsize::new(0)).unwrap();
+        assert_eq!(first.windows.len(),2);
+        assert_eq!(first.windows[0].window.to,first.windows[1].window.from);
+        assert_eq!(first.windows[0].window.role,WindowRole::Development);
+        assert_eq!(first.windows[1].window.role,WindowRole::Holdout);
+        assert!(first.research_only&&!first.broker_orders&&!first.automatic_promotion);
+        assert!(!first.independently_frozen_oos);
+        for w in &first.windows {
+            assert_eq!(w.tick_volume_policy.strategy,Strategy::CesV1);
+            assert_eq!(w.candle_range_policy.strategy,Strategy::CesRangeResearch);
+            for result in [&w.tick_volume_policy,&w.candle_range_policy]{
+                assert!(result.first_test_bar>=w.window.from);
+                assert!(result.last_test_bar<w.window.to);
+            }
+            let mut fixed=o.clone();fixed.from=w.window.from;fixed.to=w.window.to;
+            fixed.strategy=Strategy::CesV1;
+            let direct=summarized(run(&h,&fixed,&AtomicBool::new(false),
+                &AtomicUsize::new(0)).unwrap());
+            assert_eq!(serde_json::to_value(&w.tick_volume_policy).unwrap(),
+                serde_json::to_value(&direct).unwrap(),
+                "Comparison may never alter historical CES v1 trading results");
+        }
+        let mut future=h.clone();
+        let split=first.windows[0].window.to;
+        for bar in future.bars.iter_mut().filter(|b|b.candle.time>=split) {
+            bar.candle.open+=300.;
+            bar.candle.high+=300.;
+            bar.candle.low+=300.;
+            bar.candle.close+=300.;
+        }
+        let revised=compare_ces_epi(&future,&o,&plan,
+            &AtomicBool::new(false),&AtomicUsize::new(0)).unwrap();
+        for policy in 0..2{
+            let a=&first.windows[0];
+            let b=&revised.windows[0];
+            let (p,q)=if policy==0{(&a.tick_volume_policy,&b.tick_volume_policy)}
+                else{(&a.candle_range_policy,&b.candle_range_policy)};
+            assert_eq!(serde_json::to_value(p).unwrap(),serde_json::to_value(q).unwrap(),
+                "Future holdout prices must not change development result");
+        }
     }
 
     #[test]
