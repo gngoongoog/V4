@@ -152,7 +152,10 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
        return <div className="brain-control-row" key={String(r.plan_id)+'-'+i}>
         <div><b>TP{[1,2,3].includes(Number(r.stage))?String(r.stage):'؟'} — مركز {Number.isSafeInteger(r.position_identifier)?String(r.position_identifier):'—'}</b>
          <small style={{display:'block',marginTop:4}}>{sealed?
-          'مطابقة تاريخية محفوظة: أمر MT5 والـDeals وحجم المركز المتبقي':'بانتظار إثبات سجل الوسيط ولقطة المركز المتبقية'}</small>
+          'مطابقة تاريخية محفوظة: أمر MT5 والـDeals وحجم المركز المتبقي':
+          r.state==='sealed_evidence_needs_review'?
+          'التسوية القديمة محفوظة لكن سند الوسيط الحالي تغيّر أو فقد — يلزم تدقيق ولا يُسمح بالمرحلة التالية':
+          'بانتظار إثبات سجل الوسيط ولقطة المركز المتبقية'}</small>
         </div>
         <span>{sealed?volume(r.matched_volume)+' لوت مُصالح':'غير مُصالح'}</span>
        </div>;
