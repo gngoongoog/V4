@@ -193,7 +193,7 @@ impl MarketBrains {
     /// Re-price ideas on the current quote; never modifies the closed-bar cache.
     pub fn price(&mut self, t:&Telemetry, risk:&RiskConfig, budget:f64, gates:&[String], now:u64) {
         if !self.current { self.withdraw("خريطة الشموع غير صالحة؛ انتظر تحديث البيانات"); return; }
-        self.dom=dom::assess(t);
+        self.dom=dom::assess(t,now);
         self.specialists.retain(|vote| vote.name != "DOM Depth Brain / عقل عمق السوق");
         self.specialists.push(Vote {
             name:"DOM Depth Brain / عقل عمق السوق".into(),
