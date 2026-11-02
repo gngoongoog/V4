@@ -16,6 +16,12 @@ assert.match(core,/self\.hvn\.route\(method,path,body,&status,now_ms\(\)\)/);
 assert.match(core,/!self\.hvn\.pending\(now_ms\(\)\)/,'Cannot START while MT5 tick-history read is active');
 assert.match(core,/ensure_hvn_gateway_reconfiguration_idle\(self\.hvn\.pending\(now_ms\(\)\)\)/,
   'Do not destroy Gateway with an unresolved HVN tick-history request');
+assert.match(core,/!self\.backtests\.loading\(\)/,
+  'No HVN tick-history read while Backtest is importing MT5 history');
+assert.match(core,/method=="POST" && path=="\/v1\/backtest\/start"/,
+  'Backtest starts must recognize a pending HVN research read');
+assert.match(core,/انتظر تسوية قراءة HVN قبل بدء جلب تاريخ Backtest/,
+  'Backtest must not admit a competing MT5 history read');
 assert.match(core,/"\/v1\/config"\|"\/v1\/reconnect"\|"\/v1\/backup\/restore\/stage"/,
   'Config, reconnect and staged restore must all be fenced');
 assert.match(hvn,/ensure!\(!s\.requested_run/);
