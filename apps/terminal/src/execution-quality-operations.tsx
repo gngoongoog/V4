@@ -47,9 +47,9 @@ export function ExecutionQualityOperations({status,report,disabled,onRefresh}:{
     <div>المرفوضة <strong>{fmt(observed.rejects)}</strong></div>
     <div>نتيجة مجهولة UNKNOWN <strong>{fmt(observed.unknown)}</strong></div>
     <div>تحتاج تسوية/تأكيد <strong>{fmt(observed.unresolved)}</strong></div>
-    <div>Queue → Send P95 <strong>{fmt(observed.queueP95)} ms</strong></div>
-    <div>MT5 Send P95 <strong>{fmt(observed.sendP95)} ms</strong></div>
-    <div>دورة Gateway P95 <strong>{fmt(observed.totalP95)} ms</strong></div>
+    <div>Queue → Send P95 <strong>{fmt(observed.queueP95)} ms</strong><small> عينات التوقيت: {fmt(observed.queueSamples)} / {fmt(observed.sampleSize)}</small></div>
+    <div>MT5 Send P95 <strong>{fmt(observed.sendP95)} ms</strong><small> عينات التوقيت: {fmt(observed.sendSamples)} / {fmt(observed.sampleSize)}</small></div>
+    <div>دورة Gateway P95 <strong>{fmt(observed.totalP95)} ms</strong><small> عينات التوقيت: {fmt(observed.totalSamples)} / {fmt(observed.sampleSize)}</small></div>
    </div>
    <h4>أسباب الأوامر المرفوضة</h4>
    {Object.keys(observed.categoryCounts).length?
