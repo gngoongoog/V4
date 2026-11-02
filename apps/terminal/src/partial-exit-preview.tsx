@@ -45,6 +45,22 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
   stages.target===(t?.demo?'demo':'live')&&stages.read_only===true&&
   stages.orders_enabled===false&&stages.stage_execution_supported===false;
  const stageRows=stagesBound&&Array.isArray(stages.rows)?stages.rows.slice(0,75).map(object):[];
+ const dealAudit=object(view.partial_exit_deal_evidence);
+ const dealAuditBound=verified&&dealAudit.schema==='partial-exit-deal-evidence-v1'&&
+  dealAudit.status==='broker_history_audit_only'&&dealAudit.context===context&&
+  dealAudit.target===(t?.demo?'demo':'live')&&dealAudit.read_only===true&&
+  dealAudit.orders_enabled===false&&dealAudit.tp_stage_execution_supported===false;
+ const dealRows=dealAuditBound&&Array.isArray(dealAudit.rows)?dealAudit.rows.slice(0,25).map(object):[];
+ const dealState:Record<string,string>={
+  invalid_deal_history:'السجل يتضمن صفقة أو قيمة غير صالحة — لا تعتمد على الحجم',
+  incomplete_or_ambiguous_open_history:'صفقات فتح المركز ناقصة أو غير مؤكدة',
+  no_broker_exit_deals:'لا يوجد إغلاق موثق ضمن السجل المحفوظ',
+  broker_partial_exit_unattributed:'يوجد إغلاق جزئي مثبت من MT5 لكنه غير منسوب إلى أي هدف TP',
+  broker_flat_by_deals_unattributed:'حجم الفتح والإغلاق متساويان في سجل MT5؛ لم يُثبت أي هدف TP',
+  broker_history_not_synced:'لم يكتمل مزامنة سجل الوسيط لهذا الحساب',
+  too_many_deals_to_audit:'عدد سجلات المركز تجاوز حد الفحص',
+  invalid_draft_geometry:'خطوة اللوت أو حجم المسودة غير صالح'
+ };
  const draftState:Record<string,string>={
   draft_only:'مسودة محفوظة فقط — لم يُرسل أي أمر',
   volume_changed_unverified:'تغيّر حجم المركز أو هويته — يحتاج مراجعة',
@@ -89,6 +105,23 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
        <span>الحجم الأصلي {volume(d.initial_volume)} لوت</span>
       </div>)}
     </div>:null}
+   {dealAuditBound?<details className="operator-advanced" aria-label="دليل الإغلاقات الفعلية من MT5">
+     <summary>مراجعة إغلاقات MT5 الموثقة — لا تثبت تحقق TP</summary>
+     <p className="safe-note">المبالغ هنا من سجل Broker Deals المحفوظ في Core، وليست أرقام الشادو أو المحاكاة. إغلاق المركز بحد ذاته لا يثبت أنه نُفّذ ضمن TP1/2/3؛ لا توجد أي مرحلة مذكورة كمنفذة.</p>
+     {dealRows.length===0?<p>لا توجد مراكز مخططة يمكن فحص سجل إغلاقاتها.</p>:
+      dealRows.map((r,i)=>{const e=object(r.evidence);
+       const usable=e.tp_stage_attribution_verified===false&&e.stage_completed===false;
+       return <div className="brain-control-row" key={String(r.position_identifier)+'-'+i}>
+        <div><b>مركز {Number.isSafeInteger(r.position_identifier)?String(r.position_identifier):'—'}</b>
+         <small style={{display:'block',marginTop:4}}>
+          {usable?(dealState[String(e.state)]||'نتيجة السجل غير موثقة'):'نتيجة غير آمنة أو مجهولة — لا يمكن تأكيد تنفيذ TP'}
+         </small>
+        </div>
+        <span>{usable&&valid(e.broker_closed_lots)?volume(e.broker_closed_lots)+' لوت مُغلق في السجل':'غير موثق'}</span>
+       </div>;
+      })}
+     <p className="safe-note">العمولة والسواب والرسوم جزء من سجل الصفقات، لكن إثبات ربح كل هدف يحتاج ارتباطاً منفصلاً بأمر الإغلاق وDeal ID الفعلي.</p>
+    </details>:null}
    {stagesBound?<details className="operator-advanced" aria-label="هويات مراحل TP المخطط لها">
      <summary>هويات مراحل TP المحفوظة (عدد {stageRows.length}) — غير قابلة للتنفيذ</summary>
      <p className="safe-note">كل مرحلة لديها هوية ثابتة تمنع تكرار التخطيط عند إعادة التشغيل؛ هذه ليست تذكرة MT5، ولا تعني أن السعر وصل للهدف أو أُغلق أي لوت.</p>
