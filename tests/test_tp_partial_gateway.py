@@ -56,6 +56,43 @@ class StageDemoTests(unittest.TestCase):
         self.cmd["lots"]=0.06
         self.assertEqual(self.send()["state"],"unknown")
         self.assertEqual(len(self.mt.sends),1)
+    def test_same_stage_plan_cannot_be_sent_under_second_id_even_after_first_fill(self):
+        original=self.send()
+        self.assertEqual(original["state"],"filled",original)
+        first_id=self.cmd["id"]
+        self.cmd["id"]="tp-duplicate-"+"f"*24
+        result=self.send()
+        self.assertEqual(result["state"],"unknown",result)
+        self.assertEqual(len(self.mt.sends),1)
+        claim=self.ex.db.execute(
+            "SELECT send_id FROM tp_stage_claims WHERE plan_id=?",
+            (PLAN,)).fetchone()
+        self.assertEqual(claim,(first_id,))
+    def test_stage_claim_persists_after_gateway_restarts(self):
+        self.assertEqual(self.send()["state"],"filled")
+        first_id=self.cmd["id"]
+        self.ex.close()
+        self.ex=BrokerExecutor(Path(self.tmp.name)/"gateway.sqlite")
+        self.cmd["id"]="tp-restarted-"+"e"*24
+        result=self.send()
+        self.assertEqual(result["state"],"unknown",result)
+        self.assertEqual(len(self.mt.sends),1)
+        self.assertEqual(self.ex.db.execute(
+            "SELECT send_id FROM tp_stage_claims WHERE plan_id=?",
+            (PLAN,)).fetchone(),(first_id,))
+    def test_incomplete_stage_fields_must_never_fall_back_to_full_close(self):
+        for idx,missing in enumerate(("tp_stage_plan_id","tp_stage","expected_position_identifier")):
+            self.cmd=stage_command()
+            self.cmd["id"]=f"tp-incomplete-{idx}-"+"d"*24
+            self.cmd.pop(missing)
+            result=self.send()
+            self.assertEqual(result["state"],"rejected",result)
+            self.assertEqual(len(self.mt.sends),0)
+    def test_stage_replay_cannot_switch_identity_or_expected_size(self):
+        self.assertEqual(self.send()["state"],"filled")
+        self.cmd["tp_stage_plan_id"]="tp-plan-"+"0"*32
+        self.assertEqual(self.send()["state"],"unknown")
+        self.assertEqual(len(self.mt.sends),1)
     def test_tp2_and_tp3_keep_residual_on_broker_grid(self):
         self.p.volume=0.05
         self.cmd=stage_command(stage=2,held=0.05,lots=0.03)
