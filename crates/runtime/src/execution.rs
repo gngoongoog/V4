@@ -322,9 +322,21 @@ fn enforce_portfolio(
 /// entry policy; Expert studies its voting members, NOT a fake consensus.
 fn inactive_study_members(brains:&[BrainConfig],mode:braintrade_domain::trading::TradingMode)->Vec<BrainConfig>{
     match mode {
-        braintrade_domain::trading::TradingMode::Scalping
-        |braintrade_domain::trading::TradingMode::Swing=>
-            brains.iter().filter(|b|b.id=="system").cloned().collect(),
+        braintrade_domain::trading::TradingMode::Scalping=>
+            brains.iter().filter(|b|b.id=="system").map(|b|{
+                let mut study=b.clone();
+                study.timeframe="M1".into();
+                study
+            }).collect(),
+        braintrade_domain::trading::TradingMode::Swing=>
+            brains.iter().filter(|b|b.id=="system").map(|b|{
+                let mut study=b.clone();
+                // The actual Swing trigger needs H1/H4/D1. Score its
+                // prospective horizon over H4, not 12 M1 bars (12 minutes
+                // for a strategy with multi-day intended holding).
+                study.timeframe="H4".into();
+                study
+            }).collect(),
         braintrade_domain::trading::TradingMode::Expert=>
             brains.iter().filter(|b|b.id!="system"&&b.id!="sniper_learner")
                 .cloned().collect(),
@@ -1959,6 +1971,9 @@ mod tests {
             assert_eq!(members.len(),1);
             assert_eq!(members[0].id,"system",
                 "Inactive Scalp/Swing must use the real mode-specific primary signal");
+            assert_eq!(members[0].timeframe,
+                if mode==TradingMode::Swing{"H4"}else{"M1"},
+                "Causal forward horizon must respect mode time scale, not fake 12-minute Swing");
         }
         let members=inactive_study_members(&brains,TradingMode::Expert);
         assert_eq!(members.iter().map(|b|b.id.as_str()).collect::<Vec<_>>(),
