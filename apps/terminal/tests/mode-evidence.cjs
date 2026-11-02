@@ -96,6 +96,26 @@ const refresh=items.find(n=>n.type==='button'&&n.props.children==='تحديث أ
 assert(refresh&&!refresh.props.disabled);
 refresh.props.onClick();assert.equal(refreshed,1);
 assert(items.filter(x=>x.type==='tr').length>=5,'four actual mode rows');
+const shadowReport=make();
+shadowReport.inactive_forward={
+ source:'prospective_inactive_mode_candle_forward_only',broker_orders:false,
+ can_promote_to_live:false,modes:modes.map((mode,i)=>({
+  mode,source:i===0?'not_studied_from_candle_snapshots':'inactive_mode_forward_on_bound_demo_completed_bars',
+  status:i===0?'tick_native_not_supported':'recent_historical_observation',
+  samples:i===0?0:i*2,scored_after_future_bars:i===0?0:i,
+  broker_orders:false,demo_broker_fills:false,independent_frozen_oos:false
+ }))
+};
+const shadowPanel=component.ModeEvidenceOperations({status,report:shadowReport,disabled:false,onRefresh:()=>{}});
+assert(nodes(shadowPanel).filter(x=>x.type==='tr').length>=10,
+ 'Four mode shadow evidence rows must appear separately from actual Demo booked fills');
+assert(JSON.stringify(shadowPanel).includes('لا نختلق تدريب شموع'),
+ 'Sniper native tick training must not be represented by a synthetic candle study');
+const forged=clone(shadowReport);
+forged.inactive_forward.broker_orders=true;
+assert(!JSON.stringify(component.ModeEvidenceOperations({status,report:forged,disabled:false,onRefresh:()=>{}}))
+ .includes('نضج تقييمها'),'Forge claiming broker orders must not display background learning');
+
 const stale=component.ModeEvidenceOperations({status:{...status,gateway_fresh:false},report:poor,disabled:false,onRefresh:()=>{}});
 assert.equal(nodes(stale).filter(x=>x.type==='tr').length,0,'stale account never paints mode scores');
 const core=fs.readFileSync(path.resolve(dir,'../../../crates/runtime/src/execution.rs'),'utf8');
@@ -109,5 +129,8 @@ assert(ui.includes('<ModeEvidenceOperations status={!preview&&feed.broker?status
 assert(rustEvidence.includes('cross_mode_position_collisions'));
 assert(rustEvidence.includes('malformed_broker_samples'));
 assert(rustEvidence.includes('online_learning_could_have_seen_these_results'));
+assert(rustEvidence.includes('inactive_mode_forward_on_bound_demo_completed_bars'));
+assert(rustEvidence.includes('demo_broker_fills'));
+
 assert(!rustEvidence.includes('order_send('));
 console.log('PASS: P1-H four-mode evidence with 25+ stale/REAL/fake/mixed-source negative contracts, scoped Windows UI refresh and no broker write');
