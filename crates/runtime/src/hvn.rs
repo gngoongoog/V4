@@ -125,18 +125,35 @@ impl Service{
                     "window_ms":p.window_ms},"read_only":true}))
             }
             ("POST","/v1/gateway/hvn/result")=>{
-                let pending=self.pending.as_ref().ok_or_else(||anyhow!("No outstanding HVN request"))?;
+                let pending=self.pending.as_ref().cloned().ok_or_else(||anyhow!("No outstanding HVN request"))?;
                 ensure!(pending.dispatched,"HVN job not yet dispatched");
-                ensure!(!s.requested_run && ctx.as_ref()==Some(&pending.context),
-                    "HVN result rejected after START, disconnect or account change");
                 let v:Value=serde_json::from_slice(body)?;
                 ensure!(v["id"].as_str()==Some(pending.id.as_str()),"HVN job ID mismatch");
-                let report=v.get("report").ok_or_else(||anyhow!("HVN report missing"))?;
-                valid_result(report,pending,s)?;
+                // A matched completion from the authenticated Gateway means
+                // its blocking copy_ticks_range call has returned. Release
+                // the START fence; that does NOT certify account freshness.
+                let report=match v.get("report"){
+                    Some(report)=>report,
+                    None=>{
+                        self.pending=None;
+                        self.note="اكتملت محاولة قراءة HVN لكن لم يصل تقرير صالح؛ لا تُعرض نتيجة".into();
+                        return Err(anyhow!("HVN report missing"));
+                    }
+                };
+                if s.requested_run || ctx.as_ref()!=Some(&pending.context){
+                    self.pending=None;
+                    self.note="اكتملت قراءة HVN لكن تغيرت حالة MT5 أو انتهت حداثة الحساب؛ النتيجة مرفوضة".into();
+                    return Ok(json!({"ok":false,"discarded":true,"read_only":true,"trade_authorized":false}));
+                }
+                if let Err(error)=valid_result(report,&pending,s){
+                    self.pending=None;
+                    self.note="اكتملت قراءة HVN لكن تقرير البيانات لم يجتز التحقق؛ النتيجة مرفوضة".into();
+                    return Err(error);
+                }
                 self.last=Some((pending.context.clone(),now,report.clone()));
                 self.pending=None;
                 self.note="استلم Core نتيجة بحث HVN المطابقة لهوية الوسيط، دون تحويلها إلى إشارة تداول".into();
-                Ok(json!({"ok":true,"read_only":true}))
+                Ok(json!({"ok":true,"read_only":true,"trade_authorized":false}))
             }
             _=>Err(anyhow!("Unknown HVN research route"))
         }
@@ -173,9 +190,26 @@ mod tests{
         let body=json!({"id":id,"report":report}).to_string();
         assert!(h.route("POST","/v1/gateway/hvn/result",body.as_bytes(),&s,now).is_err());
         assert!(h.route("GET","/v1/hvn",b"",&s,now).unwrap()["report"].is_null());
+        assert!(!h.pending(now),"Matched but invalid result proves Gateway history read ended");
+        let id=h.route("POST","/v1/hvn/request",b"{}",&s,now+2).unwrap()["id"].as_str().unwrap().to_owned();
+        h.route("GET","/v1/gateway/hvn/request",b"",&s,now+2).unwrap();
         let mut other=s.clone();other.telemetry.as_mut().unwrap().login=99;
-        assert!(h.route("POST","/v1/gateway/hvn/result",body.as_bytes(),&other,now).is_err());
-        assert!(h.pending(now),"A dispatched job may still be reading the original account");
+        let result=h.route("POST","/v1/gateway/hvn/result",
+            json!({"id":id,"report":{}}).to_string().as_bytes(),&other,now+3).unwrap();
+        assert_eq!(result["discarded"],true);
+        assert!(!h.pending(now+3),"Matched Gateway completion must release work fence, not accept wrong-account levels");
+        assert!(h.route("GET","/v1/hvn",b"",&other,now+3).unwrap()["report"].is_null());
+    }
+    #[test]fn stale_account_snapshot_drops_completed_job_without_trapping_start(){
+        let mut h=Service::default();let now=120_000;let s=status();
+        let id=h.route("POST","/v1/hvn/request",b"{}",&s,now).unwrap()["id"].as_str().unwrap().to_owned();
+        h.route("GET","/v1/gateway/hvn/request",b"",&s,now).unwrap();
+        let mut stale=s.clone();stale.gateway_fresh=false;
+        let reply=h.route("POST","/v1/gateway/hvn/result",
+            json!({"id":id,"report":{}}).to_string().as_bytes(),&stale,now+EXPIRY_MS+10).unwrap();
+        assert_eq!(reply["discarded"],true);
+        assert!(!h.pending(now+EXPIRY_MS+10));
+        assert!(h.route("GET","/v1/hvn",b"",&s,now+EXPIRY_MS+11).unwrap()["report"].is_null());
     }
     #[test]fn completed_or_nondispatched_job_has_bounded_retry_semantics(){
         let now=100_000;let mut h=Service::default();let s=status();
