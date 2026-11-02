@@ -72,11 +72,15 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
                 let unchanged=ticket==p.ticket && magic==p.magic
                     && step.is_finite()&&step>0. && (step-original_step).abs()<=original_step*1e-8
                     && (p.volume-initial).abs()<=original_step*1e-6;
-                let next=if state=="draft_only"&&unchanged {"draft_only"}
-                    else {"volume_changed_unverified"};
+                // Once unknown, preserve the FIRST uncertainty reason. A
+                // later position snapshot is not an MT5 deal-history receipt.
+                let next=if state=="draft_only" {
+                    if unchanged {"draft_only"}else{"volume_changed_unverified"}
+                } else {state.as_str()};
                 tx.execute(
                     "UPDATE partial_exit_drafts SET status=?4,last_seen_ms=?5
-                     WHERE context=?1 AND target=?2 AND position_identifier=?3",
+                     WHERE context=?1 AND target=?2 AND position_identifier=?3
+                      AND last_seen_ms<=?5",
                     params![key,target,p.identifier,next,now])?;
             }
             Err(rusqlite::Error::QueryReturnedNoRows)=>{
@@ -218,7 +222,8 @@ mod tests{
         assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["state"],"position_missing_unverified");
         t.positions.push(t_zero_position());
         observe(&d,&t,"demo",350).unwrap();
-        assert_ne!(report(&d,&t,"demo").unwrap()["rows"][0]["state"],"draft_only");
+        assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["state"],
+            "position_missing_unverified","Reappearing position does not prove why it vanished");
     }
     fn t_zero_position()->Position{t().positions.remove(0)}
     #[test]
