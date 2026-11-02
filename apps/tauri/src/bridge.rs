@@ -393,6 +393,18 @@ fn study_request(kind:&str,action:&str,id:Option<&str>,source_id:Option<&str>,pl
 fn study_action(kind:String,action:String,id:Option<String>,source_id:Option<String>,plan:Option<Value>)->Result<Value,String>{
     let (route,post,body)=study_request(&kind,&action,id.as_deref(),source_id.as_deref(),plan.as_ref())?;
     let client=open_client()?;
+    if post && kind=="backtest" && matches!(action.as_str(),"brain_ablation"|"ces_ablation"){
+        // Saved-history research ONLY. Four full M1 policy replays may run
+        // beyond the ordinary 4-second IPC request window. Trading commands
+        // retain their unchanged, strictly bounded broker timeouts.
+        return match client.checked_post(route,body,std::time::Duration::from_secs(120)){
+            Ok(value)=>Ok(value),
+            Err(CheckedPostError::Rejected(reason))=>Err(reason),
+            Err(CheckedPostError::Uncertain(reason))=>Err(format!(
+                "نتيجة المقارنة البحثية غير مؤكدة؛ ربما انتهى الحساب داخل Core: {reason}"
+            )),
+        };
+    }
     if post{client.post(route,body)}else{client.get(route)}.map_err(|e|e.to_string())
 }
 
