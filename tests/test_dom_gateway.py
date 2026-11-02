@@ -40,6 +40,25 @@ class DomTests(unittest.TestCase):
         self.assertEqual(rows[0]['volume'],4)
         self.assertEqual(rows[-1]['side'],'sell')
         self.assertFalse(any(row['volume']==999 for row in rows))
+    def test_receipt_only_for_successful_read_and_never_reused_after_failure(self):
+        mt5=Book();cache=DomCache();key=('broker',1,'XAUUSD')
+        self.assertIsNone(cache.observed_ms)
+        mt5.rows=[level(2,100),level(1,101)]
+        with patch('mt5_gateway.time.time',return_value=1700000000.125):
+            available,book=cache.read(mt5,key)
+        self.assertTrue(available)
+        self.assertEqual(cache.observed_ms,1700000000125)
+        self.assertEqual(len(book),2)
+        mt5.rows=[]
+        self.assertEqual(cache.read(mt5,key),(False,[]))
+        self.assertIsNone(cache.observed_ms,
+            'A stale old book receipt cannot be reused on empty market_book_get')
+        mt5.rows=[level(2,100),level(1,101)]
+        self.assertTrue(cache.read(mt5,key)[0])
+        self.assertIsNotNone(cache.observed_ms)
+        cache.release(mt5)
+        self.assertIsNone(cache.observed_ms)
+
     def test_account_switch_releases_old_subscription(self):
         mt5=Book();cache=DomCache();mt5.rows=[level(2,100),level(1,101)]
         cache.read(mt5,('broker',1,'XAUUSD'))
