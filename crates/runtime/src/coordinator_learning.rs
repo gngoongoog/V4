@@ -779,6 +779,11 @@ impl Learner {
             "Inactive mode forward observations require verified MT5 Demo");
         anyhow::ensure!(c.trading.mode!=TradingMode::Sniper,
             "Sniper requires tick-native research, not candle shadow learning");
+        anyhow::ensure!(brains.iter().all(|b|match c.trading.mode {
+            TradingMode::Scalping|TradingMode::Swing=>b.id=="system",
+            TradingMode::Expert=>b.id!="system"&&b.id!="sniper_learner",
+            TradingMode::Sniper=>false,
+        }),"Inactive study members do not match their actual mode-specific policy");
         self.observe_gated_impl(db,t,c,brains,frames,true,now,None,(0.5,0),true)
     }
 
@@ -970,7 +975,7 @@ mod tests {
         let db=Connection::open_in_memory().unwrap();
         let mut learner=Learner::new(&db).unwrap();
         let mut c=Config::default();
-        c.trading.mode=TradingMode::Swing;
+        c.trading.mode=TradingMode::Expert;
         let b=BrainConfig{id:"trend".into(),timeframe:"M1".into(),..Default::default()};
         let mut now=1_800_000_000_000u64;
         let mut frames=BTreeMap::from([("M1".to_owned(),bars(now/1000-60))]);
@@ -987,7 +992,7 @@ mod tests {
         let original:Value=serde_json::from_str(&original).unwrap();
         assert_eq!(original["observation_origin"],"inactive_mode_forward");
         assert_eq!(original["study_kind"],"inactive_expert_advisor_signal_not_consensus",
-            "This direct test asks for an advisor: it is not a true Swing mode entry rule");
+            "A single Expert advisor signal is not a coordinator consensus");
         assert_eq!(original["live_broker_orders"],false);
         assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_samples",[],|r|r.get::<_,u64>(0)).unwrap(),1);
         now+=12*60_000;
@@ -1002,6 +1007,30 @@ mod tests {
         assert_eq!(state,"scored");
         let broker_table:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='broker_commands')",[],|r|r.get(0)).unwrap();
         assert!(!broker_table,"Shadow evidence must need no live broker intent journal");
+    }
+
+    #[test]
+    fn inactive_mode_forward_rejects_cosmetic_duplicate_advisor_as_scalp_or_swing() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut learner=Learner::new(&db).unwrap();
+        let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            login:17,server:"Demo".into(),symbol:"XAUUSD".into(),currency:"USD".into(),
+            ..Default::default()};
+        let mut c=Config::default();
+        let trend=BrainConfig{id:"trend".into(),..Default::default()};
+        let system=BrainConfig{id:"system".into(),..Default::default()};
+        for mode in [TradingMode::Scalping,TradingMode::Swing] {
+            c.trading.mode=mode;
+            assert!(learner.observe_inactive_forward(&db,&t,&c,&[trend.clone()],
+                &BTreeMap::new(),1000).is_err(),
+                "Duplicating trend's identical signal under a second mode is fake learning");
+            assert!(learner.observe_inactive_forward(&db,&t,&c,&[system.clone()],
+                &BTreeMap::new(),1000).is_ok());
+        }
+        c.trading.mode=TradingMode::Expert;
+        assert!(learner.observe_inactive_forward(&db,&t,&c,&[system],
+            &BTreeMap::new(),1000).is_err(),
+            "Expert's default primary research must not impersonate real advisor vote consensus");
     }
 
     #[test]
