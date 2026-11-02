@@ -1266,7 +1266,7 @@ class BrokerExecutor:
             if same_broker_mode():
                 rows=mt5.history_deals_get(datetime.fromtimestamp(start/1000,timezone.utc),datetime.fromtimestamp(until/1000,timezone.utc))
                 if rows is not None and same_broker_mode():
-                    fields=('ticket','position_id','magic','symbol','entry','type','time_msc','volume','price','profit','commission','swap','fee','reason')
+                    fields=('ticket','order','position_id','magic','symbol','entry','type','time_msc','volume','price','profit','commission','swap','fee','reason')
                     deals=[]
                     reliable=True
                     for d in rows:
