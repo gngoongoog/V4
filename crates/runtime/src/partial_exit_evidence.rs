@@ -274,7 +274,8 @@ mod tests{
         d.execute("INSERT INTO broker_history_sync VALUES(?1,'demo',200,201)",
             [context_for(&t)]).unwrap();
         assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["evidence"]["state"],
-            "incomplete_or_ambiguous_open_history");
+            "invalid_deal_history",
+            "An exit with no known opening is invalid for a proof audit, never TP credit");
     }
     #[test]
     fn stale_watermark_and_broker_history_beyond_sync_horizon_are_not_authoritative(){
@@ -283,7 +284,9 @@ mod tests{
         d.execute("INSERT INTO broker_history_sync VALUES(?1,'demo',0,0)",
             [context_for(&t)]).unwrap();
         store(&d,&t,deal(100,0,0,410601,0.1));
-        store(&d,&t,deal(101,1,1,0,0.04));
+        let mut late_exit=deal(101,1,1,0,0.04);
+        late_exit["time_msc"]=json!(10_000);
+        store(&d,&t,late_exit);
         assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["evidence"]["state"],
             "broker_history_not_synced");
         d.execute("UPDATE broker_history_sync SET until_ms=30,synced_ms=31",[]).unwrap();
