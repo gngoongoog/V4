@@ -115,6 +115,12 @@ class HvnResearch(unittest.TestCase):
             def account_info(self):
                 self.calls.append("account")
                 return SimpleNamespace(login=42, server=self.server, currency="USD")
+            def positions_get(self):
+                self.calls.append("positions")
+                return ()
+            def orders_get(self):
+                self.calls.append("orders")
+                return ()
             def symbol_info(self, symbol):
                 self.calls.append(("symbol", symbol))
                 return SimpleNamespace(trade_tick_size=0.01)
@@ -127,10 +133,12 @@ class HvnResearch(unittest.TestCase):
         self.assertTrue(out["available"], out)
         self.assertEqual(broker.calls.count("account"),2)
         self.assertEqual(out["identity"]["symbol"],"XAUUSDm")
-        self.assertIn(("ticks","XAUUSDm",0,
-                       broker.calls[2][3],broker.calls[2][4]),broker.calls)
-        self.assertEqual(broker.calls[2][3].total_seconds(),0)
-        self.assertEqual(broker.calls[2][4].total_seconds(),0)
+        tick_event=next(c for c in broker.calls if isinstance(c,tuple) and c[0]=="ticks")
+        self.assertEqual(tick_event[1:3],("XAUUSDm",0))
+        self.assertEqual(tick_event[3].total_seconds(),0)
+        self.assertEqual(tick_event[4].total_seconds(),0)
+        self.assertEqual(broker.calls.count("positions"),2)
+        self.assertEqual(broker.calls.count("orders"),2)
 
     def test_changing_mt5_account_while_reading_withdraws_all_hvn_levels(self):
         from types import SimpleNamespace
@@ -141,6 +149,8 @@ class HvnResearch(unittest.TestCase):
                 self.calls += 1
                 return SimpleNamespace(login=42 if self.calls==1 else 43,
                     server="Broker-Demo",currency="USD")
+            def positions_get(self): return ()
+            def orders_get(self): return ()
             def symbol_info(self,symbol):
                 return SimpleNamespace(trade_tick_size=0.01)
             def copy_ticks_range(self,*args):
@@ -150,6 +160,51 @@ class HvnResearch(unittest.TestCase):
         self.assertFalse(out["available"])
         self.assertEqual(out["nodes"],[])
         self.assertIn("changed",out["reason"])
+
+    def test_manual_position_or_unknown_order_book_blocks_tick_history(self):
+        from types import SimpleNamespace
+        class Broker:
+            COPY_TICKS_ALL=0
+            def __init__(self,positions=(),orders=()):
+                self.positions=positions
+                self.orders=orders
+                self.reads=0
+            def account_info(self):
+                return SimpleNamespace(login=42,server="Broker-Demo",currency="USD")
+            def positions_get(self): return self.positions
+            def orders_get(self): return self.orders
+            def symbol_info(self,symbol):
+                return SimpleNamespace(trade_tick_size=.01)
+            def copy_ticks_range(self,*args):
+                self.reads+=1
+                return quotes()
+        for positions,orders in [([object()],()),((),[object()]),(None,()),((),None)]:
+            mt5=Broker(positions,orders)
+            result=collect_mt5_hvn(mt5,**{k:KW[k] for k in
+                ("server","login","symbol","currency","now_ms")})
+            self.assertFalse(result["available"])
+            self.assertEqual(result["nodes"],[])
+            self.assertEqual(mt5.reads,0,"Never start a blocking tick read for unknown or nonflat broker")
+
+    def test_manual_position_opened_during_history_invalidates_result(self):
+        from types import SimpleNamespace
+        class Broker:
+            COPY_TICKS_ALL=0
+            def __init__(self): self.has_position=False
+            def account_info(self):
+                return SimpleNamespace(login=42,server="Broker-Demo",currency="USD")
+            def positions_get(self): return [object()] if self.has_position else ()
+            def orders_get(self): return ()
+            def symbol_info(self,symbol):
+                return SimpleNamespace(trade_tick_size=.01)
+            def copy_ticks_range(self,*args):
+                self.has_position=True
+                return quotes()
+        result=collect_mt5_hvn(Broker(),**{k:KW[k] for k in
+            ("server","login","symbol","currency","now_ms")})
+        self.assertFalse(result["available"])
+        self.assertEqual(result["nodes"],[])
+        self.assertIn("nonflat",result["reason"])
 
     def test_no_executable_broker_in_hvn_research_module(self):
         source=(Path(__file__).resolve().parents[1]/"gateway"/"hvn_research.py").read_text()
