@@ -364,6 +364,86 @@ pub fn compare_ces_epi(
     })
 }
 
+/// Four predeclared deterministic advisor policies under the same M1
+/// entry/exit/cost/stop model, grouped by chronological window. This
+/// compares SIGNALS rather than reproducing exact per-brain live execution.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BrainWindow {
+    pub window: EvaluationWindow,
+    pub trend_baseline: StrategyWindowResult,
+    pub wyckoff: StrategyWindowResult,
+    pub liquidity_sweep: StrategyWindowResult,
+    pub trend_pullback: StrategyWindowResult,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BrainAblation {
+    pub version:String,
+    pub symbol:String,
+    pub server:String,
+    pub login:u64,
+    pub currency:String,
+    pub captured_ms:u64,
+    pub plan:EvaluationPlan,
+    pub options_template:Options,
+    pub windows:Vec<BrainWindow>,
+    pub trend_baseline:StrategyAggregate,
+    pub wyckoff:StrategyAggregate,
+    pub liquidity_sweep:StrategyAggregate,
+    pub trend_pullback:StrategyAggregate,
+    pub research_only:bool,
+    pub broker_orders:bool,
+    pub automatic_promotion:bool,
+    pub independently_frozen_oos:bool,
+    pub note:String,
+}
+pub fn compare_brain_signals(
+    history:&History,options:&Options,plan:&EvaluationPlan,
+    cancel:&AtomicBool,progress:&AtomicUsize
+)->Result<BrainAblation,String>{
+    history.validate()?;options.validate()?;
+    let first=history.bars.first().unwrap().candle.time;
+    if options.from.saturating_sub(first)<MIN_WARMUP {
+        return Err("Brain signal comparison needs at least two prior UTC warmup days".into());
+    }
+    let windows=windows(options,plan)?;
+    let total=windows.len()*4;
+    let mut rows=Vec::with_capacity(windows.len());
+    for (i,window) in windows.into_iter().enumerate(){
+        if cancel.load(Ordering::Relaxed){return Err("Brain study cancelled".into())}
+        let mut reports=Vec::with_capacity(4);
+        for (j,strategy) in [
+            Strategy::BrainTrendResearch,Strategy::BrainWyckoffResearch,
+            Strategy::BrainLiquidityResearch,Strategy::BrainPullbackResearch
+        ].into_iter().enumerate(){
+            let mut child=options.clone();child.strategy=strategy;
+            child.from=window.from;child.to=window.to;
+            reports.push(summarized(run(history,&child,cancel,&AtomicUsize::new(0))?));
+            progress.store((i*4+j+1)*100/total,Ordering::Relaxed);
+        }
+        rows.push(BrainWindow{window,trend_baseline:reports.remove(0),
+            wyckoff:reports.remove(0),liquidity_sweep:reports.remove(0),
+            trend_pullback:reports.remove(0)});
+    }
+    let summary=|strategy,fn_row:fn(&BrainWindow)->StrategyWindowResult|{
+        aggregate(strategy,rows.iter().map(fn_row))
+    };
+    progress.store(100,Ordering::Relaxed);
+    Ok(BrainAblation{
+        version:"brain-signal-ablation-m1-ohlc-v1".into(),
+        symbol:history.symbol.clone(),server:history.server.clone(),
+        login:history.login,currency:history.currency.clone(),
+        captured_ms:history.captured_ms,plan:plan.clone(),
+        options_template:options.clone(),
+        trend_baseline:summary(Strategy::BrainTrendResearch,|r|r.trend_baseline.clone()),
+        wyckoff:summary(Strategy::BrainWyckoffResearch,|r|r.wyckoff.clone()),
+        liquidity_sweep:summary(Strategy::BrainLiquidityResearch,|r|r.liquidity_sweep.clone()),
+        trend_pullback:summary(Strategy::BrainPullbackResearch,|r|r.trend_pullback.clone()),
+        windows:rows,research_only:true,broker_orders:false,
+        automatic_promotion:false,independently_frozen_oos:false,
+        note:"Signal-only comparison of actual deterministic rule votes vs Trend under identical 1.5ATR/2R/30min OHLC fills and historical cost assumptions. Last-close quote proxy is not a true broker tick; structural stops, fill latency, real volume and live execution are NOT replicated. Holdout already observable and may be subject to selection bias. Do not promote or claim edge without prospective frozen evidence.".into(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -540,6 +620,40 @@ mod tests {
             assert_eq!(serde_json::to_value(p).unwrap(),serde_json::to_value(q).unwrap(),
                 "Future holdout prices must not change development result");
         }
+    }
+
+    #[test]
+    fn four_brain_comparison_is_chronological_fixed_cost_and_no_promotion(){
+        let h=fixture(7);
+        let mut o=options();
+        o.from=BASE+2*DAY;o.to=BASE+6*DAY;
+        let result=compare_brain_signals(&h,&o,
+            &EvaluationPlan::Holdout{holdout_percent:30},
+            &AtomicBool::new(false),&AtomicUsize::new(0)).unwrap();
+        assert!(result.research_only&&!result.broker_orders&&!result.automatic_promotion);
+        assert!(!result.independently_frozen_oos);
+        assert_eq!(result.windows.len(),2);
+        assert_eq!(result.windows[0].window.to,result.windows[1].window.from);
+        for w in &result.windows {
+            for p in [&w.trend_baseline,&w.wyckoff,&w.liquidity_sweep,&w.trend_pullback]{
+                assert!(p.first_test_bar>=w.window.from&&p.last_test_bar<w.window.to);
+                assert!(p.metrics.commissions>=0.);
+            }
+        }
+        // A future mutation cannot alter an already finished development
+        // window; this includes all 4 advisor signals, not just baseline.
+        let mut modified=h.clone();
+        for bar in modified.bars.iter_mut().filter(|b|b.candle.time>=result.windows[0].window.to){
+            bar.candle.open+=100.;
+            bar.candle.high+=100.;
+            bar.candle.low+=100.;
+            bar.candle.close+=100.;
+        }
+        let rerun=compare_brain_signals(&modified,&o,
+            &EvaluationPlan::Holdout{holdout_percent:30},
+            &AtomicBool::new(false),&AtomicUsize::new(0)).unwrap();
+        assert_eq!(serde_json::to_value(&result.windows[0]).unwrap(),
+            serde_json::to_value(&rerun.windows[0]).unwrap());
     }
 
     #[test]
