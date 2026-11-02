@@ -96,6 +96,22 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  const expertAdvisor=nodes(expert).find(x=>x.type==='button'&&String(x.props['aria-label']||'').includes('مشاركة trend'));
  assert(expertAdvisor&&!expertAdvisor.props.disabled,'Expert advisor changes affect the real coordinator');
  assert(JSON.stringify(expert).includes('تُفترض مشاركة')===false);
+ const sniperBrain=state=>exportsObj.BrainControlsOperations({source:{
+  controls_available:true,account_matches:true,trading_mode:'sniper',selected_owner:'system',
+  brains:[{config:{id:'system'}},{config:{id:'sniper_learner'},
+   control:{advisor:true,paper:true},decision_participation:{status:state,
+    reason:state==='sniper_classic_selected'?'Classic selected':'Learner selected'},
+   participates_in_coordinator:state==='sniper_learner_eligible'}]},
+  disabled:false,armed:false,onSave:async()=>{}
+ });
+ const brainAdvisor=ui=>nodes(ui).find(n=>n.type==='button'&&
+  String(n.props['aria-label']||'').includes('مشاركة sniper_learner'));
+ assert(brainAdvisor(sniperBrain('sniper_classic_selected')).props.disabled,
+  'Classic must not display a pretend actionable Learner advisor control');
+ assert(brainAdvisor(sniperBrain('sniper_selection_unverified')).props.disabled,
+  'Unknown Sniper selector must fail closed');
+ assert(!brainAdvisor(sniperBrain('sniper_learner_eligible')).props.disabled,
+  'Selected Learner must expose its real participation control');
 
  const advisor=brainButtons.find(x=>String(x.props['aria-label']||'').includes('مشاركة trend'));
  const paper=brainButtons.find(x=>String(x.props['aria-label']||'').includes('Paper trend'));
