@@ -42,19 +42,46 @@ fn valid_result(report:&Value, pending:&Pending, s:&Status)->Result<()>{
     let available=report["available"].as_bool().ok_or_else(||anyhow!("HVN availability missing"))?;
     if available {
         ensure!(source!="none","Available HVN cannot have no source");
+        let unit=report["unit"].as_str().unwrap_or("");
+        let expected_unit=if source=="mt5_quote_tick_activity" {
+            "observed_quote_events"
+        }else{"broker_reported_real_volume"};
+        ensure!(unit==expected_unit,"HVN reported activity unit mismatches its source");
+        let observed=report["observations"].as_u64()
+            .ok_or_else(||anyhow!("HVN observation count missing"))?;
+        let trade_events=report["trade_events_observed"].as_u64()
+            .ok_or_else(||anyhow!("HVN trade event evidence missing"))?;
+        let quote_events=report["quote_events_observed"].as_u64()
+            .ok_or_else(||anyhow!("HVN quote event evidence missing"))?;
+        let selected=if source=="mt5_quote_tick_activity"{quote_events}else{trade_events};
+        ensure!((80..=40_000).contains(&observed) && observed==selected &&
+            trade_events<=40_000 && quote_events<=40_000,
+            "HVN selected observations disagree with source-specific evidence");
+        let distinct=report["distinct_levels"].as_u64()
+            .ok_or_else(||anyhow!("HVN distinct level count missing"))?;
+        ensure!((5..=2_000).contains(&distinct),"HVN distinct levels invalid");
+        let total=report["total_activity"].as_f64().unwrap_or(0.);
+        ensure!(total.is_finite() && total>0.,"HVN total activity invalid");
+        if source=="mt5_quote_tick_activity" {
+            ensure!((total-observed as f64).abs()<0.00001,
+                "HVN quote activity must equal observed quote events");
+        }
         let nodes=report["nodes"].as_array().ok_or_else(||anyhow!("HVN nodes missing"))?;
         ensure!(!nodes.is_empty() && nodes.len()<=8, "HVN node count invalid");
         ensure!(report["observed_to_ms"].as_u64().is_some_and(|v|v<=pending.requested_ms),
             "HVN used future ticks");
         ensure!(report["observed_from_ms"].as_u64().is_some_and(|v|
-            v<=report["observed_to_ms"].as_u64().unwrap_or(0)),"HVN source timestamps invalid");
+            v<=report["observed_to_ms"].as_u64().unwrap_or(0) &&
+            v>=pending.requested_ms.saturating_sub(pending.window_ms)),
+            "HVN source timestamps outside requested causal window");
         for node in nodes {
             let price=node["price"].as_f64().unwrap_or(0.);
             let amount=node["activity"].as_f64().unwrap_or(0.);
             let share=node["share"].as_f64().unwrap_or(-1.);
             ensure!(price.is_finite()&&price>0.&&amount.is_finite()&&amount>0.
-                &&share.is_finite()&&(0.0..=1.0).contains(&share),
-                "HVN node has invalid or fabricated values");
+                &&amount<=total &&share.is_finite()&&(0.0..=1.0).contains(&share) &&
+                (share-amount/total).abs()<=0.000002,
+                "HVN node activity/share cannot be reconciled with source total");
         }
     } else {
         ensure!(source=="none" && report["nodes"].as_array().is_some_and(|v|v.is_empty()),
@@ -194,8 +221,11 @@ mod tests{
         assert!(h.route("GET","/v1/gateway/hvn/request",b"",&s,now).unwrap()["job"].is_object());
         let report=json!({"available":true,"read_only":true,"trade_authorized":false,
             "broker_only":true,"exchange_wide":false,"source":"mt5_quote_tick_activity",
+            "unit":"observed_quote_events","observations":80,
+            "quote_events_observed":80,"trade_events_observed":0,
+            "distinct_levels":10,"total_activity":80.0,
             "window_ms":600000,"identity":{"server":"Demo","login":42,"currency":"USD","symbol":"XAUUSDm"},
-            "nodes":[{"price":2000.0,"activity":10.0,"share":0.2}],
+            "nodes":[{"price":2000.0,"activity":16.0,"share":0.2}],
             "observed_from_ms":1000,"observed_to_ms":now+1});
         let body=json!({"id":id,"report":report}).to_string();
         assert!(h.route("POST","/v1/gateway/hvn/result",body.as_bytes(),&s,now).is_err());
@@ -236,14 +266,50 @@ mod tests{
         h.route("GET","/v1/hvn",b"",&wrong,late+EXPIRY_MS+2).unwrap();
         assert!(h.pending(late+EXPIRY_MS+2),"Account switch must not release a dispatched read lock");
     }
+    #[test]fn source_evidence_unit_and_share_must_reconcile(){
+        let s=status();
+        let pending=Pending{
+            id:"job".into(),context:context(&s).unwrap(),requested_ms:100_000,
+            window_ms:600_000,dispatched:true,
+        };
+        let valid=json!({"available":true,"read_only":true,"trade_authorized":false,
+            "broker_only":true,"exchange_wide":false,"source":"mt5_quote_tick_activity",
+            "unit":"observed_quote_events","observations":80,
+            "quote_events_observed":80,"trade_events_observed":0,
+            "distinct_levels":10,"total_activity":80.0,
+            "window_ms":600000,"identity":{"server":"Demo","login":42,"currency":"USD","symbol":"XAUUSDm"},
+            "nodes":[{"price":2000.0,"activity":16.0,"share":0.2}],
+            "observed_from_ms":1000,"observed_to_ms":100_000});
+        assert!(valid_result(&valid,&pending,&s).is_ok());
+        for (field, value) in [
+            ("unit",json!("broker_reported_real_volume")),
+            ("observations",json!(79)),
+            ("quote_events_observed",json!(79)),
+            ("distinct_levels",json!(3000)),
+            ("total_activity",json!(81.0)),
+            ("observed_from_ms",json!(200_000)),
+        ] {
+            let mut corrupted=valid.clone();corrupted[field]=value;
+            assert!(valid_result(&corrupted,&pending,&s).is_err(),"{field}");
+        }
+        let mut corrupt_share=valid.clone();
+        corrupt_share["nodes"][0]["share"]=json!(0.9);
+        assert!(valid_result(&corrupt_share,&pending,&s).is_err());
+        let mut corrupt_activity=valid.clone();
+        corrupt_activity["nodes"][0]["activity"]=json!(100.0);
+        assert!(valid_result(&corrupt_activity,&pending,&s).is_err());
+    }
     #[test]fn success_is_read_only_and_context_scoped(){
         let now=100_000;let mut h=Service::default();let s=status();
         let id=h.route("POST","/v1/hvn/request",b"{}",&s,now).unwrap()["id"].as_str().unwrap().to_string();
         h.route("GET","/v1/gateway/hvn/request",b"",&s,now).unwrap();
         let report=json!({"available":true,"read_only":true,"trade_authorized":false,
             "broker_only":true,"exchange_wide":false,"source":"mt5_quote_tick_activity",
+            "unit":"observed_quote_events","observations":80,
+            "quote_events_observed":80,"trade_events_observed":0,
+            "distinct_levels":10,"total_activity":80.0,
             "window_ms":600000,"identity":{"server":"Demo","login":42,"currency":"USD","symbol":"XAUUSDm"},
-            "nodes":[{"price":2000.0,"activity":10.0,"share":0.2}],
+            "nodes":[{"price":2000.0,"activity":16.0,"share":0.2}],
             "observed_from_ms":1000,"observed_to_ms":now});
         assert!(h.route("POST","/v1/gateway/hvn/result",json!({"id":id,"report":report}).to_string().as_bytes(),&s,now).is_ok());
         let result=h.route("GET","/v1/hvn",b"",&s,now).unwrap();
