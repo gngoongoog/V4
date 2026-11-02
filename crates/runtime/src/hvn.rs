@@ -63,16 +63,30 @@ fn valid_result(report:&Value, pending:&Pending, s:&Status)->Result<()>{
     Ok(())
 }
 impl Service{
-    pub fn pending(&self,now:u64)->bool {
-        self.pending.as_ref().is_some_and(|p|now.saturating_sub(p.requested_ms)<=EXPIRY_MS)
+    pub fn pending(&self,_now:u64)->bool {
+        // A dispatched MT5 history read may still be executing *after* the
+        // UI deadline. Never fail open into START without Gateway completion.
+        self.pending.is_some()
     }
     pub fn route(&mut self,method:&str,path:&str,body:&[u8],s:&Status,now:u64)->Result<Value>{
         if self.pending.as_ref().is_some_and(|p|now.saturating_sub(p.requested_ms)>EXPIRY_MS){
-            self.pending=None; self.note="مهلة قياس HVN انتهت دون وصول رد مطابق".into();
+            if self.pending.as_ref().is_some_and(|p|p.dispatched){
+                // Gateway is possibly still busy in copy_ticks_range. There
+                // is no reliable cancellation acknowledgment yet; fail closed.
+                self.note="انتهت مهلة HVN بعد إرسال الطلب؛ لا يمكن بدء التداول حتى تأكيد النتيجة أو خروج كامل وإعادة تشغيل آمنة".into();
+            }else{
+                self.pending=None;
+                self.note="انتهت مهلة HVN قبل استلام Gateway للطلب؛ لم يبدأ جمع تيكات".into();
+            }
         }
         let ctx=context(s);
         if self.pending.as_ref().is_some_and(|p|ctx.as_ref()!=Some(&p.context)){
-            self.pending=None;self.note="تغيّر حساب MT5 أو انقطع الاتصال أثناء قياس HVN".into();
+            if self.pending.as_ref().is_some_and(|p|p.dispatched){
+                self.note="تغيّر حساب MT5 بعد إرسال HVN؛ ستبقى محاولة START محجوبة حتى تصالح Gateway أو إعادة التشغيل الآمنة".into();
+            }else{
+                self.pending=None;
+                self.note="تغيّر حساب MT5 قبل بدء قراءة HVN؛ تم إلغاء الطلب غير المرسل".into();
+            }
         }
         match(method,path){
             ("GET","/v1/hvn")=>{
@@ -159,7 +173,22 @@ mod tests{
         assert!(h.route("GET","/v1/hvn",b"",&s,now).unwrap()["report"].is_null());
         let mut other=s.clone();other.telemetry.as_mut().unwrap().login=99;
         assert!(h.route("POST","/v1/gateway/hvn/result",body.as_bytes(),&other,now).is_err());
-        assert!(!h.pending(now));
+        assert!(h.pending(now),"A dispatched job may still be reading the original account");
+    }
+    #[test]fn completed_or_nondispatched_job_has_bounded_retry_semantics(){
+        let now=100_000;let mut h=Service::default();let s=status();
+        h.route("POST","/v1/hvn/request",b"{}",&s,now).unwrap();
+        let late=now+EXPIRY_MS+1;
+        assert!(h.pending(late),"START must not bypass a request without checking its state");
+        h.route("GET","/v1/hvn",b"",&s,late).unwrap();
+        assert!(!h.pending(late),"Unsent expired request can be cancelled safely");
+        assert!(h.route("POST","/v1/hvn/request",b"{}",&s,late).is_ok());
+        assert!(h.route("GET","/v1/gateway/hvn/request",b"",&s,late).unwrap()["job"].is_object());
+        h.route("GET","/v1/hvn",b"",&s,late+EXPIRY_MS+1).unwrap();
+        assert!(h.pending(late+EXPIRY_MS+1),"Dispatched job may still be inside MT5 history even after timeout");
+        let mut wrong=s.clone();wrong.telemetry.as_mut().unwrap().login=43;
+        h.route("GET","/v1/hvn",b"",&wrong,late+EXPIRY_MS+2).unwrap();
+        assert!(h.pending(late+EXPIRY_MS+2),"Account switch must not release a dispatched read lock");
     }
     #[test]fn success_is_read_only_and_context_scoped(){
         let now=100_000;let mut h=Service::default();let s=status();
