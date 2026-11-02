@@ -235,9 +235,10 @@ mod tests{
             (key.as_str(),"expert",100u64,"active_mode_forward",Some(json!({"state":"scored"}))),
             (other.as_str(),"swing",130u64,"inactive_mode_forward",Some(json!({"state":"scored"}))),
         ]{
+            let (member,timeframe)=if mode=="expert" {("trend","M1")} else {("system","H4")};
             let source=serde_json::to_string(&(context,
                 if origin=="active_mode_forward" {"adaptive-member-v1"}else{"inactive-mode-forward-v1"},
-                mode,"trend","M1","")).unwrap();
+                mode,member,timeframe,"")).unwrap();
             let kind=if mode=="expert" {"inactive_expert_advisor_signal_not_consensus"}
                 else{"inactive_primary_mode_signal"};
             let value=json!({"observation_origin":origin,"study_kind":kind,
