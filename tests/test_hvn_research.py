@@ -306,6 +306,43 @@ class HvnResearch(unittest.TestCase):
         self.assertEqual(receipts[0][0], "/v1/gateway/hvn/result")
         self.assertIs(receipts[0][1]["report"], source_report)
 
+    def test_hvn_completion_outbox_retries_transport_without_recollecting_ticks(self):
+        from mt5_gateway import HvnResultOutbox
+        outbox = HvnResultOutbox()
+        receipt = {"id": "job-1", "report": {"available": False}}
+        calls = []
+        def fail_once(path, payload):
+            calls.append((path, payload))
+            if len(calls) == 1:
+                raise OSError("Transient localhost connection loss")
+        with self.assertRaises(OSError):
+            outbox.submit(fail_once, receipt)
+        self.assertIs(outbox.payload, receipt)
+        self.assertTrue(outbox.flush(fail_once))
+        self.assertIsNone(outbox.payload)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][1], calls[1][1],
+                         "Retry exact completed receipt, not a re-read")
+        self.assertFalse(outbox.flush(fail_once))
+
+    def test_hvn_completion_outbox_retires_duplicate_or_rejected_response(self):
+        import urllib.error
+        from mt5_gateway import HvnResultOutbox
+        outbox = HvnResultOutbox()
+        receipt = {"id": "job-2", "report": {"available": False}}
+        def rejected(path, payload):
+            raise urllib.error.HTTPError(path, 400, "No outstanding HVN request", {}, None)
+        self.assertFalse(outbox.submit(rejected, receipt))
+        self.assertIsNone(outbox.payload)
+        self.assertFalse(outbox.flush(rejected))
+        # Authorization/transport failures must NOT silently discard a
+        # completed read: the retry/exit fence remains fail-closed.
+        def unauthorized(path, payload):
+            raise urllib.error.HTTPError(path, 401, "Unauthorized", {}, None)
+        with self.assertRaises(urllib.error.HTTPError):
+            outbox.submit(unauthorized, receipt)
+        self.assertIs(outbox.payload, receipt)
+
     def test_no_executable_broker_in_hvn_research_module(self):
         source=(Path(__file__).resolve().parents[1]/"gateway"/"hvn_research.py").read_text()
         self.assertNotIn("order_send(", source)
