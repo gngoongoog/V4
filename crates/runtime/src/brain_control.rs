@@ -90,17 +90,25 @@ fn participation(
     if return_pending {
         return (Some(false),"return_pending","أوامر أو مركز قديم لهذا العقل لم تُسوَّ بعد؛ لا ينضم للمنسق");
     }
+    // A disabled advisor toggle cannot make Classic Sniper suddenly depend
+    // on Learner. Check the selected Sniper engine before the toggle.
+    if mode==TradingMode::Sniper && id=="sniper_learner" {
+        match sniper_selected {
+            Some(false)=>return (Some(false),"sniper_classic_selected",
+                "القناص الكلاسيكي مختار؛ غيّر إعداد العقل إلى Learner قبل تعديل المشاركة"),
+            None=>return (None,"sniper_selection_unverified",
+                "اختيار القناص Classic/Learner غير مؤكد من Core؛ لا ننسب مشاركة"),
+            Some(true)=>{}
+        }
+    }
     if !control.advisor {
         return (Some(false),"advisor_disabled","المشاركة متوقفة لهذا العقل في الحساب والوضع الحاليين");
     }
     match mode {
         TradingMode::Expert =>
             (Some(true),"expert_eligible","مؤهل للتصويت في Expert إذا أعطى إشارة جاهزة؛ هذا ليس تنفيذ صفقة أو إثبات ربح"),
-        TradingMode::Sniper if id=="sniper_learner" => match sniper_selected {
-            Some(true)=>(Some(true),"sniper_learner_eligible","القناص المتعلّم مختار ومشارك؛ تبقى بوابات الإشارة والمخاطر والتنفيذ مستقلة"),
-            Some(false)=>(Some(false),"sniper_classic_selected","القناص الكلاسيكي مختار؛ إشارات Learner لا تفتح صفقات بهذا الإعداد"),
-            None=>(None,"sniper_selection_unverified","اختيار القناص Classic/Learner غير مؤكد من Core؛ لا ننسب مشاركة"),
-        },
+        TradingMode::Sniper if id=="sniper_learner" =>
+            (Some(true),"sniper_learner_eligible","القناص المتعلّم مختار ومشارك؛ تبقى بوابات الإشارة والمخاطر والتنفيذ مستقلة"),
         TradingMode::Sniper =>
             (Some(false),"sniper_diagnostic","هذا العقل تشخيصي في وضع Sniper، وليس مصدراً لتغيير قرار القناص"),
         TradingMode::Scalping =>
@@ -172,6 +180,10 @@ pub fn enrich(value:&mut Value,db:&Connection,key:&str,mode:TradingMode,account_
         assert_eq!(participation(TradingMode::Expert,"trend",None,on,false,None).0,None);
         assert_eq!(participation(TradingMode::Sniper,"sniper_learner",Some("system"),on,false,Some(true)).0,Some(true));
         assert_eq!(participation(TradingMode::Sniper,"sniper_learner",Some("system"),on,false,Some(false)).0,Some(false));
+        assert_eq!(participation(TradingMode::Sniper,"sniper_learner",Some("system"),off,false,Some(false)).1,
+            "sniper_classic_selected","Classic selection must dominate an unused advisor toggle");
+        assert_eq!(participation(TradingMode::Sniper,"sniper_learner",Some("system"),off,false,Some(true)).1,
+            "advisor_disabled","Actual Learner selection can enable its advisor gate");
         assert_eq!(participation(TradingMode::Sniper,"sniper_learner",Some("system"),on,false,None).0,None);
         assert_eq!(participation(TradingMode::Sniper,"gann",Some("system"),on,false,Some(true)).0,Some(false));
     }
