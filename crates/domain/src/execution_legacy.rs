@@ -481,6 +481,41 @@ mod tests {
         assert!(b.validate().is_err());
     }
     #[test]
+    fn gann_produces_entry_only_from_confirmed_pivot_and_matching_candle(){
+        let candles=(0..140u64).map(|i|{
+            let mut candle=Candle{
+                time:i*60,open:2011.9,high:2013.,low:2011.,
+                close:2012.,tick_volume:100
+            };
+            if i==70 {candle.high=2020.;}
+            if i==109 {candle.low=2000.;}
+            candle
+        }).collect::<Vec<_>>();
+        let frames=|candles:Vec<Candle>|BTreeMap::from([("M1".to_owned(),
+            candles.into_iter().map(|candle|FrameBar{
+                candle,spread_points:1,real_volume:0,
+            }).collect::<Vec<_>>())]);
+        let now=8_420_000u64;
+        let t=Telemetry{connected:true,symbol:"XAUUSD".into(),
+            quote_time_ms:Some(now),tick_age_ms:Some(0),..Default::default()};
+        let brain=BrainConfig{id:"gann".into(),..Default::default()};
+        let c=Config::default();
+        let valid=evaluate(&brain,&t,&c,&frames(candles.clone()),now);
+        assert!(valid.ready,"Confirmed low pivot plus bullish candle must allow Gann");
+        assert_eq!(valid.side,1);
+        assert!(valid.reason.contains("Square9"));
+        assert!(valid.reason.contains("بحث فقط"));
+        // The new experimental geometry must not auto-authorize a red
+        // candle, or a pivot that never existed in completed history.
+        let mut red=candles.clone();
+        red.last_mut().unwrap().open=2012.5;
+        let rejected=evaluate(&brain,&t,&c,&frames(red),now);
+        assert!(!rejected.ready);
+        let mut without_low=candles;
+        without_low[109].low=2011.;
+        assert!(!evaluate(&brain,&t,&c,&frames(without_low),now).ready);
+    }
+    #[test]
     fn trend_has_no_other_brain_vote_dependency() {
         let now = 1_800_000_020_000;
         let m = crate::research::tests::fixture(now, false);
