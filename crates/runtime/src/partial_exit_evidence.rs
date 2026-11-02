@@ -57,7 +57,10 @@ fn calculate(deals:&[(u64,String)],pid:u64,magic:u64,symbol:&str,volume:f64,step
                 sum.open+=lots;sum.entry_deals+=1;
             }
             Some(1|3)=>{
-                if first_side.is_some_and(|first|first==side){bad=true;break}
+                let exit_magic=d["magic"].as_u64();
+                if first_side.is_none_or(|first|first==side)
+                    || !exit_magic.is_some_and(|m|m==0 || m==magic)
+                {bad=true;break}
                 sum.close+=lots;sum.exit_deals+=1;
             }
             // Netting INOUT reversal, adjustments and unknown deal kinds
@@ -229,6 +232,11 @@ mod tests{
         store(&d,&t,corrupt);
         assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["evidence"]["state"],
             "invalid_deal_history");
+        d.execute("DELETE FROM broker_deals",[]).unwrap();
+        store(&d,&t,deal(100,0,0,410601,0.1));
+        store(&d,&t,deal(101,1,1,410609,0.04));
+        assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["evidence"]["state"],
+            "invalid_deal_history","Another strategy magic may not claim this close");
         d.execute("DELETE FROM broker_deals",[]).unwrap();
         store(&d,&t,deal(100,0,0,410601,0.1));
         store(&d,&t,deal(101,2,1,0,0.04));
