@@ -68,6 +68,8 @@ class HvnResearch(unittest.TestCase):
         self.assertEqual(result["source"], "mt5_quote_tick_activity")
         self.assertEqual(result["observations"], 150)
         self.assertEqual(result["total_activity"], 150)
+        self.assertEqual(result["trade_events_observed"], 60)
+        self.assertEqual(result["quote_events_observed"], 150)
         self.assertEqual(result["unit"], "observed_quote_events")
         self.assertFalse(result["exchange_wide"])
 
@@ -84,6 +86,8 @@ class HvnResearch(unittest.TestCase):
         self.assertEqual(result["source"], "mt5_broker_trade_volume_real")
         self.assertEqual(result["observations"], 90)
         self.assertAlmostEqual(result["total_activity"], 225.0)
+        self.assertEqual(result["trade_events_observed"], 90)
+        self.assertEqual(result["quote_events_observed"], 150)
         self.assertNotEqual(result["total_activity"], 225.0 + 150)
         self.assertFalse(result["exchange_wide"])
 
