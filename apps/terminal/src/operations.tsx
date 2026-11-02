@@ -205,6 +205,7 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
  const actualBrains=brains.filter(b=>safeObject(safeObject(b).config).id!=='system');
  const verifiedAccount=view.controls_available===true&&view.account_matches===true;
  const available=verifiedAccount&&actualBrains.length>0;
+ const summary=safeObject(view.mode_participation_summary);
  const modeName=String(view.trading_mode||'');
  const modeCaption=modeName==='expert'?'Expert: العقول المشاركة تصوّت على اتجاه القرار':
   modeName==='sniper'?'Sniper: القناص المتعلّم يشارك فقط عند اختياره؛ بقية العقول تشخيصية':
@@ -232,6 +233,12 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
   <p className="safe-note" role="status">{reason}</p>
   {view.selected_owner!==undefined&&<p className="safe-note">منفّذ الأوامر الحالي: <b>{txtOwner(view.selected_owner)}</b>. إذا كان عقل منفرد يملك التنفيذ، تغيير مشاركة بقية المستشارين لا يغيّر صفقاته إلى أن ترجع للمنسق.</p>}
   <p className="safe-note" role="status">منطق الوضع الفعلي: <b>{modeCaption}</b>. المشاركة لا تعني أن إشارة العقل جاهزة ولا أن صفقة أُرسلت أو أن التعلّم أثبت ربحاً.</p>
+  {available&&summary.source==='current_broker_account_mode_and_core_controls'&&
+   <p className="safe-note" role="status">
+    مؤهلون للتأثير بالقرار: <b>{typeof summary.eligible_for_decision==='number'?summary.eligible_for_decision:'—'}</b> من {typeof summary.secondary_brains==='number'?summary.secondary_brains:'—'}.
+    {' '}Paper مفعّل: <b>{typeof summary.paper_enabled==='number'?summary.paper_enabled:'—'}</b>.
+    {' '}{String(summary.note||'لا يوجد تفسير مؤكد من Core')}
+   </p>}
   <div className="concept-brain-card-grid">{cards.map((b,i)=>{
     const row=safeObject(b),id=String(safeObject(row.config).id||'');
     if(!id)return null;
