@@ -34,6 +34,17 @@ fn source_key(
     ))?)
 }
 
+/// Keep prospective inactive-mode estimates in an entirely separate
+/// source family. Otherwise selecting that mode would silently inject its
+/// unverified Paper/forward rewards into the LIVE-admissible active policy.
+fn inactive_source_key(
+    context: &str,mode: TradingMode,id:&str,timeframe:&str,report_id:&str,
+)->Result<String>{
+    Ok(serde_json::to_string(&(
+        context,"inactive-mode-forward-v1",mode,id,timeframe,report_id,
+    ))?)
+}
+
 fn table_exists(db: &Connection, name: &str) -> Result<bool> {
     Ok(db.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
@@ -811,7 +822,11 @@ impl Learner {
         }
 
         for b in brains {
-            let source = source_key(&source_context, c.trading.mode, &b.id, &b.timeframe, &b.report_id)?;
+            let source = if inactive_shadow {
+                inactive_source_key(&source_context,c.trading.mode,&b.id,&b.timeframe,&b.report_id)?
+            } else {
+                source_key(&source_context,c.trading.mode,&b.id,&b.timeframe,&b.report_id)?
+            };
             let Some(bars) = frames.get(&b.timeframe).filter(|v| v.len() >= 100) else {
                 continue;
             };
@@ -986,7 +1001,9 @@ mod tests {
             tick_value_loss:Some(1.),quote_time_ms:Some(now),tick_age_ms:Some(0),
             bid:Some(price),ask:Some(price+0.01),..Default::default()};
         learner.observe_inactive_forward(&db,&t,&c,&[b.clone()],&frames,now).unwrap();
-        let source=source_key(&context(&t),c.trading.mode,&b.id,&b.timeframe,&b.report_id).unwrap();
+        let source=inactive_source_key(&context(&t),c.trading.mode,&b.id,&b.timeframe,&b.report_id).unwrap();
+        let active_source=source_key(&context(&t),c.trading.mode,&b.id,&b.timeframe,&b.report_id).unwrap();
+        assert_ne!(source,active_source,"Research reward must not auto-promote to active execution weights");
         let original:String=db.query_row(
             "SELECT payload FROM coordinator_samples WHERE source=?1",[&source],|r|r.get(0)).unwrap();
         let original:Value=serde_json::from_str(&original).unwrap();
@@ -1005,6 +1022,11 @@ mod tests {
             "SELECT json_extract(outcome,'$.state') FROM coordinator_samples WHERE source=?1 ORDER BY bar LIMIT 1",
             [&source],|r|r.get(0)).unwrap();
         assert_eq!(state,"scored");
+        let active_count:u64=db.query_row(
+            "SELECT COUNT(*) FROM coordinator_samples WHERE source=?1",
+            [&active_source],|r|r.get(0)).unwrap();
+        assert_eq!(active_count,0,
+            "Scored research samples must not be reused as active policy training evidence");
         let broker_table:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='broker_commands')",[],|r|r.get(0)).unwrap();
         assert!(!broker_table,"Shadow evidence must need no live broker intent journal");
     }
