@@ -951,7 +951,11 @@ class BrokerExecutor:
                                     reason='Conflicting durable TP stage claim; never send another order')
                 # Exact same ID may already have been journaled. Normal
                 # replay path will reconcile, never send the same ID twice.
-                return self.execute(mt5,cmd,authorize)
+                saved=self.db.execute('SELECT 1 FROM sends WHERE id=?',(cmd['id'],)).fetchone()
+                if saved:
+                    return self.execute(mt5,cmd,authorize)
+                return dict(result,state='unknown',
+                            reason='Stage claim collision without exact durable send; do not retry')
             except sqlite3.OperationalError:
                 # A locked/unwritable journal cannot guarantee idempotency.
                 self.db.rollback()
