@@ -94,12 +94,35 @@ const executableStages=render({status,source:{
  ...view,partial_exit_draft_ledger:scopedLedger,
  partial_exit_stage_plans:{...stageResponse,stage_execution_supported:true}}});
 assert(!shown(executableStages).includes('هويات مراحل TP المحفوظة'));
+const audit={schema:'partial-exit-deal-evidence-v1',status:'broker_history_audit_only',
+ context,target:'demo',read_only:true,orders_enabled:false,tp_stage_execution_supported:false,
+ rows:[{position_identifier:42,evidence:{state:'broker_partial_exit_unattributed',
+   broker_closed_lots:0.04,tp_stage_attribution_verified:false,stage_completed:false}}]};
+const observed=render({status,source:{...view,partial_exit_deal_evidence:audit}});
+assert(shown(observed).includes('مراجعة إغلاقات MT5 الموثقة'));
+assert(shown(observed).includes('غير منسوب إلى أي هدف TP'));
+assert(shown(observed).includes('0.04 لوت مُغلق'));
+assert(!collect(observed).some(x=>x.type==='button'));
+const wrongAudit=render({status,source:{...view,
+ partial_exit_deal_evidence:{...audit,context:'other'}}});
+assert(!shown(wrongAudit).includes('مراجعة إغلاقات MT5 الموثقة'));
+const forgedFill=render({status,source:{...view,
+ partial_exit_deal_evidence:{...audit,rows:[{position_identifier:42,evidence:{
+ state:'broker_partial_exit_unattributed',broker_closed_lots:0.04,
+ tp_stage_attribution_verified:true,stage_completed:true}}]}}});
+assert(!shown(forgedFill).includes('0.04 لوت مُغلق'),
+ 'TP completion asserted without an executable command must never get credit');
 const core=file('../../crates/runtime/src/execution.rs');
 const domain=file('../../crates/domain/src/partial_exit.rs');
 const terminal=file('src/terminal.tsx');
 assert(core.includes('value["partial_exit_preview"]=if status.gateway_fresh && self.account_matches(status)'));
 assert(core.includes('value["partial_exit_draft_ledger"]=if status.gateway_fresh && self.account_matches(status)'));
 assert(core.includes('value["partial_exit_stage_plans"]=if status.gateway_fresh && self.account_matches(status)'));
+assert(core.includes('value["partial_exit_deal_evidence"]=if status.gateway_fresh && self.account_matches(status)'));
+const evidenceSrc=file('../../crates/runtime/src/partial_exit_evidence.rs');
+assert(evidenceSrc.includes('tp_stage_attribution_verified'));
+assert(evidenceSrc.includes('broker_partial_exit_unattributed'));
+assert(!evidenceSrc.includes('order_send('));
 const stageSource=file('../../crates/runtime/src/partial_exit_stage.rs');
 assert(stageSource.includes('PRIMARY KEY(context,target,position_identifier,stage)'));
 assert(stageSource.includes('review_required'));
