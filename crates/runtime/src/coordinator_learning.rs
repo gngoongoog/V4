@@ -182,7 +182,7 @@ fn valid_pending_forward_payload(p: &Value) -> bool {
     true
 }
 
-fn verified_forward_feedback(
+pub(crate) fn verified_forward_feedback(
     bar: u64, payload: &Value, outcome: &Value, now: u64,
 ) -> Option<(f64, f64, u64)> {
     if outcome["state"] != "scored"
