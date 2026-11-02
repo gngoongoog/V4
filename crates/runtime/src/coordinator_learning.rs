@@ -962,6 +962,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn inactive_mode_forward_creates_and_matures_scoped_signal_without_broker_orders() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut learner=Learner::new(&db).unwrap();
+        let mut c=Config::default();
+        c.trading.mode=TradingMode::Swing;
+        let b=BrainConfig{id:"trend".into(),timeframe:"M1".into(),..Default::default()};
+        let mut now=1_800_000_000_000u64;
+        let mut frames=BTreeMap::from([("M1".to_owned(),bars(now/1000-60))]);
+        let price=frames["M1"].last().unwrap().candle.close;
+        let mut t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            login:17,server:"Demo".into(),symbol:c.symbol.clone(),currency:"USD".into(),
+            point:Some(0.01),tick_size:Some(0.01),tick_value_profit:Some(1.),
+            tick_value_loss:Some(1.),quote_time_ms:Some(now),tick_age_ms:Some(0),
+            bid:Some(price),ask:Some(price+0.01),..Default::default()};
+        learner.observe_inactive_forward(&db,&t,&c,&[b.clone()],&frames,now).unwrap();
+        let source=source_key(&context(&t),c.trading.mode,&b.id,&b.timeframe,&b.report_id).unwrap();
+        let original:String=db.query_row(
+            "SELECT payload FROM coordinator_samples WHERE source=?1",[&source],|r|r.get(0)).unwrap();
+        let original:Value=serde_json::from_str(&original).unwrap();
+        assert_eq!(original["observation_origin"],"inactive_mode_forward");
+        assert_eq!(original["live_broker_orders"],false);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_samples",[],|r|r.get::<_,u64>(0)).unwrap(),1);
+        now+=12*60_000;
+        t.quote_time_ms=Some(now);
+        frames.insert("M1".to_owned(),bars(now/1000-60));
+        let outcome=learner.observe_inactive_forward(&db,&t,&c,&[b],&frames,now).unwrap();
+        assert_eq!(outcome["trend"].samples,1,
+            "Only 12 strictly later completed bars may mature a shadow observation");
+        let state:String=db.query_row(
+            "SELECT json_extract(outcome,'$.state') FROM coordinator_samples WHERE source=?1 ORDER BY bar LIMIT 1",
+            [&source],|r|r.get(0)).unwrap();
+        assert_eq!(state,"scored");
+        let broker_table:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='broker_commands')",[],|r|r.get(0)).unwrap();
+        assert!(!broker_table,"Shadow evidence must need no live broker intent journal");
+    }
+
+    #[test]
     fn inactive_mode_forward_requires_demo_and_rejects_sniper_tick_simulation() {
         let db=Connection::open_in_memory().unwrap();
         let mut learner=Learner::new(&db).unwrap();
