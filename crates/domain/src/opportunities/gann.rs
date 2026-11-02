@@ -242,7 +242,8 @@ mod tests{
         let mut not_confirmed=p.clone();
         not_confirmed[1].confirmed_at=candles.last().unwrap().time+60;
         let early=assess(&candles,"M1",&not_confirmed);
-        assert_eq!(early.anchor_time,70*60);
+        assert!(!early.available,
+            "A future-unconfirmed low must not be treated as a known anchor");
         let mut foreign=p;
         foreign[1].time=999_999;
         assert!(!assess(&candles,"M1",&foreign).available);
