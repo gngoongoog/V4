@@ -298,6 +298,31 @@ mod tests{
         assert_eq!(e(&d,&t)["state"],"broker_fill_lots_do_not_cover_stage");
     }
     #[test]
+    fn older_broker_history_without_order_id_cannot_be_claimed_as_tp_proof(){
+        let d=db();let t=sample_telemetry();seed(&d,&t);
+        d.execute("UPDATE broker_deals SET payload=json_remove(payload,'$.order')",[]).unwrap();
+        assert_eq!(e(&d,&t)["state"],"broker_deal_order_or_identity_mismatch");
+    }
+    #[test]
+    fn two_stages_cannot_claim_the_same_mt5_order(){
+        let d=db();let t=sample_telemetry();seed(&d,&t);
+        let plan=crate::partial_exit_stage::report(&d,&t,"demo").unwrap()["rows"][1]["plan_id"]
+            .as_str().unwrap().to_string();
+        let mut cmd:Value=serde_json::from_str(&d.query_row(
+            "SELECT payload FROM broker_commands WHERE id='core-close-1'",[],
+            |r|r.get::<_,String>(0)).unwrap()).unwrap();
+        cmd["id"]=json!("second-command");
+        cmd["tp_stage_plan_id"]=json!(plan);
+        cmd["tp_stage"]=json!(2);
+        let result:String=d.query_row(
+            "SELECT result FROM broker_commands WHERE id='core-close-1'",[],
+            |r|r.get(0)).unwrap();
+        d.execute("INSERT INTO broker_commands VALUES ('second-command',?1,'gann',
+            'close',140,'filled',?2,?3)",
+            params![ctx(&t),cmd.to_string(),result]).unwrap();
+        assert_eq!(e(&d,&t)["state"],"broker_order_claimed_by_multiple_stages");
+    }
+    #[test]
     fn foreign_account_or_real_mode_does_not_inherit_stage_proof(){
         let d=db();let mut t=sample_telemetry();seed(&d,&t);
         t.login+=1;
