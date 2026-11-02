@@ -2411,6 +2411,10 @@ mod execution_persistence_tests {
                 if owner!="system" {
                     service.set_solo(&db,&t,mode,owner,60).unwrap();
                 }
+                // Production refresh_solo() reconciles saved ownership and
+                // updates the enabled flag on every fresh broker snapshot.
+                // Simulate that reconciliation explicitly in this fixture.
+                service.sync_owner_flags(&t,mode);
                 let mut status=Status::default();
                 status.telemetry=Some(t.clone());
                 status.gateway_fresh=true;
