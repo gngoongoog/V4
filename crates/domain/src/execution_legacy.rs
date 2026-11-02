@@ -269,7 +269,15 @@ pub fn evaluate(
                 } else {
                     0
                 };
-                "هندسة جان على الفريم المختار + شمعة بنفس الاتجاه؛ لا تصويت من عقول أخرى".into()
+                if gann.available {
+                    format!("جان هندسي {}: اتجاه {} قوة {:.2}؛ 1/8={}/8 عند {:.3}؛ ميل {:.3} ATR/شمعة؛ مروحة 1x1 {:.3} (مرجع ATR عند pivot)؛ Square9 {:.3} (وحدة سعر 1.0)؛ دورة {} شمعة بفارق {}؛ شروط التنفيذ: شمعة بنفس الاتجاه وقوة >=0.25. المروحة والدورات ومربع 9 بحث فقط، ليست موافقة تنفيذ تلقائية",
+                        b.timeframe,gann.direction,gann.strength,gann.nearest_eighth,
+                        gann.nearest_level,gann.atr_per_bar,gann.fan_1x1,
+                        gann.square9_nearest_level,gann.time_nearest_cycle_bars,
+                        gann.time_distance_bars)
+                }else{
+                    "جان: لا توجد قمم وقيعان مؤكدة أو نطاق/ATR صالح؛ لا إشارة".into()
+                }
             }
             "wyckoff" => {
                 let w = crate::wyckoff::analyze(bars);
