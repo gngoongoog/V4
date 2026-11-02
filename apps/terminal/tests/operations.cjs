@@ -115,6 +115,19 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  });
  assert(JSON.stringify(brokerDepth).includes('MT5 broker book, not COMEX consolidated depth'),
   'Brain management must disclose broker-only DOM provenance');
+ const gannEvidence=exportsObj.BrainControlsOperations({
+  source:{controls_available:true,account_matches:true,trading_mode:'expert',
+   selected_owner:'system',brains:[
+    {config:{id:'system'}},
+    {config:{id:'gann'},control:{advisor:true,paper:true},
+     decision_participation:{status:'expert_eligible',reason:'Gann vote if ready'},
+     data_evidence:{source:'confirmed_pivots_atr_fan_square9_fixed_quote_scale_and_predeclared_bar_cycles',
+      exchange_wide:false,validated_trading_edge:false,
+      note:'Gann research: fixed root scale and cycles; no validated edge'}}]},
+  disabled:false,armed:false,onSave:async()=>{}
+ });
+ assert(JSON.stringify(gannEvidence).includes('Gann research: fixed root scale and cycles; no validated edge'),
+  'The Gann card must disclose experimental geometry before trading decisions');
  assert(catalog.BRAIN_DIRECTORY.find(row=>row[0]==='profile')[2].includes('tick_volume'),
   'Candle-derived price profile must never be advertised as true executed volume');
  assert(JSON.stringify(expert).includes('One eligible Expert advisor; actual signals not yet observed'),
