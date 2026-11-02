@@ -26,6 +26,10 @@ assert.match(core,/"\/v1\/config"\|"\/v1\/reconnect"\|"\/v1\/backup\/restore\/st
   'Config, reconnect and staged restore must all be fenced');
 assert.match(hvn,/ensure!\(!s\.requested_run/);
 assert.match(hvn,/t\.positions\.is_empty\(\) && t\.pending_orders==0/);
+assert.match(hvn,/if !t\.positions\.is_empty\(\) \|\| t\.pending_orders!=0/,
+  'A new manual MT5 position or pending order must cancel an undelivered HVN read');
+assert.match(hvn,/self\.pending=None;[\s\S]*?أُلغي الطلب دون قراءة تيكات/,
+  'Never mark a nonflat account HVN request as dispatched');
 assert.match(hvn,/trade_authorized.*false/s);
 assert.match(hvn,/report\["observed_to_ms"\]/);
 assert.match(hvn,/"report_age_ms":age_ms,"report_stale":stale/,'Core must expose actual observed tick age');
