@@ -31,6 +31,13 @@ pub const BRAINS: [(&str, &str); 17] = [
     ("trend_pullback", "Trend Pullback — رجوع منظم + تأكيد"),
     ("sniper_learner", "القناص المتعلّم — اندفاع وارتداد سريع"),
 ];
+/// The same geometry gate must be used by solo Gann and its composite.
+/// Combining two extra votes is not permission to resurrect a rejected Gann.
+fn gann_entry_eligible(g:&crate::opportunities::GannFrame,last:&Candle)->bool {
+    g.available&&g.direction!=0&&g.strength>=0.25
+        && ((last.close-last.open)*g.direction as f64)>0.
+}
+
 pub fn magic(id: &str) -> Option<u64> {
     // 410616 is reserved by the unmerged adaptive-brain PR #58. Never reuse it.
     if id == "manual" { return Some(410_618); }
@@ -264,10 +271,7 @@ pub fn evaluate(
         };
         s.reason = match b.id.as_str() {
             "gann" => {
-                s.side = if gann.available
-                    && gann.strength >= 0.25
-                    && ((last.close - last.open) * gann.direction as f64) > 0.
-                {
+                s.side = if gann_entry_eligible(&gann,last) {
                     gann.direction
                 } else {
                     0
@@ -351,10 +355,7 @@ pub fn evaluate(
             "gann_dom_profile" => {
                 // A composite is never allowed to resurrect a Gann signal
                 // that the standalone Gann brain itself rejects.
-                let gann_entry_eligible=gann.available
-                    && gann.strength>=0.25
-                    && ((last.close-last.open)*gann.direction as f64)>0.;
-                s.side = if gann_entry_eligible
+                s.side = if gann_entry_eligible(&gann,last)
                     && dom.available
                     && gann.direction != 0
                     && gann.direction == dom.direction
@@ -488,6 +489,20 @@ mod tests {
         b.lots = f64::NAN;
         assert!(b.validate().is_err());
     }
+    #[test]
+    fn gann_composite_reuses_exact_solo_gate_for_weak_or_wrong_side_geometry(){
+        let c=Candle{time:60,open:100.,high:101.,low:99.,close:100.5,tick_volume:100};
+        let mut g=crate::opportunities::GannFrame::default();
+        g.available=true;g.direction=1;g.strength=0.24;
+        assert!(!gann_entry_eligible(&g,&c));
+        g.strength=0.25;
+        assert!(gann_entry_eligible(&g,&c));
+        g.direction=-1;
+        assert!(!gann_entry_eligible(&g,&c));
+        g.available=false;g.direction=1;
+        assert!(!gann_entry_eligible(&g,&c));
+    }
+
     #[test]
     fn gann_produces_entry_only_from_confirmed_pivot_and_matching_candle(){
         let candles=(0..140u64).map(|i|{
