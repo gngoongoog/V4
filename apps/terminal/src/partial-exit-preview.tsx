@@ -69,6 +69,8 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
   gateway_request_not_matching_stage:'الحجم أو الاتجاه المرسل لا يطابق المرحلة',
   broker_order_claimed_by_multiple_stages:'رقم أمر الوسيط مرتبط بأكثر من مرحلة',
   gateway_deal_ticket_list_missing:'تذاكر صفقات تنفيذ الأمر غير متوفرة',
+  gateway_primary_deal_ticket_missing:'التذكرة الرئيسية لتنفيذ الأمر غير متاحة',
+  gateway_primary_deal_not_in_fill_batch:'تذكرة التنفيذ الرئيسية غير موجودة ضمن صفقات الأمر',
   matching_broker_deal_not_yet_synced:'الصفقات المقابلة لم تُحفظ في Core بعد',
   broker_deal_order_or_identity_mismatch:'الصفقات لا تطابق رقم الأمر أو هوية المركز',
   broker_fill_lots_do_not_cover_stage:'كميات الإغلاق المسجلة لا تغطي حجم المرحلة',
