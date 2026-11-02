@@ -186,10 +186,15 @@ mod tests{
     use super::*;
 
     fn series() -> Vec<Candle> {
-        (0..140).map(|i|Candle{
+        let mut out=(0..140).map(|i|Candle{
             time:i*60,open:2011.9,high:2013.,low:2011.,
             close:2012.,tick_volume:100,
-        }).collect()
+        }).collect::<Vec<_>>();
+        // Construct observable pivots, not invented pivots whose quoted
+        // prices disagree with their underlying candles.
+        out[70].high=2020.;
+        out[109].low=2000.;
+        out
     }
     fn pivots()->Vec<Swing>{
         vec![
