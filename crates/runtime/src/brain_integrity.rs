@@ -18,6 +18,9 @@ pub(crate) fn enrich(view:&mut Value,db:&Connection,status:&Status,mode:TradingM
         && status.gateway_fresh && account_matches && target_is_demo && !context.is_empty();
     let current_mode=broker.and_then(|t|t.account_trade_mode);
     let no_account=!status.gateway_fresh||!account_matches;
+    // Core's selected_owner is a reported coordinator role, not a second
+    // grant of brokerage permission. SOLO is not a dummy "research only" role.
+    let owner=view["selected_owner"].as_str().map(str::to_owned);
     let expected:BTreeSet<String>=BRAINS.iter().map(|(id,_)|id.to_string()).collect();
     let rows=view["brains"].as_array_mut().ok_or_else(||anyhow::anyhow!("Brain list is missing"))?;
     let got:BTreeSet<String>=rows.iter().filter_map(|row|row["config"]["id"].as_str().map(str::to_owned)).collect();
@@ -54,7 +57,12 @@ pub(crate) fn enrich(view:&mut Value,db:&Connection,status:&Status,mode:TradingM
             "broker_evidence":evidence,
             "signal":if row["latest"].is_null(){"no_fresh_signal"}else{"recent_signal_present_not_a_fill"},
             "learned_weight_is_not_win_probability":true,
-            "broker_ownership":if id=="system"{"selected_mode_coordinator_only"}else{"research_only"},
+            "broker_ownership":match owner.as_deref(){
+                None=>"unverified_owner",
+                Some(active) if active==id=>"selected_entry_owner_subject_to_broker_gates",
+                Some(_) if id=="system"=>"standby_system_not_entry_owner",
+                Some(_)=>"advisor_not_entry_owner",
+            },
             "promotion_enabled":false
         });
     }
@@ -121,6 +129,22 @@ mod tests{
                 assert!(brain["integrity"]["broker_evidence"]["net_booked"].is_null());
             }
         }
+    }
+    #[test]
+    fn solo_owner_and_unknown_owner_are_not_labeled_research_only(){
+        let db=Connection::open_in_memory().unwrap();
+        let mut solo=view();solo["selected_owner"]=json!("trend");
+        enrich(&mut solo,&db,&status(true,true),TradingMode::Expert).unwrap();
+        assert_eq!(solo["brains"][3]["integrity"]["broker_ownership"],
+            "selected_entry_owner_subject_to_broker_gates");
+        assert_eq!(solo["brains"][0]["integrity"]["broker_ownership"],
+            "standby_system_not_entry_owner");
+        assert_eq!(solo["brains"][1]["integrity"]["broker_ownership"],
+            "advisor_not_entry_owner");
+        let mut unknown=view();
+        enrich(&mut unknown,&db,&status(true,true),TradingMode::Expert).unwrap();
+        assert_eq!(unknown["brains"][0]["integrity"]["broker_ownership"],
+            "unverified_owner");
     }
     #[test]
     fn incomplete_and_duplicate_brain_inventory_fails_closed(){
