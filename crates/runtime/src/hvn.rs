@@ -92,12 +92,22 @@ impl Service{
         }
         match(method,path){
             ("GET","/v1/hvn")=>{
+                // Retain the last account-scoped research result for audit,
+                // but do not mistake a historic node for fresh market data.
+                // Data age uses the actual latest observed tick, NOT the Core
+                // completion time (which may follow a slow copy_ticks_range).
                 let report=self.last.as_ref().and_then(|(k,_,r)|
                     if ctx.as_ref()==Some(k){Some(r.clone())}else{None});
+                let age_ms=report.as_ref().and_then(|r|r["observed_to_ms"].as_u64())
+                    .map(|t|now.saturating_sub(t));
+                let max_fresh_ms=report.as_ref().and_then(|r|r["window_ms"].as_u64())
+                    .unwrap_or(60_000).min(300_000);
+                let stale=age_ms.is_some_and(|age|age>max_fresh_ms);
                 Ok(json!({"schema":"hvn-research-v1","read_only":true,
                     "trade_authorized":false,"connected":ctx.is_some(),
                     "pending":self.pending.is_some(),
-                    "report":report,"note":self.note}))
+                    "report":report,"report_age_ms":age_ms,"report_stale":stale,
+                    "note":self.note}))
             }
             ("POST","/v1/hvn/request")=>{
                 ensure!(!s.requested_run,"أوقف الدخول STOP قبل قراءة تيكات HVN البحثية");
@@ -239,6 +249,14 @@ mod tests{
         let result=h.route("GET","/v1/hvn",b"",&s,now).unwrap();
         assert_eq!(result["report"]["nodes"][0]["price"],2000.);
         assert_eq!(result["trade_authorized"],false);
+        assert_eq!(result["report_age_ms"],0);
+        assert_eq!(result["report_stale"],false);
+        // Cached source may be reviewed, but must not be silently represented
+        // as current once the evidence-age window has elapsed.
+        let aged=h.route("GET","/v1/hvn",b"",&s,now+600_001).unwrap();
+        assert_eq!(aged["report"]["nodes"][0]["price"],2000.);
+        assert_eq!(aged["report_stale"],true);
+        assert_eq!(aged["report_age_ms"],600_001);
         let mut other=s.clone();other.telemetry.as_mut().unwrap().symbol="XAUUSD".into();
         assert!(h.route("GET","/v1/hvn",b"",&other,now).unwrap()["report"].is_null());
     }
