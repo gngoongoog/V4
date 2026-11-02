@@ -54,7 +54,18 @@ export function BackupOperations({create,exportBrain,importBrain,source,onRestor
 }
 
 const MODES=[['scalping','Scalping'],['swing','Swing'],['expert','Expert'],['sniper','Sniper']] as const;
-const STYLES=['auto','impulse','rebound','confirmed'];
+const STYLES=[
+ ['auto','تلقائي: يختار أسلوب القناص المتعلّم'],
+ ['impulse','اندفاع سريع'],
+ ['rebound','ارتداد بعد حركة'],
+ ['confirmed','اندفاع مؤكد بشروط إضافية']
+] as const;
+const MODE_GUIDE:Record<string,string>={
+ sniper:'Sniper: إشارة القناص اللحظية؛ Classic أو Learner، ولا يتبع تصويت عقول Expert.',
+ scalping:'Scalping: إشارة الوضع السريع مستقلة؛ أصوات العقول الأخرى تشخيصية لا تغيّر قرار الدخول.',
+ swing:'Swing: إشارات واحتفاظ أطول من السكالبينغ؛ المستشارون مراقبة ولا يغيّرون دخول الوضع.',
+ expert:'Expert: منسق إجماع/اختيار بين العقول المؤهلة؛ إذا لا توجد إشارات جاهزة لا تُخترع صفقة.'
+};
 const safeObject=(data:unknown):Record<string,unknown>=>data!==null&&typeof data==='object'&&!Array.isArray(data)?data as Record<string,unknown>:{};
 
 export function TradingSettingsOperations({source,disabled,armed,apply,brokerPoint}: {
@@ -142,12 +153,13 @@ export function TradingSettingsOperations({source,disabled,armed,apply,brokerPoi
  return <section className="operator-card" aria-label="Coordinator and costs">
   <h3><ShieldAlert size={18}/> منسق التداول وتكاليف الوسيط</h3>
   <p>يوجد منسق واحد فقط لإرسال صفقات MT5. العقول الأخرى تحليلية. لا يمكن تعديل هذه الإعدادات أثناء START.</p>
+  <p className="safe-note" role="status">آلية الوضع المختار: {MODE_GUIDE[priority?(sniper?'sniper':fallback):mode]||'الوضع غير مؤكد'}. تغيير الأسلوب لا يعدّل أوامر قائمة.</p>
   <div className="operator-grid">
    <label>وضع تنفيذ الصفقات<select value={mode} disabled={priority||locked} onChange={e=>patch('mode',e.target.value)}>{MODES.map(([v,label])=><option key={v} value={v}>{label}</option>)}</select></label>
    <label>الوضع البديل للقناص<select value={fallback} disabled={locked} onChange={e=>patch('fallback_mode',e.target.value)}>{MODES.filter(([v])=>v!=='sniper').map(([v,label])=><option key={v} value={v}>{label}</option>)}</select></label>
    <label className="operator-toggle"><input type="checkbox" checked={priority} disabled={locked} onChange={e=>{markEditing();setDraft(old=>({...old,priority_enabled:e.target.checked,mode:e.target.checked?(sniper?'sniper':fallback):mode}))}}/> تفعيل أولوية القناص</label>
    <label className="operator-toggle"><input type="checkbox" checked={sniper} disabled={!priority||locked} onChange={e=>{markEditing();setDraft(old=>({...old,sniper_active:e.target.checked,mode:e.target.checked?'sniper':fallback}))}}/> القناص هو المنسق النشط</label>
-   <label>أسلوب القناص<select value={String(edit.sniper_style||'auto')} disabled={locked} onChange={e=>patch('sniper_style',e.target.value)}>{STYLES.map(s=><option key={s} value={s}>{s}</option>)}</select></label>
+   <label>أسلوب القناص (Learner فقط)<select value={String(edit.sniper_style||'auto')} disabled={locked||edit.sniper_brain!=='learner'} onChange={e=>patch('sniper_style',e.target.value)}>{STYLES.map(([id,label])=><option key={id} value={id}>{label}</option>)}</select></label>
    <label>عقل القناص<select value={String(edit.sniper_brain||'classic')} disabled={locked} onChange={e=>patch('sniper_brain',e.target.value)}><option value="classic">Classic</option><option value="learner">Learner</option></select></label>
    <label>العمولة لكل 1 لوت<input aria-label="commission per lot" type="number" min="0" step="0.01" disabled={locked} value={editedFee?fee:String(commission.amount??7)} onChange={e=>{markEditing();setEditedFee(true);setFee(e.target.value)}}/></label>
    <label>طريقة احتساب العمولة<select aria-label="commission basis" disabled={locked} value={editedBasis?basis:String(commission.basis||'round_trip')} onChange={e=>{markEditing();setEditedBasis(true);setBasis(e.target.value)}}><option value="round_trip">دخول وخروج معاً</option><option value="per_side">لكل جهة (مرتين)</option></select></label>
@@ -275,7 +287,7 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
         <span className={effective?'active':'off'}>تأثيره على قرار المنسق: {effectiveKnown?(effective?'مؤهل للمشاركة':'غير مشارك'):'غير مؤكد'}</span>
       </div>
       <p className="safe-note" data-brain-decision-reason={id}>سبب الحالة: {decisionReason}</p>
-      <div className="concept-brain-card-metrics"><span>إشارات <b>{known&&typeof activity.signals==='number'?activity.signals:'—'}</b></span><span title="رد تعبئة برقم Deal من الوسيط؛ قد يكون جزئياً وليس إغلاقاً مُسوّى">ردود تعبئة MT5 <b>{known&&typeof orders.fill_acknowledged==='number'?orders.fill_acknowledged:'—'}</b></span><span>نجاح موثق <b>{verified?`${(rate*100).toFixed(1)}%`:'—'}</b></span></div>
+      <div className="concept-brain-card-metrics"><span>إشارات <b>{known&&typeof activity.signals==='number'?activity.signals:'—'}</b></span><span title="رد تعبئة برقم Deal من الوسيط؛ قد يكون جزئياً وليس إغلاقاً مُسوّى">ردود تعبئة MT5 <b>{known&&typeof orders.fill_acknowledged==='number'?orders.fill_acknowledged:'—'}</b></span><span title="نسبة تاريخية لصفقات Demo مغلقة ومطابقة بعد التكاليف؛ ليست توقعاً لنجاح المستقبل">نجاح سابق Demo <b>{verified?`${(rate*100).toFixed(1)}%`:'—'}</b></span></div>
       <div className="concept-brain-card-actions">
         <button type="button" aria-label={`${advisorOn?'إيقاف':'تشغيل'} مشاركة ${id}`}
          title={advisorSelectable?'تغيير المشاركة في القرار الفعلي للمنسق':'هذا العقل لا يغيّر قرار الوضع الحالي؛ غيّر الوضع أو المنفّذ أولاً'}
