@@ -122,7 +122,10 @@ def main():
             assert hvn_job['id']==hvn_request['id']
             assert hvn_job['login']==123 and hvn_job['symbol']=='XAUUSD'
             for path,body in (('/v1/start',{}),('/v1/reconnect',{}),
-                              ('/v1/config',{'config':config})):
+                              ('/v1/config',{'config':config}),
+                              ('/v1/backtest/start',{'from_date':'2024-10-01',
+                                  'to_date':'2024-10-03','initial_equity':10000.,
+                                  'spread_floor':0.02})):
                 try:api(path,body)
                 except urllib.error.HTTPError as error:
                     assert error.code==400 and b'HVN' in error.read(),path
