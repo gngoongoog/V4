@@ -287,6 +287,13 @@ impl MarketBrains {
         for frame in &self.gann {
             if frame.available {
                 let _=writeln!(out,"{} | اتجاه {} | قوة {:.2} | anchor {:.5} @ {} | speed {:.3} ATR/bar | 1/8 level {}/8 = {:.5} | distance {:.2} ATR",frame.timeframe,frame.direction,frame.strength,frame.anchor_price,frame.anchor_time,frame.atr_per_bar,frame.nearest_eighth,frame.nearest_level,frame.distance_atr);
+                if frame.fan_anchor_atr>0. {
+                    let _=writeln!(out,"  Gann ATR fan (scale fixed at confirmed pivot): 1x2 {:.5} | 1x1 {:.5} | 2x1 {:.5} | 1x1 distance {:.2} ATR | agrees {}",frame.fan_1x2,frame.fan_1x1,frame.fan_2x1,frame.fan_distance_atr,frame.fan_agrees_with_direction);
+                }
+                if frame.square9_available {
+                    let _=writeln!(out,"  Square9 experimental sqrt-price 45deg step {} | level {:.5} | distance {:.2} ATR | fixed quote price unit {:.2}",frame.square9_steps_45deg,frame.square9_nearest_level,frame.square9_distance_atr,frame.square9_quote_unit);
+                }
+                let _=writeln!(out,"  Gann bar cycle: nearest {} bars | distance {} bars | near {}. Research-only, not an entry veto or proof of a price-time law.",frame.time_nearest_cycle_bars,frame.time_distance_bars,frame.time_cycle_near);
             } else {
                 let _=writeln!(out,"{} | بيانات swing/range غير كافية لهندسة جان",frame.timeframe);
             }
