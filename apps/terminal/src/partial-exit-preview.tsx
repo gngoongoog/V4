@@ -33,6 +33,18 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
   p.status==='read_only_geometry'&&p.read_only===true&&
   p.orders_enabled===false;
  const rows=verified&&Array.isArray(p.rows)?p.rows.slice(0,25).map(object):[];
+ const ledger=object(view.partial_exit_draft_ledger);
+ const ledgerBound=verified&&ledger.schema==='partial-exit-draft-ledger-v1'&&
+  ledger.status==='research_drafts_only'&&ledger.context===context&&
+  ledger.target===(t?.demo?'demo':'live')&&ledger.read_only===true&&
+  ledger.orders_enabled===false;
+ const drafts=ledgerBound&&Array.isArray(ledger.rows)?ledger.rows.slice(0,25).map(object):[];
+ const draftState:Record<string,string>={
+  draft_only:'مسودة محفوظة فقط — لم يُرسل أي أمر',
+  volume_changed_unverified:'تغيّر حجم المركز أو هويته — يحتاج مراجعة',
+  position_missing_unverified:'المركز غير ظاهر — نتيجة الإغلاق غير مثبتة',
+  invalid_draft_journal:'سجل الخطة غير صالح — لا تعتمد عليه'
+ };
  return <section className="operator-card" aria-label="معاينة أهداف TP الجزئية للوت">
   <h3>معاينة توزيع حجم TP1 / TP2 / TP3</h3>
   <p>تقسيم حسابي للوت فقط وفق بيانات MT5: 50%، 30%، 20%. لا تُنشأ أهداف سعرية ولا تُرسل أوامر إغلاق. هذه ليست خاصية TP جزئي جاهزة للتداول.</p>
@@ -60,6 +72,17 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
        </tr>;
       })}
      </tbody></table></div>}
+   {ledgerBound?<div className="execution-binding-summary" aria-label="سجل مسودات TP الدائم">
+     <strong>سجل مسودات TP المحفوظة في Rust Core</strong>
+     <p className="safe-note">هذا سجل تدريبي دائم للخطط الحسابية فقط. لا يُرسل أوامر ولا يعتبر اختفاء المركز أو انخفاض حجمه دليلاً على تنفيذ TP.</p>
+     {drafts.length===0?<p>لا توجد مسودة محفوظة للحساب والرمز الحالي.</p>:
+      drafts.map((d,i)=><div className="brain-control-row" key={String(d.position_identifier)+'-'+i}>
+       <div><b>مركز #{Number.isSafeInteger(d.ticket)?String(d.ticket):'—'}</b>
+        <small style={{display:'block',marginTop:4}}>{draftState[String(d.state)]||'حالة غير موثقة — راجع Core'}</small>
+       </div>
+       <span>الحجم الأصلي {volume(d.initial_volume)} لوت</span>
+      </div>)}
+    </div>:null}
    </>}
   <p className="safe-note">حتى إذا صلح تقسيم اللوت، التنفيذ يحتاج مدير إغلاقات جزئية منفصل، ومصالحة حجم الصفقة الفعلي بعد كل هدف، واختبار Hedging/Netting والسبريد والانزلاق وحدود الوسيط. لا تعتبر هذه الشاشة موافقة على LIVE.</p>
  </section>;
