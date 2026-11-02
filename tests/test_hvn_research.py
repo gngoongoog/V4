@@ -54,6 +54,37 @@ class HvnResearch(unittest.TestCase):
         self.assertAlmostEqual(result["total_activity"], 225.0)
         self.assertFalse(result["exchange_wide"])
 
+    def test_mixed_trade_and_quote_flags_preserve_quote_activity_fallback(self):
+        # A quote change and a trade update can share one MT5 tick row.
+        # With fewer than the required number of observed trade updates,
+        # the quote fallback still counts *all* actual bid/ask changes.
+        rows = quotes(150)
+        for row in rows[:60]:
+            row["flags"] = 6 | 8 | 16
+            row["last"] = 2000.05
+            row["volume_real"] = 3.5
+        result = calculate_hvn(rows, **KW)
+        self.assertTrue(result["available"], result)
+        self.assertEqual(result["source"], "mt5_quote_tick_activity")
+        self.assertEqual(result["observations"], 150)
+        self.assertEqual(result["total_activity"], 150)
+        self.assertEqual(result["unit"], "observed_quote_events")
+        self.assertFalse(result["exchange_wide"])
+
+    def test_mixed_flags_never_add_quote_counts_to_actual_trade_volume(self):
+        rows = quotes(150)
+        for row in rows[:90]:
+            row["flags"] = 6 | 8 | 16
+            row["last"] = 2000.05
+            row["volume_real"] = 2.5
+        result = calculate_hvn(rows, **KW)
+        self.assertTrue(result["available"], result)
+        self.assertEqual(result["source"], "mt5_broker_trade_volume_real")
+        self.assertEqual(result["observations"], 90)
+        self.assertAlmostEqual(result["total_activity"], 225.0)
+        self.assertNotEqual(result["total_activity"], 225.0 + 150)
+        self.assertFalse(result["exchange_wide"])
+
     def test_quote_only_flags_cannot_recount_old_last_trade_volume(self):
         rows = quotes()
         for row in rows:
