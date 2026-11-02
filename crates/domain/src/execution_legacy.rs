@@ -244,7 +244,7 @@ pub fn evaluate(
             crate::studio::seconds(&b.timeframe).unwrap(),
         );
         let gann = crate::opportunities::gann::assess(&series, &b.timeframe, &swings);
-        let dom = crate::opportunities::dom::assess(t);
+        let dom = crate::opportunities::dom::assess(t,now);
         // Entry candle must be compared against a frozen baseline from
         // *prior* completed bars, not a profile silently rebuilt with its own
         // breakout high/low/tick spike. Display-only maps can include latest.
