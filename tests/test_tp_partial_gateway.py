@@ -44,7 +44,7 @@ class StageDemoTests(unittest.TestCase):
         self.ex.close();self.tmp.cleanup()
     def send(self,authorize=lambda _:True):
         return self.ex.execute(self.mt,self.cmd,authorize)
-    def test_tp1_exact_lots_preflight_order_check_and_journal_replay():
+    def test_tp1_exact_lots_preflight_order_check_and_journal_replay(self):
         self.assertFalse(is_fast_path(self.cmd))
         result=self.send()
         self.assertEqual(result["state"],"filled",result)
