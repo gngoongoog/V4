@@ -12,15 +12,15 @@ const compiled=ts.transpileModule(source,{
  reportDiagnostics:true
 });
 assert.equal((compiled.diagnostics||[]).filter(x=>x.category===ts.DiagnosticCategory.Error).length,0);
-const exports={};
+const moduleExports={};
 const el=(type,props)=>({type,props:props||{}});
 vm.runInNewContext(compiled.outputText,{
- exports,require:id=>{
+ exports:moduleExports,require:id=>{
   if(id==='react/jsx-runtime')return {jsx:el,jsxs:el};
   throw Error('Unexpected dependency '+id);
  },Number,Object,Array,JSON,Math,String
 });
-const render=exports.PartialExitPreview;
+const render=moduleExports.PartialExitPreview;
 function collect(n,all=[]){
  if(n===null||n===undefined)return all;
  if(Array.isArray(n)){n.forEach(x=>collect(x,all));return all}
