@@ -44,6 +44,11 @@ export function ModeEvidenceOperations({status,report,disabled,onRefresh}:{
     r.independent_frozen_oos===false&&typeof r.samples==='number'&&Number.isInteger(r.samples)&&r.samples>=0&&
     typeof r.scored_after_future_bars==='number'&&Number.isInteger(r.scored_after_future_bars)&&
     r.scored_after_future_bars>=0&&r.scored_after_future_bars<=r.samples&&
+    typeof r.rejected_or_unverifiable_scored==='number'&&
+    Number.isInteger(r.rejected_or_unverifiable_scored)&&
+    r.rejected_or_unverifiable_scored>=0&&
+    r.scored_after_future_bars+r.rejected_or_unverifiable_scored<=r.samples&&
+    r.scoring_validation==='same_causal_cost_horizon_validator_as_learning_core'&&
     typeof r.horizon==='string'&&typeof horizons[r.horizon]==='string';
   }) as Record<string,unknown>[]:[];
  return <section className="operator-card" aria-label="Four trading mode broker evidence">
@@ -71,14 +76,16 @@ export function ModeEvidenceOperations({status,report,disabled,onRefresh}:{
   {view.available&&<div>
    <h4>مراقبة Forward للأوضاع غير النشطة — بدون صفقات MT5</h4>
    <p className="safe-note">هذه عينات تجريبية من الشموع المكتملة لحساب Demo المطابق، تُقيّم بعد وصول شموع لاحقة.
+      النتائج المقبولة مرّت بتدقيق الأفق الزمني والشموع المتتابعة واحتساب المخاطر والتكاليف داخل Core.
       لا تُضاف لإغلاقات الوسيط، ولا تمثل تعلّم Sniper بالتيك، ولا اختبار OOS مجمداً.
       لا تُنتج أوامر تداول أو تفويض تشغيل REAL.</p>
    {shadowRows.length===4?<div className="table-scroll"><table>
-    <thead><tr>{['الوضع','العينات المستقبلية','نضج تقييمها','نافذة الدراسة','الحالة'].map(x=><th key={x}>{x}</th>)}</tr></thead>
+    <thead><tr>{['الوضع','العينات المستقبلية','نتائج تحقّق منها Core','نتائج مرفوضة','نافذة الدراسة','الحالة'].map(x=><th key={x}>{x}</th>)}</tr></thead>
     <tbody>{shadowRows.map(row=><tr key={String(row.mode)}>
      <td>{labels[String(row.mode)]||String(row.mode)}</td>
      <td>{Number(row.samples)}</td>
      <td>{Number(row.scored_after_future_bars)}</td>
+     <td>{Number(row.rejected_or_unverifiable_scored)}</td>
      <td>{horizons[String(row.horizon)]}</td>
      <td>{shadowState[String(row.status)]||'غير مؤكدة'}</td>
     </tr>)}</tbody>
