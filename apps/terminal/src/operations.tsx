@@ -270,6 +270,9 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
     const effective=row.participates_in_coordinator===true;
     const effectiveKnown=known&&typeof row.participates_in_coordinator==='boolean';
     const decision=safeObject(row.decision_participation);
+    const provenance=safeObject(row.data_evidence);
+    const evidenceNote=available&&provenance.exchange_wide===false&&typeof provenance.note==='string'?provenance.note:
+      'مصدر البيانات غير موثق حالياً؛ لا نستنتج عمق سوق أو ربحية';
     const decisionReason=available&&typeof decision.reason==='string'?decision.reason:
       'السبب الفعلي غير متاح من Core؛ لا تُفترض مشاركة أو نتائج';
     // The advisor button must actually affect the chosen coordinator. In
@@ -287,6 +290,8 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
         <span className={effective?'active':'off'}>تأثيره على قرار المنسق: {effectiveKnown?(effective?'مؤهل للمشاركة':'غير مشارك'):'غير مؤكد'}</span>
       </div>
       <p className="safe-note" data-brain-decision-reason={id}>سبب الحالة: {decisionReason}</p>
+      {(id==='dom'||id==='profile'||id==='gann_dom_profile'||id==='generated')&&
+       <p className="safe-note" data-brain-source={id}>مصدر التحليل: {evidenceNote}</p>}
       <div className="concept-brain-card-metrics"><span>إشارات <b>{known&&typeof activity.signals==='number'?activity.signals:'—'}</b></span><span title="رد تعبئة برقم Deal من الوسيط؛ قد يكون جزئياً وليس إغلاقاً مُسوّى">ردود تعبئة MT5 <b>{known&&typeof orders.fill_acknowledged==='number'?orders.fill_acknowledged:'—'}</b></span><span title="نسبة تاريخية لصفقات Demo مغلقة ومطابقة بعد التكاليف؛ ليست توقعاً لنجاح المستقبل">نجاح سابق Demo <b>{verified?`${(rate*100).toFixed(1)}%`:'—'}</b></span></div>
       <div className="concept-brain-card-actions">
         <button type="button" aria-label={`${advisorOn?'إيقاف':'تشغيل'} مشاركة ${id}`}
@@ -298,7 +303,7 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
       </div>
     </article>;
   })}</div>
-  <div className="concept-brain-inspector" dir="rtl"><h3><ShieldAlert size={18}/> تفاصيل العقل المحدد</h3>{activeBrain&&Object.keys(selected).length?<div><strong>{BRAIN_DIRECTORY.find(item=>item[0]===activeBrain)?.[1]||String(selected.name||activeBrain)}</strong><p>المشاركة: {selectedVerified?(selectedControl.advisor?'مفعّلة':'متوقفة'):'غير مؤكدة'} · Paper: {selectedVerified?(selectedControl.paper?'مفعّل':'متوقف'):'غير مؤكد'}</p><p>فحوص التحليل: {available&&typeof selectedActivity.checks==='number'?selectedActivity.checks:'—'} · الإشارات المرصودة: {available&&typeof selectedActivity.signals==='number'?selectedActivity.signals:'—'}</p><p>دوره في القرار: {selectedVerified&&typeof safeObject(selected.decision_participation).reason==='string'?String(safeObject(selected.decision_participation).reason):'لم يؤكد Core دور العقل'}</p><small>الحالة تُقرأ من Core بعد الحفظ. هذه الأزرار لا تشغل تنفيذ MT5 منفرداً ولا تثبت التعلّم.</small></div>:<p>اختَر بطاقة عقل لعرض حالته الفعلية.</p>}</div>
+  <div className="concept-brain-inspector" dir="rtl"><h3><ShieldAlert size={18}/> تفاصيل العقل المحدد</h3>{activeBrain&&Object.keys(selected).length?<div><strong>{BRAIN_DIRECTORY.find(item=>item[0]===activeBrain)?.[1]||String(selected.name||activeBrain)}</strong><p>المشاركة: {selectedVerified?(selectedControl.advisor?'مفعّلة':'متوقفة'):'غير مؤكدة'} · Paper: {selectedVerified?(selectedControl.paper?'مفعّل':'متوقف'):'غير مؤكد'}</p><p>فحوص التحليل: {available&&typeof selectedActivity.checks==='number'?selectedActivity.checks:'—'} · الإشارات المرصودة: {available&&typeof selectedActivity.signals==='number'?selectedActivity.signals:'—'}</p><p>دوره في القرار: {selectedVerified&&typeof safeObject(selected.decision_participation).reason==='string'?String(safeObject(selected.decision_participation).reason):'لم يؤكد Core دور العقل'}</p><p>مصدر بيانات العقل: {selectedVerified&&typeof safeObject(selected.data_evidence).note==='string'?String(safeObject(selected.data_evidence).note):'لا يوجد وصف موثوق للمصدر'}</p><small>الحالة تُقرأ من Core بعد الحفظ. هذه الأزرار لا تشغل تنفيذ MT5 منفرداً ولا تثبت التعلّم.</small></div>:<p>اختَر بطاقة عقل لعرض حالته الفعلية.</p>}</div>
  </section>;
 }
 
