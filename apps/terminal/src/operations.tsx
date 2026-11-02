@@ -290,7 +290,7 @@ export function BrainControlsOperations({source,disabled,armed,onSave}: {
         <span className={effective?'active':'off'}>تأثيره على قرار المنسق: {effectiveKnown?(effective?'مؤهل للمشاركة':'غير مشارك'):'غير مؤكد'}</span>
       </div>
       <p className="safe-note" data-brain-decision-reason={id}>سبب الحالة: {decisionReason}</p>
-      {(id==='dom'||id==='profile'||id==='gann_dom_profile'||id==='generated')&&
+      {(id==='gann'||id==='dom'||id==='profile'||id==='gann_dom_profile'||id==='generated')&&
        <p className="safe-note" data-brain-source={id}>مصدر التحليل: {evidenceNote}</p>}
       <div className="concept-brain-card-metrics"><span>إشارات <b>{known&&typeof activity.signals==='number'?activity.signals:'—'}</b></span><span title="رد تعبئة برقم Deal من الوسيط؛ قد يكون جزئياً وليس إغلاقاً مُسوّى">ردود تعبئة MT5 <b>{known&&typeof orders.fill_acknowledged==='number'?orders.fill_acknowledged:'—'}</b></span><span title="نسبة تاريخية لصفقات Demo مغلقة ومطابقة بعد التكاليف؛ ليست توقعاً لنجاح المستقبل">نجاح سابق Demo <b>{verified?`${(rate*100).toFixed(1)}%`:'—'}</b></span></div>
       <div className="concept-brain-card-actions">
