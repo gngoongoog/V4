@@ -3,6 +3,7 @@ pub mod backtest;
 pub mod trading;
 pub mod sniper;
 pub mod commission;
+pub mod partial_exit;
 pub mod execution;
 pub mod student;
 pub mod studio;
