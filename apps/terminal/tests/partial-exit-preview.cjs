@@ -62,10 +62,29 @@ const impossible=render({status,source:{...view,partial_exit_preview:{
  lots:{tp1:0.05,tp2:0.04,tp3:0.04}}]
 }}});
 assert(!shown(impossible).includes('تقسيم حجم صالح حسابياً فقط'));
+const scopedLedger={schema:'partial-exit-draft-ledger-v1',status:'research_drafts_only',
+ context,target:'demo',read_only:true,orders_enabled:false,
+ rows:[{position_identifier:42,ticket:77,initial_volume:0.1,state:'draft_only'},
+       {position_identifier:43,ticket:88,initial_volume:0.1,state:'volume_changed_unverified'},
+       {position_identifier:44,ticket:99,initial_volume:0.1,state:'position_missing_unverified'}]};
+const withLedger=render({status,source:{...view,partial_exit_draft_ledger:scopedLedger}});
+assert(shown(withLedger).includes('سجل مسودات TP المحفوظة'));
+assert(shown(withLedger).includes('تغيّر حجم المركز أو هويته'));
+assert(shown(withLedger).includes('نتيجة الإغلاق غير مثبتة'));
+assert(!collect(withLedger).some(x=>x.type==='button'),'Draft ledger remains read-only');
+const foreignLedger=render({status,source:{...view,partial_exit_draft_ledger:{...scopedLedger,context:'other'}}});
+assert(!shown(foreignLedger).includes('سجل مسودات TP المحفوظة'),'Never show another account draft');
+const forgedLedger=render({status,source:{...view,partial_exit_draft_ledger:{...scopedLedger,orders_enabled:true}}});
+assert(!shown(forgedLedger).includes('سجل مسودات TP المحفوظة'),'Never show an executable ledger as read-only');
 const core=file('../../crates/runtime/src/execution.rs');
 const domain=file('../../crates/domain/src/partial_exit.rs');
 const terminal=file('src/terminal.tsx');
 assert(core.includes('value["partial_exit_preview"]=if status.gateway_fresh && self.account_matches(status)'));
+assert(core.includes('value["partial_exit_draft_ledger"]=if status.gateway_fresh && self.account_matches(status)'));
+const ledgerSource=file('../../crates/runtime/src/partial_exit_ledger.rs');
+assert(ledgerSource.includes('position_missing_unverified'));
+assert(ledgerSource.includes('volume_changed_unverified'));
+assert(!ledgerSource.includes('order_send('));
 assert(domain.includes('pub fn three_target_lots('));
 assert(domain.includes('pub fn preview('));
 assert(terminal.includes('<PartialExitPreview status={!preview&&feed.broker?status:null} source={portfolioReport}/>'));
