@@ -101,6 +101,8 @@ class DomCache:
         self.key=None
         self.active=False
         self.next_retry=0.0
+        # Local read receipt, NOT a timestamp supplied by the exchange/broker.
+        self.observed_ms=None
     def release(self,mt5):
         if self.active and self.key is not None:
             try:
@@ -110,7 +112,10 @@ class DomCache:
         self.key=None
         self.active=False
         self.next_retry=0.0
+        self.observed_ms=None
     def read(self,mt5,key):
+        # Never reuse a receipt from a previous failed/empty retrieval.
+        self.observed_ms=None
         if self.key!=key:
             self.release(mt5)
             self.key=key
@@ -148,7 +153,10 @@ class DomCache:
             asks=[dict(side=side,price=price,volume=volume) for (side,price),volume in levels.items() if side=='sell' and math.isfinite(volume)]
             bids.sort(key=lambda row:-row['price']);asks.sort(key=lambda row:row['price'])
             depth=bids[:50]+asks[:50]
-            return bool(bids and asks),depth
+            if bids and asks:
+                self.observed_ms=int(time.time()*1000)
+                return True,depth
+            return False,[]
         except Exception:
             return False,[]
 
@@ -205,7 +213,7 @@ def empty_snapshot(error: str) -> dict:
                 tick_age_ms=None, quote_time_ms=None, source_quote_time_ms=None,
                 native_event_id=None, symbol="", leverage=None, margin_free=None,
                 minimum_lot_margin=None, margin=None, volume_min=None, volume_step=None,
-                tick_size=None, dom_available=False,dom=[],volume_max=None,
+                tick_size=None, dom_available=False,dom=[],dom_observed_ms=None,volume_max=None,
                 tick_value_loss=None,tick_value_profit=None,market=None,point=None)
 
 
@@ -277,6 +285,7 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
     key=(account.login,account.server,symbol,account.currency,account.trade_mode)
     market=market_cache.read(mt5,key,now) if market_cache is not None and info is not None else None
     dom_available,dom=dom_cache.read(mt5,key) if dom_cache is not None and info is not None else (False,[])
+    dom_observed_ms=(dom_cache.observed_ms if dom_available and dom_cache is not None else None)
     current = mt5.account_info()
     identity_fields=('login','server','currency','trade_mode')
     if (current is None or
@@ -344,7 +353,7 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
                   tick_age_ms=max(0, int(now.timestamp() * 1000) - tick.time_msc) if tick and tick.time_msc<=int(now.timestamp()*1000)+2000 else None,
                   volume_min=info.volume_min if info else None,
                   volume_step=info.volume_step if info else None,
-                  tick_size=info.trade_tick_size if info else None,dom_available=dom_available,dom=dom,
+                  tick_size=info.trade_tick_size if info else None,dom_available=dom_available,dom=dom,dom_observed_ms=dom_observed_ms,
                   volume_max=getattr(info,'volume_max',None),tick_value_loss=getattr(info,'trade_tick_value_loss',None),tick_value_profit=getattr(info,'trade_tick_value_profit',None),market=market,point=getattr(info,'point',None))
     return result
 
