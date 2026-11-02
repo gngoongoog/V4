@@ -135,8 +135,11 @@ fn inactive_mode_forward(db:&Connection,context:&str,now:u64)->Result<Value>{
                         ELSE 'inactive_primary_mode_signal' END
                     AND (CASE WHEN json_valid(source) THEN json_extract(source,'$[3]') END)
                         IS NOT NULL
-                    AND ((?2='expert' AND json_extract(source,'$[3]') NOT IN ('system','sniper_learner'))
-                      OR (?2 IN ('scalping','swing') AND json_extract(source,'$[3]')='system'))",
+                    AND ((?2='expert' AND
+                        (CASE WHEN json_valid(source) THEN json_extract(source,'$[3]') END)
+                            NOT IN ('system','sniper_learner'))
+                      OR (?2 IN ('scalping','swing') AND
+                        (CASE WHEN json_valid(source) THEN json_extract(source,'$[3]') END)='system'))",
                 params![context,label],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))
             )?
         } else {(0,0,None)};
@@ -251,6 +254,9 @@ mod tests{
         let checked=report(&db,Some(&t),125_000).unwrap();
         assert_eq!(checked["inactive_forward"]["modes"][1]["samples"],0,
             "A secondary advisor cannot impersonate Scalping's primary entry policy");
+        db.execute("INSERT INTO coordinator_samples VALUES('not JSON',126,'{}',NULL)",[]).unwrap();
+        assert!(report(&db,Some(&t),125_000).is_ok(),
+            "Malformed research source must not break account mode evidence");
         assert_eq!(v["inactive_forward"]["modes"][0]["status"],"tick_native_not_supported");
         assert_eq!(v["modes"][2]["closed_costed_samples"],0,
             "Forward candle outcomes must not become booked MT5 Demo fills");
