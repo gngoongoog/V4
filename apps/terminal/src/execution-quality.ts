@@ -10,12 +10,14 @@ export type QualityObservation={
  categoryCounts:Record<string,number>;
  circuit:{state:string;policy:string;reason:string;unknown:number;rejections:number}|null;
  queueP95:number|null;sendP95:number|null;totalP95:number|null;
+ queueSamples:number|null;sendSamples:number|null;totalSamples:number|null;
  rows:Array<{brain:string;kind:string;state:string;createdMs:number;
    category:string;retcode:number|null}>;
 };
 const none=(reason:string):QualityObservation=>({
  ready:false,reason,sampleSize:null,rejects:null,unknown:null,unresolved:null,
- categoryCounts:{},circuit:null,queueP95:null,sendP95:null,totalP95:null,rows:[]
+ categoryCounts:{},circuit:null,queueP95:null,sendP95:null,totalP95:null,
+ queueSamples:null,sendSamples:null,totalSamples:null,rows:[]
 });
 const obj=(v:unknown):Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
 const positiveInt=(v:unknown):v is number=>typeof v==='number'&&Number.isSafeInteger(v)&&v>0;
@@ -76,11 +78,15 @@ export function qualityObservation(status:QualityStatus|null,source:unknown,nowM
     {state:String(rawCircuit.state),policy:String(rawCircuit.policy),
      reason:String(rawCircuit.reason),unknown:Number(rawCircuit.unknown_open_intents),
      rejections:Number(rawCircuit.recent_broker_rejections)}:null;
- const qMetric=(key:string)=>{const m=obj(q[key]);return nonNegativeInt(m.samples)&&m.samples>0?
-  measured(m.p95_ms):null};
+ const qMetric=(key:string)=>{const m=obj(q[key]);const samples=m.samples;
+  return nonNegativeInt(samples)&&samples<=q.sample_size?
+    {samples,p95:samples>0?measured(m.p95_ms):null}:{samples:null,p95:null};
+ };
+ const queue=qMetric('queue_to_send'),send=qMetric('send'),total=qMetric('total');
  return {ready:true,reason:'قراءة من سجل أوامر Core، وليس تاريخ أرباح أو تعبئات مضمونة',
    sampleSize:q.sample_size,rejects:q.rejected_count,unknown:q.unknown_count,
    unresolved:q.unresolved_count,categoryCounts:categories,circuit,
-   queueP95:qMetric('queue_to_send'),sendP95:qMetric('send'),totalP95:qMetric('total'),
+   queueP95:queue.p95,sendP95:send.p95,totalP95:total.p95,
+   queueSamples:queue.samples,sendSamples:send.samples,totalSamples:total.samples,
    rows};
 }
