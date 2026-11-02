@@ -28,7 +28,7 @@ export function HvnWorkspace({status,connected,preview,disabled}:{
  useEffect(()=>{
   if(preview)return;
   let active=true;
-  const refresh=()=>{void readPanel('/v1/hvn').then(r=>{if(active)setData(obj(r))})
+  const refresh=()=>{void readPanel('/v1/hvn').then(r=>{if(active){setData(obj(r));setError('')}})
     .catch(e=>{if(active)setError('تعذر قراءة بحث HVN من Core: '+String(e))})};
   refresh();
   const interval=setInterval(refresh,2000);
@@ -85,6 +85,8 @@ export function HvnWorkspace({status,connected,preview,disabled}:{
    <div className="hvn-metrics">
     <div><span>نوع البيانات</span><strong>{source}</strong></div>
     <div><span>أحداث مرصودة</span><strong>{format(report.observations,0)}</strong></div>
+    <div><span>أحداث تغيّر Last/Volume صالحة</span><strong>{format(report.trade_events_observed,0)}</strong></div>
+    <div><span>أحداث تغيّر Bid/Ask صالحة</span><strong>{format(report.quote_events_observed,0)}</strong></div>
     <div><span>مستويات سعرية</span><strong>{format(report.distinct_levels,0)}</strong></div>
     <div><span>آخر Tick مستخدم</span><strong>{showDate(report.observed_to_ms)}</strong></div>
     <div><span>عمر أحدث Tick</span><strong>{showAge(data?.report_age_ms)} — {reportStale?'تاريخي':'بحسب وقت الوسيط'}</strong></div>
@@ -93,7 +95,7 @@ export function HvnWorkspace({status,connected,preview,disabled}:{
     <div className="hvn-scroll"><table><thead><tr><th>السعر</th><th>النشاط</th><th>الحصة من العينة</th></tr></thead>
     <tbody>{nodes.map((r,i)=><tr key={i}><td>{format(r.price,8)}</td><td>{format(r.activity,4)}</td><td>{format(value(r.share)===null?null:Number(r.share)*100,2)}%</td></tr>)}</tbody>
     </table></div></div>
-   <p className="hvn-caption">الحساب {String(headerIdentity.login||'—')} · {String(headerIdentity.server||'—')} · {String(headerIdentity.symbol||'—')} · المصدر: {String(report.source)}. {String(report.note||'')}</p>
+   <p className="hvn-caption">الحساب {String(headerIdentity.login||'—')} · {String(headerIdentity.server||'—')} · {String(headerIdentity.symbol||'—')} · المصدر: {String(report.source)}. الرقم المختار من مصدر واحد فقط؛ لا نجمع أحداث Bid/Ask مع أحجام Last. {String(report.note||'')}</p>
    </>:
    <p className="hvn-empty">{preview?'لا تعرض المعاينة نتائج تداول':!connected?'بانتظار حساب MT5 حديث':pending?'استلام سجل Tick وتحليل العقد جارٍ':'لم تصل بعد نتيجة HVN متوافقة مع الحساب الحالي'}</p>}
   <p className="hvn-warning">للدقة: XAUUSD لدى وسيط CFD لا يكشف بالضرورة حجم عقود الذهب المركزية CME/COMEX. هذا القسم لا يفتح صفقات، ولا يعدّل عقول التنفيذ أو المخاطر.</p>
