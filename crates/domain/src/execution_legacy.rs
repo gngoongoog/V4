@@ -245,7 +245,10 @@ pub fn evaluate(
         );
         let gann = crate::opportunities::gann::assess(&series, &b.timeframe, &swings);
         let dom = crate::opportunities::dom::assess(t);
-        let profile = crate::opportunities::features::profile(&series);
+        // Entry candle must be compared against a frozen baseline from
+        // *prior* completed bars, not a profile silently rebuilt with its own
+        // breakout high/low/tick spike. Display-only maps can include latest.
+        let profile = crate::opportunities::features::profile(&series[..n-1]);
         let profile_side = if profile.available
             && prev.close <= profile.value_high
             && last.close > profile.value_high
@@ -346,7 +349,12 @@ pub fn evaluate(
                 format!("خروج من منطقة قيمة نشاط الشموع؛ {}", profile.note)
             }
             "gann_dom_profile" => {
-                s.side = if gann.available
+                // A composite is never allowed to resurrect a Gann signal
+                // that the standalone Gann brain itself rejects.
+                let gann_entry_eligible=gann.available
+                    && gann.strength>=0.25
+                    && ((last.close-last.open)*gann.direction as f64)>0.;
+                s.side = if gann_entry_eligible
                     && dom.available
                     && gann.direction != 0
                     && gann.direction == dom.direction
