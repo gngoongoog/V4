@@ -1032,6 +1032,68 @@ mod tests {
     }
 
     #[test]
+    fn gann_expert_forward_learning_is_causal_costed_and_never_auto_promoted(){
+        let db=Connection::open_in_memory().unwrap();
+        let mut learner=Learner::new(&db).unwrap();
+        let mut c=Config::default();c.trading.mode=TradingMode::Expert;
+        let b=BrainConfig{id:"gann".into(),timeframe:"M1".into(),..Default::default()};
+        let mut now=1_800_000_000_000u64;
+        let end=now/1000-60;
+        let start=end-179*60;
+        let candles=(0..180u64).map(|i|{
+            let mut candle=Candle{time:start+i*60,open:2011.9,high:2013.,
+                low:2011.,close:2012.,tick_volume:100};
+            if i==110 {candle.high=2020.;}
+            if i==149 {candle.low=2000.;}
+            FrameBar{candle,spread_points:1,real_volume:0}
+        }).collect::<Vec<_>>();
+        let mut frames=BTreeMap::from([("M1".to_owned(),candles.clone())]);
+        let mut t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            login:17,server:"Demo".into(),symbol:c.symbol.clone(),currency:"USD".into(),
+            point:Some(0.01),tick_size:Some(0.01),tick_value_profit:Some(1.),
+            tick_value_loss:Some(1.),quote_time_ms:Some(now),tick_age_ms:Some(0),
+            bid:Some(2011.99),ask:Some(2012.),..Default::default()};
+        let signal=execution::evaluate(&b,&t,&c,&frames,None,now);
+        assert!(signal.ready && signal.side==1,
+            "Real Gann rule needs confirmed pivots, ATR and bullish last candle");
+        learner.observe_inactive_forward(&db,&t,&c,&[b.clone()],&frames,now).unwrap();
+        let research=inactive_source_key(&context(&t),c.trading.mode,&b.id,
+            &b.timeframe,&b.report_id).unwrap();
+        let live=source_key(&context(&t),c.trading.mode,&b.id,
+            &b.timeframe,&b.report_id).unwrap();
+        let p:String=db.query_row("SELECT payload FROM coordinator_samples WHERE source=?1",
+            [&research],|r|r.get(0)).unwrap();
+        let p:Value=serde_json::from_str(&p).unwrap();
+        assert_eq!(p["brain"],"gann");
+        assert_eq!(p["study_kind"],"inactive_expert_advisor_signal_not_consensus");
+        assert_eq!(p["live_broker_orders"],false);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_samples WHERE source=?1",
+            [&live],|r|r.get::<_,u64>(0)).unwrap(),0);
+        now+=12*60_000;
+        t.quote_time_ms=Some(now);
+        let mut later=candles;
+        for i in 1..=12u64 {
+            later.push(FrameBar{candle:Candle{time:end+i*60,
+                open:2012.,high:2013.,low:2011.,close:2012.1,tick_volume:100},
+                spread_points:1,real_volume:0});
+        }
+        frames.insert("M1".into(),later);
+        let weights=learner.observe_inactive_forward(&db,&t,&c,&[b],&frames,now).unwrap();
+        assert_eq!(weights["gann"].forward_samples,1,
+            "One Gann signal matures only after 12 subsequent completed M1 bars");
+        let outcome:String=db.query_row(
+            "SELECT outcome FROM coordinator_samples WHERE source=?1 ORDER BY bar LIMIT 1",
+            [&research],|r|r.get(0)).unwrap();
+        let outcome:Value=serde_json::from_str(&outcome).unwrap();
+        assert_eq!(outcome["state"],"scored");
+        assert_eq!(outcome["horizon_contiguous"],true);
+        assert_eq!(outcome["horizon_seconds"],12*60);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_samples WHERE source=?1",
+            [&live],|r|r.get::<_,u64>(0)).unwrap(),0,
+            "Gann Forward research is not automatic authorization to modify execution");
+    }
+
+    #[test]
     fn inactive_mode_forward_rejects_cosmetic_duplicate_advisor_as_scalp_or_swing() {
         let db=Connection::open_in_memory().unwrap();
         let mut learner=Learner::new(&db).unwrap();
