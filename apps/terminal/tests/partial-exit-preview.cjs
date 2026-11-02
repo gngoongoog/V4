@@ -135,6 +135,26 @@ const stagedFalseProof=render({status,source:{...view,partial_exit_command_links
  evidence:{state:'broker_order_deals_exactly_linked',matched_broker_lots:0.05,
  stage_completed:true,orders_enabled:true}}]}}});
 assert(!shown(stagedFalseProof).includes('0.05 لوت موثق'));
+const settlement={schema:'partial-exit-stage-settlements-v1',
+ status:'account_scoped_historical_settlements',context,target:'demo',
+ read_only:true,orders_enabled:false,next_stage_authorized:false,
+ breakeven_enabled:false,
+ rows:[{position_identifier:907,stage:1,plan_id:'tp-plan-test',
+ state:'historical_stage_sealed',matched_volume:0.05,broker_order:777,
+ next_stage_authorized:false,breakeven_triggered:false}]};
+const sealedView=render({status,source:{...view,partial_exit_stage_settlements:settlement}});
+assert(shown(sealedView).includes('تسوية TP1/TP2/TP3'));
+assert(shown(sealedView).includes('0.05 لوت مُصالح'));
+assert(!collect(sealedView).some(x=>x.type==='button'));
+const wrongSettlement=render({status,source:{...view,
+ partial_exit_stage_settlements:{...settlement,context:'foreign'}}});
+assert(!shown(wrongSettlement).includes('تسوية TP1/TP2/TP3'));
+const unsafeSettlement=render({status,source:{...view,
+ partial_exit_stage_settlements:{...settlement,
+ rows:[{position_identifier:907,stage:1,plan_id:'tp-plan-test',
+ state:'historical_stage_sealed',matched_volume:0.05,broker_order:777,
+ next_stage_authorized:true,breakeven_triggered:true}]}}});
+assert(!shown(unsafeSettlement).includes('0.05 لوت مُصالح'));
 const core=file('../../crates/runtime/src/execution.rs');
 const domain=file('../../crates/domain/src/partial_exit.rs');
 const terminal=file('src/terminal.tsx');
@@ -143,6 +163,12 @@ assert(core.includes('value["partial_exit_draft_ledger"]=if status.gateway_fresh
 assert(core.includes('value["partial_exit_stage_plans"]=if status.gateway_fresh && self.account_matches(status)'));
 assert(core.includes('value["partial_exit_deal_evidence"]=if status.gateway_fresh && self.account_matches(status)'));
 assert(core.includes('value["partial_exit_command_links"]=if status.gateway_fresh && self.account_matches(status)'));
+assert(core.includes('value["partial_exit_stage_settlements"]=if status.gateway_fresh && self.account_matches(status)'));
+const settleSrc=file('../../crates/runtime/src/partial_exit_progress.rs');
+assert(settleSrc.includes('partial_exit_stage_settlements'));
+assert(settleSrc.includes('authorizes_next_stage')); 
+assert(!settleSrc.includes('order_send('));
+
 const linkRust=file('../../crates/runtime/src/partial_exit_link.rs');
 assert(linkRust.includes('broker_order_deals_exactly_linked'));
 assert(linkRust.includes('d["order"].as_u64()!=Some(order)'));
