@@ -59,7 +59,8 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  assert(nodes(settings).some(x=>x.props?.['aria-label']==='sniper fixed target pips'));
  assert(nodes(settings).some(x=>x.props?.['aria-label']==='sniper cooldown seconds'));
  let brainState=null;
- const scopedBrain={controls_available:true,account_matches:true,brains:[{name:'system',config:{id:'system'}},{name:'Trend',config:{id:'trend'},control:{advisor:true,paper:false}}]};
+ const scopedBrain={controls_available:true,account_matches:true,trading_mode:'expert',selected_owner:'system',
+  brains:[{name:'system',config:{id:'system'}},{name:'Trend',config:{id:'trend'},control:{advisor:true,paper:false}}]};
  const brains=exportsObj.BrainControlsOperations({source:scopedBrain,disabled:false,armed:false,onSave:async(...v)=>{brainState=v}});
  const brainButtons=nodes(brains).filter(x=>x.type==='button');
  // Render truthful Core-provided decision roles, never infer that an ON
@@ -74,6 +75,11 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  });
  assert(JSON.stringify(diagnostic).includes('Scalping diagnostic only'),
   'Expert-only votes must not be presented as active Scalping participation');
+ const diagButtons=nodes(diagnostic).filter(x=>x.type==='button');
+ assert(diagButtons.find(x=>String(x.props['aria-label']||'').includes('مشاركة trend')).props.disabled,
+  'Scalping advisor toggle cannot pretend to change a primary-mode signal');
+ assert(!diagButtons.find(x=>String(x.props['aria-label']||'').includes('Paper trend')).props.disabled,
+  'Paper practice remains independently configurable in Scalping');
  assert(JSON.stringify(diagnostic).includes('العقول الفرعية تشخيصية'),
   'Scalping must explain the primary-signal ownership boundary');
  assert(JSON.stringify(diagnostic).includes('ردود تعبئة MT5'),
@@ -87,6 +93,8 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
   disabled:false,armed:false,onSave:async()=>{}
  });
  assert(JSON.stringify(expert).includes('Expert eligible if ready'));
+ const expertAdvisor=nodes(expert).find(x=>x.type==='button'&&String(x.props['aria-label']||'').includes('مشاركة trend'));
+ assert(expertAdvisor&&!expertAdvisor.props.disabled,'Expert advisor changes affect the real coordinator');
  assert(JSON.stringify(expert).includes('تُفترض مشاركة')===false);
 
  const advisor=brainButtons.find(x=>String(x.props['aria-label']||'').includes('مشاركة trend'));
@@ -94,6 +102,11 @@ function nodes(node,out=[]){if(!node||typeof node!=='object')return out;
  assert(advisor&&!advisor.props.disabled&&paper&&!paper.props.disabled,'Core-scoped advisor and Paper controls are actionable');
  assert.equal(advisor.props['aria-label'],'إيقاف مشاركة trend','enabled advisor action must say STOP');
  assert.equal(paper.props['aria-label'],'تشغيل Paper trend','disabled Paper action must say START');
+ const solo=exportsObj.BrainControlsOperations({source:{...scopedBrain,selected_owner:'trend'},disabled:false,armed:false,onSave:async()=>{throw Error('SOLO cannot change coordinator advisor')}}); 
+ assert(nodes(solo).find(x=>x.type==='button'&&String(x.props['aria-label']||'').includes('مشاركة trend')).props.disabled,
+   'SOLO does not consume coordinator advisor settings; restore SYSTEM to edit');
+ assert(!nodes(solo).find(x=>x.type==='button'&&String(x.props['aria-label']||'').includes('Paper trend')).props.disabled,
+   'SOLO ownership must not stop independent Paper control');
  await advisor.props.onClick();assert.deepEqual(brainState,['trend',false,false]);
  await paper.props.onClick();assert.deepEqual(brainState,['trend',true,true]);
  for(const [caseName,locked] of [['running',true],['wrong account',false]]){
