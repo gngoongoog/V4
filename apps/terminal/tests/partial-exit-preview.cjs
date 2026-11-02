@@ -149,6 +149,13 @@ assert(!collect(sealedView).some(x=>x.type==='button'));
 const wrongSettlement=render({status,source:{...view,
  partial_exit_stage_settlements:{...settlement,context:'foreign'}}});
 assert(!shown(wrongSettlement).includes('تسوية TP1/TP2/TP3'));
+const revokedEvidenceView=render({status,source:{...view,
+ partial_exit_stage_settlements:{...settlement,
+ rows:[{position_identifier:907,stage:1,plan_id:'tp-plan-test',
+ state:'sealed_evidence_needs_review',matched_volume:0.05,broker_order:777,
+ next_stage_authorized:false,breakeven_triggered:false}]}}});
+assert(shown(revokedEvidenceView).includes('سند الوسيط الحالي تغيّر أو فقد'));
+assert(!shown(revokedEvidenceView).includes('0.05 لوت مُصالح'));
 const unsafeSettlement=render({status,source:{...view,
  partial_exit_stage_settlements:{...settlement,
  rows:[{position_identifier:907,stage:1,plan_id:'tp-plan-test',
