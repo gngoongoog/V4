@@ -418,6 +418,11 @@ impl Engine{
             if method=="POST" && path=="/v1/hvn/request" {
                 anyhow::ensure!(!self.execution.pending(&self.db)?,
                     "لا يمكن بدء HVN أثناء وجود أمر وسيط لم تُحسم تسويته");
+                // Both HVN and Backtest history fetch use the same MT5
+                // Gateway background cycle. Never admit a new HVN read while
+                // a Backtest history import is still in flight.
+                anyhow::ensure!(!self.backtests.loading(),
+                    "انتظر اكتمال تحميل بيانات Backtest أو ألغِه قبل بدء بحث HVN؛ كلاهما يستخدم Gateway");
             }
             let status={let mut shared=self.shared.lock().unwrap();shared.status.refresh(now_ms());shared.status.clone()};
             return self.hvn.route(method,path,body,&status,now_ms());
@@ -629,6 +634,13 @@ impl Engine{
         if path.starts_with("/v1/learning/review/"){return learning_review::route(method,path,body,&mut self.db,now_ms());}
         if path=="/v1/research/correlation"||path.starts_with("/v1/research/correlation/"){return correlation::route(method,path,body,&self.db,now_ms());}
         if path=="/v1/backtest"||path.starts_with("/v1/backtest/")||path.starts_with("/v1/gateway/history/"){
+            // Prevent the symmetric race: a new history import must not
+            // interrupt a previously admitted HVN tick-history request.
+            // Saved-history replay/experiments are local and are unaffected.
+            if method=="POST" && path=="/v1/backtest/start" {
+                anyhow::ensure!(!self.hvn.pending(now_ms()),
+                    "انتظر تسوية قراءة HVN قبل بدء جلب تاريخ Backtest من MT5");
+            }
             let(config,status)={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());(s.config.clone(),s.status.clone())};let config=status.telemetry.as_ref().map(|t|config.for_account(t)).unwrap_or(config);let open=status.telemetry.as_ref().is_some_and(|t|self.research.has_open_position(t));return self.backtests.route(method,path,body,&self.db,&self.dir,&config,&status,open);
         }
         if method=="POST"&&path=="/v1/brain-snapshot/export"{
