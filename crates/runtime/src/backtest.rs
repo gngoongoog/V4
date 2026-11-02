@@ -644,10 +644,12 @@ fn ledger_markers(
     let mut markers = String::new();
     for t in trades {
         for f in &t.fills {
-            let point = values
-                .iter()
-                .find(|p| p.time >= f.time)
-                .or_else(|| values.last());
+            // Equity points are generated in chronological order. Find the
+            // first point at/after a fill via binary search instead of a fresh
+            // linear scan for EACH fill (quadratic on large Meta-v2 exports).
+            // Retain the original last-point fallback for out-of-range fills.
+            let next = values.partition_point(|p| p.time < f.time);
+            let point = values.get(next).or_else(|| values.last());
             let Some(point) = point else { continue };
             let elapsed = f.time.saturating_sub(start).min(duration);
             let x = 20.0 + 760.0 * elapsed as f64 / duration as f64;
@@ -852,6 +854,24 @@ mod tests {
         let markers = ledger_markers(&trades, &equity);
         assert_eq!(markers.matches("<circle").count(), 3);
         assert!(markers.contains("tp1,partial"));
+    }
+    #[test]
+    fn marker_lookup_matches_first_later_or_equal_equity_point() {
+        use braintrade_domain::backtest::EquityPoint;
+        let values = vec![
+            EquityPoint {time:100,equity:1000.,balance:1000.},
+            EquityPoint {time:200,equity:1010.,balance:1010.},
+            EquityPoint {time:300,equity:1020.,balance:1020.},
+        ];
+        // Exact, between-point, before-first and after-last boundaries must
+        // be the same as the previous linear search behavior.
+        for (time, expected) in [(100,0),(150,1),(200,1),(299,2),(500,2)] {
+            let idx=values.partition_point(|p|p.time<time);
+            let selected=values.get(idx).or_else(||values.last()).unwrap();
+            assert_eq!(selected.time,values[expected].time, "fill at {time}");
+            let baseline=values.iter().find(|p|p.time>=time).or_else(||values.last()).unwrap();
+            assert_eq!(selected.time,baseline.time);
+        }
     }
     #[test]
     fn cancelled_or_timed_out_jobs_never_accept_late_data() {
