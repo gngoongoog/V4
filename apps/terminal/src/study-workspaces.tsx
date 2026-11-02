@@ -82,7 +82,7 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
   }finally{setBusy(false)}
  };
  const compareCes=async()=>{
-  if(!selected||disabled||busy)return;
+  if(!selected||disabled||armed||active||busy)return;
   setBusy(true);setError('');setNotice('');setCesComparison(null);
   try{
    const result=obj(await studyAction('backtest','ces_ablation',selected));
@@ -98,7 +98,7 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
   finally{setBusy(false)}
  };
  const compareBrains=async()=>{
-  if(!selected||disabled||busy)return;
+  if(!selected||disabled||armed||active||busy)return;
   setBusy(true);setError('');setNotice('');setBrainComparison(null);
   try {
    const response=obj(await studyAction('backtest','brain_ablation',selected));
@@ -169,7 +169,7 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
   {error&&<div className="operator-error" role="alert">{error}</div>}
   {notice&&<p className="study-notice" role="status">{notice}</p>}
   {outcome?<div className="operator-card study-results">
-    <div className="study-row"><div><small>تقرير محفوظ من Core</small><h3><TrendingUp size={18}/> قراءة نتيجة المحاكاة</h3></div><div className="study-actions"><button type="button" onClick={()=>void exportReport()} disabled={busy||disabled}><Download size={15}/> تصدير التقرير</button><button type="button" onClick={()=>void compareCes()} disabled={busy||disabled||!selected}><BarChart3 size={15}/> مقارنة معادلتي CES</button><button type="button" onClick={()=>void compareBrains()} disabled={busy||disabled||!selected}><BarChart3 size={15}/> مقارنة العقول مقابل Trend</button><button type="button" onClick={onEvaluation}>تقييم خارج العينة</button></div></div>
+    <div className="study-row"><div><small>تقرير محفوظ من Core</small><h3><TrendingUp size={18}/> قراءة نتيجة المحاكاة</h3></div><div className="study-actions"><button type="button" onClick={()=>void exportReport()} disabled={busy||disabled}><Download size={15}/> تصدير التقرير</button><button type="button" onClick={()=>void compareCes()} disabled={busy||disabled||armed||active||!selected}><BarChart3 size={15}/> مقارنة معادلتي CES</button><button type="button" onClick={()=>void compareBrains()} disabled={busy||disabled||armed||active||!selected}><BarChart3 size={15}/> مقارنة العقول مقابل Trend</button><button type="button" onClick={onEvaluation}>تقييم خارج العينة</button></div></div>
     <div className="study-metrics"><Metric name="صافي النتيجة" value={show(metrics.net,2)} hint="بعد التكاليف المحاكية"/><Metric name="عدد الصفقات" value={show(metrics.trades,0)} hint="داخل التاريخ المختبر"/><Metric name="نسبة الفوز" value={show(metrics.win_rate,1,'%')} hint="لا تكفي وحدها للحكم"/><Metric name="Profit Factor" value={show(metrics.profit_factor)} hint="غير معرّف دون خسائر"/><Metric name="أقصى تراجع" value={show(metrics.max_drawdown_percent,2,'%')} hint="داخل العينة المختبرة"/><Metric name="العمولات" value={show(metrics.commissions,2)} hint="محسوبة تقديرياً"/></div>
     <div className="study-visual-layout">
       <div className="study-equity-panel"><div className="study-row"><h4>منحنى رأس المال الافتراضي</h4><small>{curve.length} نقطة معروضة من {show(report?.recorded_equity_points,0)} مسجلة لدى Core</small></div>
@@ -192,6 +192,7 @@ export function BacktestWorkspace({source,disabled,armed,onStart,onCancel,onRefr
        <small className="study-help">التقرير لا يساوي سجلات MT5. الصفقة الملتبسة قد تشمل لمس وقف وهدف داخل شمعة واحدة.</small>
       </div>
     </div>
+    {armed&&<p className="safe-note">أوقف START قبل مقارنة العقول التاريخية؛ قراءة التقرير القديم متاحة دائماً، لكن الدراسة الثقيلة موقوفة حتى لا تؤخر تيكات وأوامر MT5.</p>}
     {brainComparison&&<div className="study-trades-panel" aria-label="Causal four-brain signal study">
       <h4>العقول الأربعة — مقارنة الإشارة بنفس التكاليف</h4>
       <p className="safe-note">Trend هو خط الأساس. Wyckoff وLiquidity Sweep وTrend Pullback تستخدم قواعدها الفعلية على شموع مكتملة، لكن الوقف 1.5 ATR والهدف 2R والمهلة 30 دقيقة موحدة للعدالة، والاقتباس سعري تقريبي من آخر إغلاق؛ **ليس تنفيذ MT5 فعلياً ولا إثبات OOS مستقل**.</p>
