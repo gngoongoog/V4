@@ -197,6 +197,10 @@ pub struct Telemetry {
     pub dom_available: bool,
     #[serde(default)]
     pub dom: Vec<DomLevel>,
+    /// Local Gateway receipt for a successful MT5 Market Book read,
+    /// not broker publication time. Absent in old snapshots => no DOM entry.
+    #[serde(default)]
+    pub dom_observed_ms: Option<u64>,
     #[serde(default)]
     pub volume_max: Option<f64>,
     #[serde(default)]
