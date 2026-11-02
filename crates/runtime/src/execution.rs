@@ -370,6 +370,9 @@ pub struct Service {
     // protection journal on every latency-sensitive Sniper quote.
     protection_work:bool,
     cancellation_work:bool,
+    // Heavy historical TP audit is bounded to full snapshots at <= 1 Hz.
+    // It must never burden the Sniper fast-tick hot path.
+    tp_settlement_last_ms:u64,
 }
 
 impl Service {
@@ -436,6 +439,7 @@ impl Service {
             manual_blocked:true,
             protection_work:false,
             cancellation_work:false,
+            tp_settlement_last_ms:0,
         })
     }
 
@@ -672,7 +676,11 @@ impl Service {
             if crate::partial_exit_ledger::observe(
                 db,telemetry,&self.inner.settings.target,now).is_ok(){
                 if crate::partial_exit_stage::observe(
-                    db,telemetry,&self.inner.settings.target,now).is_ok(){
+                    db,telemetry,&self.inner.settings.target,now).is_ok() &&
+                    (self.tp_settlement_last_ms==0
+                     || now<self.tp_settlement_last_ms
+                     || now.saturating_sub(self.tp_settlement_last_ms)>=1_000){
+                    self.tp_settlement_last_ms=now;
                     let _=crate::partial_exit_progress::observe(
                         db,telemetry,&self.inner.settings.target,now);
                 }
