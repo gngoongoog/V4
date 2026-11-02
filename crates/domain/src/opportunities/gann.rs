@@ -2,6 +2,7 @@ use super::{atr, sign, Candle, Swing};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct GannFrame {
     pub timeframe: String,
     pub available: bool,
@@ -19,7 +20,52 @@ pub struct GannFrame {
     pub atr_per_bar: f64,
     pub direction: i8,
     pub strength: f64,
+    /// Experimental 1x1 / 2x1 / 1x2 price-time projections; anchored to
+    /// the pivot's *historical* ATR, not current chart pixel scaling.
+    pub fan_anchor_atr: f64,
+    pub fan_1x1: f64,
+    pub fan_2x1: f64,
+    pub fan_1x2: f64,
+    pub fan_distance_atr: f64,
+    pub fan_agrees_with_direction: bool,
+    /// Square-of-Nine-inspired root lattice. Unit = one quote-currency price
+    /// unit, NOT broker tick size; a change in scale changes all levels.
+    pub square9_available: bool,
+    pub square9_quote_unit: f64,
+    pub square9_steps_45deg: i64,
+    pub square9_nearest_level: f64,
+    pub square9_distance_atr: f64,
+    /// Nearest predeclared *bar-count* cycle since the confirmed pivot.
+    /// This is not a market-clock prediction or automatically a trade trigger.
+    pub time_nearest_cycle_bars: u64,
+    pub time_distance_bars: u64,
+    pub time_cycle_near: bool,
     pub note: String,
+}
+
+// Fixed, explicit research hypotheses, not a data-fitted best cycle or
+// hidden broker tick-scaled Square-of-Nine magic factor.
+const CYCLE_BARS: [u64;7] = [30,45,60,90,120,180,360];
+const SQUARE9_QUOTE_UNIT: f64 = 1.0;
+const FAN_ATR_PER_BAR_1X1: f64 = 0.10;
+
+/// Canonical root-square step: 45° in this *defined* convention means
+/// sqrt(P / quote_unit) shifts by 1/4. The chart's horizontal/vertical
+/// pixel scales and tick sizes are deliberately irrelevant here.
+fn square9_nearest(anchor:f64,price:f64,atr:f64)->Option<(i64,f64,f64)>{
+    if !anchor.is_finite()||!price.is_finite()||!atr.is_finite()
+        ||anchor<=0.||price<=0.||atr<=0. {return None}
+    let root=(anchor/SQUARE9_QUOTE_UNIT).sqrt();
+    let target=(price/SQUARE9_QUOTE_UNIT).sqrt();
+    let n=((target-root)*4.).round();
+    // Without bounded cast a saturated i64 can conceal overflow from a
+    // corrupted quote or wildly different instrument denomination.
+    if !n.is_finite() || n.abs()>1_000_000. {return None}
+    let next=root+n*0.25;
+    if next<=0. {return None}
+    let level=next*next*SQUARE9_QUOTE_UNIT;
+    if !level.is_finite() {return None}
+    Some((n as i64,level,(price-level).abs()/atr))
 }
 
 /// Gann-inspired geometry using only completed bars and confirmed pivots.
@@ -31,7 +77,7 @@ pub struct GannFrame {
 pub fn assess(series: &[Candle], timeframe: &str, swings: &[Swing]) -> GannFrame {
     let mut out = GannFrame {
         timeframe: timeframe.into(),
-        note: "هندسة مستوحاة من Gann: نطاق swing مؤكد مقسّم إلى 1/8 وميل سعري بوحدة ATR لكل شمعة؛ ليست زاوية شاشة ولا نسبة نجاح.".into(),
+        note: "هندسة جان بحثية: swing مؤكد + أثمان + ATR لكل شمعة + مروحة بمقياس ATR مثبت عند المحور + شبكة جذر السعر (الوحدة 1.0) + دورات بالشموع. ليست توقعاً مضموناً ولا زاوية شاشة.".into(),
         ..Default::default()
     };
     if series.len() < 40 || swings.len() < 2 {
@@ -102,5 +148,34 @@ pub fn assess(series: &[Candle], timeframe: &str, swings: &[Swing]) -> GannFrame
     out.atr_per_bar = atr_per_bar;
     out.direction = direction;
     out.strength = strength;
+
+    // Freeze the fan slope's volatility scale at the historical pivot bar:
+    // using the current ATR here would silently repaint all older fan levels.
+    if index>=15 {
+        let anchor_atr=atr(&series[..=index]);
+        if anchor_atr.is_finite()&&anchor_atr>0. {
+            let projected=anchor.side as f64*anchor_atr*FAN_ATR_PER_BAR_1X1
+                * bars_since as f64;
+            out.fan_anchor_atr=anchor_atr;
+            out.fan_1x1=anchor.price+projected;
+            out.fan_2x1=anchor.price+2.*projected;
+            out.fan_1x2=anchor.price+0.5*projected;
+            out.fan_distance_atr=(last.close-out.fan_1x1).abs()/a;
+            out.fan_agrees_with_direction=direction!=0 &&
+                (last.close-out.fan_1x1)*direction as f64>=0.;
+        }
+    }
+    if let Some((n,level,distance))=square9_nearest(anchor.price,last.close,a){
+        out.square9_available=true;
+        out.square9_quote_unit=SQUARE9_QUOTE_UNIT;
+        out.square9_steps_45deg=n;
+        out.square9_nearest_level=level;
+        out.square9_distance_atr=distance;
+    }
+    let age=bars_since as u64;
+    let cycle=CYCLE_BARS.into_iter().min_by_key(|c|age.abs_diff(*c)).unwrap_or(30);
+    out.time_nearest_cycle_bars=cycle;
+    out.time_distance_bars=age.abs_diff(cycle);
+    out.time_cycle_near=out.time_distance_bars<=2;
     out
 }
