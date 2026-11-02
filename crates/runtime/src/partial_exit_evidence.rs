@@ -24,7 +24,7 @@ struct Totals {
     open:f64,close:f64,net_cost:f64,
     entry_deals:u32,exit_deals:u32
 }
-fn calculate(deals:&[(u64,String)],pid:u64,magic:u64,symbol:&str,volume:f64,step:f64,history_until:u64)
+fn calculate(deals:&[(u64,String)],pid:u64,magic:u64,symbol:&str,volume:f64,step:f64,history_until:u64,expected_side:i64)
     -> Result<Value>
 {
     let mut seen=BTreeSet::new();
@@ -53,6 +53,7 @@ fn calculate(deals:&[(u64,String)],pid:u64,magic:u64,symbol:&str,volume:f64,step
                 // The physical position must be opened by this exact owned
                 // brain; exits are allowed to have broker-side magic 0.
                 if d["magic"].as_u64()!=Some(magic)
+                    || side!=expected_side
                     || first_side.is_some_and(|first|first!=side) {bad=true;break}
                 first_side=Some(side);
                 sum.open+=lots;sum.entry_deals+=1;
@@ -114,17 +115,34 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
         Err(e)=>return Err(e.into())
     };
     let mut stmt=db.prepare(
-        "SELECT position_identifier,magic,initial_volume,step,status
+        "SELECT position_identifier,magic,initial_volume,step,status,ticket,payload
          FROM partial_exit_drafts WHERE context=?1 AND target=?2
          ORDER BY created_ms DESC,position_identifier DESC LIMIT 25")?;
     let drafts=stmt.query_map(params![key,target],|r|Ok((
         r.get::<_,u64>(0)?,r.get::<_,u64>(1)?,
         r.get::<_,f64>(2)?,r.get::<_,f64>(3)?,
-        r.get::<_,String>(4)?
+        r.get::<_,String>(4)?,r.get::<_,u64>(5)?,
+        r.get::<_,String>(6)?
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
     let mut rows=Vec::new();
-    for (pid,magic,volume,step,revision) in drafts{
+    for (pid,magic,volume,step,revision,ticket,draft_raw) in drafts{
+        let original=serde_json::from_str::<Value>(&draft_raw).unwrap_or(Value::Null);
+        let side=match original["side"].as_str(){
+            Some("BUY")=>Some(0),Some("SELL")=>Some(1),_=>None
+        };
+        let intact=original["schema"]=="partial-exit-draft-v1"
+            && original["position_identifier"].as_u64()==Some(pid)
+            && original["ticket"].as_u64()==Some(ticket)
+            && original["magic"].as_u64()==Some(magic)
+            && original["symbol"].as_str()==Some(t.symbol.as_str())
+            && original["broker_orders_created"]==false
+            && step.is_finite()&&step>0.&&volume.is_finite()&&volume>0.
+            && original["entry_volume"].as_f64().is_some_and(|v|
+                (v-volume).abs()<=step*1e-6)
+            && original["volume_step"].as_f64().is_some_and(|v|
+                (v-step).abs()<=step*1e-8)
+            && side.is_some();
         let mut st=db.prepare(
             "SELECT ticket,payload FROM broker_deals
              WHERE context=?1 AND position_id=?2 ORDER BY ticket LIMIT 1001")?;
@@ -137,12 +155,12 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
         }else if watermark.is_none(){
             json!({"state":"broker_history_not_synced",
                 "stage_completed":false,"tp_stage_attribution_verified":false})
-        }else if !step.is_finite() || step<=0. || !volume.is_finite() || volume<=0.{
-            json!({"state":"invalid_draft_geometry","stage_completed":false,
+        }else if !intact{
+            json!({"state":"invalid_draft_identity","stage_completed":false,
                 "tp_stage_attribution_verified":false})
         }else{
             calculate(&deals,pid,magic,&t.symbol,volume,step,
-                watermark.map(|(until,_)|until).unwrap_or(0))?
+                watermark.map(|(until,_)|until).unwrap_or(0),side.unwrap())?
         };
         rows.push(json!({
             "position_identifier":pid,
@@ -286,6 +304,29 @@ mod tests{
         store(&d,&t,wrong);
         assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["evidence"]["state"],
             "invalid_deal_history","A forged payload position ID cannot claim a stored position");
+    }
+    #[test]
+    fn history_must_match_original_trade_side_and_immutable_draft_payload(){
+        let d=fixture();let mut t=t();
+        init_evidence(&d,&t);
+        store(&d,&t,deal(100,0,1,410601,0.1));
+        assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["evidence"]["state"],
+            "invalid_deal_history",
+            "A SELL opening cannot certify a BUY draft");
+        d.execute("DELETE FROM broker_deals",[]).unwrap();
+        d.execute(
+            "UPDATE partial_exit_drafts SET payload='{}'",[]
+        ).unwrap();
+        assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["evidence"]["state"],
+            "invalid_draft_identity",
+            "Corrupt original plans can never inherit broker deal history");
+        let d=fixture();
+        t.positions[0].side="SELL".into();
+        init_evidence(&d,&t);
+        store(&d,&t,deal(100,0,1,410601,0.1));
+        store(&d,&t,deal(101,1,0,0,0.04));
+        assert_eq!(report(&d,&t,"demo").unwrap()["rows"][0]["evidence"]["state"],
+            "broker_partial_exit_unattributed");
     }
     #[test]
     fn cross_account_and_target_are_strictly_isolated(){
