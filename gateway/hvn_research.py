@@ -158,6 +158,10 @@ def calculate_hvn(ticks, *, server, login, symbol, currency, tick_size,
         "identity": identity, "window_ms": window_ms,
         "observed_from_ms": samples[0][0], "observed_to_ms": samples[-1][0],
         "observations": len(samples), "distinct_levels": len(weights),
+        # Keep source-specific counters independent so the operator can
+        # inspect data coverage and why the quote proxy was selected.
+        "trade_events_observed": len(trades),
+        "quote_events_observed": len(quotes),
         "source": source, "unit": unit, "broker_only": True,
         "exchange_wide": False, "nodes": raw_nodes[:MAX_NODES],
         "total_activity": round(total, 6),
