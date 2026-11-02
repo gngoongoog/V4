@@ -1,3 +1,13 @@
+# Enterprise V25 modes, Studio, research — current notes
+
+**Version:** `0.25.1` Enterprise V25 RC2, `ready_for_real=false`. Four real modes: Sniper, Scalping, Swing, Expert, controlled by one START/STOP and exact account ownership; SOLO can be explicitly selected subject to the Core broker gates. Native EA tick feed is transport-only. The older 0.7.0 policies and latency/timing descriptions in the archive below **are not an operator contract for V25**.
+
+Current historical evaluation includes the legacy Meta/CES/KTE paths plus **CES Range EPI** (research-only, not an actual brain enabled for execution) and a **four-policy signal-only comparison**: Trend baseline, Wyckoff, Liquidity Sweep, Trend Pullback. All four use 240 previous consecutive completed M1 candles and common hypothetical 1.5 ATR/2R/30-minute exits, historical spread/cost assumptions and a last-closed-candle quote proxy. Thus results are not comparable to actual broker fills or independent forward outcomes. Each chronological window is labelled for missing data or insufficient closed sample count; there is no guaranteed/auto-selected winner. Heavy studies are STOP/Paper-idle only. See [study guide](v25/BRAIN_SIGNAL_ABLATION_WYCKOFF_LIQUIDITY_PULLBACK_AR.md), [CES guide](v25/CES_EPI_CHRONOLOGICAL_ABLATION_AR.md), [manual](v25/USER_MANUAL_V25_AR.md) and [README](../README.md).
+
+---
+
+## Archived 0.7.0 development research and modes (historical reference only)
+
 # Trading modes and learning studio — 0.7.0 Development Preview
 
 All four modes drive the coordinated broker policy after account binding and START, alongside the separate Shadow research ledger. See `EXECUTION_AND_ROLES.md` for actual membership and execution. Generated strategy activation is manual; no automatic ML promotion.
