@@ -126,7 +126,7 @@ assert(textOf(render({...opts,source:corrupt})).includes('بيانات خطة TP
 assert(!collect(render({...opts,source:corrupt})).some(x=>x.type==='button'&&!x.props.disabled));
 const eligibleSaved={...verified,
  partial_exit_stage_consent:{schema:'tp-stage-operator-consent-v1',
-  status:'account_scoped_operator_consent_not_execution',context,target:'demo',
+  status:'account_scoped_operator_consent_not_execution',purpose:'preparation_only',context,target:'demo',
   read_only:true,automatic_tp_execution_enabled:false,orders_created:0,rows:[]}};
 const consentTree=render({...opts,source:eligibleSaved});
 assert(textOf(consentTree).includes('تسجيل موافقة هذه الخطة للتحضير المستقبلي'));
