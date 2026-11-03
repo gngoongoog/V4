@@ -35,6 +35,8 @@ import {MicroCapitalOperations} from './micro-capital-operations';
 import {RiskMasterOperations} from './risk-master-operations';
 import {PositionProtectionOperations} from './position-protection-operations';
 import {PartialExitPreview} from './partial-exit-preview';
+import {PartialExitPriceOperations} from './partial-exit-price-operations';
+import type {PriceProposal} from './partial-exit-price-operations';
 import {SoloOperations} from './solo-operations';
 import {ExecutionQualityOperations} from './execution-quality-operations';
 import {ModeEvidenceOperations} from './mode-evidence-operations';
@@ -49,7 +51,7 @@ import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position,PendingOrder} from './types';
 import type {RiskRecovery,PositionProtectionPolicy} from './bridge';
 import {DESIGN_FIXTURE} from './mock';
-import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,newsAction,studioAction,correlationAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,updatePositionProtection,setLearningFrozen,manualMarket,cancelPendingOrder,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
+import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,newsAction,studioAction,correlationAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,updatePositionProtection,savePartialExitPrices,setLearningFrozen,manualMarket,cancelPendingOrder,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
 import {money,num,signed,up,valid} from './format';
 
 // Concept 4 visual comparison fixture, NEVER emitted as broker results.
@@ -855,6 +857,45 @@ export default function Terminal(){
   }catch(e){if(writeFresh(mutation))sendNotice('تعذر تأكيد حفظ حماية المراكز: '+String(e),true);return false}
   finally{finishWrite(mutation)}
  };
+ const runPartialExitPrices=async(proposal:PriceProposal):Promise<boolean>=>{
+  if(preview||busy||!hasTauri()||!feed.broker||status?.requested_run||!status?.telemetry){
+   sendNotice('حفظ أسعار TP يتطلب STOP وحساب Demo متصلاً بـ MT5',true);return false;
+  }
+  const t=status.telemetry,view=unwrap(portfolioReport),stages=unwrap(view.partial_exit_stage_plans);
+  const context=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
+  const rows=Array.isArray(stages.rows)?stages.rows.map(unwrap):[];
+  if(!t.demo||t.account_trade_mode!==0||t.margin_mode!==2||
+   view.account_matches!==true||view.context!==context||
+   proposal.context!==context||stages.context!==context||
+   !proposal.planIds.every((id,i)=>rows.some(r=>
+     r.position_identifier===proposal.positionIdentifier&&r.stage===i+1&&
+     r.plan_id===id&&r.state==='prepared_only'))){
+   sendNotice('هوية حساب Demo أو خطط TP تغيرت؛ حدّث البيانات',true);return false;
+  }
+  if(!window.confirm('تأكيد حفظ أسعار TP1/TP2/TP3 للبحث فقط على حساب Demo '+t.login+
+   ' والمركز '+proposal.positionIdentifier+'؟\\n'+proposal.prices.join(' / ')+
+   '\\nلن يرسل هذا الإجراء صفقات ولن يغيّر وقف الخسارة أو TP الموجود عند MT5.')){
+   return false;
+  }
+  const mutation=beginWrite('tp-price-proposal');if(!mutation)return false;
+  try{
+   const result=unwrap(await savePartialExitPrices(proposal.context,
+     proposal.positionIdentifier,proposal.planIds,proposal.prices));
+   if(!writeFresh(mutation))return false;
+   if(result.saved!==true||result.orders_enabled!==false)
+    throw new Error('لم يؤكد Core حفظ أسعار TP للمعاينة فقط');
+   scopedGeneration.current.invalidate('portfolio');
+   const ticket=scopedGeneration.current.beginRead('portfolio');
+   const updated=unwrap(await readPanel('/v1/execution'));
+   if(!writeFresh(mutation))return false;
+   if(scopedGeneration.current.isCurrent(ticket))setPortfolioReport(updated);
+   sendNotice('تم حفظ أسعار أهداف TP التجريبية دون إرسال أي أمر إلى MT5');
+   return true;
+  }catch(error){
+   if(writeFresh(mutation))sendNotice('تعذر حفظ أسعار TP: '+String(error),true);
+   return false;
+  }finally{finishWrite(mutation)}
+ };
  const runLearningFreeze=async(frozen:boolean)=>{
   if(preview||!hasTauri()||!online||typeof status?.learning_control?.frozen!=='boolean'){
    sendNotice('اتصل بـ Core حتى تتأكد حالة التعلّم قبل تغييرها',true);return;
@@ -1290,7 +1331,7 @@ export default function Terminal(){
              monitor={safeRiskSnapshot} portfolio={unwrap(portfolioReport).portfolio} armed={status?.requested_run===true}
              disabled={busy||preview} onSavePortfolio={runSavePortfolio}/></div>
           <div className="concept-risk-daily"><DailyRiskOperations status={!preview&&feed.broker?status:null} monitor={safeRiskSnapshot} preview={preview}/></div>
-          <div className="concept-risk-extra"><PositionProtectionOperations key={contextKey} status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} onSet={runPositionProtection}/><PartialExitPreview status={!preview&&feed.broker?status:null} source={portfolioReport}/><h3>حماية المراكز في الطوارئ</h3><p>ميزة إغلاق كل مراكز الحساب بضغطة واحدة غير مدعومة في Core حالياً، لذلك لا يوجد زر يوهمك بتنفيذها. زر STOP يوقف فتح الصفقات الجديدة فقط.</p><button type="button" onClick={()=>open('positions')}>عرض المراكز الفعلية</button></div></div>
+          <div className="concept-risk-extra"><PositionProtectionOperations key={contextKey} status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} onSet={runPositionProtection}/><PartialExitPreview status={!preview&&feed.broker?status:null} source={portfolioReport}/><PartialExitPriceOperations key={'tp-'+contextKey} status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} onSave={runPartialExitPrices}/><h3>حماية المراكز في الطوارئ</h3><p>ميزة إغلاق كل مراكز الحساب بضغطة واحدة غير مدعومة في Core حالياً، لذلك لا يوجد زر يوهمك بتنفيذها. زر STOP يوقف فتح الصفقات الجديدة فقط.</p><button type="button" onClick={()=>open('positions')}>عرض المراكز الفعلية</button></div></div>
           <details className="operator-advanced"><summary>بيانات Core التفصيلية — افتحها عند التشخيص</summary><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/risk/monitor')}/></details>
          </div>:
         page==='settings'||page==='telegram'?<div className="editor-panel operator-settings-page">
