@@ -371,7 +371,9 @@ mod tests {
             let mut other=t.clone();other.login+=1;
             assert!(report(&db,&other,"demo").unwrap()["rows"].as_array().unwrap().is_empty());
             other=t.clone();other.demo=false;other.account_trade_mode=Some(2);
-            assert_eq!(report(&db,&other,"live").unwrap()["status"],"unverified_selected_account");
+            let selected=report(&db,&other,"live").unwrap();
+            assert_eq!(selected["status"],"shadow_crossings_no_broker_orders");
+            assert!(selected["rows"].as_array().unwrap().is_empty());
             db.execute("UPDATE partial_exit_stage_plans SET status='review_required' WHERE stage=1",[]).unwrap();
             assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],"needs_review");
         }
