@@ -391,6 +391,7 @@ impl Service {
         crate::partial_exit_shadow_trigger::init(db)?;
         crate::partial_exit_shadow_intent::init(db)?;
         crate::partial_exit_stage_reservation::init(db)?;
+        crate::partial_exit_stage_outbox::init(db)?;
         crate::partial_exit_stage_consent::init(db)?;
         crate::pending_cancellation::init(db)?;
         let mut inner = legacy::Service::new(db)?;
@@ -698,6 +699,15 @@ impl Service {
                     // operator's mode choice; this is NOT an MT5 send.
                     if entries_allowed {
                         let _=crate::partial_exit_stage_reservation::prepare(
+                            db,telemetry,&self.inner.settings.target,now,
+                            self.inner.settings.revision,
+                            self.inner.settings.deviation_points,
+                            self.inner.risk_master(telemetry).unwrap_or(true));
+                        // A preparation-only operator approval may seal a
+                        // single immutable TP1 Core identity, never a broker
+                        // command. This remains outside the Gateway outbox;
+                        // explicit trade approval and promotion are absent.
+                        let _=crate::partial_exit_stage_outbox::seal_tp1(
                             db,telemetry,&self.inner.settings.target,now,
                             self.inner.settings.revision,
                             self.inner.settings.deviation_points,
@@ -1024,6 +1034,18 @@ impl Service {
                 "status":"fresh_bound_selected_gateway_required","rows":[],
                 "read_only":true,"orders_enabled":false,
                 "automatic_tp_execution_enabled":false,"orders_created":0}));
+        }
+        if method=="GET" && path=="/v1/execution/partial-exit-sealed-core" {
+            if status.gateway_fresh&&self.account_matches(status){
+                if let Some(t)=status.telemetry.as_ref(){
+                    return crate::partial_exit_stage_outbox::report(
+                        db,t,&self.inner.settings.target,now);
+                }
+            }
+            return Ok(json!({"schema":"tp-stage-sealed-core-intents-v1",
+                "status":"fresh_selected_gateway_required","rows":[],
+                "read_only":true,"orders_enabled":false,
+                "broker_commands_created":0}));
         }
         if method=="GET" && path=="/v1/execution/partial-exit-reservations" {
             if status.gateway_fresh && self.account_matches(status) {
@@ -1761,6 +1783,13 @@ impl Service {
                 status.telemetry.as_ref().map(|t|
                     crate::partial_exit_stage_consent::report_for_revision(
                         db,t,&self.inner.settings.target,self.inner.settings.revision)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["partial_exit_stage_sealed_core"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_stage_outbox::report(
+                        db,t,&self.inner.settings.target,now)
                         .unwrap_or_else(|error|json!({"error":error.to_string()})))
                     .unwrap_or(Value::Null)
             } else {Value::Null};
