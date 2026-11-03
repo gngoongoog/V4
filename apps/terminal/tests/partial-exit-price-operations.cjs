@@ -27,7 +27,7 @@ function collect(n,out=[]){
  if(typeof n==='object'){out.push(n);collect(n.props?.children,out);return out}
  out.push(n);return out;
 }
-const render=(opts)=>{hook=0;return exp.PartialExitPriceOperations({onSave:async()=>true,onConsent:async()=>true,...opts})};
+const render=(opts)=>{hook=0;return exp.PartialExitPriceOperations({onSave:async()=>true,onConsent:async()=>true,onTradeApproval:async()=>true,...opts})};
 const shown=(root)=>collect(rendered).filter(x=>typeof x==='string').join(' ');
 const tel={connected:true,demo:true,account_trade_mode:0,margin_mode:2,
  login:17,server:'D',symbol:'XAUUSDm',currency:'USD',
@@ -158,6 +158,62 @@ const approvedConsent={...eligibleSaved,partial_exit_stage_consent:{
    orders_enabled:false,broker_command_id:null,
    operator_approved:true,state:'operator_approved_not_dispatched'}]}};
 assert(textOf(render({...opts,source:approvedConsent})).includes('إلغاء الموافقة المحفوظة'));
+const tradeSource={...approvedConsent,partial_exit_trade_approval:{
+ schema:'tp1-trade-approval-v1',status:'account_scoped_trade_preference_not_execution',
+ context,target:'demo',read_only:true,tp1_execution_enabled:false,
+ broker_commands_created:0,rows:[]}};
+const seenTrade=[];
+const tradeTree=render({...opts,source:tradeSource,
+ onTradeApproval:async(...args)=>{seenTrade.push(args);return true;}});
+assert(textOf(tradeTree).includes('تفويض تداول TP1 المستقبلي'));
+assert(textOf(tradeTree).includes('التلقائي ما زال مقفلاً في Core'));
+const createTrade=collect(tradeTree).find(x=>x.type==='button'&&
+ textOf(x).includes('تسجيل تفويض TP1 المستقبلي'));
+assert(createTrade&&!createTrade.props.disabled,
+ 'A verified preparation approval may explicitly create a future-trade preference');
+createTrade.props.onClick();
+assert.equal(seenTrade.length,1);
+assert.equal(seenTrade[0][3],true);
+const tradeActiveSource={...tradeSource,partial_exit_trade_approval:{
+ ...tradeSource.partial_exit_trade_approval,
+ rows:[{position_identifier:907,physical_ticket:87,
+ plan_ids:stages.map(r=>r.plan_id),purpose:'tp1_future_trading_preference',
+ read_only:true,tp1_execution_enabled:false,orders_enabled:false,
+ broker_command_id:null,trade_preference_current:true,
+ state:'trade_preference_current_sender_locked'}]}};
+const activeTradeTree=render({...opts,source:tradeActiveSource,
+ onTradeApproval:async(...args)=>{seenTrade.push(args);return true;}});
+assert(textOf(activeTradeTree).includes('الإرسال معطّل'));
+const revokeTrade=collect(activeTradeTree).find(x=>x.type==='button'&&
+ textOf(x).includes('إلغاء تفويض تداول TP1 المحفوظ'));
+assert(revokeTrade&&!revokeTrade.props.disabled);
+revokeTrade.props.onClick();
+assert.equal(seenTrade[1][3],false,'UI revoke must never reauthorize an old TP1 record');
+const tradeStale={...tradeActiveSource,partial_exit_trade_approval:{
+ ...tradeActiveSource.partial_exit_trade_approval,
+ rows:[{...tradeActiveSource.partial_exit_trade_approval.rows[0],
+ trade_preference_current:false,state:'trade_preference_revision_mismatch'}]}};
+const staleTradeTree=render({...opts,source:tradeStale});
+assert(textOf(staleTradeTree).includes('ألغِه وراجع الإعدادات'));
+assert(!collect(staleTradeTree).some(x=>x.type==='button'&&
+ textOf(x).includes('تسجيل تفويض TP1 المستقبلي')),
+ 'Stale prior execution preference must only be revocable');
+const lostTrade=render({...opts,status:{...status,telemetry:{...tel,positions:[]}},
+ source:tradeStale});
+assert(textOf(lostTrade).includes('إلغاء تفويض TP1 للمركز 907'),
+ 'A missing position must still have a scoped trade-preference revoke control');
+const wrongTradeAccount={...tradeSource,partial_exit_trade_approval:{
+ ...tradeSource.partial_exit_trade_approval,target:'live'}};
+assert(!textOf(render({...opts,source:wrongTradeAccount}))
+ .includes('تسجيل تفويض TP1 المستقبلي'),
+ 'Trade opt-in cannot borrow another account target');
+const noPreApproval={...tradeSource,partial_exit_stage_consent:{
+ ...tradeSource.partial_exit_stage_consent,rows:[]}};
+const blockedTrade=render({...opts,source:noPreApproval});
+const disabledTrade=collect(blockedTrade).find(x=>x.type==='button'&&
+ textOf(x).includes('تسجيل تفويض TP1 المستقبلي'));
+assert(disabledTrade&&disabledTrade.props.disabled,
+ 'Trade preference requires a verified operator preparation consent');
 const invalidRevision={...approvedConsent,partial_exit_stage_consent:{
  ...approvedConsent.partial_exit_stage_consent,
  rows:[{...approvedConsent.partial_exit_stage_consent.rows[0],
@@ -193,8 +249,12 @@ const tauri=fs.readFileSync(path.join(root,'../tauri/src/bridge.rs'),'utf8');
 assert(tauri.includes('fn save_partial_exit_prices('));
 assert(tauri.includes('"/v1/execution/partial-exit-prices"'));
 assert(tauri.includes('update_position_protection, save_partial_exit_prices,'));
+assert(tauri.includes('fn update_partial_exit_trade_approval('));
+assert(tauri.includes('"/v1/execution/partial-exit-trade-approval"'));
+assert(bridge.includes("invoke('update_partial_exit_trade_approval'"));
 const core=fs.readFileSync(path.join(root,'../../crates/runtime/src/execution.rs'),'utf8');
 assert(core.includes('path=="/v1/execution/partial-exit-prices"'));
+assert(core.includes('path=="/v1/execution/partial-exit-trade-approval"'));
 assert(core.includes('!status.requested_run && !self.pending(db)?'));
 const prices=fs.readFileSync(path.join(root,'../../crates/runtime/src/partial_exit_prices.rs'),'utf8');
 assert(!prices.includes('order_send('));
