@@ -685,6 +685,8 @@ impl Service {
                     self.tp_settlement_last_ms=now;
                     let _=crate::partial_exit_progress::observe(
                         db,telemetry,&self.inner.settings.target,now);
+                    let _=crate::partial_exit_shadow_trigger::observe(
+                        db,telemetry,&self.inner.settings.target,now);
                 }
             }
         }
