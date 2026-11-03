@@ -566,6 +566,25 @@ fn update_position_protection(context:String,policy:Value,expected_policy_id:Str
 }
 
 #[tauri::command]
+fn save_partial_exit_prices(context:String,position_identifier:u64,
+    plan_ids:Vec<String>,prices:Vec<f64>)->Result<Value,String>{
+    if context.is_empty()||context.len()>500||position_identifier==0||
+       plan_ids.len()!=3||prices.len()!=3||
+       plan_ids.iter().any(|id|id.len()!=40||!id.starts_with("tp-plan-")||
+           !id[8..].bytes().all(|byte|byte.is_ascii_hexdigit()))||
+       prices.iter().any(|price|!price.is_finite()||*price<=0.){
+        return Err("هوية خطة TP أو الأسعار المدخلة غير صالحة".into());
+    }
+    // This whitelisted endpoint can only save research prices. Core enforces
+    // Demo Hedging, STOP, original immutable stage IDs, current broker quote
+    // and price/lot grid validation. Never proxy arbitrary URLs or close.
+    open_client()?.post("/v1/execution/partial-exit-prices",
+        json!({"context":context,"position_identifier":position_identifier,
+            "plan_ids":plan_ids,"prices":prices}))
+        .map_err(|err|err.to_string())
+}
+
+#[tauri::command]
 fn set_learning_frozen(frozen:bool)->Result<Value,String>{
     open_client()?.post("/v1/learning/control",json!({"frozen":frozen}))
         .map_err(|err|err.to_string())
@@ -768,7 +787,7 @@ pub fn run() {
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore, save_excel_report,
-            backtest_action, study_action, news_action, studio_action, correlation_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
+            backtest_action, study_action, news_action, studio_action, correlation_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, save_partial_exit_prices, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");
