@@ -11,8 +11,8 @@ const compiled=ts.transpileModule(source,{fileName:'partial-exit-price-operation
   jsx:ts.JsxEmit.ReactJSX},reportDiagnostics:true});
 assert.equal((compiled.diagnostics||[]).filter(d=>d.category===ts.DiagnosticCategory.Error).length,0);
 const exp={},el=(type,props)=>({type,props:props||{}});
-let selected='',inputs=['','',''],dirty=false,hook=0;
-const useState=(init)=>{const value=hook++===0?selected:hook===2?inputs:dirty;
+let selected='',inputs=['','',''],dirty=false,liveConfirm='',hook=0;
+const useState=(init)=>{const slot=hook++;const value=slot===0?selected:slot===1?inputs:slot===2?dirty:liveConfirm;
  return [value,()=>{}]};
 vm.runInNewContext(compiled.outputText,{
  exports:exp,require:(id)=>{
@@ -27,7 +27,7 @@ function collect(n,out=[]){
  if(typeof n==='object'){out.push(n);collect(n.props?.children,out);return out}
  out.push(n);return out;
 }
-const render=(opts)=>{hook=0;return exp.PartialExitPriceOperations({...opts,onSave:async()=>true})};
+const render=(opts)=>{hook=0;return exp.PartialExitPriceOperations({...opts,onSave:async()=>true,onConsent:async()=>true})};
 const shown=(root)=>collect(rendered).filter(x=>typeof x==='string').join(' ');
 const tel={connected:true,demo:true,account_trade_mode:0,margin_mode:2,
  login:17,server:'D',symbol:'XAUUSDm',currency:'USD',
@@ -124,6 +124,25 @@ const corrupt={...view,partial_exit_price_proposals:{...view.partial_exit_price_
  rows:[{position_identifier:907,prices:[2001,2002,2003],state:'invalid_record'}]}};
 assert(textOf(render({...opts,source:corrupt})).includes('بيانات خطة TP غير موثوقة'));
 assert(!collect(render({...opts,source:corrupt})).some(x=>x.type==='button'&&!x.props.disabled));
+const eligibleSaved={...verified,
+ partial_exit_stage_consent:{schema:'tp-stage-operator-consent-v1',
+  status:'account_scoped_operator_consent_not_execution',context,target:'demo',
+  read_only:true,automatic_tp_execution_enabled:false,orders_created:0,rows:[]}};
+const consentTree=render({...opts,source:eligibleSaved});
+assert(textOf(consentTree).includes('تسجيل موافقة هذه الخطة للتحضير المستقبلي'));
+assert(!textOf(consentTree).includes('تم تنفيذ TP'),
+ 'Operator intent is not a broker fill or queued order');
+const approvedConsent={...eligibleSaved,partial_exit_stage_consent:{
+ ...eligibleSaved.partial_exit_stage_consent,
+ rows:[{position_identifier:907,position_ticket:87,
+   plan_ids:stages.map(x=>x.plan_id),read_only:true,
+   orders_enabled:false,broker_command_id:null,
+   operator_approved:true,state:'operator_approved_not_dispatched'}]}};
+assert(textOf(render({...opts,source:approvedConsent})).includes('إلغاء الموافقة المحفوظة'));
+const borrowedConsent={...eligibleSaved,partial_exit_stage_consent:{
+ ...eligibleSaved.partial_exit_stage_consent,target:'live'}};
+assert(!textOf(render({...opts,source:borrowedConsent})).includes('تسجيل موافقة هذه الخطة للتحضير المستقبلي'),
+ 'Demo controls cannot adopt Live consent');
 const bridge=read('src/bridge.ts');
 assert(bridge.includes("invoke('save_partial_exit_prices'"));
 const tauri=fs.readFileSync(path.join(root,'../tauri/src/bridge.rs'),'utf8');
