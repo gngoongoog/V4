@@ -27,7 +27,7 @@ function collect(n,out=[]){
  if(typeof n==='object'){out.push(n);collect(n.props?.children,out);return out}
  out.push(n);return out;
 }
-const render=(opts)=>{hook=0;return exp.PartialExitPriceOperations({onSave:async()=>true,onConsent:async()=>true,onTradeApproval:async()=>true,...opts})};
+const render=(opts)=>{hook=0;return exp.PartialExitPriceOperations({onSave:async()=>true,onConsent:async()=>true,onTradeApproval:async()=>true,onArm:async()=>true,...opts})};
 const shown=(root)=>collect(rendered).filter(x=>typeof x==='string').join(' ');
 const tel={connected:true,demo:true,account_trade_mode:0,margin_mode:2,
  login:17,server:'D',symbol:'XAUUSDm',currency:'USD',
@@ -148,22 +148,36 @@ assert(textOf(expiredTree).includes('سجل TP1 تاريخي'));
 assert(!collect(expiredTree).some(x=>x.type==='button'&&
  textOf(x).includes('إرسال TP1')),'Sealing an immutable TP1 ID must never create a send action');
 const heldPreview={...sealedCore,partial_exit_tp1_held:{
- schema:'tp1-core-held-outbox-v1',status:'account_scoped_held_never_sent',
- context,target:'demo',read_only:true,orders_dispatched:0,gateway_sends:0,
+ schema:'tp1-core-held-outbox-v1',status:'account_scoped_tp1_outbox_not_fill_proof',
+ context,target:'demo',read_only:true,queued_for_gateway:0,gateway_sends:null,
  rows:[{position_identifier:907,physical_ticket:87,plan_id:stages[0].plan_id,
   held_core_command_id:'held-id-123',state:'held_unreleased_no_gateway',
-  orders_dispatched:0,gateway_sends:0,read_only:true}]}};
+  gateway_send_confirmed:false,broker_fill_verified:false,read_only:true}]}};
 const heldTree=render({...opts,source:heldPreview});
-assert(textOf(heldTree).includes('أمر TP1 محجوز ولم يُرسل إلى الوسيط'));
+assert(textOf(heldTree).includes('أمر TP1 محجوز ولم يُرسل إلى Gateway'));
 assert(!textOf(render({...opts,source:{...heldPreview,
  partial_exit_tp1_held:{...heldPreview.partial_exit_tp1_held,target:'live'}}}))
- .includes('أمر TP1 محجوز ولم يُرسل إلى الوسيط'),
+ .includes('أمر TP1 محجوز ولم يُرسل إلى Gateway'),
  'A Demo TP1 held row cannot borrow a Live account');
 const expiredHeld=render({...opts,source:{...heldPreview,
  partial_exit_tp1_held:{...heldPreview.partial_exit_tp1_held,
  rows:[{...heldPreview.partial_exit_tp1_held.rows[0],
  state:'held_expired_never_dispatched'}]}}});
-assert(textOf(expiredHeld).includes('انتهت صلاحية الأمر المحجوز دون إرساله'));
+assert(textOf(expiredHeld).includes('انتهت صلاحية الأمر المحجوز قبل إطلاقه'));
+const queuedTp1=render({...opts,source:{...heldPreview,
+ partial_exit_tp1_held:{...heldPreview.partial_exit_tp1_held,
+ rows:[{...heldPreview.partial_exit_tp1_held.rows[0],
+ state:'queued_for_gateway_not_broker_fill',
+ broker_command_state:'queued',release_verified:true,
+ gateway_dispatchable:true}]}}});
+assert(textOf(queuedTp1).includes('أُطلق إلى طابور Gateway'));
+assert(textOf(queuedTp1).includes('لا يوجد تأكيد تنفيذ'));
+const gatewaySelected=render({...opts,source:{...heldPreview,
+ partial_exit_tp1_held:{...heldPreview.partial_exit_tp1_held,
+ rows:[{...heldPreview.partial_exit_tp1_held.rows[0],
+ state:'gateway_selected_broker_send_unconfirmed',
+ broker_command_state:'dispatched'}]}}});
+assert(textOf(gatewaySelected).includes('نتيجة الوسيط غير مؤكدة'));
 const consentTree=render({...opts,source:eligibleSaved});
 assert(textOf(consentTree).includes('تسجيل موافقة هذه الخطة للتحضير المستقبلي'));
 assert(!textOf(consentTree).includes('تم تنفيذ TP'),
@@ -183,7 +197,7 @@ const seenTrade=[];
 const tradeTree=render({...opts,source:tradeSource,
  onTradeApproval:async(...args)=>{seenTrade.push(args);return true;}});
 assert(textOf(tradeTree).includes('تفويض منفصل لتداول TP1 مستقبلاً'));
-assert(textOf(tradeTree).includes('التلقائي ما زال مقفلاً في Core'));
+assert(textOf(tradeTree).includes('يلزم تسليح تنفيذ TP1 مستقل قبل START'));
 const createTrade=collect(tradeTree).find(x=>x.type==='button'&&
  textOf(x).includes('تسجيل تفويض TP1 المستقبلي'));
 assert(createTrade&&!createTrade.props.disabled,
@@ -200,7 +214,7 @@ const tradeActiveSource={...tradeSource,partial_exit_trade_approval:{
  state:'trade_preference_current_sender_locked'}]}};
 const activeTradeTree=render({...opts,source:tradeActiveSource,
  onTradeApproval:async(...args)=>{seenTrade.push(args);return true;}});
-assert(textOf(activeTradeTree).includes('الإرسال معطّل'));
+assert(textOf(activeTradeTree).includes('لا إرسال منه وحده دون تسليح التنفيذ'));
 const revokeTrade=collect(activeTradeTree).find(x=>x.type==='button'&&
  textOf(x).includes('إلغاء تفويض تداول TP1 المحفوظ'));
 assert(revokeTrade&&!revokeTrade.props.disabled);
@@ -231,6 +245,41 @@ const disabledTrade=collect(blockedTrade).find(x=>x.type==='button'&&
  textOf(x).includes('تسجيل تفويض TP1 المستقبلي'));
 assert(disabledTrade&&disabledTrade.props.disabled,
  'Trade preference requires a verified operator preparation consent');
+const armSource={...tradeActiveSource,partial_exit_tp1_arm:{
+ schema:'tp1-execution-arm-v1',status:'account_scoped_arm_not_broker_fill',
+ context,target:'demo',read_only:true,orders_enabled:false,rows:[]}};
+const seenArm=[];
+const armTree=render({...opts,source:armSource,
+ onArm:async(...args)=>{seenArm.push(args);return true;}});
+assert(textOf(armTree).includes('تسليح تنفيذ TP1 الفعلي'));
+assert(textOf(armTree).includes('أمر إغلاق جزئي حقيقي'));
+const armButton=collect(armTree).find(x=>x.type==='button'&&
+ textOf(x).includes('تسليح أمر TP1 الفعلي'));
+assert(armButton&&!armButton.props.disabled);
+armButton.props.onClick();
+assert.equal(seenArm.length,1);
+assert.equal(seenArm[0][3],true);
+const activeArm={...armSource,partial_exit_tp1_arm:{
+ ...armSource.partial_exit_tp1_arm,rows:[{
+ position_identifier:907,physical_ticket:87,plan_ids:stages.map(x=>x.plan_id),
+ read_only:true,orders_enabled:false,armed_active:true,
+ state:'execution_arm_valid_no_send_yet'}]}};
+const activeArmTree=render({...opts,source:activeArm,
+ onArm:async(...args)=>{seenArm.push(args);return true;}});
+assert(textOf(activeArmTree).includes('تسليح TP1 نشط'));
+const disarm=collect(activeArmTree).find(x=>x.type==='button'&&
+ textOf(x).includes('إلغاء تسليح TP1'));
+assert(disarm&&!disarm.props.disabled);
+disarm.props.onClick();
+assert.equal(seenArm[1][3],false);
+const missingArmTree=render({...opts,source:activeArm,
+ status:{...status,telemetry:{...tel,positions:[]}}});
+assert(/إلغاء تسليح TP1 للمركز\s+907/.test(textOf(missingArmTree)),
+ 'Lost physical TP1 must still allow an account-specific disarm');
+const foreignArm={...armSource,partial_exit_tp1_arm:{
+ ...armSource.partial_exit_tp1_arm,target:'live'}};
+assert(!textOf(render({...opts,source:foreignArm}))
+ .includes('تسليح أمر TP1 الفعلي'));
 const invalidRevision={...approvedConsent,partial_exit_stage_consent:{
  ...approvedConsent.partial_exit_stage_consent,
  rows:[{...approvedConsent.partial_exit_stage_consent.rows[0],
@@ -269,9 +318,13 @@ assert(tauri.includes('update_position_protection, save_partial_exit_prices,'));
 assert(tauri.includes('fn update_partial_exit_trade_approval('));
 assert(tauri.includes('"/v1/execution/partial-exit-trade-approval"'));
 assert(bridge.includes("invoke('update_partial_exit_trade_approval'"));
+assert(bridge.includes("invoke('update_partial_exit_tp1_arm'"));
+assert(tauri.includes('fn update_partial_exit_tp1_arm('));
+assert(tauri.includes('"/v1/execution/partial-exit-tp1-arm"'));
 const core=fs.readFileSync(path.join(root,'../../crates/runtime/src/execution.rs'),'utf8');
 assert(core.includes('path=="/v1/execution/partial-exit-prices"'));
 assert(core.includes('path=="/v1/execution/partial-exit-trade-approval"'));
+assert(core.includes('path=="/v1/execution/partial-exit-tp1-arm"'));
 assert(core.includes('!status.requested_run && !self.pending(db)?'));
 const prices=fs.readFileSync(path.join(root,'../../crates/runtime/src/partial_exit_prices.rs'),'utf8');
 assert(!prices.includes('order_send('));
