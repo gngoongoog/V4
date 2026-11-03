@@ -1,4 +1,4 @@
-"""Fail-closed DEMO/hedging partial-TP close contract.
+"""Fail-closed account-selected hedging partial-TP close contract.
 
 This is a validation helper used by the existing durable Gateway close path.
 It does NOT create a Core broker command, stage price, completion event or
@@ -34,10 +34,11 @@ def stage_volume(cmd, account, mt5, position, info, tick=None, now_ms=None):
     stage = cmd.get("tp_stage")
     if type(stage) is not int or stage not in (1, 2, 3):
         raise ValueError("TP stage number must be 1, 2, or 3")
-    if cmd.get("kind") != "close" or cmd.get("target") != "demo":
-        raise ValueError("TP stage is DEMO close only; LIVE stage sends are disabled")
-    if account is None or getattr(account, "trade_mode", None) != 0:
-        raise ValueError("TP stage requires the bound MT5 DEMO account")
+    target_mode = {"demo": 0, "live": 2}.get(cmd.get("target"))
+    if cmd.get("kind") != "close" or target_mode is None:
+        raise ValueError("TP stage requires a selected Demo or Live close account")
+    if account is None or getattr(account, "trade_mode", None) != target_mode:
+        raise ValueError("TP stage account mode does not match the Core-selected MT5 account")
     if getattr(account, "margin_mode", None) != getattr(mt5, "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING", 2):
         raise ValueError("TP stage requires hedging mode; netting is not implemented")
     if cmd.get("manual_close") is True or cmd.get("manual_open") is True:
