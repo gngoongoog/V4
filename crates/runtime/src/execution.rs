@@ -391,6 +391,7 @@ impl Service {
         crate::partial_exit_shadow_trigger::init(db)?;
         crate::partial_exit_shadow_intent::init(db)?;
         crate::partial_exit_stage_reservation::init(db)?;
+        crate::partial_exit_stage_consent::init(db)?;
         crate::pending_cancellation::init(db)?;
         let mut inner = legacy::Service::new(db)?;
         // Old per-brain flags do not choose an execution owner. A scoped solo
@@ -990,6 +991,39 @@ impl Service {
                 "read_only":true,
                 "trade_enabled_by_read":false
             }));
+        }
+        if method=="POST" && path=="/v1/execution/partial-exit-stage-consent" {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request {context:String,position_identifier:u64,
+                plan_ids:[String;3],enabled:bool,confirm_live_login:String}
+            let request:Request=serde_json::from_slice(body)?;
+            anyhow::ensure!(!status.requested_run&&!self.pending(db)?,
+                "STOP وانتظر مصالحة كل أوامر MT5 قبل تغيير موافقة TP");
+            anyhow::ensure!(status.gateway_fresh&&self.account_matches(status),
+                "حساب MT5 المختار غير مربوط ببيانات حديثة");
+            let t=status.telemetry.as_ref().context("لقطة MT5 غير متاحة")?;
+            anyhow::ensure!(request.context==context(t),
+                "هوية الحساب أو الرمز تغيّرت؛ حدّث البيانات");
+            if self.inner.settings.target=="live"&&request.enabled {
+                anyhow::ensure!(request.confirm_live_login==t.login.to_string(),
+                    "اكتب رقم حساب Live بالضبط لتأكيد اعتماد خطة TP لهذا المركز");
+            }
+            return crate::partial_exit_stage_consent::set(db,t,
+                &self.inner.settings.target,request.position_identifier,
+                &request.plan_ids,request.enabled,self.inner.settings.revision,now);
+        }
+        if method=="GET" && path=="/v1/execution/partial-exit-stage-consent" {
+            if status.gateway_fresh&&self.account_matches(status) {
+                if let Some(t)=status.telemetry.as_ref() {
+                    return crate::partial_exit_stage_consent::report(
+                        db,t,&self.inner.settings.target);
+                }
+            }
+            return Ok(json!({"schema":"tp-stage-operator-consent-v1",
+                "status":"fresh_bound_selected_gateway_required","rows":[],
+                "read_only":true,"orders_enabled":false,
+                "automatic_tp_execution_enabled":false,"orders_created":0}));
         }
         if method=="GET" && path=="/v1/execution/partial-exit-reservations" {
             if status.gateway_fresh && self.account_matches(status) {
@@ -1723,6 +1757,12 @@ impl Service {
             // Show the Core-owned, immutable-stage command shape WITHOUT an
             // executable command ID, broker queue write or authorization.
             // This report cannot turn a research crossing into a live order.
+            value["partial_exit_stage_consent"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_stage_consent::report(db,t,&self.inner.settings.target)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
             value["partial_exit_stage_reservations"]=if status.gateway_fresh && self.account_matches(status) {
                 status.telemetry.as_ref().map(|t|
                     crate::partial_exit_stage_reservation::report(
