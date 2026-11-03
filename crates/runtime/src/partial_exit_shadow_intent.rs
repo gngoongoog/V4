@@ -17,8 +17,9 @@ fn near(a:f64,b:f64,step:f64)->bool{
     a.is_finite()&&b.is_finite()&&step.is_finite()&&step>0.
         &&(a-b).abs()<=step*1e-6
 }
-fn demo(t:&Telemetry,target:&str,now:u64)->bool{
-    target=="demo"&&t.connected&&t.demo&&t.account_trade_mode==Some(0)
+fn bound(t:&Telemetry,target:&str,now:u64)->bool{
+    matches!((target,t.demo,t.account_trade_mode),
+        ("demo",true,Some(0))|("live",false,Some(2)))&&t.connected
         &&t.margin_mode==Some(2)&&t.validate()&&t.login>0
         &&!t.server.is_empty()&&!t.symbol.is_empty()&&!t.currency.is_empty()
         &&t.quote_is_fresh(now,3_000)
@@ -26,7 +27,7 @@ fn demo(t:&Telemetry,target:&str,now:u64)->bool{
 pub fn init(db:&Connection)->Result<()>{
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS partial_exit_shadow_close_intents(
-            context TEXT NOT NULL,target TEXT NOT NULL CHECK(target='demo'),
+            context TEXT NOT NULL,target TEXT NOT NULL CHECK(target IN ('demo','live')),
             position_identifier INTEGER NOT NULL CHECK(position_identifier>0),
             plan_id TEXT NOT NULL,
             ticket INTEGER NOT NULL CHECK(ticket>0),
@@ -48,12 +49,12 @@ pub fn init(db:&Connection)->Result<()>{
 /// Runs only with complete reconciled MT5 snapshots, directly after the
 /// shadow TP1 observer and before leaving the 1Hz history-audit branch.
 pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
-    if !demo(t,target,now){return Ok(())}
+    if !bound(t,target,now){return Ok(())}
     let key=context(t);
     let shadow=crate::partial_exit_shadow_trigger::report(db,t,target)?;
     if shadow["status"]!="shadow_crossings_no_broker_orders"{return Ok(())}
     let proposals=crate::partial_exit_prices::report(db,t,target,now)?;
-    if proposals["status"]!="demo_operator_price_proposals_only"{return Ok(())}
+    if proposals["status"]!="operator_price_proposals_only"{return Ok(())}
     let Some(shadows)=shadow["rows"].as_array()else{return Ok(())};
     let Some(prices)=proposals["rows"].as_array()else{return Ok(())};
     for evidence in shadows {
@@ -79,9 +80,9 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
         if evidence["target_price"].as_f64()!=Some(level){continue}
         let mut stages=db.prepare(
             "SELECT stage,plan_id,planned_volume,status FROM partial_exit_stage_plans
-             WHERE context=?1 AND target='demo' AND position_identifier=?2
+             WHERE context=?1 AND target=?2 AND position_identifier=?3
              ORDER BY stage")?;
-        let planned=stages.query_map(params![key,pid],|r|Ok((
+        let planned=stages.query_map(params![key,target,pid],|r|Ok((
             r.get::<_,u32>(0)?,r.get::<_,String>(1)?,
             r.get::<_,f64>(2)?,r.get::<_,String>(3)?
         )))?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -94,9 +95,9 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
             u64,u64,f64,f64,String,String
         )=match db.query_row(
             "SELECT ticket,magic,initial_volume,step,status,payload
-             FROM partial_exit_drafts WHERE context=?1 AND target='demo'
-             AND position_identifier=?2",
-            params![key,pid],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,
+             FROM partial_exit_drafts WHERE context=?1 AND target=?2
+             AND position_identifier=?3",
+            params![key,target,pid],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,
                 r.get(3)?,r.get(4)?,r.get(5)?))
         ){Ok(row)=>row,Err(_)=>continue};
         if status!="draft_only"||ticket==0||magic==0||!step.is_finite()||step<=0.
@@ -147,7 +148,7 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
         if prior!=0{continue}
         let candidate=json!({
             "schema":"tp1-shadow-close-intent-v1",
-            "kind":"research_close_intent","target":"demo",
+            "kind":"research_close_intent","target":target,
             "context":key,"position_identifier":pid,
             "ticket":ticket,"magic":magic,"symbol":t.symbol,
             "brain":brain,"side":p.side,
@@ -167,18 +168,19 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
                context,target,position_identifier,plan_id,ticket,magic,
                lot_volume,full_position_volume,lot_step,target_price,
                source_quote_ms,captured_ms,payload)
-             VALUES(?1,'demo',?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
-            params![key,pid,plan,ticket,magic,lots,original,step,level,source,
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            params![key,target,pid,plan,ticket,magic,lots,original,step,level,source,
                 now,candidate.to_string()])?;
     }
     Ok(())
 }
 pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
-    if target!="demo"||!t.connected||!t.demo||t.account_trade_mode!=Some(0)||
+    if !matches!((target,t.demo,t.account_trade_mode),
+        ("demo",true,Some(0))|("live",false,Some(2)))||!t.connected||
         t.margin_mode!=Some(2)||!t.validate()||t.login==0||
         t.server.is_empty()||t.symbol.is_empty()||t.currency.is_empty(){
         return Ok(json!({"schema":"tp-shadow-close-intents-v1",
-            "status":"unverified_demo_account","read_only":true,
+            "status":"unverified_selected_account","read_only":true,
             "orders_enabled":false,"rows":[]}))
     }
     let key=context(t);
@@ -186,9 +188,9 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
         "SELECT position_identifier,plan_id,ticket,magic,lot_volume,
                 full_position_volume,lot_step,target_price,source_quote_ms,
                 captured_ms,payload
-         FROM partial_exit_shadow_close_intents WHERE context=?1 AND target='demo'
+         FROM partial_exit_shadow_close_intents WHERE context=?1 AND target=?2
          ORDER BY captured_ms DESC LIMIT 50")?;
-    let saved=statement.query_map(params![key],|r|Ok((
+    let saved=statement.query_map(params![key,target],|r|Ok((
         r.get::<_,u64>(0)?,r.get::<_,String>(1)?,
         r.get::<_,u64>(2)?,r.get::<_,u64>(3)?,
         r.get::<_,f64>(4)?,r.get::<_,f64>(5)?,
@@ -217,8 +219,8 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
         // than accepting any farther-away newly configured broker TP.
         let capture_ok=db.query_row(
             "SELECT captured_json,prices_json FROM partial_exit_price_plans
-             WHERE context=?1 AND target='demo' AND position_identifier=?2",
-            params![key,pid],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))
+             WHERE context=?1 AND target=?2 AND position_identifier=?3",
+            params![key,target,pid],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))
         ).ok().is_some_and(|(raw,levels)|{
             let cap=serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null);
             let levels=serde_json::from_str::<Value>(&levels).unwrap_or(Value::Null);
@@ -245,9 +247,9 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
                  JOIN partial_exit_drafts d ON d.context=s.context
                      AND d.target=s.target
                      AND d.position_identifier=s.position_identifier
-                 WHERE s.context=?1 AND s.target='demo'
-                     AND s.position_identifier=?2 AND s.stage=1",
-                params![key,pid],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,
+                 WHERE s.context=?1 AND s.target=?2
+                     AND s.position_identifier=?3 AND s.stage=1",
+                params![key,target,pid],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,
                     r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?)));
         let lineage_ok=lineage.is_ok_and(|(stage_lots,stage_state,orig_ticket,
             orig_magic,orig_volume,orig_step,draft_state)|
@@ -262,7 +264,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
         let bound=stage_ok&&physical_ok&&capture_ok&&lineage_ok&&recent_orders==0&&broker_grid_ok&&
             candidate["schema"]=="tp1-shadow-close-intent-v1"&&
             candidate["kind"]=="research_close_intent"&&
-            candidate["context"]==key&&candidate["target"]=="demo"&&
+            candidate["context"]==key&&candidate["target"]==target&&
             candidate["position_identifier"].as_u64()==Some(pid)&&
             candidate["ticket"].as_u64()==Some(ticket)&&
             candidate["magic"].as_u64()==Some(magic)&&
@@ -299,7 +301,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
     }
     Ok(json!({"schema":"tp-shadow-close-intents-v1",
         "status":"research_close_intents_no_broker_commands",
-        "context":key,"target":"demo","read_only":true,
+        "context":key,"target":target,"read_only":true,
         "orders_enabled":false,"next_stage_authorized":false,
         "breakeven_enabled":false,"rows":rows,
         "note":"A durable research-only close-lot snapshot, not a dispatched command or a broker fill."}))
