@@ -109,6 +109,16 @@ pub fn seal_tp1(db:&Connection,t:&Telemetry,target:&str,now:u64,
         ||revision==0||!t.quote_is_fresh(now,3_000)
     {return Ok(empty())}
     let key=account_key(t);
+    // On most pulses there is no explicit operator preparation approval.
+    // Avoid re-running the expensive multi-table producer in that case.
+    // This is a read-only indexed account/revision check, not permission to
+    // dispatch: the full current lineage is validated below regardless.
+    let any_approval:i64=db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM partial_exit_stage_consents
+         WHERE context=?1 AND target=?2 AND enabled=1
+         AND purpose='preparation_only' AND approved_revision=?3)",
+        params![key,target,revision],|r|r.get(0))?;
+    if any_approval!=1{return Ok(empty())}
     let candidates=crate::partial_exit_stage_producer::report(
         db,t,target,now,revision,deviation,risk_master)?;
     if candidates["status"]!="broker_command_shapes_not_queued"
