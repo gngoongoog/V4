@@ -48,6 +48,7 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
  const recorded=stored.find(r=>r.position_identifier===Number(position?.identifier));
  const consentValid=available&&consent.schema==='tp-stage-operator-consent-v1'&&
   consent.status==='account_scoped_operator_consent_not_execution'&&
+  consent.purpose==='preparation_only'&&
   consent.context===context&&consent.target===target&&consent.read_only===true&&
   consent.automatic_tp_execution_enabled===false&&consent.orders_created===0;
  const consentRows=consentValid&&Array.isArray(consent.rows)?consent.rows.map(object):[];
