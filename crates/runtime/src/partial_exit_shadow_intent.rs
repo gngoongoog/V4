@@ -476,6 +476,41 @@ mod tests{
         assert_eq!(command["expected_position_entry"],1999.5);
         assert_eq!(command["expected_broker_tp"],0.0);
         assert_eq!(command["tp_target_price"],2001.0);
+        crate::partial_exit_stage_reservation::init(&db).unwrap();
+        let first=crate::partial_exit_stage_reservation::prepare(
+            &db,&live,"live",10_250,7,20,true).unwrap();
+        assert_eq!(first["prepared"],1);
+        assert_eq!(first["idempotent"],0);
+        assert_eq!(first["broker_commands_created"],0);
+        let duplicate=crate::partial_exit_stage_reservation::prepare(
+            &db,&live,"live",10_250,7,20,true).unwrap();
+        assert_eq!(duplicate["prepared"],0);
+        assert_eq!(duplicate["idempotent"],1);
+        let reserved=crate::partial_exit_stage_reservation::report(
+            &db,&live,"live").unwrap();
+        assert_eq!(reserved["rows"].as_array().unwrap().len(),1);
+        assert_eq!(reserved["rows"][0]["state"],"reserved_only_no_send");
+        assert_eq!(reserved["rows"][0]["target_price"],2001.0);
+        assert_eq!(reserved["rows"][0]["lots"],0.05);
+        assert_eq!(reserved["rows"][0]["plan_id"],ids[0]);
+        assert_eq!(reserved["orders_enabled"],false);
+        let mut moved=live.clone();
+        moved.source_quote_time_ms=Some(10_350);
+        moved.quote_time_ms=Some(10_350);
+        moved.bid=Some(2001.3);
+        assert_eq!(crate::partial_exit_stage_reservation::prepare(
+            &db,&moved,"live",10_400,7,20,true).unwrap()["idempotent"],1);
+        assert_eq!(crate::partial_exit_stage_reservation::prepare(
+            &db,&moved,"live",10_400,8,20,true).unwrap()["conflicting"],1,
+            "A changed binding revision cannot rewrite an earlier stage intent");
+        let original=db.query_row(
+            "SELECT payload FROM partial_exit_stage_reservations
+             WHERE position_identifier=907 AND stage=1",[],|r|r.get::<_,String>(0)).unwrap();
+        let kept:Value=serde_json::from_str(&original).unwrap();
+        assert_eq!(kept["revision"],7);
+        let other=crate::partial_exit_stage_reservation::report(
+            &db,&telemetry(),"demo").unwrap();
+        assert!(other["rows"].as_array().unwrap().is_empty());
         assert!(command.get("id").is_none());
         assert!(command.get("state").is_none());
         assert_eq!(crate::partial_exit_stage_producer::report(
