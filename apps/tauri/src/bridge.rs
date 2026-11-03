@@ -620,6 +620,30 @@ fn update_partial_exit_trade_approval(context:String,position_identifier:u64,
 }
 
 #[tauri::command]
+fn update_partial_exit_tp1_arm(context:String,position_identifier:u64,
+    plan_ids:Vec<String>,enabled:bool,confirm_live_login:String)->Result<Value,String>{
+    if context.is_empty()||context.len()>500||position_identifier==0||
+       plan_ids.len()!=3||confirm_live_login.len()>32||
+       plan_ids.iter().any(|id|id.len()!=40||!id.starts_with("tp-plan-")||
+           !id[8..].bytes().all(|b|b.is_ascii_hexdigit()&&!b.is_ascii_uppercase())) {
+        return Err("TP1 execution arm account or immutable plan is invalid".into());
+    }
+    // Unlike preparation approval, enabling this one-shot control permits a
+    // future REAL broker close if the exact operator-selected account is
+    // subsequently STARTed and the target is reached. Core rechecks all data.
+    // A transport timeout is UNCERTAIN, never blindly retry the arm.
+    match open_client()?.checked_post("/v1/execution/partial-exit-tp1-arm",
+        json!({"context":context,"position_identifier":position_identifier,
+            "plan_ids":plan_ids,"enabled":enabled,
+            "confirm_live_login":confirm_live_login}),Duration::from_secs(8)) {
+        Ok(value)=>Ok(value),
+        Err(CheckedPostError::Rejected(error))=>Err(error),
+        Err(CheckedPostError::Uncertain(_))=>Err(
+            "نتيجة تسليح TP1 غير مؤكدة؛ لا تكرر الطلب تلقائياً. اقرأ حالة Core أولاً.".into())
+    }
+}
+
+#[tauri::command]
 fn set_learning_frozen(frozen:bool)->Result<Value,String>{
     open_client()?.post("/v1/learning/control",json!({"frozen":frozen}))
         .map_err(|err|err.to_string())
@@ -822,7 +846,7 @@ pub fn run() {
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore, save_excel_report,
-            backtest_action, study_action, news_action, studio_action, correlation_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, save_partial_exit_prices, update_partial_exit_stage_consent, update_partial_exit_trade_approval, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
+            backtest_action, study_action, news_action, studio_action, correlation_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, save_partial_exit_prices, update_partial_exit_stage_consent, update_partial_exit_trade_approval, update_partial_exit_tp1_arm, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");
