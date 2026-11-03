@@ -225,6 +225,152 @@ pub fn release(db:&Connection,t:&Telemetry,target:&str,revision:u64,
 mod tests {
     use super::*;
     #[test]
+    fn explicit_one_shot_release_is_atomic_and_authorization_revocable(){
+        use braintrade_domain::Position;
+        let db=Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE broker_commands(
+          id TEXT PRIMARY KEY,context TEXT,brain TEXT,kind TEXT,
+          created_ms INTEGER,state TEXT,payload TEXT,result TEXT DEFAULT '{}');
+          CREATE TABLE events(id INTEGER PRIMARY KEY,
+            timestamp_ms INTEGER,kind TEXT,detail TEXT);").unwrap();
+        init(&db).unwrap();
+        crate::partial_exit_tp1_held::init(&db).unwrap();
+        crate::partial_exit_tp1_arm::init(&db).unwrap();
+        crate::partial_exit_trade_approval::init(&db).unwrap();
+        crate::partial_exit_stage_consent::init(&db).unwrap();
+        crate::partial_exit_prices::init(&db).unwrap();
+        crate::partial_exit_stage::init(&db).unwrap();
+        let t=Telemetry{
+            connected:true,demo:true,account_trade_mode:Some(0),
+            margin_mode:Some(2),login:17,server:"D".into(),
+            symbol:"XAUUSDm".into(),currency:"USD".into(),
+            volume_min:Some(0.01),volume_step:Some(0.01),
+            volume_max:Some(100.0),tick_size:Some(0.01),
+            quote_time_ms:Some(1550),source_quote_time_ms:Some(1500),
+            tick_age_ms:Some(0),bid:Some(2005.2),ask:Some(2005.4),
+            positions:vec![Position{
+                ticket:87,identifier:907,magic:410601,
+                symbol:"XAUUSDm".into(),side:"BUY".into(),
+                volume:0.10,price_open:2000.0,tp:0.0,
+                ..Default::default()
+            }],..Default::default()
+        };
+        let ctx=key(&t);
+        let ids=[
+            format!("tp-plan-{}","a".repeat(32)),
+            format!("tp-plan-{}","b".repeat(32)),
+            format!("tp-plan-{}","c".repeat(32))];
+        let cap=json!({
+            "schema":"partial-exit-price-capture-v1",
+            "context":ctx,"target":"demo","position_identifier":907,
+            "ticket":87,"magic":410601,"symbol":"XAUUSDm","side":"BUY",
+            "entry":2000.0,"original_volume":0.10,"lot_step":0.01,
+            "tick_size":0.01,"original_broker_tp":0.0,"saved_ms":1000,
+            "saved_bid":2000.5,"saved_ask":2001.0,"quote_reference":2000.5,
+            "broker_quote_ms":950,
+            "orders_enabled":false,"trading_enabled":false,"breakeven_enabled":false
+        });
+        db.execute(
+            "INSERT INTO partial_exit_price_plans(
+             context,target,position_identifier,ticket,magic,
+             plan_ids_json,prices_json,captured_json,saved_ms)
+             VALUES(?1,'demo',907,87,410601,?2,'[2005.0,2010.0,2015.0]',?3,1000)",
+            params![ctx,json!(ids).to_string(),cap.to_string()]
+        ).unwrap();
+        for (i,id) in ids.iter().enumerate(){
+            db.execute(
+                "INSERT INTO partial_exit_stage_plans(
+                 context,target,position_identifier,stage,plan_id,planned_volume,
+                 created_ms,status)
+                 VALUES(?1,'demo',907,?2,?3,?4,1050,'prepared_only')",
+                params![ctx,i+1,id,[0.05,0.03,0.02][i]]
+            ).unwrap();
+        }
+        db.execute(
+            "INSERT INTO partial_exit_stage_consents(
+             context,target,position_identifier,position_ticket,plan_ids,
+             approved_revision,approved_ms,enabled,purpose)
+             VALUES(?1,'demo',907,87,?2,5,1150,1,'preparation_only')",
+            params![ctx,json!(ids).to_string()]
+        ).unwrap();
+        db.execute(
+            "INSERT INTO partial_exit_tp1_trade_approvals(
+             context,target,position_identifier,physical_ticket,plan_ids,
+             settings_revision,approved_ms,expires_ms,enabled,purpose)
+             VALUES(?1,'demo',907,87,?2,5,1200,86401200,1,
+             'tp1_future_trading_preference')",
+            params![ctx,json!(ids).to_string()]
+        ).unwrap();
+        db.execute(
+            "INSERT INTO partial_exit_tp1_arms(
+             context,target,position_identifier,physical_ticket,plan_ids,
+             settings_revision,armed_ms,expires_ms,state)
+             VALUES(?1,'demo',907,87,?2,5,1300,901300,'armed_once')",
+            params![ctx,json!(ids).to_string()]
+        ).unwrap();
+        let brain=execution::brain_for_magic(410601).unwrap();
+        let cmd=json!({
+            "id":"tp1-once-id","schema":"tp-stage-broker-command-shape-v1",
+            "context":ctx,"target":"demo","login":17,"server":"D",
+            "currency":"USD","symbol":"XAUUSDm","brain":brain,"magic":410601,
+            "kind":"close","position":87,"lots":0.05,"revision":5,
+            "tp_stage":1,"tp_stage_plan_id":ids[0],
+            "expected_position_identifier":907,"expected_position_side":"BUY",
+            "expected_position_volume":0.10,"expected_position_entry":2000.0,
+            "expected_broker_tp":0.0,"tp_target_price":2005.0,
+            "manual_close":false,"manual_open":false,
+            "created_ms":1450,"expires_ms":4450,
+            "price_source_quote_ms":1400
+        });
+        db.execute(
+            "INSERT INTO broker_commands(
+             id,context,brain,kind,created_ms,state,payload)
+             VALUES('tp1-once-id',?1,?2,'close',1450,'stage_held',?3)",
+            params![ctx,brain,cmd.to_string()]
+        ).unwrap();
+        db.execute(
+            "INSERT INTO partial_exit_tp1_held(
+             context,target,position_identifier,physical_ticket,plan_id,
+             command_id,created_ms,immutable_command,state)
+             VALUES(?1,'demo',907,87,?2,'tp1-once-id',1450,?3,'held_never_dispatched')",
+            params![ctx,ids[0],cmd.to_string()]
+        ).unwrap();
+        assert!(!authorize(&db,&t,"demo","tp1-once-id",5,1550,true),
+            "A held stage cannot be authorized before atomic release");
+        assert_eq!(release(&db,&t,"demo",5,1550,false).unwrap()["released"],0);
+        assert_eq!(release(&db,&t,"demo",5,1550,true).unwrap()["released"],1);
+        assert_eq!(release(&db,&t,"demo",5,1550,true).unwrap()["released"],0,
+            "The release is exactly once and does not create a second queued command");
+        assert_eq!(db.query_row(
+            "SELECT state FROM broker_commands WHERE id='tp1-once-id'",
+            [],|r|r.get::<_,String>(0)).unwrap(),"queued");
+        assert_eq!(db.query_row(
+            "SELECT COUNT(*) FROM partial_exit_tp1_releases",
+            [],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert!(stage_id_exists(&db,"tp1-once-id"));
+        assert!(authorize(&db,&t,"demo","tp1-once-id",5,1550,true));
+        assert!(!authorize(&db,&t,"live","tp1-once-id",5,1550,true));
+        assert!(!authorize(&db,&t,"demo","tp1-once-id",6,1550,true));
+        assert!(!authorize(&db,&t,"demo","tp1-once-id",5,1550,false));
+        db.execute(
+            "UPDATE broker_commands SET state='dispatched'
+             WHERE id='tp1-once-id'",[]
+        ).unwrap();
+        assert!(authorize(&db,&t,"demo","tp1-once-id",5,1550,true));
+        let mut changed=t.clone();changed.positions[0].volume=0.09;
+        assert!(!authorize(&db,&changed,"demo","tp1-once-id",5,1550,true),
+            "Physical volume change requires Deal reconciliation, never blind resend");
+        changed=t.clone();changed.bid=Some(2004.0);
+        assert!(!authorize(&db,&changed,"demo","tp1-once-id",5,1550,true),
+            "Current broker Bid must still cross the saved TP1 price");
+        db.execute(
+            "UPDATE partial_exit_tp1_arms SET state='disarmed'
+             WHERE position_identifier=907",[]
+        ).unwrap();
+        assert!(!authorize(&db,&t,"demo","tp1-once-id",5,1550,true),
+            "STOP+operator revoke must prevent any further Core send authority");
+    }
+    #[test]
     fn orphan_or_held_command_cannot_pass_final_stage_authorization(){
         let db=Connection::open_in_memory().unwrap();
         init(&db).unwrap();
