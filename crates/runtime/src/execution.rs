@@ -519,8 +519,8 @@ impl Service {
                 && t.login == self.inner.settings.login
                 && t.server == self.inner.settings.server
                 && t.currency == self.inner.settings.currency
-                && t.account_trade_mode
-                    == Some(if self.inner.settings.target == "demo" { 0 } else { 2 })
+                && matches!((self.inner.settings.target.as_str(),t.demo,t.account_trade_mode),
+                    ("demo",true,Some(0))|("live",false,Some(2)))
         })
     }
 
