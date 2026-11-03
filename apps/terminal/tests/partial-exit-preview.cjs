@@ -282,6 +282,25 @@ const foreignStageCommand=render({status:liveStatus,source:{...liveView,
  partial_exit_stage_command_drafts:{...stageCommandDraft,target:'demo'}}});
 assert(!shown(foreignStageCommand).includes('تركيب أمر TP داخل Rust Core'),
  'A Demo stage draft must not appear in Live account scope');
+const savedStage={
+ schema:'tp-stage-reservations-v1',
+ status:'durable_stage_intents_not_dispatched',context:liveContext,target:'live',
+ read_only:true,orders_enabled:false,broker_commands_created:0,
+ rows:[{stage:1,position_identifier:907,plan_id:'tp-plan-test',
+  state:'reserved_only_no_send',read_only:true,orders_enabled:false,
+  broker_command_id:null,lots:0.05,target_price:2001}]};
+const reservedStage=render({status:liveStatus,source:{...liveView,
+ partial_exit_stage_reservations:savedStage}});
+assert(shown(reservedStage).includes('الحجز الدائم لخطة TP داخل Core'));
+assert(shown(reservedStage).includes('تم تثبيت نية المرحلة في SQLite'));
+assert(!collect(reservedStage).some(x=>x.type==='button'));
+const forgedReservation=render({status:liveStatus,source:{...liveView,
+ partial_exit_stage_reservations:{...savedStage,
+ rows:[{...savedStage.rows[0],broker_command_id:'fake'}]}}});
+assert(!shown(forgedReservation).includes('تم تثبيت نية المرحلة في SQLite'));
+const foreignReservation=render({status:liveStatus,source:{...liveView,
+ partial_exit_stage_reservations:{...savedStage,target:'demo'}}});
+assert(!shown(foreignReservation).includes('الحجز الدائم لخطة TP داخل Core'));
 const core=file('../../crates/runtime/src/execution.rs');
 const domain=file('../../crates/domain/src/partial_exit.rs');
 const terminal=file('src/terminal.tsx');
