@@ -120,7 +120,8 @@ def round_trip_commission(rate_per_lot, lots):
 def size_to_stop_risk(mt5, account, info, symbol, side, entry, stop_price,
                       requested, risk_percent, commission, slippage_ticks,
                       micro_demo_risk_opt_in=False, broker_demo=False,
-                      micro_real_active=False):
+                      micro_real_active=False, live_elevated_risk_opt_in=False,
+                      broker_live=False):
     """Limit order size to an equity-at-risk budget using MT5 contract PnL.
 
     A requested volume is an UPPER bound, never a minimum. No order can be
@@ -133,7 +134,8 @@ def size_to_stop_risk(mt5, account, info, symbol, side, entry, stop_price,
     if not all(math.isfinite(float(v)) for v in values):
         raise ValueError('Risk sizing: all prices, lot and fee inputs must be finite')
     allowed_risk_percent = (20.0 if micro_real_active
-                            else 5.0 if micro_demo_risk_opt_in and broker_demo
+                            else 5.0 if (micro_demo_risk_opt_in and broker_demo)
+                                       or (live_elevated_risk_opt_in and broker_live)
                             else 2.0)
     if not (entry > 0 and stop_price > 0 and requested > 0
             and 0 < risk_percent <= allowed_risk_percent
@@ -695,7 +697,7 @@ class BrokerExecutor:
                        'price_source_quote_ms',
                        'deviation_points','created_ms','expires_ms',
                        'commission_per_lot','slippage_ticks','risk_percent','risk_master_enabled','risk_master_recovery','risk_master_recovery_id',
-                       'demo_flexible','micro_demo_risk_opt_in',
+                       'demo_flexible','micro_demo_risk_opt_in','live_elevated_risk_opt_in',
                        'micro_real_temporary','micro_real_cap_percent',
                        'micro_real_recovery_equity','daily_breaker_enabled',
                        'daily_breaker_limit_percent','max_quote_age_ms')
@@ -920,7 +922,9 @@ class BrokerExecutor:
                         float(cmd.get('slippage_ticks',float('nan'))),
                         micro_demo_risk_opt_in=cmd.get('micro_demo_risk_opt_in') is True,
                         broker_demo=cmd['target']=='demo' and a.trade_mode==0,
-                        micro_real_active=self._micro_real_active(cmd,a))
+                        micro_real_active=self._micro_real_active(cmd,a),
+                        live_elevated_risk_opt_in=cmd.get('live_elevated_risk_opt_in') is True,
+                        broker_live=cmd['target']=='live' and a.trade_mode==2)
                     if cmd.get('manual_open') is True and abs(lots-float(cmd['lots']))>1e-8:
                         raise ValueError('Manual volume exceeds risk budget; no automatic lot reduction')
                     request['volume']=lots
