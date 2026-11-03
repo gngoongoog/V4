@@ -146,5 +146,26 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
      {!valid&&dirty?<p className="safe-note">الأهداف لازم تكون على شبكة Tick وفي اتجاه الربح وبالترتيب، وخارج نطاق السعر الحالي. يُراجع Core أيضاً هوية المركز ومسودة TP وTP الوسيط الأصلي.</p>:null}
     </>:null}
    </form>}
+  {consentValid&&consentRows.some(r=>r.operator_approved===true&&
+   r.position_identifier!==Number(position?.identifier))?<div className="execution-binding-summary" aria-label="إلغاء موافقات TP القديمة">
+   <p className="safe-note">موافقات مخزونة من مراكز ثانية أو تغيّر وضعها. ماكو تنفيذ تلقائي منها؛ تكدر تلغيها بعد STOP حتى لو المركز ما عاد متاح بالقائمة.</p>
+   {consentRows.filter(r=>r.operator_approved===true&&
+    r.position_identifier!==Number(position?.identifier)).map((r,i)=>{
+    const ids=r.plan_ids;
+    const validIds=Array.isArray(ids)&&ids.length===3&&
+     ids.every((v:unknown)=>typeof v==='string'&&/^tp-plan-[a-f0-9]{32}$/.test(v));
+    const verified=r.purpose==='preparation_only'&&r.read_only===true&&
+     r.orders_enabled===false&&r.broker_command_id===null&&
+     Number.isSafeInteger(r.position_identifier)&&Number(r.position_identifier)>0&&validIds;
+    return <div className="brain-control-row" key={String(r.position_identifier)+'-'+i}>
+     <span>مركز {String(r.position_identifier)} · تحضير فقط</span>
+     <button type="button" disabled={!verified||consentLocked}
+      onClick={()=>{if(verified)void onConsent(context,Number(r.position_identifier),
+       ids as [string,string,string],false,'')}}>
+      إلغاء موافقة المركز {String(r.position_identifier)}
+     </button>
+    </div>;
+   })}
+  </div>:null}
  </section>;
 }
