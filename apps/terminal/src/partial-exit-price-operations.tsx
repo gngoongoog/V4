@@ -30,16 +30,16 @@ export function PartialExitPriceOperations({status,source,disabled,onSave}:{
  const stageRows=available&&Array.isArray(stages.rows)?stages.rows.map(object):[];
  const stored=available&&Array.isArray(prices.rows)?prices.rows.map(object):[];
  const positions=t?.positions||[];
- const eligible=positions.filter(p=>p.identifier>0&&p.ticket>0&&
-  ['BUY','SELL'].includes(p.side)&&stageRows.filter(r=>r.position_identifier===p.identifier
+ const eligible=positions.filter(p=>Number.isSafeInteger(p.identifier)&&Number(p.identifier)>0&&p.ticket>0&&
+  ['BUY','SELL'].includes(p.side)&&stageRows.filter(r=>r.position_identifier===Number(p.identifier)
     &&r.state==='prepared_only').length===3);
  const position=eligible.find(p=>String(p.identifier)===selected);
- const plans=position?stageRows.filter(r=>r.position_identifier===position.identifier)
+ const plans=position?stageRows.filter(r=>r.position_identifier===Number(position.identifier))
   .sort((a,b)=>Number(a.stage)-Number(b.stage)):[];
  const planIds=plans.length===3&&plans.every((r,i)=>r.stage===i+1&&
   typeof r.plan_id==='string'&&/^tp-plan-[a-f0-9]{32}$/.test(r.plan_id as string))?
   plans.map(r=>String(r.plan_id)) as [string,string,string]:null;
- const recorded=stored.find(r=>r.position_identifier===position?.identifier);
+ const recorded=stored.find(r=>r.position_identifier===Number(position?.identifier));
  const targets=values.map(Number);
  const tick=Number(t?.tick_size);
  const valid=values.every(v=>v.trim()!=='')&&targets.every(good)&&
@@ -53,7 +53,7 @@ export function PartialExitPriceOperations({status,source,disabled,onSave}:{
  const locked=disabled||!available||status?.requested_run===true||!!recorded;
  const submit=()=>{
   if(locked||!valid||!position||!planIds||!dirty)return;
-  void onSave({context,positionIdentifier:position.identifier,planIds,
+  void onSave({context,positionIdentifier:Number(position.identifier),planIds,
    prices:targets as [number,number,number]}).then(ok=>{
     if(ok){setDirty(false);setValues(['','',''])}
   });
