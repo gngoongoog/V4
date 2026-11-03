@@ -61,8 +61,25 @@ def stage_volume(cmd, account, mt5, position, info, tick=None, now_ms=None):
     target_price = _number(cmd.get("tp_target_price"), "target price")
     price_step = _number(getattr(info, "trade_tick_size", None), "broker tick size")
     open_price = _number(getattr(position, "price_open", None), "position entry")
-    if min(target_price, price_step, open_price) <= 0:
-        raise ValueError("TP stage invalid target, tick size or entry")
+    bound_entry = _number(cmd.get("expected_position_entry"), "original position entry")
+    current_broker_tp = _number(getattr(position, "tp", None), "original MT5 TP")
+    bound_broker_tp = _number(cmd.get("expected_broker_tp"), "original bound MT5 TP")
+    if min(target_price, price_step, open_price, bound_entry) <= 0 or min(current_broker_tp,bound_broker_tp)<0:
+        raise ValueError("TP stage invalid target, tick size, original entry or broker TP")
+    # MT5 can retain the same position identifier and ticket through some
+    # account/broker operations; immutable economic geometry must also match
+    # the original Core-saved price proposal at every pre-send check.
+    tolerance = price_step * 1e-6
+    if not math.isclose(open_price, bound_entry, rel_tol=0, abs_tol=tolerance):
+        raise ValueError("TP stage original position entry changed")
+    if not math.isclose(current_broker_tp, bound_broker_tp, rel_tol=0, abs_tol=tolerance):
+        raise ValueError("TP stage original MT5 full-position TP changed")
+    # The original broker TP must not flatten the whole position before a
+    # staged target. For zero TP, staged prices are the only saved proposal.
+    if bound_broker_tp:
+        if (name=="BUY" and bound_broker_tp<=target_price+price_step*0.5) or (
+                name=="SELL" and bound_broker_tp>=target_price-price_step*0.5):
+            raise ValueError("TP stage original broker full TP conflicts with partial target")
     price_units = target_price / price_step
     if not math.isfinite(price_units) or abs(price_units-round(price_units)) > 1e-6:
         raise ValueError("TP stage target not on broker price tick grid")
