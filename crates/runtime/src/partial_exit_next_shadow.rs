@@ -1,0 +1,226 @@
+//! Read-only post-TP1/TP2 ladder eligibility from *verified broker history*.
+//!
+//! The old immutable TP drafts deliberately become review_required after
+//! physical position volume changes. Do not reset those rows. Historical
+//! broker stage settlements are the ONLY route to evaluating subsequent
+//! research targets. This module creates NO broker or shadow orders.
+use anyhow::Result;
+use braintrade_domain::{execution,Telemetry};
+use rusqlite::{params,Connection};
+use serde_json::{json,Value};
+use std::collections::BTreeSet;
+
+fn key(t:&Telemetry)->String{
+    serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency))
+        .unwrap_or_default()
+}
+fn near(a:f64,b:f64,step:f64)->bool{
+    a.is_finite()&&b.is_finite()&&step.is_finite()&&step>0.
+        &&(a-b).abs()<=step*1e-6
+}
+fn account(t:&Telemetry,target:&str)->bool{
+    target=="demo"&&t.connected&&t.demo&&t.account_trade_mode==Some(0)
+        &&t.margin_mode==Some(2)&&t.validate()&&t.login>0
+        &&!t.server.is_empty()&&!t.symbol.is_empty()&&!t.currency.is_empty()
+}
+/// Stateless research gate. A "target crossed" result is NOT permission to
+/// place a trade. It must never be passed to the gateway/authorizer.
+pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
+    if !account(t,target){
+        return Ok(json!({"schema":"partial-exit-next-shadow-gate-v1",
+            "status":"unverified_demo_hedging","rows":[],
+            "read_only":true,"orders_enabled":false,
+            "next_stage_authorized":false,"breakeven_enabled":false}))
+    }
+    let context=key(t);
+    let progress=crate::partial_exit_progress::report(db,t,target)?;
+    if progress["status"]!="account_scoped_historical_settlements" {
+        return Ok(json!({"schema":"partial-exit-next-shadow-gate-v1",
+            "status":"settlement_unavailable","context":context,"target":"demo",
+            "read_only":true,"orders_enabled":false,"rows":[]}))
+    }
+    let history=progress["rows"].as_array();
+    let fresh=t.quote_is_fresh(now,3_000)
+        &&t.source_quote_time_ms.is_some_and(|ms|ms>0&&ms<=now.saturating_add(2_000))
+        &&t.bid.zip(t.ask).is_some_and(|(b,a)|b.is_finite()&&a.is_finite()&&b>0.&&a>=b);
+    let mut st=db.prepare(
+        "SELECT position_identifier,ticket,magic,plan_ids_json,prices_json,
+                captured_json,saved_ms FROM partial_exit_price_plans
+         WHERE context=?1 AND target='demo'
+         ORDER BY saved_ms DESC LIMIT 25")?;
+    let input=st.query_map(params![context],|r|Ok((
+        r.get::<_,u64>(0)?,r.get::<_,u64>(1)?,r.get::<_,u64>(2)?,
+        r.get::<_,String>(3)?,r.get::<_,String>(4)?,
+        r.get::<_,String>(5)?,r.get::<_,u64>(6)?
+    )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(st);
+    let mut rows=Vec::new();
+    for (pid,ticket,magic,raw_ids,raw_prices,raw_cap,saved) in input{
+        let ids=serde_json::from_str::<Value>(&raw_ids).unwrap_or(Value::Null);
+        let prices=serde_json::from_str::<Value>(&raw_prices).unwrap_or(Value::Null);
+        let cap=serde_json::from_str::<Value>(&raw_cap).unwrap_or(Value::Null);
+        let stages:Vec<(u32,String,f64,String)>={
+            let mut query=db.prepare(
+                "SELECT stage,plan_id,planned_volume,status
+                 FROM partial_exit_stage_plans WHERE context=?1 AND target='demo'
+                 AND position_identifier=?2 ORDER BY stage")?;
+            query.query_map(params![context,pid],|r|Ok((
+                r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?
+            )))?.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        if stages.len()!=3||!ids.is_array()||!prices.is_array() {
+            continue
+        }
+        let listed=ids.as_array().unwrap();
+        let levels=prices.as_array().unwrap();
+        let stage_identity=listed.len()==3&&levels.len()==3
+            &&stages.iter().enumerate().all(|(i,(num,id,vol,_))|
+                *num==(i+1) as u32&&listed[i]==*id
+                &&id.starts_with("tp-plan-")&&id.len()==40
+                &&vol.is_finite()&&*vol>0.);
+        if !stage_identity{continue}
+        let Some((draft_status,initial,step,draft_raw))=db.query_row(
+            "SELECT status,initial_volume,step,payload
+             FROM partial_exit_drafts WHERE context=?1 AND target='demo'
+             AND position_identifier=?2",
+            params![context,pid],|r|Ok((
+                r.get::<_,String>(0)?,r.get::<_,f64>(1)?,
+                r.get::<_,f64>(2)?,r.get::<_,String>(3)?
+            ))
+        ).ok() else{continue};
+        let draft=serde_json::from_str::<Value>(&draft_raw).unwrap_or(Value::Null);
+        let p=t.positions.iter().filter(|p|p.identifier==pid||p.ticket==ticket)
+            .collect::<Vec<_>>();
+        let tick=cap["tick_size"].as_f64().unwrap_or(f64::NAN);
+        let original_ok=cap["schema"]=="partial-exit-price-capture-v1"
+            &&cap["context"]==context&&cap["target"]=="demo"
+            &&cap["position_identifier"].as_u64()==Some(pid)
+            &&cap["ticket"].as_u64()==Some(ticket)
+            &&cap["magic"].as_u64()==Some(magic)
+            &&cap["symbol"]==t.symbol
+            &&cap["saved_ms"].as_u64()==Some(saved)
+            &&cap["orders_enabled"]==false
+            &&cap["breakeven_enabled"]==false
+            &&matches!(cap["side"].as_str(),Some("BUY"|"SELL"))
+            &&draft["schema"]=="partial-exit-draft-v1"
+            &&draft["position_identifier"].as_u64()==Some(pid)
+            &&draft["ticket"].as_u64()==Some(ticket)
+            &&draft["magic"].as_u64()==Some(magic)
+            &&draft["symbol"]==t.symbol
+            &&draft["side"]==cap["side"]
+            &&draft["broker_orders_created"]==false
+            &&near(cap["original_volume"].as_f64().unwrap_or(f64::NAN),initial,step)
+            &&near(draft["entry_volume"].as_f64().unwrap_or(f64::NAN),initial,step)
+            &&near(draft["volume_step"].as_f64().unwrap_or(f64::NAN),step,step)
+            &&near(cap["lot_step"].as_f64().unwrap_or(f64::NAN),step,step)
+            &&t.volume_step.is_some_and(|s|near(s,step,step))
+            &&t.tick_size.is_some_and(|v|near(v,tick,tick))
+            &&tick.is_finite()&&tick>0.
+            &&initial.is_finite()&&initial>0.
+            &&stages.iter().map(|s|s.2).sum::<f64>().is_finite()
+            &&near(stages.iter().map(|s|s.2).sum::<f64>(),initial,step);
+        // The *prior* stages must have independent, still-current order,
+        // Deal and residual-snapshot seals. An old synthetic record or a
+        // previously revoked seal cannot advance the ladder.
+        let sealed=|stage:u32|history.and_then(|rows|rows.iter().find(|r|
+            r["position_identifier"].as_u64()==Some(pid)
+            &&r["stage"].as_u64()==Some(stage as u64)
+            &&r["plan_id"]==stages[(stage-1) as usize].1))
+            .filter(|r|r["state"]=="historical_stage_sealed"
+                &&r["next_stage_authorized"]==false
+                &&r["breakeven_triggered"]==false);
+        let prior_count=if sealed(1).is_some(){
+            if sealed(2).is_some(){2}else{1}
+        }else{0};
+        // TP2 and TP3 are *always* false until at least one prior stage is
+        // proven with exact MT5 order, Deal and changed position volume.
+        if prior_count==0 {continue}
+        let stage=(prior_count+1) as usize;
+        if stage>3{continue}
+        let previous=sealed(prior_count).unwrap();
+        let previous_at=previous["sealed_ms"].as_u64().unwrap_or(0);
+        let volume_exited=stages.iter().take(prior_count as usize)
+            .map(|s|s.2).sum::<f64>();
+        let remaining=initial-volume_exited;
+        let active=p.len()==1&&p[0].identifier==pid&&p[0].ticket==ticket
+            &&p[0].magic==magic&&p[0].symbol==t.symbol
+            &&cap["side"]==p[0].side
+            &&execution::brain_for_magic(magic).is_some()
+            &&near(p[0].volume,remaining,step)
+            &&near(p[0].price_open,cap["entry"].as_f64().unwrap_or(f64::NAN),tick);
+        // Original immutable rows become review_required after a *verified*
+        // partial fill; never reset them. A price crossing is still only a
+        // shadow observation, not a command or Stage 2/3 authorization.
+        let previous_review_expected=draft_status=="volume_changed_unverified"
+            &&stages.iter().all(|s|s.3=="review_required");
+        let current_lots=stages[stage-1].2;
+        let expected_after=remaining-current_lots;
+        let grid=t.volume_min.zip(t.volume_max).is_some_and(|(min,max)|
+            min.is_finite()&&min>0.&&max.is_finite()&&max>=min
+            &&current_lots>=min-step*1e-6&&current_lots<=max+step*1e-6
+            &&expected_after>=min-step*1e-6
+            &&near(current_lots/step,(current_lots/step).round(),1.));
+        let target_price=levels[stage-1].as_f64().unwrap_or(f64::NAN);
+        let source=t.source_quote_time_ms.unwrap_or(0);
+        let quote_after_history=fresh&&saved>0&&previous_at>0
+            &&source>saved&&source>previous_at;
+        let quote=if cap["side"]=="BUY"{t.bid}else{t.ask};
+        let price_crossed=quote.is_some_and(|q|q.is_finite()&&
+            target_price.is_finite()&&target_price>0.
+            &&if cap["side"]=="BUY"{q>=target_price}else{q<=target_price});
+        // The only Core closes allowed on this ticket are the exact
+        // history-verified earlier TP stage commands. Any unknown, cancelled,
+        // malformed, or extra close prevents a research "ready" display.
+        let prior_ids=(1..=prior_count).filter_map(|n|
+            sealed(n).and_then(|r|r["core_command_id"].as_str().map(str::to_owned)))
+            .collect::<BTreeSet<_>>();
+        let commands= {
+            let mut st=db.prepare(
+                "SELECT id,payload FROM broker_commands WHERE context=?1 AND kind='close'")?;
+            st.query_map(params![context],|r|Ok((
+                r.get::<_,String>(0)?,r.get::<_,String>(1)?
+            )))?.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let mut related=BTreeSet::new();
+        let mut unknown=false;
+        for (id,raw) in commands{
+            let cmd=serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null);
+            let position=cmd["position"].as_u64();
+            if position.is_none() {unknown=true;continue}
+            if position==Some(ticket)||cmd["expected_position_identifier"].as_u64()==Some(pid){
+                related.insert(id);
+            }
+        }
+        let only_previous=related==prior_ids&&prior_ids.len()==prior_count as usize&&!unknown;
+        let reason=if !original_ok{"original_identity_changed"}
+            else if !previous_review_expected{"original_plan_review_state_mismatch"}
+            else if !active{"residual_position_not_verified"}
+            else if !grid{"broker_lot_grid_invalid"}
+            else if !only_previous{"unverified_or_competing_close_command"}
+            else if !quote_after_history{"broker_quote_not_after_previous_settlement"}
+            else if !price_crossed{"next_target_not_crossed"}
+            else{"historical_prerequisites_met_shadow_only"};
+        rows.push(json!({
+            "position_identifier":pid,"ticket":ticket,
+            "stage":stage,"plan_id":stages[stage-1].1,
+            "target_price":target_price,
+            "expected_close_lots":current_lots,
+            "expected_position_volume":remaining,
+            "expected_remaining_volume":if stage==3{0.0}else{expected_after},
+            "observed_quote_source_ms":source,
+            "previous_broker_sealed_ms":previous_at,
+            "state":reason,
+            "historical_condition_only":reason=="historical_prerequisites_met_shadow_only",
+            "read_only":true,"orders_enabled":false,
+            "next_stage_authorized":false,"breakeven_enabled":false
+        }));
+    }
+    Ok(json!({
+        "schema":"partial-exit-next-shadow-gate-v1",
+        "status":"verified_history_research_only",
+        "context":context,"target":"demo","rows":rows,
+        "read_only":true,"orders_enabled":false,
+        "next_stage_authorized":false,"breakeven_enabled":false,
+        "note":"A verified earlier MT5 stage and exact residual are necessary to consider a later price crossing. This report creates no trades, order IDs, approval, or stop changes."
+    }))
+}
