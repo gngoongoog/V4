@@ -25,10 +25,10 @@ pub(crate) fn allow_selected_account(db:&Connection, table:&str, index:&str)->Re
     ensure!(ddl.matches("CHECK(target='demo')").count()==1,
         "Unsupported TP table schema; preserving original without modification: {table}");
     let from=format!("{table}(");
-    ensure!(ddl.matches(&from).count()==1,
+    ensure!(ddl.matches(from.as_str()).count()==1,
         "Unsupported TP table declaration; preserving original: {table}");
     let temporary=format!("{table}__account_upgrade");
-    let new_ddl=ddl.replacen(&from,&format!("{temporary}("),1)
+    let new_ddl=ddl.replacen(from.as_str(),&format!("{temporary}("),1)
         .replacen("CHECK(target='demo')",
             "CHECK(target IN ('demo','live'))",1);
     // An interruption rolls back the whole rebuild; all columns are copied
