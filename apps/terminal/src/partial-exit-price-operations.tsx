@@ -8,10 +8,11 @@ export type PriceProposal={context:string;positionIdentifier:number;
  planIds:[string,string,string];prices:[number,number,number]};
 
 /** Operator-only saved research prices. No stage authorization or send path. */
-export function PartialExitPriceOperations({status,source,disabled,onSave,onConsent}:{
+export function PartialExitPriceOperations({status,source,disabled,onSave,onConsent,onTradeApproval}:{
  status:Status|null;source:unknown;disabled:boolean;
  onSave:(proposal:PriceProposal)=>Promise<boolean>;
  onConsent:(context:string,positionIdentifier:number,planIds:[string,string,string],enabled:boolean,confirmLiveLogin:string)=>Promise<boolean>;
+ onTradeApproval:(context:string,positionIdentifier:number,planIds:[string,string,string],enabled:boolean,confirmLiveLogin:string)=>Promise<boolean>;
 }){
  const [selected,setSelected]=useState(''),[values,setValues]=useState<[string,string,string]>(['','','']);
  const [dirty,setDirty]=useState(false);
@@ -20,6 +21,7 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
  const stages=object(view.partial_exit_stage_plans);
  const prices=object(view.partial_exit_price_proposals);
  const consent=object(view.partial_exit_stage_consent);
+ const trade=object(view.partial_exit_trade_approval);
  const sealed=object(view.partial_exit_stage_sealed_core);
  const context=t?JSON.stringify([t.server,t.login,t.symbol,t.currency]):'';
  const target=settings.target==='live'?'live':settings.target==='demo'?'demo':null;
@@ -54,6 +56,23 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
   consent.automatic_tp_execution_enabled===false&&consent.orders_created===0;
  const consentRows=consentValid&&Array.isArray(consent.rows)?consent.rows.map(object):[];
  const approval=consentRows.find(r=>r.position_identifier===Number(position?.identifier));
+ const tradeValid=available&&trade.schema==='tp1-trade-approval-v1'&&
+  trade.status==='account_scoped_trade_preference_not_execution'&&
+  trade.context===context&&trade.target===target&&trade.read_only===true&&
+  trade.tp1_execution_enabled===false&&trade.broker_commands_created===0;
+ const tradeRows=tradeValid&&Array.isArray(trade.rows)?trade.rows.map(object):[];
+ const tradeRow=tradeRows.find(r=>r.position_identifier===Number(position?.identifier));
+ const tradeMatches=!!tradeRow&&tradeRow.physical_ticket===position?.ticket&&
+  Array.isArray(tradeRow.plan_ids)&&!!planIds&&
+  JSON.stringify(tradeRow.plan_ids)===JSON.stringify(planIds)&&
+  tradeRow.purpose==='tp1_future_trading_preference'&&
+  tradeRow.read_only===true&&tradeRow.tp1_execution_enabled===false&&
+  tradeRow.orders_enabled===false&&tradeRow.broker_command_id===null;
+ const tradeActive=tradeMatches&&tradeRow.trade_preference_current===true&&
+  tradeRow.state==='trade_preference_current_sender_locked';
+ const tradeNeedsRevoke=tradeMatches&&tradeRow.state!=='trade_preference_revoked';
+ const tradeOther=tradeRows.filter(r=>r.state!=='trade_preference_revoked'&&
+  (r.position_identifier!==Number(position?.identifier)||!tradeMatches));
  const sealedScoped=available&&sealed.schema==='tp-stage-sealed-core-intents-v1'&&
   sealed.status==='account_scoped_prepared_not_sent'&&
   sealed.context===context&&sealed.target===target&&
@@ -100,6 +119,16 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
     targets[1]+tick*.5<targets[0]&&targets[2]+tick*.5<targets[1]);
  const locked=disabled||!available||status?.requested_run===true||!!recorded;
  const consentLocked=disabled||!available||status?.requested_run===true||!consentValid;
+ const tradeLocked=disabled||!available||status?.requested_run===true||!tradeValid;
+ const submitTrade=(next:boolean)=>{
+  if(tradeLocked||!position||!planIds||!recordedValid||
+   (next&&!approved)||(next&&tradeNeedsRevoke)||
+   (next&&target==='live'&&liveConfirm!==String(t?.login))||
+   (tradeRow&&!tradeMatches))return;
+  void onTradeApproval(context,Number(position.identifier),planIds,next,liveConfirm).then(ok=>{
+   if(ok)setLiveConfirm('');
+  });
+ };
  const submitConsent=(next:boolean)=>{
   if(consentLocked||!position||!planIds||!recordedValid||
    (next&&target==='live'&&liveConfirm!==String(t?.login))||
@@ -153,7 +182,7 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
      <p>{approved?'موافقة بحثية مُثبتة للحساب المحدد — لا أوامر':
       staleConsent?'الموافقة المحفوظة قديمة أو تغيّر المركز/إعدادات التنفيذ؛ يجب إلغاء الموافقة القديمة قبل مراجعة الخطة. لا يُسمح بإعادة تفعيلها بصمت.':
        'لم تُثبت موافقة تنفيذ هذه الخطة بعد'}</p>
-     {target==='live'&&!approved&&!staleConsent?<label>اكتب رقم حساب Live للتحقق من الموافقة
+     {target==='live'?<label>اكتب رقم حساب Live لتأكيد موافقة TP
       <input type="text" autoComplete="off" value={liveConfirm}
        aria-label="تأكيد رقم حساب Live لخطة TP" disabled={consentLocked}
        onChange={e=>setLiveConfirm(e.target.value)} placeholder={String(t?.login||'')}/>
@@ -163,6 +192,18 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
        onClick={()=>submitConsent(!(approved||staleConsent))}>
        {staleConsent?'إلغاء الموافقة القديمة غير الصالحة':
         approved?'إلغاء الموافقة المحفوظة':'تسجيل موافقة هذه الخطة للتحضير المستقبلي (لا إرسال)'}
+     </button>
+    </div>:null}
+    {position&&recordedValid&&tradeValid?<div className="execution-binding-summary" aria-label="تفويض تداول TP1 المستقبلي">
+     <p className="safe-note">تفويض منفصل لتداول TP1 مستقبلاً، مربوط بحسابك والمركز والخطة؛ مدة صلاحيته 24 ساعة. حالياً لا يرسل أمراً، وإغلاق TP1 التلقائي ما زال مقفلاً في Core.</p>
+     <p>{tradeActive?'تفويض TP1 مسجّل وساري لكن الإرسال معطّل إلى أن يكتمل المحرك':
+       tradeNeedsRevoke?'تفويض TP1 محفوظ لكنه قديم أو غير مطابق؛ ألغِه وراجع الإعدادات قبل الموافقة مجدداً':
+       'لم تسجّل موافقة تداول TP1 المستقلة بعد'}</p>
+     <button type="button" disabled={tradeLocked||(tradeRow&&!tradeMatches)||
+       (!tradeNeedsRevoke&&(!approved||(target==='live'&&liveConfirm!==String(t?.login))))}
+      onClick={()=>submitTrade(!tradeNeedsRevoke)}>
+      {tradeNeedsRevoke?'إلغاء تفويض تداول TP1 المحفوظ':
+       'تسجيل تفويض TP1 المستقبلي (لا إرسال الآن)'}
      </button>
     </div>:null}
     {position&&!recorded?<>
@@ -180,6 +221,26 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
      {!valid&&dirty?<p className="safe-note">الأهداف لازم تكون على شبكة Tick وفي اتجاه الربح وبالترتيب، وخارج نطاق السعر الحالي. يُراجع Core أيضاً هوية المركز ومسودة TP وTP الوسيط الأصلي.</p>:null}
     </>:null}
    </form>}
+  {tradeValid&&tradeOther.length>0?<div className="execution-binding-summary" aria-label="إلغاء تفويضات تداول TP1 القديمة">
+   <p className="safe-note">تفويضات TP1 قديمة أو تخص مركزاً غير ظاهر؛ تستطيع إلغاءها عند STOP دون إرسال أمر تداول.</p>
+   {tradeOther.map((r,i)=>{
+    const ids=r.plan_ids;
+    const validIds=Array.isArray(ids)&&ids.length===3&&
+     ids.every((v:unknown)=>typeof v==='string'&&/^tp-plan-[a-f0-9]{32}$/.test(v));
+    const verified=r.purpose==='tp1_future_trading_preference'&&r.read_only===true&&
+     r.tp1_execution_enabled===false&&r.orders_enabled===false&&
+     r.broker_command_id===null&&Number.isSafeInteger(r.position_identifier)&&
+     Number(r.position_identifier)>0&&validIds;
+    return <div className="brain-control-row" key={'trade-'+String(r.position_identifier)+'-'+i}>
+     <span>مركز {String(r.position_identifier)} · تفويض TP1 غير منفّذ</span>
+     <button type="button" disabled={!verified||tradeLocked}
+      onClick={()=>{if(verified)void onTradeApproval(context,Number(r.position_identifier),
+       ids as [string,string,string],false,'')}}>
+      إلغاء تفويض TP1 للمركز {String(r.position_identifier)}
+     </button>
+    </div>;
+   })}
+  </div>:null}
   {consentValid&&revokeOther.length>0?<div className="execution-binding-summary" aria-label="إلغاء موافقات TP القديمة">
    <p className="safe-note">موافقات مخزونة من مراكز ثانية أو تغيّر وضعها. ماكو تنفيذ تلقائي منها؛ تكدر تلغيها بعد STOP حتى لو المركز ما عاد متاح بالقائمة.</p>
    {revokeOther.map((r,i)=>{
