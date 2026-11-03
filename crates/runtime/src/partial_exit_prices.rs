@@ -166,25 +166,41 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         let ids=serde_json::from_str::<Value>(&raw_ids).unwrap_or(Value::Null);
         let prices=serde_json::from_str::<Value>(&raw_prices).unwrap_or(Value::Null);
         let cap=serde_json::from_str::<Value>(&raw_capture).unwrap_or(Value::Null);
+        let tick=cap["tick_size"].as_f64().unwrap_or(f64::NAN);
         let intact=cap["schema"]=="partial-exit-price-capture-v1"
             &&cap["context"]==key&&cap["ticket"].as_u64()==Some(ticket)
             &&cap["magic"].as_u64()==Some(magic)&&cap["position_identifier"].as_u64()==Some(pid)
             &&cap["target"]=="demo"&&cap["orders_enabled"]==false
             &&cap["breakeven_enabled"]==false&&cap["saved_ms"].as_u64()==Some(saved_ms)
+            &&matches!(cap["side"].as_str(),Some("BUY"|"SELL"))
             &&prices.as_array().is_some_and(|a|a.len()==3
-                &&a.iter().all(|p|p.as_f64().is_some_and(|p|p.is_finite()&&p>0.)))
-            &&ids.as_array().is_some_and(|a|a.len()==3);
+                &&a.iter().all(|p|p.as_f64().is_some_and(|p|grid(p,tick))))
+            &&ids.as_array().is_some_and(|a|a.len()==3&&a.iter().all(|v|
+                v.as_str().is_some_and(|id|id.starts_with("tp-plan-")&&id.len()==40)));
         let p=t.positions.iter().find(|p|p.identifier==pid&&p.ticket==ticket
-            &&p.magic==magic&&p.symbol==t.symbol);
+            &&p.magic==magic&&p.symbol==t.symbol&&cap["side"]==p.side);
+        let plan_ok=if intact{
+            let mut statement=db.prepare("SELECT stage,plan_id,status
+                FROM partial_exit_stage_plans WHERE context=?1
+                AND target='demo' AND position_identifier=?2 ORDER BY stage")?;
+            let items=statement.query_map(params![key,pid],|r|Ok((
+                r.get::<_,u32>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?
+            )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            items.len()==3&&items.iter().enumerate().all(|(i,(stage,id,status))|
+                *stage==(i+1) as u32&&ids[i]==*id&&status=="prepared_only")
+        }else{false};
         let state=if !intact{"invalid_record"}
+            else if !plan_ok{"plan_requires_review"}
             else if p.is_none(){"position_absent_review"}
             else if !fresh{"quote_stale_no_trigger"}
             else{"price_levels_saved_no_execution"};
         let buy=cap["side"]=="BUY";
         let quote=if fresh {if buy{t.bid}else{t.ask}}else{None};
-        let crossed=quote.and_then(|q|prices.as_array().map(|a|
-            a.iter().map(|v|v.as_f64().is_some_and(|price|
-                if buy{q>=price}else{q<=price})).collect::<Vec<_>>()));
+        let crossed=if state=="price_levels_saved_no_execution"{
+            quote.and_then(|q|prices.as_array().map(|a|
+                a.iter().map(|v|v.as_f64().is_some_and(|price|
+                    if buy{q>=price}else{q<=price})).collect::<Vec<_>>()))
+        }else{None};
         rows.push(json!({"position_identifier":pid,"ticket":ticket,"plan_ids":ids,
             "prices":prices,"captured_ms":saved_ms,"state":state,
             "quote_crossing_only":crossed,
@@ -280,8 +296,39 @@ mod tests{
         assert!(save(&d,&t,"demo",907,&plans,[2001.,2002.,2003.],10_000).is_err());
     }
     #[test]
+    fn restarted_database_retains_prices_without_mutating_order_execution(){
+        let path=std::env::temp_dir().join(format!("bt-tp-prices-{}.sqlite",uuid::Uuid::new_v4().simple()));
+        let t=t();let saved;
+        {
+            let d=Connection::open(&path).unwrap();
+            crate::partial_exit_ledger::init(&d).unwrap();
+            crate::partial_exit_stage::init(&d).unwrap();
+            d.execute_batch("CREATE TABLE broker_commands(context TEXT,kind TEXT,payload TEXT);").unwrap();
+            init(&d).unwrap();
+            crate::partial_exit_ledger::observe(&d,&t,"demo",100).unwrap();
+            crate::partial_exit_stage::observe(&d,&t,"demo",100).unwrap();
+            let ids=ids(&d);
+            save(&d,&t,"demo",907,&ids,[2001.,2002.,2003.],10_000).unwrap();
+            saved=report(&d,&t,"demo",10_000).unwrap()["rows"][0]["prices"].clone();
+        }
+        {
+            let d=Connection::open(&path).unwrap();
+            init(&d).unwrap();
+            let v=report(&d,&t,"demo",10_000).unwrap();
+            assert_eq!(v["rows"][0]["prices"],saved);
+            assert_eq!(v["orders_enabled"],false);
+            let used:i64=d.query_row("SELECT COUNT(*) FROM broker_commands",[],|r|r.get(0)).unwrap();
+            assert_eq!(used,0);
+            d.execute("UPDATE partial_exit_stage_plans SET status='review_required' WHERE stage=1",[]).unwrap();
+            let bad=report(&d,&t,"demo",10_000).unwrap();
+            assert_eq!(bad["rows"][0]["state"],"plan_requires_review");
+            assert!(bad["rows"][0]["quote_crossing_only"].is_null());
+        }
+        let _=std::fs::remove_file(path);
+    }
+    #[test]
     fn sell_prices_must_descend_beyond_broker_ask(){
-        let d=db();let mut t=t();t.positions[0].side="SELL".into();
+        let mut t=t();t.positions[0].side="SELL".into();
         t.positions[0].price_open=2000.8;
         // Build the original SELL plan from scratch.
         let other=Connection::open_in_memory().unwrap();
@@ -291,8 +338,6 @@ mod tests{
         init(&other).unwrap();
         crate::partial_exit_ledger::observe(&other,&t,"demo",100).unwrap();
         crate::partial_exit_stage::observe(&other,&t,"demo",100).unwrap();
-        let plans=ids(&other);
-        // ids() above reads BUY fixture; use the freshly captured SELL list.
         let v=crate::partial_exit_stage::report(&other,&t,"demo").unwrap();
         let plans=std::array::from_fn(|i|v["rows"][i]["plan_id"].as_str().unwrap().to_string());
         assert!(save(&other,&t,"demo",907,&plans,[1999.,1998.,1997.],10_000).is_ok());
