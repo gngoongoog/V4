@@ -56,6 +56,7 @@ mod partial_exit_shadow_trigger;
 mod partial_exit_shadow_intent;
 mod partial_exit_next_shadow;
 mod partial_exit_stage_contract;
+mod partial_exit_stage_producer;
 mod partial_exit_account_schema;
 mod pending_cancellation;
 mod learning_inference;
