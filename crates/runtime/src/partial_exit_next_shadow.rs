@@ -33,6 +33,19 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
             "next_stage_authorized":false,"breakeven_enabled":false}))
     }
     let context=key(t);
+    // Empty accounts must not pay for a full broker Deal-history audit on
+    // every dashboard refresh. A saved prior TP seal is required.
+    let has_prior:bool=db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM partial_exit_stage_settlements
+         WHERE context=?1 AND target='demo' LIMIT 1)",
+        params![context],|r|r.get(0))?;
+    if !has_prior {
+        return Ok(json!({"schema":"partial-exit-next-shadow-gate-v1",
+            "status":"no_broker_verified_previous_stage","context":context,
+            "target":"demo","rows":[],"read_only":true,
+            "orders_enabled":false,"next_stage_authorized":false,
+            "breakeven_enabled":false}))
+    }
     let progress=crate::partial_exit_progress::report(db,t,target)?;
     if progress["status"]!="account_scoped_historical_settlements" {
         return Ok(json!({"schema":"partial-exit-next-shadow-gate-v1",
@@ -158,7 +171,8 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         let grid=t.volume_min.zip(t.volume_max).is_some_and(|(min,max)|
             min.is_finite()&&min>0.&&max.is_finite()&&max>=min
             &&current_lots>=min-step*1e-6&&current_lots<=max+step*1e-6
-            &&expected_after>=min-step*1e-6
+            &&(stage==3&&near(expected_after,0.,step)
+               ||stage<3&&expected_after>=min-step*1e-6)
             &&near(current_lots/step,(current_lots/step).round(),1.));
         let target_price=levels[stage-1].as_f64().unwrap_or(f64::NAN);
         let source=t.source_quote_time_ms.unwrap_or(0);
