@@ -31,7 +31,8 @@ fn grid_amount(volume:f64,step:f64)->f64{
     }else{volume}
 }
 fn account(t:&Telemetry,target:&str)->bool{
-    target=="demo"&&t.connected&&t.demo&&t.account_trade_mode==Some(0)
+    matches!((target,t.demo,t.account_trade_mode),
+        ("demo",true,Some(0))|("live",false,Some(2)))&&t.connected
         &&t.margin_mode==Some(2)&&t.validate()&&t.login>0
         &&!t.server.is_empty()&&!t.symbol.is_empty()&&!t.currency.is_empty()
 }
@@ -40,7 +41,7 @@ fn account(t:&Telemetry,target:&str)->bool{
 pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
     if !account(t,target){
         return Ok(json!({"schema":"partial-exit-next-shadow-gate-v1",
-            "status":"unverified_demo_hedging","rows":[],
+            "status":"unverified_selected_account_or_hedging","rows":[],
             "read_only":true,"orders_enabled":false,
             "next_stage_authorized":false,"breakeven_enabled":false}))
     }
@@ -49,19 +50,19 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
     // every dashboard refresh. A saved prior TP seal is required.
     let has_prior:bool=db.query_row(
         "SELECT EXISTS(SELECT 1 FROM partial_exit_stage_settlements
-         WHERE context=?1 AND target='demo' LIMIT 1)",
-        params![context],|r|r.get(0))?;
+         WHERE context=?1 AND target=?2 LIMIT 1)",
+        params![context,target],|r|r.get(0))?;
     if !has_prior {
         return Ok(json!({"schema":"partial-exit-next-shadow-gate-v1",
             "status":"no_broker_verified_previous_stage","context":context,
-            "target":"demo","rows":[],"read_only":true,
+            "target":target,"rows":[],"read_only":true,
             "orders_enabled":false,"next_stage_authorized":false,
             "breakeven_enabled":false}))
     }
     let progress=crate::partial_exit_progress::report(db,t,target)?;
     if progress["status"]!="account_scoped_historical_settlements" {
         return Ok(json!({"schema":"partial-exit-next-shadow-gate-v1",
-            "status":"settlement_unavailable","context":context,"target":"demo",
+            "status":"settlement_unavailable","context":context,"target":target,
             "read_only":true,"orders_enabled":false,"rows":[]}))
     }
     let history=progress["rows"].as_array();
@@ -71,9 +72,9 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
     let mut st=db.prepare(
         "SELECT position_identifier,ticket,magic,plan_ids_json,prices_json,
                 captured_json,saved_ms FROM partial_exit_price_plans
-         WHERE context=?1 AND target='demo'
+         WHERE context=?1 AND target=?2
          ORDER BY saved_ms DESC LIMIT 25")?;
-    let input=st.query_map(params![context],|r|Ok((
+    let input=st.query_map(params![context,target],|r|Ok((
         r.get::<_,u64>(0)?,r.get::<_,u64>(1)?,r.get::<_,u64>(2)?,
         r.get::<_,String>(3)?,r.get::<_,String>(4)?,
         r.get::<_,String>(5)?,r.get::<_,u64>(6)?
@@ -87,9 +88,9 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         let stages:Vec<(u32,String,f64,String)>={
             let mut query=db.prepare(
                 "SELECT stage,plan_id,planned_volume,status
-                 FROM partial_exit_stage_plans WHERE context=?1 AND target='demo'
-                 AND position_identifier=?2 ORDER BY stage")?;
-            let loaded=query.query_map(params![context,pid],|r|Ok((
+                 FROM partial_exit_stage_plans WHERE context=?1 AND target=?2
+                 AND position_identifier=?3 ORDER BY stage")?;
+            let loaded=query.query_map(params![context,target,pid],|r|Ok((
                 r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?
             )))?.collect::<rusqlite::Result<Vec<_>>>()?;
             loaded
@@ -107,9 +108,9 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         if !stage_identity{continue}
         let Some((draft_status,initial,step,draft_raw))=db.query_row(
             "SELECT status,initial_volume,step,payload
-             FROM partial_exit_drafts WHERE context=?1 AND target='demo'
-             AND position_identifier=?2",
-            params![context,pid],|r|Ok((
+             FROM partial_exit_drafts WHERE context=?1 AND target=?2
+             AND position_identifier=?3",
+            params![context,target,pid],|r|Ok((
                 r.get::<_,String>(0)?,r.get::<_,f64>(1)?,
                 r.get::<_,f64>(2)?,r.get::<_,String>(3)?
             ))
@@ -120,7 +121,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         let tick=cap["tick_size"].as_f64().unwrap_or(f64::NAN);
         let original_ok=crate::partial_exit_prices::capture_geometry_valid(&cap,&prices)
             &&cap["schema"]=="partial-exit-price-capture-v1"
-            &&cap["context"]==context&&cap["target"]=="demo"
+            &&cap["context"]==context&&cap["target"]==target
             &&cap["position_identifier"].as_u64()==Some(pid)
             &&cap["ticket"].as_u64()==Some(ticket)
             &&cap["magic"].as_u64()==Some(magic)
@@ -263,7 +264,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
     Ok(json!({
         "schema":"partial-exit-next-shadow-gate-v1",
         "status":"verified_history_research_only",
-        "context":context,"target":"demo","rows":rows,
+        "context":context,"target":target,"rows":rows,
         "read_only":true,"orders_enabled":false,
         "next_stage_authorized":false,"breakeven_enabled":false,
         "note":"A verified earlier MT5 stage and exact residual are necessary to consider a later price crossing. This report creates no trades, order IDs, approval, or stop changes."
