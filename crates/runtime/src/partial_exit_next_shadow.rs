@@ -160,7 +160,12 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
             &&cap["side"]==p[0].side
             &&execution::brain_for_magic(magic).is_some()
             &&near(p[0].volume,remaining,step)
-            &&near(p[0].price_open,cap["entry"].as_f64().unwrap_or(f64::NAN),tick);
+            &&near(p[0].price_open,cap["entry"].as_f64().unwrap_or(f64::NAN),tick)
+            &&levels[2].as_f64().is_some_and(|last|
+                last.is_finite()&&last>0.
+                &&(p[0].tp==0.||if cap["side"]=="BUY"{
+                    p[0].tp>last+tick*0.5
+                }else{p[0].tp+tick*0.5<last}));
         // Original immutable rows become review_required after a *verified*
         // partial fill; never reset them. A price crossing is still only a
         // shadow observation, not a command or Stage 2/3 authorization.
@@ -173,7 +178,9 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
             &&current_lots>=min-step*1e-6&&current_lots<=max+step*1e-6
             &&(stage==3&&near(expected_after,0.,step)
                ||stage<3&&expected_after>=min-step*1e-6)
-            &&near(current_lots/step,(current_lots/step).round(),1.));
+            &&near(current_lots/step,(current_lots/step).round(),1.)
+            &&(stage==3&&near(expected_after,0.,step)
+                ||stage<3&&near(expected_after/step,(expected_after/step).round(),1.)));
         let target_price=levels[stage-1].as_f64().unwrap_or(f64::NAN);
         let source=t.source_quote_time_ms.unwrap_or(0);
         let quote_after_history=fresh&&saved>0&&previous_at>0
