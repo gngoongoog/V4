@@ -1624,6 +1624,12 @@ impl Service {
                 status.telemetry.as_ref().map(braintrade_domain::partial_exit::preview)
                     .unwrap_or(Value::Null)
             } else {Value::Null};
+            value["partial_exit_shadow_tp1"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_shadow_trigger::report(db,t,&self.inner.settings.target)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
             value["partial_exit_price_proposals"]=if status.gateway_fresh && self.account_matches(status) {
                 status.telemetry.as_ref().map(|t|
                     crate::partial_exit_prices::report(db,t,&self.inner.settings.target,now)
