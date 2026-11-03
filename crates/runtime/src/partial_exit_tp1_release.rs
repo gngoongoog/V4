@@ -192,9 +192,11 @@ pub fn release(db:&Connection,t:&Telemetry,target:&str,revision:u64,
         let others:i64=tx.query_row(
             "SELECT COUNT(*) FROM broker_commands
              WHERE context=?1 AND id<>?2 AND kind='close'
-               AND (NOT json_valid(payload)
-                    OR json_extract(payload,'$.position') IS NULL
-                    OR CAST(json_extract(payload,'$.position') AS INTEGER)=?3)",
+               AND CASE
+                   WHEN NOT json_valid(payload) THEN 1
+                   WHEN COALESCE(json_type(payload,'$.position'),'missing')!='integer' THEN 1
+                   WHEN CAST(json_extract(payload,'$.position') AS INTEGER)=?3 THEN 1
+                   ELSE 0 END=1",
             params![key,id,ticket],|r|r.get(0))?;
         if others!=0{rejected+=1;continue}
         let inserted=tx.execute(
@@ -338,6 +340,19 @@ mod tests {
         assert!(!authorize(&db,&t,"demo","tp1-once-id",5,1550,true),
             "A held stage cannot be authorized before atomic release");
         assert_eq!(release(&db,&t,"demo",5,1550,false).unwrap()["released"],0);
+        db.execute_batch(
+            "CREATE TRIGGER fail_tp1_release BEFORE INSERT ON partial_exit_tp1_releases
+             BEGIN SELECT RAISE(ABORT,'injected Core release journal failure'); END;"
+        ).unwrap();
+        assert!(release(&db,&t,"demo",5,1550,true).is_err(),
+            "Failed release journal must abort broker queue state transition");
+        assert_eq!(db.query_row(
+            "SELECT state FROM broker_commands WHERE id='tp1-once-id'",
+            [],|r|r.get::<_,String>(0)).unwrap(),"stage_held");
+        assert_eq!(db.query_row(
+            "SELECT COUNT(*) FROM partial_exit_tp1_releases",
+            [],|r|r.get::<_,i64>(0)).unwrap(),0);
+        db.execute_batch("DROP TRIGGER fail_tp1_release;").unwrap();
         assert_eq!(release(&db,&t,"demo",5,1550,true).unwrap()["released"],1);
         assert_eq!(release(&db,&t,"demo",5,1550,true).unwrap()["released"],0,
             "The release is exactly once and does not create a second queued command");
