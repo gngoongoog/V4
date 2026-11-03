@@ -168,6 +168,11 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         let volume_exited=stages.iter().take(prior_count as usize)
             .map(|s|s.2).sum::<f64>();
         let remaining=grid_amount(initial-volume_exited,step);
+        // A historical stage may have a correct Deal ID yet a corrupted
+        // recorded residual. Never let that old inconsistency promote TP2/3.
+        let previous_residual_proven=near(
+            previous["remaining_volume_at_seal"].as_f64().unwrap_or(f64::NAN),
+            remaining,step);
         let active=p.len()==1&&p[0].identifier==pid&&p[0].ticket==ticket
             &&p[0].magic==magic&&p[0].symbol==t.symbol
             &&cap["side"]==p[0].side
@@ -228,6 +233,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         }
         let only_previous=related==prior_ids&&prior_ids.len()==prior_count as usize&&!unknown;
         let reason=if !original_ok{"original_identity_changed"}
+            else if !previous_residual_proven{"previous_stage_residual_not_proven"}
             else if !previous_review_expected{"original_plan_review_state_mismatch"}
             else if !active{"residual_position_not_verified"}
             else if !grid{"broker_lot_grid_invalid"}
@@ -437,6 +443,17 @@ mod tests {
             }
             assert_eq!(v["orders_enabled"],false);
         }
+    }
+    #[test]
+    fn tampered_historical_residual_never_unlocks_later_research_stage(){
+        let (d,t)=tp2_fixture();
+        assert_eq!(first(&d,&t,10350)["state"],
+            "historical_prerequisites_met_shadow_only");
+        d.execute("UPDATE partial_exit_stage_settlements
+            SET remaining_volume=0.07 WHERE stage=1",[]).unwrap();
+        let after=report(&d,&t,"demo",10350).unwrap();
+        assert!(after["rows"].as_array().unwrap().is_empty(),
+            "A corrupt previous stage must no longer be historically sealed");
     }
     #[test]
     fn no_cross_account_or_real_ladder_evidence_even_with_same_position_ids(){
