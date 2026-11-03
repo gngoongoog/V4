@@ -209,6 +209,84 @@ mod tests{
             [],|r|r.get::<_,i64>(0)).unwrap(),0);
     }
     #[test]
+    fn explicit_tp1_preference_requires_immutable_price_lots_and_current_revision(){
+        use braintrade_domain::Position;
+        let db=Connection::open_in_memory().unwrap();
+        init(&db).unwrap();
+        crate::partial_exit_stage_consent::init(&db).unwrap();
+        crate::partial_exit_prices::init(&db).unwrap();
+        crate::partial_exit_stage::init(&db).unwrap();
+        let mut t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            margin_mode:Some(2),login:222,server:"DemoA".into(),
+            symbol:"XAUUSDm".into(),currency:"USD".into(),
+            volume_min:Some(0.01),volume_step:Some(0.01),
+            volume_max:Some(100.0),tick_size:Some(0.01),
+            quote_time_ms:Some(1550),source_quote_time_ms:Some(1500),
+            tick_age_ms:Some(0),bid:Some(2000.5),ask:Some(2001.0),
+            positions:vec![Position{ticket:87,identifier:907,magic:410601,
+                symbol:"XAUUSDm".into(),side:"BUY".into(),volume:0.10,
+                price_open:2000.0,tp:0.0,..Default::default()}],
+            ..Default::default()};
+        let key=context(&t);
+        let ids=[
+            format!("tp-plan-{}","a".repeat(32)),
+            format!("tp-plan-{}","b".repeat(32)),
+            format!("tp-plan-{}","c".repeat(32))
+        ];
+        let capture=json!({"schema":"partial-exit-price-capture-v1",
+            "context":key,"target":"demo","position_identifier":907,
+            "ticket":87,"magic":410601,"symbol":"XAUUSDm","side":"BUY",
+            "entry":2000.0,"original_volume":0.10,"lot_step":0.01,
+            "tick_size":0.01,"original_broker_tp":0.0,"saved_ms":1000,
+            "saved_bid":2000.5,"saved_ask":2001.0,"quote_reference":2000.5,
+            "orders_enabled":false,"trading_enabled":false,"breakeven_enabled":false});
+        db.execute("INSERT INTO partial_exit_price_plans
+            (context,target,position_identifier,ticket,magic,plan_ids_json,
+             prices_json,captured_json,saved_ms)
+            VALUES(?1,'demo',907,87,410601,?2,'[2010,2020,2030]',?3,1000)",
+            params![key,json!(ids).to_string(),capture.to_string()]).unwrap();
+        for (i,id) in ids.iter().enumerate(){
+            db.execute("INSERT INTO partial_exit_stage_plans
+               (context,target,position_identifier,stage,plan_id,planned_volume,
+                created_ms,status) VALUES(?1,'demo',907,?2,?3,?4,900,'prepared_only')",
+                params![key,i+1,id,[0.05,0.03,0.02][i]]).unwrap();
+        }
+        db.execute("INSERT INTO partial_exit_stage_consents
+            (context,target,position_identifier,position_ticket,plan_ids,
+             approved_revision,approved_ms,enabled,purpose)
+             VALUES(?1,'demo',907,87,?2,5,1200,1,'preparation_only')",
+             params![key,json!(ids).to_string()]).unwrap();
+        assert!(current_preparation(&db,&t,"demo",5,907,87,&ids).unwrap(),
+            "The separate preparatory approval must match all immutable lots and prices");
+        let saved=set(&db,&t,"demo",907,&ids,true,5,1550).unwrap();
+        assert_eq!(saved["trade_preference_saved"],true);
+        assert_eq!(saved["tp1_execution_enabled"],false);
+        let first=report(&db,&t,"demo",1550,5).unwrap();
+        assert_eq!(first["rows"][0]["state"],"trade_preference_current_sender_locked");
+        assert_eq!(first["rows"][0]["trade_preference_current"],true);
+        assert_eq!(first["rows"][0]["broker_command_id"],Value::Null);
+        assert_eq!(report(&db,&t,"demo",1550,6).unwrap()["rows"][0]["state"],
+            "trade_preference_revision_mismatch");
+        // Tampering any TP lot invalidates the approval; reauthorizing the
+        // identical plan without repairing the lineage remains forbidden.
+        db.execute("UPDATE partial_exit_stage_plans
+            SET planned_volume=0.04 WHERE stage=1",[]).unwrap();
+        assert_eq!(report(&db,&t,"demo",1550,5).unwrap()["rows"][0]["trade_preference_current"],false);
+        assert!(set(&db,&t,"demo",907,&ids,true,5,1551).is_err());
+        db.execute("UPDATE partial_exit_stage_plans
+            SET planned_volume=0.05 WHERE stage=1",[]).unwrap();
+        assert_eq!(report(&db,&t,"demo",1550+APPROVAL_LIFETIME_MS,5)
+            .unwrap()["rows"][0]["state"],"trade_preference_expired");
+        t.positions.clear();
+        assert_eq!(report(&db,&t,"demo",1551,5).unwrap()["rows"][0]
+            ["trade_preference_current"],false);
+        assert_eq!(set(&db,&t,"demo",907,&ids,false,5,1551).unwrap()
+            ["state"],"trade_preference_revoked");
+        assert_eq!(db.query_row(
+            "SELECT COUNT(*) FROM partial_exit_tp1_trade_approvals",
+            [],|r|r.get::<_,i64>(0)).unwrap(),1);
+    }
+    #[test]
     fn stored_permission_restarts_revokes_even_when_position_gone_and_never_queues(){
         let file=std::env::temp_dir().join(format!(
             "bt-tp1-optin-{}.sqlite",uuid::Uuid::new_v4().simple()));
