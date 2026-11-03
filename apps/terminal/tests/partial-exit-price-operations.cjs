@@ -82,7 +82,7 @@ const liveView={...view,context:liveContext,
 const liveOpts={status:{...status,telemetry:liveAccount},source:liveView,disabled:false};
 assert(collect(render(liveOpts)).some(x=>x.type==='button'&&!x.props.disabled),
  'A matching user-selected Live account must be able to save immutable TP plans');
-assert(textOf(render(liveOpts)).includes('حساب Live'));
+assert(collect(render(liveOpts)).filter(x=>typeof x==='string').join(' ').includes('حساب Live'));
 const foreignLive={...liveView,partial_exit_stage_plans:{...liveView.partial_exit_stage_plans,
  target:'demo'}};
 assert(!collect(render({...liveOpts,source:foreignLive}))
