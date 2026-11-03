@@ -411,6 +411,7 @@ mod tests{
             "An exact old command remains immutable, not silently refreshed");
         let mut newer=c.clone();
         newer["created_ms"]=json!(6001);newer["expires_ms"]=json!(9001);
+        newer["price_source_quote_ms"]=json!(6000);
         assert_eq!(claim(&db,&ctx,"demo",907,87,plan,&newer,6001).unwrap(),
             "conflict","An expired intent cannot reprice and resend itself");
     }
