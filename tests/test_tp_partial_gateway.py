@@ -117,7 +117,7 @@ class StageDemoTests(unittest.TestCase):
         self.assertFalse(self.mt.sends)
 
     def test_incomplete_stage_fields_must_never_fall_back_to_full_close(self):
-        for idx,missing in enumerate(("tp_stage_plan_id","tp_stage","expected_position_identifier")):
+        for idx,missing in enumerate(("tp_stage_plan_id","tp_stage","expected_position_identifier","tp_target_price")):
             self.cmd=stage_command()
             self.cmd["id"]=f"tp-incomplete-{idx}-"+"d"*24
             self.cmd.pop(missing)
@@ -126,12 +126,13 @@ class StageDemoTests(unittest.TestCase):
             self.assertEqual(len(self.mt.sends),0)
     def test_null_stage_marker_cannot_fall_back_to_full_close(self):
         self.cmd=stage_command()
-        for marker in ('tp_stage_plan_id','tp_stage','expected_position_identifier'):
+        for marker in ('tp_stage_plan_id','tp_stage','expected_position_identifier','tp_target_price'):
             with self.subTest(marker=marker):
                 cmd=stage_command()
                 cmd.pop('tp_stage_plan_id',None)
                 cmd.pop('tp_stage',None)
                 cmd.pop('expected_position_identifier',None)
+                cmd.pop('tp_target_price',None)
                 cmd[marker]=None
                 self.cmd=cmd
                 self.cmd['id']='tp-null-'+marker+'-'+'f'*20
@@ -140,10 +141,24 @@ class StageDemoTests(unittest.TestCase):
                 self.assertEqual(result['state'],'rejected',result)
                 self.assertIn('Incomplete TP stage marker',result['reason'])
                 self.assertFalse(self.mt.sends)
+    def test_lone_tp_price_marker_cannot_be_interpreted_as_full_close(self):
+        self.cmd=stage_command()
+        for key in ('tp_stage_plan_id','tp_stage','expected_position_identifier'):
+            self.cmd.pop(key)
+        self.assertFalse(is_fast_path(self.cmd))
+        result=self.send()
+        self.assertEqual(result['state'],'rejected',result)
+        self.assertIn('Incomplete TP stage marker',result['reason'])
+        self.assertFalse(self.mt.sends)
     def test_stage_replay_cannot_switch_identity_or_expected_size(self):
         self.assertEqual(self.send()["state"],"placed")
         self.cmd["tp_stage_plan_id"]="tp-plan-"+"0"*32
         self.assertEqual(self.send()["state"],"unknown")
+        self.assertEqual(len(self.mt.sends),1)
+        self.cmd["tp_stage_plan_id"]=PLAN
+        self.cmd["tp_target_price"]=2000.0
+        self.assertEqual(self.send()["state"],"unknown",
+                         "A journalled TP price cannot be modified after placement")
         self.assertEqual(len(self.mt.sends),1)
     def test_tp2_and_tp3_keep_residual_on_broker_grid(self):
         self.p.volume=0.05
