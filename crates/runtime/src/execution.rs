@@ -980,6 +980,21 @@ impl Service {
                 "trade_enabled_by_read":false
             }));
         }
+        if method=="GET" && path=="/v1/execution/partial-exit-command-drafts" {
+            if status.gateway_fresh && self.account_matches(status) {
+                if let Some(t)=status.telemetry.as_ref(){
+                    return crate::partial_exit_stage_producer::report(db,t,
+                        &self.inner.settings.target,now,
+                        self.inner.settings.revision,
+                        self.inner.settings.deviation_points,
+                        self.inner.risk_master(t).unwrap_or(true));
+                }
+            }
+            return Ok(json!({"schema":"tp-stage-broker-command-drafts-v1",
+                "status":"fresh_bound_selected_gateway_required",
+                "rows":[],"read_only":true,"orders_enabled":false,
+                "authorized":false,"broker_commands_created":0}));
+        }
         if method=="GET" && path=="/v1/execution/partial-exit-contracts" {
             if status.gateway_fresh && self.account_matches(status) {
                 if let Some(t)=status.telemetry.as_ref() {
@@ -1685,6 +1700,15 @@ impl Service {
             // Show the Core-owned, immutable-stage command shape WITHOUT an
             // executable command ID, broker queue write or authorization.
             // This report cannot turn a research crossing into a live order.
+            value["partial_exit_stage_command_drafts"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_stage_producer::report(db,t,
+                        &self.inner.settings.target,now,
+                        self.inner.settings.revision,self.inner.settings.deviation_points,
+                        self.inner.risk_master(t).unwrap_or(true))
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
             value["partial_exit_stage_contracts"]=if status.gateway_fresh && self.account_matches(status) {
                 status.telemetry.as_ref().map(|t|
                     crate::partial_exit_stage_contract::report(db,t,&self.inner.settings.target,now)
