@@ -283,10 +283,10 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
     </div>:null}
     {position&&recordedValid&&armValid?<div className="execution-binding-summary" aria-label="تسليح تنفيذ TP1 الفعلي">
      <p className="safe-note">تسليح TP1 قرار مستقل لمدة 15 دقيقة. عند تشغيل START ووصول سعر TP1، يمكن للنظام إرسال أمر إغلاق جزئي حقيقي إلى MT5 على حساب {target==='live'?'Live':'Demo'} المختار. هذا ليس اختباراً ولا وعداً بالربح؛ النتيجة تتطلب تأكيد الوسيط.</p>
-     <p>{armActive?'تسليح TP1 نشط؛ قد ينفّذ عند وصول السعر إذا شغّلت النظام.':
+     <p>{armRow?.state==='consumed_wait_broker_reconciliation'?
+       'أُطلق أمر TP1 لطابور التنفيذ؛ يمكن إلغاء إذن أي إرسال جديد أثناء STOP، لكن إذا وصل أمر للوسيط فقد يكون تنفيذه جارياً. تحقق من سجل الـDeals قبل اعتبار الصفقة مغلقة.':
+       armActive?'تسليح TP1 نشط؛ قد ينفّذ عند وصول السعر إذا شغّلت النظام.':
        armNeedsRevoke?'تسليح TP1 قديم أو انتهت صلاحيته؛ ألغِه قبل التجديد.':
-       armRow?.state==='consumed_wait_broker_reconciliation'?
-       'أُطلق أمر TP1 للطابور. يمكن إلغاء إذن الإرسال أثناء STOP، لكن الأمر المرسل فعلاً قد لا يمكن سحبه.':
        'تنفيذ TP1 غير مسلّح لهذا المركز.'}</p>
      <button type="button" disabled={armLocked||(armRow&&!armMatches)||
       (armNeedsRevoke?false:!tradeActive||!!tp1Held||
