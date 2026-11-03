@@ -630,7 +630,7 @@ class BrokerExecutor:
             if (cmd.get('tp_stage_plan_id') is not None
                     and (type(cmd.get('expected_position_identifier')) is not int
                          or positions[0]!=cmd['expected_position_identifier']
-                         or cmd.get('target')!='demo')):
+                         or cmd.get('target') not in ('demo','live'))):
                 return dict(result,reason='TP stage broker history belongs to the wrong physical position/account; reconciliation pending')
             try:
                 prices = [float(getattr(d, 'price', 0)) for d in matches]
