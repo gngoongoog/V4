@@ -1634,6 +1634,15 @@ impl Service {
                         .unwrap_or_else(|error|json!({"error":error.to_string()})))
                     .unwrap_or(Value::Null)
             } else {Value::Null};
+            // Show the Core-owned, immutable-stage command shape WITHOUT an
+            // executable command ID, broker queue write or authorization.
+            // This report cannot turn a research crossing into a live order.
+            value["partial_exit_stage_contracts"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_stage_contract::report(db,t,&self.inner.settings.target,now)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
             value["partial_exit_shadow_close_intents"]=if status.gateway_fresh && self.account_matches(status) {
                 status.telemetry.as_ref().map(|t|
                     crate::partial_exit_shadow_intent::report(db,t,&self.inner.settings.target)
