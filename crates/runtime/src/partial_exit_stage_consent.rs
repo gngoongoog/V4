@@ -144,6 +144,25 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
         "automatic_tp_execution_enabled":false,"orders_created":0,
         "note":"Per-position operator authorization stored for a future separately verified stage executor. No MT5 close is sent."}))
 }
+/// A persisted operator action is also bound to the exact Core execution
+/// settings revision. Price/position lineage alone must never revive a consent
+/// after account costs, target or execution policy have been reconfigured.
+pub fn report_for_revision(db:&Connection,t:&Telemetry,target:&str,
+    current_revision:u64)->Result<Value>{
+    let mut value=report(db,t,target)?;
+    if let Some(rows)=value["rows"].as_array_mut(){
+        for row in rows {
+            if row["operator_approved"]==true
+                &&(current_revision==0
+                    ||row["approved_revision"].as_u64()!=Some(current_revision)){
+                row["operator_approved"]=json!(false);
+                row["state"]=json!("operator_approval_revision_mismatch");
+            }
+        }
+    }
+    Ok(value)
+}
+
 /// The caller must additionally require STOP, no pending broker intents and
 /// matching MT5 session; Live requires typed login at the Core route.
 pub fn set(db:&Connection,t:&Telemetry,target:&str,pid:u64,
@@ -251,6 +270,14 @@ mod tests{
             params![key,json!(ids).to_string()]).unwrap();
         let row=||report(&db,&t,"demo").unwrap()["rows"][0].clone();
         assert_eq!(row()["state"],"operator_approved_not_dispatched");
+        assert_eq!(report_for_revision(&db,&t,"demo",5).unwrap()["rows"][0]
+            ["operator_approved"],true);
+        let changed=report_for_revision(&db,&t,"demo",6).unwrap();
+        assert_eq!(changed["rows"][0]["operator_approved"],false);
+        assert_eq!(changed["rows"][0]["state"],
+            "operator_approval_revision_mismatch");
+        assert_eq!(report_for_revision(&db,&t,"demo",0).unwrap()["rows"][0]
+            ["operator_approved"],false);
         t.positions.clear();
         assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],
             "operator_approval_stale_needs_review");
