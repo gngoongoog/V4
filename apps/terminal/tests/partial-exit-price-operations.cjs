@@ -128,6 +128,25 @@ const eligibleSaved={...verified,
  partial_exit_stage_consent:{schema:'tp-stage-operator-consent-v1',
   status:'account_scoped_operator_consent_not_execution',purpose:'preparation_only',context,target:'demo',
   read_only:true,automatic_tp_execution_enabled:false,orders_created:0,rows:[]}};
+const sealedCore={...eligibleSaved,partial_exit_stage_sealed_core:{
+ schema:'tp-stage-sealed-core-intents-v1',status:'account_scoped_prepared_not_sent',
+ context,target:'demo',read_only:true,orders_enabled:false,broker_commands_created:0,
+ rows:[{position_identifier:907,physical_ticket:87,stage:1,plan_id:stages[0].plan_id,
+  state:'sealed_unarmed_not_dispatched',broker_command_id:null,
+  gateway_send_id:null,broker_order_ticket:null}]}};
+const sealedTree=render({...opts,source:sealedCore});
+assert(textOf(sealedTree).includes('سجل هوية TP1 داخل Core'));
+assert(textOf(sealedTree).includes('لا يوجد أمر مرسل إلى MT5'));
+assert(!textOf(render({...opts,source:{...sealedCore,
+ partial_exit_stage_sealed_core:{...sealedCore.partial_exit_stage_sealed_core,target:'live'}}}))
+ .includes('سجل هوية TP1 داخل Core'),'A foreign-account seal must stay hidden');
+const expiredTree=render({...opts,source:{...sealedCore,
+ partial_exit_stage_sealed_core:{...sealedCore.partial_exit_stage_sealed_core,
+ rows:[{...sealedCore.partial_exit_stage_sealed_core.rows[0],
+ state:'historical_seal_expired_no_send'}]}}});
+assert(textOf(expiredTree).includes('سجل TP1 تاريخي'));
+assert(!collect(expiredTree).some(x=>x.type==='button'&&
+ textOf(x).includes('إرسال TP1')),'Sealing an immutable TP1 ID must never create a send action');
 const consentTree=render({...opts,source:eligibleSaved});
 assert(textOf(consentTree).includes('تسجيل موافقة هذه الخطة للتحضير المستقبلي'));
 assert(!textOf(consentTree).includes('تم تنفيذ TP'),
