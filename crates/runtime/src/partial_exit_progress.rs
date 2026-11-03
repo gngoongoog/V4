@@ -387,6 +387,26 @@ mod tests{
         assert_eq!(row(&d,&t,0)["state"],"historical_stage_sealed");
     }
     #[test]
+    fn close_by_reclassification_revokes_an_existing_tp_settlement(){
+        let d=Connection::open_in_memory().unwrap();fixture(&d);
+        let mut t=tele();seed(&d,1);t.positions[0].volume=0.05;
+        snapshot(&d,&t,200);
+        assert_eq!(row(&d,&t,0)["state"],"historical_stage_sealed");
+        // An MT5 OUT_BY deal proves a different close-by operation, not the
+        // ordinary market-close command that a staged TP is meant to send.
+        d.execute("UPDATE broker_deals SET payload=json_set(payload,'$.entry',3)",
+            []).unwrap();
+        assert_eq!(row(&d,&t,0)["state"],"sealed_evidence_needs_review");
+        seed(&d,2);t.positions[0].volume=0.02;
+        snapshot(&d,&t,300);
+        assert_eq!(row(&d,&t,1)["state"],"unsettled");
+        // Restoring genuine OUT evidence revalidates the old immutable seal;
+        // the observer never invents a new command or rewrites the seal.
+        d.execute("UPDATE broker_deals SET payload=json_set(payload,'$.entry',1)",
+            []).unwrap();
+        assert_eq!(row(&d,&t,0)["state"],"historical_stage_sealed");
+    }
+    #[test]
     fn previously_sealed_stage_cannot_unlock_next_when_history_was_corrupted(){
         let d=Connection::open_in_memory().unwrap();fixture(&d);
         let mut t=tele();seed(&d,1);t.positions[0].volume=0.05;
