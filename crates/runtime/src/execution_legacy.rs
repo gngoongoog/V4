@@ -596,7 +596,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             && t.login == self.settings.login
             && t.server == self.settings.server
             && t.currency == self.settings.currency
-            && t.account_trade_mode == Some(if self.settings.target == "demo" { 0 } else { 2 })
+            && matches!((self.settings.target.as_str(),t.demo,t.account_trade_mode),
+                ("demo",true,Some(0))|("live",false,Some(2)))
     }
     pub fn enabled(&self, s: &Status) -> bool {
         s.requested_run
