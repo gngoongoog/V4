@@ -251,6 +251,9 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
         tp1Held.state==='broker_receipt_needs_deal_and_position_reconciliation'?
         'توجد نتيجة أولية لأمر TP1؛ يلزم التحقق من Deal وحجم المركز قبل اعتماد الإغلاق.':
         'سجل TP1 يحتاج مراجعة، ولا يجوز افتراض تنفيذ أي إغلاق.'}</p>
+      {tp1Held.manual_replan_required===true&&
+       tp1Held.automatic_requeue_allowed===false?
+        <p className="safe-note">هذا الأمر انتهى قبل إطلاقه. النظام لا يعيد تسعيره أو إرساله تلقائياً على نفس المركز. راجع تاريخ أوامر MT5 والـDeals، ثم استخدم إدارة المراكز اليدوية إذا احتجت تدخلاً؛ لا تعِد تشغيل الأمر من قاعدة البيانات.</p>:null}
      </div>:null}
     {position&&recorded&&recordedValid&&consentValid?<div className="execution-binding-summary" aria-label="موافقة مشغل TP المرحلية">
      <p className="safe-note">موافقة المشغل مرتبطة بهذا المركز وهي للتحضير فقط؛ هذا الزر لا يرسل أوامر. التنفيذ الفعلي يحتاج تفويض تداول مستقل وتسليح TP1 صريحاً.</p>
