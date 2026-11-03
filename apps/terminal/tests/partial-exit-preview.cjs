@@ -251,6 +251,37 @@ const wrongMode=render({status:{...liveStatus,
 assert(!collect(wrongMode).some(x=>x.type==='table'),
  'Contradictory live broker trade mode must not show account data');
 assert(!shown(wrongMode).includes('مسودة حجم إغلاق TP1'));
+const stageCommandDraft={
+ schema:'tp-stage-broker-command-drafts-v1',
+ status:'broker_command_shapes_not_queued',context:liveContext,target:'live',
+ read_only:true,orders_enabled:false,authorized:false,broker_commands_created:0,
+ rows:[{stage:1,position_identifier:907,plan_id:'tp-plan-test',
+  read_only:true,orders_enabled:false,broker_command_id:null,
+  broker_command_draft:{
+   schema:'tp-stage-broker-command-shape-v1',kind:'close',
+   context:liveContext,target:'live',login:liveTel.login,
+   server:liveTel.server,symbol:liveTel.symbol,
+   tp_stage:1,tp_stage_plan_id:'tp-plan-test',lots:0.05,
+   tp_target_price:2001,expected_position_volume:0.1,
+   expected_position_entry:1999.5,expected_broker_tp:0.0}}]};
+const stagedCommandView=render({status:liveStatus,source:{
+ ...liveView,partial_exit_stage_command_drafts:stageCommandDraft}});
+assert(shown(stagedCommandView).includes('تركيب أمر TP داخل Rust Core'));
+assert(shown(stagedCommandView).includes('لوت 0.05 · هدف 2,001'),
+ 'Only exact, identified source-level command drafts may be shown');
+assert(!collect(stagedCommandView).some(x=>x.type==='button'),
+ 'No send button may exist for an unqueued Live stage candidate');
+const injectedId=render({status:liveStatus,source:{...liveView,
+ partial_exit_stage_command_drafts:{...stageCommandDraft,
+ rows:[{...stageCommandDraft.rows[0],
+ broker_command_draft:{...stageCommandDraft.rows[0].broker_command_draft,
+  id:'fake-command'}}]}}});
+assert(!shown(injectedId).includes('لوت 0.05 · هدف 2,001'),
+ 'Never present a payload with a claimed broker command ID as a read-only draft');
+const foreignStageCommand=render({status:liveStatus,source:{...liveView,
+ partial_exit_stage_command_drafts:{...stageCommandDraft,target:'demo'}}});
+assert(!shown(foreignStageCommand).includes('تركيب أمر TP داخل Rust Core'),
+ 'A Demo stage draft must not appear in Live account scope');
 const core=file('../../crates/runtime/src/execution.rs');
 const domain=file('../../crates/domain/src/partial_exit.rs');
 const terminal=file('src/terminal.tsx');
