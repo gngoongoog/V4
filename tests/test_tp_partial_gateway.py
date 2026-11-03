@@ -162,6 +162,41 @@ class StageDemoTests(unittest.TestCase):
         self.assertEqual(confirmed["state"],"filled",confirmed)
         self.assertTrue(confirmed["recovered_from_history"])
         self.assertEqual(len(self.mt.sends),1)
+    def test_zero_magic_exit_only_accepted_with_exact_order_and_physical_position(self):
+        self.assertEqual(self.send()["state"],"placed")
+        self.history_fill(magic=0,order=999)
+        self.assertEqual(self.send()["state"],"placed",
+                         "A cleared magic cannot bypass the exact acknowledged order")
+        self.history_fill(magic=0,position=918)
+        self.assertEqual(self.send()["state"],"placed",
+                         "A cleared magic cannot bypass the bound physical position")
+        self.history_fill(magic=0)
+        result=self.send()
+        self.assertEqual(result["state"],"filled",result)
+        self.assertTrue(result["recovered_from_history"])
+        self.assertEqual(len(self.mt.sends),1)
+    def test_filled_ack_cannot_be_overwritten_by_zero_fill_terminal_history(self):
+        self.assertEqual(self.send()["state"],"placed")
+        self.ex._terminal_partial_order=lambda *_:dict(confirmed=True,ticket=55,
+            state="canceled",volume_initial=0.05,volume_current=0.05)
+        result=self.send()
+        self.assertEqual(result["state"],"placed",result)
+        self.assertIn("no cancel/no resend",result["reason"])
+        self.assertEqual(len(self.mt.sends),1)
+        self.history_fill()
+        self.assertEqual(self.send()["state"],"filled")
+        self.assertEqual(len(self.mt.sends),1)
+    def test_genuine_zero_fill_placed_order_can_be_cancelled_without_resend(self):
+        self.mt.code=10008
+        self.mt.reply_deal=0
+        self.assertEqual(self.send()["state"],"placed")
+        self.ex._terminal_partial_order=lambda *_:dict(confirmed=True,ticket=55,
+            state="canceled",volume_initial=0.05,volume_current=0.05)
+        result=self.send()
+        self.assertEqual(result["state"],"cancelled",result)
+        self.assertEqual(len(self.mt.sends),1)
+        self.assertEqual(self.send()["state"],"cancelled")
+        self.assertEqual(len(self.mt.sends),1)
     def test_stage_done_ack_restart_waits_for_history_and_never_resends(self):
         self.assertEqual(self.send()["state"],"placed")
         self.ex.close()
