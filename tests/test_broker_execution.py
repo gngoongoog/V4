@@ -257,6 +257,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(len(self.mt.sends),1)
     def test_live_elevated_opt_in_is_independent_from_demo_and_in_durable_journal(self):
         self.mt.account.trade_mode=2
+        self.mt.account.balance=100.
         self.mt.account.equity=100.
         self.mt.account.margin_free=100.
         self.cmd.update(id='live-opt-out',target='live',risk_percent=4.0,
