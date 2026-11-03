@@ -1197,9 +1197,21 @@ class BrokerExecutor:
                 # instead of training on an acknowledgement with deal=0.
                 if state in ('filled','partial') and deal_id<=0:
                     state='placed'
+                # A TP stage ACK is only proof that MT5 accepted the request.
+                # It is not an immutable fill receipt, even with DONE+deal.
+                # Always reconcile the original order against complete MT5
+                # Deal history before Core may attribute that TP stage.
+                # The durable send row already exists: subsequent polls NEVER
+                # send a second order, including across a Gateway restart.
+                stage_ack_waiting=(cmd.get('tp_stage_plan_id') is not None
+                                   and state=='filled')
+                if stage_ack_waiting:
+                    state='placed'
                 result.update(state=state,retcode=code,reason=str(getattr(response,'comment','No broker acknowledgement')),
                               order=order_id,deal=deal_id,
                               volume=response_volume,price=response_price)
+                if stage_ack_waiting:
+                    result['reason']='TP stage broker ACK only; await exact MT5 Deal history by order/position/volume before marking filled'
                 if deal_id<=0 and code in (10009,10010):
                     result['reason']='Broker retcode acknowledges submission but deal ticket is unavailable; await exact MT5 history reconciliation'
             result['acknowledged_ms']=clock_ms()
