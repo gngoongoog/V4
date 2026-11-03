@@ -440,6 +440,32 @@ class StageDemoTests(unittest.TestCase):
                          self.mt.tick,clock_ms())
         self.assertFalse(self.mt.sends)
 
+    def test_core_price_source_timestamp_is_monotonic_and_journal_immutable(self):
+        stamp=clock_ms()
+        self.mt.tick.time_msc=stamp
+        self.cmd["price_source_quote_ms"]=stamp
+        lots, side=stage_volume(self.cmd,self.mt.account,self.mt,self.p,
+                                self.mt.info,self.mt.tick,clock_ms())
+        self.assertEqual((lots,side),(0.05,-1))
+        self.cmd["price_source_quote_ms"]=stamp+1
+        with self.assertRaisesRegex(ValueError,"predates"):
+            stage_volume(self.cmd,self.mt.account,self.mt,self.p,
+                         self.mt.info,self.mt.tick,clock_ms())
+        self.cmd["price_source_quote_ms"]="tampered"
+        with self.assertRaisesRegex(ValueError,"predates"):
+            stage_volume(self.cmd,self.mt.account,self.mt,self.p,
+                         self.mt.info,self.mt.tick,clock_ms())
+        self.cmd["price_source_quote_ms"]=stamp
+        first=self.send()
+        self.assertEqual(first["state"],"placed",first)
+        self.assertEqual(len(self.mt.sends),1)
+        # Once the Gateway journal owns the economic request, even an
+        # earlier historical crossing timestamp is a changed command.
+        self.cmd["price_source_quote_ms"]=stamp-1
+        repeated=self.send()
+        self.assertEqual(repeated["state"],"unknown",repeated)
+        self.assertEqual(len(self.mt.sends),1)
+
     def test_final_authorization_refusal_stops_before_send(self):
         self.assertEqual(self.send(lambda _:False)["state"],"cancelled")
         self.assertFalse(self.mt.sends)
