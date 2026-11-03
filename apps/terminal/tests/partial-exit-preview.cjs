@@ -221,6 +221,36 @@ const unsafeSettlement=render({status,source:{...view,
  state:'historical_stage_sealed',matched_volume:0.05,broker_order:777,
  next_stage_authorized:true,breakeven_triggered:true}]}}});
 assert(!shown(unsafeSettlement).includes('0.05 لوت مُصالح'));
+// The user selects Demo/Live: broker TP research evidence must be displayed
+// for the same selected Core account, never hidden only because it is Live.
+const liveTel={...tel,demo:false,account_trade_mode:2,server:'LiveBroker'};
+const liveStatus={...status,telemetry:liveTel};
+const liveContext=JSON.stringify([liveTel.server,liveTel.login,liveTel.symbol,liveTel.currency]);
+const liveView={...view,context:liveContext,
+ settings:{...view.settings,target:'live',server:liveTel.server},
+ partial_exit_preview:{...view.partial_exit_preview,context:liveContext,target:'live'},
+ partial_exit_shadow_tp1:{...shadow,context:liveContext,target:'live'},
+ partial_exit_next_shadow_gate:{...nextGate,context:liveContext,target:'live'},
+ partial_exit_shadow_close_intents:{...shadowIntent,context:liveContext,target:'live'},
+ partial_exit_stage_settlements:{...settlement,context:liveContext,target:'live'}};
+const realEvidence=render({status:liveStatus,source:liveView});
+for(const label of ['رصْد عبور TP1','تسوية TP1/TP2/TP3','فحص شروط TP2 / TP3',
+ 'مسودة حجم إغلاق TP1']){
+ assert(shown(realEvidence).includes(label),
+  'Live broker account must show verified scoped TP research evidence: '+label);
+}
+assert(!collect(realEvidence).some(x=>x.type==='button'),
+ 'Live research TP evidence cannot become an order action');
+const foreignReal=render({status:liveStatus,source:{...liveView,
+ partial_exit_shadow_tp1:{...shadow,context:liveContext,target:'demo'},
+ partial_exit_stage_settlements:{...settlement,context:liveContext,target:'demo'}}});
+assert(!shown(foreignReal).includes('رصْد عبور TP1'));
+assert(!shown(foreignReal).includes('تسوية TP1/TP2/TP3'));
+const wrongMode=render({status:{...liveStatus,
+ telemetry:{...liveTel,account_trade_mode:0}},source:liveView});
+assert(!collect(wrongMode).some(x=>x.type==='table'),
+ 'Contradictory live broker trade mode must not show account data');
+assert(!shown(wrongMode).includes('مسودة حجم إغلاق TP1'));
 const core=file('../../crates/runtime/src/execution.rs');
 const domain=file('../../crates/domain/src/partial_exit.rs');
 const terminal=file('src/terminal.tsx');
