@@ -44,6 +44,8 @@ pub fn init(db:&Connection)->Result<()>{
         );
         CREATE INDEX IF NOT EXISTS tp_shadow_intent_recent
           ON partial_exit_shadow_close_intents(context,target,captured_ms DESC);")?;
+    crate::partial_exit_account_schema::allow_selected_account(
+        db,"partial_exit_shadow_close_intents","CREATE INDEX IF NOT EXISTS tp_shadow_intent_recent ON partial_exit_shadow_close_intents(context,target,captured_ms DESC)")?;
     Ok(())
 }
 /// Runs only with complete reconciled MT5 snapshots, directly after the
