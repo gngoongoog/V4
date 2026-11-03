@@ -22,10 +22,11 @@ def _number(value, name):
     return result
 
 
-def stage_volume(cmd, account, mt5, position, info):
-    """Validate exact broker-owned, broker-grid planned close volume.
+def stage_volume(cmd, account, mt5, position, info, tick=None, now_ms=None):
+    """Validate exact partial-close size AND a fresh executable TP price.
 
-    Returns (close_lots, closing_side). No order_send or rounding occurs.
+    Both the early Gateway preflight and the final physical-position re-read
+    must pass a broker Bid/Ask quote. No rounding, order_send or retry here.
     """
     plan = cmd.get("tp_stage_plan_id")
     if not isinstance(plan, str) or not _PLAN.fullmatch(plan):
@@ -54,6 +55,35 @@ def stage_volume(cmd, account, mt5, position, info):
     name = "BUY" if side_type == getattr(mt5, "POSITION_TYPE_BUY", 0) else "SELL"
     if cmd.get("expected_position_side") != name:
         raise ValueError("TP stage position side changed")
+    # A TP stage is a price-conditioned close, never a blind market close.
+    # The immutable Core command must name its intended broker-tick-aligned
+    # price. The quote must be independently obtained from MT5 on every check.
+    target_price = _number(cmd.get("tp_target_price"), "target price")
+    price_step = _number(getattr(info, "trade_tick_size", None), "broker tick size")
+    open_price = _number(getattr(position, "price_open", None), "position entry")
+    if min(target_price, price_step, open_price) <= 0:
+        raise ValueError("TP stage invalid target, tick size or entry")
+    price_units = target_price / price_step
+    if not math.isfinite(price_units) or abs(price_units-round(price_units)) > 1e-6:
+        raise ValueError("TP stage target not on broker price tick grid")
+    if name == "BUY" and target_price <= open_price+price_step*0.5:
+        raise ValueError("TP stage BUY price must be above position entry")
+    if name == "SELL" and target_price+price_step*0.5 >= open_price:
+        raise ValueError("TP stage SELL price must be below position entry")
+    if tick is None or type(now_ms) is not int or now_ms<=0:
+        raise ValueError("TP stage requires a fresh MT5 source quote")
+    bid = _number(getattr(tick, "bid", None), "Bid")
+    ask = _number(getattr(tick, "ask", None), "Ask")
+    stamp = getattr(tick, "time_msc", None)
+    max_age = cmd.get("max_quote_age_ms", 3000)
+    if (min(bid,ask)<=0 or ask<bid or type(stamp) is not int or stamp<=0
+            or type(max_age) is not int or not 1<=max_age<=3000
+            or stamp>now_ms+2000 or now_ms-stamp>max_age):
+        raise ValueError("TP stage quote is invalid, crossed or stale")
+    exit_price = bid if name == "BUY" else ask
+    if (name == "BUY" and exit_price+price_step*1e-7<target_price) or (
+            name == "SELL" and exit_price>target_price+price_step*1e-7):
+        raise ValueError("TP stage broker executable price has not reached target")
     held = _number(getattr(position, "volume", None), "position volume")
     original = _number(cmd.get("expected_position_volume"), "expected position volume")
     lots = _number(cmd.get("lots"), "requested partial lots")
