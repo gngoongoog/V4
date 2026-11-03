@@ -111,8 +111,8 @@ pub fn save(db:&Connection,t:&Telemetry,target:&str,pid:u64,
         "TP الوسيط الأصلي قد يغلق كامل المركز قبل اكتمال المراحل");
     let draft:(u64,u64,f64,f64,String,String)=db.query_row(
         "SELECT ticket,magic,initial_volume,step,status,payload
-         FROM partial_exit_drafts WHERE context=?1 AND target='demo'
-         AND position_identifier=?2",
+         FROM partial_exit_drafts WHERE context=?1 AND target=?2
+         AND position_identifier=?3",
         params![key,target,pid],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,
                                 r.get(3)?,r.get(4)?,r.get(5)?))
     ).context("مسودة TP الأصلية غير متوفرة")?;
