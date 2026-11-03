@@ -60,6 +60,8 @@ pub fn init(db:&Connection)->Result<()>{
          );
          CREATE INDEX IF NOT EXISTS partial_exit_settlements_account
             ON partial_exit_stage_settlements(context,target,position_identifier);")?;
+    crate::partial_exit_account_schema::allow_selected_account(
+        db,"partial_exit_stage_settlements","CREATE INDEX IF NOT EXISTS partial_exit_settlements_account ON partial_exit_stage_settlements(context,target,position_identifier)")?;
     Ok(())
 }
 /// Only called AFTER the regular full MT5 snapshot and after original TP
