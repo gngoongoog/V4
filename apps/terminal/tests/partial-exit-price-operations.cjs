@@ -147,6 +147,23 @@ const expiredTree=render({...opts,source:{...sealedCore,
 assert(textOf(expiredTree).includes('سجل TP1 تاريخي'));
 assert(!collect(expiredTree).some(x=>x.type==='button'&&
  textOf(x).includes('إرسال TP1')),'Sealing an immutable TP1 ID must never create a send action');
+const heldPreview={...sealedCore,partial_exit_tp1_held:{
+ schema:'tp1-core-held-outbox-v1',status:'account_scoped_held_never_sent',
+ context,target:'demo',read_only:true,orders_dispatched:0,gateway_sends:0,
+ rows:[{position_identifier:907,physical_ticket:87,plan_id:stages[0].plan_id,
+  held_core_command_id:'held-id-123',state:'held_unreleased_no_gateway',
+  orders_dispatched:0,gateway_sends:0,read_only:true}]}};
+const heldTree=render({...opts,source:heldPreview});
+assert(textOf(heldTree).includes('أمر TP1 محجوز ولم يُرسل إلى الوسيط'));
+assert(!textOf(render({...opts,source:{...heldPreview,
+ partial_exit_tp1_held:{...heldPreview.partial_exit_tp1_held,target:'live'}}}))
+ .includes('أمر TP1 محجوز ولم يُرسل إلى الوسيط'),
+ 'A Demo TP1 held row cannot borrow a Live account');
+const expiredHeld=render({...opts,source:{...heldPreview,
+ partial_exit_tp1_held:{...heldPreview.partial_exit_tp1_held,
+ rows:[{...heldPreview.partial_exit_tp1_held.rows[0],
+ state:'held_expired_never_dispatched'}]}}});
+assert(textOf(expiredHeld).includes('انتهت صلاحية الأمر المحجوز دون إرساله'));
 const consentTree=render({...opts,source:eligibleSaved});
 assert(textOf(consentTree).includes('تسجيل موافقة هذه الخطة للتحضير المستقبلي'));
 assert(!textOf(consentTree).includes('تم تنفيذ TP'),
