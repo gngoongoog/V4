@@ -27,7 +27,7 @@ function collect(n,out=[]){
  if(typeof n==='object'){out.push(n);collect(n.props?.children,out);return out}
  out.push(n);return out;
 }
-const render=(opts)=>{hook=0;return exp.PartialExitPriceOperations({...opts,onSave:async()=>true,onConsent:async()=>true})};
+const render=(opts)=>{hook=0;return exp.PartialExitPriceOperations({onSave:async()=>true,onConsent:async()=>true,...opts})};
 const shown=(root)=>collect(rendered).filter(x=>typeof x==='string').join(' ');
 const tel={connected:true,demo:true,account_trade_mode:0,margin_mode:2,
  login:17,server:'D',symbol:'XAUUSDm',currency:'USD',
@@ -139,6 +139,31 @@ const approvedConsent={...eligibleSaved,partial_exit_stage_consent:{
    orders_enabled:false,broker_command_id:null,
    operator_approved:true,state:'operator_approved_not_dispatched'}]}};
 assert(textOf(render({...opts,source:approvedConsent})).includes('إلغاء الموافقة المحفوظة'));
+const invalidRevision={...approvedConsent,partial_exit_stage_consent:{
+ ...approvedConsent.partial_exit_stage_consent,
+ rows:[{...approvedConsent.partial_exit_stage_consent.rows[0],
+  operator_approved:false,state:'operator_approval_revision_mismatch'}]}};
+const seen=[];
+const staleTree=render({...opts,source:invalidRevision,onConsent:async(...args)=>{seen.push(args);return true;}});
+assert(textOf(staleTree).includes('تغيّر المركز/إعدادات التنفيذ'));
+assert(!textOf(staleTree).includes('موافقة بحثية مُثبتة للحساب المحدد'));
+const revoke=collect(staleTree).find(x=>x.type==='button'&&
+ textOf(x).includes('إلغاء الموافقة القديمة غير الصالحة'));
+assert(revoke&&!revoke.props.disabled,'Stale matching consent must be revocable');
+revoke.props.onClick();
+assert.equal(seen.length,1);
+assert.equal(seen[0][3],false,'A stale consent must NEVER be re-armed from UI');
+const lostPosition=render({...opts,status:{...status,telemetry:{...tel,positions:[]}},
+ source:invalidRevision,onConsent:async(...args)=>{seen.push(args);return true;}});
+assert(textOf(lostPosition).includes('إلغاء موافقة المركز 907'),
+ 'Even a missing physical position needs an account-scoped revoke path');
+const wrongStoredIds={...invalidRevision,partial_exit_stage_consent:{
+ ...invalidRevision.partial_exit_stage_consent,
+ rows:[{...invalidRevision.partial_exit_stage_consent.rows[0],
+  plan_ids:['forged','forged','forged']}]}};
+assert(!collect(render({...opts,source:wrongStoredIds})).some(x=>x.type==='button'&&!x.props.disabled),
+ 'Malformed historical plan IDs must never authorize a write');
+
 const borrowedConsent={...eligibleSaved,partial_exit_stage_consent:{
  ...eligibleSaved.partial_exit_stage_consent,target:'live'}};
 assert(!textOf(render({...opts,source:borrowedConsent})).includes('تسجيل موافقة هذه الخطة للتحضير المستقبلي'),
