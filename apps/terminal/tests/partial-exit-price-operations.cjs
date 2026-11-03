@@ -48,7 +48,7 @@ const view={account_matches:true,context,
  context,target:'demo',read_only:true,orders_enabled:false,rows:[]}};
 const opts={status,source:view,disabled:false};
 let rendered=render(opts);
-assert(shown(rendered).includes('DEMO فقط'));
+assert(shown(rendered).includes('حساب Demo'));
 assert(shown(rendered).includes('لا تُرسل أوامر'));
 assert(!collect(rendered).some(x=>x.type==='button'&&!x.props.disabled),
  'Must not save until a position/three prices are selected');
@@ -70,6 +70,28 @@ assert(!collect(render({...opts,status:{...status,requested_run:true}}))
  .some(x=>x.type==='button'&&!x.props.disabled));
 assert(!collect(render({...opts,status:{...status,telemetry:{...tel,demo:false,account_trade_mode:2}}}))
  .some(x=>x.type==='button'&&!x.props.disabled));
+const liveAccount={...tel,demo:false,account_trade_mode:2,server:'RealBroker'};
+const liveContext=JSON.stringify([liveAccount.server,liveAccount.login,
+ liveAccount.symbol,liveAccount.currency]);
+const liveView={...view,context:liveContext,
+ settings:{...view.settings,target:'live',server:liveAccount.server},
+ partial_exit_stage_plans:{...view.partial_exit_stage_plans,
+  context:liveContext,target:'live'},
+ partial_exit_price_proposals:{...view.partial_exit_price_proposals,
+  context:liveContext,target:'live',status:'operator_price_proposals_only'}};
+const liveOpts={status:{...status,telemetry:liveAccount},source:liveView,disabled:false};
+assert(collect(render(liveOpts)).some(x=>x.type==='button'&&!x.props.disabled),
+ 'A matching user-selected Live account must be able to save immutable TP plans');
+assert(textOf(render(liveOpts)).includes('حساب Live'));
+const foreignLive={...liveView,partial_exit_stage_plans:{...liveView.partial_exit_stage_plans,
+ target:'demo'}};
+assert(!collect(render({...liveOpts,source:foreignLive}))
+ .some(x=>x.type==='button'&&!x.props.disabled),
+ 'Live account must not adopt a Demo stage plan');
+assert(!collect(render({...liveOpts,status:{...status,
+ telemetry:{...liveAccount,account_trade_mode:0}}}))
+ .some(x=>x.type==='button'&&!x.props.disabled),
+ 'Invalid MT5 trade mode must prevent an account switch');
 const changed={...view,partial_exit_stage_plans:{...view.partial_exit_stage_plans,
  rows:stages.map(x=>({...x,state:'review_required'}))}};
 assert(!collect(render({...opts,source:changed})).some(x=>x.type==='button'&&!x.props.disabled));
