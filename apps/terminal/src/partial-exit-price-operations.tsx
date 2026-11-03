@@ -56,7 +56,8 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
  const approvalMatches=!!approval&&approval.position_ticket===position?.ticket&&
   Array.isArray(approval.plan_ids)&&!!planIds&&
   JSON.stringify(approval.plan_ids)===JSON.stringify(planIds)&&
-  approval.read_only===true&&approval.orders_enabled===false&&
+  approval.read_only===true&&approval.purpose==='preparation_only'&&
+  approval.orders_enabled===false&&
   approval.broker_command_id===null;
  const approved=approvalMatches&&approval.operator_approved===true&&
   approval.state==='operator_approved_not_dispatched';
