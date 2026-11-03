@@ -135,6 +135,25 @@ const stagedFalseProof=render({status,source:{...view,partial_exit_command_links
  evidence:{state:'broker_order_deals_exactly_linked',matched_broker_lots:0.05,
  stage_completed:true,orders_enabled:true}}]}}});
 assert(!shown(stagedFalseProof).includes('0.05 لوت موثق'));
+const shadow={schema:'partial-exit-shadow-tp1-v1',
+ status:'shadow_crossings_no_broker_orders',context,target:'demo',
+ read_only:true,orders_enabled:false,next_stage_authorized:false,
+ breakeven_enabled:false,
+ rows:[{position_identifier:907,stage:1,plan_id:'tp-plan-test',
+ state:'historical_shadow_crossing_only',
+ source_quote_time_ms:20261103010200,observed_price:2001.2,target_price:2001,
+ orders_enabled:false,broker_fill_verified:false,next_stage_authorized:false,
+ breakeven_enabled:false}]};
+const shadowTree=render({status,source:{...view,partial_exit_shadow_tp1:shadow}});
+assert(shown(shadowTree).includes('رصْد عبور TP1'));
+assert(shown(shadowTree).includes('عبور سعري بحثي مؤرشف فقط'));
+assert(!collect(shadowTree).some(x=>x.type==='button'));
+const fakeShadow=render({status,source:{...view,
+ partial_exit_shadow_tp1:{...shadow,context:'another-account'}}});
+assert(!shown(fakeShadow).includes('رصْد عبور TP1'));
+const unsafeShadow=render({status,source:{...view,
+ partial_exit_shadow_tp1:{...shadow,rows:[{...shadow.rows[0],broker_fill_verified:true}]}}});
+assert(!shown(unsafeShadow).includes('عبور سعري بحثي مؤرشف فقط'));
 const settlement={schema:'partial-exit-stage-settlements-v1',
  status:'account_scoped_historical_settlements',context,target:'demo',
  read_only:true,orders_enabled:false,next_stage_authorized:false,
@@ -171,6 +190,12 @@ assert(core.includes('value["partial_exit_stage_plans"]=if status.gateway_fresh 
 assert(core.includes('value["partial_exit_deal_evidence"]=if status.gateway_fresh && self.account_matches(status)'));
 assert(core.includes('value["partial_exit_command_links"]=if status.gateway_fresh && self.account_matches(status)'));
 assert(core.includes('value["partial_exit_stage_settlements"]=if status.gateway_fresh && self.account_matches(status)'));
+assert(core.includes('value["partial_exit_shadow_tp1"]=if status.gateway_fresh && self.account_matches(status)'));
+const shadowRust=file('../../crates/runtime/src/partial_exit_shadow_trigger.rs');
+assert(shadowRust.includes('partial_exit_shadow_tp1'));
+assert(shadowRust.includes('source_quote_time_ms'));
+assert(!shadowRust.includes('order_send('));
+
 const settleSrc=file('../../crates/runtime/src/partial_exit_progress.rs');
 assert(settleSrc.includes('partial_exit_stage_settlements'));
 assert(settleSrc.includes('authorizes_next_stage')); 
