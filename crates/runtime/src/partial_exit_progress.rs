@@ -257,6 +257,7 @@ mod tests{
     fn fixture(d:&Connection){
         crate::partial_exit_ledger::init(d).unwrap();
         crate::partial_exit_stage::init(d).unwrap();
+        crate::partial_exit_prices::init(d).unwrap();
         init(d).unwrap();
         d.execute_batch(
             "CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT,brain TEXT,
@@ -268,6 +269,22 @@ mod tests{
         let t=tele();
         crate::partial_exit_ledger::observe(d,&t,"demo",100).unwrap();
         crate::partial_exit_stage::observe(d,&t,"demo",100).unwrap();
+        let plans=crate::partial_exit_stage::report(d,&t,"demo").unwrap();
+        let ids=(0..3).map(|i|plans["rows"][i]["plan_id"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        let capture=json!({"schema":"partial-exit-price-capture-v1",
+            "context":context(&t),"target":"demo",
+            "position_identifier":907,"ticket":87,"magic":410601,
+            "side":"BUY","symbol":"XAUUSDm","entry":1999.5,
+            "original_volume":0.10,"lot_step":0.01,"tick_size":0.01,
+            "quote_reference":2000.0,"saved_bid":2000.0,
+            "saved_ask":2000.1,"original_broker_tp":0.0,
+            "saved_ms":120,"orders_enabled":false,"breakeven_enabled":false});
+        d.execute("INSERT INTO partial_exit_price_plans VALUES(?1,'demo',
+            907,87,410601,?2,?3,?4,120)",
+            params![context(&t),json!(ids).to_string(),
+                json!([2000.3,2000.6,2000.9]).to_string(),
+                capture.to_string()]).unwrap();
         d.execute("INSERT INTO broker_history_sync VALUES(?1,'demo',1000,1001)",
             [context(&t)]).unwrap();
     }
@@ -287,7 +304,9 @@ mod tests{
             "position":87,"tp_stage":stage,"tp_stage_plan_id":plan,
             "lots":quantity,"created_ms":150+stage as u64,
             "expected_position_identifier":907,
-            "expected_position_volume":expected,"expected_position_side":"BUY"});
+            "expected_position_volume":expected,"expected_position_side":"BUY",
+            "tp_target_price":[2000.3,2000.6,2000.9][(stage-1) as usize],
+            "expected_position_entry":1999.5,"expected_broker_tp":0.0});
         let receipt=json!({"state":"filled","recovered_from_history":true,
             "volume":quantity,"position_id":907,"order":order,
             "deal":ticket,"deals":[ticket],
@@ -405,6 +424,19 @@ mod tests{
         d.execute("UPDATE broker_deals SET payload=json_set(payload,'$.entry',1)",
             []).unwrap();
         assert_eq!(row(&d,&t,0)["state"],"historical_stage_sealed");
+    }
+    #[test]
+    fn changed_original_tp_ladder_revokes_sealed_stage_and_blocks_next(){
+        let d=Connection::open_in_memory().unwrap();fixture(&d);
+        let mut t=tele();seed(&d,1);t.positions[0].volume=0.05;
+        snapshot(&d,&t,200);
+        assert_eq!(row(&d,&t,0)["state"],"historical_stage_sealed");
+        d.execute("UPDATE partial_exit_price_plans
+            SET prices_json=json_set(prices_json,'$[0]',2000.4)",[]).unwrap();
+        assert_eq!(row(&d,&t,0)["state"],"sealed_evidence_needs_review");
+        seed(&d,2);t.positions[0].volume=0.02;
+        snapshot(&d,&t,300);
+        assert_eq!(row(&d,&t,1)["state"],"unsettled");
     }
     #[test]
     fn previously_sealed_stage_cannot_unlock_next_when_history_was_corrupted(){
