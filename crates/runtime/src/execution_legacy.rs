@@ -16,11 +16,12 @@ use std::collections::{BTreeMap, BTreeSet};
 // unsettled until Gateway supplies exact terminal broker-order history.
 pub(crate) const PENDING_BROKER_SQL:&str = "(state IN ('queued','dispatched','unknown','placed','filled','partial') OR (state='observed' AND json_extract(result,'$.state')='partial' AND COALESCE(json_extract(result,'$.terminal_order.confirmed'),0)<>1))";
 
-// The Gateway has a DEMO-only staged-close validation contract, but Core
-// deliberately has NO priced TP-stage producer or sequence authorization yet.
-// Fail closed for any staged/partial marker even if a durable command was
-// externally inserted and marked dispatched. A regular full close remains
-// governed by its existing independent authorization rules.
+// Core now has a selected-account TP1/TP2/TP3 economic shape producer and a
+// durable research reservation journal; neither is an authorized outbox entry.
+// The MT5 Gateway validates a stage when one arrives, but the separately
+// audited Core queue + authorization + restart reconciliation is incomplete.
+// Keep this fail-closed gate for ALL stage markers, including Live and Demo.
+// Normal full closes remain independently authorized, not disabled.
 fn incomplete_tp_stage_execution_locked(command:&Value)->bool {
     ["tp_stage_plan_id","tp_stage","expected_position_identifier","tp_target_price","expected_position_entry","expected_broker_tp"]
         .iter().any(|key|command.get(*key).is_some())
