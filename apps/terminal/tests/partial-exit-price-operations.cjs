@@ -196,7 +196,7 @@ const tradeSource={...approvedConsent,partial_exit_trade_approval:{
 const seenTrade=[];
 const tradeTree=render({...opts,source:tradeSource,
  onTradeApproval:async(...args)=>{seenTrade.push(args);return true;}});
-assert(textOf(tradeTree).includes('تفويض منفصل لتداول TP1 مستقبلاً'));
+assert(textOf(tradeTree).includes('تفويض تداول TP1 المستقبلي مرتبط بالحساب'));
 assert(textOf(tradeTree).includes('يلزم تسليح تنفيذ TP1 مستقل قبل START'));
 const createTrade=collect(tradeTree).find(x=>x.type==='button'&&
  textOf(x).includes('تسجيل تفويض TP1 المستقبلي'));
