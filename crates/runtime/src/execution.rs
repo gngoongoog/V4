@@ -952,7 +952,7 @@ impl Service {
                 }
             }
             return Ok(json!({"schema":"tp-stage-core-contract-preview-v1",
-                "status":"fresh_bound_demo_gateway_required",
+                "status":"fresh_bound_selected_gateway_required",
                 "rows":[],"read_only":true,"orders_enabled":false,
                 "authorized":false,"breakeven_enabled":false}));
         }
@@ -967,11 +967,11 @@ impl Service {
             anyhow::ensure!(!status.requested_run && !self.pending(db)?,
                 "أوقف فتح الصفقات وانتظر مصالحة الأوامر قبل حفظ أسعار TP");
             anyhow::ensure!(status.gateway_fresh && self.account_matches(status)
-                &&self.inner.settings.target=="demo",
-                "لا تُحفظ أسعار TP إلا لحساب Demo الحالي المرتبط حديثاً");
+                &&matches!(self.inner.settings.target.as_str(),"demo"|"live"),
+                "لا تُحفظ أسعار TP إلا للحساب الحالي المرتبط والمحدد في الإعدادات");
             let t=status.telemetry.as_ref().context("لقطة MT5 غير متاحة")?;
             anyhow::ensure!(request.context==context(t),"هوية الحساب تغيّرت؛ حدّث الصفحة");
-            return crate::partial_exit_prices::save(db,t,"demo",
+            return crate::partial_exit_prices::save(db,t,&self.inner.settings.target,
                 request.position_identifier,&request.plan_ids,request.prices,now);
         }
         if method=="POST" && path=="/v1/execution/settings" {
