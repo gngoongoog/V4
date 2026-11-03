@@ -451,6 +451,16 @@ mod tests {
         assert_eq!(v["expected_remaining_volume"],0.0);
         assert_eq!(v["orders_enabled"],false);
         assert_eq!(v["next_stage_authorized"],false);
+        let preview=crate::partial_exit_stage_contract::report(&d,&t,"demo",10750).unwrap();
+        assert_eq!(preview["rows"].as_array().unwrap().len(),1);
+        let stage=&preview["rows"][0];
+        assert_eq!(stage["tp_stage"],3);
+        assert_eq!(stage["tp_target_price"],2003.0);
+        assert_eq!(stage["lots"],0.02);
+        assert_eq!(stage["expected_position_volume"],0.02);
+        assert_eq!(stage["prior_stage_broker_sealed"],true);
+        assert_eq!(stage["authorized"],false);
+        assert!(stage.get("id").is_none()&&stage.get("kind").is_none());
     }
     #[test]
     fn post_fill_corrupt_deal_extra_close_wrong_volume_or_old_quote_fails_closed(){
