@@ -13,8 +13,9 @@ fn context(t:&Telemetry)->String {
     serde_json::to_string(&(&t.server,t.login,&t.symbol,&t.currency))
         .unwrap_or_default()
 }
-fn demo(t:&Telemetry,target:&str)->bool{
-    target=="demo"&&t.connected&&t.demo&&t.account_trade_mode==Some(0)
+fn bound(t:&Telemetry,target:&str)->bool{
+    matches!((target,t.demo,t.account_trade_mode),
+        ("demo",true,Some(0))|("live",false,Some(2)))&&t.connected
         &&t.login>0&&!t.server.is_empty()&&!t.symbol.is_empty()
         &&!t.currency.is_empty()&&t.validate()
 }
@@ -44,7 +45,7 @@ pub fn init(db:&Connection)->Result<()>{
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS partial_exit_stage_settlements(
             context TEXT NOT NULL,
-            target TEXT NOT NULL CHECK(target='demo'),
+            target TEXT NOT NULL CHECK(target IN ('demo','live')),
             position_identifier INTEGER NOT NULL CHECK(position_identifier>0),
             stage INTEGER NOT NULL CHECK(stage BETWEEN 1 AND 3),
             plan_id TEXT NOT NULL UNIQUE,
@@ -64,7 +65,7 @@ pub fn init(db:&Connection)->Result<()>{
 /// Only called AFTER the regular full MT5 snapshot and after original TP
 /// drafts/plans have been observed. Never on fast tick path or from UI reads.
 pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
-    if !demo(t,target)||now==0{return Ok(())}
+    if !bound(t,target)||now==0{return Ok(())}
     let key=context(t);
     let links=crate::partial_exit_link::report(db,t,target)?;
     if links["status"]!="broker_stage_links_read_only"{return Ok(())}
@@ -73,9 +74,9 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
     // owns its SQLite connection. Write uniqueness remains SQL-enforced.
     let mut statement=db.prepare(
         "SELECT position_identifier,ticket,magic,initial_volume,step,payload
-         FROM partial_exit_drafts WHERE context=?1 AND target='demo'
+         FROM partial_exit_drafts WHERE context=?1 AND target=?2
          ORDER BY position_identifier LIMIT 100")?;
-    let drafts=statement.query_map(params![key],|r|Ok((
+    let drafts=statement.query_map(params![key,target],|r|Ok((
         r.get::<_,u64>(0)?,r.get::<_,u64>(1)?,
         r.get::<_,u64>(2)?,r.get::<_,f64>(3)?,
         r.get::<_,f64>(4)?,r.get::<_,String>(5)?
@@ -101,9 +102,9 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
                 "SELECT plan_id,matched_volume,evidence_json,command_id,
                         broker_order,remaining_volume,settled_ms
                  FROM partial_exit_stage_settlements
-                 WHERE context=?1 AND target='demo'
-                     AND position_identifier=?2 AND stage=?3",
-                params![key,pid,stage],|r|Ok((
+                 WHERE context=?1 AND target=?2
+                     AND position_identifier=?3 AND stage=?4",
+                params![key,target,pid,stage],|r|Ok((
                     r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,
                     r.get(4)?,r.get(5)?,r.get(6)?
                 ))
@@ -123,9 +124,9 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
             if stage>1 {
                 let preceding:bool=db.query_row(
                     "SELECT EXISTS(SELECT 1 FROM partial_exit_stage_settlements
-                     WHERE context=?1 AND target='demo' AND position_identifier=?2
-                        AND stage=?3)",
-                    params![key,pid,stage-1],|r|r.get(0))?;
+                     WHERE context=?1 AND target=?2 AND position_identifier=?3
+                        AND stage=?4)",
+                    params![key,target,pid,stage-1],|r|r.get(0))?;
                 if !preceding {break}
             }
             let ev=&row["evidence"];
@@ -169,8 +170,8 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
                 "INSERT OR IGNORE INTO partial_exit_stage_settlements(
                  context,target,position_identifier,stage,plan_id,command_id,
                  broker_order,matched_volume,remaining_volume,evidence_json,settled_ms)
-                 VALUES(?1,'demo',?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-                params![key,pid,stage,plan,id,order,volume,certified_remaining,
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                params![key,target,pid,stage,plan,id,order,volume,certified_remaining,
                     evidence.to_string(),now])?;
             completed+=volume;
         }
@@ -178,9 +179,9 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
     Ok(())
 }
 pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
-    if !demo(t,target){
+    if !bound(t,target){
         return Ok(json!({"schema":"partial-exit-stage-settlements-v1",
-            "status":"unverified_demo_account","rows":[],
+            "status":"unverified_selected_account","rows":[],
             "read_only":true,"orders_enabled":false,"breakeven_enabled":false}))
     }
     let key=context(t);
@@ -193,9 +194,9 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
            ON p.context=s.context AND p.target=s.target
            AND p.position_identifier=s.position_identifier AND p.stage=s.stage
            AND p.plan_id=s.plan_id
-         WHERE p.context=?1 AND p.target='demo'
+         WHERE p.context=?1 AND p.target=?2
          ORDER BY p.created_ms DESC,p.position_identifier DESC,p.stage LIMIT 75")?;
-    let rows=st.query_map(params![key],|r|Ok((
+    let rows=st.query_map(params![key,target],|r|Ok((
         r.get::<_,u64>(0)?,r.get::<_,u32>(1)?,r.get::<_,String>(2)?,
         r.get::<_,f64>(3)?,r.get::<_,Option<String>>(4)?,
         r.get::<_,Option<u64>>(5)?,r.get::<_,Option<f64>>(6)?,
@@ -234,7 +235,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
     }
     Ok(json!({"schema":"partial-exit-stage-settlements-v1",
         "status":"account_scoped_historical_settlements",
-        "context":key,"target":"demo","rows":result,
+        "context":key,"target":target,"rows":result,
         "read_only":true,"orders_enabled":false,"next_stage_authorized":false,
         "breakeven_enabled":false,
         "note":"A sealed stage confirms exact broker Deal history AND a reconciled full position snapshot. It does not issue any future order or activate breakeven."}))
