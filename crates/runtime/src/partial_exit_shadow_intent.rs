@@ -327,6 +327,7 @@ mod tests{
         crate::partial_exit_ledger::init(db).unwrap();
         crate::partial_exit_stage::init(db).unwrap();
         crate::partial_exit_prices::init(db).unwrap();
+        crate::partial_exit_progress::init(db).unwrap();
         crate::partial_exit_shadow_trigger::init(db).unwrap();
         init(db).unwrap();
         db.execute_batch(
