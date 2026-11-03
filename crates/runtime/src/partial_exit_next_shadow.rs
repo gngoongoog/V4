@@ -456,7 +456,7 @@ mod tests {
             "residual_position_not_verified");
         t.positions[0].tp=0.;
         d.execute("UPDATE partial_exit_price_plans
-            SET prices_json='[2001,2001.5,2003]'",[]).unwrap();
+            SET prices_json='[2001,2000.5,2003]'",[]).unwrap();
         assert_eq!(first(&d,&t,10350)["state"],
             "original_identity_changed");
         d.execute("UPDATE partial_exit_price_plans
