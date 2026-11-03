@@ -61,6 +61,16 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
   approval.broker_command_id===null;
  const approved=approvalMatches&&approval.operator_approved===true&&
   approval.state==='operator_approved_not_dispatched';
+ // Historical operator consent is not permission to send. A binding revision
+ // or immutable price/position change must offer revocation, not reapproval.
+ const staleConsent=approvalMatches&&
+  ['operator_approval_revision_mismatch','operator_approval_stale_needs_review']
+   .includes(String(approval?.state));
+ const revokeOther=consentRows.filter(r=>
+  (r.operator_approved===true||
+   ['operator_approval_revision_mismatch','operator_approval_stale_needs_review']
+    .includes(String(r.state)))&&
+  (r.position_identifier!==Number(position?.identifier)||!approvalMatches));
  const recordedValid=!!recorded&&
   ['price_levels_saved_no_execution','quote_stale_no_trigger'].includes(String(recorded.state))&&
   Array.isArray(recorded.prices)&&recorded.prices.length===3&&
@@ -80,7 +90,7 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
  const submitConsent=(next:boolean)=>{
   if(consentLocked||!position||!planIds||!recordedValid||
    (next&&target==='live'&&liveConfirm!==String(t?.login))||
-   (approval&&!approvalMatches))return;
+   (next&&staleConsent)||(approval&&!approvalMatches))return;
   void onConsent(context,Number(position.identifier),planIds,next,liveConfirm).then(ok=>{
    if(ok)setLiveConfirm('');
   });
@@ -119,16 +129,19 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
     </p>:null}
     {position&&recorded&&recordedValid&&consentValid?<div className="execution-binding-summary" aria-label="موافقة مشغل TP المرحلية">
      <p className="safe-note">موافقة المشغل مرتبطة بهذا المركز فقط، لكنها حالياً مرحلة تحضير وليست تفويضاً بالوسيط. تشغيل TP التلقائي ما زال مقفلاً في Core؛ لا يوجد إرسال أو تعديل على MT5 من هذا الزر.</p>
-     <p>{approved?'موافقة بحثية مُثبتة للحساب المحدد — لا أوامر':'لم تُثبت موافقة تنفيذ هذه الخطة بعد'}</p>
-     {target==='live'&&!approved?<label>اكتب رقم حساب Live للتحقق من الموافقة
+     <p>{approved?'موافقة بحثية مُثبتة للحساب المحدد — لا أوامر':
+      staleConsent?'الموافقة المحفوظة قديمة أو تغيّر المركز/إعدادات التنفيذ؛ يجب إلغاء الموافقة القديمة قبل مراجعة الخطة. لا يُسمح بإعادة تفعيلها بصمت.':
+       'لم تُثبت موافقة تنفيذ هذه الخطة بعد'}</p>
+     {target==='live'&&!approved&&!staleConsent?<label>اكتب رقم حساب Live للتحقق من الموافقة
       <input type="text" autoComplete="off" value={liveConfirm}
        aria-label="تأكيد رقم حساب Live لخطة TP" disabled={consentLocked}
        onChange={e=>setLiveConfirm(e.target.value)} placeholder={String(t?.login||'')}/>
      </label>:null}
      <button type="button" disabled={consentLocked||(approval&&!approvalMatches)||
-       (!approved&&target==='live'&&liveConfirm!==String(t?.login))}
-       onClick={()=>submitConsent(!approved)}>
-       {approved?'إلغاء الموافقة المحفوظة':'تسجيل موافقة هذه الخطة للتحضير المستقبلي (لا إرسال)'}
+       (!approved&&!staleConsent&&target==='live'&&liveConfirm!==String(t?.login))}
+       onClick={()=>submitConsent(!(approved||staleConsent))}>
+       {staleConsent?'إلغاء الموافقة القديمة غير الصالحة':
+        approved?'إلغاء الموافقة المحفوظة':'تسجيل موافقة هذه الخطة للتحضير المستقبلي (لا إرسال)'}
      </button>
     </div>:null}
     {position&&!recorded?<>
@@ -146,11 +159,9 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
      {!valid&&dirty?<p className="safe-note">الأهداف لازم تكون على شبكة Tick وفي اتجاه الربح وبالترتيب، وخارج نطاق السعر الحالي. يُراجع Core أيضاً هوية المركز ومسودة TP وTP الوسيط الأصلي.</p>:null}
     </>:null}
    </form>}
-  {consentValid&&consentRows.some(r=>r.operator_approved===true&&
-   r.position_identifier!==Number(position?.identifier))?<div className="execution-binding-summary" aria-label="إلغاء موافقات TP القديمة">
+  {consentValid&&revokeOther.length>0?<div className="execution-binding-summary" aria-label="إلغاء موافقات TP القديمة">
    <p className="safe-note">موافقات مخزونة من مراكز ثانية أو تغيّر وضعها. ماكو تنفيذ تلقائي منها؛ تكدر تلغيها بعد STOP حتى لو المركز ما عاد متاح بالقائمة.</p>
-   {consentRows.filter(r=>r.operator_approved===true&&
-    r.position_identifier!==Number(position?.identifier)).map((r,i)=>{
+   {revokeOther.map((r,i)=>{
     const ids=r.plan_ids;
     const validIds=Array.isArray(ids)&&ids.length===3&&
      ids.every((v:unknown)=>typeof v==='string'&&/^tp-plan-[a-f0-9]{32}$/.test(v));
