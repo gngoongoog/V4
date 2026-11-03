@@ -123,6 +123,22 @@ class StageDemoTests(unittest.TestCase):
             result=self.send()
             self.assertEqual(result["state"],"rejected",result)
             self.assertEqual(len(self.mt.sends),0)
+    def test_null_stage_marker_cannot_fall_back_to_full_close(self):
+        self.cmd=stage_command()
+        for marker in ('tp_stage_plan_id','tp_stage','expected_position_identifier'):
+            with self.subTest(marker=marker):
+                cmd=stage_command()
+                cmd.pop('tp_stage_plan_id',None)
+                cmd.pop('tp_stage',None)
+                cmd.pop('expected_position_identifier',None)
+                cmd[marker]=None
+                self.cmd=cmd
+                self.cmd['id']='tp-null-'+marker+'-'+'f'*20
+                self.assertFalse(is_fast_path(self.cmd))
+                result=self.send()
+                self.assertEqual(result['state'],'rejected',result)
+                self.assertIn('Incomplete TP stage marker',result['reason'])
+                self.assertFalse(self.mt.sends)
     def test_stage_replay_cannot_switch_identity_or_expected_size(self):
         self.assertEqual(self.send()["state"],"placed")
         self.cmd["tp_stage_plan_id"]="tp-plan-"+"0"*32
@@ -177,6 +193,7 @@ class StageDemoTests(unittest.TestCase):
         self.assertEqual(ack["state"],"placed")
         for label,change in (
             ("wrong_order",dict(order=999)),
+            ("missing_order_but_same_magic_comment",dict(order=0)),
             ("wrong_position",dict(position=918)),
             ("wrong_entry",dict(entry=0)),
             ("wrong_direction",dict(side=0)),
@@ -192,6 +209,27 @@ class StageDemoTests(unittest.TestCase):
         confirmed=self.send()
         self.assertEqual(confirmed["state"],"filled",confirmed)
         self.assertTrue(confirmed["recovered_from_history"])
+        self.assertEqual(len(self.mt.sends),1)
+    def test_missing_mt5_order_ticket_never_turns_a_stage_into_a_fill(self):
+        ack=self.send()
+        self.assertEqual(ack["state"],"placed",ack)
+        # Same comment, magic, account, position, direction and total lots
+        # cannot substitute for an actual MT5 Deal.order ticket.
+        self.history_fill(order=0)
+        result=self.send()
+        self.assertEqual(result["state"],"placed",result)
+        self.assertFalse(result.get("recovered_from_history",False))
+        self.assertEqual(len(self.mt.sends),1)
+        # Restart must preserve the single-shot claim while evidence is missing.
+        self.ex.close()
+        self.ex=BrokerExecutor(Path(self.tmp.name)/"gateway.sqlite")
+        result=self.send()
+        self.assertEqual(result["state"],"placed",result)
+        self.assertEqual(len(self.mt.sends),1)
+        self.history_fill(order=55)
+        result=self.send()
+        self.assertEqual(result["state"],"filled",result)
+        self.assertTrue(result["recovered_from_history"])
         self.assertEqual(len(self.mt.sends),1)
     def test_zero_magic_exit_only_accepted_with_exact_order_and_physical_position(self):
         self.assertEqual(self.send()["state"],"placed")
