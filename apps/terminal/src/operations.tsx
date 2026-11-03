@@ -315,7 +315,7 @@ export function ExecutionBindingOperations({source,telemetry,ready,armed,disable
  const saved=safeObject(safeObject(source).settings);
  // The selector represents the persisted Core binding, not a Demo default.
  // A fresh live session must never show Demo selected just because the form remounted.
- const [target,setTarget]=useState<'demo'|'live'>(()=>
+ const [target,setTarget]=useState<'demo'|'live'>(
   saved.target==='live'?'live':saved.target==='demo'?'demo':
   telemetry?.demo===false&&telemetry.account_trade_mode===2?'live':'demo');
  const [deviation,setDeviation]=useState('20');
