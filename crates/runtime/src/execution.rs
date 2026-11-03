@@ -1016,8 +1016,8 @@ impl Service {
         if method=="GET" && path=="/v1/execution/partial-exit-stage-consent" {
             if status.gateway_fresh&&self.account_matches(status) {
                 if let Some(t)=status.telemetry.as_ref() {
-                    return crate::partial_exit_stage_consent::report(
-                        db,t,&self.inner.settings.target);
+                    return crate::partial_exit_stage_consent::report_for_revision(
+                        db,t,&self.inner.settings.target,self.inner.settings.revision);
                 }
             }
             return Ok(json!({"schema":"tp-stage-operator-consent-v1",
@@ -1759,7 +1759,8 @@ impl Service {
             // This report cannot turn a research crossing into a live order.
             value["partial_exit_stage_consent"]=if status.gateway_fresh && self.account_matches(status) {
                 status.telemetry.as_ref().map(|t|
-                    crate::partial_exit_stage_consent::report(db,t,&self.inner.settings.target)
+                    crate::partial_exit_stage_consent::report_for_revision(
+                        db,t,&self.inner.settings.target,self.inner.settings.revision)
                         .unwrap_or_else(|error|json!({"error":error.to_string()})))
                     .unwrap_or(Value::Null)
             } else {Value::Null};
