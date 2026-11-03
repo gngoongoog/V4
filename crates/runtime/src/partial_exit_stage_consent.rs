@@ -74,17 +74,26 @@ fn current_lineage(db:&Connection,t:&Telemetry,target:&str,key:&str,
         ||!near(cap["original_broker_tp"].as_f64().unwrap_or(f64::NAN),p.tp,tick)
         ||!near(cap["original_volume"].as_f64().unwrap_or(f64::NAN),p.volume,step)
     {return false}
+    // A matching plan UUID is not enough: the immutable TP stage lots must
+    // still conserve the actual initial broker-grid volume (50/30/20), with
+    // every partial close and residual valid under current MT5 lot rules.
+    let (Some(min),Some(max))=(t.volume_min,t.volume_max)else{return false};
+    let Ok(expected)=braintrade_domain::partial_exit::three_target_lots(
+        p.volume,min,step,max)else{return false};
+    let expected=[expected.tp1,expected.tp2,expected.tp3];
     let Ok(mut stmt)=db.prepare(
-        "SELECT stage,plan_id,status FROM partial_exit_stage_plans
+        "SELECT stage,plan_id,planned_volume,status FROM partial_exit_stage_plans
          WHERE context=?1 AND target=?2 AND position_identifier=?3
          ORDER BY stage")else{return false};
     let plans=stmt.query_map(params![key,target,pid],|r|Ok((
-        r.get::<_,u32>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?
+        r.get::<_,u32>(0)?,r.get::<_,String>(1)?,
+        r.get::<_,f64>(2)?,r.get::<_,String>(3)?
     )));
     let Ok(plans)=plans else{return false};
     let Ok(plans)=plans.collect::<rusqlite::Result<Vec<_>>>()else{return false};
-    plans.len()==3&&plans.iter().enumerate().all(|(i,(stage,id,status))|
-        *stage==(i+1) as u32&&id==&ids[i]&&status=="prepared_only")
+    plans.len()==3&&plans.iter().enumerate().all(|(i,(stage,id,volume,status))|
+        *stage==(i+1) as u32&&id==&ids[i]&&status=="prepared_only"
+            &&near(*volume,expected[i],step))
 }
 
 pub fn init(db:&Connection)->Result<()> {
@@ -234,7 +243,8 @@ mod tests{
         let mut t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
             margin_mode:Some(2),login:222,server:"DemoA".into(),
             symbol:"XAUUSDm".into(),currency:"USD".into(),
-            volume_step:Some(0.01),tick_size:Some(0.01),
+            volume_min:Some(0.01),volume_step:Some(0.01),
+            volume_max:Some(100.),tick_size:Some(0.01),
             positions:vec![Position{ticket:87,identifier:907,magic:410601,
                 symbol:"XAUUSDm".into(),side:"BUY".into(),volume:0.10,
                 price_open:2000.,tp:0.,..Default::default()}],
@@ -260,8 +270,8 @@ mod tests{
         for (i,id) in ids.iter().enumerate(){
             db.execute("INSERT INTO partial_exit_stage_plans
                 (context,target,position_identifier,stage,plan_id,planned_volume,
-                 created_ms,status) VALUES(?1,'demo',907,?2,?3,0.03,900,'prepared_only')",
-                params![key,i+1,id]).unwrap();
+                 created_ms,status) VALUES(?1,'demo',907,?2,?3,?4,900,'prepared_only')",
+                params![key,i+1,id,[0.05,0.03,0.02][i]]).unwrap();
         }
         db.execute("INSERT INTO partial_exit_stage_consents
             (context,target,position_identifier,position_ticket,plan_ids,
@@ -284,6 +294,11 @@ mod tests{
         t.positions.push(Position{ticket:87,identifier:907,magic:410601,
             symbol:"XAUUSDm".into(),side:"BUY".into(),volume:0.10,
             price_open:2000.,tp:0.,..Default::default()});
+        db.execute("UPDATE partial_exit_stage_plans
+            SET planned_volume=0.04 WHERE stage=1",[]).unwrap();
+        assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["operator_approved"],false);
+        db.execute("UPDATE partial_exit_stage_plans
+            SET planned_volume=0.05 WHERE stage=1",[]).unwrap();
         db.execute("UPDATE partial_exit_stage_plans
             SET status='review_required' WHERE stage=2",[]).unwrap();
         assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["operator_approved"],false);
