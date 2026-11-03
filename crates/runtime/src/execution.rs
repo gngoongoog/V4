@@ -396,6 +396,7 @@ impl Service {
         crate::partial_exit_trade_approval::init(db)?;
         crate::partial_exit_tp1_held::init(db)?;
         crate::partial_exit_tp1_arm::init(db)?;
+        crate::partial_exit_tp1_release::init(db)?;
         crate::pending_cancellation::init(db)?;
         let mut inner = legacy::Service::new(db)?;
         // Old per-brain flags do not choose an execution owner. A scoped solo
@@ -723,6 +724,12 @@ impl Service {
                             self.inner.settings.revision,
                             self.inner.settings.deviation_points,
                             self.inner.risk_master(telemetry).unwrap_or(true));
+                        // Separately armed TP1 can be released only after
+                        // this same, fully reconciled physical MT5 snapshot.
+                        // Core and Gateway revalidate again at dispatch/send.
+                        let _=crate::partial_exit_tp1_release::release(
+                            db,telemetry,&self.inner.settings.target,
+                            self.inner.settings.revision,now,run);
                     }
                 }
             }
