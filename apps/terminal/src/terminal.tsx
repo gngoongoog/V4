@@ -1253,16 +1253,23 @@ export default function Terminal(){
    if(!writeFresh(mutation))return;
    if(committed.ok!==true||unwrap(committed.settings).target!==target)
     throw new Error('لم يؤكد Rust Core اختيار نوع الحساب المطلوب');
-   const refreshed=unwrap(await readPanel('/v1/execution'));
+   const [full,scope]=await Promise.all([
+    readPanel('/v1/execution'),readPanel('/v1/execution/binding')]);
    if(!writeFresh(mutation))return;
+   const refreshed=unwrap(full),binding=unwrap(scope);
    const settings=unwrap(refreshed.settings);
    const current=status?.telemetry;
    const identity=current?JSON.stringify([current.server,current.login,current.symbol,current.currency]):'';
    if(!current||refreshed.account_matches!==true||refreshed.context!==identity||
       settings.target!==target||settings.login!==current.login||
-      settings.server!==current.server||settings.currency!==current.currency)
+      settings.server!==current.server||settings.currency!==current.currency||
+      binding.schema!=='execution-binding-v1'||binding.selected_target!==target||
+      binding.account_matches!==true||binding.context!==identity||
+      binding.connected_target!==target||unwrap(binding.settings).login!==current.login)
     throw new Error('Core لم يرجع ربطاً مطابقاً لجلسة MT5 الحالية؛ أعد التحقق قبل START');
    scopedGeneration.current.invalidate('brains');setBrainReport(null);
+   scopedGeneration.current.invalidate('account-binding');
+   setBindingSlot({scope:contextKey,data:binding});
    setPortfolioReport(refreshed);
    // A global account button can bind while a different page is open.
    // Never inject /v1/execution data into a dashboard/analysis panel.
@@ -1290,9 +1297,18 @@ export default function Terminal(){
     ' في MT5 أولاً، ثم ارجع لربط التنفيذ. لا يمكن تبديل تسجيل الدخول من هذه الأزرار.',true);
    open('execution');return;
   }
-  const saved=unwrap(unwrap(portfolioReport).settings);
-  const rawPoints=Number(saved.deviation_points);
-  const deviationPoints=Number.isInteger(rawPoints)&&rawPoints>=0&&rawPoints<=100000?rawPoints:20;
+  if(bindingSnapshot.schema!=='execution-binding-v1'){
+   sendNotice('لم تكتمل قراءة ربط الحساب من Core؛ انتظر تحديث الحالة',true);return;
+  }
+  if(bindingSnapshot.pending_reconciliation===true){
+   sendNotice('توجد أوامر وسيط غير مُسوّاة؛ لا يمكن تغيير الحساب حتى انتهاء المصالحة',true);return;
+  }
+  const saved=unwrap(bindingSnapshot.settings);
+  const deviationPoints=Number(saved.deviation_points);
+  if(!Number.isInteger(deviationPoints)||deviationPoints<0||deviationPoints>100000){
+   sendNotice('قيمة انحراف الوسيط المحفوظة غير مؤكدة؛ افتح تفاصيل الربط',true);
+   open('execution');return;
+  }
   let confirmLiveLogin='';
   if(target==='live'){
    const typed=window.prompt('تأكيد ربط حساب Live الحالي: اكتب رقم حساب MT5 المعروض '+t.login);
@@ -1306,7 +1322,7 @@ export default function Terminal(){
      ' رقم '+t.login+' على '+t.server+'؟\\nهذا لا يفتح صفقة ولا يشغّل START. ويُرفض إذا كانت هناك أوامر غير مُسوّاة أو مراكز مملوكة مفتوحة.'))return;
   void runBrokerBind(target,deviationPoints,confirmLiveLogin);
  };
- const bindingSnapshot=unwrap(portfolioReport);
+ const bindingSnapshot=bindingSlot?.scope===contextKey?unwrap(bindingSlot.data):{};
  const bindingSettings=unwrap(bindingSnapshot.settings);
  const boundTarget=bindingSettings.target==='live'?'live':bindingSettings.target==='demo'?'demo':null;
  const verifiedBinding=!!account&&feed.broker&&bindingSnapshot.account_matches===true&&
