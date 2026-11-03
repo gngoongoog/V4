@@ -245,3 +245,183 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         "note":"A verified earlier MT5 stage and exact residual are necessary to consider a later price crossing. This report creates no trades, order IDs, approval, or stop changes."
     }))
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use braintrade_domain::Position;
+    fn t()->Telemetry{
+        Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            margin_mode:Some(2),login:222,server:"DemoA".into(),
+            currency:"USD".into(),symbol:"XAUUSDm".into(),
+            balance:1000.,equity:1000.,volume_min:Some(0.01),
+            volume_step:Some(0.01),volume_max:Some(100.),
+            tick_size:Some(0.01),bid:Some(2000.),ask:Some(2000.2),
+            tick_age_ms:Some(100),quote_time_ms:Some(9900),
+            source_quote_time_ms:Some(9900),
+            positions:vec![Position{ticket:87,identifier:907,magic:410601,
+                symbol:"XAUUSDm".into(),side:"BUY".into(),volume:0.10,
+                price_open:1999.5,..Default::default()}],..Default::default()}
+    }
+    fn fixture(d:&Connection){
+        crate::partial_exit_ledger::init(d).unwrap();
+        crate::partial_exit_stage::init(d).unwrap();
+        crate::partial_exit_prices::init(d).unwrap();
+        crate::partial_exit_progress::init(d).unwrap();
+        d.execute_batch(
+            "CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT,
+                brain TEXT,kind TEXT,created_ms INTEGER,state TEXT,payload TEXT,result TEXT);
+             CREATE TABLE broker_deals(context TEXT,ticket INTEGER,position_id INTEGER,
+                brain TEXT,payload TEXT,PRIMARY KEY(context,ticket));
+             CREATE TABLE broker_history_sync(context TEXT,target TEXT,until_ms INTEGER,
+                synced_ms INTEGER,PRIMARY KEY(context,target));").unwrap();
+        let original=t();
+        crate::partial_exit_ledger::observe(d,&original,"demo",100).unwrap();
+        crate::partial_exit_stage::observe(d,&original,"demo",100).unwrap();
+        let plans=crate::partial_exit_stage::report(d,&original,"demo").unwrap();
+        let ids=std::array::from_fn(|i|plans["rows"][i]["plan_id"].as_str().unwrap().to_string());
+        crate::partial_exit_prices::save(d,&original,"demo",907,
+            &ids,[2001.,2002.,2003.],10_000).unwrap();
+        d.execute("INSERT INTO broker_history_sync VALUES(?1,'demo',11000,11001)",
+            [key(&original)]).unwrap();
+    }
+    fn fill(d:&Connection,n:u32){
+        let base=t();let context=key(&base);
+        let plans=crate::partial_exit_stage::report(d,&base,"demo").unwrap();
+        let plan=plans["rows"][(n-1) as usize]["plan_id"].as_str().unwrap();
+        let lots=[0.05,0.03][(n-1) as usize];
+        let previous=[0.1,0.05][(n-1) as usize];
+        let command=json!({"id":format!("core-close-{n}"),"kind":"close",
+            "context":context,"target":"demo","login":222,
+            "server":"DemoA","currency":"USD","symbol":"XAUUSDm",
+            "brain":"gann","magic":410601,"position":87,
+            "tp_stage":n,"tp_stage_plan_id":plan,"lots":lots,
+            "created_ms":10030+n as u64,
+            "expected_position_identifier":907,
+            "expected_position_volume":previous,
+            "expected_position_side":"BUY"});
+        let result=json!({"state":"filled","recovered_from_history":true,
+            "volume":lots,"position_id":907,"order":700+n,
+            "deal":900+n,"deals":[900+n],
+            "request":{"volume":lots,"position":87,"type":1,
+                "magic":410601,"symbol":"XAUUSDm"}});
+        d.execute("INSERT INTO broker_commands VALUES(?1,?2,'gann','close',?3,
+            'observed',?4,?5)",
+            params![format!("core-close-{n}"),context,10030+n as u64,
+                command.to_string(),result.to_string()]).unwrap();
+        let deal=json!({"ticket":900+n,"order":700+n,"position_id":907,
+            "symbol":"XAUUSDm","magic":410601,"entry":1,
+            "type":1,"time_msc":10090+n as u64,
+            "price":2000.0,"volume":lots,"profit":1.0,
+            "commission":-0.03,"swap":0.0,"fee":0.0});
+        d.execute("INSERT INTO broker_deals VALUES(?1,?2,907,'gann',?3)",
+            params![context,900+n,deal.to_string()]).unwrap();
+    }
+    fn reconcile(d:&Connection,t:&Telemetry,now:u64){
+        crate::partial_exit_ledger::observe(d,t,"demo",now).unwrap();
+        crate::partial_exit_stage::observe(d,t,"demo",now).unwrap();
+        crate::partial_exit_progress::observe(d,t,"demo",now).unwrap();
+    }
+    fn first(d:&Connection,t:&Telemetry,now:u64)->Value{
+        report(d,t,"demo",now).unwrap()["rows"][0].clone()
+    }
+    fn tp2_fixture()->(Connection,Telemetry){
+        let d=Connection::open_in_memory().unwrap();
+        fixture(&d);
+        fill(&d,1);
+        let mut t=t();t.positions[0].volume=0.05;
+        t.bid=Some(2002.2);t.ask=Some(2002.4);
+        t.quote_time_ms=Some(10300);t.source_quote_time_ms=Some(10300);
+        reconcile(&d,&t,10200);
+        assert_eq!(crate::partial_exit_progress::report(&d,&t,"demo")
+            .unwrap()["rows"][0]["state"],"historical_stage_sealed");
+        (d,t)
+    }
+    #[test]
+    fn missing_actual_tp1_broker_fill_never_advances_to_tp2(){
+        let d=Connection::open_in_memory().unwrap();
+        fixture(&d);
+        let mut t=t();t.bid=Some(2002.2);t.ask=Some(2002.4);
+        t.source_quote_time_ms=Some(10300);t.quote_time_ms=Some(10300);
+        let v=report(&d,&t,"demo",10350).unwrap();
+        assert_eq!(v["status"],"no_broker_verified_previous_stage");
+        assert!(v["rows"].as_array().unwrap().is_empty());
+        assert_eq!(v["orders_enabled"],false);
+        assert_eq!(v["next_stage_authorized"],false);
+    }
+    #[test]
+    fn broker_confirmed_tp1_unlocks_only_historical_research_condition_for_tp2(){
+        let (d,t)=tp2_fixture();
+        let v=report(&d,&t,"demo",10350).unwrap();
+        assert_eq!(v["rows"][0]["stage"],2);
+        assert_eq!(v["rows"][0]["expected_close_lots"],0.03);
+        assert_eq!(v["rows"][0]["expected_position_volume"],0.05);
+        assert_eq!(v["rows"][0]["expected_remaining_volume"],0.02);
+        assert_eq!(v["rows"][0]["state"],"historical_prerequisites_met_shadow_only");
+        assert_eq!(v["rows"][0]["historical_condition_only"],true);
+        assert_eq!(v["rows"][0]["orders_enabled"],false);
+        assert_eq!(v["rows"][0]["next_stage_authorized"],false);
+        assert_eq!(v["rows"][0]["breakeven_enabled"],false);
+        let draft:String=d.query_row(
+            "SELECT status FROM partial_exit_drafts WHERE position_identifier=907",
+            [],|r|r.get(0)).unwrap();
+        let stage:String=d.query_row(
+            "SELECT status FROM partial_exit_stage_plans WHERE position_identifier=907 AND stage=2",
+            [],|r|r.get(0)).unwrap();
+        assert_eq!(draft,"volume_changed_unverified");
+        assert_eq!(stage,"review_required",
+            "Old plan is NOT silently restored even when TP1 broker fill was proven");
+    }
+    #[test]
+    fn tp3_requires_a_second_exact_broker_fill_and_all_original_close_lots(){
+        let (d,mut t)=tp2_fixture();
+        fill(&d,2);
+        t.positions[0].volume=0.02;
+        t.bid=Some(2003.2);t.ask=Some(2003.4);
+        t.quote_time_ms=Some(10700);t.source_quote_time_ms=Some(10700);
+        reconcile(&d,&t,10600);
+        let v=first(&d,&t,10750);
+        assert_eq!(v["stage"],3);
+        assert_eq!(v["state"],"historical_prerequisites_met_shadow_only");
+        assert_eq!(v["expected_close_lots"],0.02);
+        assert_eq!(v["expected_position_volume"],0.02);
+        assert_eq!(v["expected_remaining_volume"],0.0);
+        assert_eq!(v["orders_enabled"],false);
+        assert_eq!(v["next_stage_authorized"],false);
+    }
+    #[test]
+    fn post_fill_corrupt_deal_extra_close_wrong_volume_or_old_quote_fails_closed(){
+        for case in 0..6{
+            let (d,mut t)=tp2_fixture();
+            match case{
+                0=>{d.execute("UPDATE broker_deals SET payload=json_set(payload,'$.order',999)",
+                    []).unwrap();},
+                1=>{d.execute("INSERT INTO broker_commands VALUES('extra',?1,'gann',
+                    'close',10230,'dispatched',?2,'{}')",
+                    params![key(&t),json!({"position":87}).to_string()]).unwrap();},
+                2=>{t.positions[0].volume=0.04;},
+                3=>{t.source_quote_time_ms=Some(10190);t.quote_time_ms=Some(10190);},
+                4=>{t.positions[0].magic=999;},
+                _=>{t.positions[0].tp=2002.5;},
+            }
+            let v=report(&d,&t,"demo",10350).unwrap();
+            if case==0 {assert!(v["rows"].as_array().unwrap().is_empty(),
+                "A corrupted prior Deal invalidates the whole next-stage ladder");
+            }else{
+                assert_ne!(v["rows"][0]["state"],"historical_prerequisites_met_shadow_only",
+                    "case {case}");
+            }
+            assert_eq!(v["orders_enabled"],false);
+        }
+    }
+    #[test]
+    fn no_cross_account_or_real_ladder_evidence_even_with_same_position_ids(){
+        let (d,t)=tp2_fixture();
+        let mut foreign=t.clone();foreign.login+=1;
+        assert!(report(&d,&foreign,"demo",10350).unwrap()["rows"].as_array().unwrap().is_empty());
+        foreign=t.clone();foreign.demo=false;foreign.account_trade_mode=Some(2);
+        assert_eq!(report(&d,&foreign,"live",10350).unwrap()["status"],
+            "unverified_demo_hedging");
+    }
+}
