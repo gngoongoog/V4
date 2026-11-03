@@ -168,7 +168,7 @@ mod tests {
         t.connected=true;t.demo=false;t.account_trade_mode=Some(2);
         t.margin_mode=Some(2);t.login=50;t.server="LiveBroker".into();
         t.currency="USD".into();t.symbol="XAUUSDm".into();
-        t.volume_step=Some(0.01);t.volume_min=Some(0.01);
+        t.volume_step=Some(0.01);t.volume_min=Some(0.01);t.volume_max=Some(100.0);
         t.tick_size=Some(0.01);t.bid=Some(2001.5);
         t.source_quote_time_ms=Some(10_100);
         let mut r=json!({
