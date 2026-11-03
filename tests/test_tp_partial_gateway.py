@@ -261,6 +261,7 @@ class StageDemoTests(unittest.TestCase):
             ("missing_order_but_same_magic_comment",dict(order=0)),
             ("wrong_position",dict(position=918)),
             ("wrong_entry",dict(entry=0)),
+            ("close_by_is_not_a_market_tp",dict(entry=3)),
             ("wrong_direction",dict(side=0)),
             ("wrong_owner",dict(magic=999)),
             ("underfill",dict(lots=0.03)),
