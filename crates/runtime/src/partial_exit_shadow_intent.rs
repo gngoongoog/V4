@@ -258,3 +258,159 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
         "breakeven_enabled":false,"rows":rows,
         "note":"A durable research-only close-lot snapshot, not a dispatched command or a broker fill."}))
 }
+
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    use braintrade_domain::Position;
+    fn telemetry()->Telemetry{
+        Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            margin_mode:Some(2),login:222,server:"DemoA".into(),
+            currency:"USD".into(),symbol:"XAUUSDm".into(),
+            balance:1000.,equity:1000.,volume_min:Some(0.01),
+            volume_step:Some(0.01),volume_max:Some(100.),
+            tick_size:Some(0.01),bid:Some(2000.),ask:Some(2000.2),
+            tick_age_ms:Some(100),quote_time_ms:Some(9900),
+            source_quote_time_ms:Some(9900),
+            positions:vec![Position{ticket:87,identifier:907,magic:410601,
+                symbol:"XAUUSDm".into(),side:"BUY".into(),volume:0.10,
+                price_open:1999.5,..Default::default()}],..Default::default()}
+    }
+    fn setup(db:&Connection){
+        crate::partial_exit_ledger::init(db).unwrap();
+        crate::partial_exit_stage::init(db).unwrap();
+        crate::partial_exit_prices::init(db).unwrap();
+        crate::partial_exit_shadow_trigger::init(db).unwrap();
+        init(db).unwrap();
+        db.execute_batch(
+            "CREATE TABLE broker_commands(context TEXT,kind TEXT,payload TEXT);").unwrap();
+        let t=telemetry();
+        crate::partial_exit_ledger::observe(db,&t,"demo",100).unwrap();
+        crate::partial_exit_stage::observe(db,&t,"demo",100).unwrap();
+        let plans=crate::partial_exit_stage::report(db,&t,"demo").unwrap();
+        let ids=std::array::from_fn(|i|plans["rows"][i]["plan_id"].as_str().unwrap().to_string());
+        crate::partial_exit_prices::save(db,&t,"demo",907,
+            &ids,[2001.,2002.,2003.],10_000).unwrap();
+    }
+    fn crossed()->Telemetry{
+        let mut t=telemetry();
+        t.bid=Some(2001.2);t.ask=Some(2001.4);
+        t.quote_time_ms=Some(10_200);
+        t.source_quote_time_ms=Some(10_200);
+        t
+    }
+    fn tick(db:&Connection,t:&Telemetry,now:u64){
+        crate::partial_exit_shadow_trigger::observe(db,t,"demo",now).unwrap();
+        observe(db,t,"demo",now).unwrap();
+    }
+    fn count(db:&Connection)->u32{
+        db.query_row("SELECT COUNT(*) FROM partial_exit_shadow_close_intents",[],
+            |r|r.get(0)).unwrap()
+    }
+    #[test]
+    fn tp1_crossing_creates_one_non_executable_grid_aligned_close_lot_snapshot(){
+        let db=Connection::open_in_memory().unwrap();setup(&db);
+        let initial=telemetry();tick(&db,&initial,10_050);
+        assert_eq!(count(&db),0);
+        let t=crossed();tick(&db,&t,10_250);
+        assert_eq!(count(&db),1);
+        let v=report(&db,&t,"demo").unwrap();
+        assert_eq!(v["status"],"research_close_intents_no_broker_commands");
+        assert_eq!(v["rows"][0]["state"],"shadow_close_intent_only");
+        assert_eq!(v["rows"][0]["close_lots"],0.05);
+        assert_eq!(v["rows"][0]["expected_remaining_volume"],0.05);
+        assert_eq!(v["orders_enabled"],false);
+        assert_eq!(v["next_stage_authorized"],false);
+        assert_eq!(v["breakeven_enabled"],false);
+        assert_eq!(v["rows"].as_array().unwrap().len(),1);
+        let raw:String=db.query_row(
+            "SELECT payload FROM partial_exit_shadow_close_intents",[],
+            |r|r.get(0)).unwrap();
+        let candidate:Value=serde_json::from_str(&raw).unwrap();
+        assert_eq!(candidate["kind"],"research_close_intent");
+        assert_eq!(candidate["broker_command_id"],Value::Null);
+        assert_eq!(candidate["gateway_send_id"],Value::Null);
+        assert_eq!(candidate["broker_order_id"],Value::Null);
+        assert_eq!(candidate["broker_fill_verified"],false);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_commands",[],
+            |r|r.get::<_,u32>(0)).unwrap(),0);
+        tick(&db,&t,10_300);
+        assert_eq!(count(&db),1,"Repeated full snapshots may not duplicate TP1 intent");
+        assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["close_lots"],0.05);
+    }
+    #[test]
+    fn unknown_quote_old_shadow_and_competing_broker_close_never_create_intent(){
+        for index in 0..5 {
+            let db=Connection::open_in_memory().unwrap();setup(&db);
+            let mut t=crossed();
+            match index{
+                0=>t.source_quote_time_ms=None,
+                1=>{t.source_quote_time_ms=Some(9950);t.quote_time_ms=Some(9950);},
+                2=>t.tick_age_ms=Some(9_000),
+                3=>{t.margin_mode=Some(0);},
+                _=>{
+                    db.execute("INSERT INTO broker_commands VALUES(?1,'close',?2)",
+                        params![context(&t),json!({"position":87}).to_string()]).unwrap();
+                }
+            }
+            tick(&db,&t,10_250);
+            assert_eq!(count(&db),0,"case {index}");
+        }
+    }
+    #[test]
+    fn damaged_or_moved_position_lot_grid_and_stages_revoke_candidate_display(){
+        let db=Connection::open_in_memory().unwrap();setup(&db);
+        let t=crossed();tick(&db,&t,10_250);
+        let mut changed=t.clone();changed.positions[0].volume=0.07;
+        assert_eq!(report(&db,&changed,"demo").unwrap()["rows"][0]["state"],"needs_review");
+        changed=t.clone();changed.positions[0].magic=999;
+        assert_eq!(report(&db,&changed,"demo").unwrap()["rows"][0]["state"],"needs_review");
+        changed=t.clone();changed.volume_step=Some(0.02);
+        assert_eq!(report(&db,&changed,"demo").unwrap()["rows"][0]["state"],"needs_review");
+        db.execute("UPDATE partial_exit_shadow_close_intents
+           SET payload=json_set(payload,'$.broker_fill_verified',json('true'))",[]).unwrap();
+        assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],"needs_review");
+    }
+    #[test]
+    fn damaged_plan_or_later_physical_close_never_resumes_saved_shadow_candidate(){
+        let db=Connection::open_in_memory().unwrap();setup(&db);
+        let t=crossed();tick(&db,&t,10_250);
+        let plan:String=db.query_row("SELECT plan_id FROM partial_exit_shadow_close_intents",
+            [],|r|r.get(0)).unwrap();
+        db.execute("INSERT INTO broker_commands VALUES(?1,'close',?2)",
+            params![context(&t),json!({"position":87,"tp_stage_plan_id":plan}).to_string()]).unwrap();
+        assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],"needs_review");
+        db.execute("DELETE FROM broker_commands",[]).unwrap();
+        db.execute("UPDATE partial_exit_stage_plans SET status='review_required'
+            WHERE stage=1",[]).unwrap();
+        assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],"needs_review");
+        tick(&db,&t,10_350);
+        assert_eq!(count(&db),1);
+    }
+    #[test]
+    fn restart_preserves_only_research_intent_and_isolates_broker_accounts(){
+        let path=std::env::temp_dir().join(format!("bt-tp1-intent-{}.sqlite",
+            uuid::Uuid::new_v4().simple()));
+        let t=crossed();let first;
+        {
+            let db=Connection::open(&path).unwrap();setup(&db);
+            tick(&db,&t,10_250);
+            first=report(&db,&t,"demo").unwrap()["rows"][0].clone();
+        }
+        {
+            let db=Connection::open(&path).unwrap();init(&db).unwrap();
+            tick(&db,&t,10_350);
+            assert_eq!(count(&db),1);
+            assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0],first);
+            let mut other=t.clone();other.login+=1;
+            assert!(report(&db,&other,"demo").unwrap()["rows"].as_array().unwrap().is_empty());
+            other=t.clone();other.demo=false;other.account_trade_mode=Some(2);
+            assert_eq!(report(&db,&other,"live").unwrap()["status"],
+                "unverified_demo_account");
+            assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_commands",[],
+                |r|r.get::<_,u32>(0)).unwrap(),0);
+        }
+        let _=std::fs::remove_file(path);
+    }
+}
