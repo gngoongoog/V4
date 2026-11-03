@@ -23,6 +23,7 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
  const consent=object(view.partial_exit_stage_consent);
  const trade=object(view.partial_exit_trade_approval);
  const sealed=object(view.partial_exit_stage_sealed_core);
+ const held=object(view.partial_exit_tp1_held);
  const context=t?JSON.stringify([t.server,t.login,t.symbol,t.currency]):'';
  const target=settings.target==='live'?'live':settings.target==='demo'?'demo':null;
  const accountModeMatches=!!t&&((target==='demo'&&t.demo===true&&t.account_trade_mode===0)||
@@ -85,6 +86,16 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
   Array.isArray(planIds)&&r.plan_id===planIds[0]&&
   r.broker_command_id===null&&r.gateway_send_id===null&&
   r.broker_order_ticket===null);
+ const heldBound=available&&held.schema==='tp1-core-held-outbox-v1'&&
+  held.status==='account_scoped_held_never_sent'&&
+  held.context===context&&held.target===target&&
+  held.read_only===true&&held.orders_dispatched===0&&held.gateway_sends===0;
+ const heldRows=heldBound&&Array.isArray(held.rows)?held.rows.map(object):[];
+ const tp1Held=heldRows.find(r=>
+  r.position_identifier===Number(position?.identifier)&&
+  r.physical_ticket===position?.ticket&&Array.isArray(planIds)&&
+  r.plan_id===planIds[0]&&r.orders_dispatched===0&&r.gateway_sends===0&&
+  r.read_only===true&&typeof r.held_core_command_id==='string');
  const approvalMatches=!!approval&&approval.position_ticket===position?.ticket&&
   Array.isArray(approval.plan_ids)&&!!planIds&&
   JSON.stringify(approval.plan_ids)===JSON.stringify(planIds)&&
@@ -177,6 +188,14 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
        'سجل TP1 تاريخي، تغيرت البيانات أو انتهت صلاحية السعر؛ لا يمكن إرساله.':
        'سجل TP1 غير موثوق ويحتاج مراجعة؛ لا يمكن إرساله.'}</p>
     </div>:null}
+    {position&&tp1Held?<div className="execution-binding-summary" aria-label="أمر TP1 محجوز داخل Core دون إرسال">
+      <p className="safe-note">تم تسجيل أمر TP1 في طابور Core بحالة محجوزة غير قابلة للإرسال إلى Gateway أو MT5.</p>
+      <p>{tp1Held.state==='held_unreleased_no_gateway'?
+        'أمر TP1 محجوز ولم يُرسل إلى الوسيط.':
+        tp1Held.state==='held_expired_never_dispatched'?
+        'انتهت صلاحية الأمر المحجوز دون إرساله؛ لا يُعاد تشغيله تلقائياً.':
+        'سجل الأمر المحجوز غير مطابق ويحتاج مراجعة؛ لا يوجد إرسال.'}</p>
+     </div>:null}
     {position&&recorded&&recordedValid&&consentValid?<div className="execution-binding-summary" aria-label="موافقة مشغل TP المرحلية">
      <p className="safe-note">موافقة المشغل مرتبطة بهذا المركز فقط، لكنها حالياً مرحلة تحضير وليست تفويضاً بالوسيط. تشغيل TP التلقائي ما زال مقفلاً في Core؛ لا يوجد إرسال أو تعديل على MT5 من هذا الزر.</p>
      <p>{approved?'موافقة بحثية مُثبتة للحساب المحدد — لا أوامر':
