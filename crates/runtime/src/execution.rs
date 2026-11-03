@@ -395,6 +395,7 @@ impl Service {
         crate::partial_exit_stage_consent::init(db)?;
         crate::partial_exit_trade_approval::init(db)?;
         crate::partial_exit_tp1_held::init(db)?;
+        crate::partial_exit_tp1_arm::init(db)?;
         crate::pending_cancellation::init(db)?;
         let mut inner = legacy::Service::new(db)?;
         // Old per-brain flags do not choose an execution owner. A scoped solo
@@ -1077,6 +1078,39 @@ impl Service {
                 "status":"fresh_bound_selected_gateway_required","rows":[],
                 "read_only":true,"orders_enabled":false,
                 "automatic_tp_execution_enabled":false,"orders_created":0}));
+        }
+        if method=="POST" && path=="/v1/execution/partial-exit-tp1-arm" {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request {context:String,position_identifier:u64,
+                plan_ids:[String;3],enabled:bool,confirm_live_login:String}
+            let request:Request=serde_json::from_slice(body)?;
+            anyhow::ensure!(!status.requested_run&&!self.pending(db)?,
+                "تسليح TP1 يتطلب STOP وخلو طابور الوسيط من أوامر غير محسومة");
+            anyhow::ensure!(status.gateway_fresh&&self.account_matches(status),
+                "حساب MT5 المختار غير مربوط باقتباس حديث");
+            let t=status.telemetry.as_ref().context("MT5 account unavailable")?;
+            anyhow::ensure!(request.context==context(t),
+                "تغيّرت هوية حساب MT5 أو الرمز");
+            if request.enabled&&self.inner.settings.target=="live" {
+                anyhow::ensure!(request.confirm_live_login==t.login.to_string(),
+                    "اكتب رقم حساب Live المطابق قبل تسليح الإغلاق الجزئي");
+            }
+            return crate::partial_exit_tp1_arm::set(db,t,
+                &self.inner.settings.target,request.position_identifier,
+                &request.plan_ids,request.enabled,self.inner.settings.revision,now);
+        }
+        if method=="GET" && path=="/v1/execution/partial-exit-tp1-arm" {
+            if status.gateway_fresh&&self.account_matches(status) {
+                if let Some(t)=status.telemetry.as_ref() {
+                    return crate::partial_exit_tp1_arm::report(
+                        db,t,&self.inner.settings.target,
+                        self.inner.settings.revision,now);
+                }
+            }
+            return Ok(json!({"schema":"tp1-execution-arm-v1",
+                "status":"fresh_bound_selected_gateway_required","rows":[],
+                "read_only":true,"orders_enabled":false}));
         }
         if method=="GET" && path=="/v1/execution/partial-exit-tp1-held" {
             if status.gateway_fresh&&self.account_matches(status) {
@@ -1838,6 +1872,13 @@ impl Service {
                 status.telemetry.as_ref().map(|t|
                     crate::partial_exit_stage_consent::report_for_revision(
                         db,t,&self.inner.settings.target,self.inner.settings.revision)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["partial_exit_tp1_arm"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_tp1_arm::report(
+                        db,t,&self.inner.settings.target,self.inner.settings.revision,now)
                         .unwrap_or_else(|error|json!({"error":error.to_string()})))
                     .unwrap_or(Value::Null)
             } else {Value::Null};
