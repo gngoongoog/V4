@@ -293,6 +293,8 @@ mod tests {
         crate::partial_exit_stage::init(d).unwrap();
         crate::partial_exit_prices::init(d).unwrap();
         crate::partial_exit_progress::init(d).unwrap();
+        crate::partial_exit_shadow_trigger::init(d).unwrap();
+        crate::partial_exit_shadow_intent::init(d).unwrap();
         d.execute_batch(
             "CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT,
                 brain TEXT,kind TEXT,created_ms INTEGER,state TEXT,payload TEXT,result TEXT);
@@ -407,6 +409,31 @@ mod tests {
         assert_eq!(draft,"volume_changed_unverified");
         assert_eq!(stage,"review_required",
             "Old plan is NOT silently restored even when TP1 broker fill was proven");
+    }
+    #[test]
+    fn core_tp2_contract_requires_a_verified_prior_broker_settlement(){
+        let (d,t)=tp2_fixture();
+        let before:i64=d.query_row("SELECT COUNT(*) FROM broker_commands",[],
+            |r|r.get(0)).unwrap();
+        let out=crate::partial_exit_stage_contract::report(&d,&t,"demo",10350).unwrap();
+        assert_eq!(out["rows"].as_array().unwrap().len(),1);
+        let p=&out["rows"][0];
+        assert_eq!(p["tp_stage"],2);
+        assert_eq!(p["tp_target_price"],2002.0);
+        assert_eq!(p["expected_position_volume"],0.05);
+        assert_eq!(p["lots"],0.03);
+        assert_eq!(p["expected_position_entry"],1999.5);
+        assert_eq!(p["expected_broker_tp"],0.0);
+        assert_eq!(p["prior_stage_broker_sealed"],true);
+        assert!(p.get("kind").is_none()&&p.get("id").is_none());
+        assert_eq!(out["authorized"],false);
+        assert_eq!(d.query_row("SELECT COUNT(*) FROM broker_commands",[],
+            |r|r.get::<_,i64>(0)).unwrap(),before);
+        d.execute("UPDATE broker_deals SET payload=json_set(payload,'$.order',99999)",
+            []).unwrap();
+        assert!(crate::partial_exit_stage_contract::report(&d,&t,"demo",10350)
+            .unwrap()["rows"].as_array().unwrap().is_empty(),
+            "A changed TP1 Deal revokes the source proof for TP2");
     }
     #[test]
     fn tp3_requires_a_second_exact_broker_fill_and_all_original_close_lots(){
