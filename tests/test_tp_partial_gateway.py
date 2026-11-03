@@ -156,6 +156,22 @@ class StageDemoTests(unittest.TestCase):
         self.assertEqual(result['state'],'rejected',result)
         self.assertIn('Incomplete TP stage marker',result['reason'])
         self.assertFalse(self.mt.sends)
+    def test_orphan_quote_source_or_stage_schema_never_becomes_full_close(self):
+        for marker,value in [
+            ('price_source_quote_ms',clock_ms()),
+            ('schema','tp-stage-broker-command-shape-v1'),
+        ]:
+            with self.subTest(marker=marker):
+                self.cmd=command()
+                self.cmd.update(id='tp-orphan-'+marker+'-'+'e'*18,
+                                kind='close',position=91,magic=410601)
+                self.cmd[marker]=value
+                self.assertFalse(is_fast_path(self.cmd),
+                                 'Never let an orphaned staged-close field take the full-close fast path')
+                result=self.send()
+                self.assertEqual(result['state'],'rejected',result)
+                self.assertIn('Incomplete TP stage marker',result['reason'])
+                self.assertFalse(self.mt.sends)
     def test_stage_replay_cannot_switch_identity_or_expected_size(self):
         self.assertEqual(self.send()["state"],"placed")
         self.cmd["tp_stage_plan_id"]="tp-plan-"+"0"*32
