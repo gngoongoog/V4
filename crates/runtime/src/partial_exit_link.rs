@@ -289,6 +289,7 @@ mod tests{
         let d=Connection::open_in_memory().unwrap();
         crate::partial_exit_ledger::init(&d).unwrap();
         crate::partial_exit_stage::init(&d).unwrap();
+        crate::partial_exit_prices::init(&d).unwrap();
         d.execute_batch("CREATE TABLE broker_commands(id TEXT PRIMARY KEY,context TEXT,
             brain TEXT,kind TEXT,created_ms INTEGER,state TEXT,payload TEXT,result TEXT);
             CREATE TABLE broker_deals(context TEXT,ticket INTEGER,position_id INTEGER,
@@ -298,6 +299,22 @@ mod tests{
         let tt=sample_telemetry();
         crate::partial_exit_ledger::observe(&d,&tt,"demo",100).unwrap();
         crate::partial_exit_stage::observe(&d,&tt,"demo",100).unwrap();
+        let plans=crate::partial_exit_stage::report(&d,&tt,"demo").unwrap();
+        let ids=(0..3).map(|i|plans["rows"][i]["plan_id"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        let prices=json!([2000.3,2000.6,2000.9]);
+        let captured=json!({"schema":"partial-exit-price-capture-v1",
+            "context":ctx(&tt),"target":"demo","position_identifier":907,
+            "ticket":87,"magic":410601,"side":"BUY","symbol":"XAUUSDm",
+            "entry":1999.5,"original_volume":0.10,"lot_step":0.01,
+            "tick_size":0.01,"quote_reference":2000.0,
+            "saved_bid":2000.0,"saved_ask":2000.1,
+            "original_broker_tp":0.0,"saved_ms":110,
+            "orders_enabled":false,"breakeven_enabled":false});
+        d.execute("INSERT INTO partial_exit_price_plans VALUES(?1,'demo',907,87,
+            410601,?2,?3,?4,110)",
+            params![ctx(&tt),json!(ids).to_string(),
+                prices.to_string(),captured.to_string()]).unwrap();
         d
     }
     fn seed(d:&Connection,t:&Telemetry){
@@ -308,7 +325,9 @@ mod tests{
             "symbol":"XAUUSDm","brain":"gann","magic":410601,
             "position":87,"tp_stage":1,"tp_stage_plan_id":plan,
             "lots":0.05,"created_ms":120,"expected_position_identifier":907,
-            "expected_position_volume":0.10,"expected_position_side":"BUY"});
+            "expected_position_volume":0.10,"expected_position_side":"BUY",
+            "tp_target_price":2000.3,"expected_position_entry":1999.5,
+            "expected_broker_tp":0.0});
         let receipt=json!({"state":"filled","recovered_from_history":true,
             "volume":0.05,"position_id":907,"order":777,"deal":901,"deals":[901],
             "request":{"volume":0.05,"position":87,"type":1,
@@ -339,6 +358,32 @@ mod tests{
         assert_eq!(x["stage_completed"],false);
         assert_eq!(report(&d,&t,"demo").unwrap()["orders_enabled"],false);
         assert_eq!(e(&d,&t),x,"Repeated audits cannot mutate broker state");
+    }
+    #[test]
+    fn command_and_saved_original_tp_ladder_must_be_identical(){
+        let d=db();let t=sample_telemetry();seed(&d,&t);
+        assert_eq!(e(&d,&t)["state"],"broker_order_deals_exactly_linked");
+        for field in ["tp_target_price","expected_position_entry","expected_broker_tp"] {
+            let original:String=d.query_row(
+                "SELECT payload FROM broker_commands WHERE id='core-close-1'",[],
+                |r|r.get(0)).unwrap();
+            d.execute("UPDATE broker_commands SET payload=json_set(payload,?1,2999.0)
+                       WHERE id='core-close-1'",
+                [format!("$.{field}")]).unwrap();
+            assert_eq!(e(&d,&t)["state"],"original_tp_price_lineage_not_verified",
+                "Mutated {field} cannot count as original stage execution");
+            d.execute("UPDATE broker_commands SET payload=?1
+                WHERE id='core-close-1'",[original]).unwrap();
+        }
+        let raw:String=d.query_row(
+            "SELECT prices_json FROM partial_exit_price_plans",[],|r|r.get(0)).unwrap();
+        d.execute("UPDATE partial_exit_price_plans
+            SET prices_json=json_set(prices_json,'$[0]',2000.4)",[]).unwrap();
+        assert_eq!(e(&d,&t)["state"],"original_tp_price_lineage_not_verified");
+        d.execute("UPDATE partial_exit_price_plans SET prices_json=?1",[raw]).unwrap();
+        assert_eq!(e(&d,&t)["state"],"broker_order_deals_exactly_linked");
+        d.execute("DELETE FROM partial_exit_price_plans",[]).unwrap();
+        assert_eq!(e(&d,&t)["state"],"original_tp_price_lineage_not_verified");
     }
     #[test]
     fn ack_only_wrong_order_or_missing_deal_cannot_verify_stage(){
