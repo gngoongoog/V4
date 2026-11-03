@@ -23,8 +23,11 @@ pub(crate) const PENDING_BROKER_SQL:&str = "(state IN ('queued','dispatched','un
 // Keep this fail-closed gate for ALL stage markers, including Live and Demo.
 // Normal full closes remain independently authorized, not disabled.
 fn incomplete_tp_stage_execution_locked(command:&Value)->bool {
-    ["tp_stage_plan_id","tp_stage","expected_position_identifier","tp_target_price","expected_position_entry","expected_broker_tp"]
-        .iter().any(|key|command.get(*key).is_some())
+    command["schema"]=="tp-stage-broker-command-shape-v1"
+        ||["tp_stage_plan_id","tp_stage","expected_position_identifier",
+            "tp_target_price","expected_position_entry","expected_broker_tp",
+            "price_source_quote_ms"]
+            .iter().any(|key|command.get(*key).is_some())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1226,7 +1229,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 for (unissued_id,unissued_raw) in unissued {
                     let parsed=serde_json::from_str::<Value>(&unissued_raw);
                     if parsed.as_ref().map_or(true,|c|
-                        incomplete_tp_stage_execution_locked(c)){
+                        !c.is_object()||incomplete_tp_stage_execution_locked(c)){
                         let n=db.execute(
                             "UPDATE broker_commands SET state='cancelled'
                              WHERE id=?1 AND context=?2 AND state='queued'",
@@ -2638,7 +2641,8 @@ mod tp_stage_core_authorization_gate_tests {
     fn no_core_stage_execution_until_a_priced_broker_safe_producer_is_implemented(){
         assert!(!incomplete_tp_stage_execution_locked(&json!({"kind":"close","position":1})),
             "Normal full-close authorization must remain unchanged");
-        for key in ["tp_stage_plan_id","tp_stage","expected_position_identifier","tp_target_price","expected_position_entry","expected_broker_tp"]{
+        for key in ["tp_stage_plan_id","tp_stage","expected_position_identifier","tp_target_price",
+            "expected_position_entry","expected_broker_tp","price_source_quote_ms"]{
             let mut command=json!({"kind":"close","target":"demo","position":17,
                 "state":"dispatched"});
             command[key]=json!(if key=="tp_stage_plan_id" {"tp-plan-deadbeef"} else {"1"});
@@ -2649,5 +2653,8 @@ mod tp_stage_core_authorization_gate_tests {
             "tp_stage_plan_id":"tp-plan-aaa","tp_stage":1,
             "expected_position_identifier":907,"tp_target_price":2001.0,"state":"dispatched"});
         assert!(incomplete_tp_stage_execution_locked(&whole));
+        assert!(incomplete_tp_stage_execution_locked(
+            &json!({"kind":"close","schema":"tp-stage-broker-command-shape-v1"})),
+            "Stripping all stage fields but leaving its schema must remain blocked");
     }
 }
