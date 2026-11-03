@@ -249,9 +249,9 @@ mod tests{
             [ctx]).unwrap();
         // A broker ACK/observed marker is not an immutable stage seal.
         assert!(conflicting_close(&db,&t,"live",ctx,907,1,87).unwrap());
-        // Prior-stage settlement must be fully reverified before TP2; this
-        // test deliberately doesn't supply it so any query error fails closed.
-        assert!(conflicting_close(&db,&t,"live",ctx,907,2,87).is_err());
+        // Prior-stage settlement is absent; neither a successful previous
+        // command state nor a broker ACK can lift the TP2 collision gate.
+        assert!(conflicting_close(&db,&t,"live",ctx,907,2,87).unwrap());
     }
     #[test]
     fn sqlite_stage_identity_survives_reopen_without_multiplying_outbox_rows(){
