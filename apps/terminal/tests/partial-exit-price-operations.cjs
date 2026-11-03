@@ -200,7 +200,7 @@ assert(!collect(staleTradeTree).some(x=>x.type==='button'&&
  'Stale prior execution preference must only be revocable');
 const lostTrade=render({...opts,status:{...status,telemetry:{...tel,positions:[]}},
  source:tradeStale});
-assert(textOf(lostTrade).includes('إلغاء تفويض TP1 للمركز 907'),
+assert(/إلغاء تفويض TP1 للمركز\s+907/.test(textOf(lostTrade)),
  'A missing position must still have a scoped trade-preference revoke control');
 const wrongTradeAccount={...tradeSource,partial_exit_trade_approval:{
  ...tradeSource.partial_exit_trade_approval,target:'live'}};
