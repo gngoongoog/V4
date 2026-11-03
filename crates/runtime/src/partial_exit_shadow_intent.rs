@@ -386,6 +386,40 @@ mod tests{
         assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["close_lots"],0.05);
     }
     #[test]
+    fn tp1_core_contract_is_read_only_price_bound_and_not_an_executable_command(){
+        let d=Connection::open_in_memory().unwrap();setup(&d);
+        let t=crossed();tick(&d,&t,10_250);
+        let view=crate::partial_exit_stage_contract::report(&d,&t,"demo",10_250).unwrap();
+        assert_eq!(view["status"],"research_contracts_no_broker_commands");
+        assert_eq!(view["rows"].as_array().unwrap().len(),1);
+        let proposed=&view["rows"][0];
+        assert_eq!(proposed["tp_stage"],1);
+        assert_eq!(proposed["tp_target_price"],2001.0);
+        assert_eq!(proposed["lots"],0.05);
+        assert_eq!(proposed["expected_position_volume"],0.1);
+        assert_eq!(proposed["expected_position_entry"],1999.5);
+        assert_eq!(proposed["expected_broker_tp"],0.0);
+        assert_eq!(proposed["authorized"],false);
+        assert_eq!(proposed["orders_enabled"],false);
+        assert!(proposed.get("id").is_none());
+        assert!(proposed.get("kind").is_none());
+        assert!(proposed["broker_command_id"].is_null());
+        assert_eq!(d.query_row("SELECT COUNT(*) FROM broker_commands",[],
+            |r|r.get::<_,u32>(0)).unwrap(),0);
+        assert_eq!(crate::partial_exit_stage_contract::report(&d,&t,"demo",10_250)
+            .unwrap(),view,"A report must not generate a unique order ID or write");
+        let mut changed=t.clone();
+        changed.positions[0].price_open=1998.0;
+        let bad=crate::partial_exit_stage_contract::report(&d,&changed,"demo",10_250)
+            .unwrap();
+        assert!(bad["rows"].as_array().unwrap().is_empty());
+        changed=t.clone();changed.tick_age_ms=Some(5_000);
+        assert!(crate::partial_exit_stage_contract::report(&d,&changed,"demo",10_250)
+            .unwrap()["rows"].as_array().unwrap().is_empty());
+        assert!(crate::partial_exit_stage_contract::report(&d,&t,"live",10_250)
+            .unwrap()["rows"].as_array().unwrap().is_empty());
+    }
+    #[test]
     fn unknown_quote_old_shadow_and_competing_broker_close_never_create_intent(){
         for index in 0..5 {
             let db=Connection::open_in_memory().unwrap();setup(&db);
