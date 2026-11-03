@@ -18,6 +18,18 @@ fn near(a:f64,b:f64,step:f64)->bool{
     a.is_finite()&&b.is_finite()&&step.is_finite()&&step>0.
         &&(a-b).abs()<=step*1e-6
 }
+// Display only a volume already proven to be on the broker lot grid.
+// For example 0.05 - 0.03 is 0.020000000000000004 in binary floats;
+// never use this helper to make an off-grid close eligible.
+fn grid_amount(volume:f64,step:f64)->f64{
+    if !volume.is_finite()||!step.is_finite()||step<=0. {return volume}
+    let steps=volume/step;
+    if !steps.is_finite(){return volume}
+    let snapped=steps.round()*step;
+    if near(volume,snapped,step){
+        if near(snapped,0.,step){0.0}else{snapped}
+    }else{volume}
+}
 fn account(t:&Telemetry,target:&str)->bool{
     target=="demo"&&t.connected&&t.demo&&t.account_trade_mode==Some(0)
         &&t.margin_mode==Some(2)&&t.validate()&&t.login>0
@@ -155,7 +167,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         let previous_at=previous["sealed_ms"].as_u64().unwrap_or(0);
         let volume_exited=stages.iter().take(prior_count as usize)
             .map(|s|s.2).sum::<f64>();
-        let remaining=initial-volume_exited;
+        let remaining=grid_amount(initial-volume_exited,step);
         let active=p.len()==1&&p[0].identifier==pid&&p[0].ticket==ticket
             &&p[0].magic==magic&&p[0].symbol==t.symbol
             &&cap["side"]==p[0].side
@@ -173,7 +185,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         let previous_review_expected=draft_status=="volume_changed_unverified"
             &&stages.iter().all(|s|s.3=="review_required");
         let current_lots=stages[stage-1].2;
-        let expected_after=remaining-current_lots;
+        let expected_after=grid_amount(remaining-current_lots,step);
         let grid=t.volume_min.zip(t.volume_max).is_some_and(|(min,max)|
             min.is_finite()&&min>0.&&max.is_finite()&&max>=min
             &&current_lots>=min-step*1e-6&&current_lots<=max+step*1e-6
@@ -339,6 +351,15 @@ mod tests {
         assert_eq!(crate::partial_exit_progress::report(&d,&t,"demo")
             .unwrap()["rows"][0]["state"],"historical_stage_sealed");
         (d,t)
+    }
+    #[test]
+    fn lot_grid_normalization_never_rounds_invalid_off_grid_residual(){
+        assert_eq!(grid_amount(0.05_f64-0.03_f64,0.01),0.02);
+        assert_eq!(grid_amount(0.1_f64-0.05_f64-0.03_f64,0.01),0.02);
+        assert_eq!(grid_amount(0.02_f64-0.02_f64,0.01),0.);
+        assert_eq!(grid_amount(0.025,0.01),0.025,
+            "An off-grid amount must never be silently rounded into eligibility");
+        assert_eq!(grid_amount(f64::NAN,0.01).is_nan(),true);
     }
     #[test]
     fn missing_actual_tp1_broker_fill_never_advances_to_tp2(){
