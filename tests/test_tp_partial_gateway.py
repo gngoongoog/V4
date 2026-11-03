@@ -44,22 +44,42 @@ class StageDemoTests(unittest.TestCase):
         self.ex.close();self.tmp.cleanup()
     def send(self,authorize=lambda _:True):
         return self.ex.execute(self.mt,self.cmd,authorize)
+    def history_fill(self, lots=None, order=55, position=917, entry=1, side=1,
+                     magic=None, deal=77):
+        """Only immutable synthetic history can complete a TP stage."""
+        self.mt.deals=[N(ticket=deal,order=order,position_id=position,
+            magic=self.cmd["magic"] if magic is None else magic,
+            symbol=self.cmd["symbol"],
+            volume=self.cmd["lots"] if lots is None else lots,
+            type=side,entry=entry,comment="BT:"+self.cmd["id"][:20],
+            price=2000.0,time_msc=clock_ms())]
     def test_tp1_exact_lots_preflight_order_check_and_journal_replay(self):
         self.assertFalse(is_fast_path(self.cmd))
         result=self.send()
-        self.assertEqual(result["state"],"filled",result)
+        self.assertEqual(result["state"],"placed",result)
+        self.assertEqual(result["retcode"],10009)
+        self.assertFalse(result.get("recovered_from_history",False))
         self.assertEqual(result["request"]["volume"],0.05)
         self.assertEqual(self.mt.sends[0]["position"],91)
         self.assertFalse(result.get("order_check_skipped"))
         self.assertEqual(len(self.mt.sends),1)
-        self.assertEqual(self.send()["state"],"filled")
+        self.assertEqual(self.send()["state"],"placed",
+                         "A bare DONE acknowledgement cannot prove a TP fill")
+        self.history_fill()
+        verified=self.send()
+        self.assertEqual(verified["state"],"filled",verified)
+        self.assertTrue(verified["recovered_from_history"])
+        self.assertEqual(verified["deals"],[77])
+        self.assertEqual(verified["position_id"],917)
         self.assertEqual(len(self.mt.sends),1,"One stage intent may never send twice")
         self.cmd["lots"]=0.06
         self.assertEqual(self.send()["state"],"unknown")
         self.assertEqual(len(self.mt.sends),1)
     def test_same_stage_plan_cannot_be_sent_under_second_id_even_after_first_fill(self):
         original=self.send()
-        self.assertEqual(original["state"],"filled",original)
+        self.assertEqual(original["state"],"placed",original)
+        self.history_fill()
+        self.assertEqual(self.send()["state"],"filled")
         first_id=self.cmd["id"]
         self.cmd["id"]="tp-duplicate-"+"f"*24
         result=self.send()
@@ -70,7 +90,7 @@ class StageDemoTests(unittest.TestCase):
             (PLAN,)).fetchone()
         self.assertEqual(claim,(first_id,))
     def test_stage_claim_persists_after_gateway_restarts(self):
-        self.assertEqual(self.send()["state"],"filled")
+        self.assertEqual(self.send()["state"],"placed")
         first_id=self.cmd["id"]
         self.ex.close()
         self.ex=BrokerExecutor(Path(self.tmp.name)/"gateway.sqlite")
@@ -102,18 +122,18 @@ class StageDemoTests(unittest.TestCase):
             self.assertEqual(result["state"],"rejected",result)
             self.assertEqual(len(self.mt.sends),0)
     def test_stage_replay_cannot_switch_identity_or_expected_size(self):
-        self.assertEqual(self.send()["state"],"filled")
+        self.assertEqual(self.send()["state"],"placed")
         self.cmd["tp_stage_plan_id"]="tp-plan-"+"0"*32
         self.assertEqual(self.send()["state"],"unknown")
         self.assertEqual(len(self.mt.sends),1)
     def test_tp2_and_tp3_keep_residual_on_broker_grid(self):
         self.p.volume=0.05
         self.cmd=stage_command(stage=2,held=0.05,lots=0.03)
-        self.assertEqual(self.send()["state"],"filled")
+        self.assertEqual(self.send()["state"],"placed")
         self.assertAlmostEqual(self.mt.sends[0]["volume"],0.03)
         self.p.volume=0.02
         self.cmd=stage_command(stage=3,held=0.02,lots=0.02)
-        self.assertEqual(self.send()["state"],"filled")
+        self.assertEqual(self.send()["state"],"placed")
         self.assertAlmostEqual(self.mt.sends[1]["volume"],0.02)
     def test_late_broker_volume_change_denies_send_even_after_first_authorization(self):
         self.mt.on_check=lambda:setattr(self.p,"volume",0.08)
@@ -121,6 +141,38 @@ class StageDemoTests(unittest.TestCase):
         self.assertEqual(res["state"],"cancelled",res)
         self.assertFalse(self.mt.sends)
         self.assertIn("pre-send",res["reason"])
+    def test_forged_broker_deal_cannot_complete_acknowledged_stage(self):
+        ack=self.send()
+        self.assertEqual(ack["state"],"placed")
+        for label,change in (
+            ("wrong_order",dict(order=999)),
+            ("wrong_position",dict(position=918)),
+            ("wrong_entry",dict(entry=0)),
+            ("wrong_direction",dict(side=0)),
+            ("wrong_owner",dict(magic=999)),
+            ("underfill",dict(lots=0.03)),
+        ):
+            with self.subTest(label=label):
+                self.history_fill(**change)
+                pending=self.send()
+                self.assertNotEqual(pending["state"],"filled",pending)
+                self.assertEqual(len(self.mt.sends),1)
+        self.history_fill()
+        confirmed=self.send()
+        self.assertEqual(confirmed["state"],"filled",confirmed)
+        self.assertTrue(confirmed["recovered_from_history"])
+        self.assertEqual(len(self.mt.sends),1)
+    def test_stage_done_ack_restart_waits_for_history_and_never_resends(self):
+        self.assertEqual(self.send()["state"],"placed")
+        self.ex.close()
+        self.ex=BrokerExecutor(Path(self.tmp.name)/"gateway.sqlite")
+        self.assertEqual(self.send()["state"],"placed")
+        self.assertEqual(len(self.mt.sends),1)
+        self.history_fill()
+        confirmed=self.send()
+        self.assertEqual(confirmed["state"],"filled",confirmed)
+        self.assertTrue(confirmed["recovered_from_history"])
+        self.assertEqual(len(self.mt.sends),1)
     def test_no_retries_after_unknown_broker_result(self):
         self.mt.raise_send=True
         result=self.send()
