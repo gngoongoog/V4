@@ -60,6 +60,15 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
   shadow.next_stage_authorized===false&&shadow.breakeven_enabled===false;
  const shadowRows=shadowBound&&Array.isArray(shadow.rows)?
   shadow.rows.slice(0,50).map(object):[];
+ const intent=object(view.partial_exit_shadow_close_intents);
+ const intentBound=verified&&t?.demo===true&&
+  intent.schema==='tp-shadow-close-intents-v1'&&
+  intent.status==='research_close_intents_no_broker_commands'&&
+  intent.context===context&&intent.target==='demo'&&
+  intent.read_only===true&&intent.orders_enabled===false&&
+  intent.next_stage_authorized===false&&intent.breakeven_enabled===false;
+ const intentRows=intentBound&&Array.isArray(intent.rows)?
+  intent.rows.slice(0,50).map(object):[];
  const settlements=object(view.partial_exit_stage_settlements);
  const settlementsBound=verified&&t?.demo===true&&
   settlements.schema==='partial-exit-stage-settlements-v1'&&
@@ -150,6 +159,25 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
        <span>الحجم الأصلي {volume(d.initial_volume)} لوت</span>
       </div>)}
     </div>:null}
+   {intentBound?<details className="operator-advanced" aria-label="مسودات حجم الإغلاق التجريبي TP1">
+     <summary>مسودة حجم إغلاق TP1 — معاينة فقط</summary>
+     <p className="safe-note">يحسب Rust Core حجم الإغلاق المتوقع من خطة اللوت المحفوظة بعد عبور TP1 بالشادو، ويتحقق من المركز وخطوة الحجم وقواعد الوسيط. لا تُسجّل المسودة ضمن أوامر Core أو Gateway، ولا تفتح أو تغلق مركزاً ولا تحقق ربحاً.</p>
+     {intentRows.length===0?<p>لم تُنشأ مسودة إغلاق بحثية بعد. يجب توفر خطة مسعّرة وعبور جديد موثق من MT5.</p>:
+      intentRows.map((r,i)=>{
+       const proven=r.state==='shadow_close_intent_only'&&r.read_only===true&&
+        r.orders_enabled===false&&r.broker_fill_verified===false&&
+        r.next_stage_authorized===false&&r.breakeven_enabled===false&&
+        valid(r.close_lots)&&valid(r.expected_remaining_volume);
+       return <div className="brain-control-row" key={String(r.plan_id)+'-'+i}>
+        <div><b>TP1 — مركز {Number.isSafeInteger(r.position_identifier)?String(r.position_identifier):'—'}</b>
+         <small style={{display:'block',marginTop:4}}>{proven?
+          'مسودة لوت بحثية فقط — لم يُرسل أمر إلى MT5':
+          'المركز أو سجل الخطة تغير أو سند المسودة غير صالح — يحتاج مراجعة'}</small>
+        </div>
+        <span>{proven?'إغلاق '+volume(r.close_lots)+' / متبقٍ '+volume(r.expected_remaining_volume)+' لوت':'غير مؤكد'}</span>
+       </div>;
+      })}
+    </details>:null}
    {shadowBound?<details className="operator-advanced" aria-label="رصد TP1 البحثي من اقتباسات MT5">
      <summary>رصْد عبور TP1 من سعر MT5 — شادو فقط</summary>
      <p className="safe-note">يحفظ Core أول عبور موثق لـ Bid عند BUY أو Ask عند SELL بعد حفظ الأسعار، وفق وقت الاقتباس الأصلي من MT5. هذا ليس أمراً للوسيط، ولا يعني تنفيذ هدف أو نجاح صفقة أو السماح بـ TP2.</p>
