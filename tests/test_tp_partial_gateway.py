@@ -1,7 +1,9 @@
 """Offline account-selected TP partial-close Gateway regressions.
 
-The fixture deliberately supplies a synthetic Core-approved command; the
-production Core does NOT yet generate these intents. No real broker is called.
+Production Core now creates one-shot, explicitly armed TP1 commands with a
+durable held->queued transition. This fixture deliberately exercises Gateway
+with synthetic, Core-shaped approvals; no real broker is called.
+TP2/TP3 automation and broker-connected acceptance remain unverified.
 """
 from __future__ import annotations
 
@@ -515,6 +517,47 @@ class StageDemoTests(unittest.TestCase):
     def test_final_authorization_refusal_stops_before_send(self):
         self.assertEqual(self.send(lambda _:False)["state"],"cancelled")
         self.assertFalse(self.mt.sends)
+
+    def test_tp1_stop_after_durable_journal_does_not_send_or_restart(self):
+        calls=[]
+        def stopped_after_first_authorization(command_id):
+            calls.append(command_id)
+            return len(calls)==1
+        first=self.send(stopped_after_first_authorization)
+        self.assertEqual(first["state"],"cancelled",first)
+        self.assertIn("after durable journal",first.get("reason",""))
+        self.assertEqual(calls,[self.cmd["id"],self.cmd["id"]])
+        self.assertEqual(len(self.mt.sends),0)
+        saved=self.ex.db.execute(
+            "SELECT request,result FROM sends WHERE id=?",(self.cmd["id"],)
+        ).fetchone()
+        self.assertIsNotNone(saved,"Crash-safe journal must exist even when STOP denies send")
+        self.ex.close()
+        self.ex=BrokerExecutor(Path(self.tmp.name)/"gateway.sqlite")
+        second=self.send(lambda _:True)
+        self.assertEqual(second["state"],"cancelled",second)
+        self.assertFalse(self.mt.sends,
+                         "A journaled STOP denial must not resend after restart")
+
+    def test_tp1_account_switch_after_final_authorization_never_sends(self):
+        calls=[]
+        def switched_account_after_authorization(_id):
+            calls.append(_id)
+            if len(calls)==2:
+                self.mt.account.trade_mode=2
+            return True
+        result=self.send(switched_account_after_authorization)
+        self.assertEqual(result["state"],"cancelled",result)
+        self.assertIn("Account changed",result.get("reason",""))
+        self.assertFalse(self.mt.sends)
+        self.mt.account.trade_mode=0
+        self.ex.close()
+        self.ex=BrokerExecutor(Path(self.tmp.name)/"gateway.sqlite")
+        recovered=self.send(lambda _:True)
+        self.assertEqual(recovered["state"],"cancelled",recovered)
+        self.assertFalse(self.mt.sends,
+                         "Core-approved stage cannot send after journaled account-switch abort")
+
     def test_helper_does_not_round_or_mutate_original_request(self):
         before=dict(self.cmd)
         qty,side=stage_volume(self.cmd,self.mt.account,self.mt,self.p,self.mt.info,
