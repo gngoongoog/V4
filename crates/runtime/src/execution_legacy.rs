@@ -708,6 +708,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             p["micro_real_temporary"] = json!(micro_real);
             p["micro_real_recovery_equity"] = json!(c.risk.micro_real_recovery_equity);
             p["micro_demo_risk_opt_in"] = json!(c.risk.micro_demo_risk_opt_in);
+            p["live_elevated_risk_opt_in"] = json!(c.risk.live_elevated_risk_opt_in);
             p["slippage_ticks"] = json!(c.risk.slippage_ticks);
             p["learning"] = json!({"trading_mode":c.trading.mode,"timeframe":b.timeframe,"report_id":b.report_id,
                 "tick_size":t.tick_size,"tick_value_loss":t.tick_value_loss,"tick_value_profit":t.tick_value_profit,
@@ -883,13 +884,18 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             if daily_breaker_blocked {
                 gates.push("قاطع الخسارة اليومي للحساب: الحد بلغ أو بيانات اليوم غير موثوقة");
             }
-            // Elevated risk is deliberately Demo-only. Reject in Core before
-            // queueing to avoid a stream of guaranteed broker rejections on REAL.
-            // The MT5 adapter independently enforces the exact broker mode.
-            if risk_master && c.risk.risk_percent > 2.0
-                && (self.settings.target != "demo" || t.account_trade_mode != Some(0))
-            {
-                gates.push("المخاطرة فوق 2% تجريبية على حساب MT5 Demo فقط؛ REAL يبقى بحد 2%");
+            // Optional elevated risk requires its own target-specific opt-in.
+            // Demo consent never transfers to Live, and vice versa. Both Core
+            // and Gateway enforce the same independent broker mode evidence.
+            if risk_master && c.risk.risk_percent > 2.0 {
+                let allowed = match (self.settings.target.as_str(),t.demo,t.account_trade_mode) {
+                    ("demo",true,Some(0)) => c.risk.micro_demo_risk_opt_in,
+                    ("live",false,Some(2)) => c.risk.live_elevated_risk_opt_in,
+                    _ => false
+                };
+                if !allowed {
+                    gates.push("مخاطرة أعلى من 2% تحتاج موافقة صريحة خاصة بنوع حساب MT5 المختار");
+                }
             }
             if b.id != active_owner {
                 gates.push("هذا العقل للمراقبة وPaper؛ عقل آخر هو المنفّذ المختار");
