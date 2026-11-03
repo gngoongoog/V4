@@ -143,6 +143,14 @@ pub fn prepare(db:&Connection,t:&Telemetry,target:&str,now:u64,
          AND settings_revision=?3 AND expires_ms>?4)",
         params![key,target,revision,now],|r|r.get(0))?;
     if exists!=1{return Ok(empty())}
+    // A future-trade preference is not permission to create a broker close.
+    // A separate explicit one-shot execution arm must exist first.
+    let has_arm:i64=db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM partial_exit_tp1_arms
+         WHERE context=?1 AND target=?2 AND state='armed_once'
+           AND settings_revision=?3 AND armed_ms<=?4 AND expires_ms>?4)",
+        params![key,target,revision,now],|r|r.get(0))?;
+    if has_arm!=1{return Ok(empty())}
     let trading=crate::partial_exit_trade_approval::report(
         db,t,target,now,revision)?;
     let prepared=crate::partial_exit_stage_outbox::report(
@@ -195,7 +203,9 @@ pub fn prepare(db:&Connection,t:&Telemetry,target:&str,now:u64,
         let frozen_matches=frozen.is_some_and(|(raw,at,state)|
             state=="sealed_not_queued"&&at==now&&same_command(&raw,draft));
         if !approved||!sealed||!frozen_matches
-            ||draft["revision"].as_u64()!=Some(revision){
+            ||draft["revision"].as_u64()!=Some(revision)
+            ||!crate::partial_exit_tp1_arm::eligible(
+                db,t,target,pid,ticket,plan,revision,now).unwrap_or(false){
             conflict+=1;continue
         }
         // One transaction does the outbox+claim. A TP1 held record will
