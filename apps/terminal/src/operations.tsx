@@ -313,7 +313,11 @@ export function ExecutionBindingOperations({source,telemetry,ready,armed,disable
  onBind:(target:'demo'|'live',deviationPoints:number,confirmation:string)=>Promise<void>;
 }){
  const saved=safeObject(safeObject(source).settings);
- const [target,setTarget]=useState<'demo'|'live'>('demo');
+ // The selector represents the persisted Core binding, not a Demo default.
+ // A fresh live session must never show Demo selected just because the form remounted.
+ const [target,setTarget]=useState<'demo'|'live'>(
+  saved.target==='live'?'live':saved.target==='demo'?'demo':
+  telemetry?.demo===false&&telemetry.account_trade_mode===2?'live':'demo');
  const [deviation,setDeviation]=useState('20');
  const [login,setLogin]=useState('');
  const [error,setError]=useState('');
@@ -335,7 +339,7 @@ export function ExecutionBindingOperations({source,telemetry,ready,armed,disable
   <h3><ShieldAlert size={18}/> ربط التنفيذ بحساب MT5 الموثوق</h3>
   <p>هذه الخطوة ضرورية قبل START. الربط لا يفتح أي صفقة؛ Core يرفض الحساب غير المطابق ولا يسمح للعقول الثانوية بتنفيذ مستقل.</p>
   <div className="execution-binding-summary">حساب MT5: <b>{telemetry?.login??'—'}</b> · <b>{telemetry?.server||'غير متصل'}</b> · نوع الحساب <b>{telemetry?(telemetry.demo?'Demo':'REAL'):'—'}</b></div>
-  <div className="execution-binding-summary">الربط المحفوظ: <b>{String(saved.target||'demo').toUpperCase()}</b> · الحساب <b>{String(saved.login||'—')}</b> · <b>{String(saved.server||'—')}</b></div>
+  <div className="execution-binding-summary">الربط المحفوظ: <b>{saved.target==='live'?'LIVE':saved.target==='demo'?'DEMO':'غير محدد'}</b> · الحساب <b>{String(saved.login||'—')}</b> · <b>{String(saved.server||'—')}</b></div>
   <div className="operator-grid">
    <label>الحساب الذي سينفذ<select value={target} onChange={e=>{setTarget(e.target.value as 'demo'|'live');setLogin('')}}><option value="demo">MT5 Demo</option><option value="live">MT5 REAL — يتطلب تأكيداً</option></select></label>
    <label>الانحراف المسموح (points)<input type="number" min="0" max="100000" step="1" value={deviation} onChange={e=>setDeviation(e.target.value)} required/></label>

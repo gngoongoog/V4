@@ -16,6 +16,17 @@ use std::collections::{BTreeMap, BTreeSet};
 // unsettled until Gateway supplies exact terminal broker-order history.
 pub(crate) const PENDING_BROKER_SQL:&str = "(state IN ('queued','dispatched','unknown','placed','filled','partial') OR (state='observed' AND json_extract(result,'$.state')='partial' AND COALESCE(json_extract(result,'$.terminal_order.confirmed'),0)<>1))";
 
+// Core now has a selected-account TP1/TP2/TP3 economic shape producer and a
+// durable research reservation journal; neither is an authorized outbox entry.
+// The MT5 Gateway validates a stage when one arrives, but the separately
+// audited Core queue + authorization + restart reconciliation is incomplete.
+// Keep this fail-closed gate for ALL stage markers, including Live and Demo.
+// Normal full closes remain independently authorized, not disabled.
+fn incomplete_tp_stage_execution_locked(command:&Value)->bool {
+    ["tp_stage_plan_id","tp_stage","expected_position_identifier","tp_target_price","expected_position_entry","expected_broker_tp"]
+        .iter().any(|key|command.get(*key).is_some())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
@@ -586,7 +597,8 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             && t.login == self.settings.login
             && t.server == self.settings.server
             && t.currency == self.settings.currency
-            && t.account_trade_mode == Some(if self.settings.target == "demo" { 0 } else { 2 })
+            && matches!((self.settings.target.as_str(),t.demo,t.account_trade_mode),
+                ("demo",true,Some(0))|("live",false,Some(2)))
     }
     pub fn enabled(&self, s: &Status) -> bool {
         s.requested_run
@@ -602,10 +614,10 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         Ok(())
     }
     fn bind_with_settings(&mut self, db: &Connection, t: &Telemetry, now: u64, mut candidate: Settings) -> Result<()> {
-        if !t.connected
-            || t.account_trade_mode != Some(if candidate.target == "demo" { 0 } else { 2 })
+        if !t.connected || !matches!((candidate.target.as_str(),t.demo,t.account_trade_mode),
+            ("demo",true,Some(0))|("live",false,Some(2)))
         {
-            bail!("نوع الحساب لا يطابق هدف التنفيذ المختار؛ Demo يحتاج حساب MT5 تجريبي");
+            bail!("نوع حساب MT5 المتصل لا يطابق اختيار Demo/Live المحفوظ");
         }
         candidate.login = t.login;
         candidate.server = t.server.clone();
@@ -697,6 +709,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             p["micro_real_temporary"] = json!(micro_real);
             p["micro_real_recovery_equity"] = json!(c.risk.micro_real_recovery_equity);
             p["micro_demo_risk_opt_in"] = json!(c.risk.micro_demo_risk_opt_in);
+            p["live_elevated_risk_opt_in"] = json!(c.risk.live_elevated_risk_opt_in);
             p["slippage_ticks"] = json!(c.risk.slippage_ticks);
             p["learning"] = json!({"trading_mode":c.trading.mode,"timeframe":b.timeframe,"report_id":b.report_id,
                 "tick_size":t.tick_size,"tick_value_loss":t.tick_value_loss,"tick_value_profit":t.tick_value_profit,
@@ -872,13 +885,18 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             if daily_breaker_blocked {
                 gates.push("قاطع الخسارة اليومي للحساب: الحد بلغ أو بيانات اليوم غير موثوقة");
             }
-            // Elevated risk is deliberately Demo-only. Reject in Core before
-            // queueing to avoid a stream of guaranteed broker rejections on REAL.
-            // The MT5 adapter independently enforces the exact broker mode.
-            if risk_master && c.risk.risk_percent > 2.0
-                && (self.settings.target != "demo" || t.account_trade_mode != Some(0))
-            {
-                gates.push("المخاطرة فوق 2% تجريبية على حساب MT5 Demo فقط؛ REAL يبقى بحد 2%");
+            // Optional elevated risk requires its own target-specific opt-in.
+            // Demo consent never transfers to Live, and vice versa. Both Core
+            // and Gateway enforce the same independent broker mode evidence.
+            if risk_master && c.risk.risk_percent > 2.0 {
+                let allowed = match (self.settings.target.as_str(),t.demo,t.account_trade_mode) {
+                    ("demo",true,Some(0)) => c.risk.micro_demo_risk_opt_in,
+                    ("live",false,Some(2)) => c.risk.live_elevated_risk_opt_in,
+                    _ => false
+                };
+                if !allowed {
+                    gates.push("مخاطرة أعلى من 2% تحتاج موافقة صريحة خاصة بنوع حساب MT5 المختار");
+                }
             }
             if b.id != active_owner {
                 gates.push("هذا العقل للمراقبة وPaper؛ عقل آخر هو المنفّذ المختار");
@@ -1266,6 +1284,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         cmd["daily_breaker_limit_percent"].as_f64().unwrap_or(2.))?
                 } else { false };
                 let ok = state == "dispatched"
+                    && !incomplete_tp_stage_execution_locked(&cmd)
                     && breaker_ok
                     && t.is_some_and(|t| self.matches(t) && ctx(t) == cmd["context"])
                     && now <= cmd["expires_ms"].as_u64().unwrap_or(0)
@@ -2511,5 +2530,26 @@ mod execution_persistence_tests {
         service.route("POST","/v1/execution/settings",request.as_bytes(),&db,&status,201).unwrap();
         assert_eq!(service.settings.deviation_points,35);
         assert_eq!(Service::new(&db).unwrap().settings.deviation_points,35);
+    }
+}
+
+#[cfg(test)]
+mod tp_stage_core_authorization_gate_tests {
+    use super::*;
+    #[test]
+    fn no_core_stage_execution_until_a_priced_broker_safe_producer_is_implemented(){
+        assert!(!incomplete_tp_stage_execution_locked(&json!({"kind":"close","position":1})),
+            "Normal full-close authorization must remain unchanged");
+        for key in ["tp_stage_plan_id","tp_stage","expected_position_identifier","tp_target_price","expected_position_entry","expected_broker_tp"]{
+            let mut command=json!({"kind":"close","target":"demo","position":17,
+                "state":"dispatched"});
+            command[key]=json!(if key=="tp_stage_plan_id" {"tp-plan-deadbeef"} else {"1"});
+            assert!(incomplete_tp_stage_execution_locked(&command),
+                "Any TP marker is blocked, including incomplete ones");
+        }
+        let whole=json!({"kind":"close","target":"demo","position":17,
+            "tp_stage_plan_id":"tp-plan-aaa","tp_stage":1,
+            "expected_position_identifier":907,"tp_target_price":2001.0,"state":"dispatched"});
+        assert!(incomplete_tp_stage_execution_locked(&whole));
     }
 }

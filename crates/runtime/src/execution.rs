@@ -370,6 +370,9 @@ pub struct Service {
     // protection journal on every latency-sensitive Sniper quote.
     protection_work:bool,
     cancellation_work:bool,
+    // Heavy historical TP audit is bounded to full snapshots at <= 1 Hz.
+    // It must never burden the Sniper fast-tick hot path.
+    tp_settlement_last_ms:u64,
 }
 
 impl Service {
@@ -381,6 +384,13 @@ impl Service {
         crate::matched_trade::init(db)?;
         crate::sniper_opportunities::init(db)?;
         crate::position_protection::init(db)?;
+        crate::partial_exit_ledger::init(db)?;
+        crate::partial_exit_stage::init(db)?;
+        crate::partial_exit_progress::init(db)?;
+        crate::partial_exit_prices::init(db)?;
+        crate::partial_exit_shadow_trigger::init(db)?;
+        crate::partial_exit_shadow_intent::init(db)?;
+        crate::partial_exit_stage_reservation::init(db)?;
         crate::pending_cancellation::init(db)?;
         let mut inner = legacy::Service::new(db)?;
         // Old per-brain flags do not choose an execution owner. A scoped solo
@@ -433,6 +443,7 @@ impl Service {
             manual_blocked:true,
             protection_work:false,
             cancellation_work:false,
+            tp_settlement_last_ms:0,
         })
     }
 
@@ -509,8 +520,8 @@ impl Service {
                 && t.login == self.inner.settings.login
                 && t.server == self.inner.settings.server
                 && t.currency == self.inner.settings.currency
-                && t.account_trade_mode
-                    == Some(if self.inner.settings.target == "demo" { 0 } else { 2 })
+                && matches!((self.inner.settings.target.as_str(),t.demo,t.account_trade_mode),
+                    ("demo",true,Some(0))|("live",false,Some(2)))
         })
     }
 
@@ -663,6 +674,37 @@ impl Service {
         self.sniper_frozen_tick.flush_research_events(db,telemetry);
         self.inner
             .observe(db, telemetry, config, entries_allowed, frames, now)?;
+        // Read-only durable TP lot drafts only on complete broker snapshots.
+        // This never opens/closes a position and never runs on Fast Pulse.
+        if self.inner.matches_bound_telemetry(telemetry) {
+            if crate::partial_exit_ledger::observe(
+                db,telemetry,&self.inner.settings.target,now).is_ok(){
+                if crate::partial_exit_stage::observe(
+                    db,telemetry,&self.inner.settings.target,now).is_ok() &&
+                    (self.tp_settlement_last_ms==0
+                     || now<self.tp_settlement_last_ms
+                     || now.saturating_sub(self.tp_settlement_last_ms)>=1_000){
+                    self.tp_settlement_last_ms=now;
+                    let _=crate::partial_exit_progress::observe(
+                        db,telemetry,&self.inner.settings.target,now);
+                    if crate::partial_exit_shadow_trigger::observe(
+                        db,telemetry,&self.inner.settings.target,now).is_ok(){
+                        let _=crate::partial_exit_shadow_intent::observe(
+                            db,telemetry,&self.inner.settings.target,now);
+                    }
+                    // Stage intent is now journaled once, independently
+                    // of the broker command outbox. START expresses the
+                    // operator's mode choice; this is NOT an MT5 send.
+                    if entries_allowed {
+                        let _=crate::partial_exit_stage_reservation::prepare(
+                            db,telemetry,&self.inner.settings.target,now,
+                            self.inner.settings.revision,
+                            self.inner.settings.deviation_points,
+                            self.inner.risk_master(telemetry).unwrap_or(true));
+                    }
+                }
+            }
+        }
         // Protection failures must not interrupt broker reconciliation or
         // existing exit logic. A failed or corrupt policy simply creates no
         // modification; the read-only report exposes the error to the UI.
@@ -913,6 +955,99 @@ impl Service {
         status: &Status,
         now: u64,
     ) -> Result<Value> {
+        if method=="GET" && path=="/v1/execution/binding" {
+            // Lightweight, account-scoped source of truth for the global
+            // Demo/Live buttons on *every* UI page. No Deal-history scan or
+            // broker mutation; distinguish persisted target from the actual
+            // currently connected MT5 account and whether they match.
+            let observed=status.telemetry.as_ref();
+            let actual_target=observed.and_then(|t|
+                match (t.demo,t.account_trade_mode) {
+                    (true,Some(0))=>Some("demo"),
+                    (false,Some(2))=>Some("live"),
+                    _=>None
+                });
+            let matches=status.gateway_fresh&&self.account_matches(status);
+            let identity=observed.filter(|_|matches).map(context)
+                .unwrap_or_default();
+            return Ok(json!({
+                "schema":"execution-binding-v1",
+                "selected_target":self.inner.settings.target,
+                "settings":{
+                    "target":self.inner.settings.target,
+                    "login":self.inner.settings.login,
+                    "server":self.inner.settings.server,
+                    "currency":self.inner.settings.currency,
+                    "deviation_points":self.inner.settings.deviation_points
+                },
+                "connected_target":if status.gateway_fresh{actual_target}else{None},
+                "connected_login":if status.gateway_fresh{observed.map(|t|t.login)}else{None},
+                "account_matches":matches,
+                "context":identity,
+                "gateway_fresh":status.gateway_fresh,
+                "requested_run":status.requested_run,
+                "pending_reconciliation":self.pending(db)?,
+                "read_only":true,
+                "trade_enabled_by_read":false
+            }));
+        }
+        if method=="GET" && path=="/v1/execution/partial-exit-reservations" {
+            if status.gateway_fresh && self.account_matches(status) {
+                if let Some(t)=status.telemetry.as_ref(){
+                    return crate::partial_exit_stage_reservation::report(
+                        db,t,&self.inner.settings.target);
+                }
+            }
+            return Ok(json!({"schema":"tp-stage-reservations-v1",
+                "status":"fresh_bound_selected_gateway_required",
+                "rows":[],"read_only":true,"orders_enabled":false,
+                "broker_commands_created":0}));
+        }
+        if method=="GET" && path=="/v1/execution/partial-exit-command-drafts" {
+            if status.gateway_fresh && self.account_matches(status) {
+                if let Some(t)=status.telemetry.as_ref(){
+                    return crate::partial_exit_stage_producer::report(db,t,
+                        &self.inner.settings.target,now,
+                        self.inner.settings.revision,
+                        self.inner.settings.deviation_points,
+                        self.inner.risk_master(t).unwrap_or(true));
+                }
+            }
+            return Ok(json!({"schema":"tp-stage-broker-command-drafts-v1",
+                "status":"fresh_bound_selected_gateway_required",
+                "rows":[],"read_only":true,"orders_enabled":false,
+                "authorized":false,"broker_commands_created":0}));
+        }
+        if method=="GET" && path=="/v1/execution/partial-exit-contracts" {
+            if status.gateway_fresh && self.account_matches(status) {
+                if let Some(t)=status.telemetry.as_ref() {
+                    return crate::partial_exit_stage_contract::report(
+                        db,t,&self.inner.settings.target,now);
+                }
+            }
+            return Ok(json!({"schema":"tp-stage-core-contract-preview-v1",
+                "status":"fresh_bound_selected_gateway_required",
+                "rows":[],"read_only":true,"orders_enabled":false,
+                "authorized":false,"breakeven_enabled":false}));
+        }
+        if method=="POST" && path=="/v1/execution/partial-exit-prices" {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request {
+                context:String,position_identifier:u64,
+                plan_ids:[String;3],prices:[f64;3]
+            }
+            let request:Request=serde_json::from_slice(body)?;
+            anyhow::ensure!(!status.requested_run && !self.pending(db)?,
+                "أوقف فتح الصفقات وانتظر مصالحة الأوامر قبل حفظ أسعار TP");
+            anyhow::ensure!(status.gateway_fresh && self.account_matches(status)
+                &&matches!(self.inner.settings.target.as_str(),"demo"|"live"),
+                "لا تُحفظ أسعار TP إلا للحساب الحالي المرتبط والمحدد في الإعدادات");
+            let t=status.telemetry.as_ref().context("لقطة MT5 غير متاحة")?;
+            anyhow::ensure!(request.context==context(t),"هوية الحساب تغيّرت؛ حدّث الصفحة");
+            return crate::partial_exit_prices::save(db,t,&self.inner.settings.target,
+                request.position_identifier,&request.plan_ids,request.prices,now);
+        }
         if method=="POST" && path=="/v1/execution/settings" {
             anyhow::ensure!(!crate::pending_cancellation::pending(db)?,"انتظر تسوية طلب إلغاء الأمر المعلّق قبل تغيير الحساب");
         }
@@ -1572,6 +1707,92 @@ impl Service {
                 status.telemetry.as_ref().map(|t|crate::position_protection::report(db,t,&self.inner.settings.target)
                     .unwrap_or_else(|e|json!({"error":e.to_string()}))).unwrap_or(Value::Null)
             } else {Value::Null};
+            // Source-only, never a close command. Uses the verified MT5
+            // volume grid for owned positions; cannot promote a simulation
+            // into an executable broker authorization.
+            value["partial_exit_preview"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(braintrade_domain::partial_exit::preview)
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["partial_exit_next_shadow_gate"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_next_shadow::report(db,t,&self.inner.settings.target,now)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
+            // Show the Core-owned, immutable-stage command shape WITHOUT an
+            // executable command ID, broker queue write or authorization.
+            // This report cannot turn a research crossing into a live order.
+            value["partial_exit_stage_reservations"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_stage_reservation::report(
+                        db,t,&self.inner.settings.target)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["partial_exit_stage_command_drafts"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_stage_producer::report(db,t,
+                        &self.inner.settings.target,now,
+                        self.inner.settings.revision,self.inner.settings.deviation_points,
+                        self.inner.risk_master(t).unwrap_or(true))
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["partial_exit_stage_contracts"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_stage_contract::report(db,t,&self.inner.settings.target,now)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["partial_exit_shadow_close_intents"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_shadow_intent::report(db,t,&self.inner.settings.target)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["partial_exit_shadow_tp1"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_shadow_trigger::report(db,t,&self.inner.settings.target)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["partial_exit_price_proposals"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_prices::report(db,t,&self.inner.settings.target,now)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["partial_exit_stage_settlements"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_progress::report(db,t,&self.inner.settings.target)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["partial_exit_command_links"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_link::report(db,t,&self.inner.settings.target)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["partial_exit_deal_evidence"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_evidence::report(db,t,&self.inner.settings.target)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["partial_exit_stage_plans"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_stage::report(db,t,&self.inner.settings.target)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["partial_exit_draft_ledger"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_ledger::report(db,t,&self.inner.settings.target)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
             value["pending_cancellations"]=if status.gateway_fresh && self.account_matches(status) {
                 status.telemetry.as_ref().map(|t|crate::pending_cancellation::report(db,t,&self.inner.settings.target)
                     .map(|rows|json!(rows)).unwrap_or(Value::Null)).unwrap_or(Value::Null)
@@ -1636,6 +1857,57 @@ mod tests {
         .unwrap()
     }
 
+    #[test]
+    fn binding_endpoint_reports_real_persisted_target_and_clears_mismatched_accounts() {
+        for selected in ["demo","live"] {
+            let db=setup();
+            let mut service=Service::new(&db).unwrap();
+            let mut t=telemetry();
+            t.demo=selected=="demo";
+            t.account_trade_mode=Some(if selected=="demo"{0}else{2});
+            t.server=if selected=="demo"{"DemoServer"}else{"LiveServer"}.into();
+            let status=Status{gateway_fresh:true,telemetry:Some(t.clone()),..Default::default()};
+            let chosen=json!({"target":selected,"deviation_points":18,
+                "confirm_live_login":if selected=="live"{t.login.to_string()}else{String::new()}});
+            let r=service.route("POST","/v1/execution/settings",
+                chosen.to_string().as_bytes(),&db,&status,100).unwrap();
+            assert_eq!(r["ok"],true);
+            let verified=service.route("GET","/v1/execution/binding",
+                &[],&db,&status,101).unwrap();
+            assert_eq!(verified["schema"],"execution-binding-v1");
+            assert_eq!(verified["selected_target"],selected);
+            assert_eq!(verified["connected_target"],selected);
+            assert_eq!(verified["account_matches"],true);
+            assert_eq!(verified["settings"]["login"],t.login);
+            assert_eq!(verified["settings"]["deviation_points"],18);
+            assert_eq!(verified["context"],context(&t));
+            assert_eq!(verified["read_only"],true);
+            assert_eq!(verified["trade_enabled_by_read"],false);
+            let mut inconsistent=t.clone();
+            inconsistent.demo=!t.demo;
+            let inconsistent_status=Status{gateway_fresh:true,
+                telemetry:Some(inconsistent),..Default::default()};
+            let contradiction=service.route("GET","/v1/execution/binding",
+                &[],&db,&inconsistent_status,101).unwrap();
+            assert_eq!(contradiction["connected_target"],Value::Null);
+            assert_eq!(contradiction["account_matches"],false,
+                "Conflicting MT5 demo flag and trade_mode never validate account identity");
+            let mut different=t.clone();
+            different.login+=1;
+            let stale=Status{gateway_fresh:true,telemetry:Some(different),..Default::default()};
+            let out=service.route("GET","/v1/execution/binding",
+                &[],&db,&stale,102).unwrap();
+            assert_eq!(out["selected_target"],selected,
+                "Persisted operator selection must not flip to a different MT5 account");
+            assert_eq!(out["account_matches"],false);
+            assert_eq!(out["context"],"");
+            let disconnected=Status{gateway_fresh:false,telemetry:Some(t),..Default::default()};
+            let offline=service.route("GET","/v1/execution/binding",
+                &[],&db,&disconnected,103).unwrap();
+            assert_eq!(offline["connected_target"],Value::Null);
+            assert_eq!(offline["account_matches"],false);
+        }
+    }
     #[test]
     fn corrupt_policy_cannot_open_trades_even_if_market_assessment_would_pass() {
         let db=Connection::open_in_memory().unwrap();

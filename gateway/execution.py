@@ -61,6 +61,12 @@ def is_fast_path(cmd):
     and re-read the exact position immediately before send.
     """
     if cmd.get('kind') == 'close':
+        if any(key in cmd for key in (
+                'tp_stage_plan_id','tp_stage','expected_position_identifier',
+                'tp_target_price','expected_position_entry','expected_broker_tp')):
+            # Any stage marker, even malformed/null, never takes the
+            # no-order_check automatic-close shortcut.
+            return False
         # Operator-requested bulk closes take the full broker order_check;
         # the existing automatic Sniper exit path keeps its latency contract.
         return cmd.get('manual_close') is not True
@@ -114,7 +120,8 @@ def round_trip_commission(rate_per_lot, lots):
 def size_to_stop_risk(mt5, account, info, symbol, side, entry, stop_price,
                       requested, risk_percent, commission, slippage_ticks,
                       micro_demo_risk_opt_in=False, broker_demo=False,
-                      micro_real_active=False):
+                      micro_real_active=False, live_elevated_risk_opt_in=False,
+                      broker_live=False):
     """Limit order size to an equity-at-risk budget using MT5 contract PnL.
 
     A requested volume is an UPPER bound, never a minimum. No order can be
@@ -127,7 +134,8 @@ def size_to_stop_risk(mt5, account, info, symbol, side, entry, stop_price,
     if not all(math.isfinite(float(v)) for v in values):
         raise ValueError('Risk sizing: all prices, lot and fee inputs must be finite')
     allowed_risk_percent = (20.0 if micro_real_active
-                            else 5.0 if micro_demo_risk_opt_in and broker_demo
+                            else 5.0 if (micro_demo_risk_opt_in and broker_demo)
+                                       or (live_elevated_risk_opt_in and broker_live)
                             else 2.0)
     if not (entry > 0 and stop_price > 0 and requested > 0
             and 0 < risk_percent <= allowed_risk_percent
@@ -248,6 +256,9 @@ class BrokerExecutor:
         self.db.execute('PRAGMA synchronous=FULL')
         self.db.execute('PRAGMA busy_timeout=50')
         self.db.execute('CREATE TABLE IF NOT EXISTS sends(id TEXT PRIMARY KEY, request TEXT NOT NULL, result TEXT, created_ms INTEGER NOT NULL)')
+        # One physical stage plan may own only one Gateway send ID for life.
+        # This claim and its send journal row commit in the SAME transaction.
+        self.db.execute('CREATE TABLE IF NOT EXISTS tp_stage_claims(plan_id TEXT PRIMARY KEY, send_id TEXT NOT NULL UNIQUE, created_ms INTEGER NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS micro_real_recovered(account_key TEXT PRIMARY KEY, reached_ms INTEGER NOT NULL, reached_equity REAL NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS daily_loss_locks(account_key TEXT NOT NULL, report_day TEXT NOT NULL, reached_ms INTEGER NOT NULL, loss_amount REAL NOT NULL, PRIMARY KEY(account_key,report_day))')
         self.db.execute('CREATE TABLE IF NOT EXISTS risk_master_recoveries(account_key TEXT NOT NULL, recovery_id TEXT NOT NULL, basis TEXT NOT NULL, threshold REAL NOT NULL, reached_value REAL NOT NULL, PRIMARY KEY(account_key,recovery_id))')
@@ -470,14 +481,33 @@ class BrokerExecutor:
         if acknowledged_order < 0:
             return dict(result, reason='Invalid acknowledged order ticket; reconciliation pending')
         def matches_deal(item):
-            if getattr(item, 'magic', 0)!=cmd['magic'] or getattr(item, 'symbol', '')!=cmd['symbol']:
+            if getattr(item, 'symbol', '')!=cmd['symbol']:
                 return False
             try:
                 item_order = int(getattr(item, 'order', 0) or 0)
             except (TypeError, ValueError, OverflowError):
                 return False
-            # If both sides expose an order ID, it must agree. A copied or
-            # broker-reused comment must never override a conflicting ticket.
+            # Some brokers strip magic from exit Deals. For a TP close only,
+            # accept magic=0 with a POSITIVE EXACT acknowledged MT5 order ID
+            # and the same immutable physical position identifier. A loose
+            # matching comment, deal timestamp or volume is never enough.
+            magic=getattr(item, 'magic', None)
+            zero_magic_tp=(cmd.get('tp_stage_plan_id') is not None
+                and magic==0 and acknowledged_order>0 and item_order==acknowledged_order
+                and type(cmd.get('expected_position_identifier')) is int
+                and cmd['expected_position_identifier']>0
+                and getattr(item, 'position_id', None)==cmd['expected_position_identifier'])
+            if magic!=cmd['magic'] and not zero_magic_tp:
+                return False
+            if cmd.get('tp_stage_plan_id') is not None:
+                # For immutable TP stages a matching magic/comment is NOT
+                # enough to claim an economic fill. A Deal with no order ID
+                # cannot be bound to the exact acknowledged MT5 Order, even
+                # when the remaining attributes happen to match.
+                return acknowledged_order>0 and item_order==acknowledged_order
+            # Legacy non-TP commands retain their own reconciliation rule.
+            # If both sides expose an order ID, it must agree; a copied
+            # broker comment cannot override an explicit conflicting ticket.
             if acknowledged_order>0 and item_order>0:
                 return item_order==acknowledged_order
             return getattr(item, 'comment', '')==tag
@@ -518,6 +548,13 @@ class BrokerExecutor:
         # history, matching ownership and the *entire* volume remaining proves
         # that cancellation/expiry completed without a fill.
         if not matches and not pending and acknowledged_order > 0:
+            # Even DONE/DONE_PARTIAL with deal=0 means broker acknowledges
+            # an attempted fill: zero-fill cancellation is contradictory
+            # until the exact Deal history becomes reliable. Do not silently
+            # turn an ambiguous TP stage into a terminal cancellation.
+            if (cmd.get('tp_stage_plan_id') is not None
+                    and result.get('retcode') in (10009,10010)):
+                return dict(result,reason='TP DONE acknowledgement conflicts with absent Deal history; no cancel/no resend until exact broker reconciliation')
             submitted = result.get('request') or cmd.get('broker_request') or {}
             try:
                 submitted_volume = float(submitted['volume'])
@@ -579,13 +616,24 @@ class BrokerExecutor:
             if cmd['kind'] == 'open':
                 valid_entries = (open_entry,)
             elif cmd['kind'] == 'close':
-                valid_entries = close_entries
+                # A TP stage is sent as a regular DEAL close of one exact
+                # position. DEAL_ENTRY_OUT_BY denotes a separate close-by
+                # operation against an opposite ticket; it cannot be proof
+                # that this staged market-close command executed.
+                valid_entries = ((getattr(mt5, 'DEAL_ENTRY_OUT', 1),)
+                                 if cmd.get('tp_stage_plan_id') is not None
+                                 else close_entries)
             else:
                 return dict(result, reason='Unknown broker intent kind; reconciliation pending')
             if any(entry not in valid_entries for entry in entries):
                 return dict(result, reason='Broker deal entry/exit classification conflicts with intent; reconciliation pending')
             if any(pos <= 0 for pos in positions) or len(set(positions)) != 1:
                 return dict(result, reason='Broker fills have missing or conflicting physical position IDs; reconciliation pending')
+            if (cmd.get('tp_stage_plan_id') is not None
+                    and (type(cmd.get('expected_position_identifier')) is not int
+                         or positions[0]!=cmd['expected_position_identifier']
+                         or cmd.get('target') not in ('demo','live'))):
+                return dict(result,reason='TP stage broker history belongs to the wrong physical position/account; reconciliation pending')
             try:
                 prices = [float(getattr(d, 'price', 0)) for d in matches]
                 times = [int(getattr(d, 'time_msc', 0)) for d in matches]
@@ -644,9 +692,12 @@ class BrokerExecutor:
                        'kind','position','lots','signal','revision',
                        'manual_open','manual_epoch','manual_reference_price','manual_stop_price','manual_target_price',
                        'manual_close','profit_only','expected_position_volume','expected_position_side',
+                       'tp_stage_plan_id','tp_stage','expected_position_identifier',
+                       'tp_target_price','expected_position_entry','expected_broker_tp',
+                       'price_source_quote_ms',
                        'deviation_points','created_ms','expires_ms',
                        'commission_per_lot','slippage_ticks','risk_percent','risk_master_enabled','risk_master_recovery','risk_master_recovery_id',
-                       'demo_flexible','micro_demo_risk_opt_in',
+                       'demo_flexible','micro_demo_risk_opt_in','live_elevated_risk_opt_in',
                        'micro_real_temporary','micro_real_cap_percent',
                        'micro_real_recovery_equity','daily_breaker_enabled',
                        'daily_breaker_limit_percent','max_quote_age_ms')
@@ -727,6 +778,11 @@ class BrokerExecutor:
                     or any(o.magic in OWNED_MAGICS for o in orders)):
                 raise ValueError('A BrainTrade position or order already owns this symbol')
             closing=cmd['kind']=='close'
+            stage_keys=('tp_stage_plan_id','tp_stage','expected_position_identifier',
+                        'tp_target_price','expected_position_entry','expected_broker_tp')
+            if any(key in cmd for key in stage_keys):
+                if not closing or any(cmd.get(key) is None for key in stage_keys):
+                    raise ValueError('Incomplete TP stage marker; a full position close is forbidden')
             if closing:
                 # A different close intent must not bypass an existing
                 # unresolved close of the same bound physical position.
@@ -739,6 +795,13 @@ class BrokerExecutor:
                     LIMIT 1''',(cmd['id'],cmd['login'],cmd['server'],cmd['currency'],cmd['target'],cmd['position'])).fetchone()
                 if prior:
                     return dict(result,state='cancelled',reason='Existing unresolved close for this position; no second send')
+                if cmd.get('tp_stage_plan_id') is not None:
+                    used=self.db.execute(
+                        'SELECT send_id FROM tp_stage_claims WHERE plan_id=?',
+                        (cmd['tp_stage_plan_id'],)).fetchone()
+                    if used and used[0]!=cmd['id']:
+                        return dict(result,state='unknown',
+                                    reason='Stage plan already claimed by another durable Gateway send; never resend')
                 owned=[p for p in positions if p.ticket==cmd['position'] and p.magic==cmd['magic'] and p.symbol==symbol]
                 if not owned:
                     # No close was sent. A flat or foreign-owned position
@@ -746,6 +809,9 @@ class BrokerExecutor:
                     return dict(result,state='cancelled',
                                 reason='Exact owned MT5 position absent; no close order sent. Verify exit from broker Deal history.')
                 p=owned[0]; lots=float(p.volume); side=-1 if p.type==mt5.POSITION_TYPE_BUY else 1
+                if cmd.get('tp_stage_plan_id') is not None:
+                    from tp_partial_close import stage_volume
+                    lots, side = stage_volume(cmd, a, mt5, p, info, tick, clock_ms())
                 if cmd.get('manual_close') is True:
                     if type(cmd.get('profit_only')) is not bool or p.type not in (mt5.POSITION_TYPE_BUY, getattr(mt5,'POSITION_TYPE_SELL',1)):
                         raise ValueError('Manual close has invalid profit filter or position side')
@@ -856,7 +922,9 @@ class BrokerExecutor:
                         float(cmd.get('slippage_ticks',float('nan'))),
                         micro_demo_risk_opt_in=cmd.get('micro_demo_risk_opt_in') is True,
                         broker_demo=cmd['target']=='demo' and a.trade_mode==0,
-                        micro_real_active=self._micro_real_active(cmd,a))
+                        micro_real_active=self._micro_real_active(cmd,a),
+                        live_elevated_risk_opt_in=cmd.get('live_elevated_risk_opt_in') is True,
+                        broker_live=cmd['target']=='live' and a.trade_mode==2)
                     if cmd.get('manual_open') is True and abs(lots-float(cmd['lots']))>1e-8:
                         raise ValueError('Manual volume exceeds risk budget; no automatic lot reduction')
                     request['volume']=lots
@@ -911,15 +979,30 @@ class BrokerExecutor:
 
             journal_start=time.perf_counter()
             try:
+                if cmd.get('tp_stage_plan_id') is not None:
+                    self.db.execute('INSERT INTO tp_stage_claims(plan_id,send_id,created_ms) VALUES(?,?,?)',
+                                    (cmd['tp_stage_plan_id'],cmd['id'],clock_ms()))
                 self.db.execute('INSERT INTO sends(id,request,result,created_ms) VALUES(?,?,NULL,?)',
                                 (cmd['id'],json.dumps(dict(cmd,broker_request=request),allow_nan=False),clock_ms()))
                 self.db.commit()
                 journaled=True
             except sqlite3.IntegrityError:
-                # Another gateway worker already committed the same intent.
-                # No second order_send is allowed.
+                # Both stage claims and sends are one SQLite transaction.
+                # A stage used by a different ID is NEVER retried.
                 self.db.rollback()
-                return self.execute(mt5,cmd,authorize)
+                if cmd.get('tp_stage_plan_id') is not None:
+                    row=self.db.execute('SELECT send_id FROM tp_stage_claims WHERE plan_id=?',
+                                        (cmd['tp_stage_plan_id'],)).fetchone()
+                    if row and row[0]!=cmd['id']:
+                        return dict(result,state='unknown',
+                                    reason='Conflicting durable TP stage claim; never send another order')
+                # Exact same ID may already have been journaled. Normal
+                # replay path will reconcile, never send the same ID twice.
+                saved=self.db.execute('SELECT 1 FROM sends WHERE id=?',(cmd['id'],)).fetchone()
+                if saved:
+                    return self.execute(mt5,cmd,authorize)
+                return dict(result,state='unknown',
+                            reason='Stage claim collision without exact durable send; do not retry')
             except sqlite3.OperationalError:
                 # A locked/unwritable journal cannot guarantee idempotency.
                 self.db.rollback()
@@ -1092,7 +1175,7 @@ class BrokerExecutor:
                 if any(float(getattr(current_account,k,float('nan')))!=final_number(k) for k in ('balance','equity','margin_free')):
                     result.update(state='cancelled',reason='Manual account values changed during final checks; no order sent')
                     return self._save(cmd,result)
-            if closing and cmd.get('manual_close') is True:
+            if closing and (cmd.get('manual_close') is True or cmd.get('tp_stage_plan_id') is not None):
                 # Re-read the approved physical ticket immediately before send.
                 # The floating-profit filter is not a net-after-fees guarantee.
                 try:
@@ -1103,17 +1186,31 @@ class BrokerExecutor:
                         raise ValueError('Approved position no longer present')
                     p=same[0]
                     current_lots=float(p.volume)
-                    if (not math.isfinite(current_lots) or abs(current_lots-request['volume'])>1e-8
+                    if cmd.get('tp_stage_plan_id') is not None:
+                        from tp_partial_close import stage_volume
+                        final_tick=mt5.symbol_info_tick(symbol)
+                        checked_lots, checked_side = stage_volume(
+                            cmd, mt5.account_info(), mt5, p, info, final_tick, clock_ms())
+                        if abs(checked_lots-request['volume'])>1e-8 or checked_side!=side:
+                            raise ValueError('TP stage approved volume or side changed')
+                        # The broker order_check and prepared order price must
+                        # refer to the same quote as the final stage preflight.
+                        # A moved quote requires a fresh Core command instead
+                        # of dispatching stale market-request geometry.
+                        if (float(final_tick.bid)!=validated_bid or
+                                float(final_tick.ask)!=validated_ask):
+                            raise ValueError('TP stage broker quote moved after order_check')
+                    elif (not math.isfinite(current_lots) or abs(current_lots-request['volume'])>1e-8
                             or p.type not in (mt5.POSITION_TYPE_BUY,getattr(mt5,'POSITION_TYPE_SELL',1))
                             or (-1 if p.type==mt5.POSITION_TYPE_BUY else 1)!=side):
                         raise ValueError('Approved position volume or side changed')
-                    if cmd['profit_only'] and (not math.isfinite(float(getattr(p,'profit',float('nan')))) or float(p.profit)<=0):
+                    if cmd.get('manual_close') is True and cmd['profit_only'] and (not math.isfinite(float(getattr(p,'profit',float('nan')))) or float(p.profit)<=0):
                         raise ValueError('Position no longer has positive MT5 floating P/L')
                     final_manual_account=mt5.account_info()
                     if account_identity(final_manual_account)!=expected(cmd) or getattr(final_manual_account,'trade_mode',None)!=target_mode:
                         raise ValueError('Broker account changed during final position check')
                 except Exception as exc:
-                    result.update(state='cancelled',reason='Manual close pre-send check failed; order not sent: '+str(exc))
+                    result.update(state='cancelled',reason='Protected close pre-send check failed; order not sent: '+str(exc))
                     return self._save(cmd,result)
                 now=clock_ms(); quote_age=now-quote_time_ms
                 if now>cmd['expires_ms'] or quote_age < -2000 or quote_age>cmd.get('max_quote_age_ms',3000):
@@ -1156,9 +1253,21 @@ class BrokerExecutor:
                 # instead of training on an acknowledgement with deal=0.
                 if state in ('filled','partial') and deal_id<=0:
                     state='placed'
+                # A TP stage ACK is only proof that MT5 accepted the request.
+                # It is not an immutable fill receipt, even with DONE+deal.
+                # Always reconcile the original order against complete MT5
+                # Deal history before Core may attribute that TP stage.
+                # The durable send row already exists: subsequent polls NEVER
+                # send a second order, including across a Gateway restart.
+                stage_ack_waiting=(cmd.get('tp_stage_plan_id') is not None
+                                   and state=='filled')
+                if stage_ack_waiting:
+                    state='placed'
                 result.update(state=state,retcode=code,reason=str(getattr(response,'comment','No broker acknowledgement')),
                               order=order_id,deal=deal_id,
                               volume=response_volume,price=response_price)
+                if stage_ack_waiting:
+                    result['reason']='TP stage broker ACK only; await exact MT5 Deal history by order/position/volume before marking filled'
                 if deal_id<=0 and code in (10009,10010):
                     result['reason']='Broker retcode acknowledges submission but deal ticket is unavailable; await exact MT5 history reconciliation'
             result['acknowledged_ms']=clock_ms()
@@ -1225,7 +1334,7 @@ class BrokerExecutor:
             if same_broker_mode():
                 rows=mt5.history_deals_get(datetime.fromtimestamp(start/1000,timezone.utc),datetime.fromtimestamp(until/1000,timezone.utc))
                 if rows is not None and same_broker_mode():
-                    fields=('ticket','position_id','magic','symbol','entry','type','time_msc','volume','price','profit','commission','swap','fee','reason')
+                    fields=('ticket','order','position_id','magic','symbol','entry','type','time_msc','volume','price','profit','commission','swap','fee','reason')
                     deals=[]
                     reliable=True
                     for d in rows:

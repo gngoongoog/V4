@@ -12,6 +12,15 @@ body[data-theme=light]{--bg:#e9edf3;--panel:#f9fafc;--panel2:#f5f7fa;--ink:#1419
 .concept-symbol,.concept-frame,.concept-top-icon{height:39px;border-radius:7px;border:1px solid #38444a;background:#202a30;display:flex;align-items:center;justify-content:center;gap:8px;padding:0 10px}
 .concept-symbol b{font-size:13px}.concept-gold-symbol,.gold-icon{background:linear-gradient(145deg,#e5ae2c,#a66f0b)!important;color:white!important;border-radius:8px;box-shadow:none!important}
 .concept-gold-symbol{display:grid;place-items:center;width:27px;height:27px;font-size:16px}.concept-frame select{border:0;background:transparent;font-weight:700;outline:0;color-scheme:dark}.concept-top-icon{width:39px;padding:0}
+.concept-account-toggle{display:flex;align-items:center;gap:3px;min-height:39px;padding:3px 5px;background:#1d272d;border:1px solid #45535b;border-radius:8px;flex:0 0 auto}
+.concept-account-toggle .concept-binding-label{display:flex;flex-direction:column;min-width:78px;gap:1px;margin-right:4px}
+.concept-account-toggle .concept-binding-label small{font-size:9px;color:#acb9be;white-space:nowrap}
+.concept-account-toggle .concept-binding-label strong{font-size:10px;color:#eef1f3;white-space:nowrap}
+.concept-account-toggle button{min-width:44px;height:29px;padding:0 8px;border:1px solid transparent;border-radius:5px;background:#303c43;color:#dce5e8;font-weight:600;font-size:11px}
+.concept-account-toggle button[aria-pressed="true"]{background:#52646c;color:#fff;border-color:#788c95;box-shadow:inset 0 0 0 1px #c1cdd133}
+.concept-account-toggle button[aria-label="اختيار الحساب الحقيقي"][aria-pressed="true"]{background:#594d3b;border-color:#c3a575;color:#fff1d4}
+@media(max-width:1450px){.concept-account-toggle .concept-binding-label{display:none}}
+@media(max-width:1200px){.concept-top-actions{gap:4px}.concept-account-toggle{gap:2px;padding:2px}.concept-account-toggle button{min-width:37px;padding:0 5px}.concept4 .concept-connection{min-width:100px}.concept-top-brand strong{font-size:19px}}
 .concept-connection{min-width:166px;border:0;background:transparent;display:flex;align-items:center;text-align:left;gap:10px;padding:3px 8px}.concept-connection>span:last-child{display:flex;flex-direction:column;gap:2px}.concept-connection b{font-size:11px}.concept-connection small{font-size:10px;color:#c1c9cb}.concept-led{width:11px;height:11px;border-radius:50%;background:#929b9f;flex:0 0 auto}.concept-led.on{background:#04cf4a;box-shadow:0 0 10px #04cf4a66}.concept-top-divider{height:27px;border-left:1px solid #637078;margin:0 3px}.concept-window{width:35px;height:39px;border:0;background:transparent;display:grid;place-items:center}.concept-window.close:hover{background:#d6313f}
 .concept4 .sidebar{grid-column:1;grid-row:2;width:auto;min-width:0;position:relative;display:flex;flex-direction:column;overflow:hidden;border:0;border-right:1px solid #333d43;background:linear-gradient(150deg,#202a30,#121a1f 67%,#0e171b);box-shadow:none;color:#e7ebed}
 .concept4 .sidebar:before,.concept4 .sidebar:after{display:none}.concept4 .brand{height:169px;flex:0 0 169px;border:0;text-align:center;padding:13px 6px 4px;white-space:nowrap}

@@ -34,6 +34,9 @@ import type {OperatorWriteTicket} from './operator-write-fence';
 import {MicroCapitalOperations} from './micro-capital-operations';
 import {RiskMasterOperations} from './risk-master-operations';
 import {PositionProtectionOperations} from './position-protection-operations';
+import {PartialExitPreview} from './partial-exit-preview';
+import {PartialExitPriceOperations} from './partial-exit-price-operations';
+import type {PriceProposal} from './partial-exit-price-operations';
 import {SoloOperations} from './solo-operations';
 import {ExecutionQualityOperations} from './execution-quality-operations';
 import {ModeEvidenceOperations} from './mode-evidence-operations';
@@ -48,7 +51,7 @@ import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position,PendingOrder} from './types';
 import type {RiskRecovery,PositionProtectionPolicy} from './bridge';
 import {DESIGN_FIXTURE} from './mock';
-import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,newsAction,studioAction,correlationAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,updatePositionProtection,setLearningFrozen,manualMarket,cancelPendingOrder,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
+import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,newsAction,studioAction,correlationAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,updatePositionProtection,savePartialExitPrices,setLearningFrozen,manualMarket,cancelPendingOrder,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
 import {money,num,signed,up,valid} from './format';
 
 // Concept 4 visual comparison fixture, NEVER emitted as broker results.
@@ -108,7 +111,7 @@ const PAGE_GUIDE:Record<PageId,{purpose:string;step:string}>={
 const primaryNav:PageId[]=['dashboard','trading','brainControl','risk','reports','journal','news','settings'];
 const navLabel:Partial<Record<PageId,string>>={dashboard:'اللوحة الرئيسية',trading:'التداول المباشر',brainControl:'إعدادات العقول',risk:'إدارة المخاطر',reports:'التحليلات والتقارير',journal:'سجل العمليات',news:'السوق والأخبار',settings:'الإعدادات العامة'};
 const RISK_FIELDS=[['risk_percent','نسبة المخاطرة لكل صفقة','%'],['daily_loss_percent','الحد اليومي للخسارة','%'],['max_drawdown_percent','أقصى تراجع مسموح','%'],['max_spread_atr','سقف السبريد بالنسبة إلى ATR','ATR'],['max_lots','أقصى لوت','lot'],['commission_per_lot','العمولة لكل لوت كامل','/lot'],['slippage_ticks','انزلاق السعر','ticks'],['micro_real_recovery_equity','رصيد استعادة الحماية','equity'],['micro_real_cap_percent','سقف وضع الحساب الصغير','%']] as const;
-const RISK_FLAGS=[['daily_breaker_demo_enabled','قاطع الخسارة اليومي DEMO'],['daily_breaker_real_enabled','قاطع الخسارة اليومي REAL'],['micro_demo_risk_opt_in','إذن تجربة نسبة أعلى في DEMO'],['micro_real_temporary','وضع الحساب الحقيقي الصغير المؤقت']] as const;
+const RISK_FLAGS=[['daily_breaker_demo_enabled','قاطع الخسارة اليومي DEMO'],['daily_breaker_real_enabled','قاطع الخسارة اليومي REAL'],['micro_demo_risk_opt_in','إذن تجربة نسبة أعلى في DEMO'],['live_elevated_risk_opt_in','موافقة صريحة على مخاطرة 2–5% في LIVE'],['micro_real_temporary','وضع الحساب الحقيقي الصغير المؤقت']] as const;
 
 function buttonLabel(status:Status|null,fixture:boolean){return fixture?'PREVIEW':status?.gateway_fresh?'MT5 CONNECTED':'CORE / MT5 OFFLINE'}
 const array=(x:unknown):Record<string,unknown>[]=>Array.isArray(x)?x.filter(v=>v&&typeof v==='object').slice(0,60) as Record<string,unknown>[]:[];
@@ -130,7 +133,7 @@ function RiskEditor({config,apply,loading,armed}:{config:Record<string,unknown>|
  // explicit domain defaults before editing so required inputs are never blank.
  useEffect(()=>{if(config)setValues({
   micro_real_temporary:false,micro_real_recovery_equity:500,micro_real_cap_percent:10,
-  micro_demo_risk_opt_in:false,daily_breaker_demo_enabled:false,
+  micro_demo_risk_opt_in:false,live_elevated_risk_opt_in:false,daily_breaker_demo_enabled:false,
   daily_breaker_real_enabled:true,...config
  });else setValues({})},[config]);
  const locked=loading||armed||!config;
@@ -138,8 +141,9 @@ function RiskEditor({config,apply,loading,armed}:{config:Record<string,unknown>|
   e.preventDefault();if(!config)return;if(armed)return;
   if((config.daily_breaker_real_enabled===true&&values.daily_breaker_real_enabled===false)||
      (config.micro_real_temporary!==true&&values.micro_real_temporary===true)||
+     (config.live_elevated_risk_opt_in!==true&&values.live_elevated_risk_opt_in===true)||
      (values.micro_real_temporary===true&&Number(values.micro_real_cap_percent)>Number(config.micro_real_cap_percent||0))){
-   if(!window.confirm('Micro REAL أو تعطيل قاطع الحساب قد يسبب خسارة معظم رأس المال. هل تريد حفظ هذه التغييرات؟'))return;
+   if(!window.confirm('رفع مخاطرة LIVE فوق 2% أو تفعيل Micro REAL أو تعطيل قاطع الحساب قد يسبب خسارة معظم رأس المال. هذا إذن اختياري خاص بالحساب، ولا يغيّر حساب MT5 تلقائياً. هل تؤكد حفظ هذه التغييرات؟'))return;
   }
   void apply(values);
  }}>
@@ -151,7 +155,7 @@ function RiskEditor({config,apply,loading,armed}:{config:Record<string,unknown>|
    <button type="button" disabled={locked} onClick={()=>setValues(old=>({...old,micro_real_temporary:true,micro_real_cap_percent:20,micro_real_recovery_equity:500}))}>Micro REAL · 20% (مخاطرة مرتفعة جداً)</button>
    <button type="button" disabled={locked} onClick={()=>setValues(old=>({...old,micro_real_temporary:false}))}>إلغاء Micro REAL</button>
   </div>
-  <p className="safe-note">هذه النسب سقف الخسارة المقدّرة عند الستوب لكل صفقة، مو هدف ربح. تقدر تعدّل السقف وEquity التعافي يدوياً. يُطبق فقط إذا سمحت حالة الحساب وسجل التعافي والهامش، ويبقى أمر الوسيط خاضعاً للتحقق. قاطع الخسارة اليومي REAL خيار مستقل.</p>
+  <p className="safe-note">الحد الافتراضي 2% لكل صفقة. رفعه إلى 5% على LIVE يتطلب تفعيل الموافقة الصريحة أعلاه؛ موافقة DEMO لا تنتقل إلى LIVE. هذا خطر مرتفع، وقد تتجاوز الخسارة النسبة المقدرة عند الفجوات والانزلاق. هذه النسب سقف الخسارة المقدّرة عند الستوب لكل صفقة، مو هدف ربح. تقدر تعدّل السقف وEquity التعافي يدوياً. يُطبق فقط إذا سمحت حالة الحساب وسجل التعافي والهامش، ويبقى أمر الوسيط خاضعاً للتحقق. قاطع الخسارة اليومي REAL خيار مستقل.</p>
   <button type="submit" className="save-button" disabled={locked}>حفظ إعدادات المخاطر في Rust Core</button>
   {!config&&<p className="safe-note">إعدادات المخاطر غير متاحة؛ الحقول متوقفة حتى الاتصال بـCore.</p>}
   {armed&&<p className="safe-note">أوقف الدخول STOP أولاً لتعديل إعدادات المخاطرة واللوت.</p>}
@@ -178,6 +182,7 @@ export default function Terminal(){
  const [config,setConfig]=useState<Record<string,unknown>|null>(null);const [riskSnapshot,setRiskSnapshot]=useState<Record<string,unknown>|null>(null);
  const [configScope,setConfigScope]=useState<string|null>(null);const [riskScope,setRiskScope]=useState<string|null>(null);
  const [learning,setLearning]=useState<Record<string,unknown>|null>(null);const [brainReport,setBrainReport]=useState<Record<string,unknown>|null>(null);const [frozenSlot,setFrozenSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [portfolioReport,setPortfolioReport]=useState<Record<string,unknown>|null>(null);const [executionQuality,setExecutionQuality]=useState<Record<string,unknown>|null>(null);const [modeEvidence,setModeEvidence]=useState<Record<string,unknown>|null>(null);const [sniperAuditSlot,setSniperAuditSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [sniperFrozenSlot,setSniperFrozenSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [classicFrozenSlot,setClassicFrozenSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [filter,setFilter]=useState<'all'|'buy'|'sell'>('all');const [opsTab,setOpsTab]=useState<'trade'|'orders'|'advanced'>('trade');
+ const [bindingSlot,setBindingSlot]=useState<{scope:string;data:Record<string,unknown>|null}|null>(null);
  const [clock,setClock]=useState('');const [lastStatusAt,setLastStatusAt]=useState<number|null>(null);const [liveLogin,setLiveLogin]=useState('');const [approval,setApproval]=useState<OperatorApproval|null>(null);
  const [snapshotApproval,setSnapshotApproval]=useState<{name:string;scope:string}|null>(null);
  const [snapshotStaged,setSnapshotStaged]=useState(false);
@@ -307,6 +312,27 @@ export default function Terminal(){
   void subscribe(update=>{if(!active)return;streamReported=true;setStatus(update.ok?update.status:null);setLastStatusAt(update.ok?Date.now():null);setOnline(update.ok);setError(update.ok?'':update.error||'Core غير متصل')}).catch(e=>{if(active){setStatus(null);setOnline(false);setError(String(e))}});
   return()=>{active=false};
  },[]);
+ // A small authoritative binding read for the global account buttons.
+ // The full portfolio/Deal report is expensive and only loaded on its pages.
+ useEffect(()=>{
+  if(preview||!hasTauri()){setBindingSlot(null);return;}
+  let active=true;
+  const load=()=>{
+   const ticket=scopedGeneration.current.beginRead('account-binding');
+   void readPanel('/v1/execution/binding').then(data=>{
+    if(active&&scopedGeneration.current.isCurrent(ticket))
+     setBindingSlot({scope:contextKey,data:unwrap(data)});
+   }).catch(()=>{
+    if(active&&scopedGeneration.current.isCurrent(ticket))
+     setBindingSlot({scope:contextKey,data:null});
+   });
+  };
+  load();
+  const timer=window.setInterval(()=>{
+   if(document.visibilityState==='visible')load();
+  },8000);
+  return()=>{active=false;window.clearInterval(timer)};
+ },[contextKey,preview]);
  useEffect(()=>{
   if(!hasTauri())return;
   let active=true;
@@ -854,6 +880,48 @@ export default function Terminal(){
   }catch(e){if(writeFresh(mutation))sendNotice('تعذر تأكيد حفظ حماية المراكز: '+String(e),true);return false}
   finally{finishWrite(mutation)}
  };
+ const runPartialExitPrices=async(proposal:PriceProposal):Promise<boolean>=>{
+  if(preview||busy||!hasTauri()||!feed.broker||status?.requested_run||!status?.telemetry){
+   sendNotice('حفظ أسعار TP يتطلب STOP وحساب MT5 المختار متصلاً',true);return false;
+  }
+  const t=status.telemetry,view=unwrap(portfolioReport),stages=unwrap(view.partial_exit_stage_plans);
+  const context=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
+  const rows=Array.isArray(stages.rows)?stages.rows.map(unwrap):[];
+  const selectedTarget=unwrap(view.settings).target;
+  const accountMatched=(selectedTarget==='demo'&&t.demo===true&&t.account_trade_mode===0)||
+   (selectedTarget==='live'&&t.demo===false&&t.account_trade_mode===2);
+  if(!accountMatched||t.margin_mode!==2||
+   view.account_matches!==true||view.context!==context||
+   stages.target!==selectedTarget||proposal.context!==context||stages.context!==context||
+   !proposal.planIds.every((id,i)=>rows.some(r=>
+     r.position_identifier===proposal.positionIdentifier&&r.stage===i+1&&
+     r.plan_id===id&&r.state==='prepared_only'))){
+   sendNotice('هوية الحساب المختار أو خطط TP تغيرت؛ حدّث البيانات',true);return false;
+  }
+  if(!window.confirm('تأكيد حفظ أسعار TP1/TP2/TP3 للبحث فقط على حساب '+(selectedTarget==='live'?'Live':'Demo')+' '+t.login+
+   ' والمركز '+proposal.positionIdentifier+'؟\\n'+proposal.prices.join(' / ')+
+   '\\nلن يرسل هذا الإجراء صفقات ولن يغيّر وقف الخسارة أو TP الموجود عند MT5.')){
+   return false;
+  }
+  const mutation=beginWrite('tp-price-proposal');if(!mutation)return false;
+  try{
+   const result=unwrap(await savePartialExitPrices(proposal.context,
+     proposal.positionIdentifier,proposal.planIds,proposal.prices));
+   if(!writeFresh(mutation))return false;
+   if(result.saved!==true||result.orders_enabled!==false)
+    throw new Error('لم يؤكد Core حفظ أسعار TP للمعاينة فقط');
+   scopedGeneration.current.invalidate('portfolio');
+   const ticket=scopedGeneration.current.beginRead('portfolio');
+   const updated=unwrap(await readPanel('/v1/execution'));
+   if(!writeFresh(mutation))return false;
+   if(scopedGeneration.current.isCurrent(ticket))setPortfolioReport(updated);
+   sendNotice('تم حفظ أسعار أهداف TP للحساب المختار دون إرسال أي أمر إلى MT5');
+   return true;
+  }catch(error){
+   if(writeFresh(mutation))sendNotice('تعذر حفظ أسعار TP: '+String(error),true);
+   return false;
+  }finally{finishWrite(mutation)}
+ };
  const runLearningFreeze=async(frozen:boolean)=>{
   if(preview||!hasTauri()||!online||typeof status?.learning_control?.frozen!=='boolean'){
    sendNotice('اتصل بـ Core حتى تتأكد حالة التعلّم قبل تغييرها',true);return;
@@ -1182,17 +1250,88 @@ export default function Terminal(){
   const mutation=beginWrite('broker-binding');if(!mutation)return;
   const serial=panelSerial();
   try{
-   await bindExecution(target,deviationPoints,confirmLiveLogin);
+   const committed=unwrap(await bindExecution(target,deviationPoints,confirmLiveLogin));
    if(!writeFresh(mutation))return;
-   const refreshed=await readPanel('/v1/execution');
+   if(committed.ok!==true||unwrap(committed.settings).target!==target)
+    throw new Error('لم يؤكد Rust Core اختيار نوع الحساب المطلوب');
+   const [full,scope]=await Promise.all([
+    readPanel('/v1/execution'),readPanel('/v1/execution/binding')]);
    if(!writeFresh(mutation))return;
+   const refreshed=unwrap(full),binding=unwrap(scope);
+   const settings=unwrap(refreshed.settings);
+   const current=status?.telemetry;
+   const identity=current?JSON.stringify([current.server,current.login,current.symbol,current.currency]):'';
+   if(!current||refreshed.account_matches!==true||refreshed.context!==identity||
+      settings.target!==target||settings.login!==current.login||
+      settings.server!==current.server||settings.currency!==current.currency||
+      binding.schema!=='execution-binding-v1'||binding.selected_target!==target||
+      binding.account_matches!==true||binding.context!==identity||
+      binding.connected_target!==target||unwrap(binding.settings).login!==current.login)
+    throw new Error('Core لم يرجع ربطاً مطابقاً لجلسة MT5 الحالية؛ أعد التحقق قبل START');
    scopedGeneration.current.invalidate('brains');setBrainReport(null);
-   publishPanel(serial,refreshed);
+   scopedGeneration.current.invalidate('account-binding');
+   setBindingSlot({scope:contextKey,data:binding});
+   setPortfolioReport(refreshed);
+   // A global account button can bind while a different page is open.
+   // Never inject /v1/execution data into a dashboard/analysis panel.
+   if(page==='execution')publishPanel(serial,refreshed);
    void refreshBrainEvidence();
    sendNotice('تم التحقق من حساب '+target.toUpperCase()+' وربط التنفيذ بواسطة Core؛ الربط وحده لا يفتح صفقة');
   }catch(e){if(writeFresh(mutation))sendNotice('فشل ربط حساب التنفيذ: '+String(e),true)}
   finally{finishWrite(mutation)}
  };
+ // The operator chooses the target account. This binds the already logged-in
+ // MT5 terminal, not an invisible MT5 account login or a trading START.
+ const quickSelectAccount=(target:'demo'|'live')=>{
+  const t=status?.telemetry;
+  if(preview||busy||!hasTauri()||!feed.broker||!status?.gateway_fresh||
+     !t?.connected||!t.login||!t.server){
+   sendNotice('اربط MT5 وانتظر تأكيد حساب الوسيط قبل اختيار حساب التنفيذ',true);
+   open('execution');return;
+  }
+  if(status.requested_run){
+   sendNotice('اضغط STOP أولاً لتغيير الحساب؛ لا يتم التحويل أثناء فتح صفقات جديدة',true);return;
+  }
+  if(t.demo!==(target==='demo')||t.account_trade_mode!==(target==='demo'?0:2)){
+   sendNotice('الحساب المفتوح حالياً في MT5 هو '+(t.demo?'Demo':'Live')+
+    '. سجّل دخول حساب '+(target==='demo'?'Demo':'Live')+
+    ' في MT5 أولاً، ثم ارجع لربط التنفيذ. لا يمكن تبديل تسجيل الدخول من هذه الأزرار.',true);
+   open('execution');return;
+  }
+  if(bindingSnapshot.schema!=='execution-binding-v1'){
+   sendNotice('لم تكتمل قراءة ربط الحساب من Core؛ انتظر تحديث الحالة',true);return;
+  }
+  if(bindingSnapshot.pending_reconciliation===true){
+   sendNotice('توجد أوامر وسيط غير مُسوّاة؛ لا يمكن تغيير الحساب حتى انتهاء المصالحة',true);return;
+  }
+  const saved=unwrap(bindingSnapshot.settings);
+  const deviationPoints=Number(saved.deviation_points);
+  if(!Number.isInteger(deviationPoints)||deviationPoints<0||deviationPoints>100000){
+   sendNotice('قيمة انحراف الوسيط المحفوظة غير مؤكدة؛ افتح تفاصيل الربط',true);
+   open('execution');return;
+  }
+  let confirmLiveLogin='';
+  if(target==='live'){
+   const typed=window.prompt('تأكيد ربط حساب Live الحالي: اكتب رقم حساب MT5 المعروض '+t.login);
+   if(typed===null)return;
+   confirmLiveLogin=typed.trim();
+   if(confirmLiveLogin!==String(t.login)){
+    sendNotice('رقم الحساب الحقيقي غير مطابق؛ لم يتغير ربط التنفيذ',true);return;
+   }
+  }
+  if(!window.confirm('ربط تنفيذ النظام بحساب '+(target==='live'?'LIVE':'DEMO')+
+     ' رقم '+t.login+' على '+t.server+'؟\\nهذا لا يفتح صفقة ولا يشغّل START. ويُرفض إذا كانت هناك أوامر غير مُسوّاة أو مراكز مملوكة مفتوحة.'))return;
+  void runBrokerBind(target,deviationPoints,confirmLiveLogin);
+ };
+ const bindingSnapshot=bindingSlot?.scope===contextKey?unwrap(bindingSlot.data):{};
+ const bindingSettings=unwrap(bindingSnapshot.settings);
+ const boundTarget=bindingSettings.target==='live'?'live':bindingSettings.target==='demo'?'demo':null;
+ const verifiedBinding=!!account&&feed.broker&&bindingSnapshot.account_matches===true&&
+   bindingSnapshot.context===JSON.stringify([account.server,account.login,account.symbol,account.currency])&&
+   bindingSettings.login===account.login&&bindingSettings.server===account.server&&
+   bindingSettings.currency===account.currency&&
+   ((boundTarget==='demo'&&account.demo===true&&account.account_trade_mode===0)||
+    (boundTarget==='live'&&account.demo===false&&account.account_trade_mode===2));
  const health=buildHealth(status,online,preview,Boolean(safeConfig?.risk)&&Boolean(safeRiskSnapshot),lastStatusAt,Date.now());
  const pageMeta=findPage(page),PageIcon=pageMeta.icon;
  const rows=useMemo(()=>flattenRows(pageData),[pageData]);
@@ -1210,6 +1349,14 @@ export default function Terminal(){
    <label className="concept-frame"><span className="sr-only">الإطار الزمني للشارت</span><select value={chartFrame} onChange={e=>setChartFrame(e.target.value as ChartFrame)}>{(['m1','m5','m15','m30','h1','h4','d1'] as const).map(tf=><option key={tf} value={tf}>{tf.toUpperCase()}</option>)}</select></label>
    <button type="button" className="concept-top-icon" title="الشارت" onClick={()=>open('dashboard')}><ChartCandlestick size={19}/></button>
    <button type="button" className="concept-connection" onClick={()=>open('execution')}><span className={'concept-led '+(accountFresh&&!preview?'on':'')}/><span><b>{preview?'معاينة':accountFresh?'متصل بالمنصة':'غير متصل'}</b><small>MT5 | {account?(account.demo?'Demo Account':'Real Account'):'—'}</small></span></button>
+   <div className="concept-account-toggle" role="group" aria-label="اختيار حساب تداول Core">
+    <span className="concept-binding-label"><small>MT5: {account?(account.demo?'Demo':'Live'):'—'}</small>
+     <strong>Core: {verifiedBinding?boundTarget?.toUpperCase():'غير مربوط'}</strong></span>
+    <button type="button" aria-label="اختيار الحساب التجريبي" aria-pressed={verifiedBinding&&boundTarget==='demo'}
+     disabled={busy||preview||!hasTauri()} onClick={()=>quickSelectAccount('demo')}>Demo</button>
+    <button type="button" aria-label="اختيار الحساب الحقيقي" aria-pressed={verifiedBinding&&boundTarget==='live'}
+     disabled={busy||preview||!hasTauri()} onClick={()=>quickSelectAccount('live')}>Live</button>
+   </div>
    <button type="button" className="concept-top-icon" title="أحداث النظام" onClick={()=>open('events')}><Bell size={20}/></button>
    <button type="button" className="concept-top-icon" title="الإعدادات العامة" onClick={()=>open('settings')}><Settings size={20}/></button>
    <span className="concept-top-divider"/>
@@ -1230,7 +1377,9 @@ export default function Terminal(){
    <header className="account-strip">
     <div className="account-item broker-select"><label>Broker</label><button className="select-look" onClick={()=>open('settings')}><span className="broker-mark">MT5</span><strong>{feed.broker?'Connected broker':'Not verified'}</strong><span>⌄</span></button></div>
     <div className="account-item server-select"><label>Server</label><button className="select-look" onClick={()=>open('execution')}><strong>{account?.server||'—'}</strong><span>⌄</span></button></div>
-    <div className="account-item account-switch"><label>Account · MT5</label><div className="switch-buttons"><span aria-label="حساب الوسيط المتصل فعلياً">{account?(account.demo?'DEMO متصل':'REAL متصل'):'غير متصل'}</span><button type="button" title="فتح إعدادات الربط، وليس تبديل حساب MT5 مباشرة" onClick={()=>open('execution')}>إدارة الربط ↗</button></div></div>
+    <div className="account-item account-switch"><label>Account · MT5</label><div className="switch-buttons">
+     <span>MT5: {account?(account.demo?'Demo':'Live'):'غير متصل'}</span>
+     <button type="button" onClick={()=>open('execution')}>تفاصيل الربط</button></div></div>
     {[['Equity',money(accountStats?.equity,currency)],['Balance',money(accountStats?.balance,currency)],['Margin',money(accountStats?.margin,currency)],['Free Margin',money(accountStats?.margin_free,currency)],['Daily P&L',signed(accountStats?.today_net,currency)],['Quote Age',preview?'—':feed.quote?num(feed.quoteAgeMs,0)+' ms':'—']].map(([label,value])=><div key={label} className={'top-stat '+(label==='Daily P&L'?'daily':'')}><label>{label}</label><b>{value}</b></div>)}
     <button className="connection-pill" onClick={()=>{if((status?.requested_run||positions.length>0)&&!window.confirm('ستتم إعادة تشغيل جسر MT5. لن تُغلق الصفقات المفتوحة، لكن إدارة خروجها قد تتأخر أثناء الاتصال. تابع فقط عند الضرورة.'))return;void runCommand('reconnect')}} disabled={busy||preview}><span className={'pulse-dot '+(accountFresh?'online':'')}></span><span>{preview?'معاينة':accountFresh?'متصل':'غير متصل'}</span><RefreshCw size={16}/></button>
    </header>
@@ -1289,7 +1438,7 @@ export default function Terminal(){
              monitor={safeRiskSnapshot} portfolio={unwrap(portfolioReport).portfolio} armed={status?.requested_run===true}
              disabled={busy||preview} onSavePortfolio={runSavePortfolio}/></div>
           <div className="concept-risk-daily"><DailyRiskOperations status={!preview&&feed.broker?status:null} monitor={safeRiskSnapshot} preview={preview}/></div>
-          <div className="concept-risk-extra"><PositionProtectionOperations key={contextKey} status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} onSet={runPositionProtection}/><h3>حماية المراكز في الطوارئ</h3><p>ميزة إغلاق كل مراكز الحساب بضغطة واحدة غير مدعومة في Core حالياً، لذلك لا يوجد زر يوهمك بتنفيذها. زر STOP يوقف فتح الصفقات الجديدة فقط.</p><button type="button" onClick={()=>open('positions')}>عرض المراكز الفعلية</button></div></div>
+          <div className="concept-risk-extra"><PositionProtectionOperations key={contextKey} status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} onSet={runPositionProtection}/><PartialExitPreview status={!preview&&feed.broker?status:null} source={portfolioReport}/><PartialExitPriceOperations key={'tp-'+contextKey} status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} onSave={runPartialExitPrices}/><h3>حماية المراكز في الطوارئ</h3><p>ميزة إغلاق كل مراكز الحساب بضغطة واحدة غير مدعومة في Core حالياً، لذلك لا يوجد زر يوهمك بتنفيذها. زر STOP يوقف فتح الصفقات الجديدة فقط.</p><button type="button" onClick={()=>open('positions')}>عرض المراكز الفعلية</button></div></div>
           <details className="operator-advanced"><summary>بيانات Core التفصيلية — افتحها عند التشخيص</summary><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/risk/monitor')}/></details>
          </div>:
         page==='settings'||page==='telegram'?<div className="editor-panel operator-settings-page">

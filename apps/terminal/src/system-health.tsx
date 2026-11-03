@@ -29,13 +29,13 @@ export function buildHealth(status:Status|null,online:boolean,preview:boolean,
   const age=evidence.quoteAgeMs;
   const requested=status?.requested_run===true;
   const executionOk=quoteOk&&requested&&status?.execution_enabled===true;
-  const title=!coreCurrent?'CORE OFFLINE':!brokerOk?'FEED OFFLINE':quoteDiagnosis.code==='SYMBOL_MISSING'?'SYMBOL MISSING':!quoteOk?'QUOTE STALE':executionOk?'EXECUTION ACTIVE':'MONITORING';
-  const tone:Tone=!coreCurrent?'bad':!brokerOk||!quoteOk?'warn':'good';
+  const title=!coreCurrent?'CORE OFFLINE':!brokerOk?'FEED OFFLINE':quoteDiagnosis.code==='SYMBOL_MISSING'?'SYMBOL MISSING':!quoteOk?'QUOTE STALE':executionOk?'ENTRY ARMED':'MONITORING';
+  const tone:Tone=!coreCurrent?'bad':!brokerOk||!quoteOk||requested&&!executionOk?'warn':'good';
   const rows:HealthRow[]=[
     {key:'core',label:'Rust Core',value:coreCurrent?'ONLINE':'OFFLINE',detail:'تحديث قناة الحالة',tone:coreCurrent?'good':'bad',page:'events'},
     {key:'mt5',label:'MT5 Bridge',value:brokerOk?'CONNECTED':'OFFLINE',detail:brokerOk?'اتصال الوسيط موثوق':'التغذية غير متاحة',tone:brokerOk?'good':'bad',page:'settings'},
     {key:'quote',label:'Market Feed',value:quoteOk?'FRESH':'UNAVAILABLE',detail:quoteDiagnosis.detail,tone:quoteOk?'good':'warn',page:quoteDiagnosis.settingsRequired?'settings':'analysis'},
-    {key:'execution',label:'Execution',value:executionOk?'ARMED':requested?'BLOCKED':'STOPPED',detail:executionOk?'المحرك أجاز التنفيذ':requested?'غير مؤهل للتنفيذ':'لم يُطلب التشغيل',tone:executionOk?'good':requested?'warn':'idle',page:'execution'},
+    {key:'execution',label:'Execution',value:executionOk?'ARMED':requested?'BLOCKED':'STOPPED',detail:executionOk?'Core يسمح بطلب دخول جديد؛ التعبئة لدى الوسيط غير مؤكدة':requested?'الدخول محجوب؛ راجع أسباب المنع':'لم يُطلب التشغيل',tone:executionOk?'good':requested?'warn':'idle',page:'execution'},
     {key:'risk',label:'Risk Config',value:coreCurrent&&riskLoaded?'LOADED':'UNKNOWN',detail:coreCurrent&&riskLoaded?'إعدادات متاحة • ليست ضمان أمان':'حالة الضوابط غير مؤكدة',tone:'idle',page:'risk'}
   ];
   return {tone,title,subtitle:brokerOk?'V4 CORE • VERIFIED MT5':'No verified market feed',rows,

@@ -22,6 +22,11 @@ pub struct RiskConfig {
     /// The broker adapter rejects this elevated budget on REAL accounts.
     #[serde(default, skip_serializing_if = "micro_demo_opt_in_is_false")]
     pub micro_demo_risk_opt_in: bool,
+    /// Independent operator opt-in for a verified Live account, up to 5%
+    /// estimated stop-loss risk per trade. The default remains 2% and this
+    /// flag alone never enables trading or bypasses broker margin checks.
+    #[serde(default, skip_serializing_if = "micro_demo_opt_in_is_false")]
+    pub live_elevated_risk_opt_in: bool,
     /// Temporary real-account MICRO mode requires explicit consent and only
     /// works before the broker equity recovery milestone. Not a risk-off switch.
     #[serde(default, skip_serializing_if = "micro_demo_opt_in_is_false")]
@@ -48,6 +53,7 @@ impl Default for RiskConfig {
         Self {
             risk_percent: 0.25,
             micro_demo_risk_opt_in: false,
+            live_elevated_risk_opt_in: false,
             micro_real_temporary: false,
             micro_real_recovery_equity: default_micro_recovery(),
             micro_real_cap_percent: default_micro_cap(),
@@ -65,7 +71,7 @@ impl Default for RiskConfig {
 impl RiskConfig {
     pub fn validate(&self) -> Result<(), String> {
         let ranges = [
-            (self.risk_percent, 0.01, if self.micro_demo_risk_opt_in { 5.0 } else { 2.0 }),
+            (self.risk_percent, 0.01, if self.micro_demo_risk_opt_in || self.live_elevated_risk_opt_in { 5.0 } else { 2.0 }),
             (self.daily_loss_percent, 0.1, 10.0),
             (self.micro_real_recovery_equity, 50.0, 1_000_000.0),
             (self.micro_real_cap_percent, 0.01, 20.0),
@@ -574,6 +580,26 @@ pub mod tests {
         let decoded: RiskConfig = serde_json::from_str(&serde_json::to_string(&risk).unwrap()).unwrap();
         assert!(decoded.micro_demo_risk_opt_in);
         assert_eq!(decoded.risk_percent, 5.0);
+    }
+    #[test]
+    fn live_elevated_risk_is_separately_opted_in_and_backward_compatible(){
+        let mut risk=RiskConfig::default();
+        risk.risk_percent=4.0;
+        assert!(risk.validate().is_err(),
+            "Default risk policy does not allow unconfirmed elevated Live budget");
+        risk.live_elevated_risk_opt_in=true;
+        assert!(risk.validate().is_ok());
+        risk.micro_demo_risk_opt_in=false;
+        let raw=serde_json::to_string(&risk).unwrap();
+        let restored:RiskConfig=serde_json::from_str(&raw).unwrap();
+        assert!(restored.live_elevated_risk_opt_in);
+        assert!(!restored.micro_demo_risk_opt_in,
+            "Live consent must never enable Demo elevated risk");
+        risk.risk_percent=5.01;
+        assert!(risk.validate().is_err());
+        let old=serde_json::to_value(&RiskConfig::default()).unwrap();
+        assert!(old.get("live_elevated_risk_opt_in").is_none(),
+            "Existing serialized presets and golden research hashes stay compatible");
     }
     #[test]
     fn breaker_switches_have_independent_backward_compatible_defaults() {

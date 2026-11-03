@@ -115,8 +115,17 @@ async function exitSafely({fromHeaderX=false}={}){
  // independently; this is an isolated hosted runner with an exact PID.
  const live=spawnSync('powershell.exe',['-NoProfile','-Command',
   `$core=Get-Process -Id ${corePid} -ErrorAction SilentlyContinue; $children=Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "braintrade-core|python" }; if($core -or $children){ @($core,$children) | Where-Object { $_ } | Select-Object Id,ProcessId,ProcessName,Name | ConvertTo-Json -Compress; exit 23 }`],
-  {encoding:'utf8',timeout:10000});
- assert.equal(live.status,0,'Full exit left the exact Core PID or an owned Gateway alive: '+(live.stdout||live.stderr));
+  {encoding:'utf8',timeout:30000,windowsHide:true});
+ // Get-CimInstance can be slow on a heavily loaded Windows CI worker. A
+ // spawnSync timeout returns status=null; it is NOT proof a process survived.
+ // Retain fail-closed behavior, but report the *real* failure and allow enough
+ // time for an independent WMI process inventory to complete.
+ assert.equal(live.status,0,
+  'Full-exit process inventory did not prove cleanup: '+
+  JSON.stringify({status:live.status,signal:live.signal,
+   error:live.error?.message||null,stdout:live.stdout,stderr:live.stderr,
+   expectedCorePid:corePid,tauriPid:pid}));
+
  browser=undefined;page=undefined;
 }
 

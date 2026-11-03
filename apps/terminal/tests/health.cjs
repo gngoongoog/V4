@@ -43,7 +43,10 @@ assert.equal(v.title,'MONITORING');assert.equal(row(v,'execution').value,'STOPPE
 v=check({...fresh,requested_run:true,execution_enabled:false},true,false,true,now);
 assert.equal(row(v,'execution').value,'BLOCKED');
 v=check({...fresh,requested_run:true,execution_enabled:true},true,false,true,now);
-assert.equal(v.title,'EXECUTION ACTIVE');assert.equal(row(v,'execution').value,'ARMED');assert.equal(row(v,'risk').value,'LOADED');
+assert.equal(v.title,'ENTRY ARMED');assert.equal(row(v,'execution').value,'ARMED');assert.equal(row(v,'risk').value,'LOADED');
+assert.match(row(v,'execution').detail,/التعبئة لدى الوسيط غير مؤكدة/);
+v=check({...fresh,requested_run:true,execution_enabled:false},true,false,true,now);
+assert.equal(v.tone,'warn','Blocked START must not look globally healthy');
 v=check({...fresh,telemetry:{...fresh.telemetry,tick_age_ms:null}},true,false,true,now);
 assert.equal(row(v,'quote').value,'UNAVAILABLE');
 v=check({...fresh,last_received_ms:now-3500},true,false,true,now);

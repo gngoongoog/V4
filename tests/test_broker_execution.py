@@ -255,6 +255,31 @@ class ExecutionTests(unittest.TestCase):
         rejected=self.send()
         self.assertEqual(rejected['state'],'rejected')
         self.assertEqual(len(self.mt.sends),1)
+    def test_live_elevated_opt_in_is_independent_from_demo_and_in_durable_journal(self):
+        self.mt.account.trade_mode=2
+        self.mt.account.balance=100.
+        self.mt.account.equity=100.
+        self.mt.account.margin_free=100.
+        self.cmd.update(id='live-opt-out',target='live',risk_percent=4.0,
+                        lots=0.01,commission_per_lot=7.,
+                        slippage_ticks=2.,live_elevated_risk_opt_in=False,
+                        micro_demo_risk_opt_in=True)
+        self.cmd['signal']['stop_distance']=3.
+        blocked=self.send()
+        self.assertEqual(blocked['state'],'rejected',blocked)
+        self.assertEqual(len(self.mt.sends),0,
+                         'Demo consent must not allow elevated Live risk')
+        self.cmd.update(id='live-opted-in',micro_demo_risk_opt_in=False,
+                        live_elevated_risk_opt_in=True)
+        result=self.send()
+        self.assertEqual(result['state'],'filled',result)
+        self.assertAlmostEqual(result['request']['volume'],0.01)
+        self.assertEqual(len(self.mt.sends),1)
+        self.cmd['live_elevated_risk_opt_in']=False
+        replay=self.send()
+        self.assertEqual(replay['state'],'unknown',replay)
+        self.assertEqual(len(self.mt.sends),1,
+                         'No replay if explicit Live risk approval is changed')
     def test_real_micro_temporary_risk_until_recovery_is_durable(self):
         self.mt.account.trade_mode=2
         self.mt.account.balance=50.

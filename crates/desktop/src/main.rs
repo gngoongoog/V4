@@ -348,6 +348,9 @@ fn run_ui() -> anyhow::Result<()> {
                     let risk = RiskConfig {
                         risk_percent: v[0],
                         micro_demo_risk_opt_in: ui.get_micro_demo_risk_opt_in(),
+                        // Legacy Slint desktop does not expose an explicit Live
+                        // approval control. Only the current Tauri UI can opt in.
+                        live_elevated_risk_opt_in: false,
                         micro_real_temporary: ui.get_micro_real_temporary(),
                         micro_real_recovery_equity: v[7],
                         micro_real_cap_percent: v[8],
