@@ -20,6 +20,7 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
  const stages=object(view.partial_exit_stage_plans);
  const prices=object(view.partial_exit_price_proposals);
  const consent=object(view.partial_exit_stage_consent);
+ const sealed=object(view.partial_exit_stage_sealed_core);
  const context=t?JSON.stringify([t.server,t.login,t.symbol,t.currency]):'';
  const target=settings.target==='live'?'live':settings.target==='demo'?'demo':null;
  const accountModeMatches=!!t&&((target==='demo'&&t.demo===true&&t.account_trade_mode===0)||
@@ -53,6 +54,18 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
   consent.automatic_tp_execution_enabled===false&&consent.orders_created===0;
  const consentRows=consentValid&&Array.isArray(consent.rows)?consent.rows.map(object):[];
  const approval=consentRows.find(r=>r.position_identifier===Number(position?.identifier));
+ const sealedScoped=available&&sealed.schema==='tp-stage-sealed-core-intents-v1'&&
+  sealed.status==='account_scoped_prepared_not_sent'&&
+  sealed.context===context&&sealed.target===target&&
+  sealed.read_only===true&&sealed.orders_enabled===false&&
+  sealed.broker_commands_created===0;
+ const prepared=sealedScoped&&Array.isArray(sealed.rows)?sealed.rows.map(object):[];
+ const sealedTp1=prepared.find(r=>r.stage===1&&
+  r.position_identifier===Number(position?.identifier)&&
+  r.physical_ticket===position?.ticket&&
+  Array.isArray(planIds)&&r.plan_id===planIds[0]&&
+  r.broker_command_id===null&&r.gateway_send_id===null&&
+  r.broker_order_ticket===null);
  const approvalMatches=!!approval&&approval.position_ticket===position?.ticket&&
   Array.isArray(approval.plan_ids)&&!!planIds&&
   JSON.stringify(approval.plan_ids)===JSON.stringify(planIds)&&
@@ -127,6 +140,14 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
        وصول السعر إلى أي هدف دليلاً على تنفيذ صفقة.
       </>}
     </p>:null}
+    {position&&sealedTp1?<div className="execution-binding-summary" aria-label="سجل هوية TP1 داخل Core">
+     <p className="safe-note">سجل هوية TP1 داخل Core — لا يوجد أمر مرسل إلى MT5 أو تفويض لتنفيذ الإغلاق.</p>
+     <p>{sealedTp1.state==='sealed_unarmed_not_dispatched'?
+       'تم ختم هوية TP1 للمركز الحالي، وهي غير مفعّلة للإرسال.':
+       sealedTp1.state==='historical_seal_expired_no_send'?
+       'سجل TP1 تاريخي، تغيرت البيانات أو انتهت صلاحية السعر؛ لا يمكن إرساله.':
+       'سجل TP1 غير موثوق ويحتاج مراجعة؛ لا يمكن إرساله.'}</p>
+    </div>:null}
     {position&&recorded&&recordedValid&&consentValid?<div className="execution-binding-summary" aria-label="موافقة مشغل TP المرحلية">
      <p className="safe-note">موافقة المشغل مرتبطة بهذا المركز فقط، لكنها حالياً مرحلة تحضير وليست تفويضاً بالوسيط. تشغيل TP التلقائي ما زال مقفلاً في Core؛ لا يوجد إرسال أو تعديل على MT5 من هذا الزر.</p>
      <p>{approved?'موافقة بحثية مُثبتة للحساب المحدد — لا أوامر':
