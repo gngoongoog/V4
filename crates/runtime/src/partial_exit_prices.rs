@@ -179,6 +179,19 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
                 v.as_str().is_some_and(|id|id.starts_with("tp-plan-")&&id.len()==40)));
         let p=t.positions.iter().find(|p|p.identifier==pid&&p.ticket==ticket
             &&p.magic==magic&&p.symbol==t.symbol&&cap["side"]==p.side);
+        // A center may be altered before the original TP draft observer
+        // permanently revokes it. Never advertise a price crossing against
+        // an outdated entry, lot size, symbol tick or original broker TP.
+        let position_intact=p.is_some_and(|p| {
+            let original=cap["original_volume"].as_f64().unwrap_or(f64::NAN);
+            let lot_step=cap["lot_step"].as_f64().unwrap_or(f64::NAN);
+            let entry=cap["entry"].as_f64().unwrap_or(f64::NAN);
+            close(p.volume,original,lot_step)&&close(p.price_open,entry,tick)
+                &&t.tick_size.is_some_and(|current|close(current,tick,tick))
+                &&prices[2].as_f64().is_some_and(|last|
+                    p.tp==0.||if p.side=="BUY"{p.tp>last+tick*0.5}
+                    else{p.tp+tick*0.5<last})
+        });
         let plan_ok=if intact{
             let mut statement=db.prepare("SELECT stage,plan_id,status
                 FROM partial_exit_stage_plans WHERE context=?1
@@ -192,6 +205,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         let state=if !intact{"invalid_record"}
             else if !plan_ok{"plan_requires_review"}
             else if p.is_none(){"position_absent_review"}
+            else if !position_intact{"position_changed_review"}
             else if !fresh{"quote_stale_no_trigger"}
             else{"price_levels_saved_no_execution"};
         let buy=cap["side"]=="BUY";
@@ -262,6 +276,30 @@ mod tests{
         assert_eq!(report(&d,&t,"demo",20_000).unwrap()["rows"][0]["state"],"quote_stale_no_trigger");
         let mut next=t.clone();next.bid=Some(2001.5);next.ask=Some(2001.7);
         assert_eq!(report(&d,&next,"demo",10_000).unwrap()["rows"][0]["quote_crossing_only"],json!([true,false,false]));
+    }
+    #[test]
+    fn changes_to_position_volume_entry_broker_tp_or_tick_revoke_quote_crossing(){
+        let d=db();let t=t();let plans=ids(&d);
+        save(&d,&t,"demo",907,&plans,[2001.,2002.,2003.],10_000).unwrap();
+        let mut advanced=t.clone();
+        advanced.bid=Some(2004.);
+        advanced.ask=Some(2004.2);
+        let evidence=report(&d,&advanced,"demo",10_000).unwrap();
+        assert_eq!(evidence["rows"][0]["state"],"price_levels_saved_no_execution");
+        assert_eq!(evidence["rows"][0]["quote_crossing_only"],json!([true,true,true]));
+        for index in 0..4{
+            let mut altered=advanced.clone();
+            match index{
+                0=>altered.positions[0].volume=0.07,
+                1=>altered.positions[0].price_open=1998.5,
+                2=>altered.positions[0].tp=2002.,
+                _=>altered.tick_size=Some(0.02)
+            }
+            let r=report(&d,&altered,"demo",10_000).unwrap();
+            assert_eq!(r["rows"][0]["state"],"position_changed_review",
+                "variant {index}");
+            assert!(r["rows"][0]["quote_crossing_only"].is_null());
+        }
     }
     #[test]
     fn wrong_account_side_hedging_lot_and_no_quote_fail_closed(){
