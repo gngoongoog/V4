@@ -241,6 +241,74 @@ mod tests {
         }
     }
     #[test]
+    fn sell_uses_ask_and_never_triggers_only_when_bid_crosses(){
+        let mut t=snapshot();t.positions[0].side="SELL".into();
+        t.positions[0].price_open=2000.8;
+        let db=Connection::open_in_memory().unwrap();
+        crate::partial_exit_ledger::init(&db).unwrap();
+        crate::partial_exit_stage::init(&db).unwrap();
+        crate::partial_exit_prices::init(&db).unwrap();
+        db.execute_batch("CREATE TABLE broker_commands(context TEXT,kind TEXT,payload TEXT);").unwrap();
+        init(&db).unwrap();
+        crate::partial_exit_ledger::observe(&db,&t,"demo",100).unwrap();
+        crate::partial_exit_stage::observe(&db,&t,"demo",100).unwrap();
+        let stages=crate::partial_exit_stage::report(&db,&t,"demo").unwrap();
+        let ids=std::array::from_fn(|i|stages["rows"][i]["plan_id"].as_str().unwrap().to_string());
+        crate::partial_exit_prices::save(&db,&t,"demo",907,
+            &ids,[1999.,1998.,1997.],10_000).unwrap();
+        t.quote_time_ms=Some(10_200);t.source_quote_time_ms=Some(10_200);
+        t.bid=Some(1998.95);t.ask=Some(1999.15);
+        observe(&db,&t,"demo",10_250).unwrap();
+        assert_eq!(count(&db),0,"Only an Ask exit can close a short position");
+        t.bid=Some(1998.75);t.ask=Some(1998.95);
+        observe(&db,&t,"demo",10_250).unwrap();
+        assert_eq!(count(&db),1);
+        let proof=report(&db,&t,"demo").unwrap();
+        assert_eq!(proof["rows"][0]["observed_price"],1998.95);
+        assert_eq!(proof["rows"][0]["state"],"historical_shadow_crossing_only");
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_commands",[],
+            |r|r.get::<_,u32>(0)).unwrap(),0);
+    }
+    #[test]
+    fn shadow_tp1_receipt_survives_database_restart_and_is_account_scoped(){
+        let path=std::env::temp_dir().join(format!("bt-tp-shadow-{}.sqlite",
+            uuid::Uuid::new_v4().simple()));
+        let mut t=snapshot();
+        t.quote_time_ms=Some(10_200);t.source_quote_time_ms=Some(10_200);
+        t.bid=Some(2001.2);t.ask=Some(2001.4);
+        let first;
+        {
+            let db=Connection::open(&path).unwrap();
+            crate::partial_exit_ledger::init(&db).unwrap();
+            crate::partial_exit_stage::init(&db).unwrap();
+            crate::partial_exit_prices::init(&db).unwrap();
+            db.execute_batch("CREATE TABLE broker_commands(context TEXT,kind TEXT,payload TEXT);").unwrap();
+            init(&db).unwrap();
+            let initial=snapshot();
+            crate::partial_exit_ledger::observe(&db,&initial,"demo",100).unwrap();
+            crate::partial_exit_stage::observe(&db,&initial,"demo",100).unwrap();
+            let plans=crate::partial_exit_stage::report(&db,&initial,"demo").unwrap();
+            let ids=std::array::from_fn(|i|plans["rows"][i]["plan_id"].as_str().unwrap().to_string());
+            crate::partial_exit_prices::save(&db,&initial,"demo",907,
+                &ids,[2001.,2002.,2003.],10_000).unwrap();
+            observe(&db,&t,"demo",10_250).unwrap();
+            first=report(&db,&t,"demo").unwrap()["rows"][0].clone();
+        }
+        {
+            let db=Connection::open(&path).unwrap();init(&db).unwrap();
+            observe(&db,&t,"demo",10_300).unwrap();
+            assert_eq!(count(&db),1);
+            assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0],first);
+            let mut other=t.clone();other.login+=1;
+            assert!(report(&db,&other,"demo").unwrap()["rows"].as_array().unwrap().is_empty());
+            other=t.clone();other.demo=false;other.account_trade_mode=Some(2);
+            assert_eq!(report(&db,&other,"live").unwrap()["status"],"unverified_demo_account");
+            db.execute("UPDATE partial_exit_stage_plans SET status='review_required' WHERE stage=1",[]).unwrap();
+            assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],"needs_review");
+        }
+        let _=std::fs::remove_file(path);
+    }
+    #[test]
     fn stale_or_manipulated_position_and_stage_price_are_not_shadow_fills(){
         let db=fixture();let mut t=snapshot();
         t.quote_time_ms=Some(10_200);t.source_quote_time_ms=Some(10_200);
