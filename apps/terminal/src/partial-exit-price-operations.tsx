@@ -18,15 +18,18 @@ export function PartialExitPriceOperations({status,source,disabled,onSave}:{
  const stages=object(view.partial_exit_stage_plans);
  const prices=object(view.partial_exit_price_proposals);
  const context=t?JSON.stringify([t.server,t.login,t.symbol,t.currency]):'';
+ const target=settings.target==='live'?'live':settings.target==='demo'?'demo':null;
+ const accountModeMatches=!!t&&((target==='demo'&&t.demo===true&&t.account_trade_mode===0)||
+  (target==='live'&&t.demo===false&&t.account_trade_mode===2));
  const available=!!t&&status?.gateway_fresh===true&&view.account_matches===true&&
-  view.context===context&&t.connected&&t.demo===true&&t.account_trade_mode===0&&
-  t.margin_mode===2&&settings.target==='demo'&&settings.login===t.login&&
+  view.context===context&&t.connected&&accountModeMatches&&
+  t.margin_mode===2&&settings.login===t.login&&
   settings.server===t.server&&settings.currency===t.currency&&
   stages.schema==='partial-exit-stage-plans-v1'&&stages.context===context&&
-  stages.target==='demo'&&stages.read_only===true&&stages.orders_enabled===false&&
+  stages.target===target&&stages.read_only===true&&stages.orders_enabled===false&&
   stages.stage_execution_supported===false&&
   prices.schema==='partial-exit-prices-v1'&&prices.context===context&&
-  prices.target==='demo'&&prices.read_only===true&&prices.orders_enabled===false;
+  prices.target===target&&prices.read_only===true&&prices.orders_enabled===false;
  const stageRows=available&&Array.isArray(stages.rows)?stages.rows.map(object):[];
  const stored=available&&Array.isArray(prices.rows)?prices.rows.map(object):[];
  const positions=t?.positions||[];
@@ -62,10 +65,10 @@ export function PartialExitPriceOperations({status,source,disabled,onSave}:{
     if(ok){setDirty(false);setValues(['','',''])}
   });
  };
- return <section className="operator-card" aria-label="تسعير أهداف TP التجريبية">
-  <h3>أسعار أهداف TP1 / TP2 / TP3 — DEMO فقط</h3>
+ return <section className="operator-card" aria-label="تسعير أهداف TP للحساب المختار">
+  <h3>أسعار أهداف TP1 / TP2 / TP3 — {target==='live'?'حساب Live':'حساب Demo'}</h3>
   <p className="safe-note">هنا تحفظ أسعار ثلاثة أهداف بحثية للمركز الحالي. لا تُرسل أوامر، ولا تغيّر TP الموجود عند الوسيط، ولا تُفعّل التعادل أو المرحلة التالية. الحفظ نهائي لهذه المسودة ولا يمكن تعديل الأسعار بصمت.</p>
-  {!available?<p>هذه الخاصية تحتاج حساب Demo بنظام Hedging، وبيانات Core وMT5 حديثة ومطابقة.</p>:
+  {!available?<p>اربط الحساب الذي اخترته (Demo أو Live) بنظام Hedging، وتأكد من تطابق بيانات Core وMT5 وحداثتها قبل حفظ الأسعار.</p>:
    <form onSubmit={e=>{e.preventDefault();submit()}}>
     <label>المركز المطلوب تسعيره
      <select aria-label="اختيار مركز لتسعير TP" value={selected} disabled={disabled||status?.requested_run===true}
@@ -98,7 +101,7 @@ export function PartialExitPriceOperations({status,source,disabled,onSave}:{
          setValues(next);setDirty(true)}}/>
       </label>)}
      </div>
-     <button type="submit" disabled={locked||!valid||!dirty}>حفظ أسعار البحث لـ Demo فقط</button>
+     <button type="submit" disabled={locked||!valid||!dirty}>حفظ أسعار الأهداف لحساب {target==='live'?'Live':'Demo'} (معاينة بدون إرسال)</button>
      {!valid&&dirty?<p className="safe-note">الأهداف لازم تكون على شبكة Tick وفي اتجاه الربح وبالترتيب، وخارج نطاق السعر الحالي. يُراجع Core أيضاً هوية المركز ومسودة TP وTP الوسيط الأصلي.</p>:null}
     </>:null}
    </form>}
