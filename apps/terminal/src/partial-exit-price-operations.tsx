@@ -25,6 +25,7 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
  const trade=object(view.partial_exit_trade_approval);
  const sealed=object(view.partial_exit_stage_sealed_core);
  const held=object(view.partial_exit_tp1_held);
+ const settlements=object(view.partial_exit_stage_settlements);
  const arm=object(view.partial_exit_tp1_arm);
  const context=t?JSON.stringify([t.server,t.login,t.symbol,t.currency]):'';
  const target=settings.target==='live'?'live':settings.target==='demo'?'demo':null;
@@ -107,6 +108,16 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
   Array.isArray(planIds)&&r.plan_id===planIds[0]&&
   r.broker_command_id===null&&r.gateway_send_id===null&&
   r.broker_order_ticket===null);
+ const settlementsBound=available&&
+  settlements.schema==='partial-exit-stage-settlements-v1'&&
+  settlements.status==='account_scoped_historical_settlements'&&
+  settlements.context===context&&settlements.target===target&&
+  settlements.read_only===true&&settlements.orders_enabled===false&&
+  settlements.next_stage_authorized===false&&settlements.breakeven_enabled===false;
+ const settlementRows=settlementsBound&&Array.isArray(settlements.rows)?
+  settlements.rows.map(object):[];
+ const completedStages=settlementRows.filter(row=>
+  row.state==='historical_stage_sealed'||row.state==='sealed_evidence_needs_review');
  const heldBound=available&&held.schema==='tp1-core-held-outbox-v1'&&
   held.status==='account_scoped_tp1_outbox_not_fill_proof'&&
   held.context===context&&held.target===target&&held.read_only===true&&
@@ -309,6 +320,28 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
       إلغاء تسليح TP1 للمركز {String(r.position_identifier)}
      </button>
     </div>;
+   })}
+  </div>:null}
+  {completedStages.length>0?<div className="execution-binding-summary" aria-label="أدلة الإغلاق الجزئي المرحلية من MT5">
+   <p className="safe-note">المصالحة المالية لمراحل TP — تأكيد تاريخي فقط، ولا يفعّل المرحلة التالية أو التعادل تلقائياً.</p>
+   {completedStages.map((r,i)=>{
+    const stage=Number(r.stage),pid=Number(r.position_identifier);
+    const safe=Number.isSafeInteger(stage)&&stage>=1&&stage<=3&&
+      Number.isSafeInteger(pid)&&pid>0&&
+      typeof r.plan_id==='string'&&/^tp-plan-[a-f0-9]{32}$/.test(r.plan_id as string);
+    if(!safe)return null;
+    const proven=r.state==='historical_stage_sealed'&&
+      typeof r.core_command_id==='string'&&r.core_command_id.length>0&&
+      Number.isSafeInteger(r.broker_order)&&Number(r.broker_order)>0&&
+      good(r.matched_volume)&&typeof r.remaining_volume_at_seal==='number'&&
+      Number.isFinite(r.remaining_volume_at_seal)&&r.remaining_volume_at_seal>=0&&
+      r.next_stage_authorized===false&&r.breakeven_triggered===false;
+    return <p key={'stage-evidence-'+String(pid)+'-'+stage+'-'+i}>
+      المركز {pid} · TP{stage}: {proven?
+        'تم توثيق أمر الوسيط والـDeals وحجم المركز المتبقي وقت المصالحة':
+        'الأدلة المحفوظة تحتاج إعادة تدقيق ولا تُعد إثبات إغلاق'}
+      {proven?' · الحجم المغلق '+String(r.matched_volume)+' لوت، المتبقي '+String(r.remaining_volume_at_seal)+' لوت':''}
+    </p>;
    })}
   </div>:null}
   {tradeValid&&tradeOther.length>0?<div className="execution-binding-summary" aria-label="إلغاء تفويضات تداول TP1 القديمة">
