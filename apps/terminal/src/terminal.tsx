@@ -51,7 +51,7 @@ import {validatePortfolio} from './micro-capital';
 import type {PageId,Status,Theme,Position,PendingOrder} from './types';
 import type {RiskRecovery,PositionProtectionPolicy} from './bridge';
 import {DESIGN_FIXTURE} from './mock';
-import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,newsAction,studioAction,correlationAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,updatePositionProtection,savePartialExitPrices,updatePartialExitStageConsent,updatePartialExitTradeApproval,setLearningFrozen,manualMarket,cancelPendingOrder,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
+import {hasTauri,subscribe,coreStatus,control,readPanel,saveRisk,savePortfolio,saveSettings,handoff,shutdownCore,closeTerminal,backupAction,exportBrainSnapshot,importBrainSnapshot,restoreBrainSnapshot,backtestAction,newsAction,studioAction,correlationAction,saveTrading,saveSupervisor,updateBrainControl,updateBrainPaperAll,updateRiskMaster,updatePositionProtection,savePartialExitPrices,updatePartialExitStageConsent,updatePartialExitTradeApproval,updatePartialExitTP1Arm,setLearningFrozen,manualMarket,cancelPendingOrder,selectSoloBrain,closeOwnedPositions,bindExecution,frozenCoordinatorAction,frozenSniperAction,frozenClassicAction} from './bridge';
 import {money,num,signed,up,valid} from './format';
 
 // Concept 4 visual comparison fixture, NEVER emitted as broker results.
@@ -1037,6 +1037,77 @@ export default function Terminal(){
    return false;
   }finally{finishWrite(mutation)}
  };
+ const runTP1Arm=async(context:string,positionIdentifier:number,
+  planIds:[string,string,string],enabled:boolean,confirmLiveLogin:string):Promise<boolean>=>{
+  if(preview||busy||!hasTauri()||!feed.broker||status?.requested_run||!status?.telemetry){
+   sendNotice('تسليح TP1 يتطلب STOP وبيانات MT5 حديثة',true);return false;
+  }
+  const t=status.telemetry,view=unwrap(portfolioReport),settings=unwrap(view.settings);
+  const currentContext=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
+  const target=settings.target;
+  if(context!==currentContext||view.context!==context||view.account_matches!==true||
+   !((target==='demo'&&t.demo===true&&t.account_trade_mode===0)||
+     (target==='live'&&t.demo===false&&t.account_trade_mode===2))||
+   (enabled&&target==='live'&&confirmLiveLogin!==String(t.login))){
+   sendNotice('حساب TP1 المختار أو تأكيد رقم Live غير مطابق',true);return false;
+  }
+  const arm=unwrap(view.partial_exit_tp1_arm);
+  if(arm.schema!=='tp1-execution-arm-v1'||arm.status!=='account_scoped_arm_not_broker_fill'||
+   arm.context!==context||arm.target!==target||arm.read_only!==true||
+   arm.orders_enabled!==false){
+   sendNotice('حالة تسليح TP1 غير مؤكدة، حدث صفحة Core',true);return false;
+  }
+  const approval=unwrap(view.partial_exit_trade_approval);
+  if(enabled&&(approval.context!==context||approval.target!==target||
+    !Array.isArray(approval.rows)||!approval.rows.some((row:unknown)=>{
+      const r=unwrap(row);
+      return r.position_identifier===positionIdentifier&&
+       JSON.stringify(r.plan_ids)===JSON.stringify(planIds)&&
+       r.trade_preference_current===true;
+    }))){
+   sendNotice('ينبغي حفظ موافقة التداول المستقبلية السارية قبل تسليح TP1',true);return false;
+  }
+  const warning=enabled?
+   'تأكيد تسليح تنفيذ TP1 الحقيقي على '+target.toUpperCase()+' رقم '+t.login+
+   ' والمركز '+positionIdentifier+
+   '\nبعد START ووصول السعر قد يرسل النظام أمر إغلاق جزئي حقيقي للوسيط. ليس وضع معاينة، والنتيجة لا تُضمن. مدة التسليح 15 دقيقة. هل توافق؟':
+   'إلغاء تسليح TP1 للمركز '+positionIdentifier+
+   '\nقد يكون أمر سابق قيد الإرسال لدى الوسيط؛ تحقق من سجل الصفقات.';
+  if(!window.confirm(warning))return false;
+  const mutation=beginWrite('tp1-execution-arm');if(!mutation)return false;
+  try{
+   const response=unwrap(await updatePartialExitTP1Arm(
+     context,positionIdentifier,planIds,enabled,confirmLiveLogin));
+   if(!writeFresh(mutation))return false;
+   if(response.ok!==true||response.armed!==enabled||
+      response.orders_enabled!==false||response.broker_commands_created!==0)
+    throw new Error('Core لم يؤكد حفظ تسليح TP1 دون إرسال فوري');
+   scopedGeneration.current.invalidate('portfolio');
+   const ticket=scopedGeneration.current.beginRead('portfolio');
+   const updated=unwrap(await readPanel('/v1/execution'));
+   if(!writeFresh(mutation))return false;
+   const state=unwrap(updated.partial_exit_tp1_arm);
+   const rows=Array.isArray(state.rows)?state.rows.map(unwrap):[];
+   const row=rows.find(r=>r.position_identifier===positionIdentifier&&
+     JSON.stringify(r.plan_ids)===JSON.stringify(planIds)&&r.orders_enabled===false);
+   const persisted=state.context===context&&state.target===target&&
+     state.read_only===true&&row&&
+     (enabled?row.state==='execution_arm_valid_no_send_yet'||
+      row.state==='inactive_or_expired_execution_arm':
+      row.state==='disarmed');
+   if(!persisted)
+    throw new Error('لم نستطع التحقق من التسليح بعد إعادة قراءة Core؛ لا تكرر التسليح قبل الفحص');
+   if(scopedGeneration.current.isCurrent(ticket))setPortfolioReport(updated);
+   sendNotice(!enabled?'أُلغي تسليح TP1':
+     row.armed_active===true?
+      'تم تسليح TP1 للمركز المحدد لمدة 15 دقيقة؛ بعد START ووصول الهدف قد يُرسل أمر حقيقي.':
+      'حُفظ التسليح لكنه غير نشط حالياً. راجع حالة حساب MT5 والسعر قبل START.');
+   return true;
+  }catch(error){
+   if(writeFresh(mutation))sendNotice('تعذّر تغيير تسليح TP1: '+String(error),true);
+   return false;
+  }finally{finishWrite(mutation)}
+ };
  const runLearningFreeze=async(frozen:boolean)=>{
   if(preview||!hasTauri()||!online||typeof status?.learning_control?.frozen!=='boolean'){
    sendNotice('اتصل بـ Core حتى تتأكد حالة التعلّم قبل تغييرها',true);return;
@@ -1553,7 +1624,7 @@ export default function Terminal(){
              monitor={safeRiskSnapshot} portfolio={unwrap(portfolioReport).portfolio} armed={status?.requested_run===true}
              disabled={busy||preview} onSavePortfolio={runSavePortfolio}/></div>
           <div className="concept-risk-daily"><DailyRiskOperations status={!preview&&feed.broker?status:null} monitor={safeRiskSnapshot} preview={preview}/></div>
-          <div className="concept-risk-extra"><PositionProtectionOperations key={contextKey} status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} onSet={runPositionProtection}/><PartialExitPreview status={!preview&&feed.broker?status:null} source={portfolioReport}/><PartialExitPriceOperations key={'tp-'+contextKey} status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} onSave={runPartialExitPrices} onConsent={runPartialExitConsent} onTradeApproval={runPartialExitTradeApproval}/><h3>حماية المراكز في الطوارئ</h3><p>ميزة إغلاق كل مراكز الحساب بضغطة واحدة غير مدعومة في Core حالياً، لذلك لا يوجد زر يوهمك بتنفيذها. زر STOP يوقف فتح الصفقات الجديدة فقط.</p><button type="button" onClick={()=>open('positions')}>عرض المراكز الفعلية</button></div></div>
+          <div className="concept-risk-extra"><PositionProtectionOperations key={contextKey} status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} onSet={runPositionProtection}/><PartialExitPreview status={!preview&&feed.broker?status:null} source={portfolioReport}/><PartialExitPriceOperations key={'tp-'+contextKey} status={!preview&&feed.broker?status:null} source={portfolioReport} disabled={busy||preview||!hasTauri()} onSave={runPartialExitPrices} onConsent={runPartialExitConsent} onTradeApproval={runPartialExitTradeApproval} onArm={runTP1Arm}/><h3>حماية المراكز في الطوارئ</h3><p>ميزة إغلاق كل مراكز الحساب بضغطة واحدة غير مدعومة في Core حالياً، لذلك لا يوجد زر يوهمك بتنفيذها. زر STOP يوقف فتح الصفقات الجديدة فقط.</p><button type="button" onClick={()=>open('positions')}>عرض المراكز الفعلية</button></div></div>
           <details className="operator-advanced"><summary>بيانات Core التفصيلية — افتحها عند التشخيص</summary><DataExplorer source={pageData} error={pageError} preview={preview} updatedAt={pageUpdatedAt} onRefresh={()=>refreshCurrentPanel('/v1/risk/monitor')}/></details>
          </div>:
         page==='settings'||page==='telegram'?<div className="editor-panel operator-settings-page">
