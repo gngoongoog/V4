@@ -88,6 +88,15 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
   settlements.next_stage_authorized===false&&settlements.breakeven_enabled===false;
  const settlementRows=settlementsBound&&Array.isArray(settlements.rows)?
   settlements.rows.slice(0,75).map(object):[];
+ const stageCommands=object(view.partial_exit_stage_command_drafts);
+ const stageCommandsBound=verified&&
+  stageCommands.schema==='tp-stage-broker-command-drafts-v1'&&
+  stageCommands.status==='broker_command_shapes_not_queued'&&
+  stageCommands.context===context&&stageCommands.target===accountTarget&&
+  stageCommands.read_only===true&&stageCommands.orders_enabled===false&&
+  stageCommands.authorized===false&&stageCommands.broker_commands_created===0;
+ const stageCommandRows=stageCommandsBound&&Array.isArray(stageCommands.rows)?
+  stageCommands.rows.slice(0,25).map(object):[];
  const commandLinks=object(view.partial_exit_command_links);
  const commandLinksBound=verified&&commandLinks.schema==='partial-exit-stage-command-links-v1'&&
   commandLinks.status==='broker_stage_links_read_only'&&commandLinks.context===context&&
@@ -231,6 +240,32 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
           'سند الرصد السابق يحتاج مراجعة؛ لا يُعتمد كعبور صالح'}</small>
         </div>
         <span>{validShadow?'السعر '+volume(r.observed_price)+' / الهدف '+volume(r.target_price):'غير موثق'}</span>
+       </div>;
+      })}
+    </details>:null}
+   {stageCommandsBound?<details className="operator-advanced" aria-label="مسودات أوامر TP من Core بلا إرسال">
+     <summary>تركيب أمر TP داخل Rust Core — بدون إرسال</summary>
+     <p className="safe-note">Core كوّن حقول أمر الإغلاق من هوية الحساب والخطة الأصلية وسعر TP وحجم اللوت. ماكو رقم أمر أو إدخال بطابور Broker أو إذن إرسال. هذه مرحلة تدقيق الصيغة، وليست صفقة جاهزة أو منفذة.</p>
+     {stageCommandRows.length===0?<p>لا يوجد هدف حالياً اجتاز فحوص المصدر والسعر والمركز حتى تتكون له مسودة أمر.</p>:
+      stageCommandRows.map((r,i)=>{
+       const command=object(r.broker_command_draft);
+       const validDraft=r.read_only===true&&r.orders_enabled===false&&
+        r.broker_command_id===null&&
+        command.schema==='tp-stage-broker-command-shape-v1'&&
+        command.kind==='close'&&command.target===accountTarget&&
+        command.context===context&&command.login===t?.login&&
+        command.server===t.server&&command.symbol===t.symbol&&
+        command.tp_stage===r.stage&&command.tp_stage_plan_id===r.plan_id&&
+        !Object.prototype.hasOwnProperty.call(command,'id')&&
+        !Object.prototype.hasOwnProperty.call(command,'state')&&
+        valid(command.lots)&&valid(command.tp_target_price);
+       return <div key={String(r.plan_id)+'-'+i} className="brain-control-row">
+        <div><b>TP{[1,2,3].includes(Number(r.stage))?String(r.stage):'؟'} — مركز {Number.isSafeInteger(r.position_identifier)?String(r.position_identifier):'—'}</b>
+         <small style={{display:'block',marginTop:4}}>{validDraft?
+          'صيغة أمر داخل Core فقط · الحساب مطابق · لا تذكرة ولا إرسال':
+          'سند المسودة غير مكتمل أو غير صالح — لا يعتمد'} </small>
+        </div>
+        <span>{validDraft?'لوت '+volume(command.lots)+' · هدف '+volume(command.tp_target_price):'غير موثّق'}</span>
        </div>;
       })}
     </details>:null}
