@@ -1804,6 +1804,48 @@ mod tests {
     }
 
     #[test]
+    fn binding_endpoint_reports_real_persisted_target_and_clears_mismatched_accounts() {
+        for selected in ["demo","live"] {
+            let db=setup();
+            let mut service=Service::new(&db).unwrap();
+            let mut t=telemetry();
+            t.demo=selected=="demo";
+            t.account_trade_mode=Some(if selected=="demo"{0}else{2});
+            t.server=if selected=="demo"{"DemoServer"}else{"LiveServer"}.into();
+            let status=Status{gateway_fresh:true,telemetry:Some(t.clone()),..Default::default()};
+            let chosen=json!({"target":selected,"deviation_points":18,
+                "confirm_live_login":if selected=="live"{t.login.to_string()}else{String::new()}});
+            let r=service.route("POST","/v1/execution/settings",
+                chosen.to_string().as_bytes(),&db,&status,100).unwrap();
+            assert_eq!(r["ok"],true);
+            let verified=service.route("GET","/v1/execution/binding",
+                &[],&db,&status,101).unwrap();
+            assert_eq!(verified["schema"],"execution-binding-v1");
+            assert_eq!(verified["selected_target"],selected);
+            assert_eq!(verified["connected_target"],selected);
+            assert_eq!(verified["account_matches"],true);
+            assert_eq!(verified["settings"]["login"],t.login);
+            assert_eq!(verified["settings"]["deviation_points"],18);
+            assert_eq!(verified["context"],context(&t));
+            assert_eq!(verified["read_only"],true);
+            assert_eq!(verified["trade_enabled_by_read"],false);
+            let mut different=t.clone();
+            different.login+=1;
+            let stale=Status{gateway_fresh:true,telemetry:Some(different),..Default::default()};
+            let out=service.route("GET","/v1/execution/binding",
+                &[],&db,&stale,102).unwrap();
+            assert_eq!(out["selected_target"],selected,
+                "Persisted operator selection must not flip to a different MT5 account");
+            assert_eq!(out["account_matches"],false);
+            assert_eq!(out["context"],"");
+            let disconnected=Status{gateway_fresh:false,telemetry:Some(t),..Default::default()};
+            let offline=service.route("GET","/v1/execution/binding",
+                &[],&db,&disconnected,103).unwrap();
+            assert_eq!(offline["connected_target"],Value::Null);
+            assert_eq!(offline["account_matches"],false);
+        }
+    }
+    #[test]
     fn corrupt_policy_cannot_open_trades_even_if_market_assessment_would_pass() {
         let db=Connection::open_in_memory().unwrap();
         let mut service=Service::new(&db).unwrap();
