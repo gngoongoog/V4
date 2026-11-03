@@ -254,7 +254,7 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
         command.schema==='tp-stage-broker-command-shape-v1'&&
         command.kind==='close'&&command.target===accountTarget&&
         command.context===context&&command.login===t?.login&&
-        command.server===t.server&&command.symbol===t.symbol&&
+        command.server===t?.server&&command.symbol===t?.symbol&&
         command.tp_stage===r.stage&&command.tp_stage_plan_id===r.plan_id&&
         !Object.prototype.hasOwnProperty.call(command,'id')&&
         !Object.prototype.hasOwnProperty.call(command,'state')&&
