@@ -88,7 +88,7 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
         drop(stages);
         if planned.len()!=3||planned.iter().enumerate().any(|(i,(stage,id,v,state))|
             *stage!=(i+1) as u32||*state!="prepared_only"||
-            *id!=price["plan_ids"][i].as_str().unwrap_or("")||
+            id.as_str()!=price["plan_ids"][i].as_str().unwrap_or("")||
             !v.is_finite()||*v<=0.) {continue}
         let (ticket,magic,original,step,status,raw):(
             u64,u64,f64,f64,String,String
@@ -209,7 +209,16 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
             &&p[0].magic==magic&&p[0].symbol==t.symbol
             &&candidate["side"]==p[0].side
             &&near(p[0].volume,full,step);
-        let bound=stage_ok&&physical_ok&&
+        let recent_orders:i64=db.query_row(
+            "SELECT COUNT(*) FROM broker_commands WHERE context=?1 AND kind='close'
+             AND CASE WHEN json_valid(payload) THEN
+                  CAST(json_extract(payload,'$.position') AS INTEGER) ELSE 0 END=?2",
+            params![key,ticket],|r|r.get(0))?;
+        let broker_grid_ok=t.volume_step.is_some_and(|v|near(v,step,step))
+            &&t.volume_min.is_some_and(|v|v.is_finite()&&v>0.&&
+                lots>=v-step*1e-6)
+            &&t.volume_max.is_some_and(|v|v.is_finite()&&v>=lots);
+        let bound=stage_ok&&physical_ok&&recent_orders==0&&broker_grid_ok&&
             candidate["schema"]=="tp1-shadow-close-intent-v1"&&
             candidate["kind"]=="research_close_intent"&&
             candidate["context"]==key&&candidate["target"]=="demo"&&
@@ -228,6 +237,9 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
             candidate["broker_fill_verified"]==false&&
             candidate["next_stage_authorized"]==false&&
             candidate["breakeven_enabled"]==false;
+        // This is only a recorded research candidate. The currently
+        // configured account and mode must still own the same lot grid.
+        // No broker send may ever be resumed from this row.
         rows.push(json!({
             "position_identifier":pid,"stage":1,"plan_id":plan,
             "ticket":ticket,"observed_ms":observed,
