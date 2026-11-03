@@ -218,5 +218,44 @@ mod tests {
         let mut altered=r.clone();
         altered["tp_target_price"]=json!(1998.);
         assert!(candidate(&altered,&t,"live",10_150,3,20,true).is_none());
+
+        // TP2/TP3 require the previously broker-sealed stage; neither can
+        // borrow TP1's unsent status or leave an untradeable lot residual.
+        let mut second=r.clone();
+        let mut later=t.clone();later.bid=Some(2002.5);
+        second["tp_stage"]=json!(2);
+        second["prior_stage_broker_sealed"]=json!(true);
+        second["tp_target_price"]=json!(2002.0);
+        second["expected_position_volume"]=json!(0.05);
+        second["lots"]=json!(0.03);
+        assert_eq!(candidate(&second,&later,"live",10_150,3,20,true)
+            .unwrap()["lots"],0.03);
+        second["prior_stage_broker_sealed"]=json!(false);
+        assert!(candidate(&second,&later,"live",10_150,3,20,true).is_none());
+        second["prior_stage_broker_sealed"]=json!(true);
+        let mut third=second.clone();
+        later.bid=Some(2003.5);
+        third["tp_stage"]=json!(3);
+        third["tp_target_price"]=json!(2003.0);
+        third["expected_position_volume"]=json!(0.02);
+        third["lots"]=json!(0.02);
+        assert_eq!(candidate(&third,&later,"live",10_150,3,20,true)
+            .unwrap()["tp_stage"],3);
+        third["lots"]=json!(0.01);
+        assert!(candidate(&third,&later,"live",10_150,3,20,true).is_none());
+
+        // SELL closes use current broker Ask, never Bid, and need profit-side
+        // prices; type/target consistency is independent of the operator's
+        // Demo/Live choice.
+        let mut sell=r.clone();
+        let mut sell_tick=t.clone();
+        sell_tick.bid=Some(1998.5);sell_tick.ask=Some(1998.7);
+        sell["expected_position_side"]=json!("SELL");
+        sell["expected_position_entry"]=json!(2001.0);
+        sell["tp_target_price"]=json!(1999.0);
+        let closed=candidate(&sell,&sell_tick,"live",10_150,3,20,true).unwrap();
+        assert_eq!(closed["expected_position_side"],"SELL");
+        sell_tick.ask=Some(1999.5);
+        assert!(candidate(&sell,&sell_tick,"live",10_150,3,20,true).is_none());
     }
 }
