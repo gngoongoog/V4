@@ -138,8 +138,11 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
         // create a new "ready" candidate from an ambiguous position.
         let prior:i64=db.query_row(
             "SELECT COUNT(*) FROM broker_commands WHERE context=?1 AND kind='close'
-             AND CASE WHEN json_valid(payload) THEN
-                CAST(json_extract(payload,'$.position') AS INTEGER) ELSE 0 END=?2",
+             AND CASE
+                 WHEN NOT json_valid(payload) THEN 1
+                 WHEN COALESCE(json_type(payload,'$.position'),'missing')!='integer' THEN 1
+                 WHEN CAST(json_extract(payload,'$.position') AS INTEGER)=?2 THEN 1
+                 ELSE 0 END=1",
             params![key,ticket],|r|r.get(0))?;
         if prior!=0{continue}
         let candidate=json!({
@@ -211,20 +214,46 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
             &&near(p[0].volume,full,step);
         let recent_orders:i64=db.query_row(
             "SELECT COUNT(*) FROM broker_commands WHERE context=?1 AND kind='close'
-             AND CASE WHEN json_valid(payload) THEN
-                  CAST(json_extract(payload,'$.position') AS INTEGER) ELSE 0 END=?2",
+             AND CASE
+                 WHEN NOT json_valid(payload) THEN 1
+                 WHEN COALESCE(json_type(payload,'$.position'),'missing')!='integer' THEN 1
+                 WHEN CAST(json_extract(payload,'$.position') AS INTEGER)=?2 THEN 1
+                 ELSE 0 END=1",
             params![key,ticket],|r|r.get(0))?;
+        let lineage:rusqlite::Result<(f64,String,u64,u64,f64,f64,String)>=
+            db.query_row(
+                "SELECT s.planned_volume,s.status,d.ticket,d.magic,
+                        d.initial_volume,d.step,d.status
+                 FROM partial_exit_stage_plans s
+                 JOIN partial_exit_drafts d ON d.context=s.context
+                     AND d.target=s.target
+                     AND d.position_identifier=s.position_identifier
+                 WHERE s.context=?1 AND s.target='demo'
+                     AND s.position_identifier=?2 AND s.stage=1",
+                params![key,pid],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,
+                    r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?)));
+        let lineage_ok=lineage.is_ok_and(|(stage_lots,stage_state,orig_ticket,
+            orig_magic,orig_volume,orig_step,draft_state)|
+            stage_state=="prepared_only"&&draft_state=="draft_only"
+            &&orig_ticket==ticket&&orig_magic==magic
+            &&near(stage_lots,lots,step)&&near(orig_volume,full,step)
+            &&near(orig_step,step,step));
         let broker_grid_ok=t.volume_step.is_some_and(|v|near(v,step,step))
             &&t.volume_min.is_some_and(|v|v.is_finite()&&v>0.&&
                 lots>=v-step*1e-6)
             &&t.volume_max.is_some_and(|v|v.is_finite()&&v>=lots);
-        let bound=stage_ok&&physical_ok&&recent_orders==0&&broker_grid_ok&&
+        let bound=stage_ok&&physical_ok&&lineage_ok&&recent_orders==0&&broker_grid_ok&&
             candidate["schema"]=="tp1-shadow-close-intent-v1"&&
             candidate["kind"]=="research_close_intent"&&
             candidate["context"]==key&&candidate["target"]=="demo"&&
             candidate["position_identifier"].as_u64()==Some(pid)&&
             candidate["ticket"].as_u64()==Some(ticket)&&
             candidate["magic"].as_u64()==Some(magic)&&
+            candidate["symbol"]==t.symbol&&
+            execution::brain_for_magic(magic).is_some_and(|brain|
+                candidate["brain"]==brain)&&
+            near(candidate["volume_step"].as_f64().unwrap_or(f64::NAN),step,step)&&
+            candidate["broker_order_id"].is_null()&&
             candidate["tp_stage"].as_u64()==Some(1)&&candidate["tp_stage_plan_id"]==plan&&
             near(candidate["close_lots"].as_f64().unwrap_or(f64::NAN),lots,step)&&
             near(candidate["expected_position_volume"].as_f64().unwrap_or(f64::NAN),full,step)&&
@@ -387,6 +416,30 @@ mod tests{
         assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],"needs_review");
         tick(&db,&t,10_350);
         assert_eq!(count(&db),1);
+    }
+    #[test]
+    fn tampered_size_even_with_matching_payload_is_rejected_against_original_stage(){
+        let db=Connection::open_in_memory().unwrap();setup(&db);
+        let t=crossed();tick(&db,&t,10_250);
+        assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],
+            "shadow_close_intent_only");
+        db.execute("UPDATE partial_exit_shadow_close_intents
+            SET lot_volume=0.09,
+                payload=json_set(payload,'$.close_lots',0.09,
+                    '$.expected_remaining_volume',0.01)",[]).unwrap();
+        assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],
+            "needs_review");
+    }
+    #[test]
+    fn corrupt_or_unattributable_prior_broker_close_blocks_research_candidate(){
+        for raw in ["invalid-json","{}",r#"{"position":"unexpected"}"#] {
+            let db=Connection::open_in_memory().unwrap();setup(&db);
+            let t=crossed();
+            db.execute("INSERT INTO broker_commands VALUES(?1,'close',?2)",
+                params![context(&t),raw]).unwrap();
+            tick(&db,&t,10_250);
+            assert_eq!(count(&db),0,"ambiguous close record: {raw}");
+        }
     }
     #[test]
     fn restart_preserves_only_research_intent_and_isolates_broker_accounts(){
