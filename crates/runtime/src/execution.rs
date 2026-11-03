@@ -698,10 +698,11 @@ impl Service {
                         let _=crate::partial_exit_shadow_intent::observe(
                             db,telemetry,&self.inner.settings.target,now);
                     }
-                    // Stage intent is now journaled once, independently
-                    // of the broker command outbox. START expresses the
-                    // operator's mode choice; this is NOT an MT5 send.
-                    if entries_allowed {
+                    // TP1 is an EXIT on an already-owned physical position:
+                    // broker entry quality/supervisor admission must not block
+                    // closing it. The operator's START plus explicit TP1 arm
+                    // and every account/quote/volume proof still apply.
+                    if run {
                         let _=crate::partial_exit_stage_reservation::prepare(
                             db,telemetry,&self.inner.settings.target,now,
                             self.inner.settings.revision,
