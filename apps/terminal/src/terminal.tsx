@@ -1008,18 +1008,29 @@ export default function Terminal(){
    if(!writeFresh(mutation))return false;
    const report=unwrap(updated.partial_exit_trade_approval);
    const rows=Array.isArray(report.rows)?report.rows.map(unwrap):[];
+   // A fresh quote can become stale between the write and the readback.
+   // Confirm durable storage separately from current eligibility; otherwise
+   // a successful commit is falsely reported as a failed settings save.
+   const record=rows.find(r=>r.position_identifier===positionIdentifier&&
+     r.purpose==='tp1_future_trading_preference'&&
+     r.read_only===true&&r.tp1_execution_enabled===false&&
+     r.orders_enabled===false&&r.broker_command_id===null&&
+     JSON.stringify(r.plan_ids)===JSON.stringify(planIds));
+   const persistentlySaved=enabled&&record&&
+     ['trade_preference_current_sender_locked','trade_preference_quote_stale',
+      'trade_preference_lineage_stale','trade_preference_revision_mismatch',
+      'trade_preference_expired'].includes(String(record.state));
    const verified=report.context===context&&report.target===target&&
-      report.tp1_execution_enabled===false&&
-      rows.some(r=>r.position_identifier===positionIdentifier&&
-        r.purpose==='tp1_future_trading_preference'&&
-        JSON.stringify(r.plan_ids)===JSON.stringify(planIds)&&
-        (enabled?r.trade_preference_current===true:
-          r.state==='trade_preference_revoked'));
+     report.read_only===true&&report.tp1_execution_enabled===false&&
+     report.broker_commands_created===0&&record&&
+     (persistentlySaved||(!enabled&&record.state==='trade_preference_revoked'));
    if(!verified)
-    throw new Error('تفويض TP1 لم يعد مؤهلاً بعد إعادة القراءة؛ تحقق من ربط MT5 والسعر');
+    throw new Error('لم يتم التحقق من تخزين تفويض TP1 بعد إعادة القراءة؛ افحص حالة Core');
    if(scopedGeneration.current.isCurrent(ticket))setPortfolioReport(updated);
-   sendNotice(enabled?'حُفظ تفويض TP1 المستقبلي. لا توجد أوامر مرسلة.':
-     'أُلغي تفويض TP1 المخزّن، دون أي أمر تداول');
+   sendNotice(!enabled?'أُلغي تفويض TP1 المخزّن، دون أي أمر تداول':
+     record?.trade_preference_current===true?
+       'حُفظ تفويض TP1 المستقبلي. لا توجد أوامر مرسلة.':
+       'حُفظ تفويض TP1، لكنه غير نشط حالياً بسبب تغيّر بيانات أو انتهاء صلاحية السعر. حدّث حالة MT5.');
    return true;
   }catch(error){
    if(writeFresh(mutation))sendNotice('تعذّر تحديث تفويض TP1: '+String(error),true);
