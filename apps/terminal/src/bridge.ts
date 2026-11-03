@@ -43,6 +43,14 @@ export type RiskRecovery={basis:'balance'|'equity';threshold:number};
 export async function updateRiskMaster(context:string,enabled:boolean,confirmLiveLogin:string,recovery:RiskRecovery|null):Promise<unknown>{return invoke('update_risk_master',{context,enabled,confirmLiveLogin,recovery})}
 export type PositionProtectionPolicy={break_even_enabled:boolean;break_even_trigger_points:number;break_even_offset_points:number;trailing_enabled:boolean;trailing_distance_points:number;trailing_step_points:number};
 export async function updatePositionProtection(context:string,policy:PositionProtectionPolicy,expectedPolicyId:string,confirmLiveLogin:string):Promise<unknown>{return invoke('update_position_protection',{context,policy,expectedPolicyId,confirmLiveLogin})}
+export async function savePartialExitPrices(context:string,positionIdentifier:number,
+ planIds:[string,string,string],prices:[number,number,number]):Promise<unknown>{
+ if(!Number.isSafeInteger(positionIdentifier)||positionIdentifier<=0||
+    planIds.length!==3||planIds.some(id=>!/^tp-plan-[a-f0-9]{32}$/.test(id))||
+    prices.length!==3||prices.some(price=>!Number.isFinite(price)||price<=0))
+  throw new Error('Invalid DEMO TP price proposal');
+ return invoke('save_partial_exit_prices',{context,positionIdentifier,planIds,prices});
+}
 export async function setLearningFrozen(frozen:boolean):Promise<unknown>{return invoke('set_learning_frozen',{frozen})}
 export async function manualMarket(request:Record<string,unknown>):Promise<unknown>{return invoke('manual_market',{request})}
 export async function cancelPendingOrder(context:string,order:import('./types').PendingOrder):Promise<unknown>{return invoke('cancel_pending_order',{context,order})}
