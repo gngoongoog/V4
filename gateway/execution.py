@@ -63,7 +63,7 @@ def is_fast_path(cmd):
     if cmd.get('kind') == 'close':
         if any(key in cmd for key in (
                 'tp_stage_plan_id','tp_stage','expected_position_identifier',
-                'tp_target_price')):
+                'tp_target_price','expected_position_entry','expected_broker_tp')):
             # Any stage marker, even malformed/null, never takes the
             # no-order_check automatic-close shortcut.
             return False
@@ -691,7 +691,7 @@ class BrokerExecutor:
                        'manual_open','manual_epoch','manual_reference_price','manual_stop_price','manual_target_price',
                        'manual_close','profit_only','expected_position_volume','expected_position_side',
                        'tp_stage_plan_id','tp_stage','expected_position_identifier',
-                       'tp_target_price',
+                       'tp_target_price','expected_position_entry','expected_broker_tp',
                        'deviation_points','created_ms','expires_ms',
                        'commission_per_lot','slippage_ticks','risk_percent','risk_master_enabled','risk_master_recovery','risk_master_recovery_id',
                        'demo_flexible','micro_demo_risk_opt_in',
@@ -776,7 +776,7 @@ class BrokerExecutor:
                 raise ValueError('A BrainTrade position or order already owns this symbol')
             closing=cmd['kind']=='close'
             stage_keys=('tp_stage_plan_id','tp_stage','expected_position_identifier',
-                        'tp_target_price')
+                        'tp_target_price','expected_position_entry','expected_broker_tp')
             if any(key in cmd for key in stage_keys):
                 if not closing or any(cmd.get(key) is None for key in stage_keys):
                     raise ValueError('Incomplete TP stage marker; a full position close is forbidden')
