@@ -387,6 +387,7 @@ impl Service {
         crate::partial_exit_ledger::init(db)?;
         crate::partial_exit_stage::init(db)?;
         crate::partial_exit_progress::init(db)?;
+        crate::partial_exit_prices::init(db)?;
         crate::pending_cancellation::init(db)?;
         let mut inner = legacy::Service::new(db)?;
         // Old per-brain flags do not choose an execution owner. A scoped solo
