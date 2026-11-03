@@ -228,7 +228,10 @@ class StageDemoTests(unittest.TestCase):
         # A fresh, independent fixture is required. The earlier test has
         # already atomically claimed its stage plan before the second gate;
         # retrying that same plan under a new ID correctly returns unknown.
-        self.mt.on_check=lambda:setattr(self.mt.tick,'bid',2000.2)
+        def advance_valid_spread():
+            self.mt.tick.bid=2000.2
+            self.mt.tick.ask=2000.3
+        self.mt.on_check=advance_valid_spread
         result=self.send()
         self.assertEqual(result['state'],'cancelled',result)
         self.assertIn('quote moved',result['reason'])
