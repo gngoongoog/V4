@@ -2635,6 +2635,43 @@ mod tp_stage_core_authorization_gate_tests {
             [],|r|r.get::<_,String>(0)).unwrap(),"dispatched");
     }
     #[test]
+    fn held_tp1_outbox_row_is_invisible_to_gateway_and_never_authorized(){
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();svc.bind(&db,&t,100).unwrap();
+        let key=ctx(&t);
+        let p=json!({"id":"tp1-held-command","schema":"tp-stage-broker-command-shape-v1",
+            "kind":"close","position":87,"context":key,"target":"demo",
+            "tp_stage_plan_id":format!("tp-plan-{}","a".repeat(32)),
+            "tp_stage":1,"expected_position_identifier":907,
+            "created_ms":110,"expires_ms":5000});
+        db.execute("INSERT INTO broker_commands(
+            id,context,brain,kind,created_ms,state,payload)
+            VALUES('tp1-held-command',?1,'system','close',110,'stage_held',?2)",
+            params![key,p.to_string()]).unwrap();
+        let status=Status{gateway_fresh:true,telemetry:Some(t),..Default::default()};
+        let get=svc.route("GET","/v1/execution/gateway",b"",&db,&status,200).unwrap();
+        assert!(get["command"].is_null(),
+            "Held TP1 is not selected by Gateway polling");
+        let denied=svc.route("POST","/v1/execution/authorize",
+            br#"{"id":"tp1-held-command"}"#,&db,&status,201).unwrap();
+        assert_eq!(denied["authorized"],false,
+            "A held close cannot bypass stage execution lock or dispatched state");
+        assert_eq!(db.query_row(
+            "SELECT state FROM broker_commands WHERE id='tp1-held-command'",
+            [],|r|r.get::<_,String>(0)).unwrap(),"stage_held");
+        assert!(!svc.pending(&db).unwrap(),
+            "Held but never issued research does not block normal reconciliation");
+        db.execute("UPDATE broker_commands SET state='queued'
+            WHERE id='tp1-held-command'",[]).unwrap();
+        let get=svc.route("GET","/v1/execution/gateway",b"",&db,&status,202).unwrap();
+        assert!(get["command"].is_null(),
+            "Even corrupt manual promotion is quarantined before Gateway reads");
+        assert_eq!(db.query_row(
+            "SELECT state FROM broker_commands WHERE id='tp1-held-command'",
+            [],|r|r.get::<_,String>(0)).unwrap(),"cancelled");
+    }
+    #[test]
     fn malformed_queued_command_is_quarantined_not_sent_or_retried(){
         let db=Connection::open_in_memory().unwrap();
         let mut svc=Service::new(&db).unwrap();
