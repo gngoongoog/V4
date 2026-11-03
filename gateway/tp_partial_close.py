@@ -97,14 +97,18 @@ def stage_volume(cmd, account, mt5, position, info, tick=None, now_ms=None):
     # The Core economic draft records the quote that established target
     # crossing. A live broker re-read must be at least as recent; no replay
     # against an older MT5 tick is valid. Legacy full closes omit this field.
-    if source_stamp is not None:
-        if (type(source_stamp) is not int or source_stamp <= 0
-                or source_stamp > now_ms + 2000
-                or type(stamp) is not int or stamp < source_stamp):
-            raise ValueError("TP stage broker quote predates the Core crossing source")
     max_age = cmd.get("max_quote_age_ms", 3000)
+    if type(max_age) is not int or not 1 <= max_age <= 3000:
+        raise ValueError("TP stage quote maximum age must be 1..3000 ms")
+    # Every staged close MUST prove which Core-observed quote crossed
+    # the original target. An omitted/None timestamp is not legacy support:
+    # without it a synthetic TP close could pass on a later unrelated tick.
+    if (type(source_stamp) is not int or source_stamp <= 0
+            or source_stamp > now_ms + 2000
+            or now_ms - source_stamp > max_age
+            or type(stamp) is not int or stamp < source_stamp):
+        raise ValueError("TP stage broker quote predates or lacks a fresh Core crossing source")
     if (min(bid,ask)<=0 or ask<bid or type(stamp) is not int or stamp<=0
-            or type(max_age) is not int or not 1<=max_age<=3000
             or stamp>now_ms+2000 or now_ms-stamp>max_age):
         raise ValueError("TP stage quote is invalid, crossed or stale")
     exit_price = bid if name == "BUY" else ask
