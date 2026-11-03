@@ -21,6 +21,7 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
  const t=status?.telemetry,view=object(source),settings=object(view.settings);
  const p=object(view.partial_exit_preview);
  const context=t?JSON.stringify([t.server,t.login,t.symbol,t.currency]):'';
+ const accountTarget=t?.demo===true?'demo':t?.demo===false?'live':null;
  const verified=status?.gateway_fresh===true&&t?.connected===true&&
   t.login>0&&!!t.server&&!!t.symbol&&!!t.currency&&
   t.account_trade_mode===(t.demo?0:2)&&
@@ -52,37 +53,37 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
   dealAudit.orders_enabled===false&&dealAudit.tp_stage_execution_supported===false;
  const dealRows=dealAuditBound&&Array.isArray(dealAudit.rows)?dealAudit.rows.slice(0,25).map(object):[];
  const shadow=object(view.partial_exit_shadow_tp1);
- const shadowBound=verified&&t?.demo===true&&
+ const shadowBound=verified&&
   shadow.schema==='partial-exit-shadow-tp1-v1'&&
   shadow.status==='shadow_crossings_no_broker_orders'&&
-  shadow.context===context&&shadow.target==='demo'&&
+  shadow.context===context&&shadow.target===accountTarget&&
   shadow.read_only===true&&shadow.orders_enabled===false&&
   shadow.next_stage_authorized===false&&shadow.breakeven_enabled===false;
  const shadowRows=shadowBound&&Array.isArray(shadow.rows)?
   shadow.rows.slice(0,50).map(object):[];
  const nextGate=object(view.partial_exit_next_shadow_gate);
- const nextGateBound=verified&&t?.demo===true&&
+ const nextGateBound=verified&&
   nextGate.schema==='partial-exit-next-shadow-gate-v1'&&
   ['verified_history_research_only','no_broker_verified_previous_stage'].includes(String(nextGate.status))&&
-  nextGate.context===context&&nextGate.target==='demo'&&
+  nextGate.context===context&&nextGate.target===accountTarget&&
   nextGate.read_only===true&&nextGate.orders_enabled===false&&
   nextGate.next_stage_authorized===false&&nextGate.breakeven_enabled===false;
  const nextGateRows=nextGateBound&&Array.isArray(nextGate.rows)?
   nextGate.rows.slice(0,25).map(object):[];
  const intent=object(view.partial_exit_shadow_close_intents);
- const intentBound=verified&&t?.demo===true&&
+ const intentBound=verified&&
   intent.schema==='tp-shadow-close-intents-v1'&&
   intent.status==='research_close_intents_no_broker_commands'&&
-  intent.context===context&&intent.target==='demo'&&
+  intent.context===context&&intent.target===accountTarget&&
   intent.read_only===true&&intent.orders_enabled===false&&
   intent.next_stage_authorized===false&&intent.breakeven_enabled===false;
  const intentRows=intentBound&&Array.isArray(intent.rows)?
   intent.rows.slice(0,50).map(object):[];
  const settlements=object(view.partial_exit_stage_settlements);
- const settlementsBound=verified&&t?.demo===true&&
+ const settlementsBound=verified&&
   settlements.schema==='partial-exit-stage-settlements-v1'&&
   settlements.status==='account_scoped_historical_settlements'&&
-  settlements.context===context&&settlements.target==='demo'&&
+  settlements.context===context&&settlements.target===accountTarget&&
   settlements.read_only===true&&settlements.orders_enabled===false&&
   settlements.next_stage_authorized===false&&settlements.breakeven_enabled===false;
  const settlementRows=settlementsBound&&Array.isArray(settlements.rows)?
@@ -100,6 +101,7 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
   conflicting_stage_commands:'أكثر من أمر مرتبط بنفس المرحلة — مرفوض',
   command_not_broker_reconciled:'أمر المرحلة لم تتم مصالحته مع الوسيط بعد',
   command_identity_mismatch:'بيانات أمر المرحلة لا تطابق الخطة والحساب',
+  original_tp_price_lineage_not_verified:'سعر المرحلة أو الدخول أو TP الوسيط لا يطابق الخطة الأصلية المحفوظة',
   gateway_history_proof_missing:'تأكيد Gateway غير مدعوم بتاريخ التنفيذ النهائي',
   gateway_order_ticket_missing:'رقم أمر MT5 الفعلي مفقود',
   gateway_request_not_matching_stage:'الحجم أو الاتجاه المرسل لا يطابق المرحلة',
@@ -132,7 +134,7 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
  };
  return <section className="operator-card" aria-label="معاينة أهداف TP الجزئية للوت">
   <h3>معاينة توزيع حجم TP1 / TP2 / TP3</h3>
-  <p>تقسيم اللوت إلى 50%، 30%، 20%. يمكن حفظ أسعار أهداف بحثية منفصلة على Demo ورصد عبور TP1 بالشادو، لكن لا تُرسل أوامر إغلاق تلقائية ولا يعتبر الرصد تنفيذ صفقة. هذه ليست خاصية TP جزئي جاهزة للتداول.</p>
+  <p>تقسيم اللوت إلى 50%، 30%، 20%. يمكن حفظ أسعار الأهداف على حساب Demo أو Live الذي اخترته ورصد عبور TP1 في السجل البحثي، لكن لا تُرسل أوامر إغلاق تلقائية ولا يعتبر الرصد تنفيذ صفقة. هذه ليست خاصية TP جزئي جاهزة للتداول.</p>
   {!verified?<p className="safe-note">المعاينة غير متاحة: يجب التحقق من حساب MT5 والرمز وإعدادات الحجم الحالية لدى Core.</p>:
    <>
     <p className="safe-note">حد اللوت: <b>{volume(p.volume_min)}</b> · خطوة الحجم: <b>{volume(p.volume_step)}</b> · الحد الأعلى: <b>{volume(p.volume_max)}</b></p>
