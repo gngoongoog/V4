@@ -118,7 +118,13 @@ fn durable(db:&Connection,id:&str,context:&str,target:&str,
     let Ok(command)=serde_json::from_str::<Value>(&raw)else{return Ok(None)};
     if held_state!="held_never_dispatched"||broker_state!=stage_state
         ||at==0||at>now||now.saturating_sub(at)>3_000
-        ||command["id"]!=id||command["tp_stage_plan_id"]!=plan
+        ||command["schema"]!="tp-stage-broker-command-shape-v1"
+        ||command["kind"]!="close"||command["tp_stage"]!=1
+        ||command["id"]!=id||command["context"]!=context
+        ||command["target"]!=target||command["tp_stage_plan_id"]!=plan
+        ||command["position"].as_u64()!=Some(ticket)
+        ||command["expected_position_identifier"].as_u64()!=Some(pid)
+        ||command["created_ms"].as_u64()!=Some(at)
         ||serde_json::from_str::<Value>(&actual).ok()!=Some(command.clone())
     {return Ok(None)}
     Ok(Some((pid,ticket,plan,command)))
@@ -370,6 +376,30 @@ mod tests {
         db.execute(
             "UPDATE broker_commands SET state='dispatched'
              WHERE id='tp1-once-id'",[]
+        ).unwrap();
+        assert!(authorize(&db,&t,"demo","tp1-once-id",5,1550,true));
+        // Cross-check immutable outbox metadata with every original field.
+        // A broker-command JSON that still looks valid but conflicts with the
+        // original held account, physical position or timestamp is rejected.
+        db.execute(
+            "UPDATE partial_exit_tp1_held SET physical_ticket=88
+             WHERE command_id='tp1-once-id'",[]
+        ).unwrap();
+        assert!(!authorize(&db,&t,"demo","tp1-once-id",5,1550,true));
+        db.execute(
+            "UPDATE partial_exit_tp1_held SET physical_ticket=87
+             WHERE command_id='tp1-once-id'",[]
+        ).unwrap();
+        let mut forged=cmd.clone();
+        forged["created_ms"]=json!(1451);
+        db.execute(
+            "UPDATE broker_commands SET payload=?1
+             WHERE id='tp1-once-id'",[forged.to_string()]
+        ).unwrap();
+        assert!(!authorize(&db,&t,"demo","tp1-once-id",5,1550,true));
+        db.execute(
+            "UPDATE broker_commands SET payload=?1
+             WHERE id='tp1-once-id'",[cmd.to_string()]
         ).unwrap();
         assert!(authorize(&db,&t,"demo","tp1-once-id",5,1550,true));
         let mut changed=t.clone();changed.positions[0].volume=0.09;
