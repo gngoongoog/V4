@@ -384,12 +384,14 @@ mod tests{
     fn expired_held_tp1_is_explicit_manual_replan_blocker_never_requeued(){
         let db=Connection::open_in_memory().unwrap();setup(&db);
         crate::partial_exit_tp1_release::init(&db).unwrap();
-        let c=candidate();
-        let plan=c["tp_stage_plan_id"].as_str().unwrap();
-        assert_eq!(claim(&db,"ctx","demo",907,87,plan,&c,1550).unwrap(),"held");
         let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
             login:17,server:"D".into(),symbol:"XAUUSD".into(),
             currency:"USD".into(),..Default::default()};
+        let ctx=context(&t);
+        let mut c=candidate();
+        c["context"]=json!(ctx);
+        let plan=c["tp_stage_plan_id"].as_str().unwrap();
+        assert_eq!(claim(&db,&ctx,"demo",907,87,plan,&c,1550).unwrap(),"held");
         let recent=report(&db,&t,"demo",1550).unwrap();
         assert_eq!(recent["rows"][0]["manual_replan_required"],false);
         let expired=report(&db,&t,"demo",6000).unwrap();
@@ -405,11 +407,11 @@ mod tests{
         assert_eq!(db.query_row(
             "SELECT COUNT(*) FROM partial_exit_tp1_releases",
             [],|r|r.get::<_,i64>(0)).unwrap(),0);
-        assert_eq!(claim(&db,"ctx","demo",907,87,plan,&c,1550).unwrap(),"idempotent",
+        assert_eq!(claim(&db,&ctx,"demo",907,87,plan,&c,1550).unwrap(),"idempotent",
             "An exact old command remains immutable, not silently refreshed");
         let mut newer=c.clone();
         newer["created_ms"]=json!(6001);newer["expires_ms"]=json!(9001);
-        assert_eq!(claim(&db,"ctx","demo",907,87,plan,&newer,6001).unwrap(),
+        assert_eq!(claim(&db,&ctx,"demo",907,87,plan,&newer,6001).unwrap(),
             "conflict","An expired intent cannot reprice and resend itself");
     }
     #[test]
