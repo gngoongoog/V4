@@ -317,6 +317,36 @@ mod tests{
         std::array::from_fn(|i|v["rows"][i]["plan_id"].as_str().unwrap().into())
     }
     #[test]
+    fn user_selected_live_price_plan_is_immutable_and_isolated_from_demo(){
+        let db=Connection::open_in_memory().unwrap();
+        crate::partial_exit_ledger::init(&db).unwrap();
+        crate::partial_exit_stage::init(&db).unwrap();
+        db.execute_batch("CREATE TABLE broker_commands(context TEXT,kind TEXT,payload TEXT);")
+            .unwrap();
+        init(&db).unwrap();
+        let mut t=t();
+        t.demo=false;t.account_trade_mode=Some(2);t.server="LiveA".into();
+        crate::partial_exit_ledger::observe(&db,&t,"live",100).unwrap();
+        crate::partial_exit_stage::observe(&db,&t,"live",100).unwrap();
+        let stages=crate::partial_exit_stage::report(&db,&t,"live").unwrap();
+        assert_eq!(stages["rows"].as_array().unwrap().len(),3);
+        let ids=std::array::from_fn(|i|
+            stages["rows"][i]["plan_id"].as_str().unwrap().to_string());
+        assert_eq!(save(&db,&t,"live",907,&ids,[2001.,2002.,2003.],10_000)
+            .unwrap()["saved"],true);
+        let view=report(&db,&t,"live",10_000).unwrap();
+        assert_eq!(view["status"],"operator_price_proposals_only");
+        assert_eq!(view["target"],"live");
+        assert_eq!(view["rows"][0]["prices"],json!([2001.,2002.,2003.]));
+        assert_eq!(view["orders_enabled"],false);
+        assert_eq!(save(&db,&t,"live",907,&ids,[2001.,2002.,2003.],10_000)
+            .unwrap()["idempotent"],true);
+        assert!(save(&db,&t,"live",907,&ids,[2001.,2002.,2004.],10_000).is_err());
+        assert!(save(&db,&t,"demo",907,&ids,[2001.,2002.,2003.],10_000).is_err());
+        let other=report(&db,&t,"demo",10_000).unwrap();
+        assert!(other["rows"].as_array().unwrap().is_empty());
+    }
+    #[test]
     fn immutable_ordered_tick_aligned_demo_prices_with_idempotent_restart(){
         let d=db();let t=t();let plans=ids(&d);
         let result=save(&d,&t,"demo",907,&plans,[2001.,2002.,2003.],10_000).unwrap();
