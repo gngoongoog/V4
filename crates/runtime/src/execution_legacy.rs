@@ -22,7 +22,7 @@ pub(crate) const PENDING_BROKER_SQL:&str = "(state IN ('queued','dispatched','un
 // externally inserted and marked dispatched. A regular full close remains
 // governed by its existing independent authorization rules.
 fn incomplete_tp_stage_execution_locked(command:&Value)->bool {
-    ["tp_stage_plan_id","tp_stage","expected_position_identifier","tp_target_price"]
+    ["tp_stage_plan_id","tp_stage","expected_position_identifier","tp_target_price","expected_position_entry","expected_broker_tp"]
         .iter().any(|key|command.get(*key).is_some())
 }
 
@@ -2532,7 +2532,7 @@ mod tp_stage_core_authorization_gate_tests {
     fn no_core_stage_execution_until_a_priced_broker_safe_producer_is_implemented(){
         assert!(!incomplete_tp_stage_execution_locked(&json!({"kind":"close","position":1})),
             "Normal full-close authorization must remain unchanged");
-        for key in ["tp_stage_plan_id","tp_stage","expected_position_identifier","tp_target_price"]{
+        for key in ["tp_stage_plan_id","tp_stage","expected_position_identifier","tp_target_price","expected_position_entry","expected_broker_tp"]{
             let mut command=json!({"kind":"close","target":"demo","position":17,
                 "state":"dispatched"});
             command[key]=json!(if key=="tp_stage_plan_id" {"tp-plan-deadbeef"} else {"1"});
