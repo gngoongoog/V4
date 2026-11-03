@@ -75,8 +75,8 @@ fn candidate(row:&Value,t:&Telemetry,target:&str,now:u64,
             ||expected-lots<minimum-step*1e-6))
     {return None}
     if !fresh_quote.is_finite()||fresh_quote<=0.
-        ||(side=="BUY"&&(price<=entry+tick*.5||fresh_quote<price))
-        ||(side=="SELL"&&(price+tick*.5>=entry||fresh_quote>price))
+        ||(side=="BUY"&&(price<=entry+tick*0.5||fresh_quote<price))
+        ||(side=="SELL"&&(price+tick*0.5>=entry||fresh_quote>price))
         ||(stage==3&&!close(expected,lots,step))
     {return None}
     // The draft intentionally omits "id" and "state". Gateway cannot
