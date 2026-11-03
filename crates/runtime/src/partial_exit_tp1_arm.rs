@@ -175,6 +175,11 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,revision:u64,now:u64)->Res
         let ids=serde_json::from_str::<[String;3]>(&raw).ok();
         let good=ids.as_ref().is_some_and(ids_valid)&&ticket>0&&rev>0&&at>0
             &&ends>at&&ends<=at.saturating_add(ARM_MAX_MS);
+        let released:i64=db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM partial_exit_tp1_releases
+             WHERE context=?1 AND target=?2 AND position_identifier=?3
+               AND physical_ticket=?4 AND state='released_once')",
+            params![key,target,pid,ticket],|r|r.get(0)).unwrap_or(0);
         let active=good&&state=="armed_once"&&rev==revision&&now>=at&&now<ends
             &&ids.as_ref().is_some_and(|ids|eligible(
                 db,t,target,pid,ticket,&ids[0],revision,now).unwrap_or(false));
@@ -182,10 +187,12 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,revision:u64,now:u64)->Res
             "plan_ids":ids,"armed_ms":at,"expires_ms":ends,
             "state":if !good{"corrupt_execution_arm"}
                 else if state=="disarmed"{"disarmed"}
-                else if state=="consumed"{"consumed_wait_broker_reconciliation"}
+                else if state=="consumed"||released!=0{"consumed_wait_broker_reconciliation"}
                 else if !active{"inactive_or_expired_execution_arm"}
                 else{"execution_arm_valid_no_send_yet"},
-            "armed_active":active,"orders_enabled":false,"read_only":true})
+            "armed_active":active&&released==0,
+            "release_recorded":released!=0,
+            "orders_enabled":false,"read_only":true})
     }).collect::<Vec<_>>());
     Ok(value)
 }
