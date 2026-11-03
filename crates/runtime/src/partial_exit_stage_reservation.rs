@@ -58,6 +58,20 @@ fn equivalent_economic(saved:&Value,proposed:&Value)->bool{
 fn conflicting_close(db:&Connection,t:&Telemetry,target:&str,ctx:&str,
     pid:u64,stage:u64,physical_ticket:u64)->Result<bool>
 {
+    if stage==1 {
+        // Stage 1 cannot have any previously journaled close of this
+        // physical ticket. This cheap query also treats malformed legacy
+        // close payloads as conflicting, without demanding broker history.
+        let count:i64=db.query_row(
+            "SELECT COUNT(*) FROM broker_commands
+             WHERE context=?1 AND kind='close' AND CASE
+              WHEN NOT json_valid(payload) THEN 1
+              WHEN COALESCE(json_type(payload,'$.position'),'missing')!='integer' THEN 1
+              WHEN CAST(json_extract(payload,'$.position') AS INTEGER)=?2 THEN 1
+              ELSE 0 END=1",
+            params![ctx,physical_ticket],|r|r.get(0))?;
+        return Ok(count>0);
+    }
     let mut stmt=db.prepare(
         "SELECT id,state,payload FROM broker_commands
          WHERE context=?1 AND kind='close'")?;
