@@ -118,7 +118,8 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         let p=t.positions.iter().filter(|p|p.identifier==pid||p.ticket==ticket)
             .collect::<Vec<_>>();
         let tick=cap["tick_size"].as_f64().unwrap_or(f64::NAN);
-        let original_ok=cap["schema"]=="partial-exit-price-capture-v1"
+        let original_ok=crate::partial_exit_prices::capture_geometry_valid(&cap,&prices)
+            &&cap["schema"]=="partial-exit-price-capture-v1"
             &&cap["context"]==context&&cap["target"]=="demo"
             &&cap["position_identifier"].as_u64()==Some(pid)
             &&cap["ticket"].as_u64()==Some(ticket)
@@ -179,6 +180,9 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
             &&execution::brain_for_magic(magic).is_some()
             &&near(p[0].volume,remaining,step)
             &&near(p[0].price_open,cap["entry"].as_f64().unwrap_or(f64::NAN),tick)
+            // A changed original MT5 full-position TP cannot be treated as
+            // the same immutable research proposal, even if moved farther.
+            &&near(p[0].tp,cap["original_broker_tp"].as_f64().unwrap_or(f64::NAN),tick)
             &&levels[2].as_f64().is_some_and(|last|
                 last.is_finite()&&last>0.
                 &&(p[0].tp==0.||if cap["side"]=="BUY"{
@@ -443,6 +447,24 @@ mod tests {
             }
             assert_eq!(v["orders_enabled"],false);
         }
+    }
+    #[test]
+    fn moved_farther_broker_tp_or_tampered_prices_never_unlock_tp2_research(){
+        let (d,mut t)=tp2_fixture();
+        t.positions[0].tp=2050.;
+        assert_eq!(first(&d,&t,10350)["state"],
+            "residual_position_not_verified");
+        t.positions[0].tp=0.;
+        d.execute("UPDATE partial_exit_price_plans
+            SET prices_json='[2001,2001.5,2003]'",[]).unwrap();
+        assert_eq!(first(&d,&t,10350)["state"],
+            "original_identity_changed");
+        d.execute("UPDATE partial_exit_price_plans
+            SET prices_json='[2001,2002,2003]',
+                captured_json=json_remove(captured_json,'$.original_broker_tp')",
+            []).unwrap();
+        assert_eq!(first(&d,&t,10350)["state"],
+            "original_identity_changed");
     }
     #[test]
     fn tampered_historical_residual_never_unlocks_later_research_stage(){
