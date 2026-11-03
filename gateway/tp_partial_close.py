@@ -93,6 +93,15 @@ def stage_volume(cmd, account, mt5, position, info, tick=None, now_ms=None):
     bid = _number(getattr(tick, "bid", None), "Bid")
     ask = _number(getattr(tick, "ask", None), "Ask")
     stamp = getattr(tick, "time_msc", None)
+    source_stamp = cmd.get("price_source_quote_ms")
+    # The Core economic draft records the quote that established target
+    # crossing. A live broker re-read must be at least as recent; no replay
+    # against an older MT5 tick is valid. Legacy full closes omit this field.
+    if source_stamp is not None:
+        if (type(source_stamp) is not int or source_stamp <= 0
+                or source_stamp > now_ms + 2000
+                or type(stamp) is not int or stamp < source_stamp):
+            raise ValueError("TP stage broker quote predates the Core crossing source")
     max_age = cmd.get("max_quote_age_ms", 3000)
     if (min(bid,ask)<=0 or ask<bid or type(stamp) is not int or stamp<=0
             or type(max_age) is not int or not 1<=max_age<=3000
