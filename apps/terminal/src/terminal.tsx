@@ -181,6 +181,7 @@ export default function Terminal(){
  const [config,setConfig]=useState<Record<string,unknown>|null>(null);const [riskSnapshot,setRiskSnapshot]=useState<Record<string,unknown>|null>(null);
  const [configScope,setConfigScope]=useState<string|null>(null);const [riskScope,setRiskScope]=useState<string|null>(null);
  const [learning,setLearning]=useState<Record<string,unknown>|null>(null);const [brainReport,setBrainReport]=useState<Record<string,unknown>|null>(null);const [frozenSlot,setFrozenSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [portfolioReport,setPortfolioReport]=useState<Record<string,unknown>|null>(null);const [executionQuality,setExecutionQuality]=useState<Record<string,unknown>|null>(null);const [modeEvidence,setModeEvidence]=useState<Record<string,unknown>|null>(null);const [sniperAuditSlot,setSniperAuditSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [sniperFrozenSlot,setSniperFrozenSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [classicFrozenSlot,setClassicFrozenSlot]=useState<{scope:string;report:Record<string,unknown>|null}|null>(null);const [filter,setFilter]=useState<'all'|'buy'|'sell'>('all');const [opsTab,setOpsTab]=useState<'trade'|'orders'|'advanced'>('trade');
+ const [bindingSlot,setBindingSlot]=useState<{scope:string;data:Record<string,unknown>|null}|null>(null);
  const [clock,setClock]=useState('');const [lastStatusAt,setLastStatusAt]=useState<number|null>(null);const [liveLogin,setLiveLogin]=useState('');const [approval,setApproval]=useState<OperatorApproval|null>(null);
  const [snapshotApproval,setSnapshotApproval]=useState<{name:string;scope:string}|null>(null);
  const [snapshotStaged,setSnapshotStaged]=useState(false);
@@ -310,6 +311,27 @@ export default function Terminal(){
   void subscribe(update=>{if(!active)return;streamReported=true;setStatus(update.ok?update.status:null);setLastStatusAt(update.ok?Date.now():null);setOnline(update.ok);setError(update.ok?'':update.error||'Core غير متصل')}).catch(e=>{if(active){setStatus(null);setOnline(false);setError(String(e))}});
   return()=>{active=false};
  },[]);
+ // A small authoritative binding read for the global account buttons.
+ // The full portfolio/Deal report is expensive and only loaded on its pages.
+ useEffect(()=>{
+  if(preview||!hasTauri()){setBindingSlot(null);return;}
+  let active=true;
+  const load=()=>{
+   const ticket=scopedGeneration.current.beginRead('account-binding');
+   void readPanel('/v1/execution/binding').then(data=>{
+    if(active&&scopedGeneration.current.isCurrent(ticket))
+     setBindingSlot({scope:contextKey,data:unwrap(data)});
+   }).catch(()=>{
+    if(active&&scopedGeneration.current.isCurrent(ticket))
+     setBindingSlot({scope:contextKey,data:null});
+   });
+  };
+  load();
+  const timer=window.setInterval(()=>{
+   if(document.visibilityState==='visible')load();
+  },8000);
+  return()=>{active=false;window.clearInterval(timer)};
+ },[contextKey,preview]);
  useEffect(()=>{
   if(!hasTauri())return;
   let active=true;
