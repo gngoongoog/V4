@@ -180,11 +180,13 @@ pub fn set(db:&Connection,t:&Telemetry,target:&str,pid:u64,
     ensure!(pid>0&&revision>0&&now>0&&plan_ids_valid(ids),
         "هوية خطة TP أو مراجعة الحساب غير صالحة");
     let key=context(t);
-    let old:Option<(u64,String,u64,i64,String)>=db.query_row(
-        "SELECT position_ticket,plan_ids,approved_revision,enabled,purpose
+    let old:Option<(u64,String,u64,u64,i64,String)>=db.query_row(
+        "SELECT position_ticket,plan_ids,approved_revision,approved_ms,enabled,purpose
          FROM partial_exit_stage_consents
          WHERE context=?1 AND target=?2 AND position_identifier=?3",
-        params![key,target,pid],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))
+        params![key,target,pid],|r|Ok((
+            r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?
+        ))
     ).optional()?;
     if enabled {
         ensure!(t.quote_is_fresh(now,3_000),"يجب توفر اقتباس MT5 حديث عند اعتماد خطة TP");
@@ -201,8 +203,16 @@ pub fn set(db:&Connection,t:&Telemetry,target:&str,pid:u64,
                 &&row["state"]=="price_levels_saved_no_execution"
                 &&row["plan_ids"]==json!(ids)));
         ensure!(eligible,"أسعار وخطط TP لا تطابق المركز الحالي أو أصبحت غير موثوقة");
+        // A valid price proposal alone is insufficient: the three stage
+        // volumes and the physically present MT5 position must still match.
+        // When re-enabling an existing approval, validate its ORIGINAL
+        // approved_ms, never substitute today's timestamp to revive an old
+        // consent after a plan was replaced.
+        let consent_time=old.as_ref().map(|x|x.3).unwrap_or(now);
+        ensure!(current_lineage(db,t,target,&key,pid,p.ticket,ids,consent_time),
+            "موافقة TP لم تعد تطابق أحجام المراحل أو هوية المركز أو خطة الأسعار");
         // Old consent is immutable for ticket, plan and Core revision.
-        if let Some((old_ticket,old_ids,old_revision,_,purpose))=&old {
+        if let Some((old_ticket,old_ids,old_revision,_,_,purpose))=&old {
             ensure!(purpose=="preparation_only"&&*old_ticket==p.ticket&&*old_revision==revision
                 &&serde_json::from_str::<Value>(old_ids).ok()==Some(json!(ids)),
                 "موافقة TP قديمة تختلف عن الهوية الحالية؛ لا تعيد تفعيلها تلقائياً");
@@ -217,7 +227,7 @@ pub fn set(db:&Connection,t:&Telemetry,target:&str,pid:u64,
                 params![key,target,pid,p.ticket,json!(ids).to_string(),revision,now])?;
         }
     }else{
-        let (old_ticket,old_ids,_,_,purpose)=old.context("لا توجد خطة TP معتمدة لتعطيلها")?;
+        let (old_ticket,old_ids,_,_,_,purpose)=old.context("لا توجد خطة TP معتمدة لتعطيلها")?;
         ensure!(purpose=="preparation_only"&&old_ticket>0&&serde_json::from_str::<Value>(&old_ids).ok()==Some(json!(ids)),
             "معرّف الخطة تغيّر؛ لا يمكن تعديل موافقة مختلفة");
         db.execute("UPDATE partial_exit_stage_consents SET enabled=0
@@ -296,6 +306,18 @@ mod tests{
             price_open:2000.,tp:0.,..Default::default()});
         db.execute("UPDATE partial_exit_stage_plans
             SET planned_volume=0.04 WHERE stage=1",[]).unwrap();
+        assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["operator_approved"],false);
+        t.quote_time_ms=Some(1500);
+        t.source_quote_time_ms=Some(1500);
+        t.tick_age_ms=Some(0);
+        t.bid=Some(2001.2);
+        t.ask=Some(2001.4);
+        assert!(set(&db,&t,"demo",907,&ids,true,5,1550).is_err(),
+            "An existing immutable operator consent cannot be revived if TP lots change");
+        assert_eq!(db.query_row(
+            "SELECT enabled FROM partial_exit_stage_consents WHERE position_identifier=907",
+            [],|r|r.get::<_,i64>(0)).unwrap(),1);
+        // The old approved flag remains historical; readback is inactive.
         assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["operator_approved"],false);
         db.execute("UPDATE partial_exit_stage_plans
             SET planned_volume=0.05 WHERE stage=1",[]).unwrap();
