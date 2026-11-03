@@ -614,7 +614,13 @@ class BrokerExecutor:
             if cmd['kind'] == 'open':
                 valid_entries = (open_entry,)
             elif cmd['kind'] == 'close':
-                valid_entries = close_entries
+                # A TP stage is sent as a regular DEAL close of one exact
+                # position. DEAL_ENTRY_OUT_BY denotes a separate close-by
+                # operation against an opposite ticket; it cannot be proof
+                # that this staged market-close command executed.
+                valid_entries = ((getattr(mt5, 'DEAL_ENTRY_OUT', 1),)
+                                 if cmd.get('tp_stage_plan_id') is not None
+                                 else close_entries)
             else:
                 return dict(result, reason='Unknown broker intent kind; reconciliation pending')
             if any(entry not in valid_entries for entry in entries):
