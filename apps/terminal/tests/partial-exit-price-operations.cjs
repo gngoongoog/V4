@@ -135,7 +135,7 @@ assert(!textOf(consentTree).includes('تم تنفيذ TP'),
 const approvedConsent={...eligibleSaved,partial_exit_stage_consent:{
  ...eligibleSaved.partial_exit_stage_consent,
  rows:[{position_identifier:907,position_ticket:87,
-   plan_ids:stages.map(x=>x.plan_id),read_only:true,
+   plan_ids:stages.map(x=>x.plan_id),purpose:'preparation_only',read_only:true,
    orders_enabled:false,broker_command_id:null,
    operator_approved:true,state:'operator_approved_not_dispatched'}]}};
 assert(textOf(render({...opts,source:approvedConsent})).includes('إلغاء الموافقة المحفوظة'));
