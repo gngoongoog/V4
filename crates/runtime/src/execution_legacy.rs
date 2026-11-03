@@ -2665,6 +2665,7 @@ mod tp_stage_core_authorization_gate_tests {
     fn held_tp1_outbox_row_is_invisible_to_gateway_and_never_authorized(){
         let db=Connection::open_in_memory().unwrap();
         let mut svc=Service::new(&db).unwrap();
+        crate::partial_exit_tp1_held::init(&db).unwrap();
         let t=demo();svc.bind(&db,&t,100).unwrap();
         let key=ctx(&t);
         let p=json!({"id":"tp1-held-command","schema":"tp-stage-broker-command-shape-v1",
@@ -2689,8 +2690,29 @@ mod tp_stage_core_authorization_gate_tests {
             [],|r|r.get::<_,String>(0)).unwrap(),"stage_held");
         assert!(!svc.pending(&db).unwrap(),
             "Held but never issued research does not block normal reconciliation");
-        db.execute("UPDATE broker_commands SET state='queued'
-            WHERE id='tp1-held-command'",[]).unwrap();
+        // A damaged broker_commands payload could erase *all* TP markers
+        // and falsely resemble a normal full-close. The immutable outbox ID
+        // must still quarantine the row before Gateway can execute it.
+        db.execute(
+            "INSERT INTO partial_exit_tp1_held(
+              context,target,position_identifier,physical_ticket,plan_id,
+              command_id,created_ms,immutable_command,state)
+             VALUES(?1,'demo',907,87,?2,'tp1-held-command',110,?3,
+                    'held_never_dispatched')",
+            params![key,p["tp_stage_plan_id"].as_str().unwrap(),p.to_string()]
+        ).unwrap();
+        let mut stripped=p.clone();
+        for name in ["schema","tp_stage_plan_id","tp_stage",
+                     "expected_position_identifier"] {
+            stripped.as_object_mut().unwrap().remove(name);
+        }
+        db.execute(
+            "UPDATE broker_commands SET state='queued',payload=?1
+             WHERE id='tp1-held-command'",
+            [stripped.to_string()]
+        ).unwrap();
+        assert!(crate::partial_exit_tp1_release::stage_id_exists(
+            &db,"tp1-held-command"));
         let get=svc.route("GET","/v1/execution/gateway",b"",&db,&status,202).unwrap();
         assert!(get["command"].is_null(),
             "Even corrupt manual promotion is quarantined before Gateway reads");
