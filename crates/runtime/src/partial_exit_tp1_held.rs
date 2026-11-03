@@ -296,6 +296,42 @@ mod tests{
             |r|r.get::<_,i64>(0)).unwrap(),1);
     }
     #[test]
+    fn sqlite_fault_rolls_back_both_held_broker_command_and_stage_claim(){
+        let db=Connection::open_in_memory().unwrap();setup(&db);
+        db.execute_batch(
+            "CREATE TRIGGER fail_after_core_command BEFORE INSERT
+             ON partial_exit_tp1_held BEGIN
+             SELECT RAISE(ABORT,'injected durable claim failure');
+             END;"
+        ).unwrap();
+        let c=candidate();let plan=c["tp_stage_plan_id"].as_str().unwrap();
+        assert!(claim(&db,"ctx","demo",907,87,plan,&c,1550).is_err());
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_commands",[],
+            |r|r.get::<_,i64>(0)).unwrap(),0,
+            "A failed claim must not strand a publishable Core command");
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM partial_exit_tp1_held",[],
+            |r|r.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM events",[],
+            |r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+    #[test]
+    fn preparation_without_separate_trade_opt_in_never_creates_a_broker_row(){
+        let db=Connection::open_in_memory().unwrap();setup(&db);
+        crate::partial_exit_trade_approval::init(&db).unwrap();
+        let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            margin_mode:Some(2),login:17,server:"D".into(),currency:"USD".into(),
+            symbol:"XAUUSD".into(),quote_time_ms:Some(1550),
+            source_quote_time_ms:Some(1500),tick_age_ms:Some(0),
+            ..Default::default()};
+        let prepared=prepare(&db,&t,"demo",1550,5,20,true).unwrap();
+        assert_eq!(prepared["held"],0);
+        assert_eq!(prepared["gateway_sends"],0);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_commands",[],
+            |r|r.get::<_,i64>(0)).unwrap(),0);
+        let wrong=prepare(&db,&t,"live",1550,5,20,true).unwrap();
+        assert_eq!(wrong["held"],0);
+    }
+    #[test]
     fn tampered_or_old_unknown_close_blocks_tp1_claim(){
         let db=Connection::open_in_memory().unwrap();setup(&db);
         let c=candidate();let plan=c["tp_stage_plan_id"].as_str().unwrap();
