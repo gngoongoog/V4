@@ -185,7 +185,7 @@ pub fn seal_tp1(db:&Connection,t:&Telemetry,target:&str,now:u64,
 }
 /// Historical seal is visible but NEVER an effective broker instruction.
 /// Price-crossing age expires independently of the immutable audit record.
-pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value> {
+pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64,revision:u64)->Result<Value> {
     let mut result=json!({"schema":"tp-stage-sealed-core-intents-v1",
         "status":"unverified_account","rows":[],"read_only":true,
         "orders_enabled":false,"broker_commands_created":0});
@@ -213,13 +213,36 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value> {
             &&parsed["position"].as_u64()==Some(ticket)
             &&parsed["created_ms"].as_u64()==Some(at)
             &&parsed.get("id").is_none();
-        let recent=intact&&now>=at&&now.saturating_sub(at)<=3_000;
+        // A sealed command is never currently meaningful if its original
+        // position vanished, account settings revision changed or today's
+        // MT5 quote is stale. The audit row survives but cannot be rearmed.
+        let positions=t.positions.iter().filter(|p|
+            p.identifier==pid||p.ticket==ticket).collect::<Vec<_>>();
+        let position_current=positions.len()==1&&{
+            let p=positions[0];
+            let step=t.volume_step.unwrap_or(f64::NAN);
+            let tick=t.tick_size.unwrap_or(f64::NAN);
+            p.identifier==pid&&p.ticket==ticket&&p.symbol==t.symbol
+                &&parsed["magic"].as_u64()==Some(p.magic)
+                &&parsed["expected_position_side"]==p.side
+                &&step.is_finite()&&step>0.&&tick.is_finite()&&tick>0.
+                &&parsed["expected_position_volume"].as_f64().is_some_and(|v|
+                    v.is_finite()&&(v-p.volume).abs()<=step*1e-6)
+                &&parsed["expected_position_entry"].as_f64().is_some_and(|v|
+                    v.is_finite()&&(v-p.price_open).abs()<=tick*1e-6)
+                &&parsed["expected_broker_tp"].as_f64().is_some_and(|v|
+                    v.is_finite()&&(v-p.tp).abs()<=tick*1e-6)
+        };
+        let recent=intact&&revision>0&&parsed["revision"].as_u64()==Some(revision)
+            &&position_current&&t.quote_is_fresh(now,3_000)
+            &&now>=at&&now.saturating_sub(at)<=3_000;
         json!({"position_identifier":pid,"stage":1,"plan_id":plan,
             "physical_ticket":ticket,"core_sealed_id":id,"sealed_ms":at,
             "state":if !intact{"corrupted_seal_needs_review"}
                 else if recent{"sealed_unarmed_not_dispatched"}
                 else{"historical_seal_expired_no_send"},
-            "orders_enabled":false,"broker_command_id":Value::Null,
+            "orders_enabled":false,"trade_approval":false,
+            "broker_command_id":Value::Null,
             "gateway_send_id":Value::Null,"broker_order_ticket":Value::Null,
             "read_only":true})
     }).collect::<Vec<_>>();
@@ -265,6 +288,61 @@ mod tests {
             |r|r.get::<_,i64>(0)).unwrap(),1);
     }
     #[test]
+    fn readback_revocation_missing_position_and_expiry_never_imply_send(){
+        use braintrade_domain::Position;
+        let db=Connection::open_in_memory().unwrap();setup(&db);
+        let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            login:17,server:"DemoA".into(),symbol:"XAUUSD".into(),
+            currency:"USD".into(),margin_mode:Some(2),volume_step:Some(0.01),
+            tick_size:Some(0.01),quote_time_ms:Some(1550),
+            source_quote_time_ms:Some(1500),tick_age_ms:Some(0),
+            positions:vec![Position{identifier:907,ticket:87,magic:410601,
+                symbol:"XAUUSD".into(),side:"BUY".into(),volume:0.1,
+                price_open:1999.5,tp:0.0,..Default::default()}],
+            ..Default::default()};
+        let key=account_key(&t);
+        let mut c=candidate();
+        c["context"]=json!(key);c["login"]=json!(17);
+        c["revision"]=json!(5);c["magic"]=json!(410601);
+        c["expected_position_side"]=json!("BUY");
+        c["expected_position_entry"]=json!(1999.5);
+        c["expected_broker_tp"]=json!(0.0);
+        let plan=c["tp_stage_plan_id"].as_str().unwrap();
+        assert_eq!(seal_verified(&db,&key,"demo",907,plan,87,&c,1550).unwrap(),"sealed");
+        let fresh=report(&db,&t,"demo",1550,5).unwrap();
+        assert_eq!(fresh["rows"][0]["state"],"sealed_unarmed_not_dispatched");
+        assert_eq!(fresh["rows"][0]["broker_command_id"],Value::Null);
+        assert_eq!(fresh["rows"][0]["trade_approval"],false);
+        let wrong_revision=report(&db,&t,"demo",1550,6).unwrap();
+        assert_eq!(wrong_revision["rows"][0]["state"],"historical_seal_expired_no_send");
+        let mut missing=t.clone();missing.positions.clear();
+        assert_eq!(report(&db,&missing,"demo",1550,5).unwrap()["rows"][0]["state"],
+            "historical_seal_expired_no_send");
+        assert_eq!(report(&db,&t,"demo",10_000,5).unwrap()["rows"][0]["state"],
+            "historical_seal_expired_no_send");
+        let mut foreign=t.clone();foreign.login+=1;
+        assert!(report(&db,&foreign,"demo",1550,5).unwrap()["rows"].as_array().unwrap().is_empty());
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_commands",[],
+            |r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+    #[test]
+    fn no_implicit_stage_sealing_without_preparatory_consent(){
+        let db=Connection::open_in_memory().unwrap();setup(&db);
+        crate::partial_exit_stage_consent::init(&db).unwrap();
+        let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            margin_mode:Some(2),login:17,server:"DemoA".into(),
+            currency:"USD".into(),symbol:"XAUUSD".into(),
+            source_quote_time_ms:Some(1500),quote_time_ms:Some(1550),
+            tick_age_ms:Some(0),..Default::default()};
+        let reply=seal_tp1(&db,&t,"demo",1550,5,20,true).unwrap();
+        assert_eq!(reply["sealed"],0);
+        assert_eq!(reply["orders_enabled"],false);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM partial_exit_sealed_core_intents",[],
+            |r|r.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_commands",[],
+            |r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+    #[test]
     fn foreign_collision_and_broker_close_prevent_stage_identity(){
         let db=Connection::open_in_memory().unwrap();setup(&db);
         let c=candidate();let plan=c["tp_stage_plan_id"].as_str().unwrap();
@@ -296,8 +374,8 @@ mod tests {
             let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
                 login:17,server:"Server".into(),symbol:"XAUUSD".into(),
                 currency:"USD".into(),..Default::default()};
-            assert_eq!(report(&db,&t,"live",10_000).unwrap()["status"],"unverified_account");
-            assert!(report(&db,&t,"demo",10_000).unwrap()["rows"].as_array().unwrap().is_empty());
+            assert_eq!(report(&db,&t,"live",10_000,5).unwrap()["status"],"unverified_account");
+            assert!(report(&db,&t,"demo",10_000,5).unwrap()["rows"].as_array().unwrap().is_empty());
         }
         let _=std::fs::remove_file(path);
     }
