@@ -305,7 +305,7 @@ mod tests{
             "lots":quantity,"created_ms":150+stage as u64,
             "expected_position_identifier":907,
             "expected_position_volume":expected,"expected_position_side":"BUY",
-            "tp_target_price":[2000.3,2000.6,2000.9][(stage-1) as usize],
+            "tp_target_price":([2000.3,2000.6,2000.9][(stage-1) as usize]),
             "expected_position_entry":1999.5,"expected_broker_tp":0.0});
         let receipt=json!({"state":"filled","recovered_from_history":true,
             "volume":quantity,"position_id":907,"order":order,
