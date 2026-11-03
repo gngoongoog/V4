@@ -613,10 +613,10 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         Ok(())
     }
     fn bind_with_settings(&mut self, db: &Connection, t: &Telemetry, now: u64, mut candidate: Settings) -> Result<()> {
-        if !t.connected
-            || t.account_trade_mode != Some(if candidate.target == "demo" { 0 } else { 2 })
+        if !t.connected || !matches!((candidate.target.as_str(),t.demo,t.account_trade_mode),
+            ("demo",true,Some(0))|("live",false,Some(2)))
         {
-            bail!("نوع الحساب لا يطابق هدف التنفيذ المختار؛ Demo يحتاج حساب MT5 تجريبي");
+            bail!("نوع حساب MT5 المتصل لا يطابق اختيار Demo/Live المحفوظ");
         }
         candidate.login = t.login;
         candidate.server = t.server.clone();
