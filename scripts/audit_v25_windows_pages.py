@@ -93,7 +93,7 @@ def check(root:Path=ROOT)->dict:
         and "readPanel(route)" in terminal,
         "Browser communicates via scoped Tauri IPC, not Core HTTP or token files")
     add("all_frontend_actions_registered_in_tauri",
-        declared_commands.issubset(set(re.findall(r"\b([a-z_]+)\b",registered)))
+        declared_commands.issubset(set(re.findall(r"\b([a-z0-9_]+)\b",registered)))
         and set(APPROVED_COMMANDS).issuperset(declared_commands),
         "Every Tauri UI invoke has a registered handler and is in the bounded command inventory")
     return {
