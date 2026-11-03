@@ -528,7 +528,8 @@ mod tests {
         let mut foreign=t.clone();foreign.login+=1;
         assert!(report(&d,&foreign,"demo",10350).unwrap()["rows"].as_array().unwrap().is_empty());
         foreign=t.clone();foreign.demo=false;foreign.account_trade_mode=Some(2);
-        assert_eq!(report(&d,&foreign,"live",10350).unwrap()["status"],
-            "unverified_demo_hedging");
+        let selected=report(&d,&foreign,"live",10350).unwrap();
+        assert_eq!(selected["status"],"no_broker_verified_previous_stage");
+        assert!(selected["rows"].as_array().unwrap().is_empty());
     }
 }
