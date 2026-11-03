@@ -1227,12 +1227,24 @@ export default function Terminal(){
   const mutation=beginWrite('broker-binding');if(!mutation)return;
   const serial=panelSerial();
   try{
-   await bindExecution(target,deviationPoints,confirmLiveLogin);
+   const committed=unwrap(await bindExecution(target,deviationPoints,confirmLiveLogin));
    if(!writeFresh(mutation))return;
-   const refreshed=await readPanel('/v1/execution');
+   if(committed.ok!==true||unwrap(committed.settings).target!==target)
+    throw new Error('لم يؤكد Rust Core اختيار نوع الحساب المطلوب');
+   const refreshed=unwrap(await readPanel('/v1/execution'));
    if(!writeFresh(mutation))return;
+   const settings=unwrap(refreshed.settings);
+   const current=status?.telemetry;
+   const identity=current?JSON.stringify([current.server,current.login,current.symbol,current.currency]):'';
+   if(!current||refreshed.account_matches!==true||refreshed.context!==identity||
+      settings.target!==target||settings.login!==current.login||
+      settings.server!==current.server||settings.currency!==current.currency)
+    throw new Error('Core لم يرجع ربطاً مطابقاً لجلسة MT5 الحالية؛ أعد التحقق قبل START');
    scopedGeneration.current.invalidate('brains');setBrainReport(null);
-   publishPanel(serial,refreshed);
+   setPortfolioReport(refreshed);
+   // A global account button can bind while a different page is open.
+   // Never inject /v1/execution data into a dashboard/analysis panel.
+   if(page==='execution')publishPanel(serial,refreshed);
    void refreshBrainEvidence();
    sendNotice('تم التحقق من حساب '+target.toUpperCase()+' وربط التنفيذ بواسطة Core؛ الربط وحده لا يفتح صفقة');
   }catch(e){if(writeFresh(mutation))sendNotice('فشل ربط حساب التنفيذ: '+String(e),true)}
