@@ -164,7 +164,7 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
                context,target,position_identifier,plan_id,ticket,magic,
                lot_volume,full_position_volume,lot_step,target_price,
                source_quote_ms,captured_ms,payload)
-             VALUES(?1,'demo',?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+             VALUES(?1,'demo',?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
             params![key,pid,plan,ticket,magic,lots,original,step,level,source,
                 now,candidate.to_string()])?;
     }
