@@ -71,8 +71,9 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
             &&p.magic==capture["magic"].as_u64().unwrap_or(0)
             &&p.symbol==t.symbol&&capture["side"]==p.side).count();
         if matches!=1 {continue}
-        let Some(price)=if capture["side"]=="BUY"{t.bid}else{t.ask}
-            .filter(|v|v.is_finite()&&*v>0.)else{continue};
+        let broker_price=if capture["side"]=="BUY"{t.bid}else{t.ask};
+        let Some(price)=broker_price.filter(|v|v.is_finite()&&*v>0.)
+            else{continue};
         if (capture["side"]=="BUY"&&price<target_price)||
             (capture["side"]=="SELL"&&price>target_price){continue}
         // Never retain a TP1 "intent" if there is ANY already submitted
