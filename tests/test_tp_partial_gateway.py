@@ -13,7 +13,7 @@ from types import SimpleNamespace as N
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/"gateway"))
-from execution import BrokerExecutor, is_fast_path
+from execution import BrokerExecutor, is_fast_path, clock_ms
 from test_broker_execution import Broker, command
 from tp_partial_close import stage_volume
 
@@ -91,6 +91,8 @@ class StageDemoTests(unittest.TestCase):
         self.assertEqual(claim,(first_id,))
     def test_stage_claim_persists_after_gateway_restarts(self):
         self.assertEqual(self.send()["state"],"placed")
+        self.history_fill()
+        self.assertEqual(self.send()["state"],"filled")
         first_id=self.cmd["id"]
         self.ex.close()
         self.ex=BrokerExecutor(Path(self.tmp.name)/"gateway.sqlite")
@@ -133,7 +135,17 @@ class StageDemoTests(unittest.TestCase):
         self.assertAlmostEqual(self.mt.sends[0]["volume"],0.03)
         self.p.volume=0.02
         self.cmd=stage_command(stage=3,held=0.02,lots=0.02)
-        self.assertEqual(self.send()["state"],"placed")
+        blocked=self.send()
+        self.assertEqual(blocked["state"],"cancelled",blocked)
+        self.assertEqual(len(self.mt.sends),1,
+                         "Unsettled TP2 must prevent TP3")
+        # A separate journal represents an already-reconciled TP2 in this
+        # geometry-only test; the blocked command itself remains cancelled.
+        self.ex.close()
+        self.ex=BrokerExecutor(Path(self.tmp.name)/"stage3-settled.sqlite")
+        self.cmd["id"]="tp3-after-settlement-"+"f"*18
+        result=self.send()
+        self.assertEqual(result["state"],"placed",result)
         self.assertAlmostEqual(self.mt.sends[1]["volume"],0.02)
     def test_late_broker_volume_change_denies_send_even_after_first_authorization(self):
         self.mt.on_check=lambda:setattr(self.p,"volume",0.08)
