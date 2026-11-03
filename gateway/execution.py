@@ -536,14 +536,12 @@ class BrokerExecutor:
         # history, matching ownership and the *entire* volume remaining proves
         # that cancellation/expiry completed without a fill.
         if not matches and not pending and acknowledged_order > 0:
-            # A DONE acknowledgement containing a positive Deal ticket cannot
-            # be silently rewritten as zero-fill cancellation while MT5's
-            # deal history is still catching up, even if terminal order
-            # history appears to claim the entire volume was unfilled.
-            # Keep the claim unresolved; never resend or fabricate a TP loss.
+            # Even DONE/DONE_PARTIAL with deal=0 means broker acknowledges
+            # an attempted fill: zero-fill cancellation is contradictory
+            # until the exact Deal history becomes reliable. Do not silently
+            # turn an ambiguous TP stage into a terminal cancellation.
             if (cmd.get('tp_stage_plan_id') is not None
-                    and result.get('retcode') in (10009,10010)
-                    and type(result.get('deal')) is int and result['deal']>0):
+                    and result.get('retcode') in (10009,10010)):
                 return dict(result,reason='TP DONE acknowledgement conflicts with absent Deal history; no cancel/no resend until exact broker reconciliation')
             submitted = result.get('request') or cmd.get('broker_request') or {}
             try:
