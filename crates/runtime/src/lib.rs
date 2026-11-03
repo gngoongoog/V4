@@ -60,6 +60,7 @@ mod partial_exit_stage_producer;
 mod partial_exit_stage_reservation;
 mod partial_exit_stage_outbox;
 mod partial_exit_stage_consent;
+mod partial_exit_trade_approval;
 mod partial_exit_account_schema;
 mod pending_cancellation;
 mod learning_inference;
