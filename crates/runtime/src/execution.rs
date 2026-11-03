@@ -1039,7 +1039,8 @@ impl Service {
             if status.gateway_fresh&&self.account_matches(status){
                 if let Some(t)=status.telemetry.as_ref(){
                     return crate::partial_exit_stage_outbox::report(
-                        db,t,&self.inner.settings.target,now);
+                        db,t,&self.inner.settings.target,now,
+                        self.inner.settings.revision);
                 }
             }
             return Ok(json!({"schema":"tp-stage-sealed-core-intents-v1",
@@ -1789,7 +1790,8 @@ impl Service {
             value["partial_exit_stage_sealed_core"]=if status.gateway_fresh && self.account_matches(status) {
                 status.telemetry.as_ref().map(|t|
                     crate::partial_exit_stage_outbox::report(
-                        db,t,&self.inner.settings.target,now)
+                        db,t,&self.inner.settings.target,now,
+                        self.inner.settings.revision)
                         .unwrap_or_else(|error|json!({"error":error.to_string()})))
                     .unwrap_or(Value::Null)
             } else {Value::Null};
