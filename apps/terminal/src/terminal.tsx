@@ -1250,6 +1250,49 @@ export default function Terminal(){
   }catch(e){if(writeFresh(mutation))sendNotice('فشل ربط حساب التنفيذ: '+String(e),true)}
   finally{finishWrite(mutation)}
  };
+ // The operator chooses the target account. This binds the already logged-in
+ // MT5 terminal, not an invisible MT5 account login or a trading START.
+ const quickSelectAccount=(target:'demo'|'live')=>{
+  const t=status?.telemetry;
+  if(preview||busy||!hasTauri()||!feed.broker||!status?.gateway_fresh||
+     !t?.connected||!t.login||!t.server){
+   sendNotice('اربط MT5 وانتظر تأكيد حساب الوسيط قبل اختيار حساب التنفيذ',true);
+   open('execution');return;
+  }
+  if(status.requested_run){
+   sendNotice('اضغط STOP أولاً لتغيير الحساب؛ لا يتم التحويل أثناء فتح صفقات جديدة',true);return;
+  }
+  if(t.demo!==(target==='demo')||t.account_trade_mode!==(target==='demo'?0:2)){
+   sendNotice('الحساب المفتوح حالياً في MT5 هو '+(t.demo?'Demo':'Live')+
+    '. سجّل دخول حساب '+(target==='demo'?'Demo':'Live')+
+    ' في MT5 أولاً، ثم ارجع لربط التنفيذ. لا يمكن تبديل تسجيل الدخول من هذه الأزرار.',true);
+   open('execution');return;
+  }
+  const saved=unwrap(unwrap(portfolioReport).settings);
+  const rawPoints=Number(saved.deviation_points);
+  const deviationPoints=Number.isInteger(rawPoints)&&rawPoints>=0&&rawPoints<=100000?rawPoints:20;
+  let confirmLiveLogin='';
+  if(target==='live'){
+   const typed=window.prompt('تأكيد ربط حساب Live الحالي: اكتب رقم حساب MT5 المعروض '+t.login);
+   if(typed===null)return;
+   confirmLiveLogin=typed.trim();
+   if(confirmLiveLogin!==String(t.login)){
+    sendNotice('رقم الحساب الحقيقي غير مطابق؛ لم يتغير ربط التنفيذ',true);return;
+   }
+  }
+  if(!window.confirm('ربط تنفيذ النظام بحساب '+(target==='live'?'LIVE':'DEMO')+
+     ' رقم '+t.login+' على '+t.server+'؟\\nهذا لا يفتح صفقة ولا يشغّل START. ويُرفض إذا كانت هناك أوامر غير مُسوّاة أو مراكز مملوكة مفتوحة.'))return;
+  void runBrokerBind(target,deviationPoints,confirmLiveLogin);
+ };
+ const bindingSnapshot=unwrap(portfolioReport);
+ const bindingSettings=unwrap(bindingSnapshot.settings);
+ const boundTarget=bindingSettings.target==='live'?'live':bindingSettings.target==='demo'?'demo':null;
+ const verifiedBinding=!!account&&feed.broker&&bindingSnapshot.account_matches===true&&
+   bindingSnapshot.context===JSON.stringify([account.server,account.login,account.symbol,account.currency])&&
+   bindingSettings.login===account.login&&bindingSettings.server===account.server&&
+   bindingSettings.currency===account.currency&&
+   ((boundTarget==='demo'&&account.demo===true&&account.account_trade_mode===0)||
+    (boundTarget==='live'&&account.demo===false&&account.account_trade_mode===2));
  const health=buildHealth(status,online,preview,Boolean(safeConfig?.risk)&&Boolean(safeRiskSnapshot),lastStatusAt,Date.now());
  const pageMeta=findPage(page),PageIcon=pageMeta.icon;
  const rows=useMemo(()=>flattenRows(pageData),[pageData]);
@@ -1287,7 +1330,16 @@ export default function Terminal(){
    <header className="account-strip">
     <div className="account-item broker-select"><label>Broker</label><button className="select-look" onClick={()=>open('settings')}><span className="broker-mark">MT5</span><strong>{feed.broker?'Connected broker':'Not verified'}</strong><span>⌄</span></button></div>
     <div className="account-item server-select"><label>Server</label><button className="select-look" onClick={()=>open('execution')}><strong>{account?.server||'—'}</strong><span>⌄</span></button></div>
-    <div className="account-item account-switch"><label>Account · MT5</label><div className="switch-buttons"><span aria-label="حساب الوسيط المتصل فعلياً">{account?(account.demo?'DEMO متصل':'REAL متصل'):'غير متصل'}</span><button type="button" title="فتح إعدادات الربط، وليس تبديل حساب MT5 مباشرة" onClick={()=>open('execution')}>إدارة الربط ↗</button></div></div>
+    <div className="account-item account-switch"><label>حساب التنفيذ · MT5</label>
+      <div className="switch-buttons" role="group" aria-label="اختيار حساب التداول في Rust Core">
+       <span aria-label="حساب الوسيط الفعلي">MT5: {account?(account.demo?'Demo':'Live'):'غير متصل'} · Core: {verifiedBinding?boundTarget?.toUpperCase():'غير مربوط'}</span>
+       <button type="button" aria-label="اختيار الحساب التجريبي" aria-pressed={verifiedBinding&&boundTarget==='demo'}
+        disabled={busy||preview||!hasTauri()} onClick={()=>quickSelectAccount('demo')}>Demo</button>
+       <button type="button" aria-label="اختيار الحساب الحقيقي" aria-pressed={verifiedBinding&&boundTarget==='live'}
+        disabled={busy||preview||!hasTauri()} onClick={()=>quickSelectAccount('live')}>Live</button>
+       <button type="button" title="إعدادات ربط MT5 التفصيلية" onClick={()=>open('execution')}>تفاصيل الربط</button>
+      </div>
+     </div>
     {[['Equity',money(accountStats?.equity,currency)],['Balance',money(accountStats?.balance,currency)],['Margin',money(accountStats?.margin,currency)],['Free Margin',money(accountStats?.margin_free,currency)],['Daily P&L',signed(accountStats?.today_net,currency)],['Quote Age',preview?'—':feed.quote?num(feed.quoteAgeMs,0)+' ms':'—']].map(([label,value])=><div key={label} className={'top-stat '+(label==='Daily P&L'?'daily':'')}><label>{label}</label><b>{value}</b></div>)}
     <button className="connection-pill" onClick={()=>{if((status?.requested_run||positions.length>0)&&!window.confirm('ستتم إعادة تشغيل جسر MT5. لن تُغلق الصفقات المفتوحة، لكن إدارة خروجها قد تتأخر أثناء الاتصال. تابع فقط عند الضرورة.'))return;void runCommand('reconnect')}} disabled={busy||preview}><span className={'pulse-dot '+(accountFresh?'online':'')}></span><span>{preview?'معاينة':accountFresh?'متصل':'غير متصل'}</span><RefreshCw size={16}/></button>
    </header>
