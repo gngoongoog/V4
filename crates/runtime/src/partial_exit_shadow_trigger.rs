@@ -63,7 +63,10 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
         let Ok(capture)=serde_json::from_str::<Value>(&raw)else{continue};
         let saved_quote=capture["broker_quote_ms"].as_u64().unwrap_or(0);
         let saved_ms=capture["saved_ms"].as_u64().unwrap_or(0);
-        if saved_quote==0||source<=saved_quote||now<=saved_ms
+        // A broker quote received after saving may still have been
+        // generated BEFORE the user saved the immutable price plan.
+        // Compare event provenance with the save time, not receipt order.
+        if saved_quote==0||source<=saved_quote||source<=saved_ms||now<=saved_ms
            ||capture["orders_enabled"]!=false
            ||capture["breakeven_enabled"]!=false
            ||capture["side"]!="BUY"&&capture["side"]!="SELL"{continue}
@@ -223,7 +226,7 @@ mod tests {
     #[test]
     fn no_quote_provenance_unchanged_timestamp_or_stale_quote_never_records(){
         let db=fixture();
-        for ix in 0..5 {
+        for ix in 0..6 {
             let mut t=snapshot();
             t.bid=Some(2001.2);t.ask=Some(2001.4);
             match ix {
@@ -233,8 +236,12 @@ mod tests {
                     t.tick_age_ms=Some(3_001);}
                 3=>{t.quote_time_ms=Some(10_200);t.source_quote_time_ms=Some(10_200);
                     t.demo=false;t.account_trade_mode=Some(2);}
-                _=>{t.quote_time_ms=Some(10_200);t.source_quote_time_ms=Some(10_200);
+                4=>{t.quote_time_ms=Some(10_200);t.source_quote_time_ms=Some(10_200);
                     t.margin_mode=Some(0);}
+                _=>{t.quote_time_ms=Some(9_950);t.source_quote_time_ms=Some(9_950);
+                    // Fresh at observation but generated before price plan
+                    // was saved at 10_000. Not a legitimate post-save trigger.
+                    t.tick_age_ms=Some(100);}
             }
             observe(&db,&t,"demo",10_250).unwrap();
             assert_eq!(count(&db),0,"variant {ix}");
