@@ -179,7 +179,23 @@ pub fn prepare(db:&Connection,t:&Telemetry,target:&str,now:u64,
             &&r["plan_id"]==plan
             &&r["state"]=="sealed_unarmed_not_dispatched"
             &&r["broker_command_id"].is_null());
-        if !approved||!sealed||draft["revision"].as_u64()!=Some(revision){
+        // A mere recent seal status is not enough: the exact frozen
+        // economic command must match this SAME full-snapshot quote, expiry
+        // and price/lot decision byte-for-byte before an outbox row exists.
+        // A later crossing cannot borrow an old seal from another tick.
+        let frozen:Option<(String,u64,String)>=db.query_row(
+            "SELECT original_command,sealed_ms,state
+             FROM partial_exit_sealed_core_intents
+             WHERE context=?1 AND target=?2 AND position_identifier=?3
+               AND stage=1 AND plan_id=?4 AND physical_ticket=?5",
+            params![key,target,pid,plan,ticket],|r|Ok((
+                r.get(0)?,r.get(1)?,r.get(2)?
+            ))
+        ).optional()?;
+        let frozen_matches=frozen.is_some_and(|(raw,at,state)|
+            state=="sealed_not_queued"&&at==now&&same_command(&raw,draft));
+        if !approved||!sealed||!frozen_matches
+            ||draft["revision"].as_u64()!=Some(revision){
             conflict+=1;continue
         }
         // One transaction does the outbox+claim. A TP1 held record will
