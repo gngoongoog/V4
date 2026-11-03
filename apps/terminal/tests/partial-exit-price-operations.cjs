@@ -31,7 +31,7 @@ const render=(opts)=>{hook=0;return exp.PartialExitPriceOperations({onSave:async
 const shown=(root)=>collect(rendered).filter(x=>typeof x==='string').join(' ');
 const tel={connected:true,demo:true,account_trade_mode:0,margin_mode:2,
  login:17,server:'D',symbol:'XAUUSDm',currency:'USD',
- tick_size:0.01,bid:2000,ask:2000.2,
+ tick_size:0.01,volume_step:0.01,bid:2000,ask:2000.2,
  positions:[{identifier:907,ticket:87,magic:410601,side:'BUY',
  symbol:'XAUUSDm',price_open:1999.5,volume:0.1,tp:0}]};
 const status={gateway_fresh:true,requested_run:false,telemetry:tel};
@@ -188,7 +188,35 @@ const settled={...heldPreview,partial_exit_stage_settlements:{
   broker_order:76543,matched_volume:0.05,remaining_volume_at_seal:0.05,
   next_stage_authorized:false,breakeven_triggered:false
  }]}};
-const realDealProof=render({...opts,source:settled});
+const linkedSettled={...settled,partial_exit_command_links:{
+ schema:'partial-exit-stage-command-links-v1',
+ status:'broker_stage_links_read_only',context,target:'demo',
+ read_only:true,orders_enabled:false,stage_execution_supported:false,rows:[{
+  position_identifier:907,stage:1,plan_id:stages[0].plan_id,evidence:{
+   state:'broker_order_deals_exactly_linked',core_command_id:'tp1-once-id',
+   broker_order_ticket:76543,matched_broker_lots:0.05,
+   booked_net_account_currency:3.47
+  }}]}};
+const realDealProof=render({...opts,source:linkedSettled});
+assert(textOf(realDealProof).includes('صافي محجوز بعد تكاليف الـDeal: 3.47 USD'),
+ 'Booked stage profit needs exactly linked Deal evidence including costs');
+const wrongOrderNet=render({...opts,source:{...linkedSettled,
+ partial_exit_command_links:{...linkedSettled.partial_exit_command_links,
+ rows:[{...linkedSettled.partial_exit_command_links.rows[0],
+ evidence:{...linkedSettled.partial_exit_command_links.rows[0].evidence,
+ broker_order_ticket:76544}}]}}});
+assert(!textOf(wrongOrderNet).includes('صافي محجوز بعد تكاليف الـDeal'),
+ 'A mismatched broker order cannot publish realized TP net result');
+const missingCosts=render({...opts,source:{...linkedSettled,
+ partial_exit_command_links:{...linkedSettled.partial_exit_command_links,
+ rows:[{...linkedSettled.partial_exit_command_links.rows[0],
+ evidence:{...linkedSettled.partial_exit_command_links.rows[0].evidence,
+ booked_net_account_currency:null}}]}}});
+assert(!textOf(missingCosts).includes('صافي محجوز بعد تكاليف الـDeal'));
+const foreignFinancial=render({...opts,source:{...linkedSettled,
+ partial_exit_command_links:{...linkedSettled.partial_exit_command_links,target:'live'}}});
+assert(!textOf(foreignFinancial).includes('صافي محجوز بعد تكاليف الـDeal'));
+
 assert(textOf(realDealProof).includes('تم توثيق أمر الوسيط والـDeals وحجم المركز المتبقي'));
 assert(textOf(realDealProof).includes('الحجم المغلق 0.05 لوت'));
 assert(textOf(realDealProof).includes('المتبقي 0.05 لوت'));
@@ -198,6 +226,7 @@ const staleProof=render({...opts,source:{...settled,
  rows:[{...settled.partial_exit_stage_settlements.rows[0],
   state:'sealed_evidence_needs_review'}]}}});
 assert(textOf(staleProof).includes('الأدلة المحفوظة تحتاج إعادة تدقيق'));
+assert(!textOf(staleProof).includes('صافي محجوز بعد تكاليف الـDeal'));
 assert(!textOf(staleProof).includes('تم توثيق أمر الوسيط والـDeals'));
 const forgedProof=render({...opts,source:{...settled,
  partial_exit_stage_settlements:{...settled.partial_exit_stage_settlements,
