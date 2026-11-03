@@ -53,6 +53,7 @@ mod partial_exit_link;
 mod partial_exit_progress;
 mod partial_exit_prices;
 mod partial_exit_shadow_trigger;
+mod partial_exit_shadow_intent;
 mod pending_cancellation;
 mod learning_inference;
 mod learning_performance_review;
