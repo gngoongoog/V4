@@ -134,7 +134,10 @@ fn evaluate(db:&Connection,t:&Telemetry,target:&str,key:&str,pid:u64,stage:u32,
         if d["ticket"].as_u64()!=Some(deal_ticket)||
            d["order"].as_u64()!=Some(order)||d["position_id"].as_u64()!=Some(pid)||
            d["symbol"]!=t.symbol||
-           !matches!(d["entry"].as_i64(),Some(1|3))||
+           // Staged TP uses a normal DEAL close. OUT_BY (3) is a
+           // separate broker close-by operation and must not be attributed
+           // to this exact market-close stage even with matching order ID.
+           d["entry"].as_i64()!=Some(1)||
            d["type"].as_i64()!=Some(1-side)||
            !d["magic"].as_u64().is_some_and(|n|n==0||n==magic)||
            !d["time_msc"].as_u64().is_some_and(|n|
