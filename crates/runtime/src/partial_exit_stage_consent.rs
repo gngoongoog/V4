@@ -39,20 +39,24 @@ fn current_lineage(db:&Connection,t:&Telemetry,target:&str,key:&str,
     if p.identifier!=pid||p.ticket!=ticket||p.magic==0||p.symbol!=t.symbol
         ||!matches!(p.side.as_str(),"BUY"|"SELL"){return false}
     let saved=db.query_row(
-        "SELECT ticket,magic,plan_ids_json,captured_json,saved_ms
+        "SELECT ticket,magic,plan_ids_json,prices_json,captured_json,saved_ms
          FROM partial_exit_price_plans WHERE context=?1 AND target=?2
          AND position_identifier=?3",
         params![key,target,pid],|r|Ok((
             r.get::<_,u64>(0)?,r.get::<_,u64>(1)?,r.get::<_,String>(2)?,
-            r.get::<_,String>(3)?,r.get::<_,u64>(4)?
+            r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,u64>(5)?
         ))
     ).optional();
-    let Ok(Some((price_ticket,magic,raw_ids,raw_capture,saved_ms)))=saved
+    let Ok(Some((price_ticket,magic,raw_ids,raw_prices,raw_capture,saved_ms)))=saved
         else{return false};
     if price_ticket!=ticket||magic!=p.magic||saved_ms==0||approved_ms<saved_ms
         ||serde_json::from_str::<Value>(&raw_ids).ok()!=Some(json!(ids))
     {return false}
     let Ok(cap)=serde_json::from_str::<Value>(&raw_capture)else{return false};
+    let Ok(prices)=serde_json::from_str::<Value>(&raw_prices)else{return false};
+    if !crate::partial_exit_prices::capture_geometry_valid(&cap,&prices){
+        return false
+    }
     let tick=t.tick_size.unwrap_or(f64::NAN);
     let step=t.volume_step.unwrap_or(f64::NAN);
     if cap["schema"]!="partial-exit-price-capture-v1"
@@ -227,6 +231,7 @@ mod tests{
             "ticket":87,"magic":410601,"symbol":"XAUUSDm","side":"BUY",
             "entry":2000.,"original_volume":0.10,"lot_step":0.01,
             "tick_size":0.01,"original_broker_tp":0.,"saved_ms":1000,
+            "saved_bid":2000.5,"saved_ask":2001.0,"quote_reference":2000.5,
             "orders_enabled":false,"trading_enabled":false,"breakeven_enabled":false});
         db.execute("INSERT INTO partial_exit_price_plans
             (context,target,position_identifier,ticket,magic,plan_ids_json,
@@ -257,6 +262,9 @@ mod tests{
         assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["operator_approved"],false);
         db.execute("UPDATE partial_exit_stage_plans
             SET status='prepared_only' WHERE stage=2",[]).unwrap();
+        db.execute("UPDATE partial_exit_price_plans
+            SET prices_json='[2010,2020,2020]' ",[]).unwrap();
+        assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["operator_approved"],false);
         db.execute("DELETE FROM partial_exit_price_plans",[]).unwrap();
         assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["operator_approved"],false);
     }
