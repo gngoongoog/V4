@@ -456,6 +456,31 @@ mod tests{
         assert_eq!(contract["rows"][0]["orders_enabled"],false);
         assert!(contract["rows"][0].get("id").is_none());
         assert!(contract["rows"][0].get("kind").is_none());
+        let shaped=crate::partial_exit_stage_producer::report(
+            &db,&live,"live",10_250,7,20,true).unwrap();
+        assert_eq!(shaped["status"],"broker_command_shapes_not_queued");
+        assert_eq!(shaped["target"],"live");
+        assert_eq!(shaped["broker_commands_created"],0);
+        assert_eq!(shaped["orders_enabled"],false);
+        assert_eq!(shaped["rows"].as_array().unwrap().len(),1);
+        let command=&shaped["rows"][0]["broker_command_draft"];
+        assert_eq!(command["kind"],"close");
+        assert_eq!(command["target"],"live");
+        assert_eq!(command["position"],87);
+        assert_eq!(command["lots"],0.05);
+        assert_eq!(command["revision"],7);
+        assert_eq!(command["tp_stage"],1);
+        assert_eq!(command["tp_stage_plan_id"],ids[0]);
+        assert_eq!(command["expected_position_identifier"],907);
+        assert_eq!(command["expected_position_volume"],0.1);
+        assert_eq!(command["expected_position_entry"],1999.5);
+        assert_eq!(command["expected_broker_tp"],0.0);
+        assert_eq!(command["tp_target_price"],2001.0);
+        assert!(command.get("id").is_none());
+        assert!(command.get("state").is_none());
+        assert_eq!(crate::partial_exit_stage_producer::report(
+            &db,&telemetry(),"demo",10_250,7,20,true).unwrap()
+            ["rows"].as_array().unwrap().len(),0);
         assert!(report(&db,&telemetry(),"demo").unwrap()["rows"]
             .as_array().unwrap().is_empty());
         assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_commands",[],
