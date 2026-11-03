@@ -1,4 +1,4 @@
-//! Immutable, DEMO-only, explicit TP1/TP2/TP3 PRICE proposals.
+//! Immutable, account-selected, explicit TP1/TP2/TP3 PRICE proposals.
 //!
 //! These are operator-supplied price levels, not trading signals or broker
 //! orders. Persisted separately from the original three broker-volume plans.
@@ -54,14 +54,15 @@ pub(crate) fn capture_geometry_valid(cap:&Value,prices:&Value)->bool{
         &&(broker_tp==0.||outward(broker_tp,values[2]))
 }
 fn scoped(t:&Telemetry,target:&str)->bool{
-    target=="demo"&&t.connected&&t.demo&&t.account_trade_mode==Some(0)
-        &&t.margin_mode==Some(2)&&t.validate()&&t.login>0
+    matches!((target,t.demo,t.account_trade_mode),
+        ("demo",true,Some(0))|("live",false,Some(2)))
+        &&t.connected&&t.margin_mode==Some(2)&&t.validate()&&t.login>0
         &&!t.server.is_empty()&&!t.symbol.is_empty()&&!t.currency.is_empty()
 }
 pub fn init(db:&Connection)->Result<()>{
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS partial_exit_price_plans(
-            context TEXT NOT NULL,target TEXT NOT NULL CHECK(target='demo'),
+            context TEXT NOT NULL,target TEXT NOT NULL CHECK(target IN ('demo','live')),
             position_identifier INTEGER NOT NULL CHECK(position_identifier>0),
             ticket INTEGER NOT NULL CHECK(ticket>0),
             magic INTEGER NOT NULL CHECK(magic>0),
@@ -81,7 +82,7 @@ pub fn init(db:&Connection)->Result<()>{
 pub fn save(db:&Connection,t:&Telemetry,target:&str,pid:u64,
     ids:&[String;3],prices:[f64;3],now:u64)->Result<Value>
 {
-    ensure!(scoped(t,target),"يتطلب تسعير TP حساب MT5 Demo بنظام Hedging مؤكداً");
+    ensure!(scoped(t,target),"يتطلب تسعير TP حساب MT5 المختار بنظام Hedging مؤكداً");
     ensure!(t.quote_is_fresh(now,3_000),"انتظر سعراً حديثاً وموثقاً من MT5");
     ensure!(pid>0&&now>0,"معرّف المركز أو وقت الحفظ غير صالح");
     let tick=t.tick_size.context("خطوة سعر الوسيط غير متاحة")?;
@@ -112,7 +113,7 @@ pub fn save(db:&Connection,t:&Telemetry,target:&str,pid:u64,
         "SELECT ticket,magic,initial_volume,step,status,payload
          FROM partial_exit_drafts WHERE context=?1 AND target='demo'
          AND position_identifier=?2",
-        params![key,pid],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,
+        params![key,target,pid],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,
                                 r.get(3)?,r.get(4)?,r.get(5)?))
     ).context("مسودة TP الأصلية غير متوفرة")?;
     let (ticket,magic,initial,lot_step,state,raw)=draft;
@@ -128,9 +129,9 @@ pub fn save(db:&Connection,t:&Telemetry,target:&str,pid:u64,
         "مسودة TP غير مستقرة أو المركز تغير منذ الحفظ");
     let mut st=db.prepare(
         "SELECT stage,plan_id,status FROM partial_exit_stage_plans
-         WHERE context=?1 AND target='demo' AND position_identifier=?2
+         WHERE context=?1 AND target=?2 AND position_identifier=?3
          ORDER BY stage")?;
-    let stages=st.query_map(params![key,pid],|r|Ok((
+    let stages=st.query_map(params![key,target,pid],|r|Ok((
         r.get::<_,u32>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
     drop(st);
@@ -149,8 +150,8 @@ pub fn save(db:&Connection,t:&Telemetry,target:&str,pid:u64,
     let prior:Option<(String,String,String,u64,u64,u64)>=db.query_row(
         "SELECT plan_ids_json,prices_json,captured_json,saved_ms,ticket,magic
          FROM partial_exit_price_plans
-         WHERE context=?1 AND target='demo' AND position_identifier=?2",
-        params![key,pid],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,
+         WHERE context=?1 AND target=?2 AND position_identifier=?3",
+        params![key,target,pid],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,
                                    r.get(3)?,r.get(4)?,r.get(5)?))
     ).optional()?;
     if let Some((old_ids,old_prices,old_capture,old_ms,old_ticket,old_magic))=prior {
@@ -163,7 +164,7 @@ pub fn save(db:&Connection,t:&Telemetry,target:&str,pid:u64,
         // same displayed three numbers after immutable SQLite corruption.
         ensure!(capture_geometry_valid(&cap,&y)
             &&cap["schema"]=="partial-exit-price-capture-v1"
-            &&cap["context"]==key&&cap["target"]=="demo"
+            &&cap["context"]==key&&cap["target"]==target
             &&cap["position_identifier"].as_u64()==Some(pid)
             &&cap["ticket"].as_u64()==Some(old_ticket)&&old_ticket==ticket
             &&cap["magic"].as_u64()==Some(old_magic)&&old_magic==magic
@@ -181,7 +182,7 @@ pub fn save(db:&Connection,t:&Telemetry,target:&str,pid:u64,
             "orders_enabled":false,"breakeven_enabled":false}));
     }
     let captured=json!({"schema":"partial-exit-price-capture-v1",
-        "context":key,"target":"demo","position_identifier":pid,
+        "context":key,"target":target,"position_identifier":pid,
         "ticket":ticket,"magic":magic,"side":p.side,"symbol":t.symbol,
         "entry":p.price_open,"original_volume":initial,"lot_step":lot_step,
         "tick_size":tick,"quote_reference":reference,
@@ -192,8 +193,8 @@ pub fn save(db:&Connection,t:&Telemetry,target:&str,pid:u64,
     db.execute(
         "INSERT INTO partial_exit_price_plans(context,target,position_identifier,
             ticket,magic,plan_ids_json,prices_json,captured_json,saved_ms)
-         VALUES(?1,'demo',?2,?3,?4,?5,?6,?7,?8)",
-        params![key,pid,ticket,magic,json!(ids).to_string(),
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        params![key,target,pid,ticket,magic,json!(ids).to_string(),
             json!(prices).to_string(),captured.to_string(),now])?;
     Ok(json!({"saved":true,"idempotent":false,"read_only":true,
         "orders_enabled":false,"breakeven_enabled":false}))
@@ -201,15 +202,15 @@ pub fn save(db:&Connection,t:&Telemetry,target:&str,pid:u64,
 
 pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
     if !scoped(t,target) {
-        return Ok(json!({"schema":"partial-exit-prices-v1","status":"unverified_demo_hedging",
+        return Ok(json!({"schema":"partial-exit-prices-v1","status":"unverified_account_or_hedging",
             "rows":[],"read_only":true,"orders_enabled":false}))
     }
     let key=context(t);
     let mut st=db.prepare(
         "SELECT position_identifier,ticket,magic,plan_ids_json,prices_json,
                 captured_json,saved_ms FROM partial_exit_price_plans
-         WHERE context=?1 AND target='demo' ORDER BY saved_ms DESC LIMIT 50")?;
-    let entries=st.query_map(params![key],|r|Ok((
+         WHERE context=?1 AND target=?2 ORDER BY saved_ms DESC LIMIT 50")?;
+    let entries=st.query_map(params![key,target],|r|Ok((
         r.get::<_,u64>(0)?,r.get::<_,u64>(1)?,r.get::<_,u64>(2)?,
         r.get::<_,String>(3)?,r.get::<_,String>(4)?,
         r.get::<_,String>(5)?,r.get::<_,u64>(6)?
@@ -225,7 +226,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         let intact=cap["schema"]=="partial-exit-price-capture-v1"
             &&cap["context"]==key&&cap["ticket"].as_u64()==Some(ticket)
             &&cap["magic"].as_u64()==Some(magic)&&cap["position_identifier"].as_u64()==Some(pid)
-            &&cap["target"]=="demo"&&cap["orders_enabled"]==false
+            &&cap["target"]==target&&cap["orders_enabled"]==false
             &&cap["breakeven_enabled"]==false&&cap["saved_ms"].as_u64()==Some(saved_ms)
             &&matches!(cap["side"].as_str(),Some("BUY"|"SELL"))
             &&capture_geometry_valid(&cap,&prices)
@@ -248,8 +249,8 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         let plan_ok=if intact{
             let mut statement=db.prepare("SELECT stage,plan_id,status
                 FROM partial_exit_stage_plans WHERE context=?1
-                AND target='demo' AND position_identifier=?2 ORDER BY stage")?;
-            let items=statement.query_map(params![key,pid],|r|Ok((
+                AND target=?2 AND position_identifier=?3 ORDER BY stage")?;
+            let items=statement.query_map(params![key,target,pid],|r|Ok((
                 r.get::<_,u32>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?
             )))?.collect::<rusqlite::Result<Vec<_>>>()?;
             items.len()==3&&items.iter().enumerate().all(|(i,(stage,id,status))|
@@ -275,8 +276,8 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
             "breakeven_enabled":false}));
     }
     Ok(json!({"schema":"partial-exit-prices-v1",
-        "status":"demo_operator_price_proposals_only",
-        "context":key,"target":"demo","read_only":true,
+        "status":"operator_price_proposals_only",
+        "context":key,"target":target,"read_only":true,
         "orders_enabled":false,"next_stage_authorized":false,
         "breakeven_enabled":false,"rows":rows,
         "note":"Prices are immutable operator proposals. Quote crossing is NOT proof of a trade; Core stage sends remain locked."}))
@@ -325,7 +326,7 @@ mod tests{
         assert_eq!(v["rows"][0]["prices"],json!([2001.,2002.,2003.]));
         assert_eq!(v["orders_enabled"],false);
         assert_eq!(v["rows"][0]["quote_crossing_only"],json!([false,false,false]));
-        assert_eq!(report(&d,&t,"live",10_000).unwrap()["status"],"unverified_demo_hedging");
+        assert_eq!(report(&d,&t,"live",10_000).unwrap()["status"],"unverified_account_or_hedging");
         assert_eq!(report(&d,&t,"demo",20_000).unwrap()["rows"][0]["state"],"quote_stale_no_trigger");
         let mut next=t.clone();next.bid=Some(2001.5);next.ask=Some(2001.7);
         assert_eq!(report(&d,&next,"demo",10_000).unwrap()["rows"][0]["quote_crossing_only"],json!([true,false,false]));
