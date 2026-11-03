@@ -859,20 +859,23 @@ export default function Terminal(){
  };
  const runPartialExitPrices=async(proposal:PriceProposal):Promise<boolean>=>{
   if(preview||busy||!hasTauri()||!feed.broker||status?.requested_run||!status?.telemetry){
-   sendNotice('حفظ أسعار TP يتطلب STOP وحساب Demo متصلاً بـ MT5',true);return false;
+   sendNotice('حفظ أسعار TP يتطلب STOP وحساب MT5 المختار متصلاً',true);return false;
   }
   const t=status.telemetry,view=unwrap(portfolioReport),stages=unwrap(view.partial_exit_stage_plans);
   const context=JSON.stringify([t.server,t.login,t.symbol,t.currency]);
   const rows=Array.isArray(stages.rows)?stages.rows.map(unwrap):[];
-  if(!t.demo||t.account_trade_mode!==0||t.margin_mode!==2||
+  const selectedTarget=unwrap(view.settings).target;
+  const accountMatched=(selectedTarget==='demo'&&t.demo===true&&t.account_trade_mode===0)||
+   (selectedTarget==='live'&&t.demo===false&&t.account_trade_mode===2);
+  if(!accountMatched||t.margin_mode!==2||
    view.account_matches!==true||view.context!==context||
-   proposal.context!==context||stages.context!==context||
+   stages.target!==selectedTarget||proposal.context!==context||stages.context!==context||
    !proposal.planIds.every((id,i)=>rows.some(r=>
      r.position_identifier===proposal.positionIdentifier&&r.stage===i+1&&
      r.plan_id===id&&r.state==='prepared_only'))){
-   sendNotice('هوية حساب Demo أو خطط TP تغيرت؛ حدّث البيانات',true);return false;
+   sendNotice('هوية الحساب المختار أو خطط TP تغيرت؛ حدّث البيانات',true);return false;
   }
-  if(!window.confirm('تأكيد حفظ أسعار TP1/TP2/TP3 للبحث فقط على حساب Demo '+t.login+
+  if(!window.confirm('تأكيد حفظ أسعار TP1/TP2/TP3 للبحث فقط على حساب '+(selectedTarget==='live'?'Live':'Demo')+' '+t.login+
    ' والمركز '+proposal.positionIdentifier+'؟\\n'+proposal.prices.join(' / ')+
    '\\nلن يرسل هذا الإجراء صفقات ولن يغيّر وقف الخسارة أو TP الموجود عند MT5.')){
    return false;
@@ -889,7 +892,7 @@ export default function Terminal(){
    const updated=unwrap(await readPanel('/v1/execution'));
    if(!writeFresh(mutation))return false;
    if(scopedGeneration.current.isCurrent(ticket))setPortfolioReport(updated);
-   sendNotice('تم حفظ أسعار أهداف TP التجريبية دون إرسال أي أمر إلى MT5');
+   sendNotice('تم حفظ أسعار أهداف TP للحساب المختار دون إرسال أي أمر إلى MT5');
    return true;
   }catch(error){
    if(writeFresh(mutation))sendNotice('تعذر حفظ أسعار TP: '+String(error),true);
