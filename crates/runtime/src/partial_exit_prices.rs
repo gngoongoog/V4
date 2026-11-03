@@ -21,6 +21,38 @@ fn grid(price:f64,tick:f64)->bool{
 fn close(a:f64,b:f64,unit:f64)->bool{
     a.is_finite()&&b.is_finite()&&unit>0.&&(a-b).abs()<=unit*1e-6
 }
+// Recheck immutable capture geometry whenever an old plan is read. The
+// original quote and broker TP must be bound to the saved proposal, not
+// reconstructed from a possibly modified current position.
+pub(crate) fn capture_geometry_valid(cap:&Value,prices:&Value)->bool{
+    let Some(levels)=prices.as_array()else{return false};
+    if levels.len()!=3{return false}
+    let Some(side)=cap["side"].as_str()else{return false};
+    if side!="BUY"&&side!="SELL"{return false}
+    let tick=cap["tick_size"].as_f64().unwrap_or(f64::NAN);
+    let entry=cap["entry"].as_f64().unwrap_or(f64::NAN);
+    let bid=cap["saved_bid"].as_f64().unwrap_or(f64::NAN);
+    let ask=cap["saved_ask"].as_f64().unwrap_or(f64::NAN);
+    let reference=cap["quote_reference"].as_f64().unwrap_or(f64::NAN);
+    let broker_tp=cap["original_broker_tp"].as_f64().unwrap_or(f64::NAN);
+    if !tick.is_finite()||tick<=0.||!entry.is_finite()||entry<=0.
+        ||!bid.is_finite()||!ask.is_finite()||bid<=0.||ask<bid
+        ||!broker_tp.is_finite()||broker_tp<0. {return false}
+    if !close(reference,if side=="BUY"{bid}else{ask},tick){return false}
+    let mut values=[0.0;3];
+    for (i,level) in levels.iter().enumerate(){
+        let Some(price)=level.as_f64()else{return false};
+        if !grid(price,tick){return false}
+        values[i]=price;
+    }
+    let outward=|a:f64,b:f64|if side=="BUY"{
+        a>b+tick*0.5
+    }else{a+tick*0.5<b};
+    let start=if side=="BUY"{entry.max(ask)}else{entry.min(bid)};
+    outward(values[0],start)&&outward(values[1],values[0])
+        &&outward(values[2],values[1])
+        &&(broker_tp==0.||outward(broker_tp,values[2]))
+}
 fn scoped(t:&Telemetry,target:&str)->bool{
     target=="demo"&&t.connected&&t.demo&&t.account_trade_mode==Some(0)
         &&t.margin_mode==Some(2)&&t.validate()&&t.login>0
@@ -65,6 +97,7 @@ pub fn save(db:&Connection,t:&Telemetry,target:&str,pid:u64,
         &&execution::brain_for_magic(p.magic).is_some(),"هوية المركز أو العقل غير صالحة");
     ensure!(p.price_open.is_finite()&&p.price_open>0.
         &&p.volume.is_finite()&&p.volume>0.,"سعر الدخول أو حجم المركز غير مؤكد");
+    ensure!(p.tp.is_finite()&&p.tp>=0.,"هدف الوسيط الأصلي غير صالح");
     let (bid,ask)=t.bid.zip(t.ask).context("Bid/Ask غير متاحين")?;
     ensure!(bid.is_finite()&&ask.is_finite()&&bid>0.&&ask>=bid,"أسعار Bid/Ask غير صالحة");
     let reference=if p.side=="BUY"{bid}else{ask};
@@ -131,6 +164,7 @@ pub fn save(db:&Connection,t:&Telemetry,target:&str,pid:u64,
         "ticket":ticket,"magic":magic,"side":p.side,"symbol":t.symbol,
         "entry":p.price_open,"original_volume":initial,"lot_step":lot_step,
         "tick_size":tick,"quote_reference":reference,
+        "saved_bid":bid,"saved_ask":ask,"original_broker_tp":p.tp,
         "broker_quote_ms":t.broker_quote_time_ms(),"saved_ms":now,
         "trading_enabled":false,"orders_enabled":false,
         "breakeven_enabled":false});
@@ -173,8 +207,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
             &&cap["target"]=="demo"&&cap["orders_enabled"]==false
             &&cap["breakeven_enabled"]==false&&cap["saved_ms"].as_u64()==Some(saved_ms)
             &&matches!(cap["side"].as_str(),Some("BUY"|"SELL"))
-            &&prices.as_array().is_some_and(|a|a.len()==3
-                &&a.iter().all(|p|p.as_f64().is_some_and(|p|grid(p,tick))))
+            &&capture_geometry_valid(&cap,&prices)
             &&ids.as_array().is_some_and(|a|a.len()==3&&a.iter().all(|v|
                 v.as_str().is_some_and(|id|id.starts_with("tp-plan-")&&id.len()==40)));
         let p=t.positions.iter().find(|p|p.identifier==pid&&p.ticket==ticket
@@ -186,11 +219,10 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
             let original=cap["original_volume"].as_f64().unwrap_or(f64::NAN);
             let lot_step=cap["lot_step"].as_f64().unwrap_or(f64::NAN);
             let entry=cap["entry"].as_f64().unwrap_or(f64::NAN);
+            let saved_tp=cap["original_broker_tp"].as_f64().unwrap_or(f64::NAN);
             close(p.volume,original,lot_step)&&close(p.price_open,entry,tick)
                 &&t.tick_size.is_some_and(|current|close(current,tick,tick))
-                &&prices[2].as_f64().is_some_and(|last|
-                    p.tp==0.||if p.side=="BUY"{p.tp>last+tick*0.5}
-                    else{p.tp+tick*0.5<last})
+                &&close(p.tp,saved_tp,tick)
         });
         let plan_ok=if intact{
             let mut statement=db.prepare("SELECT stage,plan_id,status
@@ -287,18 +319,47 @@ mod tests{
         let evidence=report(&d,&advanced,"demo",10_000).unwrap();
         assert_eq!(evidence["rows"][0]["state"],"price_levels_saved_no_execution");
         assert_eq!(evidence["rows"][0]["quote_crossing_only"],json!([true,true,true]));
-        for index in 0..4{
+        for index in 0..5{
             let mut altered=advanced.clone();
             match index{
                 0=>altered.positions[0].volume=0.07,
                 1=>altered.positions[0].price_open=1998.5,
                 2=>altered.positions[0].tp=2002.,
+                3=>altered.positions[0].tp=2050.,
                 _=>altered.tick_size=Some(0.02)
             }
             let r=report(&d,&altered,"demo",10_000).unwrap();
             assert_eq!(r["rows"][0]["state"],"position_changed_review",
                 "variant {index}");
             assert!(r["rows"][0]["quote_crossing_only"].is_null());
+        }
+    }
+    #[test]
+    fn damaged_immutable_price_geometry_or_missing_old_capture_never_claims_crossing(){
+        for variant in 0..5{
+            let d=db();let t=t();let plans=ids(&d);
+            save(&d,&t,"demo",907,&plans,[2001.,2002.,2003.],10_000).unwrap();
+            match variant{
+                0=>{d.execute("UPDATE partial_exit_price_plans
+                    SET prices_json='[2001,2000.5,2003]'",[]).unwrap();},
+                1=>{d.execute("UPDATE partial_exit_price_plans
+                    SET prices_json='[2001.005,2002,2003]'",[]).unwrap();},
+                2=>{d.execute("UPDATE partial_exit_price_plans
+                    SET captured_json=json_remove(captured_json,'$.original_broker_tp')",
+                    []).unwrap();},
+                3=>{d.execute("UPDATE partial_exit_price_plans
+                    SET captured_json=json_set(captured_json,'$.saved_ask',2005)",
+                    []).unwrap();},
+                _=>{d.execute("UPDATE partial_exit_price_plans
+                    SET captured_json=json_set(captured_json,'$.quote_reference',1900)",
+                    []).unwrap();}
+            }
+            let mut advanced=t.clone();advanced.bid=Some(2004.);
+            advanced.ask=Some(2004.2);
+            let r=report(&d,&advanced,"demo",10_000).unwrap();
+            assert_eq!(r["rows"][0]["state"],"invalid_record","variant {variant}");
+            assert!(r["rows"][0]["quote_crossing_only"].is_null());
+            assert_eq!(r["orders_enabled"],false);
         }
     }
     #[test]
