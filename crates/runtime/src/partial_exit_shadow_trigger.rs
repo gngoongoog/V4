@@ -121,11 +121,13 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
     let mut st=db.prepare(
         "SELECT q.position_identifier,q.plan_id,q.quote_source_ms,q.observed_ms,
             q.broker_price,q.target_price,q.evidence_json,
-            p.plan_id,p.status
+            p.plan_id,p.status,r.captured_json,r.prices_json,r.plan_ids_json
          FROM partial_exit_shadow_tp1 q
          LEFT JOIN partial_exit_stage_plans p ON p.context=q.context
             AND p.target=q.target AND p.position_identifier=q.position_identifier
             AND p.stage=1
+         LEFT JOIN partial_exit_price_plans r ON r.context=q.context
+            AND r.target=q.target AND r.position_identifier=q.position_identifier
          WHERE q.context=?1 AND q.target='demo'
          ORDER BY q.observed_ms DESC,q.position_identifier DESC LIMIT 50")?;
     let records=st.query_map(params![key],|row|Ok((
@@ -133,10 +135,18 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
         row.get::<_,u64>(2)?,row.get::<_,u64>(3)?,
         row.get::<_,f64>(4)?,row.get::<_,f64>(5)?,
         row.get::<_,String>(6)?,row.get::<_,Option<String>>(7)?,
-        row.get::<_,Option<String>>(8)?
+        row.get::<_,Option<String>>(8)?,row.get::<_,Option<String>>(9)?,
+        row.get::<_,Option<String>>(10)?,row.get::<_,Option<String>>(11)?
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    let rows=records.into_iter().map(|(pid,id,source,at,price,target_price,raw,current,status)|{
+    let rows=records.into_iter().map(|(pid,id,source,at,price,target_price,raw,
+            current,status,cap_raw,prices_raw,ids_raw)|{
         let v=serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null);
+        let cap=cap_raw.as_deref().and_then(|s|serde_json::from_str::<Value>(s).ok())
+            .unwrap_or(Value::Null);
+        let prices=prices_raw.as_deref().and_then(|s|serde_json::from_str::<Value>(s).ok())
+            .unwrap_or(Value::Null);
+        let ids=ids_raw.as_deref().and_then(|s|serde_json::from_str::<Value>(s).ok())
+            .unwrap_or(Value::Null);
         let valid=v["schema"]=="partial-exit-shadow-price-v1"
             &&v["position_identifier"].as_u64()==Some(pid)
             &&v["plan_id"]==id&&v["stage"]==1
@@ -148,7 +158,28 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
             &&v["core_command_queued"]==false
             &&v["next_stage_authorized"]==false
             &&v["breakeven_enabled"]==false;
-        let intact=valid&&current.as_deref()==Some(id.as_str())
+        let saved_at=cap["saved_ms"].as_u64().unwrap_or(0);
+        let captured_quote=cap["broker_quote_ms"].as_u64().unwrap_or(0);
+        let buy=cap["side"]=="BUY";
+        let sell=cap["side"]=="SELL";
+        let bid=v["bid"].as_f64().unwrap_or(f64::NAN);
+        let ask=v["ask"].as_f64().unwrap_or(f64::NAN);
+        let side_price=if buy{bid}else{ask};
+        let original_ok=cap["schema"]=="partial-exit-price-capture-v1"
+            &&cap["context"]==key&&cap["target"]=="demo"
+            &&cap["position_identifier"].as_u64()==Some(pid)
+            &&cap["ticket"]==v["ticket"]
+            &&cap["orders_enabled"]==false&&cap["breakeven_enabled"]==false
+            &&(buy||sell)&&saved_at>0&&captured_quote>0
+            &&source>saved_at&&source>captured_quote&&at>saved_at
+            &&source<=at.saturating_add(2_000)
+            &&ids.as_array().is_some_and(|values|values.len()==3)
+            &&prices.as_array().is_some_and(|values|values.len()==3)
+            &&ids[0]==id&&prices[0].as_f64()==Some(target_price)
+            &&bid.is_finite()&&ask.is_finite()&&bid>0.&&ask>=bid
+            &&side_price==price
+            &&(if buy{price>=target_price}else{price<=target_price});
+        let intact=valid&&original_ok&&current.as_deref()==Some(id.as_str())
             &&status.as_deref()==Some("prepared_only");
         json!({"position_identifier":pid,"stage":1,"plan_id":id,
             "observed_ms":at,"source_quote_time_ms":source,
@@ -275,6 +306,23 @@ mod tests {
         assert_eq!(proof["rows"][0]["state"],"historical_shadow_crossing_only");
         assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_commands",[],
             |r|r.get::<_,u32>(0)).unwrap(),0);
+    }
+    #[test]
+    fn tampered_price_or_broker_quote_evidence_is_displayed_as_needs_review(){
+        let db=fixture();let mut t=snapshot();
+        t.quote_time_ms=Some(10_200);t.source_quote_time_ms=Some(10_200);
+        t.bid=Some(2001.2);t.ask=Some(2001.4);
+        observe(&db,&t,"demo",10_250).unwrap();
+        assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],
+            "historical_shadow_crossing_only");
+        db.execute("UPDATE partial_exit_price_plans
+            SET prices_json=json_set(prices_json,'$[0]',1999.0)",[]).unwrap();
+        assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],"needs_review");
+        db.execute("UPDATE partial_exit_price_plans
+            SET prices_json=json_set(prices_json,'$[0]',2001.0)",[]).unwrap();
+        db.execute("UPDATE partial_exit_shadow_tp1
+            SET evidence_json=json_set(evidence_json,'$.bid',2005.0)",[]).unwrap();
+        assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],"needs_review");
     }
     #[test]
     fn shadow_tp1_receipt_survives_database_restart_and_is_account_scoped(){
