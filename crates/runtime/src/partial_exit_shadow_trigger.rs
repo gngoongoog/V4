@@ -36,6 +36,8 @@ pub fn init(db:&Connection)->Result<()>{
             PRIMARY KEY(context,target,position_identifier),
             UNIQUE(context,target,plan_id)
         );")?;
+    crate::partial_exit_account_schema::allow_selected_account(
+        db,"partial_exit_shadow_tp1","")?;
     Ok(())
 }
 /// Called no faster than every 1s on full broker snapshots. No API read or
