@@ -15,7 +15,8 @@ fn context(t:&Telemetry)->String{
         .unwrap_or_default()
 }
 fn bound(t:&Telemetry,target:&str,now:u64)->bool {
-    target=="demo"&&t.connected&&t.demo&&t.account_trade_mode==Some(0)
+    matches!((target,t.demo,t.account_trade_mode),
+        ("demo",true,Some(0))|("live",false,Some(2)))&&t.connected
     &&t.margin_mode==Some(2)&&t.validate()&&t.login>0
     &&!t.server.is_empty()&&!t.symbol.is_empty()&&!t.currency.is_empty()
     &&t.source_quote_time_ms.is_some_and(|source|source>0)
@@ -24,7 +25,7 @@ fn bound(t:&Telemetry,target:&str,now:u64)->bool {
 pub fn init(db:&Connection)->Result<()>{
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS partial_exit_shadow_tp1(
-            context TEXT NOT NULL,target TEXT NOT NULL CHECK(target='demo'),
+            context TEXT NOT NULL,target TEXT NOT NULL CHECK(target IN ('demo','live')),
             position_identifier INTEGER NOT NULL CHECK(position_identifier>0),
             plan_id TEXT NOT NULL,
             quote_source_ms INTEGER NOT NULL CHECK(quote_source_ms>0),
@@ -44,7 +45,7 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
     let source=t.source_quote_time_ms.unwrap_or(0);
     let key=context(t);
     let proposals=crate::partial_exit_prices::report(db,t,target,now)?;
-    if proposals["status"]!="demo_operator_price_proposals_only"{return Ok(())}
+    if proposals["status"]!="operator_price_proposals_only"{return Ok(())}
     let Some(rows)=proposals["rows"].as_array()else{return Ok(())};
     for r in rows {
         if r["state"]!="price_levels_saved_no_execution"
@@ -57,8 +58,8 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
             else{continue};
         let original:rusqlite::Result<String>=db.query_row(
             "SELECT captured_json FROM partial_exit_price_plans WHERE
-                context=?1 AND target='demo' AND position_identifier=?2 AND ticket=?3",
-            params![key,pid,ticket],|row|row.get(0));
+                context=?1 AND target=?2 AND position_identifier=?3 AND ticket=?4",
+            params![key,target,pid,ticket],|row|row.get(0));
         let Ok(raw)=original else{continue};
         let Ok(capture)=serde_json::from_str::<Value>(&raw)else{continue};
         let saved_quote=capture["broker_quote_ms"].as_u64().unwrap_or(0);
@@ -104,17 +105,18 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
             "INSERT OR IGNORE INTO partial_exit_shadow_tp1(
              context,target,position_identifier,plan_id,quote_source_ms,
              observed_ms,broker_price,target_price,evidence_json)
-             VALUES(?1,'demo',?2,?3,?4,?5,?6,?7,?8)",
-            params![key,pid,plan,source,now,price,target_price,proof.to_string()])?;
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![key,target,pid,plan,source,now,price,target_price,proof.to_string()])?;
     }
     Ok(())
 }
 pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
-    if target!="demo"||!t.connected||!t.demo||t.account_trade_mode!=Some(0)
+    if !matches!((target,t.demo,t.account_trade_mode),
+        ("demo",true,Some(0))|("live",false,Some(2)))||!t.connected
         ||t.margin_mode!=Some(2)||!t.validate()||t.login==0
         ||t.server.is_empty()||t.currency.is_empty()||t.symbol.is_empty(){
         return Ok(json!({"schema":"partial-exit-shadow-tp1-v1",
-            "status":"unverified_demo_account","rows":[],
+            "status":"unverified_selected_account","rows":[],
             "read_only":true,"orders_enabled":false}))
     }
     let key=context(t);
@@ -128,9 +130,9 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
             AND p.stage=1
          LEFT JOIN partial_exit_price_plans r ON r.context=q.context
             AND r.target=q.target AND r.position_identifier=q.position_identifier
-         WHERE q.context=?1 AND q.target='demo'
+         WHERE q.context=?1 AND q.target=?2
          ORDER BY q.observed_ms DESC,q.position_identifier DESC LIMIT 50")?;
-    let records=st.query_map(params![key],|row|Ok((
+    let records=st.query_map(params![key,target],|row|Ok((
         row.get::<_,u64>(0)?,row.get::<_,String>(1)?,
         row.get::<_,u64>(2)?,row.get::<_,u64>(3)?,
         row.get::<_,f64>(4)?,row.get::<_,f64>(5)?,
@@ -167,7 +169,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
         let side_price=if buy{bid}else{ask};
         let original_ok=crate::partial_exit_prices::capture_geometry_valid(&cap,&prices)
             &&cap["schema"]=="partial-exit-price-capture-v1"
-            &&cap["context"]==key&&cap["target"]=="demo"
+            &&cap["context"]==key&&cap["target"]==target
             &&cap["position_identifier"].as_u64()==Some(pid)
             &&cap["ticket"]==v["ticket"]
             &&cap["orders_enabled"]==false&&cap["breakeven_enabled"]==false
@@ -191,7 +193,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
     }).collect::<Vec<_>>();
     Ok(json!({"schema":"partial-exit-shadow-tp1-v1",
         "status":"shadow_crossings_no_broker_orders",
-        "context":key,"target":"demo","rows":rows,
+        "context":key,"target":target,"rows":rows,
         "read_only":true,"orders_enabled":false,
         "next_stage_authorized":false,"breakeven_enabled":false,
         "note":"A historic verified source quote crossed TP1. This is not order placement, a fill, booked profit or permission for TP2."}))
@@ -367,7 +369,7 @@ mod tests {
             let mut other=t.clone();other.login+=1;
             assert!(report(&db,&other,"demo").unwrap()["rows"].as_array().unwrap().is_empty());
             other=t.clone();other.demo=false;other.account_trade_mode=Some(2);
-            assert_eq!(report(&db,&other,"live").unwrap()["status"],"unverified_demo_account");
+            assert_eq!(report(&db,&other,"live").unwrap()["status"],"unverified_selected_account");
             db.execute("UPDATE partial_exit_stage_plans SET status='review_required' WHERE stage=1",[]).unwrap();
             assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],"needs_review");
         }
