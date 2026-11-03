@@ -582,6 +582,26 @@ pub mod tests {
         assert_eq!(decoded.risk_percent, 5.0);
     }
     #[test]
+    fn live_elevated_risk_is_separately_opted_in_and_backward_compatible(){
+        let mut risk=RiskConfig::default();
+        risk.risk_percent=4.0;
+        assert!(risk.validate().is_err(),
+            "Default risk policy does not allow unconfirmed elevated Live budget");
+        risk.live_elevated_risk_opt_in=true;
+        assert!(risk.validate().is_ok());
+        risk.micro_demo_risk_opt_in=false;
+        let raw=serde_json::to_string(&risk).unwrap();
+        let restored:RiskConfig=serde_json::from_str(&raw).unwrap();
+        assert!(restored.live_elevated_risk_opt_in);
+        assert!(!restored.micro_demo_risk_opt_in,
+            "Live consent must never enable Demo elevated risk");
+        risk.risk_percent=5.01;
+        assert!(risk.validate().is_err());
+        let old=serde_json::to_value(&RiskConfig::default()).unwrap();
+        assert!(old.get("live_elevated_risk_opt_in").is_none(),
+            "Existing serialized presets and golden research hashes stay compatible");
+    }
+    #[test]
     fn breaker_switches_have_independent_backward_compatible_defaults() {
         let mut cfg = RiskConfig::default();
         assert!(!cfg.daily_breaker_demo_enabled);
