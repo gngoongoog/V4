@@ -1,18 +1,38 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const src=fs.readFileSync(path.join(__dirname,'../src/terminal.tsx'),'utf8');
 const binding=fs.readFileSync(path.join(__dirname,'../src/operations.tsx'),'utf8');
-const local=src.match(/<div className="account-item account-switch">.*?<\/div><\/div>/s);
-assert(local,'account header available');
-assert(local[0].includes('DEMO متصل')&&local[0].includes('REAL متصل'));
-assert(local[0].includes('إدارة الربط ↗'),'explicit action must navigate to binding');
-assert(local[0].includes("onClick={()=>open('execution')}"));
-assert(!/<button[^>]*>Live<\/button>|<button[^>]*>Demo<\/button>/.test(local[0]),
- 'account header must not pretend its links switch MT5 broker sessions');
-for(const term of ['إعداد Demo','إعداد Live','لا يغيّر الحساب مباشرة','لا يغيّر MT5 مباشرة']){
- assert(src.includes(term),'Demo/REAL dashboard labels must distinguish binding from switching: '+term);
-}
+const bridge=fs.readFileSync(path.join(__dirname,'../src/bridge.ts'),'utf8');
+const core=fs.readFileSync(path.join(__dirname,'../../../crates/runtime/src/execution_legacy.rs'),'utf8');
+const header=src.match(/<div className="account-item account-switch">[\s\S]*?<\/div>\s*<\/div>/);
+assert(header,'A visible operator account-selection toolbar must exist');
+assert(header[0].includes('MT5: ')&&header[0].includes('Core: '),
+ 'Never describe a Core-selected target as if the MT5 broker had switched accounts');
+assert(header[0].includes("onClick={()=>quickSelectAccount('demo')}"),
+ 'Demo button must invoke the actual Core binding procedure');
+assert(header[0].includes("onClick={()=>quickSelectAccount('live')}"),
+ 'Live button must invoke the actual Core binding procedure');
+assert(header[0].includes("aria-pressed={verifiedBinding&&boundTarget==='live'}"),
+ 'Only verified bound MT5 live settings may show Live as selected');
+assert(src.includes("void runBrokerBind(target,deviationPoints,confirmLiveLogin)"));
+assert(src.includes("const committed=unwrap(await bindExecution(target,deviationPoints,confirmLiveLogin))"));
+assert(src.includes("committed.ok!==true||unwrap(committed.settings).target!==target"),
+ 'UI may not announce success without Core acknowledging the selected target');
+assert(src.includes("if(page==='execution')publishPanel(serial,refreshed)"),
+ 'A global account binding must not publish execution data into any other page');
+assert(src.includes('اكتب رقم حساب MT5 المعروض'),
+ 'Live button must require explicit operator confirmation of broker login');
+assert(src.includes('سجّل دخول حساب '),
+ 'Clicking the switch may not claim to log MT5 into a different account');
+assert(src.includes('status.requested_run'),
+ 'Account binding must not be exposed as a hot swap during START');
+assert(binding.includes("saved.target==='live'?'live':saved.target==='demo'?'demo'"),
+ 'Binding form must show the persisted Core selection rather than default Demo');
 assert(binding.includes("telemetry.account_trade_mode!==2||login.trim()!==String(telemetry.login)"),
- 'REAL bind requires matching broker login typed explicitly');
-assert(binding.includes("onBind(target,points,login.trim())"),
- 'only confirmed binding form can request Core account switch');
-console.log('PASS: Demo/REAL status is source truth; header and action controls navigate to explicit verified Core binding, never faux-switch MT5');
+ 'A live account must be broker-verified and typed by the operator');
+assert(binding.includes("onBind(target,points,login.trim())"));
+assert(bridge.includes("invoke('bind_execution',{target,deviationPoints,confirmLiveLogin})"));
+assert(core.includes('status.requested_run || self.pending(db)?'),
+ 'Core must not change account while an order is pending or reconciliation incomplete');
+assert(core.includes('v["confirm_live_login"].as_str()==Some(t.login.to_string().as_str())'),
+ 'Core must independently validate Live confirmation, not trust the UI');
+console.log('PASS: visible Demo/Live buttons bind only exact MT5 account through Core, confirm Live identity and preserve page isolation');
