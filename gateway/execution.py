@@ -692,6 +692,7 @@ class BrokerExecutor:
                        'manual_close','profit_only','expected_position_volume','expected_position_side',
                        'tp_stage_plan_id','tp_stage','expected_position_identifier',
                        'tp_target_price','expected_position_entry','expected_broker_tp',
+                       'price_source_quote_ms',
                        'deviation_points','created_ms','expires_ms',
                        'commission_per_lot','slippage_ticks','risk_percent','risk_master_enabled','risk_master_recovery','risk_master_recovery_id',
                        'demo_flexible','micro_demo_risk_opt_in',
