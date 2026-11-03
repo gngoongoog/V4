@@ -476,11 +476,23 @@ class BrokerExecutor:
         if acknowledged_order < 0:
             return dict(result, reason='Invalid acknowledged order ticket; reconciliation pending')
         def matches_deal(item):
-            if getattr(item, 'magic', 0)!=cmd['magic'] or getattr(item, 'symbol', '')!=cmd['symbol']:
+            if getattr(item, 'symbol', '')!=cmd['symbol']:
                 return False
             try:
                 item_order = int(getattr(item, 'order', 0) or 0)
             except (TypeError, ValueError, OverflowError):
+                return False
+            # Some brokers strip magic from exit Deals. For a TP close only,
+            # accept magic=0 with a POSITIVE EXACT acknowledged MT5 order ID
+            # and the same immutable physical position identifier. A loose
+            # matching comment, deal timestamp or volume is never enough.
+            magic=getattr(item, 'magic', None)
+            zero_magic_tp=(cmd.get('tp_stage_plan_id') is not None
+                and magic==0 and acknowledged_order>0 and item_order==acknowledged_order
+                and type(cmd.get('expected_position_identifier')) is int
+                and cmd['expected_position_identifier']>0
+                and getattr(item, 'position_id', None)==cmd['expected_position_identifier'])
+            if magic!=cmd['magic'] and not zero_magic_tp:
                 return False
             # If both sides expose an order ID, it must agree. A copied or
             # broker-reused comment must never override a conflicting ticket.
@@ -524,6 +536,15 @@ class BrokerExecutor:
         # history, matching ownership and the *entire* volume remaining proves
         # that cancellation/expiry completed without a fill.
         if not matches and not pending and acknowledged_order > 0:
+            # A DONE acknowledgement containing a positive Deal ticket cannot
+            # be silently rewritten as zero-fill cancellation while MT5's
+            # deal history is still catching up, even if terminal order
+            # history appears to claim the entire volume was unfilled.
+            # Keep the claim unresolved; never resend or fabricate a TP loss.
+            if (cmd.get('tp_stage_plan_id') is not None
+                    and result.get('retcode') in (10009,10010)
+                    and type(result.get('deal')) is int and result['deal']>0):
+                return dict(result,reason='TP DONE acknowledgement conflicts with absent Deal history; no cancel/no resend until exact broker reconciliation')
             submitted = result.get('request') or cmd.get('broker_request') or {}
             try:
                 submitted_volume = float(submitted['volume'])
@@ -592,6 +613,11 @@ class BrokerExecutor:
                 return dict(result, reason='Broker deal entry/exit classification conflicts with intent; reconciliation pending')
             if any(pos <= 0 for pos in positions) or len(set(positions)) != 1:
                 return dict(result, reason='Broker fills have missing or conflicting physical position IDs; reconciliation pending')
+            if (cmd.get('tp_stage_plan_id') is not None
+                    and (type(cmd.get('expected_position_identifier')) is not int
+                         or positions[0]!=cmd['expected_position_identifier']
+                         or cmd.get('target')!='demo')):
+                return dict(result,reason='TP stage broker history belongs to the wrong physical position/account; reconciliation pending')
             try:
                 prices = [float(getattr(d, 'price', 0)) for d in matches]
                 times = [int(getattr(d, 'time_msc', 0)) for d in matches]
