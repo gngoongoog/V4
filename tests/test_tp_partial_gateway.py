@@ -26,6 +26,7 @@ def stage_command(stage=1,held=0.1,lots=0.05):
         brain="gann",magic=410601,lots=lots,signal=None,
         tp_stage_plan_id="tp-plan-"+{1:"a",2:"b",3:"c"}.get(stage,"a")*32,
         tp_stage=stage,
+        tp_target_price=round(1999.9+(stage-1)*0.01,2),
         expected_position_identifier=917,
         expected_position_volume=held,expected_position_side="BUY")
     return c
@@ -37,7 +38,7 @@ class StageDemoTests(unittest.TestCase):
         self.ex=BrokerExecutor(Path(self.tmp.name)/"gateway.sqlite")
         self.mt=Broker()
         self.p=N(ticket=91,identifier=917,magic=410601,symbol="XAUUSD",
-            volume=0.1,type=0,profit=8.)
+            volume=0.1,type=0,profit=8.,price_open=1999.5)
         self.mt.positions=[self.p]
         self.cmd=stage_command()
     def tearDown(self):
@@ -182,6 +183,51 @@ class StageDemoTests(unittest.TestCase):
         final=self.send()
         self.assertEqual(final["state"],"filled",final)
         self.assertTrue(final["recovered_from_history"])
+    def test_tp_price_must_be_fresh_tick_aligned_and_reached_at_preflight(self):
+        cases=[
+            ('missing',lambda c,m,p:c.pop('tp_target_price')),
+            ('off_grid',lambda c,m,p:c.update(tp_target_price=1999.905)),
+            ('below_entry',lambda c,m,p:c.update(tp_target_price=1999.0)),
+            ('not_crossed',lambda c,m,p:c.update(tp_target_price=2000.5)),
+            ('stale',lambda c,m,p:setattr(m.tick,'time_msc',clock_ms()-3500)),
+            ('crossed_quote',lambda c,m,p:setattr(m.tick,'ask',1999.0)),
+        ]
+        for label,mutate in cases:
+            with self.subTest(case=label):
+                self.cmd=stage_command()
+                self.cmd['id']='tp-price-'+label+'-'+'f'*24
+                self.mt.tick.bid=2000.0
+                self.mt.tick.ask=2000.1
+                self.mt.tick.time_msc=clock_ms()
+                mutate(self.cmd,self.mt,self.p)
+                result=self.send()
+                self.assertEqual(result['state'],'rejected',result)
+                self.assertFalse(self.mt.sends)
+    def test_tp_price_rechecked_after_order_check_before_any_broker_send(self):
+        self.mt.on_check=lambda:setattr(self.mt.tick,'bid',1999.8)
+        result=self.send()
+        self.assertEqual(result['state'],'cancelled',result)
+        self.assertIn('pre-send',result['reason'])
+        self.assertEqual(len(self.mt.sends),0)
+        self.mt.on_check=None
+        self.mt.tick.bid=2000.0
+        self.cmd['id']='tp-price-moved-above-'+'a'*24
+        self.mt.on_check=lambda:setattr(self.mt.tick,'bid',2000.2)
+        result=self.send()
+        self.assertEqual(result['state'],'cancelled',result)
+        self.assertIn('quote moved',result['reason'])
+        self.assertFalse(self.mt.sends)
+    def test_sell_tp_uses_ask_and_requires_profit_side_price(self):
+        self.p.type=1
+        self.p.price_open=2000.5
+        self.cmd['expected_position_side']='SELL'
+        self.cmd['tp_target_price']=2000.2
+        self.mt.tick.bid=1999.9
+        self.mt.tick.ask=2000.1
+        result=self.send()
+        self.assertEqual(result['state'],'placed',result)
+        self.assertEqual(self.mt.sends[0]['type'],self.mt.ORDER_TYPE_BUY)
+        self.assertEqual(self.mt.sends[0]['price'],2000.1)
     def test_late_broker_volume_change_denies_send_even_after_first_authorization(self):
         self.mt.on_check=lambda:setattr(self.p,"volume",0.08)
         res=self.send()
@@ -333,7 +379,8 @@ class StageDemoTests(unittest.TestCase):
         self.assertFalse(self.mt.sends)
     def test_helper_does_not_round_or_mutate_original_request(self):
         before=dict(self.cmd)
-        qty,side=stage_volume(self.cmd,self.mt.account,self.mt,self.p,self.mt.info)
+        qty,side=stage_volume(self.cmd,self.mt.account,self.mt,self.p,self.mt.info,
+                              self.mt.tick,clock_ms())
         self.assertEqual((qty,side),(0.05,-1))
         self.assertEqual(before,self.cmd)
         self.assertNotIn("request",self.cmd)
