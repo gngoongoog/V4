@@ -212,6 +212,23 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
             &&p[0].magic==magic&&p[0].symbol==t.symbol
             &&candidate["side"]==p[0].side
             &&near(p[0].volume,full,step);
+        // A TP1 shadow candidate is not a licence to reuse an altered MT5
+        // position. Recheck the *saved* full-position TP and entry, rather
+        // than accepting any farther-away newly configured broker TP.
+        let capture_ok=db.query_row(
+            "SELECT captured_json,prices_json FROM partial_exit_price_plans
+             WHERE context=?1 AND target='demo' AND position_identifier=?2",
+            params![key,pid],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))
+        ).ok().is_some_and(|(raw,levels)|{
+            let cap=serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null);
+            let levels=serde_json::from_str::<Value>(&levels).unwrap_or(Value::Null);
+            let tick=cap["tick_size"].as_f64().unwrap_or(f64::NAN);
+            crate::partial_exit_prices::capture_geometry_valid(&cap,&levels)
+                &&p.len()==1
+                &&t.tick_size.is_some_and(|x|near(x,tick,tick))
+                &&near(p[0].tp,cap["original_broker_tp"].as_f64().unwrap_or(f64::NAN),tick)
+                &&near(p[0].price_open,cap["entry"].as_f64().unwrap_or(f64::NAN),tick)
+        });
         let recent_orders:i64=db.query_row(
             "SELECT COUNT(*) FROM broker_commands WHERE context=?1 AND kind='close'
              AND CASE
@@ -242,7 +259,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
             &&t.volume_min.is_some_and(|v|v.is_finite()&&v>0.&&
                 lots>=v-step*1e-6)
             &&t.volume_max.is_some_and(|v|v.is_finite()&&v>=lots);
-        let bound=stage_ok&&physical_ok&&lineage_ok&&recent_orders==0&&broker_grid_ok&&
+        let bound=stage_ok&&physical_ok&&capture_ok&&lineage_ok&&recent_orders==0&&broker_grid_ok&&
             candidate["schema"]=="tp1-shadow-close-intent-v1"&&
             candidate["kind"]=="research_close_intent"&&
             candidate["context"]==key&&candidate["target"]=="demo"&&
@@ -396,6 +413,8 @@ mod tests{
         changed=t.clone();changed.positions[0].magic=999;
         assert_eq!(report(&db,&changed,"demo").unwrap()["rows"][0]["state"],"needs_review");
         changed=t.clone();changed.volume_step=Some(0.02);
+        assert_eq!(report(&db,&changed,"demo").unwrap()["rows"][0]["state"],"needs_review");
+        changed=t.clone();changed.positions[0].tp=2050.;
         assert_eq!(report(&db,&changed,"demo").unwrap()["rows"][0]["state"],"needs_review");
         db.execute("UPDATE partial_exit_shadow_close_intents
            SET payload=json_set(payload,'$.broker_fill_verified',json('true'))",[]).unwrap();
