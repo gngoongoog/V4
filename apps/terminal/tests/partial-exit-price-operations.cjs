@@ -251,7 +251,7 @@ const armSource={...tradeActiveSource,partial_exit_tp1_arm:{
 const seenArm=[];
 const armTree=render({...opts,source:armSource,
  onArm:async(...args)=>{seenArm.push(args);return true;}});
-assert(textOf(armTree).includes('تسليح تنفيذ TP1 الفعلي'));
+assert(textOf(armTree).includes('تسليح TP1 قرار مستقل لمدة 15 دقيقة'));
 assert(textOf(armTree).includes('أمر إغلاق جزئي حقيقي'));
 const armButton=collect(armTree).find(x=>x.type==='button'&&
  textOf(x).includes('تسليح أمر TP1 الفعلي'));
