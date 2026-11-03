@@ -1628,6 +1628,12 @@ impl Service {
                 status.telemetry.as_ref().map(braintrade_domain::partial_exit::preview)
                     .unwrap_or(Value::Null)
             } else {Value::Null};
+            value["partial_exit_next_shadow_gate"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_next_shadow::report(db,t,&self.inner.settings.target,now)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
             value["partial_exit_shadow_close_intents"]=if status.gateway_fresh && self.account_matches(status) {
                 status.telemetry.as_ref().map(|t|
                     crate::partial_exit_shadow_intent::report(db,t,&self.inner.settings.target)
