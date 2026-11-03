@@ -373,7 +373,22 @@ mod tests {
             "SELECT state FROM partial_exit_tp1_arms WHERE position_identifier=907",
             [],|r|r.get::<_,String>(0)).unwrap(),"armed_once",
             "A crashed broker queue release must not consume the arm");
-        db.execute_batch("DROP TRIGGER fail_tp1_release;").unwrap();
+        db.execute_batch("DROP TRIGGER fail_tp1_release;
+            CREATE TRIGGER fail_tp1_event BEFORE INSERT ON events
+            WHEN NEW.kind='tp1_core_released_once_to_gateway_queue'
+            BEGIN SELECT RAISE(ABORT,'injected event journal failure'); END;").unwrap();
+        assert!(release(&db,&t,"demo",5,1550,true).is_err(),
+            "Late journal failure must roll back arm consumption and broker queue publish");
+        assert_eq!(db.query_row(
+            "SELECT state FROM broker_commands WHERE id='tp1-once-id'",
+            [],|r|r.get::<_,String>(0)).unwrap(),"stage_held");
+        assert_eq!(db.query_row(
+            "SELECT state FROM partial_exit_tp1_arms WHERE position_identifier=907",
+            [],|r|r.get::<_,String>(0)).unwrap(),"armed_once");
+        assert_eq!(db.query_row(
+            "SELECT COUNT(*) FROM partial_exit_tp1_releases",
+            [],|r|r.get::<_,i64>(0)).unwrap(),0);
+        db.execute_batch("DROP TRIGGER fail_tp1_event;").unwrap();
         assert_eq!(release(&db,&t,"demo",5,1550,true).unwrap()["released"],1);
         assert_eq!(db.query_row(
             "SELECT state FROM partial_exit_tp1_arms WHERE position_identifier=907",
