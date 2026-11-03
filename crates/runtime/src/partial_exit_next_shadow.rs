@@ -325,7 +325,7 @@ mod tests {
             "expected_position_identifier":907,
             "expected_position_volume":previous,
             "expected_position_side":"BUY",
-            "tp_target_price":[2001.0,2002.0][(n-1) as usize],
+            "tp_target_price":([2001.0,2002.0][(n-1) as usize]),
             "expected_position_entry":1999.5,"expected_broker_tp":0.0});
         let result=json!({"state":"filled","recovered_from_history":true,
             "volume":lots,"position_id":907,"order":700+n,
