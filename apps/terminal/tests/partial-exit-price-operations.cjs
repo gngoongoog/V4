@@ -331,6 +331,29 @@ const disarm=collect(activeArmTree).find(x=>x.type==='button'&&
 assert(disarm&&!disarm.props.disabled);
 disarm.props.onClick();
 assert.equal(seenArm[1][3],false);
+const releasedArm={...activeArm,partial_exit_tp1_arm:{
+ ...activeArm.partial_exit_tp1_arm,
+ rows:[{...activeArm.partial_exit_tp1_arm.rows[0],
+  armed_active:false,release_recorded:true,
+  state:'consumed_wait_broker_reconciliation'}]}};
+const releasedArmTree=render({...opts,source:releasedArm,
+ onArm:async(...args)=>{seenArm.push(args);return true;}});
+assert(textOf(releasedArmTree).includes('أُطلق أمر TP1 لطابور التنفيذ'));
+assert(textOf(releasedArmTree).includes('تحقق من سجل الـDeals'));
+assert(!textOf(releasedArmTree).includes('تسليح TP1 قديم أو انتهت صلاحيته'),
+ 'A released broker order must not be misreported as merely stale approval');
+const revokeReleased=collect(releasedArmTree).find(x=>x.type==='button'&&
+ textOf(x).includes('إلغاء تسليح TP1'));
+assert(revokeReleased&&!revokeReleased.props.disabled,
+ 'At STOP an operator must be able to withdraw pending TP1 send authority');
+revokeReleased.props.onClick();
+assert.equal(seenArm[2][3],false);
+const runningReleased=render({...opts,status:{...status,requested_run:true},
+ source:releasedArm});
+const noRevokeWhileRunning=collect(runningReleased).find(x=>x.type==='button'&&
+ textOf(x).includes('إلغاء تسليح TP1'));
+assert(noRevokeWhileRunning?.props.disabled,
+ 'Core execution must be STOPped before operator revokes an issued TP1 arm');
 const missingArmTree=render({...opts,source:activeArm,
  status:{...status,telemetry:{...tel,positions:[]}}});
 assert(/إلغاء تسليح TP1 للمركز\s+907/.test(textOf(missingArmTree)),
