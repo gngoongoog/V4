@@ -155,7 +155,7 @@ assert.equal(seen.length,1);
 assert.equal(seen[0][3],false,'A stale consent must NEVER be re-armed from UI');
 const lostPosition=render({...opts,status:{...status,telemetry:{...tel,positions:[]}},
  source:invalidRevision,onConsent:async(...args)=>{seen.push(args);return true;}});
-assert(textOf(lostPosition).includes('إلغاء موافقة المركز 907'),
+assert(/إلغاء موافقة المركز\s+907/.test(textOf(lostPosition)),
  'Even a missing physical position needs an account-scoped revoke path');
 const wrongStoredIds={...invalidRevision,partial_exit_stage_consent:{
  ...invalidRevision.partial_exit_stage_consent,
