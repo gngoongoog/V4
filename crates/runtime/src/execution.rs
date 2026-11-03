@@ -390,6 +390,7 @@ impl Service {
         crate::partial_exit_prices::init(db)?;
         crate::partial_exit_shadow_trigger::init(db)?;
         crate::partial_exit_shadow_intent::init(db)?;
+        crate::partial_exit_stage_reservation::init(db)?;
         crate::pending_cancellation::init(db)?;
         let mut inner = legacy::Service::new(db)?;
         // Old per-brain flags do not choose an execution owner. A scoped solo
@@ -691,6 +692,16 @@ impl Service {
                         let _=crate::partial_exit_shadow_intent::observe(
                             db,telemetry,&self.inner.settings.target,now);
                     }
+                    // Stage intent is now journaled once, independently
+                    // of the broker command outbox. START expresses the
+                    // operator's mode choice; this is NOT an MT5 send.
+                    if entries_allowed {
+                        let _=crate::partial_exit_stage_reservation::prepare(
+                            db,telemetry,&self.inner.settings.target,now,
+                            self.inner.settings.revision,
+                            self.inner.settings.deviation_points,
+                            self.inner.risk_master(telemetry).unwrap_or(true));
+                    }
                 }
             }
         }
@@ -979,6 +990,18 @@ impl Service {
                 "read_only":true,
                 "trade_enabled_by_read":false
             }));
+        }
+        if method=="GET" && path=="/v1/execution/partial-exit-reservations" {
+            if status.gateway_fresh && self.account_matches(status) {
+                if let Some(t)=status.telemetry.as_ref(){
+                    return crate::partial_exit_stage_reservation::report(
+                        db,t,&self.inner.settings.target);
+                }
+            }
+            return Ok(json!({"schema":"tp-stage-reservations-v1",
+                "status":"fresh_bound_selected_gateway_required",
+                "rows":[],"read_only":true,"orders_enabled":false,
+                "broker_commands_created":0}));
         }
         if method=="GET" && path=="/v1/execution/partial-exit-command-drafts" {
             if status.gateway_fresh && self.account_matches(status) {
@@ -1700,6 +1723,13 @@ impl Service {
             // Show the Core-owned, immutable-stage command shape WITHOUT an
             // executable command ID, broker queue write or authorization.
             // This report cannot turn a research crossing into a live order.
+            value["partial_exit_stage_reservations"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_stage_reservation::report(
+                        db,t,&self.inner.settings.target)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
             value["partial_exit_stage_command_drafts"]=if status.gateway_fresh && self.account_matches(status) {
                 status.telemetry.as_ref().map(|t|
                     crate::partial_exit_stage_producer::report(db,t,
