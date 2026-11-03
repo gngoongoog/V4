@@ -108,8 +108,8 @@ pub fn save(db:&Connection,t:&Telemetry,target:&str,pid:u64,
     for id in ids {
         let used:i64=db.query_row(
             "SELECT COUNT(*) FROM broker_commands WHERE context=?1 AND kind='close'
-             AND json_valid(payload)
-             AND json_extract(payload,'$.tp_stage_plan_id')=?2",
+             AND CASE WHEN json_valid(payload) THEN
+                 json_extract(payload,'$.tp_stage_plan_id') ELSE NULL END=?2",
             params![key,id],|r|r.get(0))?;
         ensure!(used==0,"يوجد أمر سابق مرتبط بخطة TP؛ لا يمكن تعديل التسعير");
     }
@@ -325,6 +325,15 @@ mod tests{
             assert!(bad["rows"][0]["quote_crossing_only"].is_null());
         }
         let _=std::fs::remove_file(path);
+    }
+    #[test]
+    fn unrelated_corrupt_broker_command_cannot_break_research_price_capture(){
+        let d=db();let t=t();let plans=ids(&d);
+        d.execute("INSERT INTO broker_commands(context,kind,payload)
+            VALUES(?1,'close','broken-json')",[context(&t)]).unwrap();
+        let r=save(&d,&t,"demo",907,&plans,[2001.,2002.,2003.],10_000).unwrap();
+        assert_eq!(r["saved"],true);
+        assert_eq!(r["orders_enabled"],false);
     }
     #[test]
     fn sell_prices_must_descend_beyond_broker_ask(){
