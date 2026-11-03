@@ -90,9 +90,9 @@ pub fn set(db:&Connection,t:&Telemetry,target:&str,pid:u64,ids:&[String;3],
         // POST is NOT consent to a second broker order.
         if let Some((ticket,old_ids,old_rev,state))=&old{
             ensure!(*ticket==position.ticket&&*old_rev==revision
-                &&state=="armed_once"
+                &&matches!(state.as_str(),"armed_once"|"disarmed")
                 &&serde_json::from_str::<Value>(old_ids).ok()==Some(json!(ids)),
-                "Existing TP1 execution arm changed or was already used; no silent rearm");
+                "TP1 execution arm is consumed or the original position/plan changed");
         }
         let ends=now.checked_add(ARM_MAX_MS).context("Invalid expiry")?;
         let previous:Option<String>=db.query_row(
@@ -102,8 +102,17 @@ pub fn set(db:&Connection,t:&Telemetry,target:&str,pid:u64,ids:&[String;3],
         ).optional()?;
         ensure!(previous.is_none(),
             "TP1 already has a held/issued Core command; cannot arm a second order");
-        if old.is_some(){
-            // An accidental double-click must not extend the arm's lifetime.
+        if let Some((_,_,_,state))=&old {
+            // The operator must disarm a stale arm before deliberately
+            // arming again. A double click never silently extends expiry.
+            if state=="disarmed" {
+                db.execute(
+                    "UPDATE partial_exit_tp1_arms
+                     SET armed_ms=?4,expires_ms=?5,state='armed_once'
+                     WHERE context=?1 AND target=?2 AND position_identifier=?3
+                       AND state='disarmed'",
+                    params![key,target,pid,now,ends])?;
+            }
         }else{
             db.execute(
                 "INSERT INTO partial_exit_tp1_arms(
