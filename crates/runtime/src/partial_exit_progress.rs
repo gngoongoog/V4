@@ -473,8 +473,9 @@ mod tests{
             let mut other=t.clone();other.login+=1;
             assert!(report(&d,&other,"demo").unwrap()["rows"].as_array().unwrap().is_empty());
             other=t.clone();other.demo=false;other.account_trade_mode=Some(2);
-            assert_eq!(report(&d,&other,"live").unwrap()["status"],
-                "unverified_demo_account");
+            let account=report(&d,&other,"live").unwrap();
+            assert_eq!(account["status"],"account_scoped_historical_settlements");
+            assert!(account["rows"].as_array().unwrap().is_empty());
             let before=row(&d,&t,0);
             snapshot(&d,&t,300);
             assert_eq!(row(&d,&t,0),before,
