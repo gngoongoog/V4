@@ -151,12 +151,16 @@ class StageDemoTests(unittest.TestCase):
         self.assertTrue(settled["recovered_from_history"])
         prior=list(self.mt.deals)
         self.cmd=tp3
-        self.mt.order_send=lambda req:N(retcode=10009,comment="broker",order=56,
-            deal=78,volume=req["volume"],price=req["price"])
+        def second_order(req):
+            self.mt.sends.append(req)
+            return N(retcode=10009,comment="broker",order=56,deal=78,
+                     volume=req["volume"],price=req["price"])
+        self.mt.order_send=second_order
         ready=self.send()
         self.assertEqual(ready["state"],"placed",ready)
+        self.assertEqual(len(self.mt.sends),2)
         self.assertAlmostEqual(self.mt.sends[0]["volume"],0.03)
-        # The patched broker stub must record the separate TP3 send.
+        self.assertAlmostEqual(self.mt.sends[1]["volume"],0.02)
         self.history_fill(lots=0.02,order=56,deal=78)
         self.mt.deals=prior+self.mt.deals
         final=self.send()
