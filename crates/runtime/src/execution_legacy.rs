@@ -387,6 +387,7 @@ CREATE TABLE IF NOT EXISTS execution_solo(context TEXT NOT NULL,account_mode INT
 CREATE TABLE IF NOT EXISTS brain_configs(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS broker_commands(id TEXT PRIMARY KEY,context TEXT NOT NULL,brain TEXT NOT NULL,kind TEXT NOT NULL,created_ms INTEGER NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS broker_commands_context ON broker_commands(context,brain,created_ms);
+CREATE INDEX IF NOT EXISTS broker_commands_context_state ON broker_commands(context,state,created_ms);
 CREATE INDEX IF NOT EXISTS broker_commands_history_floor ON broker_commands(context,kind,created_ms);
 CREATE INDEX IF NOT EXISTS broker_commands_recovery ON broker_commands(kind,state,created_ms);
 CREATE INDEX IF NOT EXISTS broker_commands_manual_pending ON broker_commands(brain,state);
@@ -2579,6 +2580,11 @@ mod tp_stage_core_authorization_gate_tests {
     fn quarantined_stage_never_reaches_gateway_before_authorization(){
         let db=Connection::open_in_memory().unwrap();
         let mut svc=Service::new(&db).unwrap();
+        let indexed:i64=db.query_row(
+            "SELECT COUNT(*) FROM pragma_index_list('broker_commands')
+             WHERE name='broker_commands_context_state'",
+            [],|r|r.get(0)).unwrap();
+        assert_eq!(indexed,1,"Gateway polling must index account + pending state");
         let t=demo();
         svc.bind(&db,&t,100).unwrap();
         let context=ctx(&t);
