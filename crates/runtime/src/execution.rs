@@ -944,6 +944,42 @@ impl Service {
         status: &Status,
         now: u64,
     ) -> Result<Value> {
+        if method=="GET" && path=="/v1/execution/binding" {
+            // Lightweight, account-scoped source of truth for the global
+            // Demo/Live buttons on *every* UI page. No Deal-history scan or
+            // broker mutation; distinguish persisted target from the actual
+            // currently connected MT5 account and whether they match.
+            let observed=status.telemetry.as_ref();
+            let actual_target=observed.and_then(|t|
+                match (t.demo,t.account_trade_mode) {
+                    (true,Some(0))=>Some("demo"),
+                    (false,Some(2))=>Some("live"),
+                    _=>None
+                });
+            let matches=status.gateway_fresh&&self.account_matches(status);
+            let identity=observed.filter(|_|matches).map(context)
+                .unwrap_or_default();
+            return Ok(json!({
+                "schema":"execution-binding-v1",
+                "selected_target":self.inner.settings.target,
+                "settings":{
+                    "target":self.inner.settings.target,
+                    "login":self.inner.settings.login,
+                    "server":self.inner.settings.server,
+                    "currency":self.inner.settings.currency,
+                    "deviation_points":self.inner.settings.deviation_points
+                },
+                "connected_target":if status.gateway_fresh{actual_target}else{None},
+                "connected_login":if status.gateway_fresh{observed.map(|t|t.login)}else{None},
+                "account_matches":matches,
+                "context":identity,
+                "gateway_fresh":status.gateway_fresh,
+                "requested_run":status.requested_run,
+                "pending_reconciliation":self.pending(db)?,
+                "read_only":true,
+                "trade_enabled_by_read":false
+            }));
+        }
         if method=="GET" && path=="/v1/execution/partial-exit-contracts" {
             if status.gateway_fresh && self.account_matches(status) {
                 if let Some(t)=status.telemetry.as_ref() {
