@@ -55,17 +55,46 @@ fn equivalent_economic(saved:&Value,proposed:&Value)->bool{
     FIELDS.iter().all(|field|saved.get(*field).is_some()
         &&saved.get(*field)==proposed.get(*field))
 }
-fn conflicting_close(db:&Connection,ctx:&str,physical_ticket:u64)->Result<bool>{
-    // A malformed legacy close row is a conflicting claim until audited.
-    let count:i64=db.query_row(
-        "SELECT COUNT(*) FROM broker_commands WHERE context=?1 AND kind='close'
-         AND CASE
-          WHEN NOT json_valid(payload) THEN 1
-          WHEN COALESCE(json_type(payload,'$.position'),'missing')!='integer' THEN 1
-          WHEN CAST(json_extract(payload,'$.position') AS INTEGER)=?2 THEN 1
-          ELSE 0 END=1",
-        params![ctx,physical_ticket],|r|r.get(0))?;
-    Ok(count!=0)
+fn conflicting_close(db:&Connection,t:&Telemetry,target:&str,ctx:&str,
+    pid:u64,stage:u64,physical_ticket:u64)->Result<bool>
+{
+    let mut stmt=db.prepare(
+        "SELECT id,state,payload FROM broker_commands
+         WHERE context=?1 AND kind='close'")?;
+    let commands=stmt.query_map([ctx],|r|Ok((
+        r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?
+    )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    if commands.is_empty(){return Ok(false)}
+    // TP2/TP3 may encounter previous stage close commands. Only the CURRENT
+    // revalidated broker Deal seal, not an ACK or recorded plan alone,
+    // can justify ignoring a prior close when a later stage is reserved.
+    let historical=if stage>1 {
+        crate::partial_exit_progress::report(db,t,target)?
+    }else{Value::Null};
+    for (command_id,state,raw) in commands {
+        let Ok(command)=serde_json::from_str::<Value>(&raw)else{return Ok(true)};
+        let Some(ticket)=command["position"].as_u64().filter(|n|*n>0)else{
+            return Ok(true)
+        };
+        if ticket!=physical_ticket {continue}
+        if command["context"]!=ctx||command["target"]!=target
+            ||!matches!(state.as_str(),"observed"|"filled")
+            ||command["expected_position_identifier"].as_u64()!=Some(pid)
+        {return Ok(true)}
+        let Some(earlier)=command["tp_stage"].as_u64().filter(|v|*v>0&&*v<stage)
+            else{return Ok(true)};
+        let Some(plan)=command["tp_stage_plan_id"].as_str()else{return Ok(true)};
+        let sealed=historical["status"]=="account_scoped_historical_settlements"
+            &&historical["context"]==ctx&&historical["target"]==target
+            &&historical["rows"].as_array().is_some_and(|rows|
+                rows.iter().any(|r|r["position_identifier"].as_u64()==Some(pid)
+                    &&r["stage"].as_u64()==Some(earlier)
+                    &&r["plan_id"]==plan
+                    &&r["core_command_id"]==command_id
+                    &&r["state"]=="historical_stage_sealed"));
+        if !sealed{return Ok(true)}
+    }
+    Ok(false)
 }
 /// Record one eligible economic intent per immutable stage. It cannot send
 /// and will never re-arm an older, altered quote after an interruption.
@@ -107,7 +136,7 @@ pub fn prepare(db:&Connection,t:&Telemetry,target:&str,now:u64,
             ||candidate["created_ms"].as_u64()!=Some(now)
             ||candidate.get("id").is_some()||candidate.get("state").is_some()
             ||row["orders_enabled"]!=false||row["broker_command_id"]!=Value::Null
-            ||conflicting_close(&tx,&key,ticket)?
+            ||conflicting_close(&tx,t,target,&key,pid,stage,ticket)?
         {rejected+=1;continue}
         let saved:Option<(String,String,String)>=tx.query_row(
             "SELECT plan_id,payload,state FROM partial_exit_stage_reservations
