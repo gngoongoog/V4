@@ -51,6 +51,15 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
   dealAudit.target===(t?.demo?'demo':'live')&&dealAudit.read_only===true&&
   dealAudit.orders_enabled===false&&dealAudit.tp_stage_execution_supported===false;
  const dealRows=dealAuditBound&&Array.isArray(dealAudit.rows)?dealAudit.rows.slice(0,25).map(object):[];
+ const shadow=object(view.partial_exit_shadow_tp1);
+ const shadowBound=verified&&t?.demo===true&&
+  shadow.schema==='partial-exit-shadow-tp1-v1'&&
+  shadow.status==='shadow_crossings_no_broker_orders'&&
+  shadow.context===context&&shadow.target==='demo'&&
+  shadow.read_only===true&&shadow.orders_enabled===false&&
+  shadow.next_stage_authorized===false&&shadow.breakeven_enabled===false;
+ const shadowRows=shadowBound&&Array.isArray(shadow.rows)?
+  shadow.rows.slice(0,50).map(object):[];
  const settlements=object(view.partial_exit_stage_settlements);
  const settlementsBound=verified&&t?.demo===true&&
   settlements.schema==='partial-exit-stage-settlements-v1'&&
@@ -105,7 +114,7 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
  };
  return <section className="operator-card" aria-label="معاينة أهداف TP الجزئية للوت">
   <h3>معاينة توزيع حجم TP1 / TP2 / TP3</h3>
-  <p>تقسيم حسابي للوت فقط وفق بيانات MT5: 50%، 30%، 20%. لا تُنشأ أهداف سعرية ولا تُرسل أوامر إغلاق. هذه ليست خاصية TP جزئي جاهزة للتداول.</p>
+  <p>تقسيم اللوت إلى 50%، 30%، 20%. يمكن حفظ أسعار أهداف بحثية منفصلة على Demo ورصد عبور TP1 بالشادو، لكن لا تُرسل أوامر إغلاق تلقائية ولا يعتبر الرصد تنفيذ صفقة. هذه ليست خاصية TP جزئي جاهزة للتداول.</p>
   {!verified?<p className="safe-note">المعاينة غير متاحة: يجب التحقق من حساب MT5 والرمز وإعدادات الحجم الحالية لدى Core.</p>:
    <>
     <p className="safe-note">حد اللوت: <b>{volume(p.volume_min)}</b> · خطوة الحجم: <b>{volume(p.volume_step)}</b> · الحد الأعلى: <b>{volume(p.volume_max)}</b></p>
@@ -141,6 +150,25 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
        <span>الحجم الأصلي {volume(d.initial_volume)} لوت</span>
       </div>)}
     </div>:null}
+   {shadowBound?<details className="operator-advanced" aria-label="رصد TP1 البحثي من اقتباسات MT5">
+     <summary>رصْد عبور TP1 من سعر MT5 — شادو فقط</summary>
+     <p className="safe-note">يحفظ Core أول عبور موثق لـ Bid عند BUY أو Ask عند SELL بعد حفظ الأسعار، وفق وقت الاقتباس الأصلي من MT5. هذا ليس أمراً للوسيط، ولا يعني تنفيذ هدف أو نجاح صفقة أو السماح بـ TP2.</p>
+     {shadowRows.length===0?<p>لا توجد عبورات TP1 مرصودة وموثقة بعد. قد يكون الهدف بعيداً أو لا تتوفر اقتباسات MT5 حديثة بمصدر موثوق.</p>:
+      shadowRows.map((r,i)=>{
+       const validShadow=r.state==='historical_shadow_crossing_only'&&
+        r.orders_enabled===false&&r.broker_fill_verified===false&&
+        r.next_stage_authorized===false&&r.breakeven_enabled===false&&
+        Number.isSafeInteger(r.source_quote_time_ms)&&valid(r.observed_price)&&valid(r.target_price);
+       return <div className="brain-control-row" key={String(r.plan_id)+'-'+i}>
+        <div><b>مركز {Number.isSafeInteger(r.position_identifier)?String(r.position_identifier):'—'} — TP1</b>
+         <small style={{display:'block',marginTop:4}}>{validShadow?
+          'عبور سعري بحثي مؤرشف فقط، لا يوجد أي إغلاق مؤكد':
+          'سند الرصد السابق يحتاج مراجعة؛ لا يُعتمد كعبور صالح'}</small>
+        </div>
+        <span>{validShadow?'السعر '+volume(r.observed_price)+' / الهدف '+volume(r.target_price):'غير موثق'}</span>
+       </div>;
+      })}
+    </details>:null}
    {settlementsBound?<details className="operator-advanced" aria-label="تسوية مراحل TP الموثقة مع المركز">
      <summary>تسوية TP1/TP2/TP3 مع حجم المركز الحقيقي — قراءة فقط</summary>
      <p className="safe-note">التسوية تحتاج سجل أمر الوسيط وصفقات Deal مطابقة مع لقطة مركز MT5 الكاملة بعد كل مرحلة، بالتسلسل. توثيق مرحلة سابقة لا يسمح بتنفيذ التالية ولا ينقل الوقف إلى التعادل.</p>
