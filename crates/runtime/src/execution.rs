@@ -937,6 +937,24 @@ impl Service {
         status: &Status,
         now: u64,
     ) -> Result<Value> {
+        if method=="POST" && path=="/v1/execution/partial-exit-prices" {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request {
+                context:String,position_identifier:u64,
+                plan_ids:[String;3],prices:[f64;3]
+            }
+            let request:Request=serde_json::from_slice(body)?;
+            anyhow::ensure!(!status.requested_run && !self.pending(db)?,
+                "أوقف فتح الصفقات وانتظر مصالحة الأوامر قبل حفظ أسعار TP");
+            anyhow::ensure!(status.gateway_fresh && self.account_matches(status)
+                &&self.inner.settings.target=="demo",
+                "لا تُحفظ أسعار TP إلا لحساب Demo الحالي المرتبط حديثاً");
+            let t=status.telemetry.as_ref().context("لقطة MT5 غير متاحة")?;
+            anyhow::ensure!(request.context==context(t),"هوية الحساب تغيّرت؛ حدّث الصفحة");
+            return crate::partial_exit_prices::save(db,t,"demo",
+                request.position_identifier,&request.plan_ids,request.prices,now);
+        }
         if method=="POST" && path=="/v1/execution/settings" {
             anyhow::ensure!(!crate::pending_cancellation::pending(db)?,"انتظر تسوية طلب إلغاء الأمر المعلّق قبل تغيير الحساب");
         }
