@@ -1829,6 +1829,15 @@ mod tests {
             assert_eq!(verified["context"],context(&t));
             assert_eq!(verified["read_only"],true);
             assert_eq!(verified["trade_enabled_by_read"],false);
+            let mut inconsistent=t.clone();
+            inconsistent.demo=!t.demo;
+            let inconsistent_status=Status{gateway_fresh:true,
+                telemetry:Some(inconsistent),..Default::default()};
+            let contradiction=service.route("GET","/v1/execution/binding",
+                &[],&db,&inconsistent_status,101).unwrap();
+            assert_eq!(contradiction["connected_target"],Value::Null);
+            assert_eq!(contradiction["account_matches"],false,
+                "Conflicting MT5 demo flag and trade_mode never validate account identity");
             let mut different=t.clone();
             different.login+=1;
             let stale=Status{gateway_fresh:true,telemetry:Some(different),..Default::default()};
