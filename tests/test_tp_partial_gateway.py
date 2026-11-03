@@ -27,6 +27,7 @@ def stage_command(stage=1,held=0.1,lots=0.05):
         tp_stage_plan_id="tp-plan-"+{1:"a",2:"b",3:"c"}.get(stage,"a")*32,
         tp_stage=stage,
         tp_target_price=round(1999.9+(stage-1)*0.01,2),
+        expected_position_entry=1999.5,expected_broker_tp=0.0,
         expected_position_identifier=917,
         expected_position_volume=held,expected_position_side="BUY")
     return c
@@ -38,7 +39,7 @@ class StageDemoTests(unittest.TestCase):
         self.ex=BrokerExecutor(Path(self.tmp.name)/"gateway.sqlite")
         self.mt=Broker()
         self.p=N(ticket=91,identifier=917,magic=410601,symbol="XAUUSD",
-            volume=0.1,type=0,profit=8.,price_open=1999.5)
+            volume=0.1,type=0,profit=8.,price_open=1999.5,tp=0.0)
         self.mt.positions=[self.p]
         self.cmd=stage_command()
     def tearDown(self):
@@ -117,7 +118,8 @@ class StageDemoTests(unittest.TestCase):
         self.assertFalse(self.mt.sends)
 
     def test_incomplete_stage_fields_must_never_fall_back_to_full_close(self):
-        for idx,missing in enumerate(("tp_stage_plan_id","tp_stage","expected_position_identifier","tp_target_price")):
+        for idx,missing in enumerate(("tp_stage_plan_id","tp_stage","expected_position_identifier",
+                                                 "tp_target_price","expected_position_entry","expected_broker_tp")):
             self.cmd=stage_command()
             self.cmd["id"]=f"tp-incomplete-{idx}-"+"d"*24
             self.cmd.pop(missing)
@@ -126,13 +128,16 @@ class StageDemoTests(unittest.TestCase):
             self.assertEqual(len(self.mt.sends),0)
     def test_null_stage_marker_cannot_fall_back_to_full_close(self):
         self.cmd=stage_command()
-        for marker in ('tp_stage_plan_id','tp_stage','expected_position_identifier','tp_target_price'):
+        for marker in ('tp_stage_plan_id','tp_stage','expected_position_identifier',
+                       'tp_target_price','expected_position_entry','expected_broker_tp'):
             with self.subTest(marker=marker):
                 cmd=stage_command()
                 cmd.pop('tp_stage_plan_id',None)
                 cmd.pop('tp_stage',None)
                 cmd.pop('expected_position_identifier',None)
                 cmd.pop('tp_target_price',None)
+                cmd.pop('expected_position_entry',None)
+                cmd.pop('expected_broker_tp',None)
                 cmd[marker]=None
                 self.cmd=cmd
                 self.cmd['id']='tp-null-'+marker+'-'+'f'*20
@@ -241,12 +246,29 @@ class StageDemoTests(unittest.TestCase):
         self.p.price_open=2000.5
         self.cmd['expected_position_side']='SELL'
         self.cmd['tp_target_price']=2000.2
+        self.cmd['expected_position_entry']=2000.5
         self.mt.tick.bid=1999.9
         self.mt.tick.ask=2000.1
         result=self.send()
         self.assertEqual(result['state'],'placed',result)
         self.assertEqual(self.mt.sends[0]['type'],self.mt.ORDER_TYPE_BUY)
         self.assertEqual(self.mt.sends[0]['price'],2000.1)
+    def test_late_broker_entry_or_original_tp_change_denies_send(self):
+        for field,value in (('price_open',1998.5),('tp',2010.0)):
+            with self.subTest(field=field):
+                self.mt.on_check=lambda field=field,value=value:setattr(self.p,field,value)
+                result=self.send()
+                self.assertEqual(result['state'],'cancelled',result)
+                self.assertIn('pre-send',result['reason'])
+                self.assertEqual(len(self.mt.sends),0)
+                # Fresh fixture-like plan identity after the first persisted
+                # unsent claim; do not silently recycle another order ID.
+                self.p.price_open=1999.5;self.p.tp=0.0
+                self.cmd=stage_command()
+                self.cmd['id']='stage-identity-'+field+'-'+'0'*20
+                self.cmd['tp_stage_plan_id']='tp-plan-'+(
+                    'd'*32 if field=='price_open' else 'e'*32)
+        self.mt.on_check=None
     def test_late_broker_volume_change_denies_send_even_after_first_authorization(self):
         self.mt.on_check=lambda:setattr(self.p,"volume",0.08)
         res=self.send()
@@ -377,6 +399,10 @@ class StageDemoTests(unittest.TestCase):
             lambda c,m,p:c.update(expected_position_side="SELL"),
             lambda c,m,p:c.update(tp_stage=4),
             lambda c,m,p:c.update(tp_stage_plan_id="unknown-plan"),
+            lambda c,m,p:c.update(expected_position_entry=1998.0),
+            lambda c,m,p:setattr(p,"price_open",1998.0),
+            lambda c,m,p:setattr(p,"tp",2050.0),
+            lambda c,m,p:c.update(expected_broker_tp=2000.0),
             lambda c,m,p:c.update(target="live"),
             lambda c,m,p:setattr(m.account,"margin_mode",0),
             lambda c,m,p:setattr(m.account,"trade_mode",2),
@@ -388,6 +414,7 @@ class StageDemoTests(unittest.TestCase):
                 self.mt.account.margin_mode=2
                 self.mt.account.trade_mode=0
                 self.p.identifier=917;self.p.volume=0.1
+                self.p.price_open=1999.5;self.p.tp=0.0
                 self.cmd=stage_command()
                 self.cmd["id"]=f"tp-negative-{idx}-"+"c"*20
                 mutate(self.cmd,self.mt,self.p)
