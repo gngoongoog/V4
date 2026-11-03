@@ -32,12 +32,14 @@ fn price_plan_matches(db:&Connection,t:&Telemetry,target:&str,key:&str,
     pid:u64,stage:u32,plan:&str,ticket:u64,magic:u64,
     initial:f64,step:f64,cmd:&Value)->Result<bool>
 {
-    if target!="demo" || !(1..=3).contains(&stage){return Ok(false)}
+    if !matches!((target,t.demo,t.account_trade_mode),
+        ("demo",true,Some(0))|("live",false,Some(2)))
+        ||!(1..=3).contains(&stage){return Ok(false)}
     let saved:Option<(String,String,String,u64,u64,u64)>=db.query_row(
         "SELECT plan_ids_json,prices_json,captured_json,ticket,magic,saved_ms
          FROM partial_exit_price_plans
-         WHERE context=?1 AND target='demo' AND position_identifier=?2",
-        params![key,pid],|r|Ok((
+         WHERE context=?1 AND target=?2 AND position_identifier=?3",
+        params![key,target,pid],|r|Ok((
             r.get(0)?,r.get(1)?,r.get(2)?,
             r.get(3)?,r.get(4)?,r.get(5)?
         ))
@@ -51,8 +53,8 @@ fn price_plan_matches(db:&Connection,t:&Telemetry,target:&str,key:&str,
     let Some(level_array)=prices.as_array().filter(|a|a.len()==3)else{return Ok(false)};
     let mut st=db.prepare(
         "SELECT stage,plan_id FROM partial_exit_stage_plans
-         WHERE context=?1 AND target='demo' AND position_identifier=?2 ORDER BY stage")?;
-    let stages=st.query_map(params![key,pid],|r|Ok((
+         WHERE context=?1 AND target=?2 AND position_identifier=?3 ORDER BY stage")?;
+    let stages=st.query_map(params![key,target,pid],|r|Ok((
         r.get::<_,u32>(0)?,r.get::<_,String>(1)?
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
     if stages.len()!=3 || stages.iter().enumerate().any(|(i,(n,id))|
@@ -66,7 +68,7 @@ fn price_plan_matches(db:&Connection,t:&Telemetry,target:&str,key:&str,
         &&stored_ticket==ticket&&stored_magic==magic
         &&saved_ms>0&&cmd["created_ms"].as_u64().is_some_and(|ms|ms>=saved_ms)
         &&cap["schema"]=="partial-exit-price-capture-v1"
-        &&cap["context"]==key&&cap["target"]=="demo"
+        &&cap["context"]==key&&cap["target"]==target
         &&cap["position_identifier"].as_u64()==Some(pid)
         &&cap["ticket"].as_u64()==Some(ticket)
         &&cap["magic"].as_u64()==Some(magic)
