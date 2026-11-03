@@ -77,9 +77,10 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
                 "SELECT stage,plan_id,planned_volume,status
                  FROM partial_exit_stage_plans WHERE context=?1 AND target='demo'
                  AND position_identifier=?2 ORDER BY stage")?;
-            query.query_map(params![context,pid],|r|Ok((
+            let loaded=query.query_map(params![context,pid],|r|Ok((
                 r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?
-            )))?.collect::<rusqlite::Result<Vec<_>>>()?
+            )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            loaded
         };
         if stages.len()!=3||!ids.is_array()||!prices.is_array() {
             continue
@@ -198,9 +199,10 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         let commands= {
             let mut st=db.prepare(
                 "SELECT id,payload FROM broker_commands WHERE context=?1 AND kind='close'")?;
-            st.query_map(params![context],|r|Ok((
+            let loaded=st.query_map(params![context],|r|Ok((
                 r.get::<_,String>(0)?,r.get::<_,String>(1)?
-            )))?.collect::<rusqlite::Result<Vec<_>>>()?
+            )))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            loaded
         };
         let mut related=BTreeSet::new();
         let mut unknown=false;
