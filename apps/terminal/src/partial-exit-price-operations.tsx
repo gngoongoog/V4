@@ -8,15 +8,18 @@ export type PriceProposal={context:string;positionIdentifier:number;
  planIds:[string,string,string];prices:[number,number,number]};
 
 /** Operator-only saved research prices. No stage authorization or send path. */
-export function PartialExitPriceOperations({status,source,disabled,onSave}:{
+export function PartialExitPriceOperations({status,source,disabled,onSave,onConsent}:{
  status:Status|null;source:unknown;disabled:boolean;
  onSave:(proposal:PriceProposal)=>Promise<boolean>;
+ onConsent:(context:string,positionIdentifier:number,planIds:[string,string,string],enabled:boolean,confirmLiveLogin:string)=>Promise<boolean>;
 }){
  const [selected,setSelected]=useState(''),[values,setValues]=useState<[string,string,string]>(['','','']);
  const [dirty,setDirty]=useState(false);
+ const [liveConfirm,setLiveConfirm]=useState('');
  const t=status?.telemetry,view=object(source),settings=object(view.settings);
  const stages=object(view.partial_exit_stage_plans);
  const prices=object(view.partial_exit_price_proposals);
+ const consent=object(view.partial_exit_stage_consent);
  const context=t?JSON.stringify([t.server,t.login,t.symbol,t.currency]):'';
  const target=settings.target==='live'?'live':settings.target==='demo'?'demo':null;
  const accountModeMatches=!!t&&((target==='demo'&&t.demo===true&&t.account_trade_mode===0)||
@@ -43,6 +46,19 @@ export function PartialExitPriceOperations({status,source,disabled,onSave}:{
   typeof r.plan_id==='string'&&/^tp-plan-[a-f0-9]{32}$/.test(r.plan_id as string))?
   plans.map(r=>String(r.plan_id)) as [string,string,string]:null;
  const recorded=stored.find(r=>r.position_identifier===Number(position?.identifier));
+ const consentValid=available&&consent.schema==='tp-stage-operator-consent-v1'&&
+  consent.status==='account_scoped_operator_consent_not_execution'&&
+  consent.context===context&&consent.target===target&&consent.read_only===true&&
+  consent.automatic_tp_execution_enabled===false&&consent.orders_created===0;
+ const consentRows=consentValid&&Array.isArray(consent.rows)?consent.rows.map(object):[];
+ const approval=consentRows.find(r=>r.position_identifier===Number(position?.identifier));
+ const approvalMatches=!!approval&&approval.position_ticket===position?.ticket&&
+  Array.isArray(approval.plan_ids)&&!!planIds&&
+  JSON.stringify(approval.plan_ids)===JSON.stringify(planIds)&&
+  approval.read_only===true&&approval.orders_enabled===false&&
+  approval.broker_command_id===null;
+ const approved=approvalMatches&&approval.operator_approved===true&&
+  approval.state==='operator_approved_not_dispatched';
  const recordedValid=!!recorded&&
   ['price_levels_saved_no_execution','quote_stale_no_trigger'].includes(String(recorded.state))&&
   Array.isArray(recorded.prices)&&recorded.prices.length===3&&
@@ -58,6 +74,15 @@ export function PartialExitPriceOperations({status,source,disabled,onSave}:{
     targets[0]+tick*.5<Math.min(position.price_open,Number(t?.bid))&&
     targets[1]+tick*.5<targets[0]&&targets[2]+tick*.5<targets[1]);
  const locked=disabled||!available||status?.requested_run===true||!!recorded;
+ const consentLocked=disabled||!available||status?.requested_run===true||!consentValid;
+ const submitConsent=(next:boolean)=>{
+  if(consentLocked||!position||!planIds||!recordedValid||
+   (next&&target==='live'&&liveConfirm!==String(t?.login))||
+   (approval&&!approvalMatches))return;
+  void onConsent(context,Number(position.identifier),planIds,next,liveConfirm).then(ok=>{
+   if(ok)setLiveConfirm('');
+  });
+ };
  const submit=()=>{
   if(locked||!valid||!position||!planIds||!dirty)return;
   void onSave({context,positionIdentifier:Number(position.identifier),planIds,
@@ -90,6 +115,20 @@ export function PartialExitPriceOperations({status,source,disabled,onSave}:{
        وصول السعر إلى أي هدف دليلاً على تنفيذ صفقة.
       </>}
     </p>:null}
+    {position&&recorded&&recordedValid&&consentValid?<div className="execution-binding-summary" aria-label="موافقة مشغل TP المرحلية">
+     <p className="safe-note">موافقة المشغل مرتبطة بهذا المركز فقط، لكنها حالياً مرحلة تحضير وليست تفويضاً بالوسيط. تشغيل TP التلقائي ما زال مقفلاً في Core؛ لا يوجد إرسال أو تعديل على MT5 من هذا الزر.</p>
+     <p>{approved?'موافقة بحثية مُثبتة للحساب المحدد — لا أوامر':'لم تُثبت موافقة تنفيذ هذه الخطة بعد'}</p>
+     {target==='live'&&!approved?<label>اكتب رقم حساب Live للتحقق من الموافقة
+      <input type="text" autoComplete="off" value={liveConfirm}
+       aria-label="تأكيد رقم حساب Live لخطة TP" disabled={consentLocked}
+       onChange={e=>setLiveConfirm(e.target.value)} placeholder={String(t?.login||'')}/>
+     </label>:null}
+     <button type="button" disabled={consentLocked||(approval&&!approvalMatches)||
+       (!approved&&target==='live'&&liveConfirm!==String(t?.login))}
+       onClick={()=>submitConsent(!approved)}>
+       {approved?'إلغاء الموافقة المحفوظة':'تسجيل موافقة هذه الخطة للتحضير المستقبلي (لا إرسال)'}
+     </button>
+    </div>:null}
     {position&&!recorded?<>
      <p className="safe-note">دخول: {position.price_open} · Bid: {t?.bid??'—'} · Ask: {t?.ask??'—'} · Tick: {t?.tick_size??'—'} · الاتجاه: {position.side}</p>
      <div className="protection-cards">
