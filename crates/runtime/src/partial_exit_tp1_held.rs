@@ -225,7 +225,8 @@ pub fn prepare(db:&Connection,t:&Telemetry,target:&str,now:u64,
 pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
     let mut result=json!({"schema":"tp1-core-held-outbox-v1",
         "status":"bound_account_required","rows":[],
-        "read_only":true,"orders_dispatched":0,"gateway_sends":0});
+        "read_only":true,"queued_for_gateway":0,
+        "potential_gateway_dispatches":0,"gateway_sends":Value::Null});
     if !t.connected||t.login==0||!t.validate()
         ||!matches!((target,t.demo,t.account_trade_mode),
             ("demo",true,Some(0))|("live",false,Some(2)))
@@ -243,25 +244,56 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         r.get::<_,u64>(4)?,r.get::<_,String>(5)?,
         r.get::<_,String>(6)?
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    result["status"]=json!("account_scoped_held_never_sent");
+    result["status"]=json!("account_scoped_tp1_outbox_not_fill_proof");
     result["context"]=json!(key);result["target"]=json!(target);
+    let mut dispatchable=0_u64;
+    let mut possibly_sent=0_u64;
     result["rows"]=json!(rows.into_iter().map(|(pid,ticket,plan,id,at,raw,state)|{
         let broker:Option<(String,String)>=db.query_row(
             "SELECT payload,state FROM broker_commands WHERE id=?1",
             [&id],|r|Ok((r.get(0)?,r.get(1)?))
         ).optional().unwrap_or(None);
-        let intact=broker.is_some_and(|(payload,broker_state)|
-            broker_state=="stage_held"
-            &&state=="held_never_dispatched"
-            &&same_command(&payload,&serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null)));
+        let expected=serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null);
+        let (broker_state,payload_matches)=broker.map_or((String::new(),false),
+            |(payload,broker_state)|(
+                broker_state,same_command(&payload,&expected)));
+        let proof:Option<String>=db.query_row(
+            "SELECT immutable_command FROM partial_exit_tp1_releases
+             WHERE command_id=?1 AND context=?2 AND target=?3
+               AND position_identifier=?4 AND physical_ticket=?5
+               AND plan_id=?6 AND state='released_once'",
+            params![id,key,target,pid,ticket,plan],|r|r.get(0)
+        ).optional().unwrap_or(None);
+        let released=proof.is_some_and(|a|same_command(&a,&expected));
+        let integrity=state=="held_never_dispatched"&&payload_matches
+            &&expected["id"]==id&&expected["tp_stage_plan_id"]==plan;
+        let valid=integrity&&(broker_state=="stage_held"
+            ||(released&&matches!(broker_state.as_str(),
+                "queued"|"dispatched"|"unknown"|"placed"|"partial"|"filled"|"observed"|"rejected"|"cancelled"|"expired")));
+        if valid&&broker_state=="queued"{dispatchable+=1}
+        if valid&&matches!(broker_state.as_str(),
+            "dispatched"|"unknown"|"placed"|"partial"|"filled"|"observed"){possibly_sent+=1}
+        let label=if !valid{"held_outbox_corrupted_needs_review"}
+            else if broker_state=="stage_held"{
+                if now>=at&&now.saturating_sub(at)<=3_000{"held_unreleased_no_gateway"}
+                else{"held_expired_never_dispatched"}
+            }else if broker_state=="queued"{"queued_for_gateway_not_broker_fill"}
+            else if broker_state=="dispatched"{"gateway_selected_broker_send_unconfirmed"}
+            else if matches!(broker_state.as_str(),"unknown"|"placed"|"partial"|"filled"|"observed"){
+                "broker_receipt_needs_deal_and_position_reconciliation"
+            }else{"terminal_without_broker_fill_proof"};
         json!({"position_identifier":pid,"physical_ticket":ticket,
             "plan_id":plan,"held_core_command_id":id,
-            "created_ms":at,"state":if !intact{"held_outbox_corrupted_needs_review"}
-                else if now>=at&&now-at<=3_000{"held_unreleased_no_gateway"}
-                else{"held_expired_never_dispatched"},
-            "orders_dispatched":0,"gateway_sends":0,
+            "created_ms":at,"state":label,
+            "broker_command_state":broker_state,"release_verified":released,
+            "gateway_dispatchable":valid&&broker_state=="queued",
+            "gateway_send_confirmed":false,"broker_fill_verified":false,
             "read_only":true})
     }).collect::<Vec<_>>());
+    result["queued_for_gateway"]=json!(dispatchable);
+    result["potential_gateway_dispatches"]=json!(possibly_sent);
+    // The Core outbox alone cannot prove that order_send occurred.
+    result["gateway_sends"]=Value::Null;
     Ok(result)
 }
 #[cfg(test)]
