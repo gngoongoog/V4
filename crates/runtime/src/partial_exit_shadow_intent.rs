@@ -517,8 +517,9 @@ mod tests{
             let mut other=t.clone();other.login+=1;
             assert!(report(&db,&other,"demo").unwrap()["rows"].as_array().unwrap().is_empty());
             other=t.clone();other.demo=false;other.account_trade_mode=Some(2);
-            assert_eq!(report(&db,&other,"live").unwrap()["status"],
-                "unverified_demo_account");
+            let account=report(&db,&other,"live").unwrap();
+            assert_eq!(account["status"],"research_close_intents_no_broker_commands");
+            assert!(account["rows"].as_array().unwrap().is_empty());
             assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_commands",[],
                 |r|r.get::<_,u32>(0)).unwrap(),0);
         }
