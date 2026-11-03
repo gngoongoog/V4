@@ -135,6 +135,26 @@ const stagedFalseProof=render({status,source:{...view,partial_exit_command_links
  evidence:{state:'broker_order_deals_exactly_linked',matched_broker_lots:0.05,
  stage_completed:true,orders_enabled:true}}]}}});
 assert(!shown(stagedFalseProof).includes('0.05 لوت موثق'));
+const nextGate={schema:'partial-exit-next-shadow-gate-v1',
+ status:'verified_history_research_only',context,target:'demo',
+ read_only:true,orders_enabled:false,next_stage_authorized:false,
+ breakeven_enabled:false,
+ rows:[{position_identifier:907,plan_id:'tp-plan-b',stage:2,
+ state:'historical_prerequisites_met_shadow_only',
+ historical_condition_only:true,read_only:true,orders_enabled:false,
+ next_stage_authorized:false,breakeven_enabled:false,
+ expected_close_lots:0.03,expected_remaining_volume:0.02}]};
+const nextView=render({status,source:{...view,partial_exit_next_shadow_gate:nextGate}});
+assert(shown(nextView).includes('فحص شروط TP2 / TP3'));
+assert(shown(nextView).includes('لوت مفترض 0.03'));
+assert(!collect(nextView).some(x=>x.type==='button'));
+const nextForeign=render({status,source:{...view,
+ partial_exit_next_shadow_gate:{...nextGate,context:'foreign'}}});
+assert(!shown(nextForeign).includes('فحص شروط TP2 / TP3'));
+const forgedNext=render({status,source:{...view,
+ partial_exit_next_shadow_gate:{...nextGate,rows:[
+ {...nextGate.rows[0],next_stage_authorized:true}]}}});
+assert(!shown(forgedNext).includes('لوت مفترض 0.03'));
 const shadowIntent={schema:'tp-shadow-close-intents-v1',
  status:'research_close_intents_no_broker_commands',context,target:'demo',
  read_only:true,orders_enabled:false,next_stage_authorized:false,
@@ -212,6 +232,12 @@ assert(core.includes('value["partial_exit_command_links"]=if status.gateway_fres
 assert(core.includes('value["partial_exit_stage_settlements"]=if status.gateway_fresh && self.account_matches(status)'));
 assert(core.includes('value["partial_exit_shadow_tp1"]=if status.gateway_fresh && self.account_matches(status)'));
 assert(core.includes('value["partial_exit_shadow_close_intents"]=if status.gateway_fresh && self.account_matches(status)'));
+assert(core.includes('value["partial_exit_next_shadow_gate"]=if status.gateway_fresh && self.account_matches(status)'));
+const shadowNext=file('../../crates/runtime/src/partial_exit_next_shadow.rs');
+assert(shadowNext.includes('historical_prerequisites_met_shadow_only'));
+assert(shadowNext.includes('historical_stage_sealed'));
+assert(!shadowNext.includes('order_send('));
+
 const shadowIntentCore=file('../../crates/runtime/src/partial_exit_shadow_intent.rs');
 assert(shadowIntentCore.includes('partial_exit_shadow_close_intents'));
 assert(shadowIntentCore.includes('research_close_intent'));
