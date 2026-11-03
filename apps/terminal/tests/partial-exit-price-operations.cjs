@@ -178,6 +178,36 @@ const gatewaySelected=render({...opts,source:{...heldPreview,
  state:'gateway_selected_broker_send_unconfirmed',
  broker_command_state:'dispatched'}]}}});
 assert(textOf(gatewaySelected).includes('نتيجة الوسيط غير مؤكدة'));
+const settled={...heldPreview,partial_exit_stage_settlements:{
+ schema:'partial-exit-stage-settlements-v1',
+ status:'account_scoped_historical_settlements',
+ context,target:'demo',read_only:true,orders_enabled:false,
+ next_stage_authorized:false,breakeven_enabled:false,rows:[{
+  position_identifier:907,stage:1,plan_id:stages[0].plan_id,
+  state:'historical_stage_sealed',core_command_id:'tp1-once-id',
+  broker_order:76543,matched_volume:0.05,remaining_volume_at_seal:0.05,
+  next_stage_authorized:false,breakeven_triggered:false
+ }]}};
+const realDealProof=render({...opts,source:settled});
+assert(textOf(realDealProof).includes('تم توثيق أمر الوسيط والـDeals وحجم المركز المتبقي'));
+assert(textOf(realDealProof).includes('الحجم المغلق 0.05 لوت'));
+assert(textOf(realDealProof).includes('المتبقي 0.05 لوت'));
+assert(textOf(realDealProof).includes('ولا يفعّل المرحلة التالية أو التعادل تلقائياً'));
+const staleProof=render({...opts,source:{...settled,
+ partial_exit_stage_settlements:{...settled.partial_exit_stage_settlements,
+ rows:[{...settled.partial_exit_stage_settlements.rows[0],
+  state:'sealed_evidence_needs_review'}]}}});
+assert(textOf(staleProof).includes('الأدلة المحفوظة تحتاج إعادة تدقيق'));
+assert(!textOf(staleProof).includes('تم توثيق أمر الوسيط والـDeals'));
+const forgedProof=render({...opts,source:{...settled,
+ partial_exit_stage_settlements:{...settled.partial_exit_stage_settlements,
+ rows:[{...settled.partial_exit_stage_settlements.rows[0],
+  broker_order:null}]}}});
+assert(!textOf(forgedProof).includes('تم توثيق أمر الوسيط والـDeals'));
+const foreignSettlement=render({...opts,source:{...settled,
+ partial_exit_stage_settlements:{...settled.partial_exit_stage_settlements,
+ target:'live'}}});
+assert(!textOf(foreignSettlement).includes('أدلة الإغلاق الجزئي المرحلية من MT5'));
 const consentTree=render({...opts,source:eligibleSaved});
 assert(textOf(consentTree).includes('تسجيل موافقة هذه الخطة للتحضير المستقبلي'));
 assert(!textOf(consentTree).includes('تم تنفيذ TP'),
