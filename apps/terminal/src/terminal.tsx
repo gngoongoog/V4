@@ -111,7 +111,7 @@ const PAGE_GUIDE:Record<PageId,{purpose:string;step:string}>={
 const primaryNav:PageId[]=['dashboard','trading','brainControl','risk','reports','journal','news','settings'];
 const navLabel:Partial<Record<PageId,string>>={dashboard:'اللوحة الرئيسية',trading:'التداول المباشر',brainControl:'إعدادات العقول',risk:'إدارة المخاطر',reports:'التحليلات والتقارير',journal:'سجل العمليات',news:'السوق والأخبار',settings:'الإعدادات العامة'};
 const RISK_FIELDS=[['risk_percent','نسبة المخاطرة لكل صفقة','%'],['daily_loss_percent','الحد اليومي للخسارة','%'],['max_drawdown_percent','أقصى تراجع مسموح','%'],['max_spread_atr','سقف السبريد بالنسبة إلى ATR','ATR'],['max_lots','أقصى لوت','lot'],['commission_per_lot','العمولة لكل لوت كامل','/lot'],['slippage_ticks','انزلاق السعر','ticks'],['micro_real_recovery_equity','رصيد استعادة الحماية','equity'],['micro_real_cap_percent','سقف وضع الحساب الصغير','%']] as const;
-const RISK_FLAGS=[['daily_breaker_demo_enabled','قاطع الخسارة اليومي DEMO'],['daily_breaker_real_enabled','قاطع الخسارة اليومي REAL'],['micro_demo_risk_opt_in','إذن تجربة نسبة أعلى في DEMO'],['micro_real_temporary','وضع الحساب الحقيقي الصغير المؤقت']] as const;
+const RISK_FLAGS=[['daily_breaker_demo_enabled','قاطع الخسارة اليومي DEMO'],['daily_breaker_real_enabled','قاطع الخسارة اليومي REAL'],['micro_demo_risk_opt_in','إذن تجربة نسبة أعلى في DEMO'],['live_elevated_risk_opt_in','موافقة صريحة على مخاطرة 2–5% في LIVE'],['micro_real_temporary','وضع الحساب الحقيقي الصغير المؤقت']] as const;
 
 function buttonLabel(status:Status|null,fixture:boolean){return fixture?'PREVIEW':status?.gateway_fresh?'MT5 CONNECTED':'CORE / MT5 OFFLINE'}
 const array=(x:unknown):Record<string,unknown>[]=>Array.isArray(x)?x.filter(v=>v&&typeof v==='object').slice(0,60) as Record<string,unknown>[]:[];
@@ -133,7 +133,7 @@ function RiskEditor({config,apply,loading,armed}:{config:Record<string,unknown>|
  // explicit domain defaults before editing so required inputs are never blank.
  useEffect(()=>{if(config)setValues({
   micro_real_temporary:false,micro_real_recovery_equity:500,micro_real_cap_percent:10,
-  micro_demo_risk_opt_in:false,daily_breaker_demo_enabled:false,
+  micro_demo_risk_opt_in:false,live_elevated_risk_opt_in:false,daily_breaker_demo_enabled:false,
   daily_breaker_real_enabled:true,...config
  });else setValues({})},[config]);
  const locked=loading||armed||!config;
@@ -141,8 +141,9 @@ function RiskEditor({config,apply,loading,armed}:{config:Record<string,unknown>|
   e.preventDefault();if(!config)return;if(armed)return;
   if((config.daily_breaker_real_enabled===true&&values.daily_breaker_real_enabled===false)||
      (config.micro_real_temporary!==true&&values.micro_real_temporary===true)||
+     (config.live_elevated_risk_opt_in!==true&&values.live_elevated_risk_opt_in===true)||
      (values.micro_real_temporary===true&&Number(values.micro_real_cap_percent)>Number(config.micro_real_cap_percent||0))){
-   if(!window.confirm('Micro REAL أو تعطيل قاطع الحساب قد يسبب خسارة معظم رأس المال. هل تريد حفظ هذه التغييرات؟'))return;
+   if(!window.confirm('رفع مخاطرة LIVE فوق 2% أو تفعيل Micro REAL أو تعطيل قاطع الحساب قد يسبب خسارة معظم رأس المال. هذا إذن اختياري خاص بالحساب، ولا يغيّر حساب MT5 تلقائياً. هل تؤكد حفظ هذه التغييرات؟'))return;
   }
   void apply(values);
  }}>
@@ -154,7 +155,7 @@ function RiskEditor({config,apply,loading,armed}:{config:Record<string,unknown>|
    <button type="button" disabled={locked} onClick={()=>setValues(old=>({...old,micro_real_temporary:true,micro_real_cap_percent:20,micro_real_recovery_equity:500}))}>Micro REAL · 20% (مخاطرة مرتفعة جداً)</button>
    <button type="button" disabled={locked} onClick={()=>setValues(old=>({...old,micro_real_temporary:false}))}>إلغاء Micro REAL</button>
   </div>
-  <p className="safe-note">هذه النسب سقف الخسارة المقدّرة عند الستوب لكل صفقة، مو هدف ربح. تقدر تعدّل السقف وEquity التعافي يدوياً. يُطبق فقط إذا سمحت حالة الحساب وسجل التعافي والهامش، ويبقى أمر الوسيط خاضعاً للتحقق. قاطع الخسارة اليومي REAL خيار مستقل.</p>
+  <p className="safe-note">الحد الافتراضي 2% لكل صفقة. رفعه إلى 5% على LIVE يتطلب تفعيل الموافقة الصريحة أعلاه؛ موافقة DEMO لا تنتقل إلى LIVE. هذا خطر مرتفع، وقد تتجاوز الخسارة النسبة المقدرة عند الفجوات والانزلاق. هذه النسب سقف الخسارة المقدّرة عند الستوب لكل صفقة، مو هدف ربح. تقدر تعدّل السقف وEquity التعافي يدوياً. يُطبق فقط إذا سمحت حالة الحساب وسجل التعافي والهامش، ويبقى أمر الوسيط خاضعاً للتحقق. قاطع الخسارة اليومي REAL خيار مستقل.</p>
   <button type="submit" className="save-button" disabled={locked}>حفظ إعدادات المخاطر في Rust Core</button>
   {!config&&<p className="safe-note">إعدادات المخاطر غير متاحة؛ الحقول متوقفة حتى الاتصال بـCore.</p>}
   {armed&&<p className="safe-note">أوقف الدخول STOP أولاً لتعديل إعدادات المخاطرة واللوت.</p>}
