@@ -162,8 +162,14 @@ assert(!textOf(render({...opts,source:{...heldPreview,
 const expiredHeld=render({...opts,source:{...heldPreview,
  partial_exit_tp1_held:{...heldPreview.partial_exit_tp1_held,
  rows:[{...heldPreview.partial_exit_tp1_held.rows[0],
- state:'held_expired_never_dispatched'}]}}});
+ state:'held_expired_never_dispatched',
+ manual_replan_required:true,automatic_requeue_allowed:false}]}}});
 assert(textOf(expiredHeld).includes('انتهت صلاحية الأمر المحجوز قبل إطلاقه'));
+assert(textOf(expiredHeld).includes('لا يعيد تسعيره أو إرساله تلقائياً'),
+ 'Stale TP1 held outbox must show explicit broker-history manual resolution');
+const noManualReview=render({...opts,source:heldPreview});
+assert(!textOf(noManualReview).includes('لا يعيد تسعيره أو إرساله تلقائياً'),
+ 'An ordinary unexpired held outbox must not be reported as stale');
 const queuedTp1=render({...opts,source:{...heldPreview,
  partial_exit_tp1_held:{...heldPreview.partial_exit_tp1_held,
  rows:[{...heldPreview.partial_exit_tp1_held.rows[0],
