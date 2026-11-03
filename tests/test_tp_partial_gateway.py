@@ -130,23 +130,38 @@ class StageDemoTests(unittest.TestCase):
         self.assertEqual(len(self.mt.sends),1)
     def test_tp2_and_tp3_keep_residual_on_broker_grid(self):
         self.p.volume=0.05
-        self.cmd=stage_command(stage=2,held=0.05,lots=0.03)
+        tp2=stage_command(stage=2,held=0.05,lots=0.03)
+        self.cmd=tp2
         self.assertEqual(self.send()["state"],"placed")
         self.assertAlmostEqual(self.mt.sends[0]["volume"],0.03)
+        # TP3 cannot send with a different command while the TP2 order's
+        # actual MT5 fills have not been reconciled.
         self.p.volume=0.02
-        self.cmd=stage_command(stage=3,held=0.02,lots=0.02)
+        tp3=stage_command(stage=3,held=0.02,lots=0.02)
+        self.cmd=tp3
         blocked=self.send()
         self.assertEqual(blocked["state"],"cancelled",blocked)
-        self.assertEqual(len(self.mt.sends),1,
-                         "Unsettled TP2 must prevent TP3")
-        # A separate journal represents an already-reconciled TP2 in this
-        # geometry-only test; the blocked command itself remains cancelled.
-        self.ex.close()
-        self.ex=BrokerExecutor(Path(self.tmp.name)/"stage3-settled.sqlite")
-        self.cmd["id"]="tp3-after-settlement-"+"f"*18
-        result=self.send()
-        self.assertEqual(result["state"],"placed",result)
-        self.assertAlmostEqual(self.mt.sends[1]["volume"],0.02)
+        self.assertEqual(len(self.mt.sends),1)
+        # The block above is pre-journal: settle TP2 from its immutable Deal
+        # with the same Gateway journal before retrying TP3.
+        self.cmd=tp2
+        self.history_fill(lots=0.03)
+        settled=self.send()
+        self.assertEqual(settled["state"],"filled",settled)
+        self.assertTrue(settled["recovered_from_history"])
+        prior=list(self.mt.deals)
+        self.cmd=tp3
+        self.mt.order_send=lambda req:N(retcode=10009,comment="broker",order=56,
+            deal=78,volume=req["volume"],price=req["price"])
+        ready=self.send()
+        self.assertEqual(ready["state"],"placed",ready)
+        self.assertAlmostEqual(self.mt.sends[0]["volume"],0.03)
+        # The patched broker stub must record the separate TP3 send.
+        self.history_fill(lots=0.02,order=56,deal=78)
+        self.mt.deals=prior+self.mt.deals
+        final=self.send()
+        self.assertEqual(final["state"],"filled",final)
+        self.assertTrue(final["recovered_from_history"])
     def test_late_broker_volume_change_denies_send_even_after_first_authorization(self):
         self.mt.on_check=lambda:setattr(self.p,"volume",0.08)
         res=self.send()
