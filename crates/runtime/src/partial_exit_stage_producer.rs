@@ -58,6 +58,8 @@ fn candidate(row:&Value,t:&Telemetry,target:&str,now:u64,
     let entry=positive(row,"expected_position_entry")?;
     let price=positive(row,"tp_target_price")?;
     let step=positive(row,"volume_step")?;
+    let minimum=t.volume_min?;
+    let maximum=t.volume_max?;
     let tick=t.tick_size?;
     let original_tp=row["expected_broker_tp"].as_f64()
         .filter(|n|n.is_finite()&&*n>=0.)?;
@@ -66,9 +68,11 @@ fn candidate(row:&Value,t:&Telemetry,target:&str,now:u64,
     if !close(t.volume_step?,step,step)
         ||!exact_grid(lots,step)||!exact_grid(expected,step)
         ||!exact_grid(price,tick)
+        ||!minimum.is_finite()||minimum<=0.||!maximum.is_finite()||maximum<minimum
+        ||lots<minimum-step*1e-6||lots>maximum+step*1e-6
         ||lots>expected+step*1e-6
         ||(stage<3&&(!exact_grid(expected-lots,step)
-            ||expected-lots<t.volume_min?-1.0:0.0))
+            ||expected-lots<minimum-step*1e-6))
     {return None}
     if !fresh_quote.is_finite()||fresh_quote<=0.
         ||(side=="BUY"&&(price<=entry+tick*.5||fresh_quote<price))
