@@ -217,6 +217,22 @@ class StageDemoTests(unittest.TestCase):
         self.history_fill()
         self.assertEqual(self.send()["state"],"filled")
         self.assertEqual(len(self.mt.sends),1)
+    def test_tp_done_ack_with_missing_deal_ticket_stays_unresolved_on_conflicting_zero_fill(self):
+        self.mt.reply_deal=0
+        ack=self.send()
+        self.assertEqual(ack["state"],"placed",ack)
+        self.assertEqual(ack["retcode"],10009)
+        self.ex._terminal_partial_order=lambda *_:dict(confirmed=True,ticket=55,
+            state="canceled",volume_initial=0.05,volume_current=0.05)
+        unresolved=self.send()
+        self.assertEqual(unresolved["state"],"placed",unresolved)
+        self.assertIn("no cancel/no resend",unresolved["reason"])
+        self.assertEqual(len(self.mt.sends),1)
+        self.history_fill()
+        confirmed=self.send()
+        self.assertEqual(confirmed["state"],"filled",confirmed)
+        self.assertTrue(confirmed["recovered_from_history"])
+        self.assertEqual(len(self.mt.sends),1)
     def test_genuine_zero_fill_placed_order_can_be_cancelled_without_resend(self):
         self.mt.code=10008
         self.mt.reply_deal=0
