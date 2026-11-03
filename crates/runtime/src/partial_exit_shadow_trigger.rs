@@ -165,7 +165,8 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
         let bid=v["bid"].as_f64().unwrap_or(f64::NAN);
         let ask=v["ask"].as_f64().unwrap_or(f64::NAN);
         let side_price=if buy{bid}else{ask};
-        let original_ok=cap["schema"]=="partial-exit-price-capture-v1"
+        let original_ok=crate::partial_exit_prices::capture_geometry_valid(&cap,&prices)
+            &&cap["schema"]=="partial-exit-price-capture-v1"
             &&cap["context"]==key&&cap["target"]=="demo"
             &&cap["position_identifier"].as_u64()==Some(pid)
             &&cap["ticket"]==v["ticket"]
@@ -320,6 +321,15 @@ mod tests {
         assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],"needs_review");
         db.execute("UPDATE partial_exit_price_plans
             SET prices_json=json_set(prices_json,'$[0]',2001.0)",[]).unwrap();
+        assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],
+            "historical_shadow_crossing_only");
+        // Changing the *other* saved targets must also invalidate the
+        // full immutable plan, even though TP1's own crossing is unchanged.
+        db.execute("UPDATE partial_exit_price_plans
+            SET prices_json=json_set(prices_json,'$[1]',2000.0)",[]).unwrap();
+        assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],"needs_review");
+        db.execute("UPDATE partial_exit_price_plans
+            SET prices_json=json_set(prices_json,'$[1]',2002.0)",[]).unwrap();
         db.execute("UPDATE partial_exit_shadow_tp1
             SET evidence_json=json_set(evidence_json,'$.bid',2005.0)",[]).unwrap();
         assert_eq!(report(&db,&t,"demo").unwrap()["rows"][0]["state"],"needs_review");
