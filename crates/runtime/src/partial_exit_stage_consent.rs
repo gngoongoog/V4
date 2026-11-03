@@ -32,6 +32,7 @@ pub fn init(db:&Connection)->Result<()> {
         approved_revision INTEGER NOT NULL,
         approved_ms INTEGER NOT NULL CHECK(approved_ms>0),
         enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+        purpose TEXT NOT NULL CHECK(purpose='preparation_only'),
         PRIMARY KEY(context,target,position_identifier)
     );")?;
     Ok(())
@@ -44,20 +45,21 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
     if !account_ok(t,target){return Ok(empty())}
     let key=context(t);
     let mut statement=db.prepare("SELECT position_identifier,position_ticket,
-            plan_ids,approved_revision,approved_ms,enabled
+            plan_ids,approved_revision,approved_ms,enabled,purpose
         FROM partial_exit_stage_consents WHERE context=?1 AND target=?2
         ORDER BY approved_ms DESC LIMIT 50")?;
     let rows=statement.query_map(params![key,target],|r|Ok((
         r.get::<_,u64>(0)?,r.get::<_,u64>(1)?,r.get::<_,String>(2)?,
-        r.get::<_,u64>(3)?,r.get::<_,u64>(4)?,r.get::<_,i64>(5)?
+        r.get::<_,u64>(3)?,r.get::<_,u64>(4)?,r.get::<_,i64>(5)?,r.get::<_,String>(6)?
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    let rows=rows.into_iter().map(|(pid,ticket,raw,rev,at,enabled)|{
+    let rows=rows.into_iter().map(|(pid,ticket,raw,rev,at,enabled,purpose)|{
         let ids=serde_json::from_str::<[String;3]>(&raw).ok();
         let intact=ids.as_ref().is_some_and(plan_ids_valid)
-            &&matches!(enabled,0|1);
+            &&matches!(enabled,0|1)&&purpose=="preparation_only";
         json!({"position_identifier":pid,"position_ticket":ticket,
             "plan_ids":if intact{json!(ids)}else{Value::Null},
             "approved_revision":rev,"approved_ms":at,
+            "purpose":purpose,
             "operator_approved":intact&&enabled==1,
             "state":if intact {if enabled==1 {"operator_approved_not_dispatched"}
                 else{"operator_disabled"}} else{"invalid_record_requires_review"},
@@ -67,6 +69,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
     Ok(json!({"schema":"tp-stage-operator-consent-v1",
         "status":"account_scoped_operator_consent_not_execution",
         "context":key,"target":target,"rows":rows,
+        "purpose":"preparation_only",
         "read_only":true,"orders_enabled":false,
         "automatic_tp_execution_enabled":false,"orders_created":0,
         "note":"Per-position operator authorization stored for a future separately verified stage executor. No MT5 close is sent."}))
@@ -79,11 +82,11 @@ pub fn set(db:&Connection,t:&Telemetry,target:&str,pid:u64,
     ensure!(pid>0&&revision>0&&now>0&&plan_ids_valid(ids),
         "هوية خطة TP أو مراجعة الحساب غير صالحة");
     let key=context(t);
-    let old:Option<(u64,String,u64,i64)>=db.query_row(
-        "SELECT position_ticket,plan_ids,approved_revision,enabled
+    let old:Option<(u64,String,u64,i64,String)>=db.query_row(
+        "SELECT position_ticket,plan_ids,approved_revision,enabled,purpose
          FROM partial_exit_stage_consents
          WHERE context=?1 AND target=?2 AND position_identifier=?3",
-        params![key,target,pid],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))
+        params![key,target,pid],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))
     ).optional()?;
     if enabled {
         ensure!(t.quote_is_fresh(now,3_000),"يجب توفر اقتباس MT5 حديث عند اعتماد خطة TP");
@@ -101,8 +104,8 @@ pub fn set(db:&Connection,t:&Telemetry,target:&str,pid:u64,
                 &&row["plan_ids"]==json!(ids)));
         ensure!(eligible,"أسعار وخطط TP لا تطابق المركز الحالي أو أصبحت غير موثوقة");
         // Old consent is immutable for ticket, plan and Core revision.
-        if let Some((old_ticket,old_ids,old_revision,_))=&old {
-            ensure!(*old_ticket==p.ticket&&*old_revision==revision
+        if let Some((old_ticket,old_ids,old_revision,_,purpose))=&old {
+            ensure!(purpose=="preparation_only"&&*old_ticket==p.ticket&&*old_revision==revision
                 &&serde_json::from_str::<Value>(old_ids).ok()==Some(json!(ids)),
                 "موافقة TP قديمة تختلف عن الهوية الحالية؛ لا تعيد تفعيلها تلقائياً");
             db.execute("UPDATE partial_exit_stage_consents SET enabled=1
@@ -111,13 +114,13 @@ pub fn set(db:&Connection,t:&Telemetry,target:&str,pid:u64,
         }else{
             db.execute("INSERT INTO partial_exit_stage_consents(
                 context,target,position_identifier,position_ticket,plan_ids,
-                approved_revision,approved_ms,enabled)
-                VALUES(?1,?2,?3,?4,?5,?6,?7,1)",
+                approved_revision,approved_ms,enabled,purpose)
+                VALUES(?1,?2,?3,?4,?5,?6,?7,1,'preparation_only')",
                 params![key,target,pid,p.ticket,json!(ids).to_string(),revision,now])?;
         }
     }else{
-        let (old_ticket,old_ids,_,_)=old.context("لا توجد خطة TP معتمدة لتعطيلها")?;
-        ensure!(old_ticket>0&&serde_json::from_str::<Value>(&old_ids).ok()==Some(json!(ids)),
+        let (old_ticket,old_ids,_,_,purpose)=old.context("لا توجد خطة TP معتمدة لتعطيلها")?;
+        ensure!(purpose=="preparation_only"&&old_ticket>0&&serde_json::from_str::<Value>(&old_ids).ok()==Some(json!(ids)),
             "معرّف الخطة تغيّر؛ لا يمكن تعديل موافقة مختلفة");
         db.execute("UPDATE partial_exit_stage_consents SET enabled=0
             WHERE context=?1 AND target=?2 AND position_identifier=?3",
@@ -125,7 +128,7 @@ pub fn set(db:&Connection,t:&Telemetry,target:&str,pid:u64,
     }
     Ok(json!({"ok":true,"operator_approved":enabled,
         "context":key,"target":target,"position_identifier":pid,
-        "plan_ids":ids,"orders_enabled":false,
+        "plan_ids":ids,"purpose":"preparation_only","orders_enabled":false,
         "automatic_tp_execution_enabled":false,"broker_commands_created":0,
         "state":if enabled{"operator_approved_not_dispatched"}else{"operator_disabled"}}))
 }
