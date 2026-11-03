@@ -61,8 +61,10 @@ def is_fast_path(cmd):
     and re-read the exact position immediately before send.
     """
     if cmd.get('kind') == 'close':
-        if cmd.get('tp_stage_plan_id') is not None:
-            # Stage closes are deliberately NOT on Sniper's no-order_check path.
+        if any(key in cmd for key in (
+                'tp_stage_plan_id','tp_stage','expected_position_identifier')):
+            # Any stage marker, even malformed/null, never takes the
+            # no-order_check automatic-close shortcut.
             return False
         # Operator-requested bulk closes take the full broker order_check;
         # the existing automatic Sniper exit path keeps its latency contract.
@@ -494,8 +496,15 @@ class BrokerExecutor:
                 and getattr(item, 'position_id', None)==cmd['expected_position_identifier'])
             if magic!=cmd['magic'] and not zero_magic_tp:
                 return False
-            # If both sides expose an order ID, it must agree. A copied or
-            # broker-reused comment must never override a conflicting ticket.
+            if cmd.get('tp_stage_plan_id') is not None:
+                # For immutable TP stages a matching magic/comment is NOT
+                # enough to claim an economic fill. A Deal with no order ID
+                # cannot be bound to the exact acknowledged MT5 Order, even
+                # when the remaining attributes happen to match.
+                return acknowledged_order>0 and item_order==acknowledged_order
+            # Legacy non-TP commands retain their own reconciliation rule.
+            # If both sides expose an order ID, it must agree; a copied
+            # broker comment cannot override an explicit conflicting ticket.
             if acknowledged_order>0 and item_order>0:
                 return item_order==acknowledged_order
             return getattr(item, 'comment', '')==tag
@@ -758,10 +767,10 @@ class BrokerExecutor:
                     or any(o.magic in OWNED_MAGICS for o in orders)):
                 raise ValueError('A BrainTrade position or order already owns this symbol')
             closing=cmd['kind']=='close'
-            if any(key in cmd for key in ('tp_stage','expected_position_identifier')) and cmd.get('tp_stage_plan_id') is None:
-                raise ValueError('Incomplete TP stage marker; a full position close is forbidden')
-            if cmd.get('tp_stage_plan_id') is not None and not closing:
-                raise ValueError('TP stage marker is allowed on a close only')
+            stage_keys=('tp_stage_plan_id','tp_stage','expected_position_identifier')
+            if any(key in cmd for key in stage_keys):
+                if not closing or any(cmd.get(key) is None for key in stage_keys):
+                    raise ValueError('Incomplete TP stage marker; a full position close is forbidden')
             if closing:
                 # A different close intent must not bypass an existing
                 # unresolved close of the same bound physical position.
