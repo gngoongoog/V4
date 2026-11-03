@@ -2568,6 +2568,13 @@ mod execution_persistence_tests {
 #[cfg(test)]
 mod tp_stage_core_authorization_gate_tests {
     use super::*;
+    fn demo() -> Telemetry {
+        Telemetry {
+            connected:true,demo:true,account_trade_mode:Some(0),
+            login:17,server:"Demo-Test".into(),currency:"USD".into(),
+            symbol:"XAUUSD".into(),..Default::default()
+        }
+    }
     #[test]
     fn quarantined_stage_never_reaches_gateway_before_authorization(){
         let db=Connection::open_in_memory().unwrap();
