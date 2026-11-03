@@ -60,6 +60,15 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
   shadow.next_stage_authorized===false&&shadow.breakeven_enabled===false;
  const shadowRows=shadowBound&&Array.isArray(shadow.rows)?
   shadow.rows.slice(0,50).map(object):[];
+ const nextGate=object(view.partial_exit_next_shadow_gate);
+ const nextGateBound=verified&&t?.demo===true&&
+  nextGate.schema==='partial-exit-next-shadow-gate-v1'&&
+  ['verified_history_research_only','no_broker_verified_previous_stage'].includes(String(nextGate.status))&&
+  nextGate.context===context&&nextGate.target==='demo'&&
+  nextGate.read_only===true&&nextGate.orders_enabled===false&&
+  nextGate.next_stage_authorized===false&&nextGate.breakeven_enabled===false;
+ const nextGateRows=nextGateBound&&Array.isArray(nextGate.rows)?
+  nextGate.rows.slice(0,25).map(object):[];
  const intent=object(view.partial_exit_shadow_close_intents);
  const intentBound=verified&&t?.demo===true&&
   intent.schema==='tp-shadow-close-intents-v1'&&
@@ -159,6 +168,32 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
        <span>الحجم الأصلي {volume(d.initial_volume)} لوت</span>
       </div>)}
     </div>:null}
+   {nextGateBound?<details className="operator-advanced" aria-label="شروط انتقال TP2 وTP3 التاريخية">
+     <summary>فحص شروط TP2 / TP3 بعد إغلاق موثق — شادو فقط</summary>
+     <p className="safe-note">لا يُفحص هدف لاحق إلا إذا وثّق Core إغلاق المرحلة السابقة بأمر MT5 والـDeals وحجم المركز المتبقي. حتى لو اكتملت الشروط لا يرسل النظام أمراً ولا ينقل SL إلى التعادل، وتبقى خطة الحجم الأصلية بحاجة مراجعة.</p>
+     {nextGateRows.length===0?<p>لم تُثبت تسوية مرحلة سابقة من الوسيط بعد، لذلك لا يوجد هدف تالٍ مؤهل حتى للدراسة.</p>:
+      nextGateRows.map((r,i)=>{
+       const stage=[2,3].includes(Number(r.stage))?Number(r.stage):null;
+       const ready=stage!==null&&r.state==='historical_prerequisites_met_shadow_only'&&
+        r.historical_condition_only===true&&r.read_only===true&&
+        r.orders_enabled===false&&r.next_stage_authorized===false&&
+        r.breakeven_enabled===false&&valid(r.expected_close_lots);
+       return <div className="brain-control-row" key={String(r.plan_id)+'-'+i}>
+        <div><b>{stage?'TP'+stage:'TP غير معروف'} — مركز {Number.isSafeInteger(r.position_identifier)?String(r.position_identifier):'—'}</b>
+         <small style={{display:'block',marginTop:4}}>{ready?
+          'شروط التاريخ والسعر مكتملة للدراسة فقط؛ التنفيذ ما زال مقفلاً':
+          r.state==='unverified_or_competing_close_command'?
+          'هناك إغلاق سابق غير محسوم أو متعارض — ممنوع الاعتماد':
+          r.state==='broker_quote_not_after_previous_settlement'?
+          'انتظر اقتباس MT5 أصلياً جديداً بعد تسوية المرحلة السابقة':
+          r.state==='next_target_not_crossed'?
+          'لم يصل سعر الإغلاق إلى الهدف التالي':
+          'شروط تاريخ الوسيط أو المركز غير مكتملة — يتطلب مراجعة'}</small>
+        </div>
+        <span>{ready?'لوت مفترض '+volume(r.expected_close_lots):'غير مؤهل'}</span>
+       </div>;
+      })}
+    </details>:null}
    {intentBound?<details className="operator-advanced" aria-label="مسودات حجم الإغلاق التجريبي TP1">
      <summary>مسودة حجم إغلاق TP1 — معاينة فقط</summary>
      <p className="safe-note">يحسب Rust Core حجم الإغلاق المتوقع من خطة اللوت المحفوظة بعد عبور TP1 بالشادو، ويتحقق من المركز وخطوة الحجم وقواعد الوسيط. لا تُسجّل المسودة ضمن أوامر Core أو Gateway، ولا تفتح أو تغلق مركزاً ولا تحقق ربحاً.</p>
