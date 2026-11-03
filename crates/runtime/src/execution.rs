@@ -393,6 +393,7 @@ impl Service {
         crate::partial_exit_stage_reservation::init(db)?;
         crate::partial_exit_stage_outbox::init(db)?;
         crate::partial_exit_stage_consent::init(db)?;
+        crate::partial_exit_trade_approval::init(db)?;
         crate::pending_cancellation::init(db)?;
         let mut inner = legacy::Service::new(db)?;
         // Old per-brain flags do not choose an execution owner. A scoped solo
@@ -1022,6 +1023,39 @@ impl Service {
             return crate::partial_exit_stage_consent::set(db,t,
                 &self.inner.settings.target,request.position_identifier,
                 &request.plan_ids,request.enabled,self.inner.settings.revision,now);
+        }
+        if method=="POST" && path=="/v1/execution/partial-exit-trade-approval" {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request {context:String,position_identifier:u64,
+                plan_ids:[String;3],enabled:bool,confirm_live_login:String}
+            let request:Request=serde_json::from_slice(body)?;
+            anyhow::ensure!(!status.requested_run&&!self.pending(db)?,
+                "تفويض TP1 يتطلب STOP وإتمام مصالحة جميع أوامر الوسيط");
+            anyhow::ensure!(status.gateway_fresh&&self.account_matches(status),
+                "حساب MT5 المختار غير مطابق أو غير متصل ببيانات حديثة");
+            let t=status.telemetry.as_ref().context("بيانات حساب MT5 غير متاحة")?;
+            anyhow::ensure!(request.context==context(t),
+                "تغيّرت هوية حساب MT5 أو الرمز؛ حدّث الصفحة");
+            if self.inner.settings.target=="live"&&request.enabled {
+                anyhow::ensure!(request.confirm_live_login==t.login.to_string(),
+                    "اكتب رقم حساب Live بالضبط لتفويض تداول TP1 المستقبلي");
+            }
+            return crate::partial_exit_trade_approval::set(db,t,
+                &self.inner.settings.target,request.position_identifier,
+                &request.plan_ids,request.enabled,self.inner.settings.revision,now);
+        }
+        if method=="GET" && path=="/v1/execution/partial-exit-trade-approval" {
+            if status.gateway_fresh&&self.account_matches(status) {
+                if let Some(t)=status.telemetry.as_ref(){
+                    return crate::partial_exit_trade_approval::report(db,t,
+                        &self.inner.settings.target,now,self.inner.settings.revision);
+                }
+            }
+            return Ok(json!({"schema":"tp1-trade-approval-v1",
+                "status":"fresh_bound_selected_gateway_required","rows":[],
+                "read_only":true,"tp1_execution_enabled":false,
+                "broker_commands_created":0}));
         }
         if method=="GET" && path=="/v1/execution/partial-exit-stage-consent" {
             if status.gateway_fresh&&self.account_matches(status) {
@@ -1784,6 +1818,13 @@ impl Service {
                 status.telemetry.as_ref().map(|t|
                     crate::partial_exit_stage_consent::report_for_revision(
                         db,t,&self.inner.settings.target,self.inner.settings.revision)
+                        .unwrap_or_else(|error|json!({"error":error.to_string()})))
+                    .unwrap_or(Value::Null)
+            } else {Value::Null};
+            value["partial_exit_trade_approval"]=if status.gateway_fresh && self.account_matches(status) {
+                status.telemetry.as_ref().map(|t|
+                    crate::partial_exit_trade_approval::report(
+                        db,t,&self.inner.settings.target,now,self.inner.settings.revision)
                         .unwrap_or_else(|error|json!({"error":error.to_string()})))
                     .unwrap_or(Value::Null)
             } else {Value::Null};
