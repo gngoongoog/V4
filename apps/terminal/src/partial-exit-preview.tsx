@@ -88,6 +88,15 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
   settlements.next_stage_authorized===false&&settlements.breakeven_enabled===false;
  const settlementRows=settlementsBound&&Array.isArray(settlements.rows)?
   settlements.rows.slice(0,75).map(object):[];
+ const reservations=object(view.partial_exit_stage_reservations);
+ const reservationsBound=verified&&
+  reservations.schema==='tp-stage-reservations-v1'&&
+  reservations.status==='durable_stage_intents_not_dispatched'&&
+  reservations.context===context&&reservations.target===accountTarget&&
+  reservations.read_only===true&&reservations.orders_enabled===false&&
+  reservations.broker_commands_created===0;
+ const reservationRows=reservationsBound&&Array.isArray(reservations.rows)?
+  reservations.rows.slice(0,50).map(object):[];
  const stageCommands=object(view.partial_exit_stage_command_drafts);
  const stageCommandsBound=verified&&
   stageCommands.schema==='tp-stage-broker-command-drafts-v1'&&
@@ -240,6 +249,26 @@ export function PartialExitPreview({status,source}:{status:Status|null;source:un
           'سند الرصد السابق يحتاج مراجعة؛ لا يُعتمد كعبور صالح'}</small>
         </div>
         <span>{validShadow?'السعر '+volume(r.observed_price)+' / الهدف '+volume(r.target_price):'غير موثق'}</span>
+       </div>;
+      })}
+    </details>:null}
+   {reservationsBound?<details className="operator-advanced" aria-label="سجل حجوزات مراحل TP الدائم">
+     <summary>الحجز الدائم لخطة TP داخل Core — بدون إرسال</summary>
+     <p className="safe-note">هذا سجل SQLite محفوظ بعد رصد سعر صالح والتحقق من خطة المرحلة. يمنع إعادة تحضير نفس المرحلة بهوية متغيرة، لكنه لا يضع أمراً في طابور MT5 ولا يفتح أو يغلق صفقة.</p>
+     {reservationRows.length===0?<p>لا توجد مرحلة محفوظة بعد؛ يحتاج الحجز خطة أسعار، حركة سعر موثقة، وSTART على الحساب الذي اخترته.</p>:
+      reservationRows.map((r,i)=>{
+       const intact=r.read_only===true&&r.orders_enabled===false&&
+        r.broker_command_id===null&&r.state==='reserved_only_no_send'&&
+        [1,2,3].includes(Number(r.stage))&&
+        Number.isSafeInteger(r.position_identifier)&&
+        valid(r.lots)&&valid(r.target_price);
+       return <div className="brain-control-row" key={String(r.plan_id)+'-'+i}>
+        <div><b>TP{[1,2,3].includes(Number(r.stage))?String(r.stage):'؟'} — مركز {Number.isSafeInteger(r.position_identifier)?String(r.position_identifier):'—'}</b>
+         <small style={{display:'block',marginTop:4}}>{intact?
+          'تم تثبيت نية المرحلة في SQLite · لا أمر وسيط ولا إرسال':
+          'سجل الحجز ناقص أو تغيّرت هويته · يحتاج مراجعة'}</small>
+        </div>
+        <span>{intact?'لوت '+volume(r.lots)+' · هدف '+volume(r.target_price):'غير معتمد'}</span>
        </div>;
       })}
     </details>:null}
