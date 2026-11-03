@@ -1229,8 +1229,16 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 for (unissued_id,unissued_raw) in unissued {
                     let parsed=serde_json::from_str::<Value>(&unissued_raw);
-                    if parsed.as_ref().map_or(true,|c|
-                        !c.is_object()||incomplete_tp_stage_execution_locked(c)){
+                    if parsed.as_ref().map_or(true,|c| {
+                        let marked=incomplete_tp_stage_execution_locked(c)
+                            ||crate::partial_exit_tp1_release::stage_id_exists(
+                                db,&unissued_id);
+                        !c.is_object()||(marked
+                            &&!crate::partial_exit_tp1_release::authorize(
+                                db,t,&self.settings.target,&unissued_id,
+                                self.settings.revision,now,
+                                status.requested_run&&status.gateway_fresh))
+                    }){
                         let n=db.execute(
                             "UPDATE broker_commands SET state='cancelled'
                              WHERE id=?1 AND context=?2 AND state='queued'",
@@ -1277,8 +1285,18 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                                 cmd["daily_breaker_limit_percent"].as_f64().unwrap_or(2.))?;
                         let close_allowed = cmd["kind"] == "close"
                             && (cmd["manual_close"]!=true || !status.requested_run);
-                        let allowed = close_allowed || (breaker_ok &&
-                            ((self.enabled(status) && self.broker_entry_allowed(cmd)) || self.manual_entry_allowed(cmd,status)));
+                        let stage=incomplete_tp_stage_execution_locked(cmd)
+                            ||crate::partial_exit_tp1_release::stage_id_exists(db,id);
+                        let allowed = if stage {
+                            status.gateway_fresh&&status.requested_run
+                                &&crate::partial_exit_tp1_release::authorize(
+                                    db,t,&self.settings.target,id,
+                                    self.settings.revision,now,true)
+                        } else {
+                            close_allowed || (breaker_ok &&
+                                ((self.enabled(status) && self.broker_entry_allowed(cmd))
+                                  ||self.manual_entry_allowed(cmd,status)))
+                        };
                         if allowed {
                             db.execute("UPDATE broker_commands SET state='dispatched' WHERE id=?1 AND state='queued'",[id])?;
                         } else {
@@ -1316,15 +1334,24 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         cmd["daily_breaker_enabled"].as_bool().unwrap_or(self.settings.target=="live"),
                         cmd["daily_breaker_limit_percent"].as_f64().unwrap_or(2.))?
                 } else { false };
+                let stage=incomplete_tp_stage_execution_locked(&cmd)
+                    ||crate::partial_exit_tp1_release::stage_id_exists(db,id);
                 let ok = state == "dispatched"
-                    && !incomplete_tp_stage_execution_locked(&cmd)
                     && breaker_ok
                     && t.is_some_and(|t| self.matches(t) && ctx(t) == cmd["context"])
                     && now <= cmd["expires_ms"].as_u64().unwrap_or(0)
-                    && ((cmd["kind"] == "close" && (cmd["manual_close"]!=true || !status.requested_run))
-                        || (cmd["revision"].as_u64()==Some(self.settings.revision)
-                            && ((self.enabled(status) && self.broker_entry_allowed(&cmd))
-                                || self.manual_entry_allowed(&cmd,status))));
+                    && (if stage {
+                        status.gateway_fresh&&status.requested_run
+                            &&t.is_some_and(|t|
+                                crate::partial_exit_tp1_release::authorize(
+                                    db,t,&self.settings.target,id,
+                                    self.settings.revision,now,true))
+                    } else {
+                        (cmd["kind"] == "close" && (cmd["manual_close"]!=true || !status.requested_run))
+                            || (cmd["revision"].as_u64()==Some(self.settings.revision)
+                                && ((self.enabled(status) && self.broker_entry_allowed(&cmd))
+                                    || self.manual_entry_allowed(&cmd,status)))
+                    });
                 Ok(json!({"authorized":ok}))
             }
             ("POST", "/v1/execution/result") => {
