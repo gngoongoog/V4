@@ -26,6 +26,7 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
  const sealed=object(view.partial_exit_stage_sealed_core);
  const held=object(view.partial_exit_tp1_held);
  const settlements=object(view.partial_exit_stage_settlements);
+ const commandLinks=object(view.partial_exit_command_links);
  const arm=object(view.partial_exit_tp1_arm);
  const context=t?JSON.stringify([t.server,t.login,t.symbol,t.currency]):'';
  const target=settings.target==='live'?'live':settings.target==='demo'?'demo':null;
@@ -118,6 +119,12 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
   settlements.rows.map(object):[];
  const completedStages=settlementRows.filter(row=>
   row.state==='historical_stage_sealed'||row.state==='sealed_evidence_needs_review');
+ const linked=available&&commandLinks.schema==='partial-exit-stage-command-links-v1'&&
+  commandLinks.status==='broker_stage_links_read_only'&&
+  commandLinks.context===context&&commandLinks.target===target&&
+  commandLinks.read_only===true&&commandLinks.orders_enabled===false&&
+  commandLinks.stage_execution_supported===false;
+ const linkRows=linked&&Array.isArray(commandLinks.rows)?commandLinks.rows.map(object):[];
  const heldBound=available&&held.schema==='tp1-core-held-outbox-v1'&&
   held.status==='account_scoped_tp1_outbox_not_fill_proof'&&
   held.context===context&&held.target===target&&held.read_only===true&&
@@ -336,11 +343,28 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
       good(r.matched_volume)&&typeof r.remaining_volume_at_seal==='number'&&
       Number.isFinite(r.remaining_volume_at_seal)&&r.remaining_volume_at_seal>=0&&
       r.next_stage_authorized===false&&r.breakeven_triggered===false;
+    // A broker ACK or a stale settlement cannot be displayed as realized
+    // profit. Only a separately linked exact order + Deal audit with matching
+    // account/plan/physical position and volume can provide booked net costs.
+    const history=proven?linkRows.find(row=>
+      row.position_identifier===pid&&row.stage===stage&&row.plan_id===r.plan_id):null;
+    const evidence=object(history?.evidence);
+    const step=Number(t?.volume_step);
+    const netValid=proven&&evidence.state==='broker_order_deals_exactly_linked'&&
+      evidence.core_command_id===r.core_command_id&&
+      evidence.broker_order_ticket===r.broker_order&&
+      typeof evidence.matched_broker_lots==='number'&&
+      Number.isFinite(evidence.matched_broker_lots)&&good(step)&&
+      Math.abs(evidence.matched_broker_lots-Number(r.matched_volume))<=step*1e-6&&
+      typeof evidence.booked_net_account_currency==='number'&&
+      Number.isFinite(evidence.booked_net_account_currency)&&
+      typeof t?.currency==='string'&&t.currency.length>0;
     return <p key={'stage-evidence-'+String(pid)+'-'+stage+'-'+i}>
       المركز {pid} · TP{stage}: {proven?
         'تم توثيق أمر الوسيط والـDeals وحجم المركز المتبقي وقت المصالحة':
         'الأدلة المحفوظة تحتاج إعادة تدقيق ولا تُعد إثبات إغلاق'}
       {proven?' · الحجم المغلق '+String(r.matched_volume)+' لوت، المتبقي '+String(r.remaining_volume_at_seal)+' لوت':''}
+      {netValid?' · صافي محجوز بعد تكاليف الـDeal: '+String(evidence.booked_net_account_currency)+' '+String(t?.currency):''}
     </p>;
    })}
   </div>:null}
