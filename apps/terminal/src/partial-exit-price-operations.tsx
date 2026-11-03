@@ -87,9 +87,11 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
  const armActive=armMatches&&armRow.state==='execution_arm_valid_no_send_yet'&&
   armRow.armed_active===true;
  const armNeedsRevoke=armMatches&&
-  ['execution_arm_valid_no_send_yet','inactive_or_expired_execution_arm'].includes(String(armRow.state));
+  ['execution_arm_valid_no_send_yet','inactive_or_expired_execution_arm',
+   'consumed_wait_broker_reconciliation'].includes(String(armRow.state));
  const armOther=armRows.filter(r=>
-   ['execution_arm_valid_no_send_yet','inactive_or_expired_execution_arm'].includes(String(r.state))&&
+   ['execution_arm_valid_no_send_yet','inactive_or_expired_execution_arm',
+    'consumed_wait_broker_reconciliation'].includes(String(r.state))&&
    (r.position_identifier!==Number(position?.identifier)||!armMatches));
  const tradeOther=tradeRows.filter(r=>r.state!=='trade_preference_revoked'&&
   (r.position_identifier!==Number(position?.identifier)||!tradeMatches));
@@ -266,12 +268,11 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
      <p>{armActive?'تسليح TP1 نشط؛ قد ينفّذ عند وصول السعر إذا شغّلت النظام.':
        armNeedsRevoke?'تسليح TP1 قديم أو انتهت صلاحيته؛ ألغِه قبل التجديد.':
        armRow?.state==='consumed_wait_broker_reconciliation'?
-       'تم استخدام التسليح؛ تحقق من نتيجة أمر MT5 قبل أي إجراء آخر.':
+       'أُطلق أمر TP1 للطابور. يمكن إلغاء إذن الإرسال أثناء STOP، لكن الأمر المرسل فعلاً قد لا يمكن سحبه.':
        'تنفيذ TP1 غير مسلّح لهذا المركز.'}</p>
      <button type="button" disabled={armLocked||(armRow&&!armMatches)||
       (armNeedsRevoke?false:!tradeActive||!!tp1Held||
-        (target==='live'&&liveConfirm!==String(t?.login)))||
-      armRow?.state==='consumed_wait_broker_reconciliation'}
+        (target==='live'&&liveConfirm!==String(t?.login)))}
       onClick={()=>submitArm(!armNeedsRevoke)}>
       {armNeedsRevoke?'إلغاء تسليح TP1':
        'تسليح أمر TP1 الفعلي للمركز المحدد'}
