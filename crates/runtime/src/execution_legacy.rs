@@ -1210,6 +1210,35 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 let Some(t) = t.filter(|t| self.matches(t)) else {
                     return Ok(json!({"command":null,"history_from_ms":0}));
                 };
+                // A queued TP-stage close cannot yet be authorized by Core.
+                // Quarantine it BEFORE the Gateway command pull; otherwise it
+                // could be promoted to 'dispatched', block reconciliation and
+                // repeatedly reach a Gateway that cannot obtain final approval.
+                // Already-dispatched/placed/unknown rows are deliberately NOT
+                // cancelled here: a prior broker send must still be reconciled.
+                let unissued=db.prepare(
+                    "SELECT id,payload FROM broker_commands
+                     WHERE context=?1 AND state='queued'")?
+                    .query_map([&key],|r|Ok((
+                        r.get::<_,String>(0)?,r.get::<_,String>(1)?
+                    )))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                for (unissued_id,unissued_raw) in unissued {
+                    let parsed=serde_json::from_str::<Value>(&unissued_raw);
+                    if parsed.as_ref().map_or(true,|c|
+                        incomplete_tp_stage_execution_locked(c)){
+                        let n=db.execute(
+                            "UPDATE broker_commands SET state='cancelled'
+                             WHERE id=?1 AND context=?2 AND state='queued'",
+                            params![unissued_id,key])?;
+                        if n==1{
+                            db.execute(
+                                "INSERT INTO events(timestamp_ms,kind,detail)
+                                 VALUES(?1,'queued_stage_blocked_no_broker_send',?2)",
+                                params![now,unissued_id])?;
+                        }
+                    }
+                }
                 db.execute("UPDATE broker_commands SET state='expired' WHERE state='queued' AND CAST(json_extract(payload,'$.expires_ms') AS INTEGER)<?1",[now])?;
                 // New and interrupted dispatches keep priority. Recovery work
                 // rotates without changing stored states, so an old unknown
@@ -2536,6 +2565,75 @@ mod execution_persistence_tests {
 #[cfg(test)]
 mod tp_stage_core_authorization_gate_tests {
     use super::*;
+    #[test]
+    fn quarantined_stage_never_reaches_gateway_before_authorization(){
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let context=ctx(&t);
+        let status=Status{gateway_fresh:true,telemetry:Some(t),..Default::default()};
+        let stage=json!({"id":"queued-tp","kind":"close","position":87,
+            "context":context,"target":"demo","expires_ms":5000,
+            "tp_stage_plan_id":format!("tp-plan-{}","a".repeat(32)),
+            "tp_stage":1,"expected_position_identifier":907});
+        let ordinary=json!({"id":"queued-full","kind":"close","position":88,
+            "context":context,"target":"demo","expires_ms":5000});
+        for (id,payload) in [("queued-tp",stage),("queued-full",ordinary)]{
+            db.execute("INSERT INTO broker_commands(
+                id,context,brain,kind,created_ms,state,payload)
+                VALUES(?1,?2,'system','close',110,'queued',?3)",
+                params![id,context,payload.to_string()]).unwrap();
+        }
+        let issued=svc.route("GET","/v1/execution/gateway",b"",&db,&status,200).unwrap();
+        assert_eq!(issued["command"]["id"],"queued-full",
+            "Normal full closes remain available for broker dispatch");
+        let stage_state:String=db.query_row(
+            "SELECT state FROM broker_commands WHERE id='queued-tp'",
+            [],|r|r.get(0)).unwrap();
+        assert_eq!(stage_state,"cancelled");
+        assert_eq!(issued["command"]["kind"],"close");
+        assert_eq!(db.query_row(
+            "SELECT COUNT(*) FROM events WHERE kind='queued_stage_blocked_no_broker_send'",
+            [],|r|r.get::<_,i64>(0)).unwrap(),1);
+        // A repeat Gateway poll may not resurrect the cancelled stage or
+        // duplicate its rejection event; the quarantine is crash-stable.
+        svc.route("GET","/v1/execution/gateway",b"",&db,&status,201).unwrap();
+        assert_eq!(db.query_row(
+            "SELECT COUNT(*) FROM events WHERE kind='queued_stage_blocked_no_broker_send'",
+            [],|r|r.get::<_,i64>(0)).unwrap(),1);
+        // An old, interrupted dispatched stage cannot be assumed unsent:
+        // preserve it for broker reconciliation, but still deny permission
+        // to send it for the first time.
+        db.execute("INSERT INTO broker_commands(
+            id,context,brain,kind,created_ms,state,payload)
+            VALUES('past-dispatched',?1,'system','close',111,'dispatched',?2)",
+            params![context,json!({"id":"past-dispatched","kind":"close",
+                "tp_stage_plan_id":format!("tp-plan-{}","b".repeat(32)),
+                "position":87,"context":context,"expires_ms":5000}).to_string()]).unwrap();
+        let denied=svc.route("POST","/v1/execution/authorize",
+            br#"{"id":"past-dispatched"}"#,&db,&status,202).unwrap();
+        assert_eq!(denied["authorized"],false);
+        assert_eq!(db.query_row(
+            "SELECT state FROM broker_commands WHERE id='past-dispatched'",
+            [],|r|r.get::<_,String>(0)).unwrap(),"dispatched");
+    }
+    #[test]
+    fn malformed_queued_command_is_quarantined_not_sent_or_retried(){
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();svc.bind(&db,&t,100).unwrap();
+        let key=ctx(&t);
+        db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload)
+            VALUES('broken',?1,'system','close',110,'queued','{invalid')",
+            [&key]).unwrap();
+        let status=Status{gateway_fresh:true,telemetry:Some(t),..Default::default()};
+        let reply=svc.route("GET","/v1/execution/gateway",b"",&db,&status,200).unwrap();
+        assert!(reply["command"].is_null());
+        assert_eq!(db.query_row(
+            "SELECT state FROM broker_commands WHERE id='broken'",
+            [],|r|r.get::<_,String>(0)).unwrap(),"cancelled");
+    }
     #[test]
     fn no_core_stage_execution_until_a_priced_broker_safe_producer_is_implemented(){
         assert!(!incomplete_tp_stage_execution_locked(&json!({"kind":"close","position":1})),
