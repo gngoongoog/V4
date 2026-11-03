@@ -1348,6 +1348,14 @@ export default function Terminal(){
    <label className="concept-frame"><span className="sr-only">الإطار الزمني للشارت</span><select value={chartFrame} onChange={e=>setChartFrame(e.target.value as ChartFrame)}>{(['m1','m5','m15','m30','h1','h4','d1'] as const).map(tf=><option key={tf} value={tf}>{tf.toUpperCase()}</option>)}</select></label>
    <button type="button" className="concept-top-icon" title="الشارت" onClick={()=>open('dashboard')}><ChartCandlestick size={19}/></button>
    <button type="button" className="concept-connection" onClick={()=>open('execution')}><span className={'concept-led '+(accountFresh&&!preview?'on':'')}/><span><b>{preview?'معاينة':accountFresh?'متصل بالمنصة':'غير متصل'}</b><small>MT5 | {account?(account.demo?'Demo Account':'Real Account'):'—'}</small></span></button>
+   <div className="concept-account-toggle" role="group" aria-label="اختيار حساب تداول Core">
+    <span className="concept-binding-label"><small>MT5: {account?(account.demo?'Demo':'Live'):'—'}</small>
+     <strong>Core: {verifiedBinding?boundTarget?.toUpperCase():'غير مربوط'}</strong></span>
+    <button type="button" aria-label="اختيار الحساب التجريبي" aria-pressed={verifiedBinding&&boundTarget==='demo'}
+     disabled={busy||preview||!hasTauri()} onClick={()=>quickSelectAccount('demo')}>Demo</button>
+    <button type="button" aria-label="اختيار الحساب الحقيقي" aria-pressed={verifiedBinding&&boundTarget==='live'}
+     disabled={busy||preview||!hasTauri()} onClick={()=>quickSelectAccount('live')}>Live</button>
+   </div>
    <button type="button" className="concept-top-icon" title="أحداث النظام" onClick={()=>open('events')}><Bell size={20}/></button>
    <button type="button" className="concept-top-icon" title="الإعدادات العامة" onClick={()=>open('settings')}><Settings size={20}/></button>
    <span className="concept-top-divider"/>
@@ -1368,16 +1376,9 @@ export default function Terminal(){
    <header className="account-strip">
     <div className="account-item broker-select"><label>Broker</label><button className="select-look" onClick={()=>open('settings')}><span className="broker-mark">MT5</span><strong>{feed.broker?'Connected broker':'Not verified'}</strong><span>⌄</span></button></div>
     <div className="account-item server-select"><label>Server</label><button className="select-look" onClick={()=>open('execution')}><strong>{account?.server||'—'}</strong><span>⌄</span></button></div>
-    <div className="account-item account-switch"><label>حساب التنفيذ · MT5</label>
-      <div className="switch-buttons" role="group" aria-label="اختيار حساب التداول في Rust Core">
-       <span aria-label="حساب الوسيط الفعلي">MT5: {account?(account.demo?'Demo':'Live'):'غير متصل'} · Core: {verifiedBinding?boundTarget?.toUpperCase():'غير مربوط'}</span>
-       <button type="button" aria-label="اختيار الحساب التجريبي" aria-pressed={verifiedBinding&&boundTarget==='demo'}
-        disabled={busy||preview||!hasTauri()} onClick={()=>quickSelectAccount('demo')}>Demo</button>
-       <button type="button" aria-label="اختيار الحساب الحقيقي" aria-pressed={verifiedBinding&&boundTarget==='live'}
-        disabled={busy||preview||!hasTauri()} onClick={()=>quickSelectAccount('live')}>Live</button>
-       <button type="button" title="إعدادات ربط MT5 التفصيلية" onClick={()=>open('execution')}>تفاصيل الربط</button>
-      </div>
-     </div>
+    <div className="account-item account-switch"><label>Account · MT5</label><div className="switch-buttons">
+     <span>MT5: {account?(account.demo?'Demo':'Live'):'غير متصل'}</span>
+     <button type="button" onClick={()=>open('execution')}>تفاصيل الربط</button></div></div>
     {[['Equity',money(accountStats?.equity,currency)],['Balance',money(accountStats?.balance,currency)],['Margin',money(accountStats?.margin,currency)],['Free Margin',money(accountStats?.margin_free,currency)],['Daily P&L',signed(accountStats?.today_net,currency)],['Quote Age',preview?'—':feed.quote?num(feed.quoteAgeMs,0)+' ms':'—']].map(([label,value])=><div key={label} className={'top-stat '+(label==='Daily P&L'?'daily':'')}><label>{label}</label><b>{value}</b></div>)}
     <button className="connection-pill" onClick={()=>{if((status?.requested_run||positions.length>0)&&!window.confirm('ستتم إعادة تشغيل جسر MT5. لن تُغلق الصفقات المفتوحة، لكن إدارة خروجها قد تتأخر أثناء الاتصال. تابع فقط عند الضرورة.'))return;void runCommand('reconnect')}} disabled={busy||preview}><span className={'pulse-dot '+(accountFresh?'online':'')}></span><span>{preview?'معاينة':accountFresh?'متصل':'غير متصل'}</span><RefreshCw size={16}/></button>
    </header>
