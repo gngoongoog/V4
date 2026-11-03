@@ -51,6 +51,7 @@ mod partial_exit_stage;
 mod partial_exit_evidence;
 mod partial_exit_link;
 mod partial_exit_progress;
+mod partial_exit_prices;
 mod pending_cancellation;
 mod learning_inference;
 mod learning_performance_review;
