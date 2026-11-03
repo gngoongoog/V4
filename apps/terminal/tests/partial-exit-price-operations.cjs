@@ -81,6 +81,27 @@ assert(!collect(savedTree).some(x=>x.type==='input'),
  'Saved immutable prices cannot be edited with a second set of input controls');
 assert(!collect(savedTree).some(x=>x.type==='button'&&!x.props.disabled),
  'An immutable saved plan must never allow a second write');
+const textOf=(tree)=>collect(tree).filter(x=>typeof x==='string').join(' ');
+assert(textOf(savedTree).includes('بيانات خطة TP غير موثوقة'),
+ 'An unknown or legacy price capture must not be described as verified saved prices');
+assert(!textOf(savedTree).includes('2001 / 2002 / 2003'),
+ 'Never echo unverified stored prices as trusted executable levels');
+const verified={...view,partial_exit_price_proposals:{...view.partial_exit_price_proposals,
+ rows:[{position_identifier:907,prices:[2001,2002,2003],
+  state:'price_levels_saved_no_execution'}]}};
+const verifiedTree=render({...opts,source:verified});
+assert(textOf(verifiedTree).includes('محفوظ للمركز'),
+ 'A valid, Core-verified immutable research price proposal should remain visible');
+assert(textOf(verifiedTree).includes('2001 / 2002 / 2003'));
+const stale={...view,partial_exit_price_proposals:{...view.partial_exit_price_proposals,
+ rows:[{position_identifier:907,prices:[2001,2002,2003],
+  state:'quote_stale_no_trigger'}]}};
+assert(textOf(render({...opts,source:stale})).includes('محفوظ للمركز'),
+ 'A stale quote suppresses crossing, not the integrity of stored prices');
+const corrupt={...view,partial_exit_price_proposals:{...view.partial_exit_price_proposals,
+ rows:[{position_identifier:907,prices:[2001,2002,2003],state:'invalid_record'}]}};
+assert(textOf(render({...opts,source:corrupt})).includes('بيانات خطة TP غير موثوقة'));
+assert(!collect(render({...opts,source:corrupt})).some(x=>x.type==='button'&&!x.props.disabled));
 const bridge=read('src/bridge.ts');
 assert(bridge.includes("invoke('save_partial_exit_prices'"));
 const tauri=fs.readFileSync(path.join(root,'../tauri/src/bridge.rs'),'utf8');
