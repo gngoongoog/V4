@@ -40,6 +40,10 @@ export function PartialExitPriceOperations({status,source,disabled,onSave}:{
   typeof r.plan_id==='string'&&/^tp-plan-[a-f0-9]{32}$/.test(r.plan_id as string))?
   plans.map(r=>String(r.plan_id)) as [string,string,string]:null;
  const recorded=stored.find(r=>r.position_identifier===Number(position?.identifier));
+ const recordedValid=!!recorded&&
+  ['price_levels_saved_no_execution','quote_stale_no_trigger'].includes(String(recorded.state))&&
+  Array.isArray(recorded.prices)&&recorded.prices.length===3&&
+  recorded.prices.every(good);
  const targets=values.map(Number);
  const tick=Number(t?.tick_size);
  const valid=values.every(v=>v.trim()!=='')&&targets.every(good)&&
@@ -74,8 +78,14 @@ export function PartialExitPriceOperations({status,source,disabled,onSave}:{
     </label>
     {eligible.length===0?<p>لا توجد مراكز مؤهلة بأسعار متاحة وثلاث خطط حجم سليمة. قد تكون الخطط بحاجة إلى مراجعة بعد تغيّر المركز.</p>:null}
     {position&&recorded?<p className="safe-note">
-      محفوظ للمركز {position.ticket}: {Array.isArray(recorded.prices)?recorded.prices.join(' / '):'بيانات السعر بحاجة مراجعة'}.
-      هذه أسعار توثيقية فقط وليست أهدافاً مفعّلة لدى MT5.
+      {recordedValid?<>
+       محفوظ للمركز {position.ticket}: {(recorded.prices as number[]).join(' / ')}.
+       هذه أسعار توثيقية فقط وليست أهدافاً مفعّلة لدى MT5.
+      </>:<>
+       بيانات خطة TP غير موثوقة وتحتاج مراجعة: لا يمكن اعتماد الأسعار القديمة
+       أو إعادة حفظها تلقائياً. احتفظ بسجل الوسيط الأصلي للمراجعة، ولا تعتبر
+       وصول السعر إلى أي هدف دليلاً على تنفيذ صفقة.
+      </>}
     </p>:null}
     {position&&!recorded?<>
      <p className="safe-note">دخول: {position.price_open} · Bid: {t?.bid??'—'} · Ask: {t?.ask??'—'} · Tick: {t?.tick_size??'—'} · الاتجاه: {position.side}</p>
