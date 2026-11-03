@@ -158,7 +158,7 @@ pub fn authorize(db:&Connection,t:&Telemetry,target:&str,id:&str,
         &&released_ms<=now
         &&serde_json::from_str::<Value>(&raw).ok()==Some(cmd.clone())
         &&snapshot_valid(t,target,pid,ticket,&cmd,revision,now)
-        &&crate::partial_exit_tp1_arm::eligible(
+        &&crate::partial_exit_tp1_arm::eligible_released(
             db,t,target,pid,ticket,&plan,revision,now).unwrap_or(false)
 }
 /// Atomic held -> queued with one release receipt; only after a fresh
@@ -219,6 +219,17 @@ pub fn release(db:&Connection,t:&Telemetry,target:&str,revision:u64,
             params![id,key,cmd.to_string()])?;
         if updated!=1{return Err(anyhow::anyhow!(
             "TP1 durable broker command changed during atomic queue release"))}
+        // Consume the operator's one-shot approval in the EXACT same
+        // transaction as the release receipt and broker queue transition.
+        // No crash can expose a queued TP1 with an unconsumed/reusable arm.
+        let consumed=tx.execute(
+            "UPDATE partial_exit_tp1_arms SET state='consumed'
+             WHERE context=?1 AND target=?2 AND position_identifier=?3
+               AND physical_ticket=?4 AND settings_revision=?5
+               AND state='armed_once' AND armed_ms<=?6 AND expires_ms>?6",
+            params![key,target,pid,ticket,revision,now])?;
+        if consumed!=1{return Err(anyhow::anyhow!(
+            "TP1 execution arm disappeared during atomic queue release"))}
         tx.execute(
             "INSERT INTO events(timestamp_ms,kind,detail)
              VALUES(?1,'tp1_core_released_once_to_gateway_queue',?2)",
@@ -358,8 +369,16 @@ mod tests {
         assert_eq!(db.query_row(
             "SELECT COUNT(*) FROM partial_exit_tp1_releases",
             [],|r|r.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(db.query_row(
+            "SELECT state FROM partial_exit_tp1_arms WHERE position_identifier=907",
+            [],|r|r.get::<_,String>(0)).unwrap(),"armed_once",
+            "A crashed broker queue release must not consume the arm");
         db.execute_batch("DROP TRIGGER fail_tp1_release;").unwrap();
         assert_eq!(release(&db,&t,"demo",5,1550,true).unwrap()["released"],1);
+        assert_eq!(db.query_row(
+            "SELECT state FROM partial_exit_tp1_arms WHERE position_identifier=907",
+            [],|r|r.get::<_,String>(0)).unwrap(),"consumed",
+            "TP1 arm must be consumed together with its queued broker command");
         assert_eq!(release(&db,&t,"demo",5,1550,true).unwrap()["released"],0,
             "The release is exactly once and does not create a second queued command");
         assert_eq!(db.query_row(
@@ -408,12 +427,17 @@ mod tests {
         changed=t.clone();changed.bid=Some(2004.0);
         assert!(!authorize(&db,&changed,"demo","tp1-once-id",5,1550,true),
             "Current broker Bid must still cross the saved TP1 price");
-        db.execute(
-            "UPDATE partial_exit_tp1_arms SET state='disarmed'
-             WHERE position_identifier=907",[]
-        ).unwrap();
+        let revoked=crate::partial_exit_tp1_arm::set(
+            &db,&t,"demo",907,&ids,false,5,1550).unwrap();
+        assert_eq!(revoked["state"],"disarmed");
+        assert_eq!(db.query_row(
+            "SELECT state FROM partial_exit_tp1_arms WHERE position_identifier=907",
+            [],|r|r.get::<_,String>(0)).unwrap(),"disarmed");
         assert!(!authorize(&db,&t,"demo","tp1-once-id",5,1550,true),
             "STOP+operator revoke must prevent any further Core send authority");
+        assert!(!crate::partial_exit_tp1_arm::eligible_released(
+            &db,&t,"demo",907,87,&ids[0],5,1550).unwrap(),
+            "Revoked consumed TP1 arm cannot resurrect after restart");
     }
     #[test]
     fn orphan_or_held_command_cannot_pass_final_stage_authorization(){
