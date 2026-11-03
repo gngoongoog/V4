@@ -1,4 +1,4 @@
-"""Offline DEMO-only TP partial-close Gateway regressions.
+"""Offline account-selected TP partial-close Gateway regressions.
 
 The fixture deliberately supplies a synthetic Core-approved command; the
 production Core does NOT yet generate these intents. No real broker is called.
@@ -421,6 +421,25 @@ class StageDemoTests(unittest.TestCase):
                 result=self.send()
                 self.assertIn(result["state"],("rejected","cancelled"),result)
                 self.assertFalse(self.mt.sends)
+    def test_selected_live_stage_contract_matches_real_mode_without_rewriting_account(self):
+        self.mt.account.trade_mode=2
+        self.cmd["target"]="live"
+        original=dict(self.cmd)
+        volume,side=stage_volume(self.cmd,self.mt.account,self.mt,self.p,self.mt.info,
+                                 self.mt.tick,clock_ms())
+        self.assertEqual((volume,side),(0.05,-1))
+        self.assertEqual(self.cmd,original)
+        self.cmd["target"]="demo"
+        with self.assertRaisesRegex(ValueError,"account mode"):
+            stage_volume(self.cmd,self.mt.account,self.mt,self.p,self.mt.info,
+                         self.mt.tick,clock_ms())
+        self.cmd["target"]="live"
+        self.mt.account.trade_mode=0
+        with self.assertRaisesRegex(ValueError,"account mode"):
+            stage_volume(self.cmd,self.mt.account,self.mt,self.p,self.mt.info,
+                         self.mt.tick,clock_ms())
+        self.assertFalse(self.mt.sends)
+
     def test_final_authorization_refusal_stops_before_send(self):
         self.assertEqual(self.send(lambda _:False)["state"],"cancelled")
         self.assertFalse(self.mt.sends)
