@@ -1092,8 +1092,9 @@ impl Service {
             struct Request {context:String,position_identifier:u64,
                 plan_ids:[String;3],enabled:bool,confirm_live_login:String}
             let request:Request=serde_json::from_slice(body)?;
-            anyhow::ensure!(!status.requested_run&&!self.pending(db)?,
-                "تسليح TP1 يتطلب STOP وخلو طابور الوسيط من أوامر غير محسومة");
+            anyhow::ensure!(!status.requested_run
+                &&(!request.enabled||!self.pending(db)?),
+                "تسليح TP1 يتطلب STOP وخلو طابور الوسيط من أوامر غير محسومة؛ إلغاء التسليح مسموح حتى أثناء المصالحة");
             anyhow::ensure!(status.gateway_fresh&&self.account_matches(status),
                 "حساب MT5 المختار غير مربوط باقتباس حديث");
             let t=status.telemetry.as_ref().context("MT5 account unavailable")?;
