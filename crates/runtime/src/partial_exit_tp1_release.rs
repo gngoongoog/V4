@@ -394,6 +394,15 @@ mod tests {
             "SELECT state FROM partial_exit_tp1_arms WHERE position_identifier=907",
             [],|r|r.get::<_,String>(0)).unwrap(),"consumed",
             "TP1 arm must be consumed together with its queued broker command");
+        assert!(!crate::partial_exit_tp1_arm::eligible(
+            &db,&t,"demo",907,87,&ids[0],5,1550).unwrap(),
+            "Consumed arm must not be usable for a fresh TP1 claim");
+        assert!(crate::partial_exit_tp1_arm::eligible_released(
+            &db,&t,"demo",907,87,&ids[0],5,1550).unwrap(),
+            "Consumed arm remains valid only for the same released command");
+        assert!(crate::partial_exit_tp1_arm::set(
+            &db,&t,"demo",907,&ids,true,5,1550).is_err(),
+            "Operator must not silently rearm a consumed TP1");
         assert_eq!(release(&db,&t,"demo",5,1550,true).unwrap()["released"],0,
             "The release is exactly once and does not create a second queued command");
         assert_eq!(db.query_row(
