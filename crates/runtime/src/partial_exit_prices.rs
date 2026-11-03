@@ -74,6 +74,8 @@ pub fn init(db:&Connection)->Result<()>{
         );
         CREATE INDEX IF NOT EXISTS partial_exit_prices_recent
             ON partial_exit_price_plans(context,target,saved_ms DESC);")?;
+    crate::partial_exit_account_schema::allow_selected_account(
+        db,"partial_exit_price_plans","CREATE INDEX IF NOT EXISTS partial_exit_prices_recent ON partial_exit_price_plans(context,target,saved_ms DESC)")?;
     Ok(())
 }
 
