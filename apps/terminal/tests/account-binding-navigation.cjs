@@ -5,8 +5,13 @@ const bridge=fs.readFileSync(path.join(__dirname,'../src/bridge.ts'),'utf8');
 const core=fs.readFileSync(path.join(__dirname,'../../../crates/runtime/src/execution_legacy.rs'),'utf8');
 const router=fs.readFileSync(path.join(__dirname,'../../../crates/runtime/src/execution.rs'),'utf8');
 const tauri=fs.readFileSync(path.join(__dirname,'../../tauri/src/bridge.rs'),'utf8');
-const header=src.match(/<div className="account-item account-switch">[\s\S]*?<\/div>\s*<\/div>/);
+const header=src.match(/<div className="concept-account-toggle"[\s\S]*?<\/div>/);
 assert(header,'A visible operator account-selection toolbar must exist');
+const css=fs.readFileSync(path.join(__dirname,'../src/concept4.css'),'utf8');
+assert(css.includes('.concept-account-toggle{display:flex'), 'Demo/Live buttons must appear in the visible Concept4 top bar');
+assert(css.includes('.concept4 .account-strip{display:none'), 'Do not rely on the legacy hidden account strip');
+assert(src.indexOf('className="concept-account-toggle"')<src.indexOf('<aside className="sidebar">'),
+ 'The selector must be in the always-visible top header, not in a hidden account strip');
 assert(header[0].includes('MT5: ')&&header[0].includes('Core: '),
  'Never describe a Core-selected target as if the MT5 broker had switched accounts');
 assert(header[0].includes("onClick={()=>quickSelectAccount('demo')}"),
