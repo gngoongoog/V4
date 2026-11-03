@@ -459,14 +459,19 @@ mod tests {
         t.positions[0].tp=0.;
         d.execute("UPDATE partial_exit_price_plans
             SET prices_json='[2001,2000.5,2003]'",[]).unwrap();
-        assert_eq!(first(&d,&t,10350)["state"],
-            "original_identity_changed");
+        let corrupted=report(&d,&t,"demo",10350).unwrap();
+        assert!(corrupted["rows"].as_array().unwrap().is_empty(),
+            "A corrupted immutable TP price ladder must revoke TP1 settlement
+             before any TP2 research eligibility can be reported");
+        assert_eq!(corrupted["orders_enabled"],false);
         d.execute("UPDATE partial_exit_price_plans
             SET prices_json='[2001,2002,2003]',
                 captured_json=json_remove(captured_json,'$.original_broker_tp')",
             []).unwrap();
-        assert_eq!(first(&d,&t,10350)["state"],
-            "original_identity_changed");
+        let missing_original=report(&d,&t,"demo",10350).unwrap();
+        assert!(missing_original["rows"].as_array().unwrap().is_empty(),
+            "Missing saved original broker TP must revoke the old TP1 evidence");
+        assert_eq!(missing_original["next_stage_authorized"],false);
     }
     #[test]
     fn tampered_historical_residual_never_unlocks_later_research_stage(){
