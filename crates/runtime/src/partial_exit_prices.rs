@@ -146,16 +146,37 @@ pub fn save(db:&Connection,t:&Telemetry,target:&str,pid:u64,
             params![key,id],|r|r.get(0))?;
         ensure!(used==0,"يوجد أمر سابق مرتبط بخطة TP؛ لا يمكن تعديل التسعير");
     }
-    let prior:Option<(String,String)>=db.query_row(
-        "SELECT plan_ids_json,prices_json FROM partial_exit_price_plans
+    let prior:Option<(String,String,String,u64,u64,u64)>=db.query_row(
+        "SELECT plan_ids_json,prices_json,captured_json,saved_ms,ticket,magic
+         FROM partial_exit_price_plans
          WHERE context=?1 AND target='demo' AND position_identifier=?2",
-        params![key,pid],|r|Ok((r.get(0)?,r.get(1)?))
+        params![key,pid],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,
+                                   r.get(3)?,r.get(4)?,r.get(5)?))
     ).optional()?;
-    if let Some((old_ids,old_prices))=prior {
+    if let Some((old_ids,old_prices,old_capture,old_ms,old_ticket,old_magic))=prior {
         let x:Value=serde_json::from_str(&old_ids)?;
         let y:Value=serde_json::from_str(&old_prices)?;
+        let cap:Value=serde_json::from_str(&old_capture)?;
         ensure!(x==json!(ids)&&y==json!(prices),
             "تم حفظ أسعار مختلفة مسبقاً؛ لا يمكن تغيير هوية خطة TP بصمت");
+        // Idempotent must mean identical *valid* capture, not simply the
+        // same displayed three numbers after immutable SQLite corruption.
+        ensure!(capture_geometry_valid(&cap,&y)
+            &&cap["schema"]=="partial-exit-price-capture-v1"
+            &&cap["context"]==key&&cap["target"]=="demo"
+            &&cap["position_identifier"].as_u64()==Some(pid)
+            &&cap["ticket"].as_u64()==Some(old_ticket)&&old_ticket==ticket
+            &&cap["magic"].as_u64()==Some(old_magic)&&old_magic==magic
+            &&cap["symbol"]==t.symbol&&cap["side"]==p.side
+            &&cap["saved_ms"].as_u64()==Some(old_ms)
+            &&cap["orders_enabled"]==false&&cap["trading_enabled"]==false
+            &&cap["breakeven_enabled"]==false
+            &&close(cap["entry"].as_f64().unwrap_or(f64::NAN),p.price_open,tick)
+            &&close(cap["original_volume"].as_f64().unwrap_or(f64::NAN),initial,lot_step)
+            &&close(cap["lot_step"].as_f64().unwrap_or(f64::NAN),lot_step,lot_step)
+            &&close(cap["tick_size"].as_f64().unwrap_or(f64::NAN),tick,tick)
+            &&close(cap["original_broker_tp"].as_f64().unwrap_or(f64::NAN),p.tp,tick),
+            "المقترح المحفوظ لم يعد قابلًا للتحقق؛ يلزم تدقيق الخطة الأصلية");
         return Ok(json!({"saved":true,"idempotent":true,"read_only":true,
             "orders_enabled":false,"breakeven_enabled":false}));
     }
@@ -332,6 +353,25 @@ mod tests{
             assert_eq!(r["rows"][0]["state"],"position_changed_review",
                 "variant {index}");
             assert!(r["rows"][0]["quote_crossing_only"].is_null());
+        }
+    }
+    #[test]
+    fn idempotent_replay_rejects_corrupt_legacy_or_changed_broker_capture(){
+        for variant in 0..3 {
+            let d=db();let t=t();let plans=ids(&d);
+            save(&d,&t,"demo",907,&plans,[2001.,2002.,2003.],10_000).unwrap();
+            match variant{
+                0=>{d.execute("UPDATE partial_exit_price_plans
+                    SET captured_json=json_remove(captured_json,'$.original_broker_tp')",
+                    []).unwrap();},
+                1=>{d.execute("UPDATE partial_exit_price_plans
+                    SET captured_json=json_set(captured_json,'$.saved_ask',2005)",
+                    []).unwrap();},
+                _=>{d.execute("UPDATE partial_exit_price_plans
+                    SET magic=410602",[]).unwrap();}
+            }
+            assert!(save(&d,&t,"demo",907,&plans,
+                [2001.,2002.,2003.],10_000).is_err(),"variant {variant}");
         }
     }
     #[test]
