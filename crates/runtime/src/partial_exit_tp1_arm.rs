@@ -74,7 +74,8 @@ pub fn set(db:&Connection,t:&Telemetry,target:&str,pid:u64,ids:&[String;3],
             "TP1 revoke does not match the original plan");
         db.execute(
             "UPDATE partial_exit_tp1_arms SET state='disarmed'
-             WHERE context=?1 AND target=?2 AND position_identifier=?3 AND state='armed_once'",
+             WHERE context=?1 AND target=?2 AND position_identifier=?3
+               AND state IN ('armed_once','consumed')",
             params![key,target,pid])?;
     } else {
         ensure!(t.quote_is_fresh(now,3_000),"Fresh MT5 quote required to arm TP1");
@@ -133,6 +134,18 @@ pub fn set(db:&Connection,t:&Telemetry,target:&str,pid:u64,ids:&[String;3],
 /// again at Gateway work selection and again at final send authorization.
 pub fn eligible(db:&Connection,t:&Telemetry,target:&str,pid:u64,ticket:u64,
     plan:&str,revision:u64,now:u64)->Result<bool>{
+    eligible_with_state(db,t,target,pid,ticket,plan,revision,now,"armed_once")
+}
+/// A release consumes the one-shot arm in the SAME SQLite transaction as
+/// the queue transition. Subsequent Gateway selection and final authorize
+/// may use only that consumed arm, and ONLY with an independent immutable
+/// release receipt verified by partial_exit_tp1_release::authorize.
+pub fn eligible_released(db:&Connection,t:&Telemetry,target:&str,pid:u64,
+    ticket:u64,plan:&str,revision:u64,now:u64)->Result<bool>{
+    eligible_with_state(db,t,target,pid,ticket,plan,revision,now,"consumed")
+}
+fn eligible_with_state(db:&Connection,t:&Telemetry,target:&str,pid:u64,ticket:u64,
+    plan:&str,revision:u64,now:u64,required_state:&str)->Result<bool>{
     if !account_ok(t,target)||!t.quote_is_fresh(now,3_000)||revision==0
         ||pid==0||ticket==0||now==0
     {return Ok(false)}
@@ -147,7 +160,7 @@ pub fn eligible(db:&Connection,t:&Telemetry,target:&str,pid:u64,ticket:u64,
     ).optional()?;
     let Some((old_ticket,raw,rev,at,ends,state))=current else{return Ok(false)};
     let ids=serde_json::from_str::<[String;3]>(&raw).ok();
-    Ok(state=="armed_once"&&old_ticket==ticket&&rev==revision
+    Ok(state==required_state&&old_ticket==ticket&&rev==revision
        &&at>0&&at<=now&&now<ends&&ends<=at.saturating_add(ARM_MAX_MS)
        &&ids.as_ref().is_some_and(|ids|ids_valid(ids)
            &&ids[0]==plan&&trade_preference(
