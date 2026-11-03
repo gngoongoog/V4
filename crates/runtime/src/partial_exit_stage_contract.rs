@@ -1,4 +1,4 @@
-//! Pure Core-owned draft of an MT5 DEMO staged-close command.
+//! Pure Core-owned draft for the user-selected MT5 account.
 //!
 //! This read-only projection joins independently verified TP1 shadow evidence
 //! or later broker-sealed history with immutable price/volume lineage. It
@@ -22,7 +22,7 @@ fn grid(v:f64,step:f64)->bool {
     v.is_finite()&&v>0.&&step.is_finite()&&step>0.
         &&(v/step).is_finite()&&((v/step)-(v/step).round()).abs()<=1e-6
 }
-fn draft(db:&Connection,t:&Telemetry,key:&str,now:u64,
+fn draft(db:&Connection,t:&Telemetry,key:&str,account_target:&str,now:u64,
     stage:u32,pid:u64,plan:&str,expected:f64,requested:f64,
     target:f64,source:u64,prior_seal:u64)->Result<Option<Value>>
 {
@@ -31,8 +31,8 @@ fn draft(db:&Connection,t:&Telemetry,key:&str,now:u64,
     let saved:Option<(u64,u64,String,String,String,u64)>=db.query_row(
         "SELECT ticket,magic,plan_ids_json,prices_json,captured_json,saved_ms
          FROM partial_exit_price_plans
-         WHERE context=?1 AND target='demo' AND position_identifier=?2",
-        params![key,pid],|r|Ok((
+         WHERE context=?1 AND target=?2 AND position_identifier=?3",
+        params![key,account_target,pid],|r|Ok((
             r.get(0)?,r.get(1)?,r.get(2)?,
             r.get(3)?,r.get(4)?,r.get(5)?
         ))
@@ -46,7 +46,7 @@ fn draft(db:&Connection,t:&Telemetry,key:&str,now:u64,
         else{return Ok(None)};
     if ids.len()!=3||prices.len()!=3||ticket==0||magic==0||saved_at==0
         ||cap["schema"]!="partial-exit-price-capture-v1"
-        ||cap["context"]!=key||cap["target"]!="demo"
+        ||cap["context"]!=key||cap["target"]!=account_target
         ||cap["position_identifier"].as_u64()!=Some(pid)
         ||cap["ticket"].as_u64()!=Some(ticket)
         ||cap["magic"].as_u64()!=Some(magic)
@@ -98,9 +98,9 @@ fn draft(db:&Connection,t:&Telemetry,key:&str,now:u64,
     let mut st=db.prepare(
         "SELECT stage,plan_id,planned_volume,status
          FROM partial_exit_stage_plans
-         WHERE context=?1 AND target='demo' AND position_identifier=?2
+         WHERE context=?1 AND target=?2 AND position_identifier=?3
          ORDER BY stage")?;
-    let stages=st.query_map(params![key,pid],|r|Ok((
+    let stages=st.query_map(params![key,account_target,pid],|r|Ok((
         r.get::<_,u32>(0)?,r.get::<_,String>(1)?,
         r.get::<_,f64>(2)?,r.get::<_,String>(3)?
     )))?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -112,9 +112,9 @@ fn draft(db:&Connection,t:&Telemetry,key:&str,now:u64,
     {return Ok(None)}
     let draft_status:Option<String>=db.query_row(
         "SELECT status FROM partial_exit_drafts
-         WHERE context=?1 AND target='demo' AND position_identifier=?2
-         AND ticket=?3 AND magic=?4",
-        params![key,pid,ticket,magic],|r|r.get(0)
+         WHERE context=?1 AND target=?2 AND position_identifier=?3
+         AND ticket=?4 AND magic=?5",
+        params![key,account_target,pid,ticket,magic],|r|r.get(0)
     ).optional()?;
     if draft_status.as_deref()!=Some(if stage==1 {"draft_only"}else{"volume_changed_unverified"})
     {return Ok(None)}
@@ -126,7 +126,7 @@ fn draft(db:&Connection,t:&Telemetry,key:&str,now:u64,
     Ok(Some(json!({
         "schema":"tp-stage-core-contract-preview-v1",
         "state":"validated_research_contract_only",
-        "context":key,"target":"demo","login":t.login,
+        "context":key,"target":account_target,"login":t.login,
         "server":t.server,"currency":t.currency,"symbol":t.symbol,
         "brain":brain,"magic":magic,"position":ticket,
         "tp_stage":stage,"tp_stage_plan_id":plan,
@@ -147,10 +147,11 @@ fn draft(db:&Connection,t:&Telemetry,key:&str,now:u64,
 /// no state transitions, no Gateway access. A price crossing is NOT a fill.
 pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
     let empty=||json!({"schema":"tp-stage-core-contract-preview-v1",
-        "status":"unverified_demo_hedging_or_quote",
+        "status":"unverified_selected_account_or_quote",
         "rows":[],"read_only":true,"orders_enabled":false,
         "authorized":false,"breakeven_enabled":false});
-    if target!="demo"||!t.connected||!t.demo||t.account_trade_mode!=Some(0)
+    if !matches!((target,t.demo,t.account_trade_mode),
+        ("demo",true,Some(0))|("live",false,Some(2)))||!t.connected
         ||t.margin_mode!=Some(2)||t.login==0||!t.validate()
         ||t.server.is_empty()||t.symbol.is_empty()||t.currency.is_empty()
         ||!t.quote_is_fresh(now,3_000)
@@ -172,13 +173,13 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
             // today's executable broker Bid/Ask, not a stale past quote.
             let price_plan:Option<String>=db.query_row(
                 "SELECT prices_json FROM partial_exit_price_plans
-                 WHERE context=?1 AND target='demo' AND position_identifier=?2",
-                params![key,pid],|r|r.get(0)
+                 WHERE context=?1 AND target=?2 AND position_identifier=?3",
+                params![key,target,pid],|r|r.get(0)
             ).optional()?;
-            let target=price_plan.and_then(|raw|serde_json::from_str::<Value>(&raw).ok())
+            let level=price_plan.and_then(|raw|serde_json::from_str::<Value>(&raw).ok())
                 .and_then(|v|v[0].as_f64());
-            if let Some(target)=target {
-                if let Some(row)=draft(db,t,&key,now,1,pid,plan,expected,lots,target,source,0)?{
+            if let Some(level)=level {
+                if let Some(row)=draft(db,t,&key,target,now,1,pid,plan,expected,lots,level,source,0)?{
                     rows.push(row);
                 }
             }
@@ -189,7 +190,7 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
         for p in candidates.iter().filter(|p|
             p["state"]=="historical_prerequisites_met_shadow_only"){
             let (Some(stage),Some(pid),Some(plan),Some(expected),Some(lots),
-                Some(target),Some(source),Some(seal))=(
+                Some(level),Some(source),Some(seal))=(
                 p["stage"].as_u64().and_then(|v|u32::try_from(v).ok()),
                 p["position_identifier"].as_u64(),p["plan_id"].as_str(),
                 p["expected_position_volume"].as_f64(),
@@ -198,14 +199,14 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
                 p["observed_quote_source_ms"].as_u64(),
                 p["previous_broker_sealed_ms"].as_u64()
             )else{continue};
-            if let Some(row)=draft(db,t,&key,now,stage,pid,plan,expected,lots,target,source,seal)?{
+            if let Some(row)=draft(db,t,&key,target,now,stage,pid,plan,expected,lots,level,source,seal)?{
                 rows.push(row);
             }
         }
     }
     Ok(json!({"schema":"tp-stage-core-contract-preview-v1",
         "status":"research_contracts_no_broker_commands",
-        "context":key,"target":"demo","rows":rows,
+        "context":key,"target":target,"rows":rows,
         "read_only":true,"orders_enabled":false,
         "authorized":false,"breakeven_enabled":false,
         "note":"Exact Core-owned staged-close contract projections; no command IDs, order dispatch, authorization, fill, or stop modification."}))
