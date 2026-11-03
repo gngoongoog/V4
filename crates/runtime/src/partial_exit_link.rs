@@ -292,6 +292,18 @@ mod tests{
         assert_eq!(e(&d,&t)["state"],"matching_broker_deal_not_yet_synced");
     }
     #[test]
+    fn close_by_deal_never_counts_as_ordinary_staged_tp_market_close(){
+        let d=db();let t=sample_telemetry();seed(&d,&t);
+        assert_eq!(e(&d,&t)["state"],"broker_order_deals_exactly_linked");
+        d.execute("UPDATE broker_deals SET payload=json_set(payload,'$.entry',3)",
+            []).unwrap();
+        assert_eq!(e(&d,&t)["state"],"broker_deal_order_or_identity_mismatch");
+        // A normal MT5 DEAL_ENTRY_OUT receipt restores historical linkage.
+        d.execute("UPDATE broker_deals SET payload=json_set(payload,'$.entry',1)",
+            []).unwrap();
+        assert_eq!(e(&d,&t)["state"],"broker_order_deals_exactly_linked");
+    }
+    #[test]
     fn missing_deal_price_wrong_primary_ticket_and_ancient_order_are_rejected(){
         let d=db();let t=sample_telemetry();seed(&d,&t);
         d.execute("UPDATE broker_deals SET payload=json_remove(payload,'$.price')",[]).unwrap();
