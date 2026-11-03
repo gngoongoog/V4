@@ -944,6 +944,18 @@ impl Service {
         status: &Status,
         now: u64,
     ) -> Result<Value> {
+        if method=="GET" && path=="/v1/execution/partial-exit-contracts" {
+            if status.gateway_fresh && self.account_matches(status) {
+                if let Some(t)=status.telemetry.as_ref() {
+                    return crate::partial_exit_stage_contract::report(
+                        db,t,&self.inner.settings.target,now);
+                }
+            }
+            return Ok(json!({"schema":"tp-stage-core-contract-preview-v1",
+                "status":"fresh_bound_demo_gateway_required",
+                "rows":[],"read_only":true,"orders_enabled":false,
+                "authorized":false,"breakeven_enabled":false}));
+        }
         if method=="POST" && path=="/v1/execution/partial-exit-prices" {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]
