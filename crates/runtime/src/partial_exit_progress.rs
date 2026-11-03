@@ -25,7 +25,7 @@ fn near(a:f64,b:f64,step:f64)->bool{
 // Re-validate a latched settlement against the current immutable broker
 // receipts. Historical storage must not become proof after source corruption.
 fn receipt_matches(ev:&Value,volume:f64,step:f64,plan:&str,
-    id:&str,order:u64,old:&Value)->bool{
+    id:&str,order:u64,old:&Value,remaining:f64,settled_ms:u64)->bool{
     ev["state"]=="broker_order_deals_exactly_linked"
         &&ev["stage_completed"]==false&&ev["orders_enabled"]==false
         &&ev["core_command_id"]==id&&ev["broker_order_ticket"].as_u64()==Some(order)
@@ -34,6 +34,11 @@ fn receipt_matches(ev:&Value,volume:f64,step:f64,plan:&str,
         &&old["command_id"]==id&&old["broker_order"].as_u64()==Some(order)
         &&old["deal_tickets"]==ev["broker_deal_tickets"]
         &&near(old["matched_volume"].as_f64().unwrap_or(f64::NAN),volume,step)
+        &&remaining.is_finite()&&remaining>=0.&&settled_ms>0
+        &&near(old["remaining_volume"].as_f64().unwrap_or(f64::NAN),remaining,step)
+        &&old["broker_snapshot_ms"].as_u64()==Some(settled_ms)
+        &&old["authorizes_next_stage"]==false
+        &&old["breakeven_triggered"]==false
 }
 pub fn init(db:&Connection)->Result<()>{
     db.execute_batch(
@@ -92,20 +97,25 @@ pub fn observe(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<()>{
             let Some(plan)=row["plan_id"].as_str()else{break};
             let Some(volume)=row["planned_volume"].as_f64()
                 .filter(|n|n.is_finite()&&*n>0.)else{break};
-            let prior:Option<(String,f64,String,String,u64)>=db.query_row(
-                "SELECT plan_id,matched_volume,evidence_json,command_id,broker_order
+            let prior:Option<(String,f64,String,String,u64,f64,u64)>=db.query_row(
+                "SELECT plan_id,matched_volume,evidence_json,command_id,
+                        broker_order,remaining_volume,settled_ms
                  FROM partial_exit_stage_settlements
                  WHERE context=?1 AND target='demo'
                      AND position_identifier=?2 AND stage=?3",
                 params![key,pid,stage],|r|Ok((
-                    r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?
+                    r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,
+                    r.get(4)?,r.get(5)?,r.get(6)?
                 ))
             ).optional()?;
-            if let Some((old_plan,old_volume,old_raw,old_id,old_order))=prior{
+            if let Some((old_plan,old_volume,old_raw,old_id,old_order,
+                old_remaining,old_settled_ms))=prior{
                 let old=serde_json::from_str::<Value>(&old_raw).unwrap_or(Value::Null);
+                let expected_remaining=initial-completed-volume;
                 if old_plan!=plan||!near(old_volume,volume,step)||
+                    !near(old_remaining,expected_remaining,step)||
                     !receipt_matches(&row["evidence"],volume,step,plan,
-                        &old_id,old_order,&old) {break}
+                        &old_id,old_order,&old,old_remaining,old_settled_ms) {break}
                 completed+=volume;
                 continue
             }
@@ -202,13 +212,15 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
     let mut result=Vec::new();
     for (pid,stage,plan,lot,id,order,filled,left,settled,old_raw) in rows{
         let still_proven=if let (Some(id),Some(order),Some(old_raw),
-            Some(step))=(&id,order,&old_raw,t.volume_step){
+            Some(step),Some(remaining),Some(settled_ms))=
+            (&id,order,&old_raw,t.volume_step,left,settled){
             let old=serde_json::from_str::<Value>(old_raw).unwrap_or(Value::Null);
             current.and_then(|rows|rows.iter().find(|r|
                 r["position_identifier"].as_u64()==Some(pid)
                 &&r["stage"].as_u64()==Some(stage as u64)
                 &&r["plan_id"]==plan)).is_some_and(|r|
-                    receipt_matches(&r["evidence"],lot,step,&plan,id,order,&old))
+                    receipt_matches(&r["evidence"],lot,step,&plan,id,order,
+                        &old,remaining,settled_ms))
         }else{false};
         let state=if settled.is_some(){
             if still_proven{"historical_stage_sealed"}else{"sealed_evidence_needs_review"}
@@ -357,6 +369,22 @@ mod tests{
         t.positions[0].magic=999;
         snapshot(&d,&t,300);
         assert_eq!(row(&d,&t,0)["state"],"unsettled");
+    }
+    #[test]
+    fn corrupted_persisted_remaining_lots_or_settlement_time_revokes_stage_proof(){
+        let d=Connection::open_in_memory().unwrap();fixture(&d);
+        let mut t=tele();seed(&d,1);t.positions[0].volume=0.05;
+        snapshot(&d,&t,200);
+        assert_eq!(row(&d,&t,0)["state"],"historical_stage_sealed");
+        d.execute("UPDATE partial_exit_stage_settlements
+            SET remaining_volume=0.04",[]).unwrap();
+        assert_eq!(row(&d,&t,0)["state"],"sealed_evidence_needs_review");
+        d.execute("UPDATE partial_exit_stage_settlements
+            SET remaining_volume=0.05,settled_ms=999",[]).unwrap();
+        assert_eq!(row(&d,&t,0)["state"],"sealed_evidence_needs_review");
+        d.execute("UPDATE partial_exit_stage_settlements
+            SET settled_ms=200",[]).unwrap();
+        assert_eq!(row(&d,&t,0)["state"],"historical_stage_sealed");
     }
     #[test]
     fn previously_sealed_stage_cannot_unlock_next_when_history_was_corrupted(){
