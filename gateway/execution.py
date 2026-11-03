@@ -684,6 +684,7 @@ class BrokerExecutor:
                        'manual_open','manual_epoch','manual_reference_price','manual_stop_price','manual_target_price',
                        'manual_close','profit_only','expected_position_volume','expected_position_side',
                        'tp_stage_plan_id','tp_stage','expected_position_identifier',
+                       'tp_target_price',
                        'deviation_points','created_ms','expires_ms',
                        'commission_per_lot','slippage_ticks','risk_percent','risk_master_enabled','risk_master_recovery','risk_master_recovery_id',
                        'demo_flexible','micro_demo_risk_opt_in',
@@ -799,7 +800,7 @@ class BrokerExecutor:
                 p=owned[0]; lots=float(p.volume); side=-1 if p.type==mt5.POSITION_TYPE_BUY else 1
                 if cmd.get('tp_stage_plan_id') is not None:
                     from tp_partial_close import stage_volume
-                    lots, side = stage_volume(cmd, a, mt5, p, info)
+                    lots, side = stage_volume(cmd, a, mt5, p, info, tick, clock_ms())
                 if cmd.get('manual_close') is True:
                     if type(cmd.get('profit_only')) is not bool or p.type not in (mt5.POSITION_TYPE_BUY, getattr(mt5,'POSITION_TYPE_SELL',1)):
                         raise ValueError('Manual close has invalid profit filter or position side')
@@ -1174,9 +1175,18 @@ class BrokerExecutor:
                     current_lots=float(p.volume)
                     if cmd.get('tp_stage_plan_id') is not None:
                         from tp_partial_close import stage_volume
-                        checked_lots, checked_side = stage_volume(cmd, mt5.account_info(), mt5, p, info)
+                        final_tick=mt5.symbol_info_tick(symbol)
+                        checked_lots, checked_side = stage_volume(
+                            cmd, mt5.account_info(), mt5, p, info, final_tick, clock_ms())
                         if abs(checked_lots-request['volume'])>1e-8 or checked_side!=side:
                             raise ValueError('TP stage approved volume or side changed')
+                        # The broker order_check and prepared order price must
+                        # refer to the same quote as the final stage preflight.
+                        # A moved quote requires a fresh Core command instead
+                        # of dispatching stale market-request geometry.
+                        if (float(final_tick.bid)!=validated_bid or
+                                float(final_tick.ask)!=validated_ask):
+                            raise ValueError('TP stage broker quote moved after order_check')
                     elif (not math.isfinite(current_lots) or abs(current_lots-request['volume'])>1e-8
                             or p.type not in (mt5.POSITION_TYPE_BUY,getattr(mt5,'POSITION_TYPE_SELL',1))
                             or (-1 if p.type==mt5.POSITION_TYPE_BUY else 1)!=side):
