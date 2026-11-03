@@ -425,6 +425,43 @@ mod tests{
             .unwrap()["rows"].as_array().unwrap().is_empty());
     }
     #[test]
+    fn selected_live_account_has_complete_research_tp1_contract_without_sending(){
+        let db=Connection::open_in_memory().unwrap();
+        setup(&db);
+        let mut live=telemetry();
+        live.demo=false;live.account_trade_mode=Some(2);
+        crate::partial_exit_ledger::observe(&db,&live,"live",100).unwrap();
+        crate::partial_exit_stage::observe(&db,&live,"live",100).unwrap();
+        let plans=crate::partial_exit_stage::report(&db,&live,"live").unwrap();
+        assert_eq!(plans["rows"].as_array().unwrap().len(),3);
+        let ids=std::array::from_fn(|i|
+            plans["rows"][i]["plan_id"].as_str().unwrap().to_string());
+        crate::partial_exit_prices::save(&db,&live,"live",907,
+            &ids,[2001.,2002.,2003.],10_000).unwrap();
+        live.bid=Some(2001.2);live.ask=Some(2001.4);
+        live.quote_time_ms=Some(10_200);
+        live.source_quote_time_ms=Some(10_200);
+        crate::partial_exit_shadow_trigger::observe(&db,&live,"live",10_250).unwrap();
+        observe(&db,&live,"live",10_250).unwrap();
+        let intents=report(&db,&live,"live").unwrap();
+        assert_eq!(intents["target"],"live");
+        assert_eq!(intents["rows"].as_array().unwrap().len(),1);
+        assert_eq!(intents["rows"][0]["state"],"shadow_close_intent_only");
+        let contract=crate::partial_exit_stage_contract::report(
+            &db,&live,"live",10_250).unwrap();
+        assert_eq!(contract["rows"].as_array().unwrap().len(),1);
+        assert_eq!(contract["rows"][0]["target"],"live");
+        assert_eq!(contract["rows"][0]["tp_stage"],1);
+        assert_eq!(contract["rows"][0]["tp_target_price"],2001.0);
+        assert_eq!(contract["rows"][0]["orders_enabled"],false);
+        assert!(contract["rows"][0].get("id").is_none());
+        assert!(contract["rows"][0].get("kind").is_none());
+        assert!(report(&db,&telemetry(),"demo").unwrap()["rows"]
+            .as_array().unwrap().is_empty());
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM broker_commands",[],
+            |r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+    #[test]
     fn unknown_quote_old_shadow_and_competing_broker_close_never_create_intent(){
         for index in 0..5 {
             let db=Connection::open_in_memory().unwrap();setup(&db);
