@@ -106,15 +106,16 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
   r.broker_command_id===null&&r.gateway_send_id===null&&
   r.broker_order_ticket===null);
  const heldBound=available&&held.schema==='tp1-core-held-outbox-v1'&&
-  held.status==='account_scoped_held_never_sent'&&
-  held.context===context&&held.target===target&&
-  held.read_only===true&&held.orders_dispatched===0&&held.gateway_sends===0;
+  held.status==='account_scoped_tp1_outbox_not_fill_proof'&&
+  held.context===context&&held.target===target&&held.read_only===true&&
+  held.gateway_sends===null;
  const heldRows=heldBound&&Array.isArray(held.rows)?held.rows.map(object):[];
  const tp1Held=heldRows.find(r=>
   r.position_identifier===Number(position?.identifier)&&
   r.physical_ticket===position?.ticket&&Array.isArray(planIds)&&
-  r.plan_id===planIds[0]&&r.orders_dispatched===0&&r.gateway_sends===0&&
-  r.read_only===true&&typeof r.held_core_command_id==='string');
+  r.plan_id===planIds[0]&&r.read_only===true&&
+  r.gateway_send_confirmed===false&&r.broker_fill_verified===false&&
+  typeof r.held_core_command_id==='string');
  const approvalMatches=!!approval&&approval.position_ticket===position?.ticket&&
   Array.isArray(approval.plan_ids)&&!!planIds&&
   JSON.stringify(approval.plan_ids)===JSON.stringify(planIds)&&
@@ -209,7 +210,7 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
        وصول السعر إلى أي هدف دليلاً على تنفيذ صفقة.
       </>}
     </p>:null}
-    {position&&sealedTp1?<div className="execution-binding-summary" aria-label="سجل هوية TP1 داخل Core">
+    {position&&sealedTp1&&!tp1Held?<div className="execution-binding-summary" aria-label="سجل هوية TP1 داخل Core">
      <p className="safe-note">سجل هوية TP1 داخل Core — لا يوجد أمر مرسل إلى MT5 أو تفويض لتنفيذ الإغلاق.</p>
      <p>{sealedTp1.state==='sealed_unarmed_not_dispatched'?
        'تم ختم هوية TP1 للمركز الحالي، وهي غير مفعّلة للإرسال.':
@@ -218,15 +219,21 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
        'سجل TP1 غير موثوق ويحتاج مراجعة؛ لا يمكن إرساله.'}</p>
     </div>:null}
     {position&&tp1Held?<div className="execution-binding-summary" aria-label="أمر TP1 محجوز داخل Core دون إرسال">
-      <p className="safe-note">تم تسجيل أمر TP1 في طابور Core بحالة محجوزة غير قابلة للإرسال إلى Gateway أو MT5.</p>
+      <p className="safe-note">حالة أمر TP1 من Core: وجوده بالطابور أو وصوله إلى Gateway لا يثبت تنفيذ MT5. إثبات الإغلاق يحتاج Deal وحجم مركز متبقٍ مطابقين.</p>
       <p>{tp1Held.state==='held_unreleased_no_gateway'?
-        'أمر TP1 محجوز ولم يُرسل إلى الوسيط.':
+        'أمر TP1 محجوز ولم يُرسل إلى Gateway.':
         tp1Held.state==='held_expired_never_dispatched'?
-        'انتهت صلاحية الأمر المحجوز دون إرساله؛ لا يُعاد تشغيله تلقائياً.':
-        'سجل الأمر المحجوز غير مطابق ويحتاج مراجعة؛ لا يوجد إرسال.'}</p>
+        'انتهت صلاحية الأمر المحجوز قبل إطلاقه؛ لا يُعاد إرساله.':
+        tp1Held.state==='queued_for_gateway_not_broker_fill'?
+        'TP1 أُطلق إلى طابور Gateway؛ لا يوجد تأكيد تنفيذ من الوسيط بعد.':
+        tp1Held.state==='gateway_selected_broker_send_unconfirmed'?
+        'استلم Gateway أمر TP1، وقد يكون الإرسال جارياً؛ نتيجة الوسيط غير مؤكدة.':
+        tp1Held.state==='broker_receipt_needs_deal_and_position_reconciliation'?
+        'توجد نتيجة أولية لأمر TP1؛ يلزم التحقق من Deal وحجم المركز قبل اعتماد الإغلاق.':
+        'سجل TP1 يحتاج مراجعة، ولا يجوز افتراض تنفيذ أي إغلاق.'}</p>
      </div>:null}
     {position&&recorded&&recordedValid&&consentValid?<div className="execution-binding-summary" aria-label="موافقة مشغل TP المرحلية">
-     <p className="safe-note">موافقة المشغل مرتبطة بهذا المركز فقط، لكنها حالياً مرحلة تحضير وليست تفويضاً بالوسيط. تشغيل TP التلقائي ما زال مقفلاً في Core؛ لا يوجد إرسال أو تعديل على MT5 من هذا الزر.</p>
+     <p className="safe-note">موافقة المشغل مرتبطة بهذا المركز وهي للتحضير فقط؛ هذا الزر لا يرسل أوامر. التنفيذ الفعلي يحتاج تفويض تداول مستقل وتسليح TP1 صريحاً.</p>
      <p>{approved?'موافقة بحثية مُثبتة للحساب المحدد — لا أوامر':
       staleConsent?'الموافقة المحفوظة قديمة أو تغيّر المركز/إعدادات التنفيذ؛ يجب إلغاء الموافقة القديمة قبل مراجعة الخطة. لا يُسمح بإعادة تفعيلها بصمت.':
        'لم تُثبت موافقة تنفيذ هذه الخطة بعد'}</p>
@@ -243,8 +250,8 @@ export function PartialExitPriceOperations({status,source,disabled,onSave,onCons
      </button>
     </div>:null}
     {position&&recordedValid&&tradeValid?<div className="execution-binding-summary" aria-label="تفويض تداول TP1 المستقبلي">
-     <p className="safe-note">تفويض منفصل لتداول TP1 مستقبلاً، مربوط بحسابك والمركز والخطة؛ مدة صلاحيته 24 ساعة. حالياً لا يرسل أمراً، وإغلاق TP1 التلقائي ما زال مقفلاً في Core.</p>
-     <p>{tradeActive?'تفويض TP1 مسجّل وساري لكن الإرسال معطّل إلى أن يكتمل المحرك':
+     <p className="safe-note">تفويض تداول TP1 المستقبلي مرتبط بالحساب والمركز والخطة ومدته 24 ساعة. حفظ هذا التفويض وحده لا يرسل أمراً؛ يلزم تسليح تنفيذ TP1 مستقل قبل START.</p>
+     <p>{tradeActive?'تفويض TP1 مسجّل وساري، لكن لا إرسال منه وحده دون تسليح التنفيذ':
        tradeNeedsRevoke?'تفويض TP1 محفوظ لكنه قديم أو غير مطابق؛ ألغِه وراجع الإعدادات قبل الموافقة مجدداً':
        'لم تسجّل موافقة تداول TP1 المستقلة بعد'}</p>
      <button type="button" disabled={tradeLocked||(tradeRow&&!tradeMatches)||
