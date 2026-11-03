@@ -16,6 +16,16 @@ use std::collections::{BTreeMap, BTreeSet};
 // unsettled until Gateway supplies exact terminal broker-order history.
 pub(crate) const PENDING_BROKER_SQL:&str = "(state IN ('queued','dispatched','unknown','placed','filled','partial') OR (state='observed' AND json_extract(result,'$.state')='partial' AND COALESCE(json_extract(result,'$.terminal_order.confirmed'),0)<>1))";
 
+// The Gateway has a DEMO-only staged-close validation contract, but Core
+// deliberately has NO priced TP-stage producer or sequence authorization yet.
+// Fail closed for any staged/partial marker even if a durable command was
+// externally inserted and marked dispatched. A regular full close remains
+// governed by its existing independent authorization rules.
+fn incomplete_tp_stage_execution_locked(command:&Value)->bool {
+    ["tp_stage_plan_id","tp_stage","expected_position_identifier"]
+        .iter().any(|key|command.get(*key).is_some())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
@@ -1266,6 +1276,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         cmd["daily_breaker_limit_percent"].as_f64().unwrap_or(2.))?
                 } else { false };
                 let ok = state == "dispatched"
+                    && !incomplete_tp_stage_execution_locked(&cmd)
                     && breaker_ok
                     && t.is_some_and(|t| self.matches(t) && ctx(t) == cmd["context"])
                     && now <= cmd["expires_ms"].as_u64().unwrap_or(0)
@@ -2511,5 +2522,26 @@ mod execution_persistence_tests {
         service.route("POST","/v1/execution/settings",request.as_bytes(),&db,&status,201).unwrap();
         assert_eq!(service.settings.deviation_points,35);
         assert_eq!(Service::new(&db).unwrap().settings.deviation_points,35);
+    }
+}
+
+#[cfg(test)]
+mod tp_stage_core_authorization_gate_tests {
+    use super::*;
+    #[test]
+    fn no_core_stage_execution_until_a_priced_broker_safe_producer_is_implemented(){
+        assert!(!incomplete_tp_stage_execution_locked(&json!({"kind":"close","position":1})),
+            "Normal full-close authorization must remain unchanged");
+        for key in ["tp_stage_plan_id","tp_stage","expected_position_identifier"]{
+            let mut command=json!({"kind":"close","target":"demo","position":17,
+                "state":"dispatched"});
+            command[key]=json!(if key=="tp_stage_plan_id" {"tp-plan-deadbeef"} else {"1"});
+            assert!(incomplete_tp_stage_execution_locked(&command),
+                "Any TP marker is blocked, including incomplete ones");
+        }
+        let whole=json!({"kind":"close","target":"demo","position":17,
+            "tp_stage_plan_id":"tp-plan-aaa","tp_stage":1,
+            "expected_position_identifier":907,"state":"dispatched"});
+        assert!(incomplete_tp_stage_execution_locked(&whole));
     }
 }
