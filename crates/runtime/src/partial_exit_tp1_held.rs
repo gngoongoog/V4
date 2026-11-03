@@ -288,6 +288,13 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str,now:u64)->Result<Value>{
             "broker_command_state":broker_state,"release_verified":released,
             "gateway_dispatchable":valid&&broker_state=="queued",
             "gateway_send_confirmed":false,"broker_fill_verified":false,
+            "manual_replan_required":valid&&broker_state=="stage_held"
+                &&(now<at||now.saturating_sub(at)>3_000),
+            "automatic_requeue_allowed":false,
+            "recovery_reason":if valid&&broker_state=="stage_held"
+                &&(now<at||now.saturating_sub(at)>3_000){
+                    "Original immutable price quote expired before Core release; "
+                }else{""},
             "read_only":true})
     }).collect::<Vec<_>>());
     result["queued_for_gateway"]=json!(dispatchable);
@@ -372,6 +379,38 @@ mod tests{
             |r|r.get::<_,i64>(0)).unwrap(),0);
         let wrong=prepare(&db,&t,"live",1550,5,20,true).unwrap();
         assert_eq!(wrong["held"],0);
+    }
+    #[test]
+    fn expired_held_tp1_is_explicit_manual_replan_blocker_never_requeued(){
+        let db=Connection::open_in_memory().unwrap();setup(&db);
+        crate::partial_exit_tp1_release::init(&db).unwrap();
+        let c=candidate();
+        let plan=c["tp_stage_plan_id"].as_str().unwrap();
+        assert_eq!(claim(&db,"ctx","demo",907,87,plan,&c,1550).unwrap(),"held");
+        let t=Telemetry{connected:true,demo:true,account_trade_mode:Some(0),
+            login:17,server:"D".into(),symbol:"XAUUSD".into(),
+            currency:"USD".into(),..Default::default()};
+        let recent=report(&db,&t,"demo",1550).unwrap();
+        assert_eq!(recent["rows"][0]["manual_replan_required"],false);
+        let expired=report(&db,&t,"demo",6000).unwrap();
+        assert_eq!(expired["rows"][0]["state"],"held_expired_never_dispatched");
+        assert_eq!(expired["rows"][0]["manual_replan_required"],true);
+        assert_eq!(expired["rows"][0]["automatic_requeue_allowed"],false);
+        assert_eq!(expired["rows"][0]["release_verified"],false);
+        assert_eq!(expired["gateway_sends"],Value::Null,
+            "Core cannot infer Gateway sends merely from old held records");
+        assert_eq!(db.query_row(
+            "SELECT COUNT(*) FROM broker_commands WHERE state='stage_held'",
+            [],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert_eq!(db.query_row(
+            "SELECT COUNT(*) FROM partial_exit_tp1_releases",
+            [],|r|r.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(claim(&db,"ctx","demo",907,87,plan,&c,1550).unwrap(),"idempotent",
+            "An exact old command remains immutable, not silently refreshed");
+        let mut newer=c.clone();
+        newer["created_ms"]=json!(6001);newer["expires_ms"]=json!(9001);
+        assert_eq!(claim(&db,"ctx","demo",907,87,plan,&newer,6001).unwrap(),
+            "conflict","An expired intent cannot reprice and resend itself");
     }
     #[test]
     fn tampered_or_old_unknown_close_blocks_tp1_claim(){
