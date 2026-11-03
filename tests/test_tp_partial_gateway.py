@@ -224,9 +224,10 @@ class StageDemoTests(unittest.TestCase):
         self.assertEqual(result['state'],'cancelled',result)
         self.assertIn('pre-send',result['reason'])
         self.assertEqual(len(self.mt.sends),0)
-        self.mt.on_check=None
-        self.mt.tick.bid=2000.0
-        self.cmd['id']='tp-price-moved-above-'+'a'*24
+    def test_favourable_tp_quote_drift_also_denied_without_reusing_old_stage(self):
+        # A fresh, independent fixture is required. The earlier test has
+        # already atomically claimed its stage plan before the second gate;
+        # retrying that same plan under a new ID correctly returns unknown.
         self.mt.on_check=lambda:setattr(self.mt.tick,'bid',2000.2)
         result=self.send()
         self.assertEqual(result['state'],'cancelled',result)
