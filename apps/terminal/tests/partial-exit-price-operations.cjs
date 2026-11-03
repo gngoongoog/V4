@@ -28,7 +28,7 @@ function collect(n,out=[]){
  out.push(n);return out;
 }
 const render=(opts)=>{hook=0;return exp.PartialExitPriceOperations({...opts,onSave:async()=>true})};
-const shown=(root)=>collect(root).filter(x=>typeof x==='string').join(' ');
+const shown=(root)=>collect(rendered).filter(x=>typeof x==='string').join(' ');
 const tel={connected:true,demo:true,account_trade_mode:0,margin_mode:2,
  login:17,server:'D',symbol:'XAUUSDm',currency:'USD',
  tick_size:0.01,bid:2000,ask:2000.2,
@@ -47,16 +47,16 @@ const view={account_matches:true,context,
  status:'demo_operator_price_proposals_only',
  context,target:'demo',read_only:true,orders_enabled:false,rows:[]}};
 const opts={status,source:view,disabled:false};
-let root=render(opts);
-assert(shown(root).includes('DEMO فقط'));
-assert(shown(root).includes('لا تُرسل أوامر'));
-assert(!collect(root).some(x=>x.type==='button'&&!x.props.disabled),
+let rendered=render(opts);
+assert(shown(rendered).includes('DEMO فقط'));
+assert(shown(rendered).includes('لا تُرسل أوامر'));
+assert(!collect(rendered).some(x=>x.type==='button'&&!x.props.disabled),
  'Must not save until a position/three prices are selected');
 selected='907';inputs=['2001','2002','2003'];dirty=true;
-root=render(opts);
-assert(collect(root).some(x=>x.type==='button'&&!x.props.disabled),
+rendered=render(opts);
+assert(collect(rendered).some(x=>x.type==='button'&&!x.props.disabled),
  'Exactly staged, broker-tick aligned, increasing prices can be saved');
-assert(collect(root).filter(x=>x.type==='input').length===3);
+assert(collect(rendered).filter(x=>x.type==='input').length===3);
 inputs=['2001','2001','2003'];
 assert(!collect(render(opts)).some(x=>x.type==='button'&&!x.props.disabled),
  'Decreasing/nonmonotone BUY prices must never be saved');
