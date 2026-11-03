@@ -227,3 +227,75 @@ pub fn report(db:&Connection,t:&Telemetry,target:&str)->Result<Value>{
         "read_only":true,"orders_enabled":false,
         "broker_commands_created":0}))
 }
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    #[test]
+    fn stage_one_rejects_ambiguous_or_foreign_close_and_never_reuses_it(){
+        let db=Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE broker_commands(
+            id TEXT,context TEXT,kind TEXT,state TEXT,payload TEXT);").unwrap();
+        let t=Telemetry::default();
+        let ctx=r#"["LiveBroker",50,"XAUUSDm","USD"]"#;
+        assert!(!conflicting_close(&db,&t,"live",ctx,907,1,87).unwrap());
+        db.execute("INSERT INTO broker_commands VALUES(
+            'legacy',?1,'close','unknown','{corrupt')",[ctx]).unwrap();
+        assert!(conflicting_close(&db,&t,"live",ctx,907,1,87).unwrap());
+        assert!(conflicting_close(&db,&t,"live",ctx,907,2,87).unwrap());
+        db.execute("DELETE FROM broker_commands",[]).unwrap();
+        db.execute("INSERT INTO broker_commands VALUES(
+            'other',?1,'close','observed','{\"position\":87,\"tp_stage\":1}')",
+            [ctx]).unwrap();
+        // A broker ACK/observed marker is not an immutable stage seal.
+        assert!(conflicting_close(&db,&t,"live",ctx,907,1,87).unwrap());
+        // Prior-stage settlement must be fully reverified before TP2; this
+        // test deliberately doesn't supply it so any query error fails closed.
+        assert!(conflicting_close(&db,&t,"live",ctx,907,2,87).is_err());
+    }
+    #[test]
+    fn sqlite_stage_identity_survives_reopen_without_multiplying_outbox_rows(){
+        let path=std::env::temp_dir().join(format!(
+            "bt-stage-reserve-{}.sqlite",uuid::Uuid::new_v4().simple()));
+        let ctx=r#"["LiveBroker",50,"XAUUSDm","USD"]"#;
+        let payload=json!({"schema":"tp-stage-broker-command-shape-v1",
+            "context":ctx,"target":"live","position":87,
+            "expected_position_identifier":907,"tp_stage":1,
+            "tp_stage_plan_id":"tp-plan-123","kind":"close",
+            "price_source_quote_ms":10200,"created_ms":10250});
+        {
+            let db=Connection::open(&path).unwrap();
+            init(&db).unwrap();
+            assert_eq!(db.execute(
+                "INSERT INTO partial_exit_stage_reservations VALUES(
+                 ?1,'live',907,1,'tp-plan-123',87,10200,10250,
+                 ?2,'reserved_not_dispatched')",
+                params![ctx,payload.to_string()]).unwrap(),1);
+        }
+        {
+            let db=Connection::open(&path).unwrap();
+            init(&db).unwrap();
+            assert_eq!(db.query_row(
+                "SELECT COUNT(*) FROM partial_exit_stage_reservations",
+                [],|r|r.get::<_,i64>(0)).unwrap(),1);
+            assert_eq!(db.execute(
+                "INSERT OR IGNORE INTO partial_exit_stage_reservations VALUES(
+                 ?1,'live',907,1,'tp-plan-123',87,10201,10251,
+                 ?2,'reserved_not_dispatched')",
+                params![ctx,payload.to_string()]).unwrap(),0);
+            assert_eq!(db.execute(
+                "INSERT OR IGNORE INTO partial_exit_stage_reservations VALUES(
+                 ?1,'live',999,2,'tp-plan-123',88,10202,10252,
+                 ?2,'reserved_not_dispatched')",
+                params![ctx,payload.to_string()]).unwrap(),0);
+            assert_eq!(db.query_row(
+                "SELECT COUNT(*) FROM partial_exit_stage_reservations",
+                [],|r|r.get::<_,i64>(0)).unwrap(),1);
+            let saved=db.query_row(
+                "SELECT payload FROM partial_exit_stage_reservations",
+                [],|r|r.get::<_,String>(0)).unwrap();
+            assert_eq!(saved,payload.to_string());
+        }
+        let _=std::fs::remove_file(path);
+    }
+}
