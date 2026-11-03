@@ -76,7 +76,11 @@ assert(!collect(render({...opts,source:changed})).some(x=>x.type==='button'&&!x.
 const stored={...view,partial_exit_price_proposals:{...view.partial_exit_price_proposals,
  rows:[{position_identifier:907,prices:[2001,2002,2003]}]}};
 assert(!collect(render({...opts,source:stored})).some(x=>x.type==='button'&&!x.props.disabled));
-assert(shown(render({...opts,source:stored})).includes('محفوظ للمركز'));
+const savedTree=render({...opts,source:stored});
+assert(!collect(savedTree).some(x=>x.type==='input'),
+ 'Saved immutable prices cannot be edited with a second set of input controls');
+assert(!collect(savedTree).some(x=>x.type==='button'&&!x.props.disabled),
+ 'An immutable saved plan must never allow a second write');
 const bridge=read('src/bridge.ts');
 assert(bridge.includes("invoke('save_partial_exit_prices'"));
 const tauri=fs.readFileSync(path.join(root,'../tauri/src/bridge.rs'),'utf8');
