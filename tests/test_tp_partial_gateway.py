@@ -29,7 +29,8 @@ def stage_command(stage=1,held=0.1,lots=0.05):
         tp_target_price=round(1999.9+(stage-1)*0.01,2),
         expected_position_entry=1999.5,expected_broker_tp=0.0,
         expected_position_identifier=917,
-        expected_position_volume=held,expected_position_side="BUY")
+        expected_position_volume=held,expected_position_side="BUY",
+        price_source_quote_ms=clock_ms()-1000)
     return c
 
 
@@ -439,6 +440,35 @@ class StageDemoTests(unittest.TestCase):
             stage_volume(self.cmd,self.mt.account,self.mt,self.p,self.mt.info,
                          self.mt.tick,clock_ms())
         self.assertFalse(self.mt.sends)
+
+    def test_missing_or_expired_core_quote_crossing_never_sends_stage(self):
+        fresh=clock_ms()
+        self.mt.tick.time_msc=fresh
+        invalid=[("omitted",None),("null",None),("boolean",True),
+                 ("float",float(fresh)),("old",fresh-10000),
+                 ("future",fresh+3000),("newer_than_mt5",fresh+1),
+                 ("text",str(fresh))]
+        for index,(name,source) in enumerate(invalid):
+            with self.subTest(case=name):
+                self.cmd=stage_command()
+                self.cmd["id"]=f"tp-unverified-crossing-{index}-"+"d"*18
+                if name=="omitted":
+                    self.cmd.pop("price_source_quote_ms")
+                else:
+                    self.cmd["price_source_quote_ms"]=source
+                with self.assertRaisesRegex(ValueError,"crossing source"):
+                    stage_volume(self.cmd,self.mt.account,self.mt,self.p,
+                                 self.mt.info,self.mt.tick,clock_ms())
+                result=self.send()
+                self.assertIn(result["state"],("rejected","cancelled"),result)
+                self.assertFalse(self.mt.sends,
+                    "An unverified Core quote must not produce a physical broker order")
+        self.cmd=stage_command()
+        self.cmd["id"]="tp-genuine-crossing-"+"d"*24
+        self.cmd["price_source_quote_ms"]=fresh
+        qty,side=stage_volume(self.cmd,self.mt.account,self.mt,self.p,
+                              self.mt.info,self.mt.tick,clock_ms())
+        self.assertEqual((qty,side),(0.05,-1))
 
     def test_core_price_source_timestamp_is_monotonic_and_journal_immutable(self):
         stamp=clock_ms()
