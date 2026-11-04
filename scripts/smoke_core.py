@@ -181,11 +181,28 @@ def main():
             # Research JSONL is now exported via a read-only worker. Status
             # polling must keep responding while the export owns its archive
             # slot; no account or broker effects are permitted here.
+            status_latencies_ms=[]
+            busy_observations=0
             with ThreadPoolExecutor(max_workers=2) as pool:
                 research_export_future=pool.submit(api,'/v1/export',{},timeout=60)
-                status_during_research_export=api('/v1/status')
+                # Synthetic local HTTP envelope only; this is NOT MT5 or
+                # broker order_send latency. Never assert universal P99.
+                for _ in range(48):
+                    started=time.perf_counter()
+                    status_sample=api('/v1/status',timeout=6)
+                    status_latencies_ms.append((time.perf_counter()-started)*1000)
+                    assert status_sample['state']=='stopped'
+                    busy_observations+=int(status_sample.get('backup_operation',{}).get('busy') is True)
                 export=Path(research_export_future.result(timeout=65)['path'])
-            assert status_during_research_export['state']=='stopped'
+            samples=sorted(status_latencies_ms)
+            nearest_rank=lambda pct:round(samples[max(0,(len(samples)*pct+99)//100-1)],3)
+            print('CORE_LOCAL_HTTP_STATUS_PROFILE '+json.dumps({
+                'samples':len(samples),
+                'p50_ms':nearest_rank(50),'p95_ms':nearest_rank(95),
+                'p99_ms':nearest_rank(99),'max_ms':round(samples[-1],3),
+                'backup_busy_observations':busy_observations,
+                'scope':'synthetic localhost Core status, not MT5 broker execution'
+            }),flush=True)
             assert (export/'opportunity_setups.jsonl').exists()
             assert len((export/'decisions.jsonl').read_text().splitlines())==1
             assert len((export/'paper_events.jsonl').read_text().splitlines())==2
