@@ -916,6 +916,15 @@ def main():
                                     else:
                                         core_budget.failure()
 
+                        # OnTradeTransaction only flags that broker state may
+                        # have changed. It is never used as Deal/fill proof.
+                        # Force a fresh positions/orders + broker-history
+                        # reconciliation instead of waiting for the next poll.
+                        if native.consume_trade_notice(
+                            int(latest_snapshot.get('login') or 0)
+                            if latest_snapshot else 0, symbol):
+                            next_full_snapshot=0.0
+                            broker_history_schedule.next_poll=0.0
                         full_interval=SNIPER_FULL_SNAPSHOT_SECONDS if sniper else max(0.5,min(1.0,normal_poll_seconds))
                         full_due=latest_snapshot is None or mono >= next_full_snapshot
                         if full_due:
