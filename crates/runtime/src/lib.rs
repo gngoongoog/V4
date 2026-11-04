@@ -219,6 +219,18 @@ fn mutation_allowed_during_backup_scan(method: &str, path: &str) -> bool {
     ))
 }
 
+fn backup_operation_gate(phase:u8,method:&str,path:&str)->Result<()> {
+    if phase!=0 && !mutation_allowed_during_backup_scan(method,path) {
+        bail!("انتظر انتهاء عملية النسخ أو فحص الأرشيف قبل START أو تغيير البيانات");
+    }
+    // Read-only integrity scans can be interrupted on full exit. A writer
+    // cannot be cut short without leaving an ambiguous incomplete archive.
+    if phase==2 && matches!((method,path),("POST","/v1/shutdown")|("POST","/v1/reconnect")) {
+        bail!("عملية كتابة النسخة الاحتياطية جارية؛ انتظر اكتمالها قبل الخروج الكامل أو إعادة الاتصال");
+    }
+    Ok(())
+}
+
 type BackupReadJob = (tiny_http::Request, BackupReadKind, Vec<u8>);
 
 fn start_backup_read_worker(root: PathBuf, active: Arc<AtomicU8>)
@@ -757,13 +769,7 @@ impl Engine{
         started.elapsed()
     }
     fn route(&mut self,method:&str,path:&str,body:&[u8])->Result<Value>{
-        if self.backup_io_phase.load(Ordering::Acquire)!=0 && !mutation_allowed_during_backup_scan(method,path) {
-            bail!("انتظر انتهاء مهمة النسخ الاحتياطية قبل START أو تغيير البيانات؛ STOP والمصالحة تبقى متاحة");
-        }
-        if self.backup_io_phase.load(Ordering::Acquire)==2
-            && matches!((method,path),("POST","/v1/shutdown")|("POST","/v1/reconnect")) {
-            bail!("يجري إنشاء أرشيف احتياطي؛ انتظر اكتمال الكتابة قبل الخروج الكامل أو إعادة الاتصال");
-        }
+        backup_operation_gate(self.backup_io_phase.load(Ordering::Acquire),method,path)?;
         if is_bulk_io_route(method,path) {
             let unresolved=self.execution.pending(&self.db)?;
             let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
@@ -1047,7 +1053,12 @@ impl Engine{
             return Ok(result);
         }
         match(method,path){
-            ("GET","/v1/status")=>{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());let mut value=serde_json::to_value(&s.status)?;value["selected_owner"]=json!(self.execution.selected_owner_for_status(&s.status));value["learning_control"]=self.execution.learning_status();value["core_process"]=json!({"pid":std::process::id(),"instance_id":self.instance_id});Ok(value)},
+            ("GET","/v1/status")=>{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());let mut value=serde_json::to_value(&s.status)?;value["selected_owner"]=json!(self.execution.selected_owner_for_status(&s.status));value["learning_control"]=self.execution.learning_status();value["core_process"]=json!({"pid":std::process::id(),"instance_id":self.instance_id});
+                let phase=self.backup_io_phase.load(Ordering::Acquire);
+                value["backup_operation"]=json!({"busy":phase!=0,"phase":match phase{
+                    1=>"integrity_read",2=>"archive_write",_=>"idle"
+                },"new_trades_fenced":phase!=0});
+                Ok(value)},
             ("GET","/v1/config")=>{let s=self.shared.lock().unwrap();Ok(json!({"config":s.config,"token_saved":s.token.is_some()}))},
             ("GET","/v1/learning/account-evidence")=>{
                 let (telemetry,fresh)={
@@ -1364,6 +1375,32 @@ mod housekeeping_schedule_tests {
         ] {
             assert!(offline_research_calculate(kind,b"not-json").is_err());
         }
+    }
+    #[test]
+    fn writer_fence_blocks_start_restore_and_full_exit_but_allows_broker_reconciliation() {
+        for phase in [1,2] {
+            for path in ["/v1/start","/v1/config","/v1/backup/restore/stage",
+                "/v1/execution/settings","/v1/brain-snapshot/export"] {
+                if path=="/v1/execution/settings" {
+                    // Known broker execution endpoints remain available for
+                    // reconciliation; individual routes enforce their own
+                    // authorization and pending-intent discipline.
+                    assert!(backup_operation_gate(phase,"POST",path).is_ok());
+                } else {
+                    assert!(backup_operation_gate(phase,"POST",path).is_err(),"{path}");
+                }
+            }
+            for path in ["/v1/stop","/v1/gateway/snapshot",
+                "/v1/execution/reconciliation"] {
+                assert!(backup_operation_gate(phase,"POST",path).is_ok(),"{path}");
+            }
+        }
+        for path in ["/v1/shutdown","/v1/reconnect"] {
+            assert!(backup_operation_gate(1,"POST",path).is_ok());
+            assert!(backup_operation_gate(2,"POST",path).is_err());
+        }
+        assert!(backup_operation_gate(0,"POST","/v1/start").is_ok());
+        assert!(backup_operation_gate(0,"POST","/v1/backup/restore/stage").is_ok());
     }
     #[test]
     fn backup_write_worker_only_accepts_backup_snapshot_actions() {
