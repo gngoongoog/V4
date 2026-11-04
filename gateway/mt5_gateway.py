@@ -25,6 +25,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from sniper_native import NativeTickBridge
+from managed_terminal import ManagedTerminalBinding
 from transport import LoopbackCore
 from broker_costs import booked_trading_net
 
@@ -138,13 +139,14 @@ class CoreOutageBudget:
         return mono-self.first_failure_at>=self.grace
 
 
-def mt5_session_alive(mt5):
+def mt5_session_alive(mt5,binding=None):
     """Broker/terminal session identity, not a source of order authorization."""
     try:
         term=mt5.terminal_info()
         account=mt5.account_info()
         return (term is not None and getattr(term,'connected',False) is True
-                and account is not None and int(getattr(account,'login',0))>0)
+                and account is not None and int(getattr(account,'login',0))>0
+                and (binding is None or binding.verify(term)))
     except (AttributeError,OSError,RuntimeError,TypeError,ValueError):
         return False
 
@@ -556,7 +558,7 @@ def refresh_fast_tick(snapshot: dict, mt5, symbol: str, now_ms: int | None = Non
     return updated,changed,signature
 
 
-def broker_snapshot_identity_is_current(mt5, snapshot: dict) -> bool:
+def broker_snapshot_identity_is_current(mt5, snapshot: dict, binding=None) -> bool:
     """Prevent hot pulses from using a cached identity after an MT5 account switch.
 
     This is a fast-path admission check only when new quotes actually arrive;
@@ -572,7 +574,8 @@ def broker_snapshot_identity_is_current(mt5, snapshot: dict) -> bool:
                 and getattr(a, "login", None) == snapshot.get("login")
                 and getattr(a, "server", None) == snapshot.get("server")
                 and getattr(a, "currency", None) == snapshot.get("currency")
-                and getattr(a, "trade_mode", None) == snapshot.get("account_trade_mode"))
+                and getattr(a, "trade_mode", None) == snapshot.get("account_trade_mode")
+                and (binding is None or binding.verify(terminal)))
     except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return False
 
@@ -740,7 +743,9 @@ def main():
         return
     config_path = directory / "config.json"
     runtime_config = json.loads(config_path.read_text("utf-8")) if config_path.exists() else {}
-    path = runtime_config.get("mt5_path", "")
+    binding = ManagedTerminalBinding(
+        runtime_config.get("mt5_path", ""),
+        runtime_config.get("mt5_portable", False))
     symbol = runtime_config.get("symbol", "XAUUSD")
     # HTTP/1.1 connection reuse reduces loopback TCP setup on hot quote paths.
     # A dropped connection is NEVER replayed automatically (POST ambiguity).
@@ -862,8 +867,12 @@ def main():
             else:
                 try:
                     if not initialized and mono >= retry_at:
-                        initialized = mt5.initialize(path, timeout=5000) if path else mt5.initialize(timeout=5000)
+                        initialized = binding.connect(mt5, timeout_ms=10000)
                         retry_at = mono + 5
+                        if not initialized and mono >= next_cycle_error_log:
+                            print("MT5 managed binding: "+binding.last_error,
+                                  file=sys.stderr,flush=True)
+                            next_cycle_error_log=mono+15.0
                         next_full_snapshot=0.0
                         if initialized:
                             native.bind_terminal(mt5.terminal_info())
@@ -880,7 +889,7 @@ def main():
                         # and any command is returned in that same localhost response.
                         if sniper and latest_snapshot and latest_snapshot.get('connected'):
                             packets=native.drain(int(latest_snapshot.get('login') or 0),symbol,NATIVE_BATCH_MAX)
-                            if packets and not broker_snapshot_identity_is_current(mt5,latest_snapshot):
+                            if packets and not broker_snapshot_identity_is_current(mt5,latest_snapshot,binding):
                                 # Cached Core snapshot is now another MT5 session.
                                 # Clear buffered native evidence without sending
                                 # even one old-context pulse.
@@ -920,6 +929,19 @@ def main():
                                 # Revoke the prior EA token and reject buffered old ticks.
                                 native.close()
                                 native.bind_terminal(mt5.terminal_info())
+                            # Verify the exact terminal installation/data folder
+                            # again before Core may see a reconciled snapshot.
+                            # A foreign instance must NEVER inherit an old account
+                            # binding or native tick token.
+                            if not binding.check_current(mt5):
+                                fresh_snapshot=empty_snapshot(
+                                    "MT5 selected installation/data folder changed; "
+                                    "reconnect the explicitly configured terminal.")
+                                native.close()
+                                dom_cache.release(mt5)
+                                mt5.shutdown()
+                                initialized=False
+                                retry_at=time.monotonic()+5.0
                             fresh_snapshot,_=advance_quote_clock(latest_snapshot,fresh_snapshot)
                             latest_snapshot=fresh_snapshot
                             next_full_snapshot=mono+full_interval
@@ -931,7 +953,7 @@ def main():
                             # now uses the same execution-only pulse as the native source.
                             fast_snapshot,changed,_=refresh_fast_tick(latest_snapshot,mt5,symbol)
                             if changed:
-                                if not broker_snapshot_identity_is_current(mt5,latest_snapshot):
+                                if not broker_snapshot_identity_is_current(mt5,latest_snapshot,binding):
                                     # Poll fallback can also see a new account
                                     # before the 250 ms reconciled snapshot.
                                     native.close()
@@ -951,7 +973,7 @@ def main():
                                     else:
                                         core_budget.failure()
                         if initialized and latest_snapshot:
-                            if latest_snapshot.get('connected') or mt5_session_alive(mt5):
+                            if (latest_snapshot.get('connected') and binding.check_current(mt5)) or mt5_session_alive(mt5,binding):
                                 # A missing portfolio read is not proof of
                                 # terminal logout; Core still sees connected=False
                                 # and cannot send on unverified positions.
@@ -977,7 +999,7 @@ def main():
                     latest_snapshot=empty_snapshot(
                         "MT5 snapshot was not verified; trading paused until fresh reconciliation.")
                     next_full_snapshot=time.monotonic()+0.5
-                    if mt5_session_alive(mt5):
+                    if mt5_session_alive(mt5,binding):
                         mt5_disconnect_budget.healthy()
                     elif mt5_disconnect_budget.offline():
                         native.close()
