@@ -3,6 +3,7 @@ No MT5 connection or trade submission. Run with the normal application closed.
 """
 import json
 import os
+import shutil
 from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -26,12 +27,12 @@ def main():
         process=subprocess.Popen([str(BINARY)],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         key=''
         opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        def api(path,body=None,auth=True,origin=False):
+        def api(path,body=None,auth=True,origin=False,timeout=3):
             headers={'Content-Type':'application/json'}
             if auth:headers['Authorization']='Bearer '+key
             if origin:headers['Origin']='https://untrusted.invalid'
             req=urllib.request.Request(BASE+path,data=json.dumps(body).encode() if body is not None else None,headers=headers)
-            with opener.open(req,timeout=3) as response:return json.load(response)
+            with opener.open(req,timeout=timeout) as response:return json.load(response)
         try:
             for _ in range(80):
                 try:
@@ -196,7 +197,13 @@ def main():
             assert len(api('/v1/learning/inference/recent')['predictions'])==1
             assert not api('/v1/status')['execution_enabled']
 
-            backup=api('/v1/backup',{})
+            # P1-8G: the backup writer uses its own SQLite connection. The
+            # Core must still serve status while the online backup runs.
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                writing=pool.submit(api,'/v1/backup',{},timeout=60)
+                status_during_backup=api('/v1/status')
+                backup=writing.result(timeout=65)
+            assert status_during_backup['state']=='stopped'
             folder=Path(backup['path'])
             assert (folder/'config.json').exists()
             # A validated backup is sealed. sqlite3.connect(path) opens a
@@ -216,17 +223,35 @@ def main():
             # Backup integrity checks are read-only and served by their
             # bounded worker, while Core status remains responsive.
             with ThreadPoolExecutor(max_workers=2) as pool:
-                listing_future=pool.submit(api,'/v1/backups')
+                listing_future=pool.submit(api,'/v1/backups',timeout=60)
                 core_status=api('/v1/status')
-                listing=listing_future.result(timeout=15)
+                listing=listing_future.result(timeout=65)
             assert core_status['state']=='stopped'
             assert any(item.get('name')==backup['name'] and item.get('valid') is True
                        for item in listing['backups'])
-            checked=api('/v1/backup/restore/validate',{'name':backup['name']})
+            checked=api('/v1/backup/restore/validate',{'name':backup['name']},timeout=60)
             assert checked['valid'] is True and checked['name']==backup['name']
             try:api('/v1/backup/restore/validate',{'name':'missing-backup-fixture'})
             except urllib.error.HTTPError as e:assert e.code==400
             else:raise AssertionError('Invalid backup was not rejected')
+            # A self-contained snapshot export/import is a separate writer
+            # operation, and must never mutate the current Engine database.
+            brain=api('/v1/brain-snapshot/export',{},timeout=60)
+            assert brain['secrets_included'] is False
+            archive=Path(brain['path'])
+            assert archive.is_file() and archive.stat().st_size==brain['bytes']
+            inbox=Path(directory)/'brain_imports'
+            inbox.mkdir(exist_ok=True)
+            uploaded=inbox/'smoke-transfer.btbrain'
+            shutil.copyfile(archive,uploaded)
+            imported=api('/v1/brain-snapshot/import',{'name':uploaded.name},timeout=60)
+            assert imported['imported'] is True and imported['restore_required'] is True
+            assert not uploaded.exists()
+            imported_folder=Path(directory)/'backups'/imported['backup_name']
+            assert (imported_folder/'events.sqlite').is_file()
+            checked_import=api('/v1/backup/restore/validate',
+                               {'name':imported['backup_name']},timeout=60)
+            assert checked_import['valid'] is True
             frozen=api('/v1/learning/control',{'frozen':True})
             assert frozen['frozen'] and frozen['trading_unchanged'] and frozen['cutoff_ms']>0
             assert api('/v1/status')['learning_control']['frozen']
