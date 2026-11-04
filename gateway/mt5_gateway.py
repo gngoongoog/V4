@@ -882,7 +882,7 @@ def main():
                         # without falsely claiming that ordinary MT5 polling is native.
                         if mono >= next_native_rebind:
                             next_native_rebind=mono+2.0
-                            if not native.available:
+                            if not native.available and binding.check_current(mt5):
                                 native.bind_terminal(mt5.terminal_info())
                         # Drain authenticated quote events before slower account/candle work.
                         # Each distinct quote is evaluated through the execution-only pulse
@@ -937,7 +937,8 @@ def main():
                                 # MT5 can switch accounts inside the same data directory.
                                 # Revoke the prior EA token and reject buffered old ticks.
                                 native.close()
-                                native.bind_terminal(mt5.terminal_info())
+                                if binding.check_current(mt5):
+                                    native.bind_terminal(mt5.terminal_info())
                             # Verify the exact terminal installation/data folder
                             # again before Core may see a reconciled snapshot.
                             # A foreign instance must NEVER inherit an old account
