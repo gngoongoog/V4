@@ -336,10 +336,12 @@ fn export_research_dataset(db:&Connection,root:&Path)->Result<Value> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BackupWriteKind { Create, BrainExport, BrainImport }
+enum BackupWriteKind { Create, BrainExport, BrainImport, ResearchExport, LearningExport }
 impl BackupWriteKind {
     fn label(self)->&'static str {
-        match self {Self::Create=>"create",Self::BrainExport=>"brain_export",Self::BrainImport=>"brain_import"}
+        match self {Self::Create=>"create",Self::BrainExport=>"brain_export",
+            Self::BrainImport=>"brain_import",Self::ResearchExport=>"research_export",
+            Self::LearningExport=>"learning_export"}
     }
 }
 fn backup_write_kind(method:&str,path:&str)->Option<BackupWriteKind> {
@@ -347,6 +349,8 @@ fn backup_write_kind(method:&str,path:&str)->Option<BackupWriteKind> {
         ("POST","/v1/backup")=>Some(BackupWriteKind::Create),
         ("POST","/v1/brain-snapshot/export")=>Some(BackupWriteKind::BrainExport),
         ("POST","/v1/brain-snapshot/import")=>Some(BackupWriteKind::BrainImport),
+        ("POST","/v1/export")=>Some(BackupWriteKind::ResearchExport),
+        ("POST","/v1/learning/export")=>Some(BackupWriteKind::LearningExport),
         _=>None,
     }
 }
@@ -372,12 +376,15 @@ fn start_backup_write_worker(root:PathBuf, phase:Arc<AtomicU8>,
                     // Read-only SQLite in WAL mode is safe with Core's one
                     // writer; no new transaction is allowed on this connection.
                     match kind {
-                        BackupWriteKind::Create|BackupWriteKind::BrainExport=>{
+                        BackupWriteKind::Create|BackupWriteKind::BrainExport|
+                        BackupWriteKind::ResearchExport|BackupWriteKind::LearningExport=>{
                             let db=Connection::open_with_flags(root.join("events.sqlite"),
                                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
                             match kind {
                                 BackupWriteKind::Create=>backup::create(&db,&root,&config,now_ms()),
                                 BackupWriteKind::BrainExport=>backup::export_brain(&db,&root,&config,now_ms()),
+                                BackupWriteKind::ResearchExport=>export_research_dataset(&db,&root),
+                                BackupWriteKind::LearningExport=>learning::export_dataset(&db,&root,now_ms()),
                                 BackupWriteKind::BrainImport=>unreachable!(),
                             }
                         }
@@ -1467,11 +1474,13 @@ mod housekeeping_schedule_tests {
         assert_eq!(backup_write_kind("POST","/v1/backup"),Some(BackupWriteKind::Create));
         assert_eq!(backup_write_kind("POST","/v1/brain-snapshot/export"),Some(BackupWriteKind::BrainExport));
         assert_eq!(backup_write_kind("POST","/v1/brain-snapshot/import"),Some(BackupWriteKind::BrainImport));
+        assert_eq!(backup_write_kind("POST","/v1/export"),Some(BackupWriteKind::ResearchExport));
+        assert_eq!(backup_write_kind("POST","/v1/learning/export"),Some(BackupWriteKind::LearningExport));
         for (method,path) in [("GET","/v1/backups"),("POST","/v1/start"),
             ("POST","/v1/stop"),("POST","/v1/shutdown"),
             ("POST","/v1/backup/restore/stage"),("POST","/v1/backup/restore/validate"),
             ("POST","/v1/execution/authorize"),
-            ("POST","/v1/gateway/snapshot"),("POST","/v1/export"),("GET","/v1/backup")] {
+            ("POST","/v1/gateway/snapshot"),("GET","/v1/export"),("GET","/v1/backup")] {
             assert_eq!(backup_write_kind(method,path),None,"{method} {path}");
         }
     }
