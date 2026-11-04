@@ -16,6 +16,7 @@ submission.
 from __future__ import annotations
 import json
 import math
+from collections import deque
 import os
 import sys
 import threading
@@ -174,6 +175,55 @@ class CoreFallbackThrottle:
         if mono<self.next_allowed:return False
         self.next_allowed=mono+self.interval
         return True
+
+
+class GatewayLatencyWindow:
+    """Bounded local monotonic stage timings; diagnostic only, never orders.
+
+    Broker ACK/fill latency is measured separately by BrokerExecutor. This
+    window measures only the local Core HTTP and Gateway dispatch legs.
+    No account identifiers, prices, symbols, tokens or order payloads logged.
+    """
+    STAGES = ("core_pulse_ms", "gateway_cycle_ms", "snapshot_ms")
+
+    def __init__(self, limit=1024, report_every=30.0):
+        self.samples = {stage: deque(maxlen=limit) for stage in self.STAGES}
+        self.errors = 0
+        self.next_report = time.monotonic() + report_every
+        self.report_every = report_every
+
+    def record(self, stage, ms):
+        if stage not in self.samples:
+            raise ValueError("Unrecognized latency stage")
+        value = float(ms)
+        if math.isfinite(value) and 0 <= value <= 60_000:
+            self.samples[stage].append(value)
+
+    def pulse_error(self):
+        self.errors += 1
+
+    def report_due(self, now=None):
+        mono = time.monotonic() if now is None else float(now)
+        if mono < self.next_report:
+            return None
+        self.next_report = mono + self.report_every
+        details = []
+        for stage in self.STAGES:
+            points = sorted(self.samples[stage])
+            if not points:
+                details.append(stage + "=no_samples")
+                continue
+            def percentile(q):
+                return points[min(len(points)-1, int((len(points)-1)*q))]
+            details.append(
+                "%s:n=%d,p50=%.2f,p95=%.2f,p99=%.2f,max=%.2f" % (
+                    stage, len(points), percentile(.50), percentile(.95),
+                    percentile(.99), points[-1]))
+        details.append("core_pulse_errors=%d" % self.errors)
+        self.errors = 0
+        for sample in self.samples.values():
+            sample.clear()
+        return "BRAINTRADE_LOCAL_LATENCY " + " ".join(details)
 
 
 class MarketCache:
@@ -767,6 +817,7 @@ def main():
     core_budget=CoreOutageBudget()
     mt5_disconnect_budget=MT5DisconnectBudget()
     fallback_throttle=CoreFallbackThrottle()
+    latency=GatewayLatencyWindow()
     next_cycle_error_log=0.0
     native=NativeTickBridge()
     if os.environ.get("BRAINTRADE_GATEWAY_PARENT_STDIN") == "1":
@@ -902,13 +953,18 @@ def main():
                                     continue
                                 latest_snapshot=native_snapshot
                                 try:
+                                    pulse_started=time.perf_counter()
                                     work=api('/v1/execution/pulse',pulse_payload(latest_snapshot,
                                         quote_source='native',
                                         native_dropped_total=native.mailbox.dropped),method='PUT')
+                                    latency.record('core_pulse_ms',(time.perf_counter()-pulse_started)*1000)
+                                    dispatch_started=time.perf_counter()
                                     normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api,work=work)))
+                                    latency.record('gateway_cycle_ms',(time.perf_counter()-dispatch_started)*1000)
                                     command_polled=True
                                     core_budget.success()
                                 except (OSError,ValueError,RuntimeError):
+                                    latency.pulse_error()
                                     # Compatibility/failure fallback: publish the full cached
                                     # state and let the normal work poll preserve behavior.
                                     if fallback_throttle.allow():
@@ -928,8 +984,10 @@ def main():
                         full_interval=SNIPER_FULL_SNAPSHOT_SECONDS if sniper else max(0.5,min(1.0,normal_poll_seconds))
                         full_due=latest_snapshot is None or mono >= next_full_snapshot
                         if full_due:
+                            snapshot_started=time.perf_counter()
                             fresh_snapshot=collect(mt5,symbol,market_cache=market_cache,
                                 dom_cache=dom_cache,deals_cache=daily_deals_cache)
+                            latency.record('snapshot_ms',(time.perf_counter()-snapshot_started)*1000)
                             if (fresh_snapshot.get('connected') and latest_snapshot and
                                     latest_snapshot.get('connected') and
                                     any(latest_snapshot.get(k)!=fresh_snapshot.get(k)
@@ -971,13 +1029,18 @@ def main():
                                     continue
                                 latest_snapshot=fast_snapshot
                                 try:
+                                    pulse_started=time.perf_counter()
                                     work=api('/v1/execution/pulse',pulse_payload(latest_snapshot,
                                         quote_source='poll',
                                         native_dropped_total=native.mailbox.dropped),method='PUT')
+                                    latency.record('core_pulse_ms',(time.perf_counter()-pulse_started)*1000)
+                                    dispatch_started=time.perf_counter()
                                     normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api,work=work)))
+                                    latency.record('gateway_cycle_ms',(time.perf_counter()-dispatch_started)*1000)
                                     command_polled=True
                                     core_budget.success()
                                 except (OSError,ValueError,RuntimeError):
+                                    latency.pulse_error()
                                     if fallback_throttle.allow():
                                         publish_checked(latest_snapshot)
                                     else:
@@ -1046,6 +1109,9 @@ def main():
                           file=sys.stderr,flush=True)
                     return
 
+            report=latency.report_due()
+            if report is not None:
+                print(report,file=sys.stderr,flush=True)
             target=SNIPER_LOOP_SECONDS if sniper and initialized else normal_poll_seconds
             elapsed=time.perf_counter()-loop_started
             if target > elapsed:
