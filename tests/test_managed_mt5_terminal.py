@@ -3,10 +3,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace as N
 from unittest import TestCase, main
+import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gateway"))
-from managed_terminal import ManagedTerminalBinding
+from managed_terminal import ManagedTerminalBinding, canonical_directory
 from mt5_gateway import broker_snapshot_identity_is_current, mt5_session_alive
 
 
@@ -116,6 +117,31 @@ class ManagedTerminalTests(TestCase):
                     "After first Gateway completes cleanup, successor may acquire lock")
             finally:
                 first.release();second.release()
+
+    def test_exclusive_owner_lock_blocks_a_separate_process_and_recovers_after_crash(self):
+        with TemporaryDirectory() as root:
+            owner=ManagedTerminalBinding()
+            owner.data_path=canonical_directory(root)
+            self.assertTrue(owner.acquire_ownership())
+            child_code=(
+                "import sys;"
+                "from managed_terminal import ManagedTerminalBinding,canonical_directory;"
+                "b=ManagedTerminalBinding();"
+                "b.data_path=canonical_directory(sys.argv[1]);"
+                "ok=b.acquire_ownership();"
+                "print('ACQUIRED' if ok else 'BUSY');"
+                "b.release()"
+            )
+            def probe():
+                return subprocess.run([sys.executable,"-c",child_code,root],
+                    env=__import__("os").environ.copy(),timeout=10,
+                    capture_output=True,text=True,check=True).stdout.strip()
+            try:
+                self.assertEqual(probe(),"BUSY")
+            finally:
+                owner.release()
+            self.assertEqual(probe(),"ACQUIRED",
+                "OS must release broker owner lock after Gateway closes")
 
     def test_separate_terminal_data_folders_can_coexist(self):
         with TemporaryDirectory() as root:
