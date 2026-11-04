@@ -106,6 +106,39 @@ fn housekeeping_due(now: Instant, next: &mut Instant) -> bool {
     true
 }
 
+/// Run one non-execution maintenance owner per 50ms opportunity, never all
+/// four database-maintaining services in the same housekeeping pass. Their
+/// order is stable and each receives a turn at least every four opportunities
+/// while Core keeps servicing requests; this is scheduling, NOT SQLite worker
+/// isolation or a guarantee that one expensive transaction cannot block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MaintenanceStage { Studio, News, Backtest, Evaluation }
+
+impl MaintenanceStage {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Studio => "studio",
+            Self::News => "news",
+            Self::Backtest => "backtest",
+            Self::Evaluation => "evaluation",
+        }
+    }
+}
+#[derive(Default)]
+struct MaintenanceRotation { step: usize }
+impl MaintenanceRotation {
+    fn next(&mut self) -> MaintenanceStage {
+        let stage = match self.step {
+            0 => MaintenanceStage::Studio,
+            1 => MaintenanceStage::News,
+            2 => MaintenanceStage::Backtest,
+            _ => MaintenanceStage::Evaluation,
+        };
+        self.step = (self.step + 1) % 4;
+        stage
+    }
+}
+
 /// Explicitly offline calculators; none references Engine, broker, shared status,
 /// or the trading SQLite connection. Never offload authorization/execution routes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -527,7 +560,34 @@ impl Engine{
         Ok(mode)
     }
 
-    fn tick(&mut self){let cfg=self.shared.lock().unwrap().config.clone();self.studio.set_learning_frozen(self.execution.learning_frozen());self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
+    fn tick(&mut self, stage: MaintenanceStage) -> Duration {
+        let now = now_ms();
+        // Always refresh process liveness, operator state and Gateway supervision
+        // before best-effort research persistence, which can involve SQLite I/O.
+        self.studio.set_learning_frozen(self.execution.learning_frozen());
+        {
+            let mut s = self.shared.lock().unwrap();
+            s.status.refresh(now);
+            s.status.execution_enabled = self.execution.enabled(&s.status);
+        }
+        if now >= self.gateway_retry_ms {
+            self.gateway_retry_ms = now.saturating_add(15_000);
+            if let Err(error) = self.launch_gateway() {
+                self.shared.lock().unwrap().status.message = error.to_string();
+            }
+        }
+        let started = Instant::now();
+        match stage {
+            MaintenanceStage::Studio => {
+                let cfg = self.shared.lock().unwrap().config.clone();
+                self.studio.tick(&self.db, &cfg, now);
+            }
+            MaintenanceStage::News => self.news.tick(&self.db, now),
+            MaintenanceStage::Backtest => self.backtests.tick(&self.db, now),
+            MaintenanceStage::Evaluation => self.evaluations.tick(&self.db),
+        }
+        started.elapsed()
+    }
     fn route(&mut self,method:&str,path:&str,body:&[u8])->Result<Value>{
         if is_bulk_io_route(method,path) {
             let unresolved=self.execution.pending(&self.db)?;
@@ -937,9 +997,17 @@ pub fn run_core()->Result<()>{
     let offline_research_tx = start_offline_research_worker()?;
     let mut next_housekeeping = Instant::now();
     let mut next_slow_route_warning = Instant::now();
+    let mut next_slow_maintenance_warning = Instant::now();
+    let mut maintenance = MaintenanceRotation::default();
     while !engine.shutting_down{
         if housekeeping_due(Instant::now(), &mut next_housekeeping) {
-            engine.tick();
+            let stage = maintenance.next();
+            let elapsed = engine.tick(stage);
+            if elapsed >= Duration::from_millis(75) && Instant::now() >= next_slow_maintenance_warning {
+                eprintln!("CORE_SLOW_MAINTENANCE class={} duration_ms={} (research maintenance only)",
+                    stage.label(), elapsed.as_millis());
+                next_slow_maintenance_warning = Instant::now() + Duration::from_secs(10);
+            }
         }
         let Some(mut request)=server.recv_timeout(Duration::from_millis(250))? else{continue;};let authenticated=request.headers().iter().any(|h|h.field.equiv("Authorization")&&h.value.as_str()==format!("Bearer {key}"));let origin=request.headers().iter().any(|h|h.field.equiv("Origin"));if !authenticated||origin{let _=request.respond(tiny_http::Response::from_string("{\"error\":\"Unauthorized\"}").with_status_code(401));continue;}if request.body_length().is_none()&&request.method().as_str()=="POST"{let _=request.respond(tiny_http::Response::empty(411));continue;}if request.body_length().unwrap_or(0)>2_000_000{let _=request.respond(tiny_http::Response::empty(413));continue;}let mut body=Vec::new();if request.as_reader().read_to_end(&mut body).is_err(){continue;}
         if let Some(kind) = offline_research_kind(request.method().as_str(), request.url()) {
@@ -1032,6 +1100,38 @@ mod housekeeping_schedule_tests {
         ] {
             assert!(offline_research_calculate(kind,b"not-json").is_err());
         }
+    }
+    #[test]
+    fn maintenance_is_rotated_and_no_iteration_runs_four_services() {
+        let mut rotation = MaintenanceRotation::default();
+        let expected = [MaintenanceStage::Studio, MaintenanceStage::News,
+            MaintenanceStage::Backtest, MaintenanceStage::Evaluation];
+        for _ in 0..8 {
+            for stage in expected {
+                assert_eq!(rotation.next(),stage);
+                assert!(!stage.label().is_empty());
+            }
+        }
+    }
+    #[test]
+    fn maintenance_slots_are_due_under_continuous_requests() {
+        let now=Instant::now();
+        let mut next=now;
+        let mut rotation=MaintenanceRotation::default();
+        let mut emitted=Vec::new();
+        // Even if every 5ms an execution request is waiting, service owners
+        // get a bounded, fair turn without executing all database writes in
+        // the same housekeeping pass.
+        for ms in (0..=400).step_by(5) {
+            if housekeeping_due(now+Duration::from_millis(ms),&mut next) {
+                emitted.push(rotation.next());
+            }
+        }
+        assert_eq!(emitted.len(),9);
+        assert_eq!(emitted[0],MaintenanceStage::Studio);
+        assert_eq!(emitted[3],MaintenanceStage::Evaluation);
+        assert_eq!(emitted[4],MaintenanceStage::Studio);
+        assert_eq!(emitted[7],MaintenanceStage::Evaluation);
     }
     #[test]
     fn maintenance_runs_once_per_interval_even_during_tight_quote_loops() {
