@@ -125,6 +125,7 @@ class ManagedTerminalTests(TestCase):
             self.assertTrue(owner.acquire_ownership())
             child_code=(
                 "import sys;"
+                "sys.path.insert(0,sys.argv[2]);"
                 "from managed_terminal import ManagedTerminalBinding,canonical_directory;"
                 "b=ManagedTerminalBinding();"
                 "b.data_path=canonical_directory(sys.argv[1]);"
@@ -133,7 +134,8 @@ class ManagedTerminalTests(TestCase):
                 "b.release()"
             )
             def probe():
-                return subprocess.run([sys.executable,"-c",child_code,root],
+                return subprocess.run([sys.executable,"-c",child_code,root,
+                                str(Path(__file__).resolve().parents[1]/"gateway")],
                     env=__import__("os").environ.copy(),timeout=10,
                     capture_output=True,text=True,check=True).stdout.strip()
             try:
