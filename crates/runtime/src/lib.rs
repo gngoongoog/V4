@@ -212,11 +212,21 @@ fn backup_read_kind(method: &str, path: &str) -> Option<BackupReadKind> {
 /// a backup integrity scan runs. START, restores and other state mutations
 /// must not race this I/O-heavy read-only background task.
 fn mutation_allowed_during_backup_scan(method: &str, path: &str) -> bool {
-    method == "GET" || (matches!(method,"POST"|"PUT") && (
-        matches!(path,"/v1/stop"|"/v1/shutdown"|"/v1/reconnect")
-        || path.starts_with("/v1/execution/")
-        || path.starts_with("/v1/gateway/")
-    ))
+    // Backup snapshots must never race operator configuration, risk policy,
+    // manual entries, new history jobs, or arbitrary execution APIs. Preserve
+    // only the existing broker heartbeat, durable results and exit/cancel work
+    // needed to reconcile positions discovered after admission.
+    method=="GET" || matches!((method,path),
+        ("POST","/v1/stop") |
+        ("POST","/v1/shutdown") |
+        ("POST","/v1/reconnect") |
+        ("POST","/v1/gateway/snapshot") |
+        ("PUT","/v1/execution/pulse") |
+        ("POST","/v1/execution/sync") |
+        ("POST","/v1/execution/authorize") |
+        ("POST","/v1/execution/result") |
+        ("POST","/v1/execution/close-selected") |
+        ("POST","/v1/execution/cancel-pending"))
 }
 
 fn backup_operation_gate(phase:u8,method:&str,path:&str)->Result<()> {
@@ -1220,6 +1230,8 @@ pub fn run_core()->Result<()>{
                     shared.status.clone()
                 };
                 ensure_bulk_io_idle(&status,pending)?;
+                anyhow::ensure!(!engine.backtests.loading() && !engine.hvn.pending(now_ms()),
+                    "انتظر اكتمال استيراد Backtest أو قراءة HVN قبل فحص أو نسخ قاعدة البيانات");
                 anyhow::ensure!(backup_io_phase.load(Ordering::Acquire)==0,
                     "توجد مهمة نسخ احتياطية جارية؛ انتظر إكمالها");
                 Ok(())
@@ -1256,6 +1268,8 @@ pub fn run_core()->Result<()>{
                     (shared.status.clone(),shared.config.clone())
                 };
                 ensure_bulk_io_idle(&status,pending)?;
+                anyhow::ensure!(!engine.backtests.loading() && !engine.hvn.pending(now_ms()),
+                    "انتظر اكتمال استيراد Backtest أو قراءة HVN قبل فحص أو نسخ قاعدة البيانات");
                 anyhow::ensure!(backup_io_phase.load(Ordering::Acquire)==0,
                     "توجد مهمة نسخ احتياطية جارية؛ انتظر إكمالها");
                 Ok(config)
@@ -1380,20 +1394,16 @@ mod housekeeping_schedule_tests {
     fn writer_fence_blocks_start_restore_and_full_exit_but_allows_broker_reconciliation() {
         for phase in [1,2] {
             for path in ["/v1/start","/v1/config","/v1/backup/restore/stage",
-                "/v1/execution/settings","/v1/brain-snapshot/export"] {
-                if path=="/v1/execution/settings" {
-                    // Known broker execution endpoints remain available for
-                    // reconciliation; individual routes enforce their own
-                    // authorization and pending-intent discipline.
-                    assert!(backup_operation_gate(phase,"POST",path).is_ok());
-                } else {
-                    assert!(backup_operation_gate(phase,"POST",path).is_err(),"{path}");
-                }
+                "/v1/execution/settings","/v1/execution/manual-market",
+                "/v1/execution/position-protection","/v1/brain-snapshot/export"] {
+                assert!(backup_operation_gate(phase,"POST",path).is_err(),"{path}");
             }
             for path in ["/v1/stop","/v1/gateway/snapshot",
-                "/v1/execution/reconciliation"] {
+                "/v1/execution/result","/v1/execution/sync",
+                "/v1/execution/close-selected","/v1/execution/cancel-pending"] {
                 assert!(backup_operation_gate(phase,"POST",path).is_ok(),"{path}");
             }
+            assert!(backup_operation_gate(phase,"PUT","/v1/execution/pulse").is_ok());
         }
         for path in ["/v1/shutdown","/v1/reconnect"] {
             assert!(backup_operation_gate(1,"POST",path).is_ok());
@@ -1429,11 +1439,17 @@ mod housekeeping_schedule_tests {
             assert_eq!(backup_read_kind(method,path),None,"{method} {path}");
         }
         for path in ["/v1/stop","/v1/shutdown","/v1/reconnect",
-            "/v1/execution/gateway","/v1/gateway/snapshot"] {
+            "/v1/execution/result","/v1/execution/sync",
+            "/v1/execution/authorize","/v1/gateway/snapshot",
+            "/v1/execution/cancel-pending","/v1/execution/close-selected"] {
             assert!(mutation_allowed_during_backup_scan("POST",path),"{path}");
         }
+        assert!(mutation_allowed_during_backup_scan("PUT","/v1/execution/pulse"));
         for path in ["/v1/start","/v1/config","/v1/backup",
-            "/v1/brain-snapshot/export","/v1/backup/restore/stage"] {
+            "/v1/brain-snapshot/export","/v1/backup/restore/stage",
+            "/v1/execution/settings","/v1/execution/manual-market",
+            "/v1/execution/position-protection","/v1/execution/risk-master",
+            "/v1/gateway/history/result","/v1/gateway/hvn/result"] {
             assert!(!mutation_allowed_during_backup_scan("POST",path),"{path}");
         }
     }
