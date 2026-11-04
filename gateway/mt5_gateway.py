@@ -31,13 +31,15 @@ from broker_costs import booked_trading_net
 BASE = "http://127.0.0.1:18741"
 BAGHDAD = timezone(timedelta(hours=3))
 SNIPER_LOOP_SECONDS = 0.005
-SNIPER_FULL_SNAPSHOT_SECONDS = 0.250
-SNIPER_BACKGROUND_SECONDS = 0.500
+SNIPER_FULL_SNAPSHOT_SECONDS = 0.500
+SNIPER_BACKGROUND_SECONDS = 1.000
 BROKER_HISTORY_POLL_SECONDS = 5.0
+DAILY_DEAL_CACHE_SECONDS = 5.0
+CORE_OUTAGE_GRACE_SECONDS = 20.0
 CONFIG_REFRESH_SECONDS = 0.500
 NORMAL_MIN_LOOP_SECONDS = 0.050
 NATIVE_RECENT_MS = 500
-NATIVE_BATCH_MAX = 512
+NATIVE_BATCH_MAX = 32
 
 
 class HvnResultOutbox:
@@ -82,6 +84,93 @@ class BrokerHistoryScheduler:
         if command_polled and now < self.next_poll:
             return False
         self.next_poll = now + BROKER_HISTORY_POLL_SECONDS
+        return True
+
+
+class DailyDealsCache:
+    """Rate-limit daily MT5 deal history while retaining exact account scope.
+
+    No trading order uses cached deals. An unavailable history returns unknown
+    cost/PnL instead of zero, and a Demo/Live or Baghdad-day switch clears it.
+    """
+    def __init__(self, interval=DAILY_DEAL_CACHE_SECONDS):
+        self.interval=interval
+        self.key=None
+        self.next_read=0.0
+        self.value=(None,None,False)
+    def read(self, mt5, account, now):
+        start,end,day=day_range(now)
+        key=(account.login,account.server,account.currency,account.trade_mode,day)
+        if key!=self.key:
+            self.key=key
+            self.next_read=0.0
+            self.value=(None,None,False)
+        mono=time.monotonic()
+        if mono>=self.next_read:
+            self.next_read=mono+self.interval
+            try:
+                deals=mt5.history_deals_get(start,end)
+            except (OSError,RuntimeError,ValueError,TypeError):
+                deals=None
+            net,count=deal_summary(deals,mt5)
+            self.value=(net,count,deals is not None)
+        return self.value
+
+
+class CoreOutageBudget:
+    """Short loopback HTTP trouble is not a reason to restart MT5."""
+    def __init__(self,grace=CORE_OUTAGE_GRACE_SECONDS):
+        self.grace=grace
+        self.first_failure_at=None
+        self.count=0
+    def success(self):
+        self.first_failure_at=None
+        self.count=0
+    def failure(self,now=None):
+        mono=time.monotonic() if now is None else now
+        if self.first_failure_at is None:
+            self.first_failure_at=mono
+        self.count+=1
+        return self.count>=3 and mono-self.first_failure_at>=self.grace
+    def expired(self,now=None):
+        if self.first_failure_at is None or self.count<3:return False
+        mono=time.monotonic() if now is None else now
+        return mono-self.first_failure_at>=self.grace
+
+
+def mt5_session_alive(mt5):
+    """Broker/terminal session identity, not a source of order authorization."""
+    try:
+        term=mt5.terminal_info()
+        account=mt5.account_info()
+        return (term is not None and getattr(term,'connected',False) is True
+                and account is not None and int(getattr(account,'login',0))>0)
+    except (AttributeError,OSError,RuntimeError,TypeError,ValueError):
+        return False
+
+
+class MT5DisconnectBudget:
+    """Never reuse unverified positions; avoid MT5 shutdown on one IPC error."""
+    def __init__(self,threshold=3,grace=1.0):
+        self.threshold=threshold;self.grace=grace
+        self.first_at=None;self.count=0
+    def healthy(self):
+        self.first_at=None;self.count=0
+    def offline(self,now=None):
+        mono=time.monotonic() if now is None else now
+        if self.first_at is None:self.first_at=mono
+        self.count+=1
+        return self.count>=self.threshold and mono-self.first_at>=self.grace
+
+
+class CoreFallbackThrottle:
+    """Rate-limit full snapshot recovery after a failed hot quote pulse."""
+    def __init__(self,interval=.5):
+        self.interval=interval;self.next_allowed=0.
+    def allow(self,now=None):
+        mono=time.monotonic() if now is None else now
+        if mono<self.next_allowed:return False
+        self.next_allowed=mono+self.interval
         return True
 
 
@@ -264,19 +353,30 @@ def active_order_details(orders):
         return None
 
 
-def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, dom_cache=None) -> dict:
+def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, dom_cache=None, deals_cache=None) -> dict:
     now = now or datetime.now(timezone.utc)
     terminal = mt5.terminal_info()
     account = mt5.account_info()
     if terminal is None or not terminal.connected or account is None:
         return empty_snapshot("MT5 disconnected or account is not logged in. Sign in inside MT5.")
-    positions = mt5.positions_get()
-    orders = mt5.orders_get()
+    try:
+        positions = mt5.positions_get()
+        orders = mt5.orders_get()
+    except (OSError,ValueError,RuntimeError):
+        positions = orders = None
     if positions is None or orders is None:
-        return empty_snapshot("MT5 position/order reconciliation failed; account snapshot withheld.")
+        # Never authorize from cached positions on transient MT5 IPC failure.
+        return empty_snapshot("MT5 position/order snapshot temporarily unavailable; trading paused pending full reconciliation.")
     start, end, report_day = day_range(now)
-    deals = mt5.history_deals_get(start, end)
-    net, count = deal_summary(deals, mt5)
+    if deals_cache is not None:
+        net,count,deals_available=deals_cache.read(mt5,account,now)
+    else:
+        try:
+            deals=mt5.history_deals_get(start, end)
+        except (OSError,RuntimeError,ValueError,TypeError):
+            deals=None
+        net,count=deal_summary(deals,mt5)
+        deals_available=deals is not None
     info = mt5.symbol_info(symbol)
     if info is not None and not info.visible:
         mt5.symbol_select(symbol, True)
@@ -295,7 +395,7 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
     errors = []
     if info is None:
         errors.append(f"Symbol {symbol} is unavailable; choose its exact broker name in Settings.")
-    if deals is None:
+    if not deals_available:
         errors.append("Deal history unavailable; daily PnL is unknown.")
     elif net is None:
         errors.append("Broker deal cost fields missing or invalid; daily PnL is unknown.")
