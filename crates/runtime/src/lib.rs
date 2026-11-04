@@ -133,6 +133,20 @@ fn is_bulk_io_route(method: &str, path: &str) -> bool {
         ("POST","/v1/export"))
 }
 
+/// Sanitized route categories for slow-route diagnostics; never include
+/// user-controlled URLs, account identifiers, HTTP payloads or secrets.
+fn diagnostic_route_class(path: &str) -> &'static str {
+    if path.starts_with("/v1/execution/") {"execution"}
+    else if path.starts_with("/v1/gateway/") {"gateway"}
+    else if path.starts_with("/v1/backup") || path.starts_with("/v1/backups")
+         || path.starts_with("/v1/brain-snapshot/") {"backup"}
+    else if path.starts_with("/v1/learning/") {"learning"}
+    else if path.starts_with("/v1/backtest/") {"backtest"}
+    else if path.starts_with("/v1/studio/") {"studio"}
+    else if path.starts_with("/v1/research/") {"research"}
+    else {"other"}
+}
+
 pub const PORT: u16 = 18741;
 pub const BASE: &str = "http://127.0.0.1:18741";
 pub fn now_ms() -> u64 {
@@ -863,16 +877,32 @@ pub fn run_core()->Result<()>{
     #[cfg(unix)] {use std::os::unix::fs::PermissionsExt;fs::set_permissions(&dir,fs::Permissions::from_mode(0o700))?;}
     let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}recover_settings_transaction(&dir)?;let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;correlation::init(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let hvn=hvn::Service::default();let mut execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let mut engine=Engine{dir,shared:shared.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,instance_id:uuid::Uuid::new_v4().to_string(),shutdown_barrier:None,research,backtests,evaluations,news,learning,inference,scoring,studio,hvn,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
     let mut next_housekeeping = Instant::now();
+    let mut next_slow_route_warning = Instant::now();
     while !engine.shutting_down{
         if housekeeping_due(Instant::now(), &mut next_housekeeping) {
             engine.tick();
         }
-        let Some(mut request)=server.recv_timeout(Duration::from_millis(250))? else{continue;};let authenticated=request.headers().iter().any(|h|h.field.equiv("Authorization")&&h.value.as_str()==format!("Bearer {key}"));let origin=request.headers().iter().any(|h|h.field.equiv("Origin"));if !authenticated||origin{let _=request.respond(tiny_http::Response::from_string("{\"error\":\"Unauthorized\"}").with_status_code(401));continue;}if request.body_length().is_none()&&request.method().as_str()=="POST"{let _=request.respond(tiny_http::Response::empty(411));continue;}if request.body_length().unwrap_or(0)>2_000_000{let _=request.respond(tiny_http::Response::empty(413));continue;}let mut body=Vec::new();if request.as_reader().read_to_end(&mut body).is_err(){continue;}let result=engine.route(request.method().as_str(),request.url(),&body);let(code,value)=match result{Ok(v)=>(200,v),Err(e)=>(400,json!({"error":e.to_string()}))};let response=tiny_http::Response::from_string(value.to_string()).with_status_code(code).with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());let _=request.respond(response);}
+        let Some(mut request)=server.recv_timeout(Duration::from_millis(250))? else{continue;};let authenticated=request.headers().iter().any(|h|h.field.equiv("Authorization")&&h.value.as_str()==format!("Bearer {key}"));let origin=request.headers().iter().any(|h|h.field.equiv("Origin"));if !authenticated||origin{let _=request.respond(tiny_http::Response::from_string("{\"error\":\"Unauthorized\"}").with_status_code(401));continue;}if request.body_length().is_none()&&request.method().as_str()=="POST"{let _=request.respond(tiny_http::Response::empty(411));continue;}if request.body_length().unwrap_or(0)>2_000_000{let _=request.respond(tiny_http::Response::empty(413));continue;}let mut body=Vec::new();if request.as_reader().read_to_end(&mut body).is_err(){continue;}let started=Instant::now();let result=engine.route(request.method().as_str(),request.url(),&body);
+        let elapsed=started.elapsed();
+        if elapsed>=Duration::from_millis(75) && Instant::now()>=next_slow_route_warning {
+            eprintln!("CORE_SLOW_ROUTE class={} duration_ms={} (request-processing only)",
+                diagnostic_route_class(request.url()),elapsed.as_millis());
+            next_slow_route_warning=Instant::now()+Duration::from_secs(10);
+        }
+        let(code,value)=match result{Ok(v)=>(200,v),Err(e)=>(400,json!({"error":e.to_string()}))};let response=tiny_http::Response::from_string(value.to_string()).with_status_code(code).with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());let _=request.respond(response);}
     engine.stop_gateway();engine.backtests.cancel();engine.evaluations.cancel();engine.studio.cancel();engine.event("core_stopped",json!({}))?;drop(lock);Ok(())
 }
 #[cfg(test)]
 mod housekeeping_schedule_tests {
     use super::*;
+    #[test]
+    fn slow_route_logging_never_discloses_broker_or_url_contents() {
+        assert_eq!(diagnostic_route_class("/v1/execution/pulse?token=private"),"execution");
+        assert_eq!(diagnostic_route_class("/v1/brain-snapshot/export"),"backup");
+        assert_eq!(diagnostic_route_class("/v1/backtest/start"),"backtest");
+        assert_eq!(diagnostic_route_class("/v1/research/secret_account"),"research");
+        assert_eq!(diagnostic_route_class("/unknown/private_login"),"other");
+    }
     #[test]
     fn heavy_routes_are_rejected_during_trading_or_unresolved_intents() {
         let mut status=Status::default();
