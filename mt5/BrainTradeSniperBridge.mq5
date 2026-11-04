@@ -445,8 +445,8 @@ void OnTimer()
 
 void OnTick()
   {
-   // No cached quote / missing token / offline broker is not a failed SEND.
-   // Count only actual short pipe writes in SendPendingQuoteTicks().
+   // Quote transport only: never redraw chart text on each tick.
+   // Repainting can be expensive under broker tick bursts. OnTimer owns
+   // status updates (at least every 100 ms) without blocking hot quotes.
    SendPendingQuoteTicks();
-   UpdateStatus();
   }
