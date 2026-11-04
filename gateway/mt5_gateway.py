@@ -756,9 +756,13 @@ def main():
         mt5 = None
     initialized = False
     retry_at = 0.0
-    core_failures = 0
     market_cache=MarketCache()
     dom_cache=DomCache()
+    daily_deals_cache=DailyDealsCache()
+    core_budget=CoreOutageBudget()
+    mt5_disconnect_budget=MT5DisconnectBudget()
+    fallback_throttle=CoreFallbackThrottle()
+    next_cycle_error_log=0.0
     native=NativeTickBridge()
     if os.environ.get("BRAINTRADE_GATEWAY_PARENT_STDIN") == "1":
         if sys.stdin is None or not hasattr(sys.stdin, "buffer"):
@@ -792,6 +796,17 @@ def main():
             headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
         with legacy_opener.open(request,timeout=4) as response:
             response.read()
+
+    def publish_checked(snapshot):
+        try:
+            publish(snapshot)
+        except (OSError,ValueError,RuntimeError):
+            # Local Core HTTP trouble is not MT5 terminal logout. Do not
+            # replay the ambiguous request, and never grant trade authority.
+            core_budget.failure()
+            return False
+        core_budget.success()
+        return True
 
     hvn_outbox = HvnResultOutbox()
 
@@ -843,10 +858,7 @@ def main():
                 latest_snapshot = empty_snapshot("MT5 bridge dependency unavailable. Use the complete Windows package.")
                 if mono >= next_full_snapshot:
                     next_full_snapshot=mono+1.0
-                    try:
-                        publish(latest_snapshot);core_failures=0
-                    except (OSError,ValueError):
-                        core_failures+=1
+                    publish_checked(latest_snapshot)
             else:
                 try:
                     if not initialized and mono >= retry_at:
@@ -886,19 +898,20 @@ def main():
                                         native_dropped_total=native.mailbox.dropped),method='PUT')
                                     normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api,work=work)))
                                     command_polled=True
-                                    core_failures=0
+                                    core_budget.success()
                                 except (OSError,ValueError,RuntimeError):
                                     # Compatibility/failure fallback: publish the full cached
                                     # state and let the normal work poll preserve behavior.
-                                    try:
-                                        publish(latest_snapshot);core_failures=0
-                                    except (OSError,ValueError):
-                                        core_failures+=1
+                                    if fallback_throttle.allow():
+                                        publish_checked(latest_snapshot)
+                                    else:
+                                        core_budget.failure()
 
                         full_interval=SNIPER_FULL_SNAPSHOT_SECONDS if sniper else max(0.5,min(1.0,normal_poll_seconds))
                         full_due=latest_snapshot is None or mono >= next_full_snapshot
                         if full_due:
-                            fresh_snapshot=collect(mt5,symbol,market_cache=market_cache,dom_cache=dom_cache)
+                            fresh_snapshot=collect(mt5,symbol,market_cache=market_cache,
+                                dom_cache=dom_cache,deals_cache=daily_deals_cache)
                             if (fresh_snapshot.get('connected') and latest_snapshot and
                                     latest_snapshot.get('connected') and
                                     any(latest_snapshot.get(k)!=fresh_snapshot.get(k)
@@ -910,8 +923,7 @@ def main():
                             fresh_snapshot,_=advance_quote_clock(latest_snapshot,fresh_snapshot)
                             latest_snapshot=fresh_snapshot
                             next_full_snapshot=mono+full_interval
-                            publish(latest_snapshot)
-                            core_failures=0
+                            publish_checked(latest_snapshot)
                         elif sniper and latest_snapshot.get('connected') and not native.recent(login=int(latest_snapshot.get('login') or 0),symbol=symbol,
                                 maximum_age_ms=NATIVE_RECENT_MS):
                             # Native EA is optional. If it is absent/stale the exact
@@ -932,30 +944,50 @@ def main():
                                         native_dropped_total=native.mailbox.dropped),method='PUT')
                                     normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api,work=work)))
                                     command_polled=True
-                                    core_failures=0
+                                    core_budget.success()
                                 except (OSError,ValueError,RuntimeError):
-                                    try:
-                                        publish(latest_snapshot);core_failures=0
-                                    except (OSError,ValueError):
-                                        core_failures+=1
-                        if initialized and latest_snapshot and not latest_snapshot.get('connected'):
-                            native.close()
-                            dom_cache.release(mt5);mt5.shutdown();initialized=False
+                                    if fallback_throttle.allow():
+                                        publish_checked(latest_snapshot)
+                                    else:
+                                        core_budget.failure()
+                        if initialized and latest_snapshot:
+                            if latest_snapshot.get('connected') or mt5_session_alive(mt5):
+                                # A missing portfolio read is not proof of
+                                # terminal logout; Core still sees connected=False
+                                # and cannot send on unverified positions.
+                                mt5_disconnect_budget.healthy()
+                            elif mt5_disconnect_budget.offline():
+                                native.close()
+                                dom_cache.release(mt5)
+                                mt5.shutdown()
+                                initialized=False
+                                retry_at=time.monotonic()+5.0
                     elif mono >= next_full_snapshot:
                         latest_snapshot=empty_snapshot("MT5 connection failed. Set terminal64.exe path and sign in inside MT5.")
                         next_full_snapshot=mono+1.0
-                        publish(latest_snapshot)
-                except Exception:
-                    latest_snapshot=empty_snapshot("MT5 read failed; retrying connection.")
-                    native.close()
-                    dom_cache.release(mt5)
-                    try:
-                        mt5.shutdown()
-                    except Exception:
-                        pass
-                    initialized=False
-                    retry_at=time.monotonic()+5
-                    next_full_snapshot=0.0
+                        publish_checked(latest_snapshot)
+                except Exception as error:
+                    # A failed Core/MT5 read must not be mistaken for a
+                    # broker disconnect or authorize from cached positions.
+                    # Log the exception TYPE only, without secrets/packet data.
+                    if time.monotonic()>=next_cycle_error_log:
+                        print('MT5 snapshot cycle error: '+type(error).__name__,
+                              file=sys.stderr,flush=True)
+                        next_cycle_error_log=time.monotonic()+15.0
+                    latest_snapshot=empty_snapshot(
+                        "MT5 snapshot was not verified; trading paused until fresh reconciliation.")
+                    next_full_snapshot=time.monotonic()+0.5
+                    if mt5_session_alive(mt5):
+                        mt5_disconnect_budget.healthy()
+                    elif mt5_disconnect_budget.offline():
+                        native.close()
+                        dom_cache.release(mt5)
+                        try:
+                            mt5.shutdown()
+                        except Exception:
+                            pass
+                        initialized=False
+                        retry_at=time.monotonic()+5.0
 
             try:
                 if initialized and latest_snapshot and latest_snapshot.get('connected'):
@@ -972,11 +1004,14 @@ def main():
                     if mono >= next_background:
                         next_background=mono+background_interval
                         background_work()
-                if core_failures >= 3:
+                if core_budget.expired():
+                    print('Core loopback outage exceeded grace; Gateway exits for supervisor recovery',
+                          file=sys.stderr,flush=True)
                     return
             except (OSError,ValueError):
-                core_failures+=1
-                if core_failures >= 3:
+                if core_budget.failure():
+                    print('Core loopback outage exceeded grace; Gateway exits for supervisor recovery',
+                          file=sys.stderr,flush=True)
                     return
 
             target=SNIPER_LOOP_SECONDS if sniper and initialized else normal_poll_seconds
