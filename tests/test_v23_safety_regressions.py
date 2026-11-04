@@ -40,7 +40,13 @@ class V23SafetyRegressions(unittest.TestCase):
         self.assertIn('Lost portfolio after reconnect must not authorize account switch',core)
         self.assertIn('Stale broker state must not authorize reconfiguration',core)
         self.assertIn('s.status.gateway_fresh=false;',core)
-        reconnection=core[core.index('("POST","/v1/reconnect")'):core.index('("POST","/v1/gateway/snapshot")')]
+        # Locate the actual Core match arm, not a backup-worker
+        # allowlist that happens to mention the same route string.
+        reconnect_arm='("POST","/v1/reconnect")=>{'
+        snapshot_arm='("POST","/v1/gateway/snapshot")=>{'
+        self.assertIn(reconnect_arm,core)
+        self.assertIn(snapshot_arm,core)
+        reconnection=core[core.index(reconnect_arm):core.index(snapshot_arm)]
         self.assertNotIn('s.status.last_received_ms=None',reconnection)
         self.assertIn('s.status.telemetry=None;',reconnection)
 
