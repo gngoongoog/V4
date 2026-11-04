@@ -67,7 +67,11 @@ fn valid_db(path:&Path)->Result<()>{
 }
 fn folder(root:&Path,name:&str)->Result<PathBuf>{safe_name(name)?;Ok(root.join("backups").join(name))}
 fn validate(root:&Path,name:&str)->Result<Validated>{
-    let dir=folder(root,name)?;if !fs::symlink_metadata(&dir).is_ok_and(|m|m.file_type().is_dir()){bail!("Backup does not exist: {name}");}
+    let dir=folder(root,name)?;
+    validate_dir(&dir,name)
+}
+fn validate_dir(dir:&Path,name:&str)->Result<Validated>{
+    if !fs::symlink_metadata(dir).is_ok_and(|m|m.file_type().is_dir()){bail!("Backup does not exist: {name}");}
     let dbp=dir.join("events.sqlite");
     let mut members=Vec::new();for e in fs::read_dir(&dir)?{let e=e?;if !e.file_type()?.is_file(){bail!("Backup contains unsupported directory/member");}let n=e.file_name().to_string_lossy().to_ascii_lowercase();if !matches!(n.as_str(),"events.sqlite"|"config.json"|"manifest.json"){bail!("Unexpected backup member: {n}");}members.push(n);}members.sort();members.dedup();if members.len()!=3{bail!("Backup member coverage mismatch");}
     let mp=dir.join("manifest.json");let m:Value=serde_json::from_slice(&fs::read(&mp)?).context("Invalid backup manifest")?;
@@ -81,36 +85,47 @@ fn validate(root:&Path,name:&str)->Result<Validated>{
         let(bytes,hash)=hash_file(&p)?;if expected["bytes"].as_u64()!=Some(bytes)||expected["hash"].as_str()!=Some(hash.as_str()){bail!("Backup hash/size mismatch: {n}");}
     }
     valid_config(&dir.join("config.json"))?;valid_db(&dbp)?;let(_,manifest_hash)=hash_file(&mp)?;
-    Ok(Validated{name:name.to_owned(),dir,manifest:m,manifest_hash})
+    Ok(Validated{name:name.to_owned(),dir:dir.to_path_buf(),manifest:m,manifest_hash})
 }
 fn create_named(db:&Connection,root:&Path,config:&Config,now:u64,prefix:&str)->Result<Value>{
     fs::create_dir_all(root.join("backups"))?;let name=format!("{prefix}-{now}-{}",uuid::Uuid::new_v4().simple());
-    let staging=root.join("backups").join(format!(".{name}.tmp"));fs::create_dir_all(&staging)?;
-    let dp=staging.join("events.sqlite");db.backup(DatabaseName::Main,&dp,None)?;valid_db(&dp)?;cleanup_sqlite_sidecars(&dp)?;
-    let cp=staging.join("config.json");super::atomic_write(&cp,&serde_json::to_vec_pretty(config)?)?;
-    let m=json!({"schema":SCHEMA,"version":braintrade_domain::VERSION,"created_ms":now,
-        "kind":"settings-audit-candles-decisions-shadow-backtests-chronological-evaluations-news-learning-dataset-registry-review-eligibility-read-only-predictions-scored-outcomes-challenger-performance-review",
-        "hash_algorithm":HASH,"files":{"events.sqlite":record(&dp)?,"config.json":record(&cp)?},
-        "secrets_included":false,"broker_execution_included":true,"coordinator_samples_included":true,"gateway_send_journal_restored":false,"strategy_studio_included":true,"wyckoff_learning_included":true,"learning_included":true,"chronological_evaluations_included":true,"trained_model_included":true,
-        "learning_review_records_included":true,"learning_predictions_included":true,"learning_prediction_outcomes_included":true,
-        "learning_performance_reviews_included":true,"read_only_inference_only":true,"shadow_model_effect":false,"promotion_enabled":false,
-        "restore_implemented":true,"restore_strategy":"validate-stage-restart-rollback",
-        "hash_security_note":"FNV-1a is a corruption checksum, not a cryptographic authenticity signature."});
-    super::atomic_write(&staging.join("manifest.json"),&serde_json::to_vec_pretty(&m)?)?;
-    let dest=root.join("backups").join(&name);fs::rename(&staging,&dest)?;let v=validate(root,&name)?;
-    Ok(json!({"name":name,"path":dest,"schema":SCHEMA,"manifest_hash":v.manifest_hash,
-        "note":"Validated backup: config + SQLite audit/research state; secrets excluded; staged rollback restore supported."}))
+    let staging=root.join("backups").join(format!(".{name}.tmp"));
+    // Never reuse a partial backup folder. A failed create/validation must
+    // neither publish an invalid backup nor leave gigabytes of temp files.
+    fs::create_dir(&staging)?;
+    let result=(||->Result<Value>{
+        let dp=staging.join("events.sqlite");db.backup(DatabaseName::Main,&dp,None)?;valid_db(&dp)?;cleanup_sqlite_sidecars(&dp)?;
+        let cp=staging.join("config.json");super::atomic_write(&cp,&serde_json::to_vec_pretty(config)?)?;
+        let m=json!({"schema":SCHEMA,"version":braintrade_domain::VERSION,"created_ms":now,
+            "kind":"settings-audit-candles-decisions-shadow-backtests-chronological-evaluations-news-learning-dataset-registry-review-eligibility-read-only-predictions-scored-outcomes-challenger-performance-review",
+            "hash_algorithm":HASH,"files":{"events.sqlite":record(&dp)?,"config.json":record(&cp)?},
+            "secrets_included":false,"broker_execution_included":true,"coordinator_samples_included":true,"gateway_send_journal_restored":false,"strategy_studio_included":true,"wyckoff_learning_included":true,"learning_included":true,"chronological_evaluations_included":true,"trained_model_included":true,
+            "learning_review_records_included":true,"learning_predictions_included":true,"learning_prediction_outcomes_included":true,
+            "learning_performance_reviews_included":true,"read_only_inference_only":true,"shadow_model_effect":false,"promotion_enabled":false,
+            "restore_implemented":true,"restore_strategy":"validate-stage-restart-rollback",
+            "hash_security_note":"FNV-1a is a corruption checksum, not a cryptographic authenticity signature."});
+        super::atomic_write(&staging.join("manifest.json"),&serde_json::to_vec_pretty(&m)?)?;
+        // Validate the *staging* directory first. The final name is visible
+        // to restore/list consumers only after an atomic directory rename.
+        let validated=validate_dir(&staging,&name)?;
+        let dest=root.join("backups").join(&name);
+        fs::rename(&staging,&dest)?;
+        Ok(json!({"name":name,"path":dest,"schema":SCHEMA,"manifest_hash":validated.manifest_hash,
+            "note":"Validated backup: config + SQLite audit/research state; secrets excluded; staged rollback restore supported."}))
+    })();
+    if result.is_err(){let _=fs::remove_dir_all(&staging);}
+    result
 }
 pub fn create(db:&Connection,root:&Path,config:&Config,now:u64)->Result<Value>{create_named(db,root,config,now,"foundation")}
 pub fn export_brain(db:&Connection,root:&Path,config:&Config,now:u64)->Result<Value>{
     let backup=create_named(db,root,config,now,"brain-snapshot")?;let name=backup["name"].as_str().context("Brain backup name missing")?;let source=validate(root,name)?;
-    let exports=root.join("brain_exports");fs::create_dir_all(&exports)?;let file_name=format!("BrainTrade-Brain-{now}.btbrain");let final_path=exports.join(&file_name);let tmp=exports.join(format!(".{file_name}.{}.tmp",uuid::Uuid::new_v4().simple()));
+    let exports=root.join("brain_exports");fs::create_dir_all(&exports)?;let file_name=format!("BrainTrade-Brain-{now}-{}.btbrain",uuid::Uuid::new_v4().simple());let final_path=exports.join(&file_name);let tmp=exports.join(format!(".{file_name}.{}.tmp",uuid::Uuid::new_v4().simple()));
     let result=(||->Result<Value>{
         let mut out=OpenOptions::new().write(true).create_new(true).open(&tmp)?;out.write_all(BRAIN_MAGIC)?;out.write_all(&BRAIN_FORMAT.to_le_bytes())?;let mut hash=FNV_OFFSET;
         let manifest_bytes=write_brain_member(&mut out,&source.dir.join("manifest.json"),MAX_BRAIN_MANIFEST,&mut hash)?;
         let config_bytes=write_brain_member(&mut out,&source.dir.join("config.json"),MAX_BRAIN_CONFIG,&mut hash)?;
         let db_bytes=write_brain_member(&mut out,&source.dir.join("events.sqlite"),MAX_BRAIN_DB,&mut hash)?;
-        out.write_all(&hash.to_le_bytes())?;out.sync_all()?;drop(out);if final_path.exists(){fs::remove_file(&final_path)?;}fs::rename(&tmp,&final_path)?;
+        out.write_all(&hash.to_le_bytes())?;out.sync_all()?;drop(out);fs::rename(&tmp,&final_path)?;
         Ok(json!({"file_name":file_name,"path":final_path,"format":BRAIN_FORMAT,"checksum":format!("{hash:016x}"),"bytes":fs::metadata(&final_path)?.len(),"backup_name":source.name,"manifest_hash":source.manifest_hash,"members":{"manifest.json":manifest_bytes,"config.json":config_bytes,"events.sqlite":db_bytes},"learning_continuity":true,"secrets_included":false,"gateway_send_journal_restored":false,"note":"Portable Brain Snapshot. Restoring it continues persisted learning for the same account context; local secrets and gateway send journal are intentionally excluded."}))
     })();if result.is_err()&&tmp.exists(){let _=fs::remove_file(&tmp);}result
 }
@@ -226,6 +241,29 @@ pub fn apply_pending(root:&Path)->Result<Option<Value>>{
         let r=root();let d=db(&r);d.execute_batch("CREATE TABLE coordinator_broker_samples(source TEXT NOT NULL,position_id INTEGER NOT NULL,context TEXT NOT NULL,brain TEXT NOT NULL,closed_ms INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(source,position_id));INSERT INTO coordinator_broker_samples VALUES('ctx',77,'same-account','trend',9,'{\"net\":12.5}');").unwrap();let c=Config::default();crate::atomic_write(&r.join("config.json"),&serde_json::to_vec_pretty(&c).unwrap()).unwrap();
         let exported=export_brain(&d,&r,&c,10).unwrap();let inbox=r.join("brain_imports");fs::create_dir_all(&inbox).unwrap();let portable=inbox.join("transfer.btbrain");fs::copy(exported["path"].as_str().unwrap(),&portable).unwrap();
         let body=serde_json::to_vec(&json!({"name":"transfer.btbrain"})).unwrap();let imported=import_brain(&r,&body,11).unwrap();let backup=imported["backup_name"].as_str().unwrap();let restored=Connection::open(r.join("backups").join(backup).join("events.sqlite")).unwrap();let n:i64=restored.query_row("SELECT COUNT(*) FROM coordinator_broker_samples WHERE position_id=77 AND brain='trend'",[],|x|x.get(0)).unwrap();assert_eq!(n,1);drop(restored);drop(d);let _=fs::remove_dir_all(r);
+    }
+    #[test] fn invalid_database_backup_is_not_published_and_cleans_staging(){
+        let r=root();let db=Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE unrelated(id INTEGER);").unwrap();
+        // The snapshot must be rejected because the required events table is
+        // absent; no visible/hidden backup is allowed to accumulate.
+        assert!(create(&db,&r,&Config::default(),4).is_err());
+        assert_eq!(fs::read_dir(r.join("backups")).unwrap().count(),0);
+        drop(db);let _=fs::remove_dir_all(r);
+    }
+    #[test] fn portable_brain_snapshots_with_same_timestamp_never_overwrite(){
+        let r=root();let d=db(&r);let c=Config::default();
+        let a=export_brain(&d,&r,&c,60).unwrap();
+        let a_path=PathBuf::from(a["path"].as_str().unwrap());
+        let original=fs::read(&a_path).unwrap();
+        d.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(1,'new','{}')",[]).unwrap();
+        let b=export_brain(&d,&r,&c,60).unwrap();
+        let b_path=PathBuf::from(b["path"].as_str().unwrap());
+        assert_ne!(a_path,b_path);
+        assert!(a_path.is_file() && b_path.is_file());
+        assert_eq!(fs::read(a_path).unwrap(),original);
+        assert_ne!(fs::read(b_path).unwrap(),original);
+        drop(d);let _=fs::remove_dir_all(r);
     }
     #[test] fn portable_brain_snapshot_rejects_corruption(){
         let r=root();let d=db(&r);let c=Config::default();crate::atomic_write(&r.join("config.json"),&serde_json::to_vec_pretty(&c).unwrap()).unwrap();let exported=export_brain(&d,&r,&c,20).unwrap();let inbox=r.join("brain_imports");fs::create_dir_all(&inbox).unwrap();let portable=inbox.join("corrupt.btbrain");let mut bytes=fs::read(exported["path"].as_str().unwrap()).unwrap();let at=bytes.len()-1;bytes[at]^=0x7f;fs::write(&portable,bytes).unwrap();let body=serde_json::to_vec(&json!({"name":"corrupt.btbrain"})).unwrap();assert!(import_brain(&r,&body,21).is_err());drop(d);let _=fs::remove_dir_all(r);
