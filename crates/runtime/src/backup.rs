@@ -138,7 +138,11 @@ pub fn import_brain(root:&Path,body:&[u8],now:u64)->Result<Value>{
         let mut raw4=[0u8;4];input.read_exact(&mut raw4)?;if u32::from_le_bytes(raw4)!=BRAIN_FORMAT{bail!("Unsupported Brain Snapshot format");}
         let mut hash=FNV_OFFSET;read_brain_member(&mut input,&staging.join("manifest.json"),MAX_BRAIN_MANIFEST,&mut hash)?;read_brain_member(&mut input,&staging.join("config.json"),MAX_BRAIN_CONFIG,&mut hash)?;read_brain_member(&mut input,&staging.join("events.sqlite"),MAX_BRAIN_DB,&mut hash)?;
         let mut checksum=[0u8;8];input.read_exact(&mut checksum)?;let expected=u64::from_le_bytes(checksum);if expected!=hash{bail!("Brain Snapshot checksum mismatch");}let mut extra=[0u8;1];if input.read(&mut extra)?!=0{bail!("Unexpected trailing bytes in Brain Snapshot");}
-        fs::rename(&staging,&dest)?;let checked=match validate(root,&imported){Ok(v)=>v,Err(e)=>{let _=fs::remove_dir_all(&dest);return Err(e);}};fs::remove_file(&source)?;
+        // The outer FNV checksum alone does not prove the internal manifest
+        // and SQLite satisfy the restore contract. Validate the staged data
+        // BEFORE a public backup directory is ever visible.
+        let checked=validate_dir(&staging,&imported)?;
+        fs::rename(&staging,&dest)?;fs::remove_file(&source)?;
         Ok(json!({"imported":true,"backup_name":checked.name,"format":BRAIN_FORMAT,"checksum":format!("{hash:016x}"),"manifest_hash":checked.manifest_hash,"created_ms":checked.manifest["created_ms"],"learning_continuity":true,"restore_required":true,"same_account_context_required_for_exact_coordinator_continuity":true,"secrets_restored":false,"gateway_send_journal_restored":false,"note":"Snapshot validated and converted to a normal restore point. Stage restore while STOPPED, then reopen BrainTrade."}))
     })();if result.is_err(){if staging.exists(){let _=fs::remove_dir_all(&staging);}if dest.exists(){let _=fs::remove_dir_all(&dest);}}result
 }
@@ -263,6 +267,35 @@ pub fn apply_pending(root:&Path)->Result<Option<Value>>{
         assert!(a_path.is_file() && b_path.is_file());
         assert_eq!(fs::read(a_path).unwrap(),original);
         assert_ne!(fs::read(b_path).unwrap(),original);
+        drop(d);let _=fs::remove_dir_all(r);
+    }
+    #[test] fn portable_import_rejects_rechecksummed_invalid_manifest_without_publishing(){
+        let r=root();let d=db(&r);let c=Config::default();
+        let exported=export_brain(&d,&r,&c,30).unwrap();
+        let inbox=r.join("brain_imports");fs::create_dir_all(&inbox).unwrap();
+        let mut bytes=fs::read(exported["path"].as_str().unwrap()).unwrap();
+        let base=BRAIN_MAGIC.len()+4;
+        let manifest_len=u64::from_le_bytes(bytes[base..base+8].try_into().unwrap()) as usize;
+        // Break the JSON manifest but recalculate the OUTER archive checksum:
+        // its integrity checksum must not bypass deep sealed validation.
+        assert!(manifest_len>1);
+        bytes[base+8]=b'?';
+        let mut position=base;
+        let mut checksum=FNV_OFFSET;
+        for _ in 0..3 {
+            let len=u64::from_le_bytes(bytes[position..position+8].try_into().unwrap()) as usize;
+            position+=8;
+            checksum=fnv_update(checksum,&bytes[position..position+len]);
+            position+=len;
+        }
+        bytes[position..position+8].copy_from_slice(&checksum.to_le_bytes());
+        let invalid=inbox.join("invalid-manifest.btbrain");fs::write(&invalid,bytes).unwrap();
+        let baseline=fs::read_dir(r.join("backups")).unwrap().count();
+        let payload=serde_json::to_vec(&json!({"name":"invalid-manifest.btbrain"})).unwrap();
+        assert!(import_brain(&r,&payload,31).is_err());
+        assert_eq!(fs::read_dir(r.join("backups")).unwrap().count(),baseline,
+            "No invalid imported backup may ever be published");
+        assert!(invalid.exists(),"Rejected upload must remain available for diagnosis");
         drop(d);let _=fs::remove_dir_all(r);
     }
     #[test] fn portable_brain_snapshot_rejects_corruption(){
