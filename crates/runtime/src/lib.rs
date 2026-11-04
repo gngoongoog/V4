@@ -92,7 +92,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
+    sync::{Arc, Mutex, atomic::{AtomicU8, Ordering}},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -221,16 +221,16 @@ fn mutation_allowed_during_backup_scan(method: &str, path: &str) -> bool {
 
 type BackupReadJob = (tiny_http::Request, BackupReadKind, Vec<u8>);
 
-fn start_backup_read_worker(root: PathBuf, active: Arc<AtomicBool>)
+fn start_backup_read_worker(root: PathBuf, active: Arc<AtomicU8>)
     -> Result<std::sync::mpsc::SyncSender<BackupReadJob>> {
     let (tx,rx) = std::sync::mpsc::sync_channel::<BackupReadJob>(1);
     std::thread::Builder::new().name("braintrade-backup-read".into()).spawn(move || {
         while let Ok((request, kind, body)) = rx.recv() {
             // Clear the START fence on every exit path, even after a panic
             // while inspecting damaged/untrusted archive members.
-            struct Release(Arc<AtomicBool>);
+            struct Release(Arc<AtomicU8>);
             impl Drop for Release {
-                fn drop(&mut self) { self.0.store(false, Ordering::Release); }
+                fn drop(&mut self) { self.0.store(0, Ordering::Release); }
             }
             let response={
                 let _release=Release(active.clone());
@@ -252,6 +252,66 @@ fn start_backup_read_worker(root: PathBuf, active: Arc<AtomicBool>)
             // Release the START fence *before* the success/error response
             // becomes visible to the client. Otherwise a rapid follow-up
             // START or validation can be spuriously rejected as still busy.
+            let _=request.respond(response);
+        }
+    })?;
+    Ok(tx)
+}
+
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackupWriteKind { Create, BrainExport }
+impl BackupWriteKind {
+    fn label(self)->&'static str {
+        match self {Self::Create=>"create",Self::BrainExport=>"brain_export"}
+    }
+}
+fn backup_write_kind(method:&str,path:&str)->Option<BackupWriteKind> {
+    match (method,path) {
+        ("POST","/v1/backup")=>Some(BackupWriteKind::Create),
+        ("POST","/v1/brain-snapshot/export")=>Some(BackupWriteKind::BrainExport),
+        _=>None,
+    }
+}
+type BackupWriteJob=(tiny_http::Request, BackupWriteKind, Config);
+
+/// Online SQLite backup copies from an independent read-only connection.
+/// SQLite's online-backup API takes a coherent source snapshot; the Core
+/// connection is never shared across threads. Guard START and restore on the
+/// Core actor until the archive has been fully written and validated.
+fn start_backup_write_worker(root:PathBuf, phase:Arc<AtomicU8>,
+    completed:std::sync::mpsc::Sender<Value>)
+    ->Result<std::sync::mpsc::SyncSender<BackupWriteJob>> {
+    let (tx,rx)=std::sync::mpsc::sync_channel::<BackupWriteJob>(1);
+    std::thread::Builder::new().name("braintrade-backup-writer".into()).spawn(move || {
+        while let Ok((request,kind,config))=rx.recv() {
+            struct Release(Arc<AtomicU8>);
+            impl Drop for Release {
+                fn drop(&mut self){self.0.store(0,Ordering::Release);}
+            }
+            let response={
+                let _release=Release(phase.clone());
+                let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||->Result<Value>{
+                    // Read-only SQLite in WAL mode is safe with Core's one
+                    // writer; no new transaction is allowed on this connection.
+                    let db=Connection::open_with_flags(root.join("events.sqlite"),
+                        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+                    match kind {
+                        BackupWriteKind::Create=>backup::create(&db,&root,&config,now_ms()),
+                        BackupWriteKind::BrainExport=>backup::export_brain(&db,&root,&config,now_ms()),
+                    }
+                }));
+                let (code,value)=match result {
+                    Ok(Ok(v))=>(200,v),
+                    Ok(Err(e))=>(400,json!({"error":e.to_string()})),
+                    Err(_)=>(500,json!({"error":"Backup write worker failed"})),
+                };
+                let _=completed.send(json!({"operation":kind.label(),"success":code==200,
+                    "archive_name":value["name"],"brain_file":value["file_name"],
+                    "error":if code==200 {Value::Null}else{value["error"].clone()}}));
+                tiny_http::Response::from_string(value.to_string()).with_status_code(code)
+                    .with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap())
+            };
             let _=request.respond(response);
         }
     })?;
@@ -479,7 +539,7 @@ impl Client{
     }
 }
 pub(crate) struct Shared{pub status:Status,pub config:Config,pub token:Option<String>}
-struct Engine{dir:PathBuf,shared:Arc<Mutex<Shared>>,backup_read_active:Arc<AtomicBool>,db:Connection,gateway:Option<Child>,gateway_retry_ms:u64,shutting_down:bool,instance_id:String,shutdown_barrier:Option<lifecycle::ShutdownBarrier>,research:research::Research,backtests:backtest::Service,evaluations:evaluation::Service,news:news::Service,learning:learning::Service,inference:learning_inference::Service,scoring:learning_scoring::Service,studio:studio::Service,hvn:hvn::Service,execution:execution::Service}
+struct Engine{dir:PathBuf,shared:Arc<Mutex<Shared>>,backup_io_phase:Arc<AtomicU8>,db:Connection,gateway:Option<Child>,gateway_retry_ms:u64,shutting_down:bool,instance_id:String,shutdown_barrier:Option<lifecycle::ShutdownBarrier>,research:research::Research,backtests:backtest::Service,evaluations:evaluation::Service,news:news::Service,learning:learning::Service,inference:learning_inference::Service,scoring:learning_scoring::Service,studio:studio::Service,hvn:hvn::Service,execution:execution::Service}
 #[derive(Deserialize)]
 struct ConfigRequest{config:Config,#[serde(default)]telegram_token:String,#[serde(default)]clear_telegram_token:bool}
 #[derive(Serialize)]
@@ -690,8 +750,12 @@ impl Engine{
         started.elapsed()
     }
     fn route(&mut self,method:&str,path:&str,body:&[u8])->Result<Value>{
-        if self.backup_read_active.load(Ordering::Acquire) && !mutation_allowed_during_backup_scan(method,path) {
-            bail!("انتظر انتهاء فحص النسخة الاحتياطية قبل START أو تغيير البيانات؛ STOP والمصالحة والخروج الآمن متاحة");
+        if self.backup_io_phase.load(Ordering::Acquire)!=0 && !mutation_allowed_during_backup_scan(method,path) {
+            bail!("انتظر انتهاء مهمة النسخ الاحتياطية قبل START أو تغيير البيانات؛ STOP والمصالحة تبقى متاحة");
+        }
+        if self.backup_io_phase.load(Ordering::Acquire)==2
+            && matches!((method,path),("POST","/v1/shutdown")|("POST","/v1/reconnect")) {
+            bail!("يجري إنشاء أرشيف احتياطي؛ انتظر اكتمال الكتابة قبل الخروج الكامل أو إعادة الاتصال");
         }
         if is_bulk_io_route(method,path) {
             let unresolved=self.execution.pending(&self.db)?;
@@ -1095,16 +1159,23 @@ impl Engine{
 pub fn run_core()->Result<()>{
     let dir=data_dir();fs::create_dir_all(&dir)?;
     #[cfg(unix)] {use std::os::unix::fs::PermissionsExt;fs::set_permissions(&dir,fs::Permissions::from_mode(0o700))?;}
-    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}recover_settings_transaction(&dir)?;let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;correlation::init(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let hvn=hvn::Service::default();let mut execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let backup_read_active=Arc::new(AtomicBool::new(false));let mut engine=Engine{dir,shared:shared.clone(),backup_read_active:backup_read_active.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,instance_id:uuid::Uuid::new_v4().to_string(),shutdown_barrier:None,research,backtests,evaluations,news,learning,inference,scoring,studio,hvn,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
+    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}recover_settings_transaction(&dir)?;let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;correlation::init(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let hvn=hvn::Service::default();let mut execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let backup_io_phase=Arc::new(AtomicU8::new(0));let mut engine=Engine{dir,shared:shared.clone(),backup_io_phase:backup_io_phase.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,instance_id:uuid::Uuid::new_v4().to_string(),shutdown_barrier:None,research,backtests,evaluations,news,learning,inference,scoring,studio,hvn,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
     // Independently service pure, synthetic research calculations. Broker
     // commands, STOP, snapshots, and journal reads stay on Engine's owner.
     let offline_research_tx = start_offline_research_worker()?;
-    let backup_read_tx = start_backup_read_worker(engine.dir.clone(), backup_read_active.clone())?;
+    let backup_read_tx = start_backup_read_worker(engine.dir.clone(), backup_io_phase.clone())?;
+    let (backup_completed_tx,backup_completed_rx)=std::sync::mpsc::channel();
+    let backup_write_tx=start_backup_write_worker(engine.dir.clone(),backup_io_phase.clone(),backup_completed_tx)?;
     let mut next_housekeeping = Instant::now();
     let mut next_slow_route_warning = Instant::now();
     let mut next_slow_maintenance_warning = Instant::now();
     let mut maintenance = MaintenanceRotation::default();
     while !engine.shutting_down{
+        while let Ok(detail)=backup_completed_rx.try_recv() {
+            if let Err(error)=engine.event("backup_worker_completed",detail) {
+                eprintln!("Backup worker completion audit failed: {error}");
+            }
+        }
         if housekeeping_due(Instant::now(), &mut next_housekeeping) {
             let stage = maintenance.next();
             let elapsed = engine.tick(stage);
@@ -1126,8 +1197,8 @@ pub fn run_core()->Result<()>{
                     shared.status.clone()
                 };
                 ensure_bulk_io_idle(&status,pending)?;
-                anyhow::ensure!(!backup_read_active.load(Ordering::Acquire),
-                    "فحص النسخ الاحتياطية جارٍ؛ انتظر إكماله");
+                anyhow::ensure!(backup_io_phase.load(Ordering::Acquire)==0,
+                    "توجد مهمة نسخ احتياطية جارية؛ انتظر إكمالها");
                 Ok(())
             })();
             if let Err(e)=admission {
@@ -1137,7 +1208,7 @@ pub fn run_core()->Result<()>{
                 let _=request.respond(response);
                 continue;
             }
-            if backup_read_active.compare_exchange(false,true,Ordering::AcqRel,Ordering::Acquire).is_err(){
+            if backup_io_phase.compare_exchange(0,1,Ordering::AcqRel,Ordering::Acquire).is_err(){
                 let _=request.respond(tiny_http::Response::from_string(
                     json!({"error":"Backup read worker busy"}).to_string()).with_status_code(503));
                 continue;
@@ -1146,10 +1217,48 @@ pub fn run_core()->Result<()>{
                 Ok(()) => {},
                 Err(std::sync::mpsc::TrySendError::Full((request,_,_)))
                 | Err(std::sync::mpsc::TrySendError::Disconnected((request,_,_))) => {
-                    backup_read_active.store(false,Ordering::Release);
+                    backup_io_phase.store(0,Ordering::Release);
                     let _=request.respond(tiny_http::Response::from_string(
                         json!({"error":"Backup read worker unavailable"}).to_string()).with_status_code(503));
                 },
+            }
+            continue;
+        }
+        if let Some(kind)=backup_write_kind(request.method().as_str(),request.url()) {
+            let admitted=(||->Result<Config> {
+                let pending=engine.execution.pending(&engine.db)?;
+                let (status,config)={
+                    let mut shared=engine.shared.lock().unwrap();
+                    shared.status.refresh(now_ms());
+                    (shared.status.clone(),shared.config.clone())
+                };
+                ensure_bulk_io_idle(&status,pending)?;
+                anyhow::ensure!(backup_io_phase.load(Ordering::Acquire)==0,
+                    "توجد مهمة نسخ احتياطية جارية؛ انتظر إكمالها");
+                Ok(config)
+            })();
+            match admitted {
+                Ok(config)=>{
+                    if backup_io_phase.compare_exchange(0,2,Ordering::AcqRel,Ordering::Acquire).is_err() {
+                        let _=request.respond(tiny_http::Response::from_string(
+                            json!({"error":"Backup worker busy"}).to_string()).with_status_code(503));
+                        continue;
+                    }
+                    match backup_write_tx.try_send((request,kind,config)) {
+                        Ok(())=>{},
+                        Err(std::sync::mpsc::TrySendError::Full((request,_,_)))
+                        | Err(std::sync::mpsc::TrySendError::Disconnected((request,_,_)))=>{
+                            backup_io_phase.store(0,Ordering::Release);
+                            let _=request.respond(tiny_http::Response::from_string(
+                                json!({"error":"Backup writer unavailable"}).to_string()).with_status_code(503));
+                        }
+                    }
+                }
+                Err(e)=>{
+                    let _=request.respond(tiny_http::Response::from_string(
+                        json!({"error":e.to_string()}).to_string()).with_status_code(400)
+                        .with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap()));
+                }
             }
             continue;
         }
@@ -1242,6 +1351,18 @@ mod housekeeping_schedule_tests {
             OfflineResearchKind::Bridge,OfflineResearchKind::DemoDealAudit,
         ] {
             assert!(offline_research_calculate(kind,b"not-json").is_err());
+        }
+    }
+    #[test]
+    fn backup_write_worker_only_accepts_backup_creation_and_brain_export() {
+        assert_eq!(backup_write_kind("POST","/v1/backup"),Some(BackupWriteKind::Create));
+        assert_eq!(backup_write_kind("POST","/v1/brain-snapshot/export"),Some(BackupWriteKind::BrainExport));
+        for (method,path) in [("GET","/v1/backups"),("POST","/v1/start"),
+            ("POST","/v1/stop"),("POST","/v1/shutdown"),
+            ("POST","/v1/backup/restore/stage"),("POST","/v1/backup/restore/validate"),
+            ("POST","/v1/brain-snapshot/import"),("POST","/v1/execution/authorize"),
+            ("POST","/v1/gateway/snapshot"),("POST","/v1/export"),("GET","/v1/backup")] {
+            assert_eq!(backup_write_kind(method,path),None,"{method} {path}");
         }
     }
     #[test]
