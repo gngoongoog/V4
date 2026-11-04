@@ -260,20 +260,21 @@ fn start_backup_read_worker(root: PathBuf, active: Arc<AtomicU8>)
 
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BackupWriteKind { Create, BrainExport }
+enum BackupWriteKind { Create, BrainExport, BrainImport }
 impl BackupWriteKind {
     fn label(self)->&'static str {
-        match self {Self::Create=>"create",Self::BrainExport=>"brain_export"}
+        match self {Self::Create=>"create",Self::BrainExport=>"brain_export",Self::BrainImport=>"brain_import"}
     }
 }
 fn backup_write_kind(method:&str,path:&str)->Option<BackupWriteKind> {
     match (method,path) {
         ("POST","/v1/backup")=>Some(BackupWriteKind::Create),
         ("POST","/v1/brain-snapshot/export")=>Some(BackupWriteKind::BrainExport),
+        ("POST","/v1/brain-snapshot/import")=>Some(BackupWriteKind::BrainImport),
         _=>None,
     }
 }
-type BackupWriteJob=(tiny_http::Request, BackupWriteKind, Config);
+type BackupWriteJob=(tiny_http::Request, BackupWriteKind, Config, Vec<u8>);
 
 /// Online SQLite backup copies from an independent read-only connection.
 /// SQLite's online-backup API takes a coherent source snapshot; the Core
@@ -284,7 +285,7 @@ fn start_backup_write_worker(root:PathBuf, phase:Arc<AtomicU8>,
     ->Result<std::sync::mpsc::SyncSender<BackupWriteJob>> {
     let (tx,rx)=std::sync::mpsc::sync_channel::<BackupWriteJob>(1);
     std::thread::Builder::new().name("braintrade-backup-writer".into()).spawn(move || {
-        while let Ok((request,kind,config))=rx.recv() {
+        while let Ok((request,kind,config,body))=rx.recv() {
             struct Release(Arc<AtomicU8>);
             impl Drop for Release {
                 fn drop(&mut self){self.0.store(0,Ordering::Release);}
@@ -294,11 +295,17 @@ fn start_backup_write_worker(root:PathBuf, phase:Arc<AtomicU8>,
                 let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||->Result<Value>{
                     // Read-only SQLite in WAL mode is safe with Core's one
                     // writer; no new transaction is allowed on this connection.
-                    let db=Connection::open_with_flags(root.join("events.sqlite"),
-                        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
                     match kind {
-                        BackupWriteKind::Create=>backup::create(&db,&root,&config,now_ms()),
-                        BackupWriteKind::BrainExport=>backup::export_brain(&db,&root,&config,now_ms()),
+                        BackupWriteKind::Create|BackupWriteKind::BrainExport=>{
+                            let db=Connection::open_with_flags(root.join("events.sqlite"),
+                                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+                            match kind {
+                                BackupWriteKind::Create=>backup::create(&db,&root,&config,now_ms()),
+                                BackupWriteKind::BrainExport=>backup::export_brain(&db,&root,&config,now_ms()),
+                                BackupWriteKind::BrainImport=>unreachable!(),
+                            }
+                        }
+                        BackupWriteKind::BrainImport=>backup::import_brain(&root,&body,now_ms()),
                     }
                 }));
                 let (code,value)=match result {
@@ -1244,10 +1251,10 @@ pub fn run_core()->Result<()>{
                             json!({"error":"Backup worker busy"}).to_string()).with_status_code(503));
                         continue;
                     }
-                    match backup_write_tx.try_send((request,kind,config)) {
+                    match backup_write_tx.try_send((request,kind,config,body)) {
                         Ok(())=>{},
-                        Err(std::sync::mpsc::TrySendError::Full((request,_,_)))
-                        | Err(std::sync::mpsc::TrySendError::Disconnected((request,_,_)))=>{
+                        Err(std::sync::mpsc::TrySendError::Full((request,_,_,_)))
+                        | Err(std::sync::mpsc::TrySendError::Disconnected((request,_,_,_)))=>{
                             backup_io_phase.store(0,Ordering::Release);
                             let _=request.respond(tiny_http::Response::from_string(
                                 json!({"error":"Backup writer unavailable"}).to_string()).with_status_code(503));
@@ -1354,13 +1361,14 @@ mod housekeeping_schedule_tests {
         }
     }
     #[test]
-    fn backup_write_worker_only_accepts_backup_creation_and_brain_export() {
+    fn backup_write_worker_only_accepts_backup_snapshot_actions() {
         assert_eq!(backup_write_kind("POST","/v1/backup"),Some(BackupWriteKind::Create));
         assert_eq!(backup_write_kind("POST","/v1/brain-snapshot/export"),Some(BackupWriteKind::BrainExport));
+        assert_eq!(backup_write_kind("POST","/v1/brain-snapshot/import"),Some(BackupWriteKind::BrainImport));
         for (method,path) in [("GET","/v1/backups"),("POST","/v1/start"),
             ("POST","/v1/stop"),("POST","/v1/shutdown"),
             ("POST","/v1/backup/restore/stage"),("POST","/v1/backup/restore/validate"),
-            ("POST","/v1/brain-snapshot/import"),("POST","/v1/execution/authorize"),
+            ("POST","/v1/execution/authorize"),
             ("POST","/v1/gateway/snapshot"),("POST","/v1/export"),("GET","/v1/backup")] {
             assert_eq!(backup_write_kind(method,path),None,"{method} {path}");
         }
