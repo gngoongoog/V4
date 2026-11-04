@@ -93,6 +93,46 @@ class NativeSniperLifecycleTests(unittest.TestCase):
         self.assertNotIn("if(!SendPendingQuoteTicks())",ea)
         self.assertIn("g_failed_ticks += forwarded;",ea)
 
+    def test_session_pipe_metadata_is_bound_to_token_and_rejects_bad_names(self):
+        with tempfile.TemporaryDirectory() as root:
+            token = "private-session-token-012345678901234"
+            name = native.PIPE_NAME + "-" + "f" * 24
+            path = native.write_session_pipe(root,token,name)
+            self.assertEqual(path,native.session_pipe_path(root))
+            self.assertEqual(path.read_text("ascii").strip(),token+"|"+name)
+            for bad in (native.PIPE_NAME, native.PIPE_NAME+"-"+"g"*24,
+                        native.PIPE_NAME+"-"+"1"*23,
+                        r"\\.\pipe\AnotherApp-"+"1"*24):
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    native.write_session_pipe(root,token,bad)
+            self.assertEqual(path.read_text("ascii").strip(),token+"|"+name)
+
+    @unittest.skipUnless(os.name == "nt", "Windows named-pipe integration")
+    def test_two_native_gateway_instances_on_distinct_terminals_get_isolated_pipes(self):
+        from types import SimpleNamespace as N
+        with tempfile.TemporaryDirectory() as root:
+            first = native.NativeTickBridge()
+            second = native.NativeTickBridge()
+            a = Path(root)/"MT5-A";a.mkdir()
+            b = Path(root)/"MT5-B";b.mkdir()
+            try:
+                self.assertTrue(first.bind_terminal(N(data_path=str(a))))
+                self.assertTrue(second.bind_terminal(N(data_path=str(b))))
+                self.assertNotEqual(first.pipe_name,second.pipe_name)
+                self.assertTrue(first.pipe_name.startswith(native.PIPE_NAME+"-"))
+                self.assertTrue(second.pipe_name.startswith(native.PIPE_NAME+"-"))
+                self.assertEqual(native.session_pipe_path(a).read_text("ascii").strip(),
+                                 first.token+"|"+first.pipe_name)
+                self.assertEqual(native.session_pipe_path(b).read_text("ascii").strip(),
+                                 second.token+"|"+second.pipe_name)
+                self.assertTrue(first.available)
+                self.assertTrue(second.available)
+            finally:
+                self.assertTrue(first.close())
+                self.assertTrue(second.close())
+            self.assertFalse(native.session_pipe_path(a).exists())
+            self.assertFalse(native.session_pipe_path(b).exists())
+
     @unittest.skipUnless(os.name == "nt", "Windows named-pipe contract")
     def test_real_windows_blocking_connect_stops_and_same_name_rebinds(self):
         pipe_name = rf"\\.\pipe\BrainTradeSniperTest-{os.getpid()}-{id(self)}"
