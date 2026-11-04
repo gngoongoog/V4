@@ -3,7 +3,7 @@
 //| Native tick transport only. It never submits broker orders.     |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.15"
+#property version   "1.16"
 #property description "BrainTrade native Sniper tick bridge. Transport only; no trading calls."
 
 input string InpPipeName = "\\\\.\\pipe\\BrainTradeSniperV1";
@@ -13,6 +13,7 @@ input bool   InpShowStatus = true;
 input int    InpHeartbeatMs = 1000;
 
 #define TOKEN_FILE "BrainTrade\\sniper.token"
+#define PIPE_FILE "BrainTrade\\sniper.pipe"
 #define EVENT_FACTOR 1000000
 #define MAX_COPY_REQUEST 65536
 
@@ -86,6 +87,51 @@ bool LoadSessionToken()
    return true;
   }
 
+// V1.16: connect to the exact Gateway instance registered in THIS MT5
+// data directory. Paired token and pipe name reject stale/cross-instance
+// metadata; a missing sidecar permits the previous fixed-name Gateway.
+bool LoadSessionPipe(string &selected_pipe)
+  {
+   selected_pipe = InpPipeName;
+   ResetLastError();
+   int file = FileOpen(PIPE_FILE, FILE_READ|FILE_TXT|FILE_ANSI);
+   if(file == INVALID_HANDLE)
+      return true; // Legacy Gateway compatibility only, no sidecar present.
+
+   string raw = FileReadString(file);
+   FileClose(file);
+   StringReplace(raw, "\r", "");
+   StringReplace(raw, "\n", "");
+   int separator = StringFind(raw, "|");
+   if(separator <= 0 || StringSubstr(raw,0,separator) != g_token)
+     {
+      g_last_io_stage = "pipe session token mismatch";
+      g_last_io_error = 0;
+      return false;
+     }
+   string endpoint = StringSubstr(raw,separator+1);
+   string prefix = "\\\\.\\pipe\\BrainTradeSniperV1-";
+   if(StringFind(endpoint,prefix) != 0 ||
+      StringLen(endpoint) != StringLen(prefix) + 24)
+     {
+      g_last_io_stage = "pipe session endpoint invalid";
+      g_last_io_error = 0;
+      return false;
+     }
+   for(int i=StringLen(prefix);i<StringLen(endpoint);i++)
+     {
+      string digit=StringSubstr(endpoint,i,1);
+      if(StringFind("0123456789abcdef",digit)<0)
+        {
+         g_last_io_stage = "pipe session suffix invalid";
+         g_last_io_error = 0;
+         return false;
+        }
+     }
+   selected_pipe = endpoint;
+   return true;
+  }
+
 bool EnsurePipe()
   {
    long login = AccountInfoInteger(ACCOUNT_LOGIN);
@@ -139,7 +185,10 @@ bool EnsurePipe()
       g_pending_trade_changes = 0;
       g_control_sequence = 0;
      }
-   g_pipe = FileOpen(InpPipeName, FILE_READ|FILE_WRITE|FILE_BIN|FILE_ANSI);
+   string selected_pipe = "";
+   if(!LoadSessionPipe(selected_pipe))
+      return false;
+   g_pipe = FileOpen(selected_pipe, FILE_READ|FILE_WRITE|FILE_BIN|FILE_ANSI);
    if(g_pipe == INVALID_HANDLE)
      {
       g_last_io_stage = "pipe open";
@@ -179,7 +228,7 @@ void UpdateStatus()
            "\nLast I/O stage: ", g_last_io_stage,
            "\nLast I/O error: ", IntegerToString(g_last_io_error),
            "\nVerify fresh native ticks in BrainTrade",
-           "\nBridge source: 1.15");
+           "\nBridge source: 1.16");
   }
 
 ulong TickEventId(const long time_msc,const uint ordinal)
