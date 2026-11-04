@@ -3,12 +3,14 @@
 //| Native tick transport only. It never submits broker orders.     |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.16"
+#property version   "1.17"
 #property description "BrainTrade native Sniper tick bridge. Transport only; no trading calls."
 
 input string InpPipeName = "\\\\.\\pipe\\BrainTradeSniperV1";
 input int    InpReconnectMs = 250;
 input int    InpMaxBatch = 2048;
+input int    InpOnTickBatch = 64;
+input int    InpSlowTickUs = 5000;
 input bool   InpShowStatus = true;
 input int    InpHeartbeatMs = 1000;
 
@@ -40,6 +42,9 @@ uint   g_control_sequence = 0;
 uint   g_pending_trade_changes = 0;
 ulong  g_heartbeats_sent = 0;
 ulong  g_trade_wakes_sent = 0;
+ulong  g_max_ontick_us = 0;
+ulong  g_max_flush_us = 0;
+ulong  g_slow_ontick_count = 0;
 
 void ResetQuoteCursor()
   {
@@ -222,13 +227,16 @@ void UpdateStatus()
            "\nRecovered in batches: ", (string)g_recovered_ticks,
            "\nSaturated source milliseconds: ", (string)g_saturated_milliseconds,
            "\nSend failures: ", (string)g_failed_ticks,
+           "\nMax OnTick microseconds: ", (string)g_max_ontick_us,
+           "\nMax FileFlush microseconds: ", (string)g_max_flush_us,
+           "\nSlow OnTick count: ", (string)g_slow_ontick_count,
            "\nHeartbeat frames: ", (string)g_heartbeats_sent,
            "\nTrade reconciliation wakes: ", (string)g_trade_wakes_sent,
            "\nToken file: ", (g_token_ready ? "LOADED" : "MISSING/INVALID"),
            "\nLast I/O stage: ", g_last_io_stage,
            "\nLast I/O error: ", IntegerToString(g_last_io_error),
            "\nVerify fresh native ticks in BrainTrade",
-           "\nBridge source: 1.16");
+           "\nBridge source: 1.17");
   }
 
 ulong TickEventId(const long time_msc,const uint ordinal)
@@ -255,7 +263,7 @@ bool AppendQuotePacket(string &payload,const MqlTick &tick,const uint ordinal,co
    return true;
   }
 
-bool SendPendingQuoteTicks()
+bool SendPendingQuoteTicks(const int cap_batch=0)
   {
    if(!EnsurePipe())
       return false;
@@ -284,6 +292,8 @@ bool SendPendingQuoteTicks()
       from_msc = (ulong)old_msc;
 
    int batch = (int)MathMax(32,MathMin(4096,InpMaxBatch));
+   if(cap_batch > 0)
+      batch = (int)MathMin((double)batch,(double)MathMax(32,cap_batch));
    bool saturated_recovery = false;
    // CopyTicks counts forward from the inclusive millisecond. Reserve room
    // for ticks already consumed at that same millisecond, otherwise a full
@@ -383,7 +393,11 @@ bool SendPendingQuoteTicks()
         }
       // One flush per recovered batch, not one flush per source tick. This keeps
       // the OnTick handler short while waking the local reader immediately.
+      ulong flush_started = GetMicrosecondCount();
       FileFlush(g_pipe);
+      ulong flush_elapsed = GetMicrosecondCount()-flush_started;
+      if(flush_elapsed > g_max_flush_us)
+         g_max_flush_us = flush_elapsed;
       g_sent_ticks += forwarded;
       if(forwarded > 1)
          g_recovered_ticks += forwarded-1;
@@ -494,8 +508,15 @@ void OnTimer()
 
 void OnTick()
   {
-   // Quote transport only: never redraw chart text on each tick.
-   // Repainting can be expensive under broker tick bursts. OnTimer owns
-   // status updates (at least every 100 ms) without blocking hot quotes.
-   SendPendingQuoteTicks();
+   // Bound synchronous MQL5 formatting/CopyTicks and FileFlush work in each
+   // hot tick callback. OnTimer drains remaining bounded history without
+   // retransmitting already acknowledged batch cursors. Preserve quote
+   // freshness rules in Gateway (never execute on 1s-old backlogs).
+   ulong started = GetMicrosecondCount();
+   SendPendingQuoteTicks((int)MathMax(32,MathMin(128,InpOnTickBatch)));
+   ulong elapsed = GetMicrosecondCount()-started;
+   if(elapsed > g_max_ontick_us)
+      g_max_ontick_us=elapsed;
+   if(elapsed > (ulong)MathMax(500,InpSlowTickUs))
+      g_slow_ontick_count++;
   }
