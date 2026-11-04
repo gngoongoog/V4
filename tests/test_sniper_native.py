@@ -167,7 +167,9 @@ class NativeSniperTests(unittest.TestCase):
         self.assertIn("COPY_TICKS_ALL", source)
         self.assertIn("TICK_FLAG_BID|TICK_FLAG_ASK", source)
         self.assertIn("BT2|", source)
-        self.assertIn("FileOpen(InpPipeName", source)
+        self.assertIn("FileOpen(selected_pipe, FILE_READ|FILE_WRITE", source)
+        self.assertIn("LoadSessionPipe(selected_pipe)", source)
+        self.assertIn("StringSubstr(raw,0,separator) != g_token", source)
         self.assertIn("FileWriteString", source)
         tick_section = source.split("bool SendPendingQuoteTicks()",1)[1].split(
             "// This is a low-frequency liveness/reconciliation channel",1)[0]
