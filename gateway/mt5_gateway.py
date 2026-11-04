@@ -78,13 +78,28 @@ class HvnResultOutbox:
 
 
 class BrokerHistoryScheduler:
-    """Keep normal broker work alive even when every loop handles a tick."""
+    """Keep history alive during tick bursts without 5ms idle Core polling.
+
+    A pulse already fetches execution commands. Without a pulse, a bounded
+    50ms control poll still catches operator work, instead of repeatedly
+    hitting the Core on every 5ms Sniper iteration. Neither path retries a
+    broker order, and the 5-second history obligation remains independent.
+    """
     def __init__(self):
         self.next_poll = 0.0
+        self.next_idle_poll = 0.0
 
     def should_poll(self, command_polled: bool, now: float) -> bool:
-        if command_polled and now < self.next_poll:
+        if command_polled:
+            if now < self.next_poll:
+                return False
+            self.next_poll = now + BROKER_HISTORY_POLL_SECONDS
+            return True
+        if now < self.next_idle_poll:
             return False
+        self.next_idle_poll = now + NORMAL_MIN_LOOP_SECONDS
+        # This normal cycle checks broker history, so the next forced scan
+        # during continuous pulses is due five seconds after this one.
         self.next_poll = now + BROKER_HISTORY_POLL_SECONDS
         return True
 
