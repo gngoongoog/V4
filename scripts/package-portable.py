@@ -3,6 +3,7 @@ Run on a build host with Python 3.11+, pefile and a compiled BrainTrade.exe.
 """
 from __future__ import annotations
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -26,7 +27,38 @@ ASSETS = [
      "sha256": "b0544343a702fa80c95ad5d3d608ea3599dd54d4632df855e4c8d24eb6ecfa1c", "destination": "runtime/python/Lib/site-packages"},
 ]
 SYSTEM_DLLS = set("""advapi32 avrt bcrypt bcryptprimitives cfgmgr32 comctl32 comdlg32 crypt32 cryptbase cryptsp d2d1 d3d11 d3d12 dcomp dbghelp dhcpcsvc dnsapi dwmapi dwrite dxgi gdi32 gdiplus hid imm32 iphlpapi kernel32 kernelbase msimg32 msvcrt ncrypt normaliz ntdll ole32 oleacc oleaut32 opengl32 powrprof propsys psapi rpcrt4 secur32 setupapi shell32 shlwapi user32 userenv usp10 uxtheme version windowscodecs winhttp wininet winmm winscard winspool wintrust ws2_32 wtsapi32 ucrtbase mswsock ntmarta shcore combase netapi32 sensapi wldap32""".split())
-GATEWAY_FILES = ("mt5_gateway.py", "studio_feed.py", "execution.py", "position_protection.py", "order_cancellation.py", "broker_costs.py", "check_runtime.py", "demo_readiness.py", "sniper_native.py", "institutional_controls.py", "transport.py", "strategy_lab.py")
+GATEWAY_FILES = ("mt5_gateway.py", "studio_feed.py", "execution.py", "position_protection.py", "order_cancellation.py", "broker_costs.py", "check_runtime.py", "demo_readiness.py", "sniper_native.py", "managed_terminal.py", "hvn_research.py", "tp_partial_close.py", "institutional_controls.py", "transport.py", "strategy_lab.py")
+def validate_gateway_import_closure():
+    """Packaging must include every local module imported by bundled Python.
+
+    This catches import-time MT5 Gateway crashes that an isolated source test
+    or SHA256-only portable manifest cannot detect. Only direct local imports
+    are considered: installed third-party MetaTrader5 and NumPy stay external
+    to this source list, inside the verified embedded runtime.
+    """
+    all_local = {path.stem for path in (ROOT / "gateway").glob("*.py")}
+    bundled = {Path(name).stem for name in GATEWAY_FILES}
+    missing = set()
+    for filename in GATEWAY_FILES:
+        source = ROOT / "gateway" / filename
+        if not source.is_file():
+            missing.add(filename + " (source missing)")
+            continue
+        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imports = [item.name.split(".", 1)[0] for item in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                imports = [node.module.split(".", 1)[0]]
+            else:
+                continue
+            missing.update(name + ".py" for name in imports
+                           if name in all_local and name not in bundled)
+    if missing:
+        raise ValueError("Portable Gateway incomplete local imports: "
+                         + ", ".join(sorted(missing)))
+    return len(bundled)
+
 NATIVE_EA = "BrainTradeSniperBridge.mq5"
 OPERATOR_POWERSHELL = "Run-Demo-Acceptance.ps1"
 OPERATOR_GUI = "Run-Demo-Acceptance-GUI.ps1"
