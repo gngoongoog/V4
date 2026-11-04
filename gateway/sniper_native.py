@@ -23,6 +23,8 @@ import time
 PIPE_NAME = r"\\.\pipe\BrainTradeSniperV1"
 PROTOCOL = "BT2"
 LEGACY_PROTOCOL = "BT1"
+HEARTBEAT_PROTOCOL = "BTH1"
+TRADE_DIRTY_PROTOCOL = "BTE1"
 EVENT_FACTOR = 1_000_000
 TOKEN_RELATIVE = Path("MQL5") / "Files" / "BrainTrade" / "sniper.token"
 MAX_PACKET_BYTES = 512
@@ -113,6 +115,41 @@ def parse_packet(raw: bytes | bytearray | str, token: str, received_ms: int | No
     }
 
 
+def parse_control_packet(raw: bytes | bytearray | str, token: str,
+                         received_ms: int | None = None) -> dict:
+    """Authenticated EA liveness/reconcile hint, NEVER Deal or price evidence."""
+    if isinstance(raw, (bytes, bytearray)):
+        if len(raw) > MAX_PACKET_BYTES:
+            raise ValueError("Native control packet too large")
+        try:
+            raw = raw.decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise ValueError("Native control packet non-ASCII") from exc
+    try:
+        size = len(raw.encode("ascii"))
+    except UnicodeEncodeError as exc:
+        raise ValueError("Native control packet non-ASCII") from exc
+    if size > MAX_PACKET_BYTES:
+        raise ValueError("Native control packet too large")
+    fields = raw.strip("\r\n").split("|")
+    if len(fields) != 5 or fields[0] not in (HEARTBEAT_PROTOCOL, TRADE_DIRTY_PROTOCOL):
+        raise ValueError("Unknown native control packet")
+    if not token or not secrets.compare_digest(fields[1], token):
+        raise ValueError("Native control token mismatch")
+    if (not fields[2].isascii() or not fields[2].isdecimal()
+            or not fields[4].isascii() or not fields[4].isdecimal()):
+        raise ValueError("Invalid native control identity or sequence")
+    login, sequence = int(fields[2]), int(fields[4])
+    symbol = fields[3]
+    if login <= 0 or sequence <= 0 or sequence > 2**32-1:
+        raise ValueError("Invalid native control identity or sequence")
+    if not symbol or len(symbol) > 64 or any(ch in symbol for ch in "|\r\n\x00"):
+        raise ValueError("Native control symbol invalid")
+    return {"kind": "heartbeat" if fields[0] == HEARTBEAT_PROTOCOL else "trade_dirty",
+            "login": login, "symbol": symbol, "sequence": sequence,
+            "received_ms": clock_ms() if received_ms is None else int(received_ms)}
+
+
 class NativeTickMailbox:
     """Bounded FIFO. Overflow drops the oldest tick and records the loss."""
     def __init__(self, limit: int = DEFAULT_QUEUE_LIMIT):
@@ -128,6 +165,14 @@ class NativeTickMailbox:
         self.last_quote_time_ms = 0
         self.last_login: int | None = None
         self.last_symbol: str | None = None
+        self.last_control_received_ms = 0
+        self.last_control_login: int | None = None
+        self.last_control_symbol: str | None = None
+        self._trade_dirty = False
+        self._trade_login: int | None = None
+        self._trade_symbol: str | None = None
+        self.control_heartbeats = 0
+        self.trade_wakes = 0
 
     def reset(self) -> None:
         """Discard quote evidence across MT5 disconnects and account switches."""
@@ -138,6 +183,12 @@ class NativeTickMailbox:
             self.last_quote_time_ms = 0
             self.last_login = None
             self.last_symbol = None
+            self.last_control_received_ms = 0
+            self.last_control_login = None
+            self.last_control_symbol = None
+            self._trade_dirty = False
+            self._trade_login = None
+            self._trade_symbol = None
         self._wake.set()
 
     def set_connected(self, value: bool) -> None:
@@ -149,8 +200,42 @@ class NativeTickMailbox:
                 self.last_quote_time_ms = 0
                 self.last_login = None
                 self.last_symbol = None
+                self.last_control_received_ms = 0
+                self.last_control_login = None
+                self.last_control_symbol = None
+                self._trade_dirty = False
+                self._trade_login = None
+                self._trade_symbol = None
             self.connected = bool(value)
         self._wake.set()
+
+    def note_control(self, packet: dict) -> None:
+        """OnTradeTransaction wakes reconciliation; heartbeat never creates quotes."""
+        with self._lock:
+            if not self.connected:
+                return
+            self.last_control_received_ms = int(packet["received_ms"])
+            self.last_control_login = int(packet["login"])
+            self.last_control_symbol = packet["symbol"]
+            if packet["kind"] == "heartbeat":
+                self.control_heartbeats += 1
+            elif packet["kind"] == "trade_dirty":
+                self.trade_wakes += 1
+                self._trade_dirty = True
+                self._trade_login = int(packet["login"])
+                self._trade_symbol = packet["symbol"]
+        self._wake.set()
+
+    def consume_trade_notice(self, login: int, symbol: str) -> bool:
+        with self._lock:
+            if not self._trade_dirty:
+                return False
+            matched = self.connected and self._trade_login == login and self._trade_symbol == symbol
+            # A mismatched notice is discarded, never borrowed by another account.
+            self._trade_dirty = False
+            self._trade_login = None
+            self._trade_symbol = None
+            return matched
 
     def push(self, packet: dict) -> None:
         with self._lock:
@@ -346,7 +431,10 @@ class _WindowsPipeServer:
                         line, _, remainder = pending.partition(b"\n")
                         pending = bytearray(remainder)
                         try:
-                            self.mailbox.push(parse_packet(bytes(line), self.token))
+                            if line.startswith((b"BTH1|", b"BTE1|")):
+                                self.mailbox.note_control(parse_control_packet(bytes(line), self.token))
+                            else:
+                                self.mailbox.push(parse_packet(bytes(line), self.token))
                         except ValueError as exc:
                             self._log_problem('RejectedPacket'+type(exc).__name__)
                             continue
@@ -396,6 +484,9 @@ class NativeTickBridge:
 
     def drain(self, login: int, symbol: str, maximum: int = 256) -> list[dict]:
         return [] if self.blocked else self.mailbox.drain(int(login), symbol, maximum)
+
+    def consume_trade_notice(self, login: int, symbol: str) -> bool:
+        return not self.blocked and self.mailbox.consume_trade_notice(int(login), symbol)
 
     def recent(self, now_ms: int | None = None, maximum_age_ms: int = 500,
                *, login: int | None = None, symbol: str | None = None) -> bool:
