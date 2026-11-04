@@ -3,13 +3,14 @@
 //| Native tick transport only. It never submits broker orders.     |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.14"
+#property version   "1.15"
 #property description "BrainTrade native Sniper tick bridge. Transport only; no trading calls."
 
 input string InpPipeName = "\\\\.\\pipe\\BrainTradeSniperV1";
 input int    InpReconnectMs = 250;
 input int    InpMaxBatch = 2048;
 input bool   InpShowStatus = true;
+input int    InpHeartbeatMs = 1000;
 
 #define TOKEN_FILE "BrainTrade\\sniper.token"
 #define EVENT_FACTOR 1000000
@@ -33,6 +34,11 @@ string g_connected_token = "";
 int    g_last_io_error = 0;
 string g_last_io_stage = "not connected";
 bool   g_token_ready = false;
+ulong  g_next_heartbeat_ms = 0;
+uint   g_control_sequence = 0;
+uint   g_pending_trade_changes = 0;
+ulong  g_heartbeats_sent = 0;
+ulong  g_trade_wakes_sent = 0;
 
 void ResetQuoteCursor()
   {
@@ -96,6 +102,7 @@ bool EnsurePipe()
       g_account_server = "";
       g_account_currency = "";
       g_account_mode = -1;
+      g_pending_trade_changes = 0;
       return false;
      }
    if(g_account_login > 0 && (login != g_account_login ||
@@ -104,6 +111,7 @@ bool EnsurePipe()
      {
       ClosePipe();
       ResetQuoteCursor();
+      g_pending_trade_changes = 0;
       g_next_retry_ms = 0;
      }
    // This check runs on every OnTick AND OnTimer, not only on reconnect.
@@ -126,7 +134,11 @@ bool EnsurePipe()
    // The gateway rotates this file when the broker's session changes.
    // A new token means a new event epoch, even with the same login/server.
    if(g_connected_token != "" && g_connected_token != g_token)
+     {
       ResetQuoteCursor();
+      g_pending_trade_changes = 0;
+      g_control_sequence = 0;
+     }
    g_pipe = FileOpen(InpPipeName, FILE_READ|FILE_WRITE|FILE_BIN|FILE_ANSI);
    if(g_pipe == INVALID_HANDLE)
      {
@@ -141,6 +153,7 @@ bool EnsurePipe()
    g_account_currency = currency;
    g_account_mode = mode;
    g_connected_token = g_token;
+   g_next_heartbeat_ms = 0;
    // OnTick can be coalesced while the pipe is disconnected. One timer pass
    // attempts the current quote after reconnect, even without a later tick.
    g_pending_batch = true;
@@ -160,11 +173,13 @@ void UpdateStatus()
            "\nRecovered in batches: ", (string)g_recovered_ticks,
            "\nSaturated source milliseconds: ", (string)g_saturated_milliseconds,
            "\nSend failures: ", (string)g_failed_ticks,
+           "\nHeartbeat frames: ", (string)g_heartbeats_sent,
+           "\nTrade reconciliation wakes: ", (string)g_trade_wakes_sent,
            "\nToken file: ", (g_token_ready ? "LOADED" : "MISSING/INVALID"),
            "\nLast I/O stage: ", g_last_io_stage,
            "\nLast I/O error: ", IntegerToString(g_last_io_error),
            "\nVerify fresh native ticks in BrainTrade",
-           "\nBridge source: 1.14");
+           "\nBridge source: 1.15");
   }
 
 ulong TickEventId(const long time_msc,const uint ordinal)
@@ -341,6 +356,69 @@ bool SendPendingQuoteTicks()
    return true;
   }
 
+// This is a low-frequency liveness/reconciliation channel, not an order
+// channel. It carries no price, profit, order ticket, or execution proof.
+// Send only from OnTimer: OnTradeTransaction must not block the MT5 trade queue.
+bool SendControlFrame(const string kind)
+  {
+   if(!EnsurePipe())
+      return false;
+   long login = AccountInfoInteger(ACCOUNT_LOGIN);
+   if(login <= 0)
+      return false;
+   uint next_sequence = g_control_sequence + 1;
+   if(next_sequence == 0)
+      next_sequence = 1;
+   string payload = StringFormat("%s|%s|%I64d|%s|%u\n",
+                                 kind,g_token,login,_Symbol,next_sequence);
+   ResetLastError();
+   uint expected = (uint)StringLen(payload);
+   uint written = FileWriteString(g_pipe,payload);
+   if(written != expected)
+     {
+      g_last_io_stage = "control pipe write";
+      g_last_io_error = GetLastError();
+      ClosePipe();
+      return false;
+     }
+   FileFlush(g_pipe);
+   g_control_sequence = next_sequence;
+   return true;
+  }
+
+void SendControlUpdates()
+  {
+   if(!EnsurePipe())
+      return;
+   // An event notification means only "re-read the broker snapshot/history".
+   // It is NOT proof of a Deal fill or permission to trade.
+   if(g_pending_trade_changes > 0)
+     {
+      if(!SendControlFrame("BTE1"))
+         return;
+      g_pending_trade_changes = 0;
+      g_trade_wakes_sent++;
+     }
+   ulong now = GetTickCount64();
+   if(now >= g_next_heartbeat_ms)
+     {
+      if(!SendControlFrame("BTH1"))
+         return;
+      g_next_heartbeat_ms = now + (ulong)MathMax(500,InpHeartbeatMs);
+      g_heartbeats_sent++;
+     }
+  }
+
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest &request,
+                        const MqlTradeResult &result)
+  {
+   // Constant-time flag only; MT5's transaction queue is finite and its
+   // event ordering is not guaranteed. Never call OrderSend here.
+   if(g_pending_trade_changes < 1000000)
+      g_pending_trade_changes++;
+  }
+
 int OnInit()
   {
    EventSetMillisecondTimer((int)MathMax(100,InpReconnectMs));
@@ -361,6 +439,7 @@ void OnTimer()
   {
    if(EnsurePipe() && g_pending_batch)
       SendPendingQuoteTicks();
+   SendControlUpdates();
    UpdateStatus();
   }
 
