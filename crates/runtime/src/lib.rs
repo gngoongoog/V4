@@ -211,6 +211,17 @@ fn ensure_bulk_io_idle(status: &Status, unresolved_broker_intent: bool) -> Resul
     Ok(())
 }
 
+/// Saving completed historical Backtest/Evaluation evidence can serialize a
+/// large report/history JSON and commit it to SQLite. A previous maintenance
+/// pass could perform that work while Core was armed, or while an owned broker
+/// position/command was still being reconciled. Keep the result queued in the
+/// service's existing worker channel until research persistence is idle.
+fn historical_result_persistence_allowed(status: &Status, unresolved_broker_intent: bool) -> bool {
+    !status.requested_run && !unresolved_broker_intent
+        && status.telemetry.as_ref().is_none_or(|t|
+            t.positions.is_empty() && t.pending_orders == 0)
+}
+
 fn is_bulk_io_route(method: &str, path: &str) -> bool {
     matches!((method,path),
         ("POST","/v1/backup")|
@@ -560,6 +571,15 @@ impl Engine{
         Ok(mode)
     }
 
+    fn may_persist_historical_results(&self) -> bool {
+        let status = self.shared.lock().unwrap().status.clone();
+        if !historical_result_persistence_allowed(&status, false) {
+            return false;
+        }
+        // Unknown journal state must not be mistaken for "no broker work".
+        let pending = self.execution.pending(&self.db).unwrap_or(true);
+        historical_result_persistence_allowed(&status, pending)
+    }
     fn tick(&mut self, stage: MaintenanceStage) -> Duration {
         let now = now_ms();
         // Always refresh process liveness, operator state and Gateway supervision
@@ -583,8 +603,16 @@ impl Engine{
                 self.studio.tick(&self.db, &cfg, now);
             }
             MaintenanceStage::News => self.news.tick(&self.db, now),
-            MaintenanceStage::Backtest => self.backtests.tick(&self.db, now),
-            MaintenanceStage::Evaluation => self.evaluations.tick(&self.db),
+            MaintenanceStage::Backtest => {
+                if self.may_persist_historical_results() {
+                    self.backtests.tick(&self.db, now);
+                }
+            }
+            MaintenanceStage::Evaluation => {
+                if self.may_persist_historical_results() {
+                    self.evaluations.tick(&self.db);
+                }
+            },
         }
         started.elapsed()
     }
@@ -1100,6 +1128,24 @@ mod housekeeping_schedule_tests {
         ] {
             assert!(offline_research_calculate(kind,b"not-json").is_err());
         }
+    }
+    #[test]
+    fn historical_sqlite_commit_is_deferred_during_trading_or_reconciliation() {
+        let mut status=Status::default();
+        assert!(historical_result_persistence_allowed(&status,false));
+        assert!(!historical_result_persistence_allowed(&status,true));
+        status.requested_run=true;
+        assert!(!historical_result_persistence_allowed(&status,false));
+        status.requested_run=false;
+        let mut telemetry=Telemetry::default();
+        telemetry.pending_orders=1;
+        status.telemetry=Some(telemetry);
+        assert!(!historical_result_persistence_allowed(&status,false));
+        status.telemetry.as_mut().unwrap().pending_orders=0;
+        status.telemetry.as_mut().unwrap().positions.push(braintrade_domain::Position::default());
+        assert!(!historical_result_persistence_allowed(&status,false));
+        status.telemetry.as_mut().unwrap().positions.clear();
+        assert!(historical_result_persistence_allowed(&status,false));
     }
     #[test]
     fn maintenance_is_rotated_and_no_iteration_runs_four_services() {
