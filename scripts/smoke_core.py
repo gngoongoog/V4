@@ -178,7 +178,14 @@ def main():
             snapshot.update(bid=target+.1,ask=target+.2);api('/v1/gateway/snapshot',snapshot)
             paper=api('/v1/status')['paper'];assert paper['trades']==1 and paper['realized']>0
             assert isinstance(api('/v1/opportunities/history')['setups'], list)
-            export=Path(api('/v1/export',{})['path'])
+            # Research JSONL is now exported via a read-only worker. Status
+            # polling must keep responding while the export owns its archive
+            # slot; no account or broker effects are permitted here.
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                research_export_future=pool.submit(api,'/v1/export',{},timeout=60)
+                status_during_research_export=api('/v1/status')
+                export=Path(research_export_future.result(timeout=65)['path'])
+            assert status_during_research_export['state']=='stopped'
             assert (export/'opportunity_setups.jsonl').exists()
             assert len((export/'decisions.jsonl').read_text().splitlines())==1
             assert len((export/'paper_events.jsonl').read_text().splitlines())==2
@@ -196,6 +203,17 @@ def main():
             assert len(api('/v1/learning/review/records')['records'])==1
             assert len(api('/v1/learning/inference/recent')['predictions'])==1
             assert not api('/v1/status')['execution_enabled']
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                learning_export_future=pool.submit(api,'/v1/learning/export',{},timeout=60)
+                status_during_learning_export=api('/v1/status')
+                dataset=learning_export_future.result(timeout=65)
+            assert status_during_learning_export['state']=='stopped'
+            dataset_path=Path(dataset['path'])
+            assert (dataset_path/'dataset.jsonl').is_file()
+            manifest=json.loads((dataset_path/'manifest.json').read_text())
+            assert manifest['feature_schema']=='gold-m1-feature-v1'
+            assert manifest['rows']==dataset['rows']
+            assert dataset['excluded_legacy_or_unverified_rows']>=0
 
             # P1-8G: the backup writer uses its own SQLite connection. The
             # Core must still serve status while the online backup runs.
