@@ -27,6 +27,7 @@ HEARTBEAT_PROTOCOL = "BTH1"
 TRADE_DIRTY_PROTOCOL = "BTE1"
 EVENT_FACTOR = 1_000_000
 TOKEN_RELATIVE = Path("MQL5") / "Files" / "BrainTrade" / "sniper.token"
+PIPE_RELATIVE = Path("MQL5") / "Files" / "BrainTrade" / "sniper.pipe"
 MAX_PACKET_BYTES = 512
 MAX_PENDING_BYTES = 8192
 DEFAULT_QUEUE_LIMIT = 8192
@@ -42,6 +43,34 @@ def base_event_id(time_msc: int) -> int:
 
 def session_token_path(data_path: str | os.PathLike[str]) -> Path:
     return Path(data_path) / TOKEN_RELATIVE
+
+
+def session_pipe_path(data_path: str | os.PathLike[str]) -> Path:
+    return Path(data_path) / PIPE_RELATIVE
+
+
+def write_session_pipe(data_path: str | os.PathLike[str],
+                       token: str, pipe_name: str) -> Path:
+    """Atomic paired token+endpoint selection for this exact EA data folder.
+
+    The EA accepts the endpoint only when the sidecar token equals the token
+    loaded from the same MT5 data directory. An old stale sidecar cannot
+    redirect a new Gateway session to a foreign Named Pipe.
+    """
+    suffix = pipe_name.removeprefix(PIPE_NAME + "-")
+    if (not token or not pipe_name.startswith(PIPE_NAME + "-")
+            or len(suffix) != 24 or any(ch not in "0123456789abcdef" for ch in suffix)):
+        raise ValueError("Invalid MT5 native pipe session name")
+    path = session_pipe_path(data_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".pipe.tmp")
+    temporary.write_text(token + "|" + pipe_name + "\n", encoding="ascii")
+    try:
+        os.chmod(temporary, 0o600)
+    except OSError:
+        pass
+    temporary.replace(path)
+    return path
 
 
 def write_session_token(data_path: str | os.PathLike[str], token: str) -> Path:
@@ -456,6 +485,8 @@ class NativeTickBridge:
         self.mailbox = NativeTickMailbox(queue_limit)
         self.token = ""
         self.token_path: Path | None = None
+        self.pipe_path: Path | None = None
+        self.pipe_name = ""
         self.data_path: Path | None = None
         self.server: _WindowsPipeServer | None = None
         self.blocked = False  # A worker that did not stop may still carry old session ticks.
@@ -480,8 +511,15 @@ class NativeTickBridge:
             return False
         self.data_path = data_path
         self.token = secrets.token_urlsafe(32)
+        # A 96-bit session endpoint avoids global pipe conflicts when two
+        # separate official MT5 installations run under one Windows user.
+        # The Gateway's MT5 owner lock separately disallows two Core processes
+        # on the SAME terminal data directory.
+        self.pipe_name = PIPE_NAME + "-" + secrets.token_hex(12)
         self.token_path = write_session_token(data_path, self.token)
-        self.server = _WindowsPipeServer(self.token, self.mailbox)
+        self.pipe_path = write_session_pipe(data_path, self.token, self.pipe_name)
+        self.server = _WindowsPipeServer(self.token, self.mailbox,
+                                          self.pipe_name)
         self.server.start()
         return self.server.running
 
@@ -500,6 +538,7 @@ class NativeTickBridge:
 
     def close(self) -> bool:
         server, token_path, token = self.server, self.token_path, self.token
+        pipe_path, pipe_name = self.pipe_path, self.pipe_name
         stopped = True
         if server is not None:
             stopped = server.stop()
@@ -513,8 +552,17 @@ class NativeTickBridge:
         self.mailbox.reset()
         self.server = None
         self.token_path = None
+        self.pipe_path = None
+        self.pipe_name = ""
         self.data_path = None
         self.token = ""
+        if pipe_path is not None:
+            try:
+                if (pipe_path.is_file() and
+                        pipe_path.read_text("ascii").strip() == token + "|" + pipe_name):
+                    pipe_path.unlink()
+            except OSError:
+                pass
         if token_path is not None:
             try:
                 if token_path.is_file() and token_path.read_text("ascii").strip() == token:
