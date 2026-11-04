@@ -183,6 +183,19 @@ class SniperFastLaneTests(unittest.TestCase):
             finally:
                 executor.close()
 
+    def test_sniper_quiet_loop_broker_work_is_bounded_without_losing_history(self):
+        schedule = gateway.BrokerHistoryScheduler()
+        # Sniper wakes every ~5ms, even when the market emits no new quote.
+        # A normal Core work cycle must not run 200 times/second in that case.
+        quiet_cycles=[i/200.0 for i in range(200)
+                      if schedule.should_poll(False, i/200.0)]
+        self.assertGreaterEqual(len(quiet_cycles), 15)
+        self.assertLessEqual(len(quiet_cycles), 21)
+        self.assertFalse(schedule.should_poll(True, 1.0),
+                         'Recent normal work also satisfies the history cadence')
+        self.assertTrue(schedule.should_poll(True, 6.0),
+                        'Continuous quote pulses must eventually poll history')
+
     def test_pulse_uses_put_and_execution_only_core_endpoint(self):
         gateway_source = (ROOT / "gateway" / "mt5_gateway.py").read_text(encoding="utf-8")
         core_source = (ROOT / "crates" / "runtime" / "src" / "execution.rs").read_text(encoding="utf-8")
