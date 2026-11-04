@@ -257,6 +257,12 @@ impl Service{
         Ok(json!({"version":"learning-foundation-v1","feature_schema":FEATURE_SCHEMA,"label_schema":LABEL_SCHEMA,"snapshots":snapshots,"mode_verified_snapshots":mode_verified_snapshots,"legacy_unverified_snapshots":legacy_unverified_snapshots,"matured_labels":labels,"matured_schema_eligible_labels":matured_schema_eligible_labels,"matured_legacy_unverified_labels":matured_legacy_unverified_labels,"matured_incompatible_schema_labels":matured_incompatible_schema_labels,"pending_labels":snapshots-labels,"models":models,"champion":champion,"challenger":challenger,"recent_models":recent,"latest":latest.map(|(bar_time,captured_ms,schema)|json!({"bar_time":bar_time,"captured_ms":captured_ms,"schema":schema})),"last_error":self.last_error,"training_enabled":false,"prediction_enabled":false,"champion_promotion_enabled":false,"live_self_modification":false,"note":"Registry accepts validated unreviewed challengers only. No model can influence Shadow."}))
     }
     pub fn export(&self,db:&Connection,dir:&Path,now:u64)->Result<Value>{
+        export_dataset(db,dir,now)
+    }
+}
+/// Pure persisted dataset export. No Service state, no database schema writes:
+/// safe to call through an independent read-only SQLite worker connection.
+pub(crate) fn export_dataset(db:&Connection,dir:&Path,now:u64)->Result<Value>{
         let name=format!("learning-dataset-{now}");let staging=dir.join("exports").join(format!(".{name}.tmp"));let destination=dir.join("exports").join(&name);if staging.exists()||destination.exists(){bail!("Learning export path already exists");}
         // Atomically reserve this export's staging name. create_dir_all would
         // let a concurrent exporter enter and later delete another writer's data.
@@ -274,7 +280,7 @@ impl Service{
         let features:Value=serde_json::from_str(&r.get::<_,String>(5)?)?;let label:Value=serde_json::from_str(&r.get::<_,String>(8)?)?;writeln!(output,"{}",json!({"snapshot_id":r.get::<_,i64>(0)?,"context":raw_context,"bar_time":r.get::<_,u64>(2)?,"captured_ms":r.get::<_,u64>(3)?,"feature_schema":r.get::<_,String>(4)?,"features":features,"matured_ms":r.get::<_,u64>(6)?,"label_schema":r.get::<_,String>(7)?,"label":label}))?;count+=1;}output.sync_all()?;drop(output);
         fs::write(staging.join("manifest.json"),serde_json::to_vec_pretty(&json!({"version":"learning-foundation-v1","feature_schema":FEATURE_SCHEMA,"label_schema":LABEL_SCHEMA,"rows":count,"excluded_legacy_or_unverified_rows":excluded_legacy,"excluded_incompatible_schema_rows":excluded_schema,"created_ms":now,"ordering":"context,bar_time,snapshot_id","scope":"matured, broker-mode-verified labels only; legacy unidentified modes excluded; no quote/DOM/news features","trained_model_included":false}))?)?;drop(rows);drop(statement);fs::rename(&staging,&destination)?;staging_guard.promoted=true;Ok(json!({"path":destination,"rows":count,"excluded_legacy_or_unverified_rows":excluded_legacy,"excluded_incompatible_schema_rows":excluded_schema,"note":"Only matured labels with verified broker mode and exact schema exported. Legacy rows retained in DB but excluded from training export."}))
     }
-}
+
 
 #[cfg(test)]
 mod p0j_learning_context_tests {
