@@ -106,6 +106,33 @@ fn housekeeping_due(now: Instant, next: &mut Instant) -> bool {
     true
 }
 
+/// Bulk I/O shares Core's serial request thread in this release. Reject it
+/// while monitoring or managing unresolved broker exposure, rather than let a
+/// large SQLite backup/brain export delay Sniper pulses or exit reconciliation.
+/// This is a containment gate, NOT a substitute for a future isolated worker.
+fn ensure_bulk_io_idle(status: &Status, unresolved_broker_intent: bool) -> Result<()> {
+    anyhow::ensure!(!status.requested_run,
+        "أوقف START قبل عملية النسخ أو التصدير الثقيلة؛ منع تأخير القناص");
+    anyhow::ensure!(!unresolved_broker_intent,
+        "لا تنفذ عملية ثقيلة أثناء تسوية أمر وسيط غير محسوم");
+    if let Some(t) = status.telemetry.as_ref() {
+        anyhow::ensure!(t.positions.is_empty() && t.pending_orders == 0,
+            "عملية البيانات الثقيلة تتطلب حساباً بلا مراكز أو أوامر معلقة");
+    }
+    Ok(())
+}
+
+fn is_bulk_io_route(method: &str, path: &str) -> bool {
+    matches!((method,path),
+        ("POST","/v1/backup")|
+        ("POST","/v1/brain-snapshot/export")|
+        ("POST","/v1/brain-snapshot/import")|
+        ("POST","/v1/backup/restore/validate")|
+        ("GET","/v1/backups")|
+        ("POST","/v1/learning/export")|
+        ("POST","/v1/export"))
+}
+
 pub const PORT: u16 = 18741;
 pub const BASE: &str = "http://127.0.0.1:18741";
 pub fn now_ms() -> u64 {
@@ -432,6 +459,11 @@ impl Engine{
 
     fn tick(&mut self){let cfg=self.shared.lock().unwrap().config.clone();self.studio.set_learning_frozen(self.execution.learning_frozen());self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
     fn route(&mut self,method:&str,path:&str,body:&[u8])->Result<Value>{
+        if is_bulk_io_route(method,path) {
+            let unresolved=self.execution.pending(&self.db)?;
+            let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
+            ensure_bulk_io_idle(&status,unresolved)?;
+        }
         // Reconfiguration/reconnect/restore can terminate the exact Gateway
         // process that owns an outstanding HVN tick-history read. Reject these
         // operations until its result is reconciled; leave STOP and safe full
@@ -841,6 +873,26 @@ pub fn run_core()->Result<()>{
 #[cfg(test)]
 mod housekeeping_schedule_tests {
     use super::*;
+    #[test]
+    fn heavy_routes_are_rejected_during_trading_or_unresolved_intents() {
+        let mut status=Status::default();
+        status.requested_run=true;
+        assert!(ensure_bulk_io_idle(&status,false).is_err());
+        status.requested_run=false;
+        assert!(ensure_bulk_io_idle(&status,true).is_err());
+        assert!(ensure_bulk_io_idle(&status,false).is_ok());
+        for path in ["/v1/backup","/v1/brain-snapshot/export",
+            "/v1/brain-snapshot/import","/v1/export","/v1/learning/export",
+            "/v1/backup/restore/validate"] {
+            assert!(is_bulk_io_route("POST",path),"{path}");
+        }
+        assert!(is_bulk_io_route("GET","/v1/backups"));
+        for path in ["/v1/execution/pulse","/v1/execution/gateway",
+            "/v1/execution/authorize","/v1/gateway/snapshot",
+            "/v1/stop","/v1/shutdown","/v1/start"] {
+            assert!(!is_bulk_io_route("POST",path),"{path}");
+        }
+    }
     #[test]
     fn maintenance_runs_once_per_interval_even_during_tight_quote_loops() {
         let start=Instant::now();
