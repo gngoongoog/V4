@@ -114,6 +114,55 @@ class NativeSniperLifecycleTests(unittest.TestCase):
         self.assertTrue(second.stop())
 
     @unittest.skipUnless(os.name == "nt", "Windows named-pipe integration")
+    def test_real_pipe_heartbeat_and_trade_wake_never_create_false_quotes(self):
+        pipe_name = rf"\\.\pipe\BrainTradeControl-{os.getpid()}-{id(self)}"
+        token = "native-control-token-123456789"
+        box = native.NativeTickMailbox()
+        server = native._WindowsPipeServer(token, box, pipe_name)
+        def eventually(check, timeout=5.0):
+            until=time.monotonic()+timeout
+            while time.monotonic()<until:
+                result=check()
+                if result:
+                    return result
+                time.sleep(.01)
+            self.fail("Named-pipe control notification never arrived")
+        def connect():
+            def attempt():
+                try:
+                    return open(pipe_name, "wb", buffering=0)
+                except OSError:
+                    return None
+            return eventually(attempt)
+        server.start()
+        try:
+            with connect() as pipe:
+                eventually(lambda: box.connected)
+                payload=(f"BTH1|{token}|17|XAUUSD|1\n"
+                         f"BTE1|wrong-token|17|XAUUSD|2\n"
+                         f"BTE1|{token}|17|XAUUSD|3\n").encode("ascii")
+                for part in (payload[:9],payload[9:45],payload[45:]):
+                    pipe.write(part)
+                eventually(lambda: box.trade_wakes==1 and box.control_heartbeats==1)
+                self.assertFalse(box.recent(now_ms=native.clock_ms(),
+                    login=17,symbol="XAUUSD"))
+                self.assertEqual(box.drain(17,"XAUUSD"),[])
+                self.assertTrue(box.consume_trade_notice(17,"XAUUSD"))
+                self.assertFalse(box.consume_trade_notice(17,"XAUUSD"))
+            eventually(lambda: not box.connected)
+            with connect() as pipe:
+                eventually(lambda: box.connected)
+                self.assertFalse(box.consume_trade_notice(17,"XAUUSD"),
+                    "Reconnected pipes may not inherit a prior broker change flag")
+                pipe.write(f"BTH1|{token}|17|XAUUSD|4\n".encode("ascii"))
+                eventually(lambda: box.control_heartbeats==2)
+                self.assertFalse(box.consume_trade_notice(17,"XAUUSD"))
+                self.assertFalse(box.recent(now_ms=native.clock_ms(),
+                    login=17,symbol="XAUUSD"))
+        finally:
+            self.assertTrue(server.stop())
+
+    @unittest.skipUnless(os.name == "nt", "Windows named-pipe integration")
     def test_real_pipe_fragmented_authenticated_ticks_and_reconnect_freshness(self):
         pipe_name = rf"\\.\pipe\BrainTradeSniperIO-{os.getpid()}-{id(self)}"
         token = "native-integration-token-123456789"
