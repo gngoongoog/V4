@@ -193,9 +193,12 @@ class NativeTickMailbox:
 
     def set_connected(self, value: bool) -> None:
         with self._lock:
-            # An open handle after a disconnect is not evidence that this
-            # connection has delivered an authenticated, fresh market quote.
+            # A new pipe connection has a new evidence epoch. An old buffered
+            # quote can still be <1s old and pass Core freshness after a fast
+            # disconnect/reconnect. Clear the entire queue, not just its
+            # liveness timestamps, before admitting packets from this epoch.
             if not value or not self.connected:
+                self._items.clear()
                 self.last_received_ms = 0
                 self.last_quote_time_ms = 0
                 self.last_login = None
