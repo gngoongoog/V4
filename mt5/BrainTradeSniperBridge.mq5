@@ -414,7 +414,7 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
                         const MqlTradeResult &result)
   {
    // Constant-time flag only; MT5's transaction queue is finite and its
-   // event ordering is not guaranteed. Never call OrderSend here.
+   // event ordering is not guaranteed. Never submit an order in this event handler.
    if(g_pending_trade_changes < 1000000)
       g_pending_trade_changes++;
   }
