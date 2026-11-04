@@ -135,9 +135,13 @@ fn allowed_read_route(route: &str) -> bool {
 }
 
 #[tauri::command]
-fn read_panel(route: String) -> Result<Value, String> {
+async fn read_panel(route: String) -> Result<Value, String> {
+    // Backup integrity scans may run for tens of seconds. Keep Tauri's
+    // presentation thread responsive without expanding the route allowlist.
     if !allowed_read_route(&route) { return Err("غير مسموح بهذا المسار".into()); }
-    open_client()?.get(&route).map_err(|err| err.to_string())
+    tauri::async_runtime::spawn_blocking(move||
+        open_client()?.get(&route).map_err(|err|err.to_string())
+    ).await.map_err(|e|e.to_string())?
 }
 
 #[tauri::command]
@@ -187,14 +191,24 @@ fn close_terminal(app: tauri::AppHandle) {
     app.exit(0);
 }
 
-#[tauri::command]
-fn backup_action(action: String) -> Result<Value, String> {
-    let route=match action.as_str(){
+fn run_backup_action(action: &str) -> Result<Value, String> {
+    let route=match action{
         "create"=>"/v1/backup",
         "brain_export"=>"/v1/brain-snapshot/export",
         _=>return Err("هذا الإجراء الاحتياطي غير مسموح".into()),
     };
-    open_client()?.post(route,json!({})).map_err(|err|err.to_string())
+    let client=open_client()?;
+    match client.checked_post(route,json!({}),Duration::from_secs(300)) {
+        Ok(result)=>Ok(result),
+        Err(CheckedPostError::Rejected(e))=>Err(e),
+        Err(CheckedPostError::Uncertain(e))=>Err(format!(
+            "نتيجة عملية النسخ غير مؤكدة؛ راجع قائمة النسخ ولا تكرر الإنشاء تلقائياً: {e}")),
+    }
+}
+#[tauri::command]
+async fn backup_action(action: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move||run_backup_action(&action))
+        .await.map_err(|e|e.to_string())?
 }
 
 static SNAPSHOT_SEQUENCE:AtomicU64=AtomicU64::new(0);
