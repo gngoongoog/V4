@@ -1634,6 +1634,8 @@ export default function Terminal(){
           </div>
           {page==='settings'?<>
            <label>المسار الكامل لبرنامج MT5 Terminal64.exe<input aria-label="مسار MT5" value={String(activeSettingsEdit?.mt5_path||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('mt5_path',e.target.value)}/></label>
+           <label className="check-label"><input type="checkbox" aria-label="MT5 Portable معزول" checked={activeSettingsEdit?.mt5_portable===true} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('mt5_portable',e.target.checked)}/>استخدم نسخة MT5 مستقلة بوضع Portable (اختياري؛ يحتاج مسار Terminal محدد)</label>
+           <p className="safe-note">سيثبت Gateway نفسه على مسار المنصة المحددة ويرفض التبديل الصامت إلى نسخة أخرى. إذا فعّلت Portable اختَر نسخة رسمية منصّبة خارج Program Files في مجلد تملك صلاحية الكتابة فيه. لن ينسخ BrainTrade ملفات MT5 أو كلمات المرور، ولن يغلق منصة MT5 عند الضغط على STOP.</p>
            <label>رمز الذهب كما يظهر عند الوسيط (مثلاً XAUUSD أو XAUUSDm)<input aria-label="رمز MT5" value={String(activeSettingsEdit?.symbol||'')} disabled={!activeSettingsEdit||busy||preview} onChange={e=>editGeneral('symbol',e.target.value)}/></label>
            <p className="safe-note">الرمز يجب أن يطابق اسم الأداة عند الوسيط تماماً. تغيير مسار MT5 أو الرمز قد يؤدي إلى إعادة ربط Gateway؛ استخدم STOP أولاً.</p>
            <div className="quick-ops"><button type="button" onClick={()=>open('execution')}>فحص ربط حساب MT5</button><button type="button" onClick={()=>open('telegram')}>إعدادات Telegram</button></div>
