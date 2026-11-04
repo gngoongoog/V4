@@ -179,6 +179,7 @@ def source_copy(destination):
 
 def copy_runtime_assets(output):
     """Copy the embedded gateway plus the source-only native MT5 bridge."""
+    validate_gateway_import_closure()
     gateway = output / "runtime/gateway"
     gateway.mkdir(parents=True, exist_ok=True)
     for file in GATEWAY_FILES:
