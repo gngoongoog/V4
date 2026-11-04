@@ -6,6 +6,7 @@ import socket
 import sys
 import threading
 import unittest
+from urllib.error import HTTPError
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'gateway'))
 from transport import LoopbackCore
 
@@ -23,6 +24,16 @@ class Service(BaseHTTPRequestHandler):
         if self.path=='/v1/drop':
             self.connection.shutdown(socket.SHUT_RDWR)
             self.connection.close()
+            return
+        if self.path in ('/v1/gateway/hvn/result', '/v1/unauthorized'):
+            # Real HTTP error replies exercise the persistent Core client,
+            # not a synthetic exception injected into the HVN outbox.
+            code = 400 if self.path == '/v1/gateway/hvn/result' else 401
+            data = b'{"error":"rejected"}'
+            self.send_response(code)
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
             return
         data=json.dumps({'ok':True,'path':self.path}).encode()
         self.send_response(200)
@@ -64,6 +75,28 @@ class LoopbackTransportTests(unittest.TestCase):
         self.assertIsNone(self.client.conn)
         self.assertTrue(self.client.api('/v1/status')['ok'])
         self.assertEqual(len(Service.calls),2)
+    def test_http_status_is_legacy_compatible_and_not_replayed(self):
+        with self.assertRaises(HTTPError) as rejected:
+            self.client.api('/v1/unauthorized', {'id':'one'})
+        self.assertEqual(rejected.exception.code, 401)
+        self.assertIsNone(self.client.conn)
+        self.assertEqual(self.client.requests, 0)
+        self.assertEqual(len(Service.calls), 1, 'Rejected POST must not be resent')
+        self.assertTrue(self.client.api('/v1/status')['ok'])
+        self.assertEqual(len(Service.calls), 2)
+
+    def test_persistent_http_rejected_hvn_receipt_does_not_stall_outbox(self):
+        from mt5_gateway import HvnResultOutbox
+        outbox = HvnResultOutbox()
+        receipt = {'id':'finished-job', 'report':{'available':False}}
+        self.assertFalse(outbox.submit(self.client.api, receipt))
+        self.assertIsNone(outbox.payload,
+                          'HTTP 400 from Core must retire the rejected HVN receipt')
+        self.assertEqual(len(Service.calls), 1)
+        self.assertEqual(Service.calls[0][1], '/v1/gateway/hvn/result')
+        self.assertFalse(outbox.flush(self.client.api))
+        self.assertEqual(len(Service.calls), 1, 'Never spin on rejected receipt')
+
     def test_rejects_non_loopback_and_bad_path(self):
         with self.assertRaises(ValueError):LoopbackCore('key',host='0.0.0.0')
         with self.assertRaises(ValueError):self.client.api('http://evil.example/x')
