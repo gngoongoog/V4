@@ -7,8 +7,10 @@ No account login, password or broker order APIs are called here.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
+import tempfile
 
 
 def canonical_directory(path):
@@ -28,6 +30,62 @@ class ManagedTerminalBinding:
             canonical_directory(Path(self.executable).parent) if self.executable else ""
         )
         self.last_error = ""
+        self._owner_fd = None
+        self._owner_path = None
+
+    def acquire_ownership(self):
+        """OS-held cross-process lock for this exact terminal data folder.
+
+        Lock files reside in the per-user temporary folder, not inside the
+        broker's MT5 install/data folders. Stale files are safe: OS releases
+        locks on crash. Another BrainTrade Core cannot silently bind the same
+        terminal even with a separate Core data directory.
+        """
+        if not self.data_path:
+            self.last_error = "terminal_data_directory_unverified"
+            return False
+        if self._owner_fd is not None:
+            return True
+        scope = hashlib.sha256(self.data_path.encode("utf-8")).hexdigest()
+        directory = Path(tempfile.gettempdir()) / "braintrade-mt5-owner-locks"
+        fd = None
+        try:
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            lockpath = directory / (scope + ".lock")
+            fd = os.open(lockpath, os.O_CREAT | os.O_RDWR, 0o600)
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"0")
+            os.lseek(fd, 0, os.SEEK_SET)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, ImportError):
+            if fd is not None:
+                os.close(fd)
+            self.last_error = "terminal_already_owned_or_lock_unavailable"
+            return False
+        self._owner_fd = fd
+        self._owner_path = lockpath
+        return True
+
+    def release(self):
+        fd, self._owner_fd = self._owner_fd, None
+        self._owner_path = None
+        if fd is None:
+            return
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
     def validate(self):
         if self.portable and not self.executable:
@@ -84,6 +142,10 @@ class ManagedTerminalBinding:
                 return False
             if not self.verify(mt5.terminal_info()):
                 # Disconnect only the Python API; do NOT kill the terminal.
+                mt5.shutdown()
+                return False
+            if not self.acquire_ownership():
+                # A second Core must not execute on the same MT5 terminal.
                 mt5.shutdown()
                 return False
             return True
