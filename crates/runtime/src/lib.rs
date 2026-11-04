@@ -446,7 +446,14 @@ pub enum ShutdownError { Rejected(String), Uncertain(String) }
 pub enum CheckedPostError { Rejected(String), Uncertain(String) }
 impl Client{
     pub fn new(dir:&Path)->Result<Self>{Ok(Self{http:reqwest::blocking::Client::builder().no_proxy().timeout(Duration::from_secs(4)).build()?,key:read_ipc_key(dir)?})}
-    pub fn get(&self,path:&str)->Result<Value>{Ok(self.http.get(format!("{BASE}{path}")).bearer_auth(&self.key).send()?.error_for_status()?.json()?)}
+    pub fn get(&self,path:&str)->Result<Value>{
+        let request=self.http.get(format!("{BASE}{path}")).bearer_auth(&self.key);
+        // A full integrity scan of sealed backup archives is a separate
+        // bounded Core worker and may need much longer than a status poll.
+        // Do not give ordinary trading/status requests this larger timeout.
+        let request=if path=="/v1/backups"{request.timeout(Duration::from_secs(60))}else{request};
+        Ok(request.send()?.error_for_status()?.json()?)
+    }
     pub fn post(&self,path:&str,body:Value)->Result<Value>{let response=self.http.post(format!("{BASE}{path}")).bearer_auth(&self.key).json(&body).send()?;let code=response.status();let value:Value=response.json()?;if !code.is_success(){bail!("{}",value["error"].as_str().unwrap_or("Request failed"));}Ok(value)}
     pub fn checked_post(&self,path:&str,body:Value,timeout:Duration)->std::result::Result<Value,CheckedPostError>{
         let response=self.http.post(format!("{BASE}{path}")).bearer_auth(&self.key)
