@@ -3,6 +3,7 @@ No MT5 connection or trade submission. Run with the normal application closed.
 """
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -38,6 +39,28 @@ def main():
                 except (OSError,urllib.error.URLError):time.sleep(.1)
             else:raise AssertionError('Core startup failed')
             assert not status['execution_enabled'] and status['state']=='stopped'
+            # P1-8A real HTTP integration: a large, strictly synthetic
+            # research task uses the isolated worker while the Core keeps
+            # responding to status requests. No MT5 data or trading orders.
+            events=[]
+            for i in range(1500):
+                oid=f"synthetic-{i}"
+                events.extend(({'event':'submit','id':oid,'lots':0.01},
+                               {'event':'dispatch','id':oid}))
+            research_payload={'account':'synthetic','symbol':'XAUUSD','events':events}
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                research_future=pool.submit(api,'/v1/research/execution-lifecycle',research_payload)
+                concurrent_status=api('/v1/status')
+                research_result=research_future.result(timeout=10)
+            assert concurrent_status['state']=='stopped'
+            assert research_result['status']=='synthetic_only'
+            assert research_result['event_count']==len(events)
+            assert len(research_result['orders'])==1500
+            assert research_result['no_mt5_commands'] is True
+            assert research_result['no_broker_reads'] is True
+            try:api('/v1/research/execution-lifecycle',{'malformed':'payload'})
+            except urllib.error.HTTPError as e:assert e.code==400
+            else:raise AssertionError('Invalid offline research request accepted')
             news=api('/v1/news');assert news['offline'] and len(news['sources'])==3 and news['items']==[]
             assert all(s['stale'] for s in news['sources'])
             api('/v1/news/settings',{'enabled':False});assert not api('/v1/news')['enabled']
