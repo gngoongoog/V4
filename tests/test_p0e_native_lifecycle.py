@@ -64,6 +64,36 @@ class P0ENativeLifecycle(TestCase):
         self.assertEqual(box.drain(17,'XAUUSD'),[])
         self.assertEqual(box.last_received_ms,0)
 
+    def test_fast_pipe_reconnect_discards_quote_evidence_from_prior_epoch(self):
+        # A disconnect lasting <1s must never let a buffered quote authorize
+        # a fresh Core pulse. Timestamp freshness alone cannot prove epoch.
+        box=native.NativeTickMailbox(limit=4)
+        box.set_connected(True)
+        old=self.packet(login=17,symbol='XAUUSD',ms=10000)
+        old['received_ms']=10001
+        box.push(old)
+        box.set_connected(False)
+        box.set_connected(True)
+        self.assertFalse(box.recent(now_ms=10001,login=17,symbol='XAUUSD'))
+        self.assertEqual(box.drain(17,'XAUUSD'),[],
+            'No quote from the disconnected pipe may be returned after reconnect')
+        new=self.packet(login=17,symbol='XAUUSD',ms=10002)
+        new['received_ms']=10003
+        box.push(new)
+        self.assertEqual([p['time_msc'] for p in box.drain(17,'XAUUSD')],[10002])
+
+    def test_repeated_disconnect_cycles_never_inherit_previous_account_ticks(self):
+        box=native.NativeTickMailbox(limit=5)
+        for login in (17,22,17,23,99):
+            box.set_connected(True)
+            packet=self.packet(login=login,symbol='XAUUSD',ms=10000+login)
+            box.push(packet)
+            box.set_connected(False)
+            self.assertEqual(box.drain(login,'XAUUSD'),[])
+        box.set_connected(True)
+        self.assertEqual(box.drain(17,'XAUUSD'),[])
+        self.assertEqual(box.drain(99,'XAUUSD'),[])
+
     def test_clean_native_bridge_close_revokes_token_and_clears_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
             bridge=native.NativeTickBridge()
