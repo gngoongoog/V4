@@ -206,6 +206,20 @@ def main():
                 assert db.execute('SELECT COUNT(*) FROM learning_predictions').fetchone()[0]==1
                 assert db.execute("SELECT COUNT(*) FROM learning_slots WHERE slot='champion' AND model_id IS NOT NULL").fetchone()[0]==0
             assert not list(folder.glob('*.sealed'))
+            # Backup integrity checks are read-only and served by their
+            # bounded worker, while Core status remains responsive.
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                listing_future=pool.submit(api,'/v1/backups')
+                core_status=api('/v1/status')
+                listing=listing_future.result(timeout=15)
+            assert core_status['state']=='stopped'
+            assert any(item.get('name')==backup['name'] and item.get('valid') is True
+                       for item in listing['backups'])
+            checked=api('/v1/backup/restore/validate',{'name':backup['name']})
+            assert checked['valid'] is True and checked['name']==backup['name']
+            try:api('/v1/backup/restore/validate',{'name':'missing-backup-fixture'})
+            except urllib.error.HTTPError as e:assert e.code==400
+            else:raise AssertionError('Invalid backup was not rejected')
             frozen=api('/v1/learning/control',{'frozen':True})
             assert frozen['frozen'] and frozen['trading_unchanged'] and frozen['cutoff_ms']>0
             assert api('/v1/status')['learning_control']['frozen']
