@@ -408,10 +408,10 @@ fn start_backup_write_worker(root:PathBuf, phase:Arc<AtomicU8>,
     Ok(tx)
 }
 
-/// Bulk I/O shares Core's serial request thread in this release. Reject it
-/// while monitoring or managing unresolved broker exposure, rather than let a
-/// large SQLite backup/brain export delay Sniper pulses or exit reconciliation.
-/// This is a containment gate, NOT a substitute for a future isolated worker.
+/// Expensive bulk operations still require STOP and a reconciled flat broker
+/// context, even when moved to a separate read-only SQLite worker. Remaining
+/// synchronous restore stages and special exports share Core's actor; this is
+/// an admission gate, not a guarantee of broker execution latency.
 fn ensure_bulk_io_idle(status: &Status, unresolved_broker_intent: bool) -> Result<()> {
     anyhow::ensure!(!status.requested_run,
         "أوقف START قبل عملية النسخ أو التصدير الثقيلة؛ منع تأخير القناص");
@@ -817,6 +817,16 @@ impl Engine{
             }
         }
         let started = Instant::now();
+        // An archive holds its own read-only WAL snapshot; nonessential
+        // Studio/News/Backtest/Evaluation SQLite writes would compete with it
+        // and enlarge the WAL. Supervision and STOP/MT5 reconciliation remain
+        // active above this gate; history-import timeout still progresses.
+        if self.backup_io_phase.load(Ordering::Acquire)!=0 {
+            if stage==MaintenanceStage::Backtest {
+                self.backtests.check_loading_timeout(now);
+            }
+            return started.elapsed();
+        }
         match stage {
             MaintenanceStage::Studio => {
                 let cfg = self.shared.lock().unwrap().config.clone();
