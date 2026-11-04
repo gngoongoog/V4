@@ -1057,7 +1057,13 @@ def main():
                 else:
                     stop_requested.wait(remaining)
     finally:
-        cleanup_gateway(transport, native, executor, mt5, dom_cache, lock)
+        try:
+            cleanup_gateway(transport, native, executor, mt5, dom_cache, lock)
+        finally:
+            # Retain terminal ownership through the entire cleanup barrier.
+            # Only after the Gateway and send journal have stopped may a
+            # successor Core bind this same MetaTrader data directory.
+            binding.release()
 
 
 if __name__ == "__main__":
