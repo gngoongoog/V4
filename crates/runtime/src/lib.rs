@@ -281,6 +281,60 @@ fn start_backup_read_worker(root: PathBuf, active: Arc<AtomicU8>)
 }
 
 
+/// Serializes a coherent view of offline research rows through a separate
+/// read-only connection; no Engine or broker state enters this function.
+/// Failed exports remove their own hidden staging directory.
+fn export_research_dataset(db:&Connection,root:&Path)->Result<Value> {
+    struct Staging { path: PathBuf, promoted: bool }
+    impl Drop for Staging {
+        fn drop(&mut self) {
+            if !self.promoted { let _=fs::remove_dir_all(&self.path); }
+        }
+    }
+    let name=format!("research-{}-{}",now_ms(),uuid::Uuid::new_v4());
+    let exports=root.join("exports");
+    fs::create_dir_all(&exports)?;
+    let staging=exports.join(format!(".{name}.tmp"));
+    fs::create_dir(&staging)?;
+    let mut guard=Staging{path:staging.clone(),promoted:false};
+    // The read transaction freezes a single SQLite WAL snapshot for all
+    // five source tables, rather than mixing different broker observation
+    // moments if Core commits a new snapshot during the export.
+    db.execute_batch("BEGIN DEFERRED TRANSACTION")?;
+    let result=(||->Result<Value>{
+        for table in ["decisions","mode_decisions","paper_events","candles","opportunity_setups"] {
+            let sql=match table {
+                "opportunity_setups"=>"SELECT context,first_seen_ms,payload FROM opportunity_setups ORDER BY first_seen_ms,setup_id",
+                "decisions"=>"SELECT context,timestamp_ms,payload FROM decisions ORDER BY id",
+                "mode_decisions"=>"SELECT context,timestamp_ms,payload FROM mode_decisions ORDER BY id",
+                "paper_events"=>"SELECT context,timestamp_ms,json_object('kind',kind,'detail',json(payload)) FROM paper_events ORDER BY id",
+                _=>"SELECT context,bar_time*1000,json_object('timeframe',timeframe,'candle',json(payload)) FROM candles ORDER BY context,timeframe,bar_time"
+            };
+            let mut stmt=db.prepare(sql)?;
+            let mut rows=stmt.query([])?;
+            let mut output=fs::File::create(staging.join(format!("{table}.jsonl")))?;
+            while let Some(row)=rows.next()? {
+                let payload:Value=serde_json::from_str(&row.get::<_,String>(2)?)?;
+                writeln!(output,"{}",json!({
+                    "context":row.get::<_,String>(0)?,
+                    "timestamp_ms":row.get::<_,u64>(1)?,
+                    "payload":payload
+                }))?;
+            }
+            output.sync_all()?;
+        }
+        atomic_write(&staging.join("README.txt"),
+            b"BrainTrade research export. Virtual fills only; UTC timestamps in milliseconds. See Source/docs/RESEARCH.md for limitations.")?;
+        db.execute_batch("COMMIT")?;
+        let dest=exports.join(name);
+        fs::rename(&staging,&dest)?;
+        guard.promoted=true;
+        Ok(json!({"path":dest,"note":"Research export: candles, decisions and virtual ledger (JSONL)."}))
+    })();
+    if result.is_err() {let _=db.execute_batch("ROLLBACK");}
+    result
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BackupWriteKind { Create, BrainExport, BrainImport }
 impl BackupWriteKind {
@@ -1096,11 +1150,7 @@ impl Engine{
                 let _=self.event("risk_settings_changed",detail);
                 Ok(json!({"ok":true}))
             },
-            ("POST","/v1/export")=>{
-                let name=format!("research-{}-{}",now_ms(),uuid::Uuid::new_v4());let staging=self.dir.join("exports").join(format!(".{name}.tmp"));fs::create_dir_all(&staging)?;
-                for table in["decisions","mode_decisions","paper_events","candles","opportunity_setups"]{let sql=match table{"opportunity_setups"=>"SELECT context,first_seen_ms,payload FROM opportunity_setups ORDER BY first_seen_ms,setup_id","decisions"=>"SELECT context,timestamp_ms,payload FROM decisions ORDER BY id","mode_decisions"=>"SELECT context,timestamp_ms,payload FROM mode_decisions ORDER BY id","paper_events"=>"SELECT context,timestamp_ms,json_object('kind',kind,'detail',json(payload)) FROM paper_events ORDER BY id",_=>"SELECT context,bar_time*1000,json_object('timeframe',timeframe,'candle',json(payload)) FROM candles ORDER BY context,timeframe,bar_time"};let mut stmt=self.db.prepare(sql)?;let mut rows=stmt.query([])?;let mut output=fs::File::create(staging.join(format!("{table}.jsonl")))?;while let Some(row)=rows.next()?{let payload:Value=serde_json::from_str(&row.get::<_,String>(2)?)?;writeln!(output,"{}",json!({"context":row.get::<_,String>(0)?,"timestamp_ms":row.get::<_,u64>(1)?,"payload":payload}))?;}output.sync_all()?;}
-                atomic_write(&staging.join("README.txt"),b"BrainTrade research export. Virtual fills only; UTC timestamps in milliseconds. See Source/docs/RESEARCH.md for limitations.")?;let dest=self.dir.join("exports").join(name);fs::rename(staging,&dest)?;Ok(json!({"path":dest,"note":"Research export: candles, decisions and virtual ledger (JSONL)."}))
-            },
+            ("POST","/v1/export")=>export_research_dataset(&self.db,&self.dir),
             ("POST","/v1/config")=>{
                 let request:ConfigRequest=serde_json::from_slice(body)?;request.config.validate().map_err(anyhow::Error::msg)?;
                 if !request.config.mt5_path.is_empty(){let path=Path::new(&request.config.mt5_path);if !path.is_absolute()||!path.is_file()||path.extension().and_then(|v|v.to_str()).map(|v|v.to_ascii_lowercase())!=Some("exe".into()){bail!("MT5 path must point to an existing terminal64.exe file");}}
