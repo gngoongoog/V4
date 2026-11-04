@@ -232,21 +232,26 @@ fn start_backup_read_worker(root: PathBuf, active: Arc<AtomicBool>)
             impl Drop for Release {
                 fn drop(&mut self) { self.0.store(false, Ordering::Release); }
             }
-            let _release=Release(active.clone());
-            let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                match kind {
-                    BackupReadKind::List => backup::list(&root),
-                    BackupReadKind::Validate => backup::validate_request(&root,&body),
-                }
-            }));
-            let (code,value) = match result {
-                Ok(Ok(value)) => (200,value),
-                Ok(Err(e)) => (400,json!({"error":e.to_string()})),
-                Err(_) => (500,json!({"error":"Backup verification worker failed"})),
+            let response={
+                let _release=Release(active.clone());
+                let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    match kind {
+                        BackupReadKind::List => backup::list(&root),
+                        BackupReadKind::Validate => backup::validate_request(&root,&body),
+                    }
+                }));
+                let (code,value) = match result {
+                    Ok(Ok(value)) => (200,value),
+                    Ok(Err(e)) => (400,json!({"error":e.to_string()})),
+                    Err(_) => (500,json!({"error":"Backup verification worker failed"})),
+                };
+                tiny_http::Response::from_string(value.to_string())
+                    .with_status_code(code)
+                    .with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap())
             };
-            let response=tiny_http::Response::from_string(value.to_string())
-                .with_status_code(code)
-                .with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());
+            // Release the START fence *before* the success/error response
+            // becomes visible to the client. Otherwise a rapid follow-up
+            // START or validation can be spuriously rejected as still busy.
             let _=request.respond(response);
         }
     })?;
