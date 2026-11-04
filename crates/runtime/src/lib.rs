@@ -106,6 +106,62 @@ fn housekeeping_due(now: Instant, next: &mut Instant) -> bool {
     true
 }
 
+/// Explicitly offline calculators; none references Engine, broker, shared status,
+/// or the trading SQLite connection. Never offload authorization/execution routes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OfflineResearchKind { Lifecycle, Admission, Bridge, DemoDealAudit }
+
+fn offline_research_kind(method: &str, path: &str) -> Option<OfflineResearchKind> {
+    if method != "POST" { return None; }
+    match path {
+        "/v1/research/execution-lifecycle" => Some(OfflineResearchKind::Lifecycle),
+        "/v1/research/execution-admission" => Some(OfflineResearchKind::Admission),
+        "/v1/research/execution-bridge" => Some(OfflineResearchKind::Bridge),
+        "/v1/research/demo-deal-audit" => Some(OfflineResearchKind::DemoDealAudit),
+        _ => None,
+    }
+}
+
+fn offline_research_calculate(kind: OfflineResearchKind, body: &[u8]) -> Result<Value> {
+    match kind {
+        OfflineResearchKind::Lifecycle => research_order_lifecycle::replay(body),
+        OfflineResearchKind::Admission => research_admission::evaluate(body),
+        OfflineResearchKind::Bridge => research_execution_bridge::compare(body),
+        OfflineResearchKind::DemoDealAudit => research_demo_deal_audit::audit(body),
+    }
+}
+
+/// A single bounded worker prevents CPU-heavy, caller-supplied simulations
+/// from holding the Core execution/reconciliation request loop. Only requests
+/// already authenticated and body-size checked by the main thread reach it.
+/// One running job + one waiting job, no unbounded work/thread creation.
+fn start_offline_research_worker() -> Result<std::sync::mpsc::SyncSender<(
+    tiny_http::Request, OfflineResearchKind, Vec<u8>,
+)>> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<(
+        tiny_http::Request, OfflineResearchKind, Vec<u8>,
+    )>(1);
+    std::thread::Builder::new().name("braintrade-offline-research".into()).spawn(move || {
+        while let Ok((request, kind, body)) = receiver.recv() {
+            // A malformed caller scenario must never kill the only research
+            // worker or propagate a panic into Core's broker-control loop.
+            let result = std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(|| offline_research_calculate(kind, &body))
+            );
+            let (status, value) = match result {
+                Ok(Ok(value)) => (200, value),
+                Ok(Err(error)) => (400, json!({"error": error.to_string()})),
+                Err(_) => (500, json!({"error": "Offline research worker failed"})),
+            };
+            let response = tiny_http::Response::from_string(value.to_string())
+                .with_status_code(status)
+                .with_header(tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap());
+            let _ = request.respond(response);
+        }
+    })?;
+    Ok(sender)
+}
+
 /// Bulk I/O shares Core's serial request thread in this release. Reject it
 /// while monitoring or managing unresolved broker exposure, rather than let a
 /// large SQLite backup/brain export delay Sniper pulses or exit reconciliation.
@@ -876,13 +932,39 @@ pub fn run_core()->Result<()>{
     let dir=data_dir();fs::create_dir_all(&dir)?;
     #[cfg(unix)] {use std::os::unix::fs::PermissionsExt;fs::set_permissions(&dir,fs::Permissions::from_mode(0o700))?;}
     let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}recover_settings_transaction(&dir)?;let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;correlation::init(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let hvn=hvn::Service::default();let mut execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let mut engine=Engine{dir,shared:shared.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,instance_id:uuid::Uuid::new_v4().to_string(),shutdown_barrier:None,research,backtests,evaluations,news,learning,inference,scoring,studio,hvn,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
+    // Independently service pure, synthetic research calculations. Broker
+    // commands, STOP, snapshots, and journal reads stay on Engine's owner.
+    let offline_research_tx = start_offline_research_worker()?;
     let mut next_housekeeping = Instant::now();
     let mut next_slow_route_warning = Instant::now();
     while !engine.shutting_down{
         if housekeeping_due(Instant::now(), &mut next_housekeeping) {
             engine.tick();
         }
-        let Some(mut request)=server.recv_timeout(Duration::from_millis(250))? else{continue;};let authenticated=request.headers().iter().any(|h|h.field.equiv("Authorization")&&h.value.as_str()==format!("Bearer {key}"));let origin=request.headers().iter().any(|h|h.field.equiv("Origin"));if !authenticated||origin{let _=request.respond(tiny_http::Response::from_string("{\"error\":\"Unauthorized\"}").with_status_code(401));continue;}if request.body_length().is_none()&&request.method().as_str()=="POST"{let _=request.respond(tiny_http::Response::empty(411));continue;}if request.body_length().unwrap_or(0)>2_000_000{let _=request.respond(tiny_http::Response::empty(413));continue;}let mut body=Vec::new();if request.as_reader().read_to_end(&mut body).is_err(){continue;}let started=Instant::now();let result=engine.route(request.method().as_str(),request.url(),&body);
+        let Some(mut request)=server.recv_timeout(Duration::from_millis(250))? else{continue;};let authenticated=request.headers().iter().any(|h|h.field.equiv("Authorization")&&h.value.as_str()==format!("Bearer {key}"));let origin=request.headers().iter().any(|h|h.field.equiv("Origin"));if !authenticated||origin{let _=request.respond(tiny_http::Response::from_string("{\"error\":\"Unauthorized\"}").with_status_code(401));continue;}if request.body_length().is_none()&&request.method().as_str()=="POST"{let _=request.respond(tiny_http::Response::empty(411));continue;}if request.body_length().unwrap_or(0)>2_000_000{let _=request.respond(tiny_http::Response::empty(413));continue;}let mut body=Vec::new();if request.as_reader().read_to_end(&mut body).is_err(){continue;}
+        if let Some(kind) = offline_research_kind(request.method().as_str(), request.url()) {
+            // Admission is strictly by allowlist. Never queue a live order or
+            // delay /v1/stop, /v1/shutdown or /v1/execution/* behind research.
+            match offline_research_tx.try_send((request, kind, body)) {
+                Ok(()) => {},
+                Err(std::sync::mpsc::TrySendError::Full((request, _, _))) => {
+                    let response=tiny_http::Response::from_string(
+                        json!({"error":"Offline research queue full; retry when idle"}).to_string())
+                        .with_status_code(503)
+                        .with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());
+                    let _=request.respond(response);
+                },
+                Err(std::sync::mpsc::TrySendError::Disconnected((request, _, _))) => {
+                    let response=tiny_http::Response::from_string(
+                        json!({"error":"Offline research worker unavailable"}).to_string())
+                        .with_status_code(503)
+                        .with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());
+                    let _=request.respond(response);
+                },
+            }
+            continue;
+        }
+        let started=Instant::now();let result=engine.route(request.method().as_str(),request.url(),&body);
         let elapsed=started.elapsed();
         if elapsed>=Duration::from_millis(75) && Instant::now()>=next_slow_route_warning {
             eprintln!("CORE_SLOW_ROUTE class={} duration_ms={} (request-processing only)",
@@ -921,6 +1003,34 @@ mod housekeeping_schedule_tests {
             "/v1/execution/authorize","/v1/gateway/snapshot",
             "/v1/stop","/v1/shutdown","/v1/start"] {
             assert!(!is_bulk_io_route("POST",path),"{path}");
+        }
+    }
+    #[test]
+    fn isolated_research_allowlist_never_moves_broker_control_off_engine() {
+        for (path,kind) in [
+            ("/v1/research/execution-lifecycle",OfflineResearchKind::Lifecycle),
+            ("/v1/research/execution-admission",OfflineResearchKind::Admission),
+            ("/v1/research/execution-bridge",OfflineResearchKind::Bridge),
+            ("/v1/research/demo-deal-audit",OfflineResearchKind::DemoDealAudit),
+        ] {
+            assert_eq!(offline_research_kind("POST",path),Some(kind));
+            assert_eq!(offline_research_kind("GET",path),None);
+        }
+        for path in ["/v1/execution/pulse","/v1/execution/authorize",
+            "/v1/execution/result","/v1/gateway/snapshot","/v1/stop",
+            "/v1/start","/v1/shutdown","/v1/config","/v1/backup",
+            "/v1/research/request","/v1/research/frame"] {
+            assert_eq!(offline_research_kind("POST",path),None,"{path}");
+            assert_eq!(offline_research_kind("PUT",path),None,"{path}");
+        }
+    }
+    #[test]
+    fn offline_research_invalid_scenario_is_a_bounded_error() {
+        for kind in [
+            OfflineResearchKind::Lifecycle,OfflineResearchKind::Admission,
+            OfflineResearchKind::Bridge,OfflineResearchKind::DemoDealAudit,
+        ] {
+            assert!(offline_research_calculate(kind,b"not-json").is_err());
         }
     }
     #[test]
