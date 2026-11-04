@@ -23,6 +23,9 @@ REQUIRED_TOOLS = (
     "runtime/gateway/demo_readiness.py",
     "G2_DEMO_READINESS_AR.md",
     "runtime/gateway/execution.py",
+    "runtime/gateway/managed_terminal.py",
+    "runtime/gateway/tp_partial_close.py",
+    "runtime/gateway/hvn_research.py",
     "runtime/gateway/position_protection.py",
     "runtime/gateway/order_cancellation.py",
 )
