@@ -1032,6 +1032,12 @@ mod tests {
         assert!(!allowed_read_route("/v1/status?token=x"));
     }
     #[test]
+    fn backup_command_rejects_unknown_action_without_contacting_core(){
+        assert!(run_backup_action("../ipc.key").is_err());
+        assert!(run_backup_action("restore").is_err());
+        assert!(run_backup_action("").is_err());
+    }
+    #[test]
     fn snapshot_copy_never_overwrites_and_rejects_unsafe_names(){
         use std::{fs,time::{SystemTime,UNIX_EPOCH}};
         let unique=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
