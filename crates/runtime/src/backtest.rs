@@ -318,7 +318,9 @@ impl Service {
         });
         Ok(())
     }
-    pub fn tick(&mut self, db: &Connection, now: u64) {
+    /// Keep MT5 history-import expiration responsive even when large
+    /// completed-report SQLite writes are deferred during broker exposure.
+    pub fn check_loading_timeout(&mut self, now: u64) {
         if self
             .job
             .as_ref()
@@ -328,6 +330,9 @@ impl Service {
                 "انتهت مهلة جلب التاريخ من MT5. تحقق من الاتصال وتوفر التاريخ ثم أعد الطلب".into(),
             );
         }
+    }
+    pub fn tick(&mut self, db: &Connection, now: u64) {
+        self.check_loading_timeout(now);
         while let Ok(done) = self.rx.try_recv() {
             let Some(j) = self
                 .job
@@ -986,7 +991,9 @@ mod tests {
             cancel: Arc::new(AtomicBool::new(false)),
             progress: Arc::new(AtomicUsize::new(0)),
         });
-        service.tick(&db, 100_000);
+        // The Core may call only the lightweight timeout check when
+        // expensive report persistence must wait for STOP/broker flat.
+        service.check_loading_timeout(100_000);
         assert!(!service.loading());
         assert_eq!(service.state(&db).unwrap()["state"], "error");
         service.job.as_mut().unwrap().phase = "running".into();
