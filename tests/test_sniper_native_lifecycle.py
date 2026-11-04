@@ -163,6 +163,50 @@ class NativeSniperLifecycleTests(unittest.TestCase):
             self.assertTrue(server.stop())
 
     @unittest.skipUnless(os.name == "nt", "Windows named-pipe integration")
+    def test_real_pipe_disconnect_discards_undrained_prior_epoch_quote(self):
+        # Regression for an actual read from the named pipe into the mailbox,
+        # disconnected before Gateway consumes the quote. A quick reconnect
+        # must never expose the buffered prior-epoch quote for execution.
+        pipe_name = rf"\\.\pipe\BrainTradeEpoch-{os.getpid()}-{id(self)}"
+        token = "native-epoch-token-123456789012"
+        box = native.NativeTickMailbox(limit=8)
+        server = native._WindowsPipeServer(token, box, pipe_name)
+        def eventually(check, timeout=5):
+            deadline=time.monotonic()+timeout
+            while time.monotonic()<deadline:
+                x=check()
+                if x:return x
+                time.sleep(.01)
+            self.fail("Timed out waiting for actual Windows pipe state")
+        def connect():
+            def attempt():
+                try:return open(pipe_name,"wb",buffering=0)
+                except OSError:return None
+            return eventually(attempt)
+        server.start()
+        try:
+            with connect() as pipe:
+                eventually(lambda:box.connected)
+                now=native.clock_ms()
+                wire=(f"BT2|{token}|17|XAUUSD|{now}|"
+                      f"{now*native.EVENT_FACTOR+1}|2000.01|2000.21\n")
+                pipe.write(wire.encode("ascii"))
+                eventually(lambda:len(box._items)==1)
+                self.assertTrue(box.recent(now_ms=native.clock_ms(),
+                    maximum_age_ms=2000,login=17,symbol="XAUUSD"))
+            eventually(lambda:not box.connected)
+            self.assertEqual(box.drain(17,"XAUUSD"),[],
+                "Old read-but-undrained quote remained in mailbox after pipe close")
+            with connect() as pipe:
+                eventually(lambda:box.connected)
+                self.assertEqual(box.drain(17,"XAUUSD"),[],
+                    "New authenticated pipe epoch must not reuse prior quote")
+                self.assertFalse(box.recent(now_ms=native.clock_ms(),
+                    maximum_age_ms=2000,login=17,symbol="XAUUSD"))
+        finally:
+            self.assertTrue(server.stop())
+
+    @unittest.skipUnless(os.name == "nt", "Windows named-pipe integration")
     def test_real_pipe_fragmented_authenticated_ticks_and_reconnect_freshness(self):
         pipe_name = rf"\\.\pipe\BrainTradeSniperIO-{os.getpid()}-{id(self)}"
         token = "native-integration-token-123456789"
