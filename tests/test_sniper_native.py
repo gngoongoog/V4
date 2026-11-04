@@ -171,7 +171,7 @@ class NativeSniperTests(unittest.TestCase):
         self.assertIn("LoadSessionPipe(selected_pipe)", source)
         self.assertIn("StringSubstr(raw,0,separator) != g_token", source)
         self.assertIn("FileWriteString", source)
-        tick_section = source.split("bool SendPendingQuoteTicks()",1)[1].split(
+        tick_section = source.split("bool SendPendingQuoteTicks(",1)[1].split(
             "// This is a low-frequency liveness/reconciliation channel",1)[0]
         self.assertEqual(tick_section.count("FileFlush(g_pipe)"),1,
                          "Only one flush per recovered quote batch")
