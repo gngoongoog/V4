@@ -96,6 +96,40 @@ class ManagedTerminalTests(TestCase):
             self.assertFalse(binding.check_current(m))
             self.assertEqual(binding.last_error,"terminal_data_directory_changed")
 
+    def test_second_gateway_to_same_mt5_data_folder_cannot_claim_execution(self):
+        with TemporaryDirectory() as root:
+            d=Path(root)/"MT5";d.mkdir()
+            exe=d/"terminal64.exe";exe.write_bytes(b"stub")
+            mt5_a,mt5_b=FakeTerminal(d),FakeTerminal(d)
+            first=ManagedTerminalBinding(str(exe))
+            second=ManagedTerminalBinding(str(exe))
+            try:
+                self.assertTrue(first.connect(mt5_a))
+                self.assertFalse(second.connect(mt5_b))
+                self.assertEqual(second.last_error,
+                    "terminal_already_owned_or_lock_unavailable")
+                self.assertEqual(mt5_b.stops,1,
+                    "Second Gateway must detach Python client, not kill broker terminal")
+                self.assertTrue(first.check_current(mt5_a))
+                first.release()
+                self.assertTrue(second.connect(mt5_b),
+                    "After first Gateway completes cleanup, successor may acquire lock")
+            finally:
+                first.release();second.release()
+
+    def test_separate_terminal_data_folders_can_coexist(self):
+        with TemporaryDirectory() as root:
+            d=Path(root)/"MT5";d.mkdir()
+            exe=d/"terminal64.exe";exe.write_bytes(b"stub")
+            d1=Path(root)/"Data-1";d1.mkdir()
+            d2=Path(root)/"Data-2";d2.mkdir()
+            x,y=ManagedTerminalBinding(str(exe)),ManagedTerminalBinding(str(exe))
+            try:
+                self.assertTrue(x.connect(FakeTerminal(d,d1)))
+                self.assertTrue(y.connect(FakeTerminal(d,d2)))
+            finally:
+                x.release();y.release()
+
     def test_missing_or_untrusted_portable_exe_fails_closed(self):
         with TemporaryDirectory() as root:
             self.assertEqual(ManagedTerminalBinding("",True).validate()[0],False)
