@@ -604,10 +604,13 @@ impl Engine{
             }
             MaintenanceStage::News => self.news.tick(&self.db, now),
             MaintenanceStage::Backtest => {
+                // Loading timeouts must still progress even while a finished
+                // report's potentially large SQLite commit is deferred.
+                self.backtests.check_loading_timeout(now);
                 if self.may_persist_historical_results() {
                     self.backtests.tick(&self.db, now);
                 }
-            }
+            },
             MaintenanceStage::Evaluation => {
                 if self.may_persist_historical_results() {
                     self.evaluations.tick(&self.db);
