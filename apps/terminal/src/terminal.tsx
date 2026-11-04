@@ -261,7 +261,12 @@ export default function Terminal(){
   setPageData(null);setPageUpdatedAt(null);setPageError(String(cause));
  };
  const refreshCurrentPanel=(route:string)=>{
-  if(preview||!hasTauri())return;
+  if(preview)return;
+  if(!hasTauri()){
+   setPageData(null);setPageUpdatedAt(null);
+   setPageError('قراءة بيانات Core تتطلب تشغيل تطبيق BrainTrade داخل Tauri؛ لا يمكن قراءتها من المتصفح.');
+   return;
+  }
   const serial=panelSerial();
   void readPanel(route).then(data=>publishPanel(serial,data)).catch(e=>rejectPanel(serial,e));
  };
@@ -1670,6 +1675,7 @@ export default function Terminal(){
         page==='positions'?<div className="feature-zone"><PositionsOperatorWorkspace key={viewScope} positions={account?positions:[]} currency={currency} accountAvailable={!preview&&feed.broker&&!!account} onTrading={()=>open('trading')}/></div>:
         page==='brains'||page==='brainControl'?<div className="feature-zone"><BrainControlsOperations source={pageData} disabled={busy||preview} armed={status?.requested_run===true} onSave={runSaveBrain}/><FrozenCoordinatorOperations status={!preview&&feed.broker?status:null} source={activeFrozenCoordinator} currentMode={unwrap(pageData).trading_mode} brainContext={unwrap(pageData).context} armed={status?.requested_run===true} disabled={busy||preview} onAction={runFrozenCoordinator} onRefresh={()=>{if(preview||!hasTauri())return;const ticket=scopedGeneration.current.beginRead('frozenCoordinator');void readPanel('/v1/execution/frozen-coordinator').then(v=>{if(scopedGeneration.current.isCurrent(ticket))setFrozenSlot({scope:viewScope,report:unwrap(v)})}).catch(()=>{if(scopedGeneration.current.isCurrent(ticket))setFrozenSlot({scope:viewScope,report:null})})}}/><p className="data-description">عقل HVN حالياً للقياس البحثي من Tick history، وليس ضمن هويات التنفيذ أو حساب نسبة الربح. <button type="button" onClick={()=>open('analysis')}>فتح غرفة HVN البحثية</button></p><p className="data-description">P1-A: نسب النجاح تظهر فقط بعد 30 نتيجة مغلقة موثّقة من MT5 DEMO بعد العمولة والسواب والرسوم، ومحددة بالعقل ووضع التداول. نتائج الورق ليست صفقات وسيط؛ لا توجد ترقية تلقائية ولا اعتماد على REAL.</p><Table rows={preview?[]:array(unwrap(pageData).brains).map(b=>({brain:b.name,checks:unwrap(b.activity).checks,signals:unwrap(b.activity).signals,broker_orders:unwrap(b.attributed_orders).requested,broker_fills:unwrap(b.attributed_orders).fill_acknowledged,paper_closed:unwrap(b.paper_stats).closed,verified_demo_closes:unwrap(unwrap(b.integrity).broker_evidence).sample_count,evidence_state:unwrap(unwrap(b.integrity).broker_evidence).status==='insufficient_evidence'?'INSUFFICIENT DATA':unwrap(unwrap(b.integrity).broker_evidence).status,winrate_costed:Number.isFinite(unwrap(unwrap(b.integrity).broker_evidence).win_rate)&&unwrap(unwrap(b.integrity).broker_evidence).win_rate!==null?((Number(unwrap(unwrap(b.integrity).broker_evidence).win_rate)*100).toFixed(1)+'%'):'—',net_after_costs:unwrap(unwrap(b.integrity).broker_evidence).net_booked??'—'}))} empty={pageError||'لا توجد إحصائيات عقول من المحرك'}/></div>:
         <div className="feature-zone">
+         {!preview&&!hasTauri()&&<p role="alert" className="operator-caveat">قراءة بيانات Core تتطلب تشغيل تطبيق BrainTrade داخل Tauri؛ لا يمكن قراءتها من المتصفح.</p>}
          {page==='correlation'?<CorrelationWorkspace key={viewScope} source={pageData} preview={preview} disabled={busy||!hasTauri()} error={pageError} onAnalyze={runCorrelationAnalyze} onRefresh={()=>refreshCurrentPanel('/v1/research/correlation')} onBacktest={()=>open('backtest')}/>:
           page==='news'?<NewsOperatorWorkspace key={viewScope} source={pageData} preview={preview} error={pageError} disabled={busy||!hasTauri()} onRefresh={()=>refreshCurrentPanel('/v1/news')} onAction={runNewsAction}/>:
           page==='studio'||page==='analysis'||page==='shadow'||page==='events'?

@@ -794,7 +794,9 @@ class BrokerExecutor:
                     AND json_extract(request,'$.login')=? AND json_extract(request,'$.server')=?
                     AND json_extract(request,'$.currency')=? AND json_extract(request,'$.target')=?
                     AND json_extract(request,'$.position')=?
-                    AND (result IS NULL OR (json_valid(result) AND json_extract(result,'$.state') IN ('unknown','placed','partial')))
+                    AND (result IS NULL OR CASE WHEN json_valid(result)
+                         THEN COALESCE(json_extract(result,'$.state') NOT IN ('filled','cancelled','rejected'),1)
+                         ELSE 1 END)
                     LIMIT 1''',(cmd['id'],cmd['login'],cmd['server'],cmd['currency'],cmd['target'],cmd['position'])).fetchone()
                 if prior:
                     return dict(result,state='cancelled',reason='Existing unresolved close for this position; no second send')
@@ -898,12 +900,34 @@ class BrokerExecutor:
                     request['sl']=(entry_steps-side*round(stop/step))*step
                     request['tp']=(entry_steps+side*round(target/step))*step
                 else:
-                    request['sl']=(math.floor((price-side*stop)/step) if side==1 else math.ceil((price-side*stop)/step))*step
-                    request['tp']=(math.ceil((price+side*target)/step) if side==1 else math.floor((price+side*target)/step))*step
+                    # Price/step can be 19990.999999999996 on a valid tick.
+                    # Snap only near-integers before directional rounding; a
+                    # floating point artefact must not widen an exact SL/TP.
+                    stop_ticks=(price-side*stop)/step
+                    target_ticks=(price+side*target)/step
+                    stop_steps=(round(stop_ticks) if abs(stop_ticks-round(stop_ticks))<1e-8
+                                else math.floor(stop_ticks) if side==1 else math.ceil(stop_ticks))
+                    target_steps=(round(target_ticks) if abs(target_ticks-round(target_ticks))<1e-8
+                                  else math.ceil(target_ticks) if side==1 else math.floor(target_ticks))
+                    request['sl']=stop_steps*step
+                    request['tp']=target_steps*step
                 exit_price=tick.bid if side==1 else tick.ask
                 minimum=max(0,getattr(info,'trade_stops_level',0))*info.point
                 if request['sl']<=0 or request['tp']<=0 or (exit_price-request['sl'])*side+step*1e-8<minimum or (request['tp']-exit_price)*side+step*1e-8<minimum:
                     raise ValueError('Stop/target too close for current spread or broker stops level')
+
+                # An operator may disable risk-based lot sizing, not price
+                # geometry. For BOTH policies a permitted adverse fill must
+                # leave TP on the profitable side of the entry (BUY/SELL).
+                # MT5 deviation uses point units, independently of tick size
+                # and our separate slippage reserve. Market Execution may not
+                # honour deviation, so this remains a scenario, not a fill guarantee.
+                worst_entry=(worst_manual_entry if cmd.get('manual_open') is True
+                             else price+side*request['deviation']*float(info.point))
+                if not math.isfinite(worst_entry) or worst_entry<=0:
+                    raise ValueError('Risk sizing: invalid adverse entry price')
+                if (request['tp']-worst_entry)*side<=0:
+                    raise ValueError('Risk sizing: adverse entry deviation reaches or crosses TP')
 
                 # This check runs for every Core-issued opening order, including
                 # Sniper fast-path and REAL. Legacy REAL intents missing a risk
@@ -919,7 +943,7 @@ class BrokerExecutor:
                 else:
                     risk_started=time.perf_counter()
                     lots,result['risk_sizing']=size_to_stop_risk(
-                        mt5,a,info,symbol,side,worst_manual_entry if cmd.get('manual_open') is True else price,request['sl'],lots,
+                        mt5,a,info,symbol,side,worst_entry,request['sl'],lots,
                         float(cmd['risk_percent']),
                         float(cmd.get('commission_per_lot',float('nan'))),
                         float(cmd.get('slippage_ticks',float('nan'))),
@@ -931,6 +955,8 @@ class BrokerExecutor:
                     if cmd.get('manual_open') is True and abs(lots-float(cmd['lots']))>1e-8:
                         raise ValueError('Manual volume exceeds risk budget; no automatic lot reduction')
                     request['volume']=lots
+                    result['risk_sizing']['budgeted_entry_price']=worst_entry
+                    result['risk_sizing']['entry_deviation_points']=request['deviation']
                     result['risk_sizing_ms']=(time.perf_counter()-risk_started)*1000
                     if 'sizing' in result:
                         result['sizing']['post_risk_sent']=lots
@@ -1178,8 +1204,10 @@ class BrokerExecutor:
                 if any(float(getattr(current_account,k,float('nan')))!=final_number(k) for k in ('balance','equity','margin_free')):
                     result.update(state='cancelled',reason='Manual account values changed during final checks; no order sent')
                     return self._save(cmd,result)
-            if closing and (cmd.get('manual_close') is True or cmd.get('tp_stage_plan_id') is not None):
-                # Re-read the approved physical ticket immediately before send.
+            if closing:
+                # Re-read the approved physical ticket for ALL closes immediately
+                # before send, not only manual and staged-TP exits. A changed
+                # volume or side could make an automatic close stale.
                 # The floating-profit filter is not a net-after-fees guarantee.
                 try:
                     latest_positions=mt5.positions_get(symbol=symbol)
@@ -1219,6 +1247,88 @@ class BrokerExecutor:
                 if now>cmd['expires_ms'] or quote_age < -2000 or quote_age>cmd.get('max_quote_age_ms',3000):
                     result.update(state='cancelled',reason='Manual close quote or intent became stale before send')
                     return self._save(cmd,result)
+            if not closing and cmd.get('manual_open') is not True:
+                # The original quote may move during order_check, journaling or
+                # Core authorization. Some MT5 market-execution brokers do not
+                # enforce request.deviation; never knowingly dispatch an
+                # automatic entry after movement beyond the priced risk window.
+                # This is a last-observed-quote check, NOT an atomic fill bound.
+                final_tick=mt5.symbol_info_tick(symbol)
+                try:
+                    final_bid=float(final_tick.bid)
+                    final_ask=float(final_tick.ask)
+                    final_quote_age=clock_ms()-int(final_tick.time_msc)
+                except (TypeError,ValueError,OverflowError,AttributeError):
+                    final_bid=final_ask=float('nan')
+                    final_quote_age=10**12
+                if (not math.isfinite(final_bid) or not math.isfinite(final_ask)
+                        or final_bid<=0 or final_ask<final_bid
+                        or final_quote_age < -2000
+                        or final_quote_age > cmd.get('max_quote_age_ms',3000)):
+                    result.update(state='cancelled',reason='Automatic final broker quote unavailable, invalid or stale; order not sent')
+                    return self._save(cmd,result)
+                final_entry=final_ask if side==1 else final_bid
+                max_drift=max(0,int(request['deviation']))*float(info.point)
+                if abs(final_entry-price)>max_drift+step*1e-7:
+                    result.update(state='cancelled',reason='Automatic broker quote moved beyond approved entry deviation; order not sent')
+                    return self._save(cmd,result)
+                # A spread change may leave BUY ask / SELL bid unchanged
+                # while moving the opposite (exit-side) price inside the SL/TP
+                # broker stops level. Recheck the exact submitted geometry on
+                # this final quote, not only the entry-price deviation.
+                final_exit=final_bid if side==1 else final_ask
+                if ((final_exit-request['sl'])*side+step*1e-8<minimum
+                        or (request['tp']-final_exit)*side+step*1e-8<minimum):
+                    result.update(state='cancelled',reason='Automatic broker stop/target geometry invalid at final quote; order not sent')
+                    return self._save(cmd,result)
+                # External/manual broker activity can occupy the symbol while
+                # order_check/Core authorization runs. Repeat the same ownership
+                # rule used at initial validation, including netting isolation.
+                final_positions=mt5.positions_get(symbol=symbol)
+                final_orders=mt5.orders_get(symbol=symbol)
+                final_entry_account=mt5.account_info()
+                if (account_identity(final_entry_account)!=expected(cmd)
+                        or getattr(final_entry_account,'trade_mode',None)!=target_mode
+                        or final_positions is None or final_orders is None
+                        or any(p.magic==cmd['magic'] for p in final_positions)
+                        or any(o.magic==cmd['magic'] for o in final_orders)
+                        or (getattr(final_entry_account,'margin_mode',None)!=getattr(mt5,'ACCOUNT_MARGIN_MODE_RETAIL_HEDGING',2)
+                            and (final_positions or final_orders))):
+                    result.update(state='cancelled',reason='Automatic account or position/order ownership changed during final checks; order not sent')
+                    return self._save(cmd,result)
+                # The final quote/portfolio reads are MT5 calls too: account
+                # switching or changing equity during them must not reuse the
+                # earlier account's authorization or risk budget.
+                latest_account=final_entry_account
+                latest_equity=final_number('equity')
+                sizing=result.get('risk_sizing')
+                margin=result.get('real_margin_check')
+                budget=latest_equity*sizing['risk_percent']/100 if sizing else 0.
+                if (sizing and (not math.isfinite(budget) or budget<=0
+                        or sizing['estimated_stop_loss_including_costs']>budget+max(1e-8,abs(budget)*1e-10))
+                        or margin and (not math.isfinite(final_number('margin_free'))
+                            or final_number('margin_free')+1e-8<margin['required'])):
+                    result.update(state='cancelled',reason='Automatic final broker equity or margin no longer permits the entry')
+                    return self._save(cmd,result)
+                recovery=self._risk_recovery(cmd,latest_account)
+                if recovery is not None:
+                    result.update(state='cancelled',reason='Risk-master recovery reached during automatic final checks',risk_master_recovery_reached=recovery)
+                    return self._save(cmd,result)
+                if cmd.get('micro_real_temporary') is True and not self._micro_real_active(cmd,latest_account):
+                    result.update(state='cancelled',reason='Micro REAL recovery reached during automatic final checks')
+                    return self._save(cmd,result)
+                if cmd.get('daily_breaker_enabled',cmd.get('target')=='live') is True:
+                    snapshot=self.last_daily_snapshot
+                    balance=final_number('balance')
+                    if (snapshot is None or not math.isfinite(balance) or not math.isfinite(latest_equity)
+                            or latest_equity<=0 or balance!=snapshot[2]
+                            or datetime.now(timezone(timedelta(hours=3))).date().isoformat()!=snapshot[1]
+                            or snapshot[3]-latest_equity>=snapshot[3]*snapshot[4]/100.):
+                        result.update(state='cancelled',reason='Daily breaker account state changed during automatic final checks')
+                        return self._save(cmd,result)
+                if clock_ms()>cmd['expires_ms']:
+                    result.update(state='cancelled',reason='Automatic intent expired during final checks; order not sent')
+                    return self._save(cmd,result)
             if (time.perf_counter()-final_authorized_at)*1000 > FINAL_AUTH_MAX_AGE_MS:
                 result.update(state='cancelled',reason='Final Core authorization became stale during broker checks; order not sent')
                 return self._save(cmd,result)
@@ -1239,10 +1349,21 @@ class BrokerExecutor:
                 try:
                     order_id=int(getattr(response,'order',0) or 0)
                     deal_id=int(getattr(response,'deal',0) or 0)
+                    if order_id<0 or deal_id<0:
+                        raise ValueError('negative broker ticket')
+                    # Retain usable identity even when the volume/price is
+                    # corrupt, so exact-order history can recover a real fill.
+                    result.update(order=order_id,deal=deal_id)
                     response_volume=float(getattr(response,'volume',0))
                     response_price=float(getattr(response,'price',0))
                     if not math.isfinite(response_volume) or not math.isfinite(response_price):
                         raise ValueError('non-finite acknowledgement')
+                    if code in (10009,10010) and deal_id>0:
+                        tolerance=max(1e-8,request['volume']*1e-7)
+                        if (response_volume<=0 or response_price<=0
+                                or response_volume>request['volume']+tolerance
+                                or code==10009 and abs(response_volume-request['volume'])>tolerance):
+                            raise ValueError('acknowledged fill conflicts with submitted geometry')
                 except (TypeError, ValueError, OverflowError, AttributeError):
                     result.update(state='unknown',retcode=code,
                                   reason='Broker acknowledgement malformed after send; reconciliation required')

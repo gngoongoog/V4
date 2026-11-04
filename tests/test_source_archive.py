@@ -13,6 +13,27 @@ spec.loader.exec_module(archive_tool)
 
 
 class SourceArchiveTests(unittest.TestCase):
+    def test_archive_excludes_secrets_nested_builds_and_symlinked_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'source'
+            root.mkdir()
+            (root / 'keep.txt').write_text('source')
+            for name in ('secrets/credentials.json', 'apps/terminal/dist/index.html',
+                         'apps/tauri/runtime/gateway/execution.py', 'apps/tauri/mt5/bridge.mq5'):
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('must not ship as source')
+            outside = Path(temporary) / 'private.txt'
+            outside.write_text('private')
+            try:
+                (root / 'linked.txt').symlink_to(outside)
+            except (OSError, NotImplementedError):
+                pass  # Windows without symlink privilege still tests every real directory.
+            output = Path(temporary) / 'source.zip'
+            archive_tool.create_archive(root, output)
+            with zipfile.ZipFile(output) as archive:
+                self.assertEqual(set(archive.namelist()), {'BrainTrade-OS/keep.txt'})
+
     def test_archive_preserves_source_runtime_crate_and_excludes_state(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "source"

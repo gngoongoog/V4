@@ -36,6 +36,18 @@ function rawText(n){if(typeof n==='string'||typeof n==='number')return String(n)
  update.props.onClick();await Promise.resolve();assert.deepEqual(actions,['refresh']);
  const disabled=api.NewsOperatorWorkspace({source:{...src,enabled:false},error:'',preview:false,disabled:false,onRefresh:()=>{},onAction:async action=>actions.push(action)});
  assert(collect(disabled).find(x=>x.type==='button'&&rawText(x).includes('جلب الأخبار الآن')).props.disabled,'disabled feed cannot refresh');
+ const noCoreNews=api.NewsOperatorWorkspace({source:src,error:'',preview:false,disabled:true,onRefresh:()=>{throw Error('Core read must be disabled')},onAction:async()=>{throw Error('action must be disabled')}});
+ const newsRead=collect(noCoreNews).find(x=>x.type==='button'&&rawText(x).includes('تحديث قراءة Core'));
+ assert(newsRead&&newsRead.props.disabled===true,'news Core-read button must honour disabled, not only preview');
+ const noCoreStudio=api.CoreReadoutWorkspace({page:'studio',source:{},preview:false,error:'',disabled:true,onRefresh:()=>{throw Error('Core read must be disabled')},onNavigate:()=>{},onStudioAction:async()=>{throw Error('action must be disabled')}});
+ const studioRead=collect(noCoreStudio).find(x=>x.type==='button'&&rawText(x).includes('تحديث البيانات'));
+ assert(studioRead&&studioRead.props.disabled===true,'Core-read button must honour disabled, not only preview');
+ // The parent must report missing Tauri IPC instead of silently ignoring a read.
+ const terminalSource=fs.readFileSync(path.resolve(__dirname,'../src/terminal.tsx'),'utf8');
+ assert(terminalSource.includes("setPageError('قراءة بيانات Core تتطلب تشغيل تطبيق BrainTrade داخل Tauri"),
+   'absent Tauri IPC must produce an actionable Core read error');
+ assert(terminalSource.includes('!preview&&!hasTauri()&&<p role="alert"'),
+   'an unavailable Core must be explained even when the refresh control is disabled');
  const on=[];
  const studio=api.CoreReadoutWorkspace({page:'studio',source:{connected:true,learning_frozen:false,auto:false,queued:0,frames:[{timeframe:'M5',bars:20,live:true}],reports:[]},preview:false,error:'',disabled:false,onRefresh:()=>{},onNavigate:()=>{},onStudioAction:async (action,tf)=>{on.push([action,tf]);return {queued:1}}});
  const run=collect(studio).find(x=>x.type==='button'&&rawText(x).includes('تشغيل تجربة بحثية'));

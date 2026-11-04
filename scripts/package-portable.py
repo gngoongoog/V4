@@ -156,12 +156,17 @@ def check_pe_tree(folder, extra_dirs=()):
 
 def source_copy(destination):
     excluded_top_level = {"target", ".package-cache", ".build-venv", ".ci", ".venv", "venv", "node_modules", "test-output", ".git", "release", "runtime", "build", "dist"}
-    excluded_dir_names = {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+    excluded_dir_names = {"node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "secrets"}
+    generated_paths = {("apps", "terminal", "dist"), ("apps", "tauri", "runtime"), ("apps", "tauri", "mt5")}
     secret_suffixes = (".pyc", ".sealed", ".key", ".log", ".sqlite", ".sqlite3", ".db", ".zip", ".7z", ".rar", ".pem", ".p12", ".pfx")
     for path in ROOT.rglob("*"):
-        if not path.is_file():
+        if path.is_symlink() or not path.is_file():
             continue
         relative = path.relative_to(ROOT)
+        if any(parent.is_symlink() for parent in path.parents if parent != ROOT and ROOT in parent.parents):
+            continue
+        if any(relative.parts[:len(prefix)] == prefix for prefix in generated_paths):
+            continue
         lower_name = path.name.lower()
         if relative.parts and relative.parts[0] in excluded_top_level:
             continue

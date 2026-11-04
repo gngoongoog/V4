@@ -22,6 +22,7 @@ EXCLUDED_TOP_LEVEL = {
     "runtime",
     "build",
     "dist",
+    "secrets",
 }
 EXCLUDED_DIR_NAMES = {
     "node_modules",
@@ -31,7 +32,10 @@ EXCLUDED_DIR_NAMES = {
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
+    "secrets",
 }
+GENERATED_PATHS = {("apps", "terminal", "dist"),
+                   ("apps", "tauri", "runtime"), ("apps", "tauri", "mt5")}
 SECRET_SUFFIXES = {
     ".pyc",
     ".sealed",
@@ -51,9 +55,13 @@ SECRET_SUFFIXES = {
 
 def source_files(root: Path):
     for path in sorted(root.rglob("*")):
-        if not path.is_file():
+        if path.is_symlink() or not path.is_file():
             continue
         relative = path.relative_to(root)
+        if any(parent.is_symlink() for parent in path.parents if parent != root and root in parent.parents):
+            continue
+        if any(relative.parts[:len(prefix)] == prefix for prefix in GENERATED_PATHS):
+            continue
         lower_name = path.name.lower()
         if relative.parts and relative.parts[0] in EXCLUDED_TOP_LEVEL:
             continue

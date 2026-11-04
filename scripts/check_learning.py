@@ -4,6 +4,7 @@ Uses synthetic history only. Never enables broker execution or model influence o
 from __future__ import annotations
 
 import importlib.util
+import copy
 import json
 from pathlib import Path
 import time
@@ -157,6 +158,21 @@ def check(api, snapshot):
     source_id = _evaluation_source(api, snapshot)
     evaluation_id = _chronological_evidence(api, source_id)
 
+    # Historical evaluation can outlive the live-analysis freshness window,
+    # especially on a loaded CI host. Recreate this synthetic fixture's closed
+    # candle clock before testing inference; never relax the Core's stale-data
+    # guard or reuse an old captured_ms as evidence of current market data.
+    snapshot = copy.deepcopy(snapshot)
+    now_ms = int(time.time() * 1000)
+    snapshot.update(quote_time_ms=now_ms, tick_age_ms=0)
+    snapshot['market']['captured_ms'] = now_ms
+    for frame, seconds in (('m1', 60), ('m5', 300), ('m15', 900)):
+        bars = snapshot['market'][frame]
+        boundary = now_ms // 1000 // seconds * seconds
+        for index, bar in enumerate(bars):
+            bar['time'] = boundary - (len(bars) - index) * seconds
+    api('/v1/gateway/snapshot', snapshot)
+
     registered = api("/v1/learning/register", _artifact(snapshot))
     model_id = registered["model_id"]
     assert registered["slot"] == "challenger"
@@ -196,7 +212,8 @@ def check(api, snapshot):
     api("/v1/gateway/snapshot", snapshot)
     after = api("/v1/status")
     recent = api("/v1/learning/inference/recent")["predictions"]
-    assert len(recent) == 1, recent
+    assert len(recent) == 1, {'predictions':recent, 'inference':api('/v1/learning/inference'),
+                             'analysis':after['analysis']}
     prediction = recent[0]
     assert prediction["model_id"] == model_id
     assert prediction["review_record_id"] == review_id

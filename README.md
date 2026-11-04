@@ -29,6 +29,7 @@
 
 ## Research, strategy evaluation, and known limits
 
+- The Core backtest API accepts a **nonempty, UTC minute-aligned period of at most 30 days**. Shorter-than-one-day windows are supported for research and regression tests; older date-only UI guidance may suggest whole-day selection.
 - The backtester simulates completed **M1 Bid OHLC**, next-bar entries, historical spread proxy, user-set commission/slippage, deterministic stops and conservative stop-before-target resolution. It **cannot reproduce intra-minute tick ordering, actual network/MT5 fills, variable historic tick value, funding/swap, or hidden order flow**.
 - CES v1 keeps its original tick-volume EPI behavior and report identity; `ces_range_research` uses the candle-range EPI **only for historical comparison**, not live execution.
 - The saved-history page contains **«مقارنة معادلتي CES»** and **«مقارنة العقول مقابل Trend»**, comparing Wyckoff, Liquidity Sweep and Trend Pullback against a Trend control under **common 1.5 ATR / 2R / 30-minute simulated exits**. These compare **entry signals**; they intentionally do not clone each brain's broker-side structural exits.
