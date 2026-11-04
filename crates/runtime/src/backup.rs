@@ -20,6 +20,31 @@ const FNV_PRIME:u64=0x100000001b3;
 #[derive(Deserialize)] struct BrainImportRequest{name:String}
 struct Validated{name:String,dir:PathBuf,manifest:Value,manifest_hash:String}
 
+/// An interrupted backup/import can leave an incomplete staging directory.
+/// Only prune exact program-owned hidden temporary backup directories after
+/// Core has acquired its exclusive process lock, never valid restore points,
+/// arbitrary hidden folders, or symlink targets.
+fn stale_staging_name(name:&str)->bool {
+    let Some(stem)=name.strip_prefix('.').and_then(|v|v.strip_suffix(".tmp")) else {return false;};
+    safe_name(stem).is_ok() && ["foundation-","brain-snapshot-","pre-restore-","imported-brain-"]
+        .iter().any(|prefix|stem.starts_with(prefix))
+}
+pub fn cleanup_stale_staging(root:&Path)->Result<usize> {
+    let backups=root.join("backups");
+    if !backups.is_dir(){return Ok(0);}
+    let mut removed=0;
+    for entry in fs::read_dir(&backups)? {
+        let entry=entry?;
+        let name=entry.file_name();
+        let Some(name)=name.to_str() else {continue;};
+        if !stale_staging_name(name){continue;}
+        let kind=entry.file_type()?;
+        if !kind.is_dir() || kind.is_symlink(){continue;}
+        fs::remove_dir_all(entry.path())?;
+        removed+=1;
+    }
+    Ok(removed)
+}
 fn safe_name(name:&str)->Result<()>{
     if name.is_empty()||name.len()>160||name=="."||name==".."||
        !name.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'-'|b'_'|b'.')){bail!("Invalid backup name");}
@@ -240,6 +265,23 @@ pub fn apply_pending(root:&Path)->Result<Option<Value>>{
         d.execute("INSERT INTO events(timestamp_ms,kind,detail) VALUES(2,'newer','{}')",[]).unwrap();
         let body=serde_json::to_vec(&json!({"name":b["name"]})).unwrap();stage(&d,&r,&c,&body,3).unwrap();drop(d);assert_eq!(apply_pending(&r).unwrap().unwrap()["status"],"applied");
         let d=Connection::open(r.join("events.sqlite")).unwrap();let count:i64=d.query_row("SELECT COUNT(*) FROM events",[],|x|x.get(0)).unwrap();assert_eq!(count,1);drop(d);let _=fs::remove_dir_all(r);
+    }
+    #[test] fn stale_cleanup_keeps_valid_backups_and_unrelated_hidden_directories(){
+        let r=root();let backups=r.join("backups");
+        fs::create_dir_all(backups.join(".foundation-1-abc.tmp")).unwrap();
+        fs::write(backups.join(".foundation-1-abc.tmp").join("incomplete.db"),b"partial").unwrap();
+        fs::create_dir_all(backups.join(".manual-private.tmp")).unwrap();
+        fs::create_dir_all(backups.join("foundation-1-safe")).unwrap();
+        #[cfg(unix)] {
+            use std::os::unix::fs::symlink;
+            symlink(backups.join("foundation-1-safe"),backups.join(".pre-restore-1-link.tmp")).unwrap();
+        }
+        assert_eq!(cleanup_stale_staging(&r).unwrap(),1);
+        assert!(!backups.join(".foundation-1-abc.tmp").exists());
+        assert!(backups.join(".manual-private.tmp").exists());
+        assert!(backups.join("foundation-1-safe").exists());
+        #[cfg(unix)] assert!(backups.join(".pre-restore-1-link.tmp").is_symlink());
+        let _=fs::remove_dir_all(r);
     }
     #[test] fn portable_brain_snapshot_round_trip_preserves_learning_rows(){
         let r=root();let d=db(&r);d.execute_batch("CREATE TABLE coordinator_broker_samples(source TEXT NOT NULL,position_id INTEGER NOT NULL,context TEXT NOT NULL,brain TEXT NOT NULL,closed_ms INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(source,position_id));INSERT INTO coordinator_broker_samples VALUES('ctx',77,'same-account','trend',9,'{\"net\":12.5}');").unwrap();let c=Config::default();crate::atomic_write(&r.join("config.json"),&serde_json::to_vec_pretty(&c).unwrap()).unwrap();
