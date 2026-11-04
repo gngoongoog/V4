@@ -3,6 +3,7 @@ No MT5 connection or trade submission. Run with the normal application closed.
 """
 import json
 import os
+from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sqlite3
@@ -198,7 +199,12 @@ def main():
             backup=api('/v1/backup',{})
             folder=Path(backup['path'])
             assert (folder/'config.json').exists()
-            with sqlite3.connect(folder/'events.sqlite') as db:
+            # A validated backup is sealed. sqlite3.connect(path) opens a
+            # read-write WAL database and CREATES -wal/-shm sidecars, which
+            # correctly makes the sealed archive invalid on later inspection.
+            # Use immutable read-only mode and explicitly close the handle.
+            sealed_db_uri=(folder/'events.sqlite').resolve().as_uri()+'?mode=ro&immutable=1'
+            with closing(sqlite3.connect(sealed_db_uri,uri=True)) as db:
                 assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
                 assert db.execute('SELECT COUNT(*) FROM events').fetchone()[0]>3
                 assert db.execute('SELECT COUNT(*) FROM chronological_evaluations').fetchone()[0]==1
@@ -206,6 +212,7 @@ def main():
                 assert db.execute('SELECT COUNT(*) FROM learning_predictions').fetchone()[0]==1
                 assert db.execute("SELECT COUNT(*) FROM learning_slots WHERE slot='champion' AND model_id IS NOT NULL").fetchone()[0]==0
             assert not list(folder.glob('*.sealed'))
+            assert not list(folder.glob('events.sqlite-*')), "Immutable check created SQLite sidecars"
             # Backup integrity checks are read-only and served by their
             # bounded worker, while Core status remains responsive.
             with ThreadPoolExecutor(max_workers=2) as pool:
