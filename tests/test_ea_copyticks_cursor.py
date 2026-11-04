@@ -70,6 +70,18 @@ class CopyTicksRecoveryTests(unittest.TestCase):
         self.assertEqual(values,[1001*EVENT_FACTOR+1,1001*EVENT_FACTOR+2])
         self.assertEqual((ms,count,pending),(1001,2,False))
 
+    def test_hot_tick_batch_is_bounded_and_flush_latency_is_visible(self):
+        self.assertIn("InpOnTickBatch = 64",EA)
+        self.assertIn("MathMin(128,InpOnTickBatch)",EA)
+        self.assertIn("SendPendingQuoteTicks(const int cap_batch=0)",EA)
+        self.assertIn("FileFlush(g_pipe)",EA)
+        self.assertIn("g_max_flush_us",EA)
+        self.assertIn("g_slow_ontick_count",EA)
+        hot=re.search(r'void OnTick\(\)\s*\{(.*?)\n  \}',EA,re.S)
+        self.assertIsNotNone(hot)
+        self.assertIn("SendPendingQuoteTicks((int)MathMax(32,MathMin(128,InpOnTickBatch)))",hot.group(1))
+        self.assertNotIn("UpdateStatus()",hot.group(1))
+
     def test_ea_wires_bounded_cursor_and_timer_without_trading(self):
         self.assertIn('#define MAX_COPY_REQUEST 65536',EA)
         self.assertRegex(EA,r'CopyTicks\(_Symbol,ticks,COPY_TICKS_ALL,from_msc,request_count\)')
