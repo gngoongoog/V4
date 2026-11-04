@@ -395,7 +395,11 @@ impl Service {
         }
     }
     pub fn tick(&mut self, db: &Connection, now: u64) {
-        loop {
+        // At most one potentially large feed replay/write per maintenance
+        // opportunity. Subsequent updates remain in the channel and are
+        // drained on future rounds, so a burst cannot hold Sniper's Core
+        // request loop for three sequential SQLite transactions.
+        for _ in 0..1 {
             let Some(rx) = &self.rx else {
                 break;
             };
@@ -620,6 +624,27 @@ mod tests {
             "<rss><channel/></rss>",
         ] {
             assert!(parse(s, FEEDS[0], NOW).is_err());
+        }
+    }
+    #[test]
+    fn feed_burst_is_persisted_one_update_per_maintenance_turn() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        service.offline=true; // Never start the network fetcher.
+        service.next_ms=u64::MAX;
+        let (tx,rx)=mpsc::channel();
+        service.rx=Some(rx);
+        for feed in FEEDS {
+            tx.send(Update{id:feed.id,at:NOW,result:Err("fixture".into())}).unwrap();
+        }
+        for completed in 1..=3 {
+            service.tick(&db,NOW);
+            let count=service.saved.sources.iter()
+                .filter(|source|source.last_attempt_ms==NOW).count();
+            assert_eq!(count,completed,"No burst of SQLite news writes");
+            let from_disk=Service::new(&db).unwrap();
+            assert_eq!(from_disk.saved.sources.iter()
+                .filter(|source|source.last_attempt_ms==NOW).count(),completed);
         }
     }
     #[test]
