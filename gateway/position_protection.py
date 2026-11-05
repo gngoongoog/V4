@@ -145,11 +145,8 @@ def execute_protection(executor, mt5, cmd, authorize, owned_magics, brain_magic,
                  'protect_policy_id','created_ms','expires_ms','max_quote_age_ms')
     row = executor.db.execute('SELECT request,result FROM sends WHERE id=?', (cmd['id'],)).fetchone()
     if row:
-        saved = json.loads(row[0])
-        if any(saved.get(k) != cmd.get(k) for k in immutable):
-            return dict(id=cmd['id'], state='unknown', reason='Protection intent differs from its durable journal')
-        result = json.loads(row[1]) if row[1] else dict(id=cmd['id'], state='unknown', reason='Interrupted; no automatic retry')
-        return _observed(executor, mt5, saved, result)
+        saved, result = executor._read_journal(row, cmd, immutable)
+        return result if saved is None else _observed(executor, mt5, saved, result)
     if cmd.get('state') not in ('queued','dispatched'):
         return dict(id=cmd['id'], state='unknown', reason='Old protection intent without a Gateway journal; never resend')
     result = dict(id=cmd['id'], state='rejected', reason='', fast_path=False)

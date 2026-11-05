@@ -5,6 +5,7 @@ import sys
 import tempfile
 from types import SimpleNamespace as N
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'gateway'))
 from execution import BrokerExecutor, clock_ms
@@ -13,11 +14,20 @@ from test_broker_execution import Broker, command
 
 class DispatchBoundaries(unittest.TestCase):
     def setUp(self):
+        # Fault-injection subcases can spend seconds in Windows SQLite fsync.
+        # Their synthetic quote/intent clock must not age between subcases;
+        # these tests exercise dispatch evidence, not market-data freshness.
+        self.now = clock_ms()
+        self.clock = patch('execution.clock_ms', return_value=self.now)
+        self.clock.start()
+        self.addCleanup(self.clock.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.path = Path(self.tmp.name) / 'journal.sqlite'
         self.ex = BrokerExecutor(self.path)
         self.b = Broker()
         self.cmd = command()
+        self.b.tick.time_msc = self.now
+        self.cmd.update(created_ms=self.now, expires_ms=self.now+30000)
 
     def tearDown(self):
         self.ex.close()
@@ -25,6 +35,58 @@ class DispatchBoundaries(unittest.TestCase):
 
     def send(self):
         return self.ex.execute(self.b, self.cmd, lambda _: True)
+
+    def test_corrupt_replayed_journal_is_quarantined_without_broker_access(self):
+        # A durable row already means a send may have happened. Broken JSON
+        # must not crash the Gateway, invent a terminal result, or resend.
+        for kind in ('open', 'close', 'protect', 'cancel_pending'):
+            self.cmd['kind'] = kind
+            valid_request = json.dumps(self.cmd)
+            cases = [(raw, '{"state":"filled"}') for raw in ('{', 'null', '[]', '1')]
+            cases += [(valid_request, raw) for raw in
+                      ('{', '', 'null', '[]', '1', '{}', '{"state":null}', '{"state":"unexpected"}',
+                       '{"state":"filled","volume":NaN}', '{"state":"filled","price":Infinity}')]
+            for request, result in cases:
+                with self.subTest(kind=kind, request=request, result=result):
+                    self.ex.db.execute('DELETE FROM sends')
+                    self.ex.db.execute('INSERT INTO sends VALUES(?,?,?,?)',
+                                       (self.cmd['id'], request, result, clock_ms()))
+                    self.ex.db.commit()
+                    for _ in range(2):
+                        answer = self.ex.execute(object(), self.cmd, lambda _: self.fail('No reauthorization'))
+                        self.assertEqual(answer['state'], 'unknown', answer)
+                        self.assertEqual(answer['id'], self.cmd['id'])
+                    saved = self.ex.db.execute('SELECT request,result FROM sends').fetchone()
+                    self.assertEqual(saved, (request, result), 'Preserve corrupt evidence for diagnosis')
+        self.assertEqual(self.b.sends, [])
+
+    def test_replay_rejects_mismatched_embedded_journal_ids(self):
+        for kind in ('open', 'close', 'protect', 'cancel_pending'):
+            self.cmd['kind'] = kind
+            for bad_request in (False, True):
+                with self.subTest(kind=kind, bad_request=bad_request):
+                    request = dict(self.cmd, id='other-intent') if bad_request else self.cmd
+                    result = dict(id=self.cmd['id'] if bad_request else 'other-intent', state='filled')
+                    self.ex.db.execute('DELETE FROM sends')
+                    self.ex.db.execute('INSERT INTO sends VALUES(?,?,?,?)',
+                                       (self.cmd['id'], json.dumps(request), json.dumps(result), clock_ms()))
+                    self.ex.db.commit()
+                    answer = self.ex.execute(object(), self.cmd, lambda _: self.fail('No reauthorization'))
+                    self.assertEqual(answer['state'], 'unknown', answer)
+                    self.assertEqual(answer['id'], self.cmd['id'])
+
+    def test_valid_terminal_replays_keep_the_exact_saved_outcome(self):
+        for kind in ('open', 'close', 'protect', 'cancel_pending'):
+            self.cmd['kind'] = kind
+            states = ('filled', 'cancelled', 'rejected', 'expired') if kind == 'cancel_pending' else ('filled', 'cancelled', 'rejected')
+            for state in states:
+                with self.subTest(kind=kind, state=state):
+                    result = dict(id=self.cmd['id'], state=state, reason='saved outcome')
+                    self.ex.db.execute('DELETE FROM sends')
+                    self.ex.db.execute('INSERT INTO sends VALUES(?,?,?,?)',
+                                       (self.cmd['id'], json.dumps(self.cmd), json.dumps(result), clock_ms()))
+                    self.ex.db.commit()
+                    self.assertEqual(self.ex.execute(object(), self.cmd, lambda _: self.fail('No reauthorization')), result)
 
     def test_unreadable_prior_close_never_allows_a_second_close(self):
         self.b.positions = [N(ticket=41, magic=410601, symbol='XAUUSD', volume=.1, type=0)]
@@ -84,7 +146,7 @@ class DispatchBoundaries(unittest.TestCase):
         self.assertEqual(result['state'], 'unknown', result)
         self.b.deals = [N(ticket=77, order=55, magic=410601, symbol='XAUUSD',
                           volume=.1, type=0, entry=0, position_id=55,
-                          comment='', price=2000.10, time_msc=clock_ms())]
+                          comment='', price=2000.10, time_msc=self.now)]
         result = self.send()
         self.assertEqual(result['state'], 'filled', result)
         self.assertTrue(result['recovered_from_history'])

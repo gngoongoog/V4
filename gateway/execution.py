@@ -403,6 +403,35 @@ class BrokerExecutor:
                 pass
         return result
 
+    def _read_journal(self, row, cmd, immutable):
+        """Quarantine malformed durable evidence without rewriting or resending.
+
+        A SQL NULL result is the legitimate interrupted-send marker. Invalid
+        JSON, unexpected shapes/states, and mismatched embedded IDs are not.
+        All broker mutations use this decoder before their reconciliation path.
+        """
+        def unknown(reason):
+            return None, dict(id=cmd['id'], state='unknown', reason=reason)
+        def invalid_constant(value):
+            raise ValueError('Non-finite journal number')
+        try:
+            saved = json.loads(row[0], parse_constant=invalid_constant)
+            previous = (json.loads(row[1], parse_constant=invalid_constant)
+                        if row[1] is not None else
+                        dict(id=cmd['id'], state='unknown', reason='Send was interrupted; no automatic retry'))
+            states = ('unknown', 'placed', 'partial', 'filled', 'cancelled', 'rejected')
+            if cmd.get('kind') == 'cancel_pending':
+                states += ('expired',)
+            if (not isinstance(saved, dict) or not isinstance(previous, dict)
+                    or previous.get('state') not in states):
+                return unknown('Durable journal evidence malformed; no automatic retry or reconciliation')
+            if (saved.get('id') != cmd['id'] or previous.get('id', cmd['id']) != cmd['id']
+                    or any(saved.get(key) != cmd.get(key) for key in immutable)):
+                return unknown('Intent identity differs from durable journal')
+            return saved, previous
+        except (TypeError, ValueError, RecursionError):
+            return unknown('Durable journal evidence unreadable; no automatic retry or reconciliation')
+
     def _institutional_entry_guard(self, cmd):
         if cmd.get('kind') != 'open':
             return
@@ -684,7 +713,6 @@ class BrokerExecutor:
             return execute_protection(self, mt5, cmd, authorize, OWNED_MAGICS, BRAIN_MAGIC, FINAL_AUTH_MAX_AGE_MS)
         row = self.db.execute('SELECT request,result FROM sends WHERE id=?', (cmd['id'],)).fetchone()
         if row:
-            saved = json.loads(row[0])
             # Durable intent IDs bind the entire economic decision, not only
             # the broker account. Never reinterpret a saved order with new lot,
             # side, expiry, fees, risk permissions or Demo/REAL destination.
@@ -702,9 +730,8 @@ class BrokerExecutor:
                        'micro_real_temporary','micro_real_cap_percent',
                        'micro_real_recovery_equity','daily_breaker_enabled',
                        'daily_breaker_limit_percent','max_quote_age_ms')
-            if any(saved.get(k)!=cmd.get(k) for k in immutable):
-                return dict(id=cmd['id'], state='unknown', reason='Intent identity differs from durable journal')
-            return self._reconcile(mt5, saved, json.loads(row[1]) if row[1] else None)
+            saved, previous = self._read_journal(row, cmd, immutable)
+            return previous if saved is None else self._reconcile(mt5, saved, previous)
         # The Core gateway response may still carry 'queued' from the
         # same poll that durably moves it to 'dispatched'; final Core
         # authorization independently rejects anything not dispatched.

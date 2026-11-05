@@ -85,11 +85,8 @@ def execute_cancellation(executor,mt5,cmd,authorize,owned_magics,brain_magic,max
                'expected_sl','expected_tp','expected_stoplimit','expected_setup_ms','expected_expiration','created_ms','expires_ms')
     row=executor.db.execute('SELECT request,result FROM sends WHERE id=?',(cmd['id'],)).fetchone()
     if row:
-        saved=json.loads(row[0])
-        if any(saved.get(k)!=cmd.get(k) for k in immutable):
-            return dict(id=cmd['id'],state='unknown',reason='Cancellation identity differs from durable journal')
-        result=json.loads(row[1]) if row[1] else dict(id=cmd['id'],state='unknown',reason='Interrupted; no automatic retry')
-        return _reconcile(executor,mt5,saved,result,True)
+        saved,result=executor._read_journal(row,cmd,immutable)
+        return result if saved is None else _reconcile(executor,mt5,saved,result,True)
     if cmd.get('state') not in ('queued','dispatched'):
         return _reconcile(executor,mt5,cmd,dict(id=cmd['id'],state='unknown',reason='No journal; never resend'),False)
     result=dict(id=cmd['id'],state='rejected',reason='',fast_path=False);journaled=False;sent=False
