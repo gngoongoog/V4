@@ -305,7 +305,7 @@ def main():
             assert status['state']=='stopped' and not status['execution_enabled']
             assert status['learning_control']['frozen'] and status['learning_control']['cutoff_ms']==frozen['cutoff_ms']
             assert api('/v1/learning/control',{'frozen':False})['frozen'] is False
-            api('/v1/gateway/snapshot',snapshot)
+            api('/v1/gateway/snapshot',learning_ids['inference_snapshot'])
             assert api('/v1/status')['paper']['trades']==1
             assert len(api('/v1/decisions')['decisions'])==1
             assert api('/v1/config')['config']['risk']['risk_percent']==.35
@@ -317,7 +317,7 @@ def main():
             reviews=api('/v1/learning/review/records')['records']
             assert reviews[0]['id']==learning_ids['review_id']
             inference=api('/v1/learning/inference')
-            assert inference['predictions']==1 and inference['shadow_effect'] is False
+            assert inference['predictions']==1 and inference['shadow_effect'] is False, inference
             assert inference['broker_effect'] is False
             assert len(api('/v1/events')['events'])>len(events_before)
             api('/v1/shutdown',{});process.wait(timeout=5)

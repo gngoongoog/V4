@@ -242,4 +242,8 @@ def check(api, snapshot):
         "evaluation_id": evaluation_id,
         "model_id": model_id,
         "review_id": review_id,
+        # Replay the exact observed bar after restart. Reusing the caller's
+        # older snapshot can legitimately create a second prediction when
+        # this refreshed fixture crossed a minute boundary during evaluation.
+        "inference_snapshot": snapshot,
     }
