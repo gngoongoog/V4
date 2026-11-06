@@ -29,6 +29,7 @@ from sniper_native import NativeTickBridge
 from managed_terminal import ManagedTerminalBinding
 from transport import LoopbackCore
 from broker_costs import booked_trading_net
+from bounded_log import bounded_stderr
 
 BASE = "http://127.0.0.1:18741"
 BAGHDAD = timezone(timedelta(hours=3))
@@ -806,6 +807,10 @@ def main():
         lock = lock_gateway(directory)
     except OSError:
         return
+    previous_stderr = sys.stderr
+    # Only the single Gateway holding this directory's lock may rotate its
+    # inherited diagnostic file. Broker journals are never retention targets.
+    sys.stderr = bounded_stderr(previous_stderr, directory / 'gateway.log')
     config_path = directory / "config.json"
     runtime_config = json.loads(config_path.read_text("utf-8")) if config_path.exists() else {}
     binding = ManagedTerminalBinding(
@@ -1144,7 +1149,10 @@ def main():
             # Retain terminal ownership through the entire cleanup barrier.
             # Only after the Gateway and send journal have stopped may a
             # successor Core bind this same MetaTrader data directory.
-            binding.release()
+            try:
+                binding.release()
+            finally:
+                sys.stderr = previous_stderr
 
 
 if __name__ == "__main__":

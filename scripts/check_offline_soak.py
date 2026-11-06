@@ -21,6 +21,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -28,6 +29,7 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'gateway'), str(ROOT / 'scripts')]
 from mt5_gateway import empty_snapshot, pulse_payload
+from transport import LoopbackCore
 
 BASE = 'http://127.0.0.1:18741'
 
@@ -118,7 +120,10 @@ def run(args):
                   broker_execution_tested=False, real_money_ready=False,
                   platform=platform.platform(), python=sys.version.split()[0],
                   binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
-                  requested_seconds=args.seconds, target_hz=args.hz, phases=[], checks={})
+                  requested_seconds=args.seconds, target_hz=args.hz, phases=[], checks={},
+                  transport=args.transport, throughput_asserted=False,
+                  persistent_http_sessions=[],
+                  bulk_io_transport='separate fresh HTTP connection')
     started = time.monotonic()
     metrics = {n: Samples() for n in ('pulse_http', 'pulse_core', 'snapshot_http', 'status_http')}
     process = None
@@ -129,22 +134,46 @@ def run(args):
         env.pop('BRAINTRADE_GATEWAY_SCRIPT', None)
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         key = ''
+        persistent_client = None
+        owner_thread = threading.get_ident()
         log = (directory / 'core.log').open('wb')
 
+        def close_client():
+            nonlocal persistent_client
+            if persistent_client is not None:
+                report['persistent_http_sessions'].append(dict(
+                    requests=persistent_client.requests,
+                    connections=persistent_client.reconnects))
+                persistent_client.close()
+                persistent_client = None
+
         def api(path, body=None, method=None, metric=None, timeout=10):
+            nonlocal persistent_client
             before = time.perf_counter()
-            request = urllib.request.Request(BASE+path,
-                data=None if body is None else json.dumps(body, allow_nan=False).encode(),
-                headers={'Authorization': 'Bearer '+key, 'Content-Type': 'application/json'},
-                method=method)
-            with opener.open(request, timeout=timeout) as response:
-                value = json.load(response)
+            if (args.transport == 'persistent' and timeout == 10
+                    and threading.get_ident() == owner_thread):
+                # Exercise the production Gateway client, including its rule
+                # that an ambiguous request is NEVER replayed automatically.
+                # Bulk export retains its own connection/thread and timeout.
+                if persistent_client is None:
+                    persistent_client = LoopbackCore(key, timeout=timeout)
+                value = persistent_client.api(path, body, method)
+            else:
+                request = urllib.request.Request(BASE+path,
+                    data=None if body is None else json.dumps(body, allow_nan=False).encode(),
+                    headers={'Authorization': 'Bearer '+key, 'Content-Type': 'application/json'},
+                    method=method)
+                with opener.open(request, timeout=timeout) as response:
+                    value = json.load(response)
             if metric:
                 metrics[metric].add((time.perf_counter()-before)*1000)
+            if path == '/v1/shutdown':
+                close_client()
             return value
 
         def boot():
             nonlocal process, key
+            close_client()
             process = subprocess.Popen([str(binary)] + (['--core'] if args.desktop else []),
                 cwd=folder, env=env, stdout=log, stderr=subprocess.STDOUT)
             for _ in range(150):
@@ -262,6 +291,7 @@ def run(args):
                     rss_end_mb=round(rss/2**20, 3), rss_delta_mb=round((rss-rss_start)/2**20, 3),
                     cpu_one_core_percent=round(100*(cpu-cpu_start)/elapsed, 2))
                 phase['achieved_hz'] = round(phase['pulses']/elapsed, 2)
+                phase['achieved_percent_of_target'] = round(100*phase['pulses']/elapsed/args.hz, 2)
                 report['phases'].append(phase)
                 api('/v1/stop', {})
                 assert not status()['requested_run']
@@ -313,6 +343,7 @@ def run(args):
             report['error'] = f'{type(error).__name__}: {error}'
             raise
         finally:
+            close_client()
             if process is not None and process.poll() is None:
                 process.terminate()
                 try:
@@ -339,6 +370,8 @@ if __name__ == '__main__':
     parser.add_argument('--desktop', action='store_true', help='Pass --core to a desktop executable')
     parser.add_argument('--seconds', type=float, default=180)
     parser.add_argument('--hz', type=float, default=50)
+    parser.add_argument('--transport', choices=('fresh', 'persistent'), default='fresh',
+                        help='Fresh urllib requests or the actual persistent Gateway HTTP client')
     parser.add_argument('--output', default=str(ROOT/'test-output/offline-soak.json'))
     args = parser.parse_args()
     if not 10 <= args.seconds <= 172800 or not 1 <= args.hz <= 500:

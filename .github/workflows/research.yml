@@ -74,6 +74,8 @@ jobs:
           .ci/node_modules/.bin/playwright install --with-deps chromium
       - name: Verify offline report interactions
         run: NODE_PATH="$GITHUB_WORKSPACE/.ci/node_modules" node scripts/check_trade_review.cjs
+      - name: Verify offline operator checklist and portable results
+        run: NODE_PATH="$GITHUB_WORKSPACE/.ci/node_modules" node scripts/check_operator_checklist.cjs
       - name: Install native font build dependency
         run: |
           sudo apt-get update

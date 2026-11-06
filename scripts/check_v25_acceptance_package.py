@@ -24,6 +24,7 @@ REQUIRED_TOOLS = (
     "G2_DEMO_READINESS_AR.md",
     "runtime/gateway/execution.py",
     "runtime/gateway/managed_terminal.py",
+    "runtime/gateway/bounded_log.py",
     "runtime/gateway/tp_partial_close.py",
     "runtime/gateway/hvn_research.py",
     "runtime/gateway/position_protection.py",
