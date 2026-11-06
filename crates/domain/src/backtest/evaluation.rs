@@ -92,7 +92,7 @@ pub struct ChronologicalEvaluation {
 }
 
 fn windows(options: &Options, plan: &EvaluationPlan) -> Result<Vec<EvaluationWindow>, String> {
-    if options.from % DAY != 0 || options.to % DAY != 0 {
+    if !options.from.is_multiple_of(DAY) || !options.to.is_multiple_of(DAY) {
         return Err("التقييم الزمني يتطلب حدود أيام UTC كاملة".into());
     }
     let total_days = (options.to - options.from) / DAY;
@@ -280,7 +280,7 @@ pub fn evaluate(
 
 /// Side-by-side CES hypotheses on the SAME broker history, contract, risk
 /// settings, cost assumptions and non-overlapping chronological windows.
-////
+///
 /// This is historical research, NOT a frozen/prespecified independent OOS
 /// certificate. The candidate never executes MT5 broker orders or auto-promotes.
 #[derive(Clone, Debug, Serialize, Deserialize)]

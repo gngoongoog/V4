@@ -35,6 +35,8 @@ def stage():
     for item in ('Run-Demo-Acceptance.ps1','Run-Demo-Acceptance-GUI.ps1'):
         shutil.copy2(ROOT/'scripts'/item,DEST/'Tools'/item)
     shutil.copy2(ROOT/'docs/DEMO_ACCEPTANCE_AR.md',DEST/'DEMO_ACCEPTANCE_AR.md')
+    for name in ('V26_WINDOWS_MT5_CHECKLIST_AR.md','V26_TP1_MT5_ACCEPTANCE_AR.md'):
+        shutil.copy2(ROOT/'docs'/name,DEST/name)
     shutil.copy2(ROOT/'docs/v25/G2_DEMO_READINESS_PREFLIGHT_AR.md',DEST/'G2_DEMO_READINESS_AR.md')
     # G6-C: research collectors must be available in the real Portable,
     # not only the source archive. Read-only Core SQLite, NEVER MT5 orders.

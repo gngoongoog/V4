@@ -26,7 +26,11 @@ def fingerprint(root=ROOT):
         visit(item)
     h = hashlib.sha256(b'braintrade-source-v1\0')
     for name in sorted(files):
-        data = (root / name).read_bytes().decode('utf-8').replace('\r\n', '\n').encode('utf-8')
+        data = (root / name).read_bytes()
+        try:
+            data = data.decode('utf-8').replace('\r\n', '\n').encode('utf-8')
+        except UnicodeDecodeError:
+            pass  # Binary release assets retain their exact original bytes.
         path = name.encode('utf-8')
         h.update(len(path).to_bytes(8, 'big')); h.update(path)
         h.update(len(data).to_bytes(8, 'big')); h.update(data)

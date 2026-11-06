@@ -120,7 +120,7 @@ impl Book {
         PaperSummary {context:context.into(),quote_current:quote.is_some(),equity:unrealized.map(|p|self.starting_equity+self.realized+p),realized:self.realized,unrealized,
             trades:self.trades,wins:self.wins,interrupted_trades:self.interrupted_trades,
             open:self.position.as_ref().map(|p|format!("VIRTUAL {} | {:.4} lots\nEntry {:.5} | SL {:.5} | TP {:.5}\n{}",if p.side==1 {"BUY"} else {"SELL"},p.lots,p.entry,p.stop,p.target,
-                format!("{:?} | max hold {}s | {}",p.mode,p.max_hold_ms/1000,if p.interrupted {"Data gap detected; missed intragap exits unknown."} else {"Open virtual position"}))).unwrap_or("No open virtual position".into()),
+                format_args!("{:?} | max hold {}s | {}",p.mode,p.max_hold_ms/1000,if p.interrupted {"Data gap detected; missed intragap exits unknown."} else {"Open virtual position"}))).unwrap_or("No open virtual position".into()),
             recent:self.recent.clone(),note:format!("Daily lock: {} | Drawdown lock: {}. STOP blocks new entries; virtual exits continue while Core runs.",self.daily_locked,self.drawdown_locked)}
     }
 }
@@ -183,6 +183,7 @@ impl Research {
         }
     }
     /// Call on a clone. Publish only after checkpoint, decision and ledger transaction commits.
+    #[cfg(test)]
     pub fn update(
         &mut self,
         db: &mut Connection,
@@ -318,7 +319,8 @@ impl Research {
         }
         let sniper=c.trading.mode==TradingMode::Sniper;let new_tick=t.quote_time_ms.is_some_and(|q|q>b.decision_tick_ms);let cooldown=now.saturating_sub(b.last_entry_ms)>=c.trading.sniper_cooldown_seconds*1000;
         let new_bar=a.current&&run&&if sniper{new_tick&&cooldown}else{a.bar_time>b.last_bar};
-        if sniper&&!cooldown {a.gates.push("Sniper cooldown active".into());}if sniper&&!new_tick {a.gates.push("Waiting for new broker tick".into());}
+        if sniper&&!cooldown {a.gates.push("Sniper cooldown active".into());}
+    if sniper&&!new_tick {a.gates.push("Waiting for new broker tick".into());}
         if !run {
             a.gates
                 .push("System stopped — new virtual entries disabled".into());

@@ -1,6 +1,6 @@
 //! Frozen non-system advisor Shadow trial (Demo-only): immutable policy
 //! parameters and an isolated, quote-observed paper ledger. NEVER broker orders.
-use anyhow::{bail,ensure,Result};
+use anyhow::{ensure,Result};
 use braintrade_domain::{
     execution::{self,BrainConfig,Signal},studio::{FrameBar,Genome},
     trading::TradingMode,Config,Telemetry

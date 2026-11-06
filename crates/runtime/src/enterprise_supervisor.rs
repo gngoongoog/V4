@@ -4,7 +4,7 @@
 //! close orders, trailing protection and existing positions remain supervised.
 use anyhow::{bail, Result};
 use braintrade_domain::{trading::TradingMode, Candle, Config, Telemetry};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;

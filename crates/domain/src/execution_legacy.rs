@@ -497,7 +497,7 @@ mod tests {
         assert!(!gann_entry_eligible(&g,&c));
         g.strength=0.25;
         assert!(gann_entry_eligible(&g,&c));
-        g.direction=-1;
+        g.direction= -1;
         assert!(!gann_entry_eligible(&g,&c));
         g.available=false;g.direction=1;
         assert!(!gann_entry_eligible(&g,&c));

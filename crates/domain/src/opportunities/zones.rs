@@ -37,7 +37,7 @@ pub(crate) fn map(s:&[Candle], tf:&str, seconds:u64)->(Vec<Swing>,Vec<Zone>) {
             }else{zones.push(z);}
         }
     }
-    zones.sort_by(|a,b|b.confirmed_at.cmp(&a.confirmed_at));
+    zones.sort_by_key(|z|std::cmp::Reverse(z.confirmed_at));
     // Retain broken levels too: they anchor breakout/retest patterns.
     zones.truncate(18);
     if swings.len()>40 {swings.drain(..swings.len()-40);}

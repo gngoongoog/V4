@@ -1839,7 +1839,7 @@ impl Service {
             }
         }
         if method == "POST" && path == "/v1/execution/result" {
-            if let Some(t) = status.telemetry.as_ref().filter(|t| status.gateway_fresh && self.account_matches(status)) {
+            if let Some(t) = status.telemetry.as_ref().filter(|_| status.gateway_fresh && self.account_matches(status)) {
                 // Result was persisted before refreshing the cache. Next Sniper
                 // Tick cannot race back into a just-breached quality circuit.
                 self.refresh_quality_circuit(db,t,now);
@@ -2074,7 +2074,7 @@ mod tests {
             assert_eq!(verified["read_only"],true);
             assert_eq!(verified["trade_enabled_by_read"],false);
             let mut inconsistent=t.clone();
-            inconsistent.demo=!t.demo;
+            inconsistent.demo= !t.demo;
             let inconsistent_status=Status{gateway_fresh:true,
                 telemetry:Some(inconsistent),..Default::default()};
             let contradiction=service.route("GET","/v1/execution/binding",

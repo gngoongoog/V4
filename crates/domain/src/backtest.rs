@@ -103,7 +103,7 @@ pub struct HistoryBar {
 impl HistoryBar {
     pub fn valid(&self, captured_ms: u64) -> bool {
         self.candle.valid()
-            && self.candle.time % 60 == 0
+            && self.candle.time.is_multiple_of(60)
             && self.candle.time.saturating_add(60).saturating_mul(1000) <= captured_ms
             && self.spread_points <= 100_000_000
             && self.candle.high <= 1e12
@@ -163,8 +163,8 @@ impl Options {
     pub fn validate(&self) -> Result<(), String> {
         self.risk.validate()?;
         if self.from == 0
-            || self.from % 60 != 0
-            || self.to % 60 != 0
+            || !self.from.is_multiple_of(60)
+            || !self.to.is_multiple_of(60)
             || self.to <= self.from
             || self.to - self.from > 30 * DAY
         {

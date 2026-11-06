@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(grid_amount(0.02_f64-0.02_f64,0.01),0.);
         assert_eq!(grid_amount(0.025,0.01),0.025,
             "An off-grid amount must never be silently rounded into eligibility");
-        assert_eq!(grid_amount(f64::NAN,0.01).is_nan(),true);
+        assert!(grid_amount(f64::NAN,0.01).is_nan());
     }
     #[test]
     fn missing_actual_tp1_broker_fill_never_advances_to_tp2(){

@@ -564,7 +564,7 @@ mod tests {
         assert!(other["frames"].as_object().unwrap().is_empty(),"never expose the previous account's candles");
         status.gateway_fresh=false;
         assert_eq!(service.route("GET","/v1/studio/chart-frames",b"",&db,&config,&status,now).unwrap()["ready"],false);
-        frame.bars[0].candle.open=-1.;
+        frame.bars[0].candle.open= -1.;
         service.frames.insert((context(&t),"H1".into()),frame);
         status.gateway_fresh=true;status.telemetry=Some(t);
         assert!(service.route("GET","/v1/studio/chart-frames",b"",&db,&config,&status,now).unwrap()["frames"].as_object().unwrap().is_empty());

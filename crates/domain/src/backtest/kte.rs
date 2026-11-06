@@ -29,7 +29,8 @@ impl Managed {
     fn targets_at(&mut self,price:f64,c:&Candle,phase:&str,ledger:&mut Ledger,spec:&Contract,risk:&RiskConfig) {
         for leg in 0..3 {if self.parts[leg]>0.0 && (price-self.targets[leg])*self.side as f64>=-1e-10 {
             self.fill(Some(leg),self.targets[leg],c,phase,["tp1","tp2","tp3"][leg],false,ledger,spec,risk);
-            if leg==0 {self.tp1=true;}if leg==1 {self.tp2=true;}
+            if leg==0 {self.tp1=true;}
+    if leg==1 {self.tp2=true;}
         }}
     }
     /// Open is known before the range. Range ambiguity gives the stop priority.

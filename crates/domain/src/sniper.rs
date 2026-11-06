@@ -195,8 +195,8 @@ impl Engine {
         let target_policies = self.target_models.get(&target_key).cloned().unwrap_or_default();
         let mut eligible = Vec::new();
         if adaptive {
-            for i in 0..TARGET_ARMS {
-                let desired=arms[i]*c.trading.sniper_pip_price/tick*t.tick_value_profit.unwrap();
+            for (i, arm) in arms.iter().enumerate() {
+                let desired=arm*c.trading.sniper_pip_price/tick*t.tick_value_profit.unwrap();
                 if desired.is_finite() && desired>0. && cost.total/(cost.total+desired) <= c.trading.max_cost_fraction {
                     eligible.push(i);
                 }

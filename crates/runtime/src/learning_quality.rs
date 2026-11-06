@@ -15,7 +15,6 @@ const MAX_HISTORY:usize=240;
 
 #[derive(Clone,Debug)]
 struct Sample {
-    pos:u64,
     closed:u64,
     source:String,
     gross:f64,
@@ -77,7 +76,7 @@ fn read_sample(source:String,pos:u64,closed:u64,context:&str,mode:&str,brain:&st
     if (reported_per_lot-net_per_lot).abs()>1e-6_f64.max(net_per_lot.abs()*1e-8){
         return None
     }
-    Some(Sample{pos,closed,source,gross:g,cost:com+fee+swap,net,volume,
+    Some(Sample{closed,source,gross:g,cost:com+fee+swap,net,volume,
         r:Some(p["r_multiple"].as_f64()?)})
 }
 pub fn audit(db:&Connection,context:&str,mode:TradingMode,brain:&str)->Result<Value>{

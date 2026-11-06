@@ -911,11 +911,9 @@ mod tests {
     #[test]
     fn marker_lookup_matches_first_later_or_equal_equity_point() {
         use braintrade_domain::backtest::EquityPoint;
-        let values = vec![
-            EquityPoint {time:100,equity:1000.,balance:1000.},
+        let values = [EquityPoint {time:100,equity:1000.,balance:1000.},
             EquityPoint {time:200,equity:1010.,balance:1010.},
-            EquityPoint {time:300,equity:1020.,balance:1020.},
-        ];
+            EquityPoint {time:300,equity:1020.,balance:1020.}];
         // Exact, between-point, before-first and after-last boundaries must
         // be the same as the previous linear search behavior.
         for (time, expected) in [(100,0),(150,1),(200,1),(299,2),(500,2)] {

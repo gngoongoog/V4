@@ -9,7 +9,6 @@ use std::{collections::HashSet, fs, io::Write, path::{Path, PathBuf}};
 const FEATURE_SCHEMA: &str = "gold-m1-feature-v1";
 const LABEL_SCHEMA: &str = "gold-m1-outcome-v1";
 const MODEL_SCHEMA: &str = "braintrade-linear-softmax-v1";
-const HORIZONS: [u64; 3] = [5, 15, 30];
 
 #[derive(Default)]
 pub struct Service {
@@ -42,7 +41,7 @@ impl Drop for DatasetExportStaging {
 /// Legacy four-field contexts remain stored, but cannot be reused for new M1
 /// snapshots or retroactively attributed to either Demo or REAL.
 pub(crate) fn context(t: &Telemetry) -> Option<String> {
-    if !t.connected || t.login <= 0 || t.server.is_empty() || t.symbol.is_empty() || t.currency.is_empty() {
+    if !t.connected || t.login == 0 || t.server.is_empty() || t.symbol.is_empty() || t.currency.is_empty() {
         return None;
     }
     match (t.demo, t.account_trade_mode) {
@@ -135,7 +134,7 @@ fn validate_artifact(a:&Value)->Result<(String,String,String)>{
 pub(crate) fn account_evidence(
     db:&Connection,t:Option<&Telemetry>,gateway_fresh:bool,now_ms:u64
 )->Result<Value>{
-    let Some(t)=t.filter(|t|gateway_fresh) else {
+    let Some(t)=t.filter(|_|gateway_fresh) else {
         return Ok(json!({"schema":"learning-account-evidence-v1","state":"unavailable",
             "read_only":true,"account_verified":false,"observed_ms":now_ms,
             "reason":"A fresh MT5 account is required; no broker-model claims",

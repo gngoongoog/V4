@@ -426,6 +426,7 @@ impl Student {
             }
         }
     }
+    #[cfg(test)]
     pub fn observe(&mut self, db: &Connection, t: &Telemetry, now: u64) -> Result<()> {
         self.observe_gated(db,t,now,false)
     }

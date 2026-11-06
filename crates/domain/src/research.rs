@@ -597,7 +597,7 @@ pub mod tests {
             "Live consent must never enable Demo elevated risk");
         risk.risk_percent=5.01;
         assert!(risk.validate().is_err());
-        let old=serde_json::to_value(&RiskConfig::default()).unwrap();
+        let old=serde_json::to_value(RiskConfig::default()).unwrap();
         assert!(old.get("live_elevated_risk_opt_in").is_none(),
             "Existing serialized presets and golden research hashes stay compatible");
     }

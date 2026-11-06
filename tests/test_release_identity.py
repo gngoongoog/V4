@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -11,6 +12,21 @@ spec.loader.exec_module(release)
 
 
 class ReleaseIdentityTests(unittest.TestCase):
+    def test_binary_asset_bytes_are_included_without_line_ending_conversion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root/'release-inputs.json').write_text('["image.jpg"]')
+            data = b'\xff\xd8\xff\r\n\x80\x00'
+            asset = root/'image.jpg'
+            asset.write_bytes(data)
+            name = b'image.jpg'
+            expected = hashlib.sha256(b'braintrade-source-v1\0'
+                + len(name).to_bytes(8, 'big') + name
+                + len(data).to_bytes(8, 'big') + data).hexdigest()
+            self.assertEqual(release.fingerprint(root), expected)
+            asset.write_bytes(data.replace(b'\r\n', b'\n'))
+            self.assertNotEqual(release.fingerprint(root), expected)
+
     def test_versions_and_identity(self):
         release.validate_versions()
         self.assertRegex(release.identity()['build_id'], '^[a-f0-9]{64}$')

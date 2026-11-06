@@ -565,6 +565,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         self.risk_master_key=key;
         Ok(())
     }
+    #[cfg(test)]
     pub fn set_risk_master(&mut self,db:&Connection,t:&Telemetry,enabled:bool,now:u64)->Result<()> {
         self.set_risk_master_with_recovery(db,t,enabled,None,now)
     }
@@ -1436,7 +1437,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     if matches!(d["type"].as_i64(), Some(0 | 1)) {
                         if d["symbol"] == t.symbol {
                             let valid_magic=d["magic"].as_u64().is_some();
-                            let valid_entry=matches!(d["entry"].as_i64(),Some(0 | 1 | 2 | 3));
+                            let valid_entry=matches!(d["entry"].as_i64(),Some(0..=3));
                             let valid_time=d["time_msc"].as_u64()
                                 .is_some_and(|ms| ms>0 && ms<=until_ms.saturating_add(2_000));
                             let valid_volume=d["volume"].as_f64()

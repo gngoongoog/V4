@@ -18,9 +18,6 @@ struct Counts {
 fn valid_positive(v:&Value)->Option<f64>{
     v.as_f64().filter(|x|x.is_finite()&&*x>0.&&*x<=1e7)
 }
-fn compatible(a:f64,b:f64)->bool {
-    (a-b).abs()<=1e-8_f64.max(a.abs().max(b.abs())*1e-7)
-}
 fn broker_entry(row:&Value)->bool {
     row["entry"].as_i64()==Some(0)
 }

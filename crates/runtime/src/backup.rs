@@ -98,7 +98,7 @@ fn validate(root:&Path,name:&str)->Result<Validated>{
 fn validate_dir(dir:&Path,name:&str)->Result<Validated>{
     if !fs::symlink_metadata(dir).is_ok_and(|m|m.file_type().is_dir()){bail!("Backup does not exist: {name}");}
     let dbp=dir.join("events.sqlite");
-    let mut members=Vec::new();for e in fs::read_dir(&dir)?{let e=e?;if !e.file_type()?.is_file(){bail!("Backup contains unsupported directory/member");}let n=e.file_name().to_string_lossy().to_ascii_lowercase();if !matches!(n.as_str(),"events.sqlite"|"config.json"|"manifest.json"){bail!("Unexpected backup member: {n}");}members.push(n);}members.sort();members.dedup();if members.len()!=3{bail!("Backup member coverage mismatch");}
+    let mut members=Vec::new();for e in fs::read_dir(dir)?{let e=e?;if !e.file_type()?.is_file(){bail!("Backup contains unsupported directory/member");}let n=e.file_name().to_string_lossy().to_ascii_lowercase();if !matches!(n.as_str(),"events.sqlite"|"config.json"|"manifest.json"){bail!("Unexpected backup member: {n}");}members.push(n);}members.sort();members.dedup();if members.len()!=3{bail!("Backup member coverage mismatch");}
     let mp=dir.join("manifest.json");let m:Value=serde_json::from_slice(&fs::read(&mp)?).context("Invalid backup manifest")?;
     if m["schema"].as_u64()!=Some(SCHEMA){bail!("Unsupported backup schema; expected {SCHEMA}");}
     // Preserve known schema-compatible 0.7.4 archives across the RC2 version rename.
@@ -169,7 +169,8 @@ pub fn import_brain(root:&Path,body:&[u8],now:u64)->Result<Value>{
         let checked=validate_dir(&staging,&imported)?;
         fs::rename(&staging,&dest)?;fs::remove_file(&source)?;
         Ok(json!({"imported":true,"backup_name":checked.name,"format":BRAIN_FORMAT,"checksum":format!("{hash:016x}"),"manifest_hash":checked.manifest_hash,"created_ms":checked.manifest["created_ms"],"learning_continuity":true,"restore_required":true,"same_account_context_required_for_exact_coordinator_continuity":true,"secrets_restored":false,"gateway_send_journal_restored":false,"note":"Snapshot validated and converted to a normal restore point. Stage restore while STOPPED, then reopen BrainTrade."}))
-    })();if result.is_err(){if staging.exists(){let _=fs::remove_dir_all(&staging);}if dest.exists(){let _=fs::remove_dir_all(&dest);}}result
+    })();if result.is_err(){if staging.exists(){let _=fs::remove_dir_all(&staging);}
+    if dest.exists(){let _=fs::remove_dir_all(&dest);}}result
 }
 pub fn list(root:&Path)->Result<Value>{
     let b=root.join("backups");fs::create_dir_all(&b)?;let mut items=Vec::new();
