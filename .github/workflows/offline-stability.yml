@@ -45,6 +45,8 @@ jobs:
         env:
           SOAK_SECONDS: ${{ inputs.seconds || '180' }}
         run: python scripts/check_offline_soak.py --seconds "$SOAK_SECONDS" --output test-output/offline-soak.json
+      - name: Higher quote-rate synthetic profile, no broker
+        run: python scripts/check_offline_soak.py --seconds 120 --hz 200 --output test-output/offline-burst.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
