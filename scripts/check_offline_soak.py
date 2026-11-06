@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing, contextmanager
 import hashlib
 import json
 import math
@@ -29,6 +30,18 @@ sys.path[:0] = [str(ROOT / 'gateway'), str(ROOT / 'scripts')]
 from mt5_gateway import empty_snapshot, pulse_payload
 
 BASE = 'http://127.0.0.1:18741'
+
+
+@contextmanager
+def temporary_case(report, output):
+    """A teardown failure must never leave a successful evidence report."""
+    try:
+        with tempfile.TemporaryDirectory(prefix='braintrade-offline-soak-') as folder:
+            yield folder
+    except BaseException as error:
+        report.update(status='FAIL', error=f'{type(error).__name__}: {error}')
+        output.write_text(json.dumps(report, indent=2, ensure_ascii=False)+'\n', encoding='utf-8')
+        raise
 
 
 class Samples:
@@ -109,7 +122,7 @@ def run(args):
     started = time.monotonic()
     metrics = {n: Samples() for n in ('pulse_http', 'pulse_core', 'snapshot_http', 'status_http')}
     process = None
-    with tempfile.TemporaryDirectory(prefix='braintrade-offline-soak-') as folder:
+    with temporary_case(report, output) as folder:
         directory = Path(folder)
         env = dict(os.environ, BRAINTRADE_DATA_DIR=folder,
                    BRAINTRADE_GATEWAY_DISABLED='1', BRAINTRADE_NEWS_OFFLINE='1')
@@ -286,13 +299,15 @@ def run(args):
             for db_path in directory.rglob('*.sqlite*'):
                 if db_path.name.endswith(('-wal', '-shm')):
                     continue
-                with sqlite3.connect(db_path.as_uri()+'?mode=ro', uri=True) as db:
+                # Connection.__exit__ commits/rolls back; it does NOT close.
+                # Windows cannot remove the temporary DB while this handle lives.
+                with closing(sqlite3.connect(db_path.as_uri()+'?mode=ro', uri=True)) as db:
                     assert db.execute('PRAGMA quick_check').fetchone() == ('ok',)
                 databases.append(dict(name=str(db_path.relative_to(directory)), bytes=db_path.stat().st_size))
             assert databases, 'No database checked'
             report['databases'] = databases
             report['checks']['sqlite_integrity'] = 'PASS'
-            report['status'] = 'PASS'
+            report['status'] = 'CHECKS_PASSED_CLEANUP_PENDING'
         except Exception as error:
             report['status'] = 'FAIL'
             report['error'] = f'{type(error).__name__}: {error}'
@@ -308,8 +323,12 @@ def run(args):
             report['elapsed_seconds'] = round(time.monotonic()-started, 3)
             report['metrics'] = {name: value.report() for name, value in metrics.items()}
             output.write_text(json.dumps(report, indent=2, ensure_ascii=False)+'\n', encoding='utf-8')
-            if report['status'] != 'PASS':
+            if report['status'] == 'FAIL':
                 output.with_suffix('.core.log').write_bytes((directory/'core.log').read_bytes())
+    report['checks']['temporary_cleanup'] = 'PASS'
+    report['status'] = 'PASS'
+    report['elapsed_seconds'] = round(time.monotonic()-started, 3)
+    output.write_text(json.dumps(report, indent=2, ensure_ascii=False)+'\n', encoding='utf-8')
     print(json.dumps(dict(status=report['status'], output=str(output),
                          pulses=metrics['pulse_http'].count, seconds=report['elapsed_seconds'])))
 
