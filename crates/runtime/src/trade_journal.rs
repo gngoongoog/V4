@@ -117,7 +117,7 @@ pub fn list(db: &Connection, context: &str, telemetry: Option<&Telemetry>, offse
         if parsed.is_empty() {continue;}
         let opened=parsed.iter().find(|d|matches!(kind(d),0|2));
         let first=opened.unwrap_or(&parsed[0]);
-        let has_exit=parsed.iter().any(|d|matches!(kind(d),1|2|3));
+        let has_exit=parsed.iter().any(|d|matches!(kind(d),1..=3));
         let position=telemetry.and_then(|t|t.positions.iter().find(|p|p.identifier==*pid||p.ticket==*pid));
         let booked = booked_costs(&parsed);
         // Option<f64> serializes as null when broker evidence is incomplete.

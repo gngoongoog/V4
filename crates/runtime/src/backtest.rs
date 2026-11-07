@@ -318,7 +318,9 @@ impl Service {
         });
         Ok(())
     }
-    pub fn tick(&mut self, db: &Connection, now: u64) {
+    /// Keep MT5 history-import expiration responsive even when large
+    /// completed-report SQLite writes are deferred during broker exposure.
+    pub fn check_loading_timeout(&mut self, now: u64) {
         if self
             .job
             .as_ref()
@@ -328,6 +330,9 @@ impl Service {
                 "انتهت مهلة جلب التاريخ من MT5. تحقق من الاتصال وتوفر التاريخ ثم أعد الطلب".into(),
             );
         }
+    }
+    pub fn tick(&mut self, db: &Connection, now: u64) {
+        self.check_loading_timeout(now);
         while let Ok(done) = self.rx.try_recv() {
             let Some(j) = self
                 .job
@@ -906,11 +911,9 @@ mod tests {
     #[test]
     fn marker_lookup_matches_first_later_or_equal_equity_point() {
         use braintrade_domain::backtest::EquityPoint;
-        let values = vec![
-            EquityPoint {time:100,equity:1000.,balance:1000.},
+        let values = [EquityPoint {time:100,equity:1000.,balance:1000.},
             EquityPoint {time:200,equity:1010.,balance:1010.},
-            EquityPoint {time:300,equity:1020.,balance:1020.},
-        ];
+            EquityPoint {time:300,equity:1020.,balance:1020.}];
         // Exact, between-point, before-first and after-last boundaries must
         // be the same as the previous linear search behavior.
         for (time, expected) in [(100,0),(150,1),(200,1),(299,2),(500,2)] {
@@ -986,7 +989,9 @@ mod tests {
             cancel: Arc::new(AtomicBool::new(false)),
             progress: Arc::new(AtomicUsize::new(0)),
         });
-        service.tick(&db, 100_000);
+        // The Core may call only the lightweight timeout check when
+        // expensive report persistence must wait for STOP/broker flat.
+        service.check_loading_timeout(100_000);
         assert!(!service.loading());
         assert_eq!(service.state(&db).unwrap()["state"], "error");
         service.job.as_mut().unwrap().phase = "running".into();

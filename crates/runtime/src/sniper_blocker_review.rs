@@ -49,7 +49,6 @@ fn label(k:&str)->&'static str{
       "setup_not_formed"=>"شروط حركة القناص لم تكتمل",
       "cost_vs_target"=>"تكلفة التنفيذ مرتفعة بالنسبة للهدف",
       "specialist_busy_or_disabled"=>"القناص مشغول أو مشاركته موقوفة",
-      "other_unready_reason"=>"سبب الاستراتيجية غير معروف",
       "engine_stopped"=>"النظام متوقف",
       "daily_breaker"=>"قاطع الخسارة اليومي",
       "demo_only_risk"=>"مخاطرة محصورة بحساب تجريبي",

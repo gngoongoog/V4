@@ -129,15 +129,19 @@ fn allowed_read_route(route: &str) -> bool {
         "/v1/opportunities/history" | "/v1/events" | "/v1/risk/monitor" |
         "/v1/trading/settings" | "/v1/studio" | "/v1/studio/chart-frames" | "/v1/news" |
         "/v1/evaluation" | "/v1/backtest" | "/v1/backups" |
-        "/v1/execution" | "/v1/execution/binding" | "/v1/execution/partial-exit-command-drafts" | "/v1/execution/partial-exit-reservations" | "/v1/execution/trades" | "/v1/execution/quality" | "/v1/execution/reconciliation" | "/v1/execution/sniper-diagnosis" | "/v1/execution/sniper-tick-audit" | "/v1/execution/frozen-sniper" | "/v1/execution/frozen-classic" | "/v1/execution/mode-evidence" | "/v1/execution/frozen-coordinator" |
+        "/v1/execution" | "/v1/execution/binding" | "/v1/execution/partial-exit-command-drafts" | "/v1/execution/partial-exit-reservations" | "/v1/execution/partial-exit-stage-consent" | "/v1/execution/trades" | "/v1/execution/quality" | "/v1/execution/reconciliation" | "/v1/execution/sniper-diagnosis" | "/v1/execution/sniper-tick-audit" | "/v1/execution/frozen-sniper" | "/v1/execution/frozen-classic" | "/v1/execution/mode-evidence" | "/v1/execution/frozen-coordinator" |
         "/v1/research/correlation" | "/v1/enterprise/supervisor"
     )
 }
 
 #[tauri::command]
-fn read_panel(route: String) -> Result<Value, String> {
+async fn read_panel(route: String) -> Result<Value, String> {
+    // Backup integrity scans may run for tens of seconds. Keep Tauri's
+    // presentation thread responsive without expanding the route allowlist.
     if !allowed_read_route(&route) { return Err("غير مسموح بهذا المسار".into()); }
-    open_client()?.get(&route).map_err(|err| err.to_string())
+    tauri::async_runtime::spawn_blocking(move||
+        open_client()?.get(&route).map_err(|err|err.to_string())
+    ).await.map_err(|e|e.to_string())?
 }
 
 #[tauri::command]
@@ -187,14 +191,24 @@ fn close_terminal(app: tauri::AppHandle) {
     app.exit(0);
 }
 
-#[tauri::command]
-fn backup_action(action: String) -> Result<Value, String> {
-    let route=match action.as_str(){
+fn run_backup_action(action: &str) -> Result<Value, String> {
+    let route=match action{
         "create"=>"/v1/backup",
         "brain_export"=>"/v1/brain-snapshot/export",
         _=>return Err("هذا الإجراء الاحتياطي غير مسموح".into()),
     };
-    open_client()?.post(route,json!({})).map_err(|err|err.to_string())
+    let client=open_client()?;
+    match client.checked_post(route,json!({}),Duration::from_secs(300)) {
+        Ok(result)=>Ok(result),
+        Err(CheckedPostError::Rejected(e))=>Err(e),
+        Err(CheckedPostError::Uncertain(e))=>Err(format!(
+            "نتيجة عملية النسخ غير مؤكدة؛ راجع قائمة النسخ ولا تكرر الإنشاء تلقائياً: {e}")),
+    }
+}
+#[tauri::command]
+async fn backup_action(action: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move||run_backup_action(&action))
+        .await.map_err(|e|e.to_string())?
 }
 
 static SNAPSHOT_SEQUENCE:AtomicU64=AtomicU64::new(0);
@@ -585,6 +599,65 @@ fn save_partial_exit_prices(context:String,position_identifier:u64,
 }
 
 #[tauri::command]
+fn update_partial_exit_stage_consent(context:String,position_identifier:u64,
+    plan_ids:Vec<String>,enabled:bool,confirm_live_login:String)->Result<Value,String>{
+    if context.is_empty()||context.len()>500||position_identifier==0||
+       plan_ids.len()!=3||confirm_live_login.len()>32||
+       plan_ids.iter().any(|id|id.len()!=40||!id.starts_with("tp-plan-")||
+           !id[8..].bytes().all(|b|b.is_ascii_hexdigit()&&!b.is_ascii_uppercase())) {
+        return Err("موافقة TP: الحساب أو هوية الخطط غير صالحة".into());
+    }
+    // This records operator consent, not a broker order or stop/TP update.
+    open_client()?.post("/v1/execution/partial-exit-stage-consent",
+        json!({"context":context,"position_identifier":position_identifier,
+            "plan_ids":plan_ids,"enabled":enabled,
+            "confirm_live_login":confirm_live_login}))
+        .map_err(|err|err.to_string())
+}
+
+#[tauri::command]
+fn update_partial_exit_trade_approval(context:String,position_identifier:u64,
+    plan_ids:Vec<String>,enabled:bool,confirm_live_login:String)->Result<Value,String>{
+    if context.is_empty()||context.len()>500||position_identifier==0||
+       plan_ids.len()!=3||confirm_live_login.len()>32||
+       plan_ids.iter().any(|id|id.len()!=40||!id.starts_with("tp-plan-")||
+           !id[8..].bytes().all(|b|b.is_ascii_hexdigit()&&!b.is_ascii_uppercase())) {
+        return Err("تفويض TP1: الحساب أو هوية الخطط غير صالحة".into());
+    }
+    // Persisted future-trade opt-in only. This endpoint cannot submit
+    // broker orders, start trading, or unlock Core's staged-close gate.
+    open_client()?.post("/v1/execution/partial-exit-trade-approval",
+        json!({"context":context,"position_identifier":position_identifier,
+            "plan_ids":plan_ids,"enabled":enabled,
+            "confirm_live_login":confirm_live_login}))
+        .map_err(|err|err.to_string())
+}
+
+#[tauri::command]
+fn update_partial_exit_tp1_arm(context:String,position_identifier:u64,
+    plan_ids:Vec<String>,enabled:bool,confirm_live_login:String)->Result<Value,String>{
+    if context.is_empty()||context.len()>500||position_identifier==0||
+       plan_ids.len()!=3||confirm_live_login.len()>32||
+       plan_ids.iter().any(|id|id.len()!=40||!id.starts_with("tp-plan-")||
+           !id[8..].bytes().all(|b|b.is_ascii_hexdigit()&&!b.is_ascii_uppercase())) {
+        return Err("TP1 execution arm account or immutable plan is invalid".into());
+    }
+    // Unlike preparation approval, enabling this one-shot control permits a
+    // future REAL broker close if the exact operator-selected account is
+    // subsequently STARTed and the target is reached. Core rechecks all data.
+    // A transport timeout is UNCERTAIN, never blindly retry the arm.
+    match open_client()?.checked_post("/v1/execution/partial-exit-tp1-arm",
+        json!({"context":context,"position_identifier":position_identifier,
+            "plan_ids":plan_ids,"enabled":enabled,
+            "confirm_live_login":confirm_live_login}),Duration::from_secs(8)) {
+        Ok(value)=>Ok(value),
+        Err(CheckedPostError::Rejected(error))=>Err(error),
+        Err(CheckedPostError::Uncertain(_))=>Err(
+            "نتيجة تسليح TP1 غير مؤكدة؛ لا تكرر الطلب تلقائياً. اقرأ حالة Core أولاً.".into())
+    }
+}
+
+#[tauri::command]
 fn set_learning_frozen(frozen:bool)->Result<Value,String>{
     open_client()?.post("/v1/learning/control",json!({"frozen":frozen}))
         .map_err(|err|err.to_string())
@@ -787,7 +860,7 @@ pub fn run() {
             update_risk, update_portfolio, update_supervisor, frozen_coordinator_action, frozen_sniper_action, frozen_classic_action, update_settings, update_trading_settings,
             priority_handoff, subscribe_status, shutdown_core, close_terminal,
             backup_action, brain_snapshot_export, brain_snapshot_import, brain_snapshot_restore, save_excel_report,
-            backtest_action, study_action, news_action, studio_action, correlation_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, save_partial_exit_prices, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
+            backtest_action, study_action, news_action, studio_action, correlation_action, update_brain_control, update_brain_paper_all, update_risk_master, update_position_protection, save_partial_exit_prices, update_partial_exit_stage_consent, update_partial_exit_trade_approval, update_partial_exit_tp1_arm, set_learning_frozen, manual_market, cancel_pending_order, select_solo_brain, close_owned_positions, bind_execution
         ])
         .run(tauri::generate_context!())
         .expect("could not start BRAINTRADE Tauri terminal");
@@ -957,6 +1030,12 @@ mod tests {
         assert!(!allowed_read_route("http://attacker.local"));
         assert!(!allowed_read_route("/v1/config/../../ipc.key"));
         assert!(!allowed_read_route("/v1/status?token=x"));
+    }
+    #[test]
+    fn backup_command_rejects_unknown_action_without_contacting_core(){
+        assert!(run_backup_action("../ipc.key").is_err());
+        assert!(run_backup_action("restore").is_err());
+        assert!(run_backup_action("").is_err());
     }
     #[test]
     fn snapshot_copy_never_overwrites_and_rejects_unsafe_names(){

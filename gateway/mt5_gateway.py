@@ -16,6 +16,7 @@ submission.
 from __future__ import annotations
 import json
 import math
+from collections import deque
 import os
 import sys
 import threading
@@ -25,19 +26,23 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from sniper_native import NativeTickBridge
+from managed_terminal import ManagedTerminalBinding
 from transport import LoopbackCore
 from broker_costs import booked_trading_net
+from bounded_log import bounded_stderr
 
 BASE = "http://127.0.0.1:18741"
 BAGHDAD = timezone(timedelta(hours=3))
 SNIPER_LOOP_SECONDS = 0.005
-SNIPER_FULL_SNAPSHOT_SECONDS = 0.250
-SNIPER_BACKGROUND_SECONDS = 0.500
+SNIPER_FULL_SNAPSHOT_SECONDS = 0.500
+SNIPER_BACKGROUND_SECONDS = 1.000
 BROKER_HISTORY_POLL_SECONDS = 5.0
+DAILY_DEAL_CACHE_SECONDS = 5.0
+CORE_OUTAGE_GRACE_SECONDS = 20.0
 CONFIG_REFRESH_SECONDS = 0.500
 NORMAL_MIN_LOOP_SECONDS = 0.050
 NATIVE_RECENT_MS = 500
-NATIVE_BATCH_MAX = 512
+NATIVE_BATCH_MAX = 32
 
 
 class HvnResultOutbox:
@@ -74,15 +79,167 @@ class HvnResultOutbox:
 
 
 class BrokerHistoryScheduler:
-    """Keep normal broker work alive even when every loop handles a tick."""
+    """Keep history alive during tick bursts without 5ms idle Core polling.
+
+    A pulse already fetches execution commands. Without a pulse, a bounded
+    50ms control poll still catches operator work, instead of repeatedly
+    hitting the Core on every 5ms Sniper iteration. Neither path retries a
+    broker order, and the 5-second history obligation remains independent.
+    """
     def __init__(self):
         self.next_poll = 0.0
+        self.next_idle_poll = 0.0
 
     def should_poll(self, command_polled: bool, now: float) -> bool:
-        if command_polled and now < self.next_poll:
+        if command_polled:
+            if now < self.next_poll:
+                return False
+            self.next_poll = now + BROKER_HISTORY_POLL_SECONDS
+            return True
+        if now < self.next_idle_poll:
             return False
+        self.next_idle_poll = now + NORMAL_MIN_LOOP_SECONDS
+        # This normal cycle checks broker history, so the next forced scan
+        # during continuous pulses is due five seconds after this one.
         self.next_poll = now + BROKER_HISTORY_POLL_SECONDS
         return True
+
+
+class DailyDealsCache:
+    """Rate-limit daily MT5 deal history while retaining exact account scope.
+
+    No trading order uses cached deals. An unavailable history returns unknown
+    cost/PnL instead of zero, and a Demo/Live or Baghdad-day switch clears it.
+    """
+    def __init__(self, interval=DAILY_DEAL_CACHE_SECONDS):
+        self.interval=interval
+        self.key=None
+        self.next_read=0.0
+        self.value=(None,None,False)
+    def read(self, mt5, account, now):
+        start,end,day=day_range(now)
+        key=(account.login,account.server,account.currency,account.trade_mode,day)
+        if key!=self.key:
+            self.key=key
+            self.next_read=0.0
+            self.value=(None,None,False)
+        mono=time.monotonic()
+        if mono>=self.next_read:
+            self.next_read=mono+self.interval
+            try:
+                deals=mt5.history_deals_get(start,end)
+            except (OSError,RuntimeError,ValueError,TypeError):
+                deals=None
+            net,count=deal_summary(deals,mt5)
+            self.value=(net,count,deals is not None)
+        return self.value
+
+
+class CoreOutageBudget:
+    """Short loopback HTTP trouble is not a reason to restart MT5."""
+    def __init__(self,grace=CORE_OUTAGE_GRACE_SECONDS):
+        self.grace=grace
+        self.first_failure_at=None
+        self.count=0
+    def success(self):
+        self.first_failure_at=None
+        self.count=0
+    def failure(self,now=None):
+        mono=time.monotonic() if now is None else now
+        if self.first_failure_at is None:
+            self.first_failure_at=mono
+        self.count+=1
+        return self.count>=3 and mono-self.first_failure_at>=self.grace
+    def expired(self,now=None):
+        if self.first_failure_at is None or self.count<3:return False
+        mono=time.monotonic() if now is None else now
+        return mono-self.first_failure_at>=self.grace
+
+
+def mt5_session_alive(mt5,binding=None):
+    """Broker/terminal session identity, not a source of order authorization."""
+    try:
+        term=mt5.terminal_info()
+        account=mt5.account_info()
+        return (term is not None and getattr(term,'connected',False) is True
+                and account is not None and int(getattr(account,'login',0))>0
+                and (binding is None or binding.verify(term)))
+    except (AttributeError,OSError,RuntimeError,TypeError,ValueError):
+        return False
+
+
+class MT5DisconnectBudget:
+    """Never reuse unverified positions; avoid MT5 shutdown on one IPC error."""
+    def __init__(self,threshold=3,grace=1.0):
+        self.threshold=threshold;self.grace=grace
+        self.first_at=None;self.count=0
+    def healthy(self):
+        self.first_at=None;self.count=0
+    def offline(self,now=None):
+        mono=time.monotonic() if now is None else now
+        if self.first_at is None:self.first_at=mono
+        self.count+=1
+        return self.count>=self.threshold and mono-self.first_at>=self.grace
+
+
+class CoreFallbackThrottle:
+    """Rate-limit full snapshot recovery after a failed hot quote pulse."""
+    def __init__(self,interval=.5):
+        self.interval=interval;self.next_allowed=0.
+    def allow(self,now=None):
+        mono=time.monotonic() if now is None else now
+        if mono<self.next_allowed:return False
+        self.next_allowed=mono+self.interval
+        return True
+
+
+class GatewayLatencyWindow:
+    """Bounded local monotonic stage timings; diagnostic only, never orders.
+
+    Broker ACK/fill latency is measured separately by BrokerExecutor. This
+    window measures only the local Core HTTP and Gateway dispatch legs.
+    No account identifiers, prices, symbols, tokens or order payloads logged.
+    """
+    STAGES = ("core_pulse_ms", "gateway_cycle_ms", "snapshot_ms")
+
+    def __init__(self, limit=1024, report_every=30.0):
+        self.samples = {stage: deque(maxlen=limit) for stage in self.STAGES}
+        self.errors = 0
+        self.next_report = time.monotonic() + report_every
+        self.report_every = report_every
+
+    def record(self, stage, ms):
+        if stage not in self.samples:
+            raise ValueError("Unrecognized latency stage")
+        value = float(ms)
+        if math.isfinite(value) and 0 <= value <= 60_000:
+            self.samples[stage].append(value)
+
+    def pulse_error(self):
+        self.errors += 1
+
+    def report_due(self, now=None):
+        mono = time.monotonic() if now is None else float(now)
+        if mono < self.next_report:
+            return None
+        self.next_report = mono + self.report_every
+        details = []
+        for stage in self.STAGES:
+            points = sorted(self.samples[stage])
+            if not points:
+                details.append(stage + "=no_samples")
+                continue
+            def percentile(q):
+                return points[min(len(points)-1, int((len(points)-1)*q))]
+            details.append(
+                "%s:n=%d,p50=%.2f,p95=%.2f,p99=%.2f,max=%.2f" % (
+                    stage, len(points), percentile(.50), percentile(.95),
+                    percentile(.99), points[-1]))
+        details.append("core_pulse_errors=%d" % self.errors)
+        self.errors = 0
+        for sample in self.samples.values():
+            sample.clear()
+        return "BRAINTRADE_LOCAL_LATENCY " + " ".join(details)
 
 
 class MarketCache:
@@ -264,19 +421,30 @@ def active_order_details(orders):
         return None
 
 
-def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, dom_cache=None) -> dict:
+def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, dom_cache=None, deals_cache=None) -> dict:
     now = now or datetime.now(timezone.utc)
     terminal = mt5.terminal_info()
     account = mt5.account_info()
     if terminal is None or not terminal.connected or account is None:
         return empty_snapshot("MT5 disconnected or account is not logged in. Sign in inside MT5.")
-    positions = mt5.positions_get()
-    orders = mt5.orders_get()
+    try:
+        positions = mt5.positions_get()
+        orders = mt5.orders_get()
+    except (OSError,ValueError,RuntimeError):
+        positions = orders = None
     if positions is None or orders is None:
-        return empty_snapshot("MT5 position/order reconciliation failed; account snapshot withheld.")
+        # Never authorize from cached positions on transient MT5 IPC failure.
+        return empty_snapshot("MT5 position/order snapshot temporarily unavailable; trading paused pending full reconciliation.")
     start, end, report_day = day_range(now)
-    deals = mt5.history_deals_get(start, end)
-    net, count = deal_summary(deals, mt5)
+    if deals_cache is not None:
+        net,count,deals_available=deals_cache.read(mt5,account,now)
+    else:
+        try:
+            deals=mt5.history_deals_get(start, end)
+        except (OSError,RuntimeError,ValueError,TypeError):
+            deals=None
+        net,count=deal_summary(deals,mt5)
+        deals_available=deals is not None
     info = mt5.symbol_info(symbol)
     if info is not None and not info.visible:
         mt5.symbol_select(symbol, True)
@@ -295,7 +463,7 @@ def collect(mt5, symbol: str, now: datetime | None = None, market_cache=None, do
     errors = []
     if info is None:
         errors.append(f"Symbol {symbol} is unavailable; choose its exact broker name in Settings.")
-    if deals is None:
+    if not deals_available:
         errors.append("Deal history unavailable; daily PnL is unknown.")
     elif net is None:
         errors.append("Broker deal cost fields missing or invalid; daily PnL is unknown.")
@@ -456,7 +624,7 @@ def refresh_fast_tick(snapshot: dict, mt5, symbol: str, now_ms: int | None = Non
     return updated,changed,signature
 
 
-def broker_snapshot_identity_is_current(mt5, snapshot: dict) -> bool:
+def broker_snapshot_identity_is_current(mt5, snapshot: dict, binding=None) -> bool:
     """Prevent hot pulses from using a cached identity after an MT5 account switch.
 
     This is a fast-path admission check only when new quotes actually arrive;
@@ -472,7 +640,8 @@ def broker_snapshot_identity_is_current(mt5, snapshot: dict) -> bool:
                 and getattr(a, "login", None) == snapshot.get("login")
                 and getattr(a, "server", None) == snapshot.get("server")
                 and getattr(a, "currency", None) == snapshot.get("currency")
-                and getattr(a, "trade_mode", None) == snapshot.get("account_trade_mode"))
+                and getattr(a, "trade_mode", None) == snapshot.get("account_trade_mode")
+                and (binding is None or binding.verify(terminal)))
     except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return False
 
@@ -638,9 +807,15 @@ def main():
         lock = lock_gateway(directory)
     except OSError:
         return
+    previous_stderr = sys.stderr
+    # Only the single Gateway holding this directory's lock may rotate its
+    # inherited diagnostic file. Broker journals are never retention targets.
+    sys.stderr = bounded_stderr(previous_stderr, directory / 'gateway.log')
     config_path = directory / "config.json"
     runtime_config = json.loads(config_path.read_text("utf-8")) if config_path.exists() else {}
-    path = runtime_config.get("mt5_path", "")
+    binding = ManagedTerminalBinding(
+        runtime_config.get("mt5_path", ""),
+        runtime_config.get("mt5_portable", False))
     symbol = runtime_config.get("symbol", "XAUUSD")
     # HTTP/1.1 connection reuse reduces loopback TCP setup on hot quote paths.
     # A dropped connection is NEVER replayed automatically (POST ambiguity).
@@ -656,9 +831,14 @@ def main():
         mt5 = None
     initialized = False
     retry_at = 0.0
-    core_failures = 0
     market_cache=MarketCache()
     dom_cache=DomCache()
+    daily_deals_cache=DailyDealsCache()
+    core_budget=CoreOutageBudget()
+    mt5_disconnect_budget=MT5DisconnectBudget()
+    fallback_throttle=CoreFallbackThrottle()
+    latency=GatewayLatencyWindow()
+    next_cycle_error_log=0.0
     native=NativeTickBridge()
     if os.environ.get("BRAINTRADE_GATEWAY_PARENT_STDIN") == "1":
         if sys.stdin is None or not hasattr(sys.stdin, "buffer"):
@@ -692,6 +872,17 @@ def main():
             headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
         with legacy_opener.open(request,timeout=4) as response:
             response.read()
+
+    def publish_checked(snapshot):
+        try:
+            publish(snapshot)
+        except (OSError,ValueError,RuntimeError):
+            # Local Core HTTP trouble is not MT5 terminal logout. Do not
+            # replay the ambiguous request, and never grant trade authority.
+            core_budget.failure()
+            return False
+        core_budget.success()
+        return True
 
     hvn_outbox = HvnResultOutbox()
 
@@ -743,15 +934,16 @@ def main():
                 latest_snapshot = empty_snapshot("MT5 bridge dependency unavailable. Use the complete Windows package.")
                 if mono >= next_full_snapshot:
                     next_full_snapshot=mono+1.0
-                    try:
-                        publish(latest_snapshot);core_failures=0
-                    except (OSError,ValueError):
-                        core_failures+=1
+                    publish_checked(latest_snapshot)
             else:
                 try:
                     if not initialized and mono >= retry_at:
-                        initialized = mt5.initialize(path, timeout=5000) if path else mt5.initialize(timeout=5000)
+                        initialized = binding.connect(mt5, timeout_ms=10000)
                         retry_at = mono + 5
+                        if not initialized and mono >= next_cycle_error_log:
+                            print("MT5 managed binding: "+binding.last_error,
+                                  file=sys.stderr,flush=True)
+                            next_cycle_error_log=mono+15.0
                         next_full_snapshot=0.0
                         if initialized:
                             native.bind_terminal(mt5.terminal_info())
@@ -761,14 +953,14 @@ def main():
                         # without falsely claiming that ordinary MT5 polling is native.
                         if mono >= next_native_rebind:
                             next_native_rebind=mono+2.0
-                            if not native.available:
+                            if not native.available and binding.check_current(mt5):
                                 native.bind_terminal(mt5.terminal_info())
                         # Drain authenticated quote events before slower account/candle work.
                         # Each distinct quote is evaluated through the execution-only pulse
                         # and any command is returned in that same localhost response.
                         if sniper and latest_snapshot and latest_snapshot.get('connected'):
                             packets=native.drain(int(latest_snapshot.get('login') or 0),symbol,NATIVE_BATCH_MAX)
-                            if packets and not broker_snapshot_identity_is_current(mt5,latest_snapshot):
+                            if packets and not broker_snapshot_identity_is_current(mt5,latest_snapshot,binding):
                                 # Cached Core snapshot is now another MT5 session.
                                 # Clear buffered native evidence without sending
                                 # even one old-context pulse.
@@ -781,24 +973,41 @@ def main():
                                     continue
                                 latest_snapshot=native_snapshot
                                 try:
+                                    pulse_started=time.perf_counter()
                                     work=api('/v1/execution/pulse',pulse_payload(latest_snapshot,
                                         quote_source='native',
                                         native_dropped_total=native.mailbox.dropped),method='PUT')
+                                    latency.record('core_pulse_ms',(time.perf_counter()-pulse_started)*1000)
+                                    dispatch_started=time.perf_counter()
                                     normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api,work=work)))
+                                    latency.record('gateway_cycle_ms',(time.perf_counter()-dispatch_started)*1000)
                                     command_polled=True
-                                    core_failures=0
+                                    core_budget.success()
                                 except (OSError,ValueError,RuntimeError):
+                                    latency.pulse_error()
                                     # Compatibility/failure fallback: publish the full cached
                                     # state and let the normal work poll preserve behavior.
-                                    try:
-                                        publish(latest_snapshot);core_failures=0
-                                    except (OSError,ValueError):
-                                        core_failures+=1
+                                    if fallback_throttle.allow():
+                                        publish_checked(latest_snapshot)
+                                    else:
+                                        core_budget.failure()
 
+                        # OnTradeTransaction only flags that broker state may
+                        # have changed. It is never used as Deal/fill proof.
+                        # Force a fresh positions/orders + broker-history
+                        # reconciliation instead of waiting for the next poll.
+                        if native.consume_trade_notice(
+                            int(latest_snapshot.get('login') or 0)
+                            if latest_snapshot else 0, symbol):
+                            next_full_snapshot=0.0
+                            broker_history_schedule.next_poll=0.0
                         full_interval=SNIPER_FULL_SNAPSHOT_SECONDS if sniper else max(0.5,min(1.0,normal_poll_seconds))
                         full_due=latest_snapshot is None or mono >= next_full_snapshot
                         if full_due:
-                            fresh_snapshot=collect(mt5,symbol,market_cache=market_cache,dom_cache=dom_cache)
+                            snapshot_started=time.perf_counter()
+                            fresh_snapshot=collect(mt5,symbol,market_cache=market_cache,
+                                dom_cache=dom_cache,deals_cache=daily_deals_cache)
+                            latency.record('snapshot_ms',(time.perf_counter()-snapshot_started)*1000)
                             if (fresh_snapshot.get('connected') and latest_snapshot and
                                     latest_snapshot.get('connected') and
                                     any(latest_snapshot.get(k)!=fresh_snapshot.get(k)
@@ -806,12 +1015,25 @@ def main():
                                 # MT5 can switch accounts inside the same data directory.
                                 # Revoke the prior EA token and reject buffered old ticks.
                                 native.close()
-                                native.bind_terminal(mt5.terminal_info())
+                                if binding.check_current(mt5):
+                                    native.bind_terminal(mt5.terminal_info())
+                            # Verify the exact terminal installation/data folder
+                            # again before Core may see a reconciled snapshot.
+                            # A foreign instance must NEVER inherit an old account
+                            # binding or native tick token.
+                            if not binding.check_current(mt5):
+                                fresh_snapshot=empty_snapshot(
+                                    "MT5 selected installation/data folder changed; "
+                                    "reconnect the explicitly configured terminal.")
+                                native.close()
+                                dom_cache.release(mt5)
+                                mt5.shutdown()
+                                initialized=False
+                                retry_at=time.monotonic()+5.0
                             fresh_snapshot,_=advance_quote_clock(latest_snapshot,fresh_snapshot)
                             latest_snapshot=fresh_snapshot
                             next_full_snapshot=mono+full_interval
-                            publish(latest_snapshot)
-                            core_failures=0
+                            publish_checked(latest_snapshot)
                         elif sniper and latest_snapshot.get('connected') and not native.recent(login=int(latest_snapshot.get('login') or 0),symbol=symbol,
                                 maximum_age_ms=NATIVE_RECENT_MS):
                             # Native EA is optional. If it is absent/stale the exact
@@ -819,7 +1041,7 @@ def main():
                             # now uses the same execution-only pulse as the native source.
                             fast_snapshot,changed,_=refresh_fast_tick(latest_snapshot,mt5,symbol)
                             if changed:
-                                if not broker_snapshot_identity_is_current(mt5,latest_snapshot):
+                                if not broker_snapshot_identity_is_current(mt5,latest_snapshot,binding):
                                     # Poll fallback can also see a new account
                                     # before the 250 ms reconciled snapshot.
                                     native.close()
@@ -827,35 +1049,60 @@ def main():
                                     continue
                                 latest_snapshot=fast_snapshot
                                 try:
+                                    pulse_started=time.perf_counter()
                                     work=api('/v1/execution/pulse',pulse_payload(latest_snapshot,
                                         quote_source='poll',
                                         native_dropped_total=native.mailbox.dropped),method='PUT')
+                                    latency.record('core_pulse_ms',(time.perf_counter()-pulse_started)*1000)
+                                    dispatch_started=time.perf_counter()
                                     normal_poll_seconds=max(NORMAL_MIN_LOOP_SECONDS,min(1.0,executor.cycle(mt5,api,work=work)))
+                                    latency.record('gateway_cycle_ms',(time.perf_counter()-dispatch_started)*1000)
                                     command_polled=True
-                                    core_failures=0
+                                    core_budget.success()
                                 except (OSError,ValueError,RuntimeError):
-                                    try:
-                                        publish(latest_snapshot);core_failures=0
-                                    except (OSError,ValueError):
-                                        core_failures+=1
-                        if initialized and latest_snapshot and not latest_snapshot.get('connected'):
-                            native.close()
-                            dom_cache.release(mt5);mt5.shutdown();initialized=False
+                                    latency.pulse_error()
+                                    if fallback_throttle.allow():
+                                        publish_checked(latest_snapshot)
+                                    else:
+                                        core_budget.failure()
+                        if initialized and latest_snapshot:
+                            if (latest_snapshot.get('connected') and binding.check_current(mt5)) or mt5_session_alive(mt5,binding):
+                                # A missing portfolio read is not proof of
+                                # terminal logout; Core still sees connected=False
+                                # and cannot send on unverified positions.
+                                mt5_disconnect_budget.healthy()
+                            elif mt5_disconnect_budget.offline():
+                                native.close()
+                                dom_cache.release(mt5)
+                                mt5.shutdown()
+                                initialized=False
+                                retry_at=time.monotonic()+5.0
                     elif mono >= next_full_snapshot:
                         latest_snapshot=empty_snapshot("MT5 connection failed. Set terminal64.exe path and sign in inside MT5.")
                         next_full_snapshot=mono+1.0
-                        publish(latest_snapshot)
-                except Exception:
-                    latest_snapshot=empty_snapshot("MT5 read failed; retrying connection.")
-                    native.close()
-                    dom_cache.release(mt5)
-                    try:
-                        mt5.shutdown()
-                    except Exception:
-                        pass
-                    initialized=False
-                    retry_at=time.monotonic()+5
-                    next_full_snapshot=0.0
+                        publish_checked(latest_snapshot)
+                except Exception as error:
+                    # A failed Core/MT5 read must not be mistaken for a
+                    # broker disconnect or authorize from cached positions.
+                    # Log the exception TYPE only, without secrets/packet data.
+                    if time.monotonic()>=next_cycle_error_log:
+                        print('MT5 snapshot cycle error: '+type(error).__name__,
+                              file=sys.stderr,flush=True)
+                        next_cycle_error_log=time.monotonic()+15.0
+                    latest_snapshot=empty_snapshot(
+                        "MT5 snapshot was not verified; trading paused until fresh reconciliation.")
+                    next_full_snapshot=time.monotonic()+0.5
+                    if mt5_session_alive(mt5,binding):
+                        mt5_disconnect_budget.healthy()
+                    elif mt5_disconnect_budget.offline():
+                        native.close()
+                        dom_cache.release(mt5)
+                        try:
+                            mt5.shutdown()
+                        except Exception:
+                            pass
+                        initialized=False
+                        retry_at=time.monotonic()+5.0
 
             try:
                 if initialized and latest_snapshot and latest_snapshot.get('connected'):
@@ -872,13 +1119,19 @@ def main():
                     if mono >= next_background:
                         next_background=mono+background_interval
                         background_work()
-                if core_failures >= 3:
+                if core_budget.expired():
+                    print('Core loopback outage exceeded grace; Gateway exits for supervisor recovery',
+                          file=sys.stderr,flush=True)
                     return
             except (OSError,ValueError):
-                core_failures+=1
-                if core_failures >= 3:
+                if core_budget.failure():
+                    print('Core loopback outage exceeded grace; Gateway exits for supervisor recovery',
+                          file=sys.stderr,flush=True)
                     return
 
+            report=latency.report_due()
+            if report is not None:
+                print(report,file=sys.stderr,flush=True)
             target=SNIPER_LOOP_SECONDS if sniper and initialized else normal_poll_seconds
             elapsed=time.perf_counter()-loop_started
             if target > elapsed:
@@ -890,7 +1143,16 @@ def main():
                 else:
                     stop_requested.wait(remaining)
     finally:
-        cleanup_gateway(transport, native, executor, mt5, dom_cache, lock)
+        try:
+            cleanup_gateway(transport, native, executor, mt5, dom_cache, lock)
+        finally:
+            # Retain terminal ownership through the entire cleanup barrier.
+            # Only after the Gateway and send journal have stopped may a
+            # successor Core bind this same MetaTrader data directory.
+            try:
+                binding.release()
+            finally:
+                sys.stderr = previous_stderr
 
 
 if __name__ == "__main__":

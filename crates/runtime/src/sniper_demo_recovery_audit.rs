@@ -4,7 +4,9 @@
 //! order. Its absence of local pending rows never proves the broker flat.
 use anyhow::{ensure,Result};
 use braintrade_domain::Telemetry;
-use rusqlite::{params,Connection};
+use rusqlite::Connection;
+#[cfg(test)]
+use rusqlite::params;
 use serde_json::{json,Value};
 use std::collections::BTreeMap;
 

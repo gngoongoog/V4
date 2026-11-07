@@ -15,6 +15,10 @@ pkg=SourceFileLoader('braintrade_pkg',str(ROOT/'scripts'/'package-portable.py'))
 STAGE=ROOT/'apps'/'tauri'
 
 def main():
+  # Check the entire transitive local import closure BEFORE downloading large
+  # runtime assets or publishing any executable. A successful SHA manifest
+  # alone cannot detect a Python module omitted from the bundle.
+  pkg.validate_gateway_import_closure()
   cache=ROOT/'.package-cache';cache.mkdir(parents=True,exist_ok=True)
   python=STAGE/'runtime'/'python'
   for asset in pkg.ASSETS:
@@ -24,6 +28,8 @@ def main():
   (python/'python313._pth').write_text('python313.zip\n.\nLib/site-packages\n../gateway\nimport site\n',encoding='ascii')
   gateway=STAGE/'runtime'/'gateway';gateway.mkdir(parents=True,exist_ok=True)
   for f in pkg.GATEWAY_FILES:shutil.copy2(ROOT/'gateway'/f,gateway/f)
+  missing=[f for f in pkg.GATEWAY_FILES if not (gateway/f).is_file()]
+  if missing:raise RuntimeError('Incomplete packaged Gateway modules: '+', '.join(missing))
   mt5=STAGE/'mt5'/'Experts';mt5.mkdir(parents=True,exist_ok=True)
   shutil.copy2(ROOT/'mt5'/pkg.NATIVE_EA,mt5/pkg.NATIVE_EA)
   p=STAGE/'runtime'/'validation.json'

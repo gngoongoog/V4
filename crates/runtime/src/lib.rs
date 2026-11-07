@@ -58,6 +58,12 @@ mod partial_exit_next_shadow;
 mod partial_exit_stage_contract;
 mod partial_exit_stage_producer;
 mod partial_exit_stage_reservation;
+mod partial_exit_stage_outbox;
+mod partial_exit_stage_consent;
+mod partial_exit_trade_approval;
+mod partial_exit_tp1_held;
+mod partial_exit_tp1_arm;
+mod partial_exit_tp1_release;
 mod partial_exit_account_schema;
 mod pending_cancellation;
 mod learning_inference;
@@ -86,9 +92,373 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::{Arc, Mutex, atomic::{AtomicU8, Ordering}},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+/// Keep non-critical maintenance from running once for every Sniper quote
+/// request. A due maintenance pass still occurs under sustained tick traffic.
+const CORE_HOUSEKEEPING_INTERVAL: Duration = Duration::from_millis(50);
+
+fn housekeeping_due(now: Instant, next: &mut Instant) -> bool {
+    if now < *next { return false; }
+    *next = now + CORE_HOUSEKEEPING_INTERVAL;
+    true
+}
+
+/// Run one non-execution maintenance owner per 50ms opportunity, never all
+/// four database-maintaining services in the same housekeeping pass. Their
+/// order is stable and each receives a turn at least every four opportunities
+/// while Core keeps servicing requests; this is scheduling, NOT SQLite worker
+/// isolation or a guarantee that one expensive transaction cannot block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MaintenanceStage { Studio, News, Backtest, Evaluation }
+
+impl MaintenanceStage {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Studio => "studio",
+            Self::News => "news",
+            Self::Backtest => "backtest",
+            Self::Evaluation => "evaluation",
+        }
+    }
+}
+#[derive(Default)]
+struct MaintenanceRotation { step: usize }
+impl MaintenanceRotation {
+    fn next(&mut self) -> MaintenanceStage {
+        let stage = match self.step {
+            0 => MaintenanceStage::Studio,
+            1 => MaintenanceStage::News,
+            2 => MaintenanceStage::Backtest,
+            _ => MaintenanceStage::Evaluation,
+        };
+        self.step = (self.step + 1) % 4;
+        stage
+    }
+}
+
+/// Explicitly offline calculators; none references Engine, broker, shared status,
+/// or the trading SQLite connection. Never offload authorization/execution routes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OfflineResearchKind { Lifecycle, Admission, Bridge, DemoDealAudit }
+
+fn offline_research_kind(method: &str, path: &str) -> Option<OfflineResearchKind> {
+    if method != "POST" { return None; }
+    match path {
+        "/v1/research/execution-lifecycle" => Some(OfflineResearchKind::Lifecycle),
+        "/v1/research/execution-admission" => Some(OfflineResearchKind::Admission),
+        "/v1/research/execution-bridge" => Some(OfflineResearchKind::Bridge),
+        "/v1/research/demo-deal-audit" => Some(OfflineResearchKind::DemoDealAudit),
+        _ => None,
+    }
+}
+
+fn offline_research_calculate(kind: OfflineResearchKind, body: &[u8]) -> Result<Value> {
+    match kind {
+        OfflineResearchKind::Lifecycle => research_order_lifecycle::replay(body),
+        OfflineResearchKind::Admission => research_admission::evaluate(body),
+        OfflineResearchKind::Bridge => research_execution_bridge::compare(body),
+        OfflineResearchKind::DemoDealAudit => research_demo_deal_audit::audit(body),
+    }
+}
+
+/// A single bounded worker prevents CPU-heavy, caller-supplied simulations
+/// from holding the Core execution/reconciliation request loop. Only requests
+/// already authenticated and body-size checked by the main thread reach it.
+/// One running job + one waiting job, no unbounded work/thread creation.
+fn start_offline_research_worker() -> Result<std::sync::mpsc::SyncSender<(
+    tiny_http::Request, OfflineResearchKind, Vec<u8>,
+)>> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<(
+        tiny_http::Request, OfflineResearchKind, Vec<u8>,
+    )>(1);
+    std::thread::Builder::new().name("braintrade-offline-research".into()).spawn(move || {
+        while let Ok((request, kind, body)) = receiver.recv() {
+            // A malformed caller scenario must never kill the only research
+            // worker or propagate a panic into Core's broker-control loop.
+            let result = std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(|| offline_research_calculate(kind, &body))
+            );
+            let (status, value) = match result {
+                Ok(Ok(value)) => (200, value),
+                Ok(Err(error)) => (400, json!({"error": error.to_string()})),
+                Err(_) => (500, json!({"error": "Offline research worker failed"})),
+            };
+            let response = tiny_http::Response::from_string(value.to_string())
+                .with_status_code(status)
+                .with_header(tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap());
+            let _ = request.respond(response);
+        }
+    })?;
+    Ok(sender)
+}
+
+/// Immutable backup directory reads and integrity checks can scan gigabytes.
+/// They require no access to Engine's SQLite connection or broker controls.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BackupReadKind { List, Validate }
+
+fn backup_read_kind(method: &str, path: &str) -> Option<BackupReadKind> {
+    match (method,path) {
+        ("GET","/v1/backups") => Some(BackupReadKind::List),
+        ("POST","/v1/backup/restore/validate") => Some(BackupReadKind::Validate),
+        _ => None,
+    }
+}
+
+/// Keep STOP, safe exit, reconnect, and broker reconciliation available while
+/// a backup integrity scan runs. START, restores and other state mutations
+/// must not race this I/O-heavy read-only background task.
+fn mutation_allowed_during_backup_scan(method: &str, path: &str) -> bool {
+    // Backup snapshots must never race operator configuration, risk policy,
+    // manual entries, new history jobs, or arbitrary execution APIs. Preserve
+    // only the existing broker heartbeat, durable results and exit/cancel work
+    // needed to reconcile positions discovered after admission.
+    method=="GET" || matches!((method,path),
+        ("POST","/v1/stop") |
+        ("POST","/v1/shutdown") |
+        ("POST","/v1/reconnect") |
+        ("POST","/v1/gateway/snapshot") |
+        ("PUT","/v1/execution/pulse") |
+        ("POST","/v1/execution/sync") |
+        ("POST","/v1/execution/authorize") |
+        ("POST","/v1/execution/result") |
+        ("POST","/v1/execution/close-selected") |
+        ("POST","/v1/execution/cancel-pending"))
+}
+
+fn backup_operation_gate(phase:u8,method:&str,path:&str)->Result<()> {
+    if phase!=0 && !mutation_allowed_during_backup_scan(method,path) {
+        bail!("انتظر انتهاء عملية النسخ أو فحص الأرشيف قبل START أو تغيير البيانات");
+    }
+    // Read-only integrity scans can be interrupted on full exit. A writer
+    // cannot be cut short without leaving an ambiguous incomplete archive.
+    if phase==2 && matches!((method,path),("POST","/v1/shutdown")|("POST","/v1/reconnect")) {
+        bail!("عملية كتابة النسخة الاحتياطية جارية؛ انتظر اكتمالها قبل الخروج الكامل أو إعادة الاتصال");
+    }
+    Ok(())
+}
+
+type BackupReadJob = (tiny_http::Request, BackupReadKind, Vec<u8>);
+
+fn start_backup_read_worker(root: PathBuf, active: Arc<AtomicU8>)
+    -> Result<std::sync::mpsc::SyncSender<BackupReadJob>> {
+    let (tx,rx) = std::sync::mpsc::sync_channel::<BackupReadJob>(1);
+    std::thread::Builder::new().name("braintrade-backup-read".into()).spawn(move || {
+        while let Ok((request, kind, body)) = rx.recv() {
+            // Clear the START fence on every exit path, even after a panic
+            // while inspecting damaged/untrusted archive members.
+            struct Release(Arc<AtomicU8>);
+            impl Drop for Release {
+                fn drop(&mut self) { self.0.store(0, Ordering::Release); }
+            }
+            let response={
+                let _release=Release(active.clone());
+                let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    match kind {
+                        BackupReadKind::List => backup::list(&root),
+                        BackupReadKind::Validate => backup::validate_request(&root,&body),
+                    }
+                }));
+                let (code,value) = match result {
+                    Ok(Ok(value)) => (200,value),
+                    Ok(Err(e)) => (400,json!({"error":e.to_string()})),
+                    Err(_) => (500,json!({"error":"Backup verification worker failed"})),
+                };
+                tiny_http::Response::from_string(value.to_string())
+                    .with_status_code(code)
+                    .with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap())
+            };
+            // Release the START fence *before* the success/error response
+            // becomes visible to the client. Otherwise a rapid follow-up
+            // START or validation can be spuriously rejected as still busy.
+            let _=request.respond(response);
+        }
+    })?;
+    Ok(tx)
+}
+
+
+/// Serializes a coherent view of offline research rows through a separate
+/// read-only connection; no Engine or broker state enters this function.
+/// Failed exports remove their own hidden staging directory.
+fn export_research_dataset(db:&Connection,root:&Path)->Result<Value> {
+    struct Staging { path: PathBuf, promoted: bool }
+    impl Drop for Staging {
+        fn drop(&mut self) {
+            if !self.promoted { let _=fs::remove_dir_all(&self.path); }
+        }
+    }
+    let name=format!("research-{}-{}",now_ms(),uuid::Uuid::new_v4());
+    let exports=root.join("exports");
+    fs::create_dir_all(&exports)?;
+    let staging=exports.join(format!(".{name}.tmp"));
+    fs::create_dir(&staging)?;
+    let mut guard=Staging{path:staging.clone(),promoted:false};
+    // The read transaction freezes a single SQLite WAL snapshot for all
+    // five source tables, rather than mixing different broker observation
+    // moments if Core commits a new snapshot during the export.
+    db.execute_batch("BEGIN DEFERRED TRANSACTION")?;
+    let result=(||->Result<Value>{
+        for table in ["decisions","mode_decisions","paper_events","candles","opportunity_setups"] {
+            let sql=match table {
+                "opportunity_setups"=>"SELECT context,first_seen_ms,payload FROM opportunity_setups ORDER BY first_seen_ms,setup_id",
+                "decisions"=>"SELECT context,timestamp_ms,payload FROM decisions ORDER BY id",
+                "mode_decisions"=>"SELECT context,timestamp_ms,payload FROM mode_decisions ORDER BY id",
+                "paper_events"=>"SELECT context,timestamp_ms,json_object('kind',kind,'detail',json(payload)) FROM paper_events ORDER BY id",
+                _=>"SELECT context,bar_time*1000,json_object('timeframe',timeframe,'candle',json(payload)) FROM candles ORDER BY context,timeframe,bar_time"
+            };
+            let mut stmt=db.prepare(sql)?;
+            let mut rows=stmt.query([])?;
+            let mut output=fs::File::create(staging.join(format!("{table}.jsonl")))?;
+            while let Some(row)=rows.next()? {
+                let payload:Value=serde_json::from_str(&row.get::<_,String>(2)?)?;
+                writeln!(output,"{}",json!({
+                    "context":row.get::<_,String>(0)?,
+                    "timestamp_ms":row.get::<_,u64>(1)?,
+                    "payload":payload
+                }))?;
+            }
+            output.sync_all()?;
+        }
+        atomic_write(&staging.join("README.txt"),
+            b"BrainTrade research export. Virtual fills only; UTC timestamps in milliseconds. See Source/docs/RESEARCH.md for limitations.")?;
+        db.execute_batch("COMMIT")?;
+        let dest=exports.join(name);
+        fs::rename(&staging,&dest)?;
+        guard.promoted=true;
+        Ok(json!({"path":dest,"note":"Research export: candles, decisions and virtual ledger (JSONL)."}))
+    })();
+    if result.is_err() {let _=db.execute_batch("ROLLBACK");}
+    result
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackupWriteKind { Create, BrainExport, BrainImport, ResearchExport, LearningExport }
+impl BackupWriteKind {
+    fn label(self)->&'static str {
+        match self {Self::Create=>"create",Self::BrainExport=>"brain_export",
+            Self::BrainImport=>"brain_import",Self::ResearchExport=>"research_export",
+            Self::LearningExport=>"learning_export"}
+    }
+}
+fn backup_write_kind(method:&str,path:&str)->Option<BackupWriteKind> {
+    match (method,path) {
+        ("POST","/v1/backup")=>Some(BackupWriteKind::Create),
+        ("POST","/v1/brain-snapshot/export")=>Some(BackupWriteKind::BrainExport),
+        ("POST","/v1/brain-snapshot/import")=>Some(BackupWriteKind::BrainImport),
+        ("POST","/v1/export")=>Some(BackupWriteKind::ResearchExport),
+        ("POST","/v1/learning/export")=>Some(BackupWriteKind::LearningExport),
+        _=>None,
+    }
+}
+type BackupWriteJob=(tiny_http::Request, BackupWriteKind, Config, Vec<u8>);
+
+/// Online SQLite backup copies from an independent read-only connection.
+/// SQLite's online-backup API takes a coherent source snapshot; the Core
+/// connection is never shared across threads. Guard START and restore on the
+/// Core actor until the archive has been fully written and validated.
+fn start_backup_write_worker(root:PathBuf, phase:Arc<AtomicU8>,
+    completed:std::sync::mpsc::Sender<Value>)
+    ->Result<std::sync::mpsc::SyncSender<BackupWriteJob>> {
+    let (tx,rx)=std::sync::mpsc::sync_channel::<BackupWriteJob>(1);
+    std::thread::Builder::new().name("braintrade-backup-writer".into()).spawn(move || {
+        while let Ok((request,kind,config,body))=rx.recv() {
+            struct Release(Arc<AtomicU8>);
+            impl Drop for Release {
+                fn drop(&mut self){self.0.store(0,Ordering::Release);}
+            }
+            let response={
+                let _release=Release(phase.clone());
+                let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||->Result<Value>{
+                    // Read-only SQLite in WAL mode is safe with Core's one
+                    // writer; no new transaction is allowed on this connection.
+                    match kind {
+                        BackupWriteKind::Create|BackupWriteKind::BrainExport|
+                        BackupWriteKind::ResearchExport|BackupWriteKind::LearningExport=>{
+                            let db=Connection::open_with_flags(root.join("events.sqlite"),
+                                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+                            match kind {
+                                BackupWriteKind::Create=>backup::create(&db,&root,&config,now_ms()),
+                                BackupWriteKind::BrainExport=>backup::export_brain(&db,&root,&config,now_ms()),
+                                BackupWriteKind::ResearchExport=>export_research_dataset(&db,&root),
+                                BackupWriteKind::LearningExport=>learning::export_dataset(&db,&root,now_ms()),
+                                BackupWriteKind::BrainImport=>unreachable!(),
+                            }
+                        }
+                        BackupWriteKind::BrainImport=>backup::import_brain(&root,&body,now_ms()),
+                    }
+                }));
+                let (code,value)=match result {
+                    Ok(Ok(v))=>(200,v),
+                    Ok(Err(e))=>(400,json!({"error":e.to_string()})),
+                    Err(_)=>(500,json!({"error":"Backup write worker failed"})),
+                };
+                let _=completed.send(json!({"operation":kind.label(),"success":code==200,
+                    "archive_name":value["name"],"brain_file":value["file_name"],
+                    "error":if code==200 {Value::Null}else{value["error"].clone()}}));
+                tiny_http::Response::from_string(value.to_string()).with_status_code(code)
+                    .with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap())
+            };
+            let _=request.respond(response);
+        }
+    })?;
+    Ok(tx)
+}
+
+/// Expensive bulk operations still require STOP and a reconciled flat broker
+/// context, even when moved to a separate read-only SQLite worker. Remaining
+/// synchronous restore stages and special exports share Core's actor; this is
+/// an admission gate, not a guarantee of broker execution latency.
+fn ensure_bulk_io_idle(status: &Status, unresolved_broker_intent: bool) -> Result<()> {
+    anyhow::ensure!(!status.requested_run,
+        "أوقف START قبل عملية النسخ أو التصدير الثقيلة؛ منع تأخير القناص");
+    anyhow::ensure!(!unresolved_broker_intent,
+        "لا تنفذ عملية ثقيلة أثناء تسوية أمر وسيط غير محسوم");
+    if let Some(t) = status.telemetry.as_ref() {
+        anyhow::ensure!(t.positions.is_empty() && t.pending_orders == 0,
+            "عملية البيانات الثقيلة تتطلب حساباً بلا مراكز أو أوامر معلقة");
+    }
+    Ok(())
+}
+
+/// Saving completed historical Backtest/Evaluation evidence can serialize a
+/// large report/history JSON and commit it to SQLite. A previous maintenance
+/// pass could perform that work while Core was armed, or while an owned broker
+/// position/command was still being reconciled. Keep the result queued in the
+/// service's existing worker channel until research persistence is idle.
+fn historical_result_persistence_allowed(status: &Status, unresolved_broker_intent: bool) -> bool {
+    !status.requested_run && !unresolved_broker_intent
+        && status.telemetry.as_ref().is_none_or(|t|
+            t.positions.is_empty() && t.pending_orders == 0)
+}
+
+fn is_bulk_io_route(method: &str, path: &str) -> bool {
+    matches!((method,path),
+        ("POST","/v1/backup")|
+        ("POST","/v1/brain-snapshot/export")|
+        ("POST","/v1/brain-snapshot/import")|
+        ("POST","/v1/backup/restore/validate")|
+        ("GET","/v1/backups")|
+        ("POST","/v1/learning/export")|
+        ("POST","/v1/export"))
+}
+
+/// Sanitized route categories for slow-route diagnostics; never include
+/// user-controlled URLs, account identifiers, HTTP payloads or secrets.
+fn diagnostic_route_class(path: &str) -> &'static str {
+    if path.starts_with("/v1/execution/") {"execution"}
+    else if path.starts_with("/v1/gateway/") {"gateway"}
+    else if path.starts_with("/v1/backup") || path.starts_with("/v1/backups")
+         || path.starts_with("/v1/brain-snapshot/") {"backup"}
+    else if path.starts_with("/v1/learning/") {"learning"}
+    else if path.starts_with("/v1/backtest/") {"backtest"}
+    else if path.starts_with("/v1/studio/") {"studio"}
+    else if path.starts_with("/v1/research/") {"research"}
+    else {"other"}
+}
 
 pub const PORT: u16 = 18741;
 pub const BASE: &str = "http://127.0.0.1:18741";
@@ -231,7 +601,14 @@ pub enum ShutdownError { Rejected(String), Uncertain(String) }
 pub enum CheckedPostError { Rejected(String), Uncertain(String) }
 impl Client{
     pub fn new(dir:&Path)->Result<Self>{Ok(Self{http:reqwest::blocking::Client::builder().no_proxy().timeout(Duration::from_secs(4)).build()?,key:read_ipc_key(dir)?})}
-    pub fn get(&self,path:&str)->Result<Value>{Ok(self.http.get(format!("{BASE}{path}")).bearer_auth(&self.key).send()?.error_for_status()?.json()?)}
+    pub fn get(&self,path:&str)->Result<Value>{
+        let request=self.http.get(format!("{BASE}{path}")).bearer_auth(&self.key);
+        // A full integrity scan of sealed backup archives is a separate
+        // bounded Core worker and may need much longer than a status poll.
+        // Do not give ordinary trading/status requests this larger timeout.
+        let request=if path=="/v1/backups"{request.timeout(Duration::from_secs(60))}else{request};
+        Ok(request.send()?.error_for_status()?.json()?)
+    }
     pub fn post(&self,path:&str,body:Value)->Result<Value>{let response=self.http.post(format!("{BASE}{path}")).bearer_auth(&self.key).json(&body).send()?;let code=response.status();let value:Value=response.json()?;if !code.is_success(){bail!("{}",value["error"].as_str().unwrap_or("Request failed"));}Ok(value)}
     pub fn checked_post(&self,path:&str,body:Value,timeout:Duration)->std::result::Result<Value,CheckedPostError>{
         let response=self.http.post(format!("{BASE}{path}")).bearer_auth(&self.key)
@@ -252,7 +629,7 @@ impl Client{
     }
 }
 pub(crate) struct Shared{pub status:Status,pub config:Config,pub token:Option<String>}
-struct Engine{dir:PathBuf,shared:Arc<Mutex<Shared>>,db:Connection,gateway:Option<Child>,gateway_retry_ms:u64,shutting_down:bool,instance_id:String,shutdown_barrier:Option<lifecycle::ShutdownBarrier>,research:research::Research,backtests:backtest::Service,evaluations:evaluation::Service,news:news::Service,learning:learning::Service,inference:learning_inference::Service,scoring:learning_scoring::Service,studio:studio::Service,hvn:hvn::Service,execution:execution::Service}
+struct Engine{dir:PathBuf,shared:Arc<Mutex<Shared>>,backup_io_phase:Arc<AtomicU8>,db:Connection,gateway:Option<Child>,gateway_retry_ms:u64,shutting_down:bool,instance_id:String,shutdown_barrier:Option<lifecycle::ShutdownBarrier>,research:research::Research,backtests:backtest::Service,evaluations:evaluation::Service,news:news::Service,learning:learning::Service,inference:learning_inference::Service,scoring:learning_scoring::Service,studio:studio::Service,hvn:hvn::Service,execution:execution::Service}
 #[derive(Deserialize)]
 struct ConfigRequest{config:Config,#[serde(default)]telegram_token:String,#[serde(default)]clear_telegram_token:bool}
 #[derive(Serialize)]
@@ -414,8 +791,71 @@ impl Engine{
         Ok(mode)
     }
 
-    fn tick(&mut self){let cfg=self.shared.lock().unwrap().config.clone();self.studio.set_learning_frozen(self.execution.learning_frozen());self.studio.tick(&self.db,&cfg,now_ms());self.news.tick(&self.db,now_ms());self.backtests.tick(&self.db,now_ms());self.evaluations.tick(&self.db);{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);}if now_ms()>=self.gateway_retry_ms{self.gateway_retry_ms=now_ms()+15_000;if let Err(error)=self.launch_gateway(){self.shared.lock().unwrap().status.message=error.to_string();}}}
+    fn may_persist_historical_results(&self) -> bool {
+        let status = self.shared.lock().unwrap().status.clone();
+        if !historical_result_persistence_allowed(&status, false) {
+            return false;
+        }
+        // Unknown journal state must not be mistaken for "no broker work".
+        let pending = self.execution.pending(&self.db).unwrap_or(true);
+        historical_result_persistence_allowed(&status, pending)
+    }
+    fn tick(&mut self, stage: MaintenanceStage) -> Duration {
+        let now = now_ms();
+        // Always refresh process liveness, operator state and Gateway supervision
+        // before best-effort research persistence, which can involve SQLite I/O.
+        self.studio.set_learning_frozen(self.execution.learning_frozen());
+        {
+            let mut s = self.shared.lock().unwrap();
+            s.status.refresh(now);
+            s.status.execution_enabled = self.execution.enabled(&s.status);
+        }
+        if now >= self.gateway_retry_ms {
+            self.gateway_retry_ms = now.saturating_add(15_000);
+            if let Err(error) = self.launch_gateway() {
+                self.shared.lock().unwrap().status.message = error.to_string();
+            }
+        }
+        let started = Instant::now();
+        // An archive holds its own read-only WAL snapshot; nonessential
+        // Studio/News/Backtest/Evaluation SQLite writes would compete with it
+        // and enlarge the WAL. Supervision and STOP/MT5 reconciliation remain
+        // active above this gate; history-import timeout still progresses.
+        if self.backup_io_phase.load(Ordering::Acquire)!=0 {
+            if stage==MaintenanceStage::Backtest {
+                self.backtests.check_loading_timeout(now);
+            }
+            return started.elapsed();
+        }
+        match stage {
+            MaintenanceStage::Studio => {
+                let cfg = self.shared.lock().unwrap().config.clone();
+                self.studio.tick(&self.db, &cfg, now);
+            }
+            MaintenanceStage::News => self.news.tick(&self.db, now),
+            MaintenanceStage::Backtest => {
+                // Loading timeouts must still progress even while a finished
+                // report's potentially large SQLite commit is deferred.
+                self.backtests.check_loading_timeout(now);
+                if self.may_persist_historical_results() {
+                    self.backtests.tick(&self.db, now);
+                }
+            },
+            MaintenanceStage::Evaluation => {
+                if self.may_persist_historical_results() {
+                    self.evaluations.tick(&self.db);
+                }
+            },
+        }
+        started.elapsed()
+    }
     fn route(&mut self,method:&str,path:&str,body:&[u8])->Result<Value>{
+        backup_operation_gate(self.backup_io_phase.load(Ordering::Acquire),method,path)?;
+        if is_bulk_io_route(method,path) {
+            let unresolved=self.execution.pending(&self.db)?;
+            let status={let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());s.status.clone()};
+            ensure_bulk_io_idle(&status,unresolved)?;
+        }
         // Reconfiguration/reconnect/restore can terminate the exact Gateway
         // process that owns an outstanding HVN tick-history read. Reject these
         // operations until its result is reconciled; leave STOP and safe full
@@ -622,7 +1062,8 @@ impl Engine{
             }
         }
         if path=="/v1/trading/preview" && method=="POST" {
-            let v:Value=serde_json::from_slice(body)?;let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());let mut c=s.config.clone();let basis=serde_json::from_value::<braintrade_domain::commission::Basis>(v.get("commission_basis").cloned().unwrap_or(json!("round_trip")))?;c.risk.commission_per_lot=basis.round_trip(v["commission_per_lot"].as_f64().context("Commission required")?).map_err(anyhow::Error::msg)?;c.trading.pip_points=v["pip_points"].as_f64().context("Pip size required")?;if let Some(price)=v.get("sniper_pip_price"){c.trading.sniper_pip_price=price.as_f64().context("Pip price must be a number")?;}if let Some(ticks)=v.get("slippage_ticks"){c.risk.slippage_ticks=ticks.as_f64().context("Slippage ticks must be a number")?;}let lots=v["lots"].as_f64().context("Lots required")?;c.validate().map_err(anyhow::Error::msg)?;if !lots.is_finite()||lots<=0.||lots>100. {bail!("Lots must be positive and at most 100");}
+            let v:Value=serde_json::from_slice(body)?;let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());let mut c=s.config.clone();let basis=serde_json::from_value::<braintrade_domain::commission::Basis>(v.get("commission_basis").cloned().unwrap_or(json!("round_trip")))?;c.risk.commission_per_lot=basis.round_trip(v["commission_per_lot"].as_f64().context("Commission required")?).map_err(anyhow::Error::msg)?;c.trading.pip_points=v["pip_points"].as_f64().context("Pip size required")?;if let Some(price)=v.get("sniper_pip_price"){c.trading.sniper_pip_price=price.as_f64().context("Pip price must be a number")?;}
+    if let Some(ticks)=v.get("slippage_ticks"){c.risk.slippage_ticks=ticks.as_f64().context("Slippage ticks must be a number")?;}let lots=v["lots"].as_f64().context("Lots required")?;c.validate().map_err(anyhow::Error::msg)?;if !lots.is_finite()||lots<=0.||lots>100. {bail!("Lots must be positive and at most 100");}
             let commission=braintrade_domain::commission::round_trip_charge(c.risk.commission_per_lot,lots)
                 .map_err(anyhow::Error::msg)?;
             let commission_examples=json!({
@@ -694,7 +1135,12 @@ impl Engine{
             return Ok(result);
         }
         match(method,path){
-            ("GET","/v1/status")=>{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());let mut value=serde_json::to_value(&s.status)?;value["selected_owner"]=json!(self.execution.selected_owner_for_status(&s.status));value["learning_control"]=self.execution.learning_status();value["core_process"]=json!({"pid":std::process::id(),"instance_id":self.instance_id});Ok(value)},
+            ("GET","/v1/status")=>{let mut s=self.shared.lock().unwrap();s.status.refresh(now_ms());let mut value=serde_json::to_value(&s.status)?;value["selected_owner"]=json!(self.execution.selected_owner_for_status(&s.status));value["learning_control"]=self.execution.learning_status();value["core_process"]=json!({"pid":std::process::id(),"instance_id":self.instance_id});
+                let phase=self.backup_io_phase.load(Ordering::Acquire);
+                value["backup_operation"]=json!({"busy":phase!=0,"phase":match phase{
+                    1=>"integrity_read",2=>"archive_write",_=>"idle"
+                },"new_trades_fenced":phase!=0});
+                Ok(value)},
             ("GET","/v1/config")=>{let s=self.shared.lock().unwrap();Ok(json!({"config":s.config,"token_saved":s.token.is_some()}))},
             ("GET","/v1/learning/account-evidence")=>{
                 let (telemetry,fresh)={
@@ -722,15 +1168,12 @@ impl Engine{
                 let _=self.event("risk_settings_changed",detail);
                 Ok(json!({"ok":true}))
             },
-            ("POST","/v1/export")=>{
-                let name=format!("research-{}-{}",now_ms(),uuid::Uuid::new_v4());let staging=self.dir.join("exports").join(format!(".{name}.tmp"));fs::create_dir_all(&staging)?;
-                for table in["decisions","mode_decisions","paper_events","candles","opportunity_setups"]{let sql=match table{"opportunity_setups"=>"SELECT context,first_seen_ms,payload FROM opportunity_setups ORDER BY first_seen_ms,setup_id","decisions"=>"SELECT context,timestamp_ms,payload FROM decisions ORDER BY id","mode_decisions"=>"SELECT context,timestamp_ms,payload FROM mode_decisions ORDER BY id","paper_events"=>"SELECT context,timestamp_ms,json_object('kind',kind,'detail',json(payload)) FROM paper_events ORDER BY id",_=>"SELECT context,bar_time*1000,json_object('timeframe',timeframe,'candle',json(payload)) FROM candles ORDER BY context,timeframe,bar_time"};let mut stmt=self.db.prepare(sql)?;let mut rows=stmt.query([])?;let mut output=fs::File::create(staging.join(format!("{table}.jsonl")))?;while let Some(row)=rows.next()?{let payload:Value=serde_json::from_str(&row.get::<_,String>(2)?)?;writeln!(output,"{}",json!({"context":row.get::<_,String>(0)?,"timestamp_ms":row.get::<_,u64>(1)?,"payload":payload}))?;}output.sync_all()?;}
-                atomic_write(&staging.join("README.txt"),b"BrainTrade research export. Virtual fills only; UTC timestamps in milliseconds. See Source/docs/RESEARCH.md for limitations.")?;let dest=self.dir.join("exports").join(name);fs::rename(staging,&dest)?;Ok(json!({"path":dest,"note":"Research export: candles, decisions and virtual ledger (JSONL)."}))
-            },
+            ("POST","/v1/export")=>export_research_dataset(&self.db,&self.dir),
             ("POST","/v1/config")=>{
                 let request:ConfigRequest=serde_json::from_slice(body)?;request.config.validate().map_err(anyhow::Error::msg)?;
                 if !request.config.mt5_path.is_empty(){let path=Path::new(&request.config.mt5_path);if !path.is_absolute()||!path.is_file()||path.extension().and_then(|v|v.to_str()).map(|v|v.to_ascii_lowercase())!=Some("exe".into()){bail!("MT5 path must point to an existing terminal64.exe file");}}
-                let token=request.telegram_token.trim();if !token.is_empty()&&(token.len()<20||!token.contains(':')||token.chars().any(char::is_whitespace)){bail!("Invalid Telegram bot token format");}if request.clear_telegram_token&&!token.is_empty(){bail!("Cannot save and remove a token together");}
+                let token=request.telegram_token.trim();if !token.is_empty()&&(token.len()<20||!token.contains(':')||token.chars().any(char::is_whitespace)){bail!("Invalid Telegram bot token format");}
+    if request.clear_telegram_token&&!token.is_empty(){bail!("Cannot save and remove a token together");}
                 let existing=self.shared.lock().unwrap().token.clone();let effective=if request.clear_telegram_token{None}else if !token.is_empty(){Some(token.to_owned())}else{existing};if request.config.telegram_enabled&&effective.is_none(){bail!("Enter a bot token before enabling Telegram");}
                 let pending=self.execution.pending(&self.db)?;
                 let current={let mut state=self.shared.lock().unwrap();state.status.refresh(now_ms());state.status.clone()};
@@ -774,7 +1217,8 @@ impl Engine{
                 Ok(json!({"ok":true}))
             },
             ("POST","/v1/gateway/snapshot")=>{
-                let telemetry:Telemetry=serde_json::from_slice(body)?;if !telemetry.validate(){bail!("Invalid telemetry");}let(config,run)={let s=self.shared.lock().unwrap();(s.config.for_account(&telemetry),s.status.requested_run)};let observed_ms=now_ms();let mut next=self.research.clone();let frames=self.studio.live_frames(&telemetry,observed_ms);let(analysis,paper)=next.update_with_frames(&mut self.db,&telemetry,&config,run,observed_ms,&frames)?;self.learning.observe(&mut self.db,&telemetry,&analysis,observed_ms);self.inference.observe(&self.db,&telemetry,&analysis,observed_ms);self.scoring.observe(&self.db,observed_ms);self.research=next;let execution_frames=self.studio.execution_frames(&telemetry,observed_ms);self.execution.observe(&self.db,&telemetry,&config,run,&execution_frames,observed_ms)?;let mut s=self.shared.lock().unwrap();let changed=s.status.telemetry.as_ref().map(|t|t.connected)!=Some(telemetry.connected);if changed{self.event("gateway_connection",json!({"connected":telemetry.connected}))?;}if !telemetry.error.is_empty(){s.status.message=telemetry.error.clone();}else{s.status.message="اتصال MT5 قائم. الوضع المختار وحده ينفذ، وبقية العقول للمشورة أو التدريب الافتراضي.".into();}s.status.analysis=analysis;s.status.paper=paper;s.status.telemetry=Some(telemetry);s.status.last_received_ms=Some(observed_ms);s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);Ok(json!({"ok":true}))
+                let telemetry:Telemetry=serde_json::from_slice(body)?;if !telemetry.validate(){bail!("Invalid telemetry");}let(config,run)={let s=self.shared.lock().unwrap();(s.config.for_account(&telemetry),s.status.requested_run)};let observed_ms=now_ms();let mut next=self.research.clone();let frames=self.studio.live_frames(&telemetry,observed_ms);let(analysis,paper)=next.update_with_frames(&mut self.db,&telemetry,&config,run,observed_ms,&frames)?;self.learning.observe(&mut self.db,&telemetry,&analysis,observed_ms);self.inference.observe(&self.db,&telemetry,&analysis,observed_ms);self.scoring.observe(&self.db,observed_ms);self.research=next;let execution_frames=self.studio.execution_frames(&telemetry,observed_ms);self.execution.observe(&self.db,&telemetry,&config,run,&execution_frames,observed_ms)?;let mut s=self.shared.lock().unwrap();let changed=s.status.telemetry.as_ref().map(|t|t.connected)!=Some(telemetry.connected);if changed{self.event("gateway_connection",json!({"connected":telemetry.connected}))?;}
+    if !telemetry.error.is_empty(){s.status.message=telemetry.error.clone();}else{s.status.message="اتصال MT5 قائم. الوضع المختار وحده ينفذ، وبقية العقول للمشورة أو التدريب الافتراضي.".into();}s.status.analysis=analysis;s.status.paper=paper;s.status.telemetry=Some(telemetry);s.status.last_received_ms=Some(observed_ms);s.status.refresh(now_ms());s.status.execution_enabled=self.execution.enabled(&s.status);Ok(json!({"ok":true}))
             },
             ("GET","/v1/events")=>{let mut statement=self.db.prepare("SELECT id,timestamp_ms,kind,detail FROM events ORDER BY id DESC LIMIT 100")?;let events=statement.query_map([],|r|Ok(Event{id:r.get(0)?,timestamp_ms:r.get(1)?,kind:r.get(2)?,detail:serde_json::from_str(&r.get::<_,String>(3)?).unwrap_or(Value::Null)}))?.collect::<std::result::Result<Vec<_>,_>>()?;Ok(json!({"events":events}))},
             ("POST","/v1/shutdown")=>{
@@ -813,10 +1257,340 @@ impl Engine{
 pub fn run_core()->Result<()>{
     let dir=data_dir();fs::create_dir_all(&dir)?;
     #[cfg(unix)] {use std::os::unix::fs::PermissionsExt;fs::set_permissions(&dir,fs::Permissions::from_mode(0o700))?;}
-    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}recover_settings_transaction(&dir)?;let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;correlation::init(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let hvn=hvn::Service::default();let mut execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let mut engine=Engine{dir,shared:shared.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,instance_id:uuid::Uuid::new_v4().to_string(),shutdown_barrier:None,research,backtests,evaluations,news,learning,inference,scoring,studio,hvn,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
-    while !engine.shutting_down{engine.tick();let Some(mut request)=server.recv_timeout(Duration::from_millis(250))? else{continue;};let authenticated=request.headers().iter().any(|h|h.field.equiv("Authorization")&&h.value.as_str()==format!("Bearer {key}"));let origin=request.headers().iter().any(|h|h.field.equiv("Origin"));if !authenticated||origin{let _=request.respond(tiny_http::Response::from_string("{\"error\":\"Unauthorized\"}").with_status_code(401));continue;}if request.body_length().is_none()&&request.method().as_str()=="POST"{let _=request.respond(tiny_http::Response::empty(411));continue;}if request.body_length().unwrap_or(0)>2_000_000{let _=request.respond(tiny_http::Response::empty(413));continue;}let mut body=Vec::new();if request.as_reader().read_to_end(&mut body).is_err(){continue;}let result=engine.route(request.method().as_str(),request.url(),&body);let(code,value)=match result{Ok(v)=>(200,v),Err(e)=>(400,json!({"error":e.to_string()}))};let response=tiny_http::Response::from_string(value.to_string()).with_status_code(code).with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());let _=request.respond(response);}
+    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join("core.lock"))?;if lock.try_lock_exclusive().is_err(){return Ok(());}recover_settings_transaction(&dir)?;
+    // Exclusive lock is held: no backup writer from another Core instance
+    // can still own a .tmp directory. Remove only program-owned stale stages.
+    let stale_stages=backup::cleanup_stale_staging(&dir)?;
+    if stale_stages>0 {eprintln!("Recovered {} abandoned backup staging directories",stale_stages);}
+    let restore_result=backup::apply_pending(&dir)?;let key=ipc_key(&dir)?;let config=read_config(&dir).context("Config invalid: preserve file and correct it; refusing silent reset")?;let db=Connection::open(dir.join("events.sqlite"))?;configure_database(&db)?;let research=research::Research::load(&db)?;let backtests=backtest::Service::new(&db)?;correlation::init(&db)?;let evaluations=evaluation::Service::new(&db)?;let news=news::Service::new(&db)?;let learning=learning::Service::new(&db)?;learning_review::init(&db)?;let inference=learning_inference::Service::new(&db)?;let scoring=learning_scoring::Service::new(&db)?;let studio=studio::Service::new(&db)?;let hvn=hvn::Service::default();let mut execution=execution::Service::new(&db)?;execution.cancel_entries(&db)?;learning_performance_review::init(&db)?;verify_foreign_key_integrity(&db)?;let token=if dir.join("telegram.sealed").exists(){Some(secrets::read(&dir.join("telegram.sealed"))?)}else{None};let shared=Arc::new(Mutex::new(Shared{status:Status::default(),config,token}));let server=tiny_http::Server::http(("127.0.0.1",PORT)).map_err(|e|anyhow::anyhow!(e.to_string()))?;let backup_io_phase=Arc::new(AtomicU8::new(0));let mut engine=Engine{dir,shared:shared.clone(),backup_io_phase:backup_io_phase.clone(),db,gateway:None,gateway_retry_ms:0,shutting_down:false,instance_id:uuid::Uuid::new_v4().to_string(),shutdown_barrier:None,research,backtests,evaluations,news,learning,inference,scoring,studio,hvn,execution};engine.event("core_started",json!({"version":braintrade_domain::VERSION,"execution_enabled":false,"challenger_inference":"read_only","prediction_scoring":"audit_only","challenger_performance_review":"manual_read_only","backup_restore":"validated_staged_restart_rollback","foreign_keys":true}))?;if let Some(result)=restore_result{engine.event("backup_restore_result",result)?;}telegram::spawn(shared);
+    // Independently service pure, synthetic research calculations. Broker
+    // commands, STOP, snapshots, and journal reads stay on Engine's owner.
+    let offline_research_tx = start_offline_research_worker()?;
+    let backup_read_tx = start_backup_read_worker(engine.dir.clone(), backup_io_phase.clone())?;
+    let (backup_completed_tx,backup_completed_rx)=std::sync::mpsc::channel();
+    let backup_write_tx=start_backup_write_worker(engine.dir.clone(),backup_io_phase.clone(),backup_completed_tx)?;
+    let mut next_housekeeping = Instant::now();
+    let mut next_slow_route_warning = Instant::now();
+    let mut next_slow_maintenance_warning = Instant::now();
+    let mut maintenance = MaintenanceRotation::default();
+    while !engine.shutting_down{
+        while let Ok(detail)=backup_completed_rx.try_recv() {
+            if let Err(error)=engine.event("backup_worker_completed",detail) {
+                eprintln!("Backup worker completion audit failed: {error}");
+            }
+        }
+        if housekeeping_due(Instant::now(), &mut next_housekeeping) {
+            let stage = maintenance.next();
+            let elapsed = engine.tick(stage);
+            if elapsed >= Duration::from_millis(75) && Instant::now() >= next_slow_maintenance_warning {
+                eprintln!("CORE_SLOW_MAINTENANCE class={} duration_ms={} (research maintenance only)",
+                    stage.label(), elapsed.as_millis());
+                next_slow_maintenance_warning = Instant::now() + Duration::from_secs(10);
+            }
+        }
+        let Some(mut request)=server.recv_timeout(Duration::from_millis(250))? else{continue;};let authenticated=request.headers().iter().any(|h|h.field.equiv("Authorization")&&h.value.as_str()==format!("Bearer {key}"));let origin=request.headers().iter().any(|h|h.field.equiv("Origin"));if !authenticated||origin{let _=request.respond(tiny_http::Response::from_string("{\"error\":\"Unauthorized\"}").with_status_code(401));continue;}
+    if request.body_length().is_none()&&request.method().as_str()=="POST"{let _=request.respond(tiny_http::Response::empty(411));continue;}
+    if request.body_length().unwrap_or(0)>2_000_000{let _=request.respond(tiny_http::Response::empty(413));continue;}let mut body=Vec::new();if request.as_reader().read_to_end(&mut body).is_err(){continue;}
+        if let Some(kind) = backup_read_kind(request.method().as_str(), request.url()) {
+            // These are read-only verification tasks and must be authorized
+            // by the same STOP/flat/no-pending gate as the old Engine route.
+            let admission=(||->Result<()> {
+                let pending=engine.execution.pending(&engine.db)?;
+                let status={
+                    let mut shared=engine.shared.lock().unwrap();
+                    shared.status.refresh(now_ms());
+                    shared.status.clone()
+                };
+                ensure_bulk_io_idle(&status,pending)?;
+                anyhow::ensure!(!engine.backtests.loading() && !engine.hvn.pending(now_ms()),
+                    "انتظر اكتمال استيراد Backtest أو قراءة HVN قبل فحص أو نسخ قاعدة البيانات");
+                anyhow::ensure!(backup_io_phase.load(Ordering::Acquire)==0,
+                    "توجد مهمة نسخ احتياطية جارية؛ انتظر إكمالها");
+                Ok(())
+            })();
+            if let Err(e)=admission {
+                let response=tiny_http::Response::from_string(json!({"error":e.to_string()}).to_string())
+                    .with_status_code(400)
+                    .with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());
+                let _=request.respond(response);
+                continue;
+            }
+            if backup_io_phase.compare_exchange(0,1,Ordering::AcqRel,Ordering::Acquire).is_err(){
+                let _=request.respond(tiny_http::Response::from_string(
+                    json!({"error":"Backup read worker busy"}).to_string()).with_status_code(503));
+                continue;
+            }
+            match backup_read_tx.try_send((request,kind,body)) {
+                Ok(()) => {},
+                Err(std::sync::mpsc::TrySendError::Full((request,_,_)))
+                | Err(std::sync::mpsc::TrySendError::Disconnected((request,_,_))) => {
+                    backup_io_phase.store(0,Ordering::Release);
+                    let _=request.respond(tiny_http::Response::from_string(
+                        json!({"error":"Backup read worker unavailable"}).to_string()).with_status_code(503));
+                },
+            }
+            continue;
+        }
+        if let Some(kind)=backup_write_kind(request.method().as_str(),request.url()) {
+            let admitted=(||->Result<Config> {
+                let pending=engine.execution.pending(&engine.db)?;
+                let (status,config)={
+                    let mut shared=engine.shared.lock().unwrap();
+                    shared.status.refresh(now_ms());
+                    (shared.status.clone(),shared.config.clone())
+                };
+                ensure_bulk_io_idle(&status,pending)?;
+                anyhow::ensure!(!engine.backtests.loading() && !engine.hvn.pending(now_ms()),
+                    "انتظر اكتمال استيراد Backtest أو قراءة HVN قبل فحص أو نسخ قاعدة البيانات");
+                anyhow::ensure!(backup_io_phase.load(Ordering::Acquire)==0,
+                    "توجد مهمة نسخ احتياطية جارية؛ انتظر إكمالها");
+                Ok(config)
+            })();
+            match admitted {
+                Ok(config)=>{
+                    if backup_io_phase.compare_exchange(0,2,Ordering::AcqRel,Ordering::Acquire).is_err() {
+                        let _=request.respond(tiny_http::Response::from_string(
+                            json!({"error":"Backup worker busy"}).to_string()).with_status_code(503));
+                        continue;
+                    }
+                    match backup_write_tx.try_send((request,kind,config,body)) {
+                        Ok(())=>{},
+                        Err(std::sync::mpsc::TrySendError::Full((request,_,_,_)))
+                        | Err(std::sync::mpsc::TrySendError::Disconnected((request,_,_,_)))=>{
+                            backup_io_phase.store(0,Ordering::Release);
+                            let _=request.respond(tiny_http::Response::from_string(
+                                json!({"error":"Backup writer unavailable"}).to_string()).with_status_code(503));
+                        }
+                    }
+                }
+                Err(e)=>{
+                    let _=request.respond(tiny_http::Response::from_string(
+                        json!({"error":e.to_string()}).to_string()).with_status_code(400)
+                        .with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap()));
+                }
+            }
+            continue;
+        }
+        if let Some(kind) = offline_research_kind(request.method().as_str(), request.url()) {
+            // Admission is strictly by allowlist. Never queue a live order or
+            // delay /v1/stop, /v1/shutdown or /v1/execution/* behind research.
+            match offline_research_tx.try_send((request, kind, body)) {
+                Ok(()) => {},
+                Err(std::sync::mpsc::TrySendError::Full((request, _, _))) => {
+                    let response=tiny_http::Response::from_string(
+                        json!({"error":"Offline research queue full; retry when idle"}).to_string())
+                        .with_status_code(503)
+                        .with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());
+                    let _=request.respond(response);
+                },
+                Err(std::sync::mpsc::TrySendError::Disconnected((request, _, _))) => {
+                    let response=tiny_http::Response::from_string(
+                        json!({"error":"Offline research worker unavailable"}).to_string())
+                        .with_status_code(503)
+                        .with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());
+                    let _=request.respond(response);
+                },
+            }
+            continue;
+        }
+        let started=Instant::now();let result=engine.route(request.method().as_str(),request.url(),&body);
+        let elapsed=started.elapsed();
+        if elapsed>=Duration::from_millis(75) && Instant::now()>=next_slow_route_warning {
+            eprintln!("CORE_SLOW_ROUTE class={} duration_ms={} (request-processing only)",
+                diagnostic_route_class(request.url()),elapsed.as_millis());
+            next_slow_route_warning=Instant::now()+Duration::from_secs(10);
+        }
+        let(code,value)=match result{Ok(v)=>(200,v),Err(e)=>(400,json!({"error":e.to_string()}))};let response=tiny_http::Response::from_string(value.to_string()).with_status_code(code).with_header(tiny_http::Header::from_bytes("Content-Type","application/json").unwrap());let _=request.respond(response);}
     engine.stop_gateway();engine.backtests.cancel();engine.evaluations.cancel();engine.studio.cancel();engine.event("core_stopped",json!({}))?;drop(lock);Ok(())
 }
+#[cfg(test)]
+mod housekeeping_schedule_tests {
+    use super::*;
+    #[test]
+    fn slow_route_logging_never_discloses_broker_or_url_contents() {
+        assert_eq!(diagnostic_route_class("/v1/execution/pulse?token=private"),"execution");
+        assert_eq!(diagnostic_route_class("/v1/brain-snapshot/export"),"backup");
+        assert_eq!(diagnostic_route_class("/v1/backtest/start"),"backtest");
+        assert_eq!(diagnostic_route_class("/v1/research/secret_account"),"research");
+        assert_eq!(diagnostic_route_class("/unknown/private_login"),"other");
+    }
+    #[test]
+    fn heavy_routes_are_rejected_during_trading_or_unresolved_intents() {
+        let mut status=Status::default();
+        status.requested_run=true;
+        assert!(ensure_bulk_io_idle(&status,false).is_err());
+        status.requested_run=false;
+        assert!(ensure_bulk_io_idle(&status,true).is_err());
+        assert!(ensure_bulk_io_idle(&status,false).is_ok());
+        for path in ["/v1/backup","/v1/brain-snapshot/export",
+            "/v1/brain-snapshot/import","/v1/export","/v1/learning/export",
+            "/v1/backup/restore/validate"] {
+            assert!(is_bulk_io_route("POST",path),"{path}");
+        }
+        assert!(is_bulk_io_route("GET","/v1/backups"));
+        for path in ["/v1/execution/pulse","/v1/execution/gateway",
+            "/v1/execution/authorize","/v1/gateway/snapshot",
+            "/v1/stop","/v1/shutdown","/v1/start"] {
+            assert!(!is_bulk_io_route("POST",path),"{path}");
+        }
+    }
+    #[test]
+    fn isolated_research_allowlist_never_moves_broker_control_off_engine() {
+        for (path,kind) in [
+            ("/v1/research/execution-lifecycle",OfflineResearchKind::Lifecycle),
+            ("/v1/research/execution-admission",OfflineResearchKind::Admission),
+            ("/v1/research/execution-bridge",OfflineResearchKind::Bridge),
+            ("/v1/research/demo-deal-audit",OfflineResearchKind::DemoDealAudit),
+        ] {
+            assert_eq!(offline_research_kind("POST",path),Some(kind));
+            assert_eq!(offline_research_kind("GET",path),None);
+        }
+        for path in ["/v1/execution/pulse","/v1/execution/authorize",
+            "/v1/execution/result","/v1/gateway/snapshot","/v1/stop",
+            "/v1/start","/v1/shutdown","/v1/config","/v1/backup",
+            "/v1/research/request","/v1/research/frame"] {
+            assert_eq!(offline_research_kind("POST",path),None,"{path}");
+            assert_eq!(offline_research_kind("PUT",path),None,"{path}");
+        }
+    }
+    #[test]
+    fn offline_research_invalid_scenario_is_a_bounded_error() {
+        for kind in [
+            OfflineResearchKind::Lifecycle,OfflineResearchKind::Admission,
+            OfflineResearchKind::Bridge,OfflineResearchKind::DemoDealAudit,
+        ] {
+            assert!(offline_research_calculate(kind,b"not-json").is_err());
+        }
+    }
+    #[test]
+    fn writer_fence_blocks_start_restore_and_full_exit_but_allows_broker_reconciliation() {
+        for phase in [1,2] {
+            for path in ["/v1/start","/v1/config","/v1/backup/restore/stage",
+                "/v1/execution/settings","/v1/execution/manual-market",
+                "/v1/execution/position-protection","/v1/brain-snapshot/export"] {
+                assert!(backup_operation_gate(phase,"POST",path).is_err(),"{path}");
+            }
+            for path in ["/v1/stop","/v1/gateway/snapshot",
+                "/v1/execution/result","/v1/execution/sync",
+                "/v1/execution/close-selected","/v1/execution/cancel-pending"] {
+                assert!(backup_operation_gate(phase,"POST",path).is_ok(),"{path}");
+            }
+            assert!(backup_operation_gate(phase,"PUT","/v1/execution/pulse").is_ok());
+        }
+        for path in ["/v1/shutdown","/v1/reconnect"] {
+            assert!(backup_operation_gate(1,"POST",path).is_ok());
+            assert!(backup_operation_gate(2,"POST",path).is_err());
+        }
+        assert!(backup_operation_gate(0,"POST","/v1/start").is_ok());
+        assert!(backup_operation_gate(0,"POST","/v1/backup/restore/stage").is_ok());
+    }
+    #[test]
+    fn backup_write_worker_only_accepts_backup_snapshot_actions() {
+        assert_eq!(backup_write_kind("POST","/v1/backup"),Some(BackupWriteKind::Create));
+        assert_eq!(backup_write_kind("POST","/v1/brain-snapshot/export"),Some(BackupWriteKind::BrainExport));
+        assert_eq!(backup_write_kind("POST","/v1/brain-snapshot/import"),Some(BackupWriteKind::BrainImport));
+        assert_eq!(backup_write_kind("POST","/v1/export"),Some(BackupWriteKind::ResearchExport));
+        assert_eq!(backup_write_kind("POST","/v1/learning/export"),Some(BackupWriteKind::LearningExport));
+        for (method,path) in [("GET","/v1/backups"),("POST","/v1/start"),
+            ("POST","/v1/stop"),("POST","/v1/shutdown"),
+            ("POST","/v1/backup/restore/stage"),("POST","/v1/backup/restore/validate"),
+            ("POST","/v1/execution/authorize"),
+            ("POST","/v1/gateway/snapshot"),("GET","/v1/export"),("GET","/v1/backup")] {
+            assert_eq!(backup_write_kind(method,path),None,"{method} {path}");
+        }
+    }
+    #[test]
+    fn backup_integrity_reads_are_exact_allowlisted_and_never_offload_commands() {
+        assert_eq!(backup_read_kind("GET","/v1/backups"),Some(BackupReadKind::List));
+        assert_eq!(backup_read_kind("POST","/v1/backup/restore/validate"),Some(BackupReadKind::Validate));
+        for (method,path) in [
+            ("POST","/v1/backup"),("POST","/v1/backup/restore/stage"),
+            ("POST","/v1/start"),("POST","/v1/shutdown"),
+            ("POST","/v1/execution/authorize"),("POST","/v1/gateway/snapshot"),
+            ("POST","/v1/brain-snapshot/export"),("GET","/v1/backup/restore/status"),
+            ("GET","/v1/backup/restore/validate"),("POST","/v1/backups"),
+        ] {
+            assert_eq!(backup_read_kind(method,path),None,"{method} {path}");
+        }
+        for path in ["/v1/stop","/v1/shutdown","/v1/reconnect",
+            "/v1/execution/result","/v1/execution/sync",
+            "/v1/execution/authorize","/v1/gateway/snapshot",
+            "/v1/execution/cancel-pending","/v1/execution/close-selected"] {
+            assert!(mutation_allowed_during_backup_scan("POST",path),"{path}");
+        }
+        assert!(mutation_allowed_during_backup_scan("PUT","/v1/execution/pulse"));
+        for path in ["/v1/start","/v1/config","/v1/backup",
+            "/v1/brain-snapshot/export","/v1/backup/restore/stage",
+            "/v1/execution/settings","/v1/execution/manual-market",
+            "/v1/execution/position-protection","/v1/execution/risk-master",
+            "/v1/gateway/history/result","/v1/gateway/hvn/result"] {
+            assert!(!mutation_allowed_during_backup_scan("POST",path),"{path}");
+        }
+    }
+    #[test]
+    fn historical_sqlite_commit_is_deferred_during_trading_or_reconciliation() {
+        let mut status=Status::default();
+        assert!(historical_result_persistence_allowed(&status,false));
+        assert!(!historical_result_persistence_allowed(&status,true));
+        status.requested_run=true;
+        assert!(!historical_result_persistence_allowed(&status,false));
+        status.requested_run=false;
+        let mut telemetry=Telemetry::default();
+        telemetry.pending_orders=1;
+        status.telemetry=Some(telemetry);
+        assert!(!historical_result_persistence_allowed(&status,false));
+        status.telemetry.as_mut().unwrap().pending_orders=0;
+        status.telemetry.as_mut().unwrap().positions.push(braintrade_domain::Position::default());
+        assert!(!historical_result_persistence_allowed(&status,false));
+        status.telemetry.as_mut().unwrap().positions.clear();
+        assert!(historical_result_persistence_allowed(&status,false));
+    }
+    #[test]
+    fn maintenance_is_rotated_and_no_iteration_runs_four_services() {
+        let mut rotation = MaintenanceRotation::default();
+        let expected = [MaintenanceStage::Studio, MaintenanceStage::News,
+            MaintenanceStage::Backtest, MaintenanceStage::Evaluation];
+        for _ in 0..8 {
+            for stage in expected {
+                assert_eq!(rotation.next(),stage);
+                assert!(!stage.label().is_empty());
+            }
+        }
+    }
+    #[test]
+    fn maintenance_slots_are_due_under_continuous_requests() {
+        let now=Instant::now();
+        let mut next=now;
+        let mut rotation=MaintenanceRotation::default();
+        let mut emitted=Vec::new();
+        // Even if every 5ms an execution request is waiting, service owners
+        // get a bounded, fair turn without executing all database writes in
+        // the same housekeeping pass.
+        for ms in (0..=400).step_by(5) {
+            if housekeeping_due(now+Duration::from_millis(ms),&mut next) {
+                emitted.push(rotation.next());
+            }
+        }
+        assert_eq!(emitted.len(),9);
+        assert_eq!(emitted[0],MaintenanceStage::Studio);
+        assert_eq!(emitted[3],MaintenanceStage::Evaluation);
+        assert_eq!(emitted[4],MaintenanceStage::Studio);
+        assert_eq!(emitted[7],MaintenanceStage::Evaluation);
+    }
+    #[test]
+    fn maintenance_runs_once_per_interval_even_during_tight_quote_loops() {
+        let start=Instant::now();
+        let mut next=start;
+        assert!(housekeeping_due(start,&mut next));
+        for ms in [0,1,3,10,20,35,49] {
+            assert!(!housekeeping_due(start+Duration::from_millis(ms),&mut next));
+        }
+        assert!(housekeeping_due(start+Duration::from_millis(50),&mut next));
+        assert!(!housekeeping_due(start+Duration::from_millis(51),&mut next));
+        assert!(housekeeping_due(start+Duration::from_millis(140),&mut next));
+    }
+}
+
 fn verify_core_identity(status:&Value)->Result<()> {
     let expected=braintrade_domain::build_identity();
     if status["version"]!=expected["version"] || ["version","build_id","core_protocol"].iter().any(|field|status["build"][*field]!=expected[*field]) {

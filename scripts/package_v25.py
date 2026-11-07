@@ -2,6 +2,7 @@
 from pathlib import Path
 import hashlib,json,shutil,subprocess,sys,zipfile
 from release_identity import identity, validate_versions
+from build_operator_checklist import build as build_operator_checklist
 ROOT=Path(__file__).resolve().parents[1]
 DEST=ROOT/'target/portable/BRAINTRADE_V4_ENTERPRISE_V25'
 MARKER=json.loads((ROOT/'release.json').read_text('utf-8'))['marker'].encode('ascii')
@@ -35,6 +36,8 @@ def stage():
     for item in ('Run-Demo-Acceptance.ps1','Run-Demo-Acceptance-GUI.ps1'):
         shutil.copy2(ROOT/'scripts'/item,DEST/'Tools'/item)
     shutil.copy2(ROOT/'docs/DEMO_ACCEPTANCE_AR.md',DEST/'DEMO_ACCEPTANCE_AR.md')
+    for name in ('V26_WINDOWS_MT5_CHECKLIST_AR.md','V26_TP1_MT5_ACCEPTANCE_AR.md'):
+        shutil.copy2(ROOT/'docs'/name,DEST/name)
     shutil.copy2(ROOT/'docs/v25/G2_DEMO_READINESS_PREFLIGHT_AR.md',DEST/'G2_DEMO_READINESS_AR.md')
     # G6-C: research collectors must be available in the real Portable,
     # not only the source archive. Read-only Core SQLite, NEVER MT5 orders.
@@ -83,8 +86,10 @@ def stage():
     for source,name in [('Cargo.lock','Cargo.lock'),('apps/terminal/package-lock.json','package-lock.json'),('docs/v25/P0O_PROVENANCE.json','P0O_PROVENANCE.json')]:
         shutil.copy2(ROOT/source,evidence/name)
     commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
+    build_operator_checklist(DEST/'BRAINTRADE_CHECKLIST_AR.html',expected,commit)
+    (DEST/'START_CHECKLIST.cmd').write_bytes(b'@echo off\r\nstart "" "%~dp0BRAINTRADE_CHECKLIST_AR.html"\r\nexit /b %ERRORLEVEL%\r\n')
     (evidence/'build.json').write_text(json.dumps({**expected,'source_commit':commit,'exe_sha256':digest(exe),'dependency_resolution':'committed locks; cargo --locked; npm ci','broker_demo':'NOT TESTED','windows_gui_all_controls':'NOT TESTED','ea_compile':'NOT TESTED','ready_for_real':False},indent=2)+'\n','utf-8')
-    (DEST/'READ_ME_FIRST_AR.txt').write_text('BRAINTRADE V4 Enterprise V25 RC2 — 0.25.1\nفك المجلد كاملاً وشغّل BrainTradeNext.exe مباشرة. لا يوجد Setup إلزامي.\nيتطلب Windows x64 وWebView2. يحتاج التداول إلى MT5 وحسابك التجريبي.\nلإنشاء اختصار سطح المكتب شغّل CREATE_DESKTOP_ICON.cmd.\nضع مسار terminal64.exe من صفحة الإعدادات، ثم اربط DEMO من صفحة التنفيذ.\nشغّل VERIFY_SYSTEM.cmd لإنتاج تقرير HTML وJSON؛ هذه الأداة لا تفتح صفقات ولا ترسل بيانات.\nلجمع نتائج تنفيذ DEMO للقراءة فقط شغّل Run-Demo-Acceptance.cmd؛ لا يفعل START أو يرسل أوامر MT5.\nللتأكد من تاريخ وأسعار XAUUSD على MT5 Demo شغّل Run-MT5-Chart-Demo.cmd؛ استعمل --symbol XAUUSDm إذا كان اسم الرمز عند الوسيط مختلفاً، و--require-fresh وقت السوق المفتوح.\nلإعداد تجربة G6 ومراجعة أسعار Demo ونتائج الوسيط الحقيقية شغّل Run-G6-Study.cmd واقرأ G6_STUDY_AR.md؛ لا يفتح MT5 أو أوامر.\nلترجمة Native EA على جهاز فيه MetaEditor افتح Compile-Sniper-EA.cmd واقرأ NATIVE_EA_ACCEPTANCE_AR.md؛ لا يوجد EX5 مثبت من CI.\nاقرأ USER_MANUAL_V25_AR.txt أو USER_MANUAL_V25_AR.md لجميع أوضاع التداول وصفحات V25.\nللتدقيق البحثي G7-H افتح Run-G7-Acceptance.cmd بعد وجود بيانات دراسة؛ لا يفتح صفقات.\nهذه نسخة تحقق مرحلية: اختبار MT5 Demo وEA وجميع أزرار Windows لم يُعتمد بعد.\nSTOP يمنع الدخول الجديد ويبقي إدارة المراكز؛ لا تغلق Core مع صفقات أو أوامر غير محسومة.\nلا تنقل EXE وحده ولا تحذف بيانات التطبيق عند التحديث. احتفظ بحزمة V24 للرجوع.\n','utf-8')
+    (DEST/'READ_ME_FIRST_AR.txt').write_text('BRAINTRADE V4 Enterprise V25 RC2 — 0.25.1\nفك المجلد كاملاً وشغّل BrainTradeNext.exe مباشرة. لا يوجد Setup إلزامي.\nيتطلب Windows x64 وWebView2. يحتاج التداول إلى MT5 وحسابك التجريبي.\nللفحص خطوة بخطوة افتح START_CHECKLIST.cmd؛ سجل 68 بنداً وصدّر JSON لإرساله للمراجعة. الصفحة لا تتصل بـMT5 ولا ترسل صفقات.\nلإنشاء اختصار سطح المكتب شغّل CREATE_DESKTOP_ICON.cmd.\nضع مسار terminal64.exe من صفحة الإعدادات، ثم اربط DEMO من صفحة التنفيذ.\nشغّل VERIFY_SYSTEM.cmd لإنتاج تقرير HTML وJSON؛ هذه الأداة لا تفتح صفقات ولا ترسل بيانات.\nلجمع نتائج تنفيذ DEMO للقراءة فقط شغّل Run-Demo-Acceptance.cmd؛ لا يفعل START أو يرسل أوامر MT5.\nللتأكد من تاريخ وأسعار XAUUSD على MT5 Demo شغّل Run-MT5-Chart-Demo.cmd؛ استعمل --symbol XAUUSDm إذا كان اسم الرمز عند الوسيط مختلفاً، و--require-fresh وقت السوق المفتوح.\nلإعداد تجربة G6 ومراجعة أسعار Demo ونتائج الوسيط الحقيقية شغّل Run-G6-Study.cmd واقرأ G6_STUDY_AR.md؛ لا يفتح MT5 أو أوامر.\nلترجمة Native EA على جهاز فيه MetaEditor افتح Compile-Sniper-EA.cmd واقرأ NATIVE_EA_ACCEPTANCE_AR.md؛ لا يوجد EX5 مثبت من CI.\nاقرأ USER_MANUAL_V25_AR.txt أو USER_MANUAL_V25_AR.md لجميع أوضاع التداول وصفحات V25.\nللتدقيق البحثي G7-H افتح Run-G7-Acceptance.cmd بعد وجود بيانات دراسة؛ لا يفتح صفقات.\nهذه نسخة تحقق مرحلية: اختبار MT5 Demo وEA وجميع أزرار Windows لم يُعتمد بعد.\nSTOP يمنع الدخول الجديد ويبقي إدارة المراكز؛ لا تغلق Core مع صفقات أو أوامر غير محسومة.\nلا تنقل EXE وحده ولا تحذف بيانات التطبيق عند التحديث. احتفظ بالحزمة السابقة ونسخة احتياطية من البيانات للرجوع.\n','utf-8')
 def archive():
     shutil.copytree(ROOT/'test-output/v25',DEST/'release-evidence/validation',dirs_exist_ok=True)
     manifest={p.relative_to(DEST).as_posix():digest(p) for p in sorted(DEST.rglob('*')) if p.is_file() and p.name!='SHA256SUMS.json'}

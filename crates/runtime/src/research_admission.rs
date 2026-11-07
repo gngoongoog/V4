@@ -57,7 +57,7 @@ fn valid_id(v:&str)->bool {
     !v.is_empty()&&v.len()<=80&&v.bytes().all(|x|
         x.is_ascii_alphanumeric()||matches!(x,b'_'|b'-'|b'.'|b':'))
 }
-fn nonnegative(v:f64)->bool{v.is_finite()&&v>=0.&&v<=1_000_000_000.}
+fn nonnegative(v:f64)->bool{v.is_finite()&&(0. ..=1_000_000_000.).contains(&v)}
 fn positive(v:f64)->bool{nonnegative(v)&&v>0.}
 
 fn validate(s:&Scenario)->Result<()>{

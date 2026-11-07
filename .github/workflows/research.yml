@@ -10,7 +10,7 @@ concurrency:
 jobs:
   build-only:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[build-only]')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -43,7 +43,9 @@ jobs:
           path: test-output/
   research:
     if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[build-only]')
-    runs-on: ubuntu-latest
+    # Playwright 1.51.1 below supports this image, not Ubuntu 26.04.
+    # Pin the OS as well as the browser dependency to prevent latest drift.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -72,6 +74,8 @@ jobs:
           .ci/node_modules/.bin/playwright install --with-deps chromium
       - name: Verify offline report interactions
         run: NODE_PATH="$GITHUB_WORKSPACE/.ci/node_modules" node scripts/check_trade_review.cjs
+      - name: Verify offline operator checklist and portable results
+        run: NODE_PATH="$GITHUB_WORKSPACE/.ci/node_modules" node scripts/check_operator_checklist.cjs
       - name: Install native font build dependency
         run: |
           sudo apt-get update

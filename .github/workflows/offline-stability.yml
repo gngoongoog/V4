@@ -1,0 +1,56 @@
+name: Offline Core stability and quality
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'Synthetic workload seconds (10..172800; runner timeout still applies)'
+        default: '600'
+        type: string
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  synthetic-soak:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.99.1'
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Enforce compiler warnings and critical Clippy categories
+        shell: bash
+        run: |
+          mkdir -p test-output
+          set -o pipefail
+          cargo clippy --locked -p braintrade-domain -p braintrade-runtime --all-targets -- -D unused -D nonstandard_style -D clippy::correctness -D clippy::suspicious -D clippy::perf 2>&1 | tee test-output/quality.log
+      - name: Build isolated Core
+        run: cargo build --locked -p braintrade-runtime --bin braintrade-core
+      - name: Actual Core synthetic endurance, no MT5 connectivity
+        shell: bash
+        env:
+          SOAK_SECONDS: ${{ inputs.seconds || '180' }}
+        run: python scripts/check_offline_soak.py --seconds "$SOAK_SECONDS" --output test-output/offline-soak.json
+      - name: Higher quote-rate synthetic profile, no broker
+        run: python scripts/check_offline_soak.py --seconds 120 --hz 200 --output test-output/offline-burst.json
+      - name: Actual persistent Gateway transport, no broker
+        run: python scripts/check_offline_soak.py --seconds 120 --hz 200 --transport persistent --output test-output/offline-persistent.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: offline-stability-${{ matrix.os }}
+          path: test-output/

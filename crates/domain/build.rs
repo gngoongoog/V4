@@ -28,10 +28,15 @@ fn main() {
     let mut hash = Sha256::new();
     hash.update(b"braintrade-source-v1\0");
     for file in files {
-        // Match source archives and Git checkouts with LF or CRLF.
-        let text = fs::read_to_string(root.join(&file)).expect("UTF-8 release input").replace("\r\n", "\n");
+        // Normalize text checkouts only. Binary UI assets must be hashed
+        // byte-for-byte, including any CRLF bytes within the image payload.
+        let raw = fs::read(root.join(&file)).expect("release input bytes");
+        let data = match std::str::from_utf8(&raw) {
+            Ok(text) => text.replace("\r\n", "\n").into_bytes(),
+            Err(_) => raw,
+        };
         hash.update((file.len() as u64).to_be_bytes()); hash.update(file.as_bytes());
-        hash.update((text.len() as u64).to_be_bytes()); hash.update(text.as_bytes());
+        hash.update((data.len() as u64).to_be_bytes()); hash.update(&data);
     }
     println!("cargo:rustc-env=BRAINTRADE_BUILD_ID={:x}", hash.finalize());
     for (key, field) in [("BRAINTRADE_RELEASE_NAME", "name"), ("BRAINTRADE_RELEASE_MARKER", "marker"),

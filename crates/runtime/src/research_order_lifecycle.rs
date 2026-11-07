@@ -25,8 +25,8 @@ enum Event {
     Unknown{id:String},
     Fill{id:String,deal_id:String,lots:f64},
     Close{id:String,deal_id:String,lots:f64},
-    Reject_remaining{id:String},
-    Cancel_unsent{id:String},
+    RejectRemaining{id:String},
+    CancelUnsent{id:String},
 }
 
 #[derive(Clone,Debug,Serialize)]
@@ -145,14 +145,14 @@ pub fn replay(body:&[u8])->Result<Value>{
                         seen.insert(deal_id.clone(),d);
                     }
                 }
-                Event::Reject_remaining{id}=>{
+                Event::RejectRemaining{id}=>{
                     let o=order(&mut orders,id)?;
                     ensure!(o.dispatched&&!o.cancelled,"Only dispatched entries may be rejected by broker");
                     ensure!(o.remaining_to_fill()>EPS,"Already fully filled");
                     if o.remainder_rejected {duplicates+=1;}
                     else {o.remainder_rejected=true;o.uncertain=false;}
                 }
-                Event::Cancel_unsent{id}=>{
+                Event::CancelUnsent{id}=>{
                     let o=order(&mut orders,id)?;
                     ensure!(!o.dispatched && o.filled_lots<=EPS && !o.remainder_rejected,
                         "Cannot cancel an already-dispatched or uncertain broker send locally");

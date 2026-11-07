@@ -3,6 +3,9 @@ No MT5 connection or trade submission. Run with the normal application closed.
 """
 import json
 import os
+import shutil
+from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -24,12 +27,12 @@ def main():
         process=subprocess.Popen([str(BINARY)],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         key=''
         opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        def api(path,body=None,auth=True,origin=False):
+        def api(path,body=None,auth=True,origin=False,timeout=3):
             headers={'Content-Type':'application/json'}
             if auth:headers['Authorization']='Bearer '+key
             if origin:headers['Origin']='https://untrusted.invalid'
             req=urllib.request.Request(BASE+path,data=json.dumps(body).encode() if body is not None else None,headers=headers)
-            with opener.open(req,timeout=3) as response:return json.load(response)
+            with opener.open(req,timeout=timeout) as response:return json.load(response)
         try:
             for _ in range(80):
                 try:
@@ -38,6 +41,28 @@ def main():
                 except (OSError,urllib.error.URLError):time.sleep(.1)
             else:raise AssertionError('Core startup failed')
             assert not status['execution_enabled'] and status['state']=='stopped'
+            # P1-8A real HTTP integration: a large, strictly synthetic
+            # research task uses the isolated worker while the Core keeps
+            # responding to status requests. No MT5 data or trading orders.
+            events=[]
+            for i in range(1500):
+                oid=f"synthetic-{i}"
+                events.extend(({'event':'submit','id':oid,'lots':0.01},
+                               {'event':'dispatch','id':oid}))
+            research_payload={'account':'synthetic','symbol':'XAUUSD','events':events}
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                research_future=pool.submit(api,'/v1/research/execution-lifecycle',research_payload)
+                concurrent_status=api('/v1/status')
+                research_result=research_future.result(timeout=10)
+            assert concurrent_status['state']=='stopped'
+            assert research_result['status']=='synthetic_only'
+            assert research_result['event_count']==len(events)
+            assert len(research_result['orders'])==1500
+            assert research_result['no_mt5_commands'] is True
+            assert research_result['no_broker_reads'] is True
+            try:api('/v1/research/execution-lifecycle',{'malformed':'payload'})
+            except urllib.error.HTTPError as e:assert e.code==400
+            else:raise AssertionError('Invalid offline research request accepted')
             news=api('/v1/news');assert news['offline'] and len(news['sources'])==3 and news['items']==[]
             assert all(s['stale'] for s in news['sources'])
             api('/v1/news/settings',{'enabled':False});assert not api('/v1/news')['enabled']
@@ -153,7 +178,31 @@ def main():
             snapshot.update(bid=target+.1,ask=target+.2);api('/v1/gateway/snapshot',snapshot)
             paper=api('/v1/status')['paper'];assert paper['trades']==1 and paper['realized']>0
             assert isinstance(api('/v1/opportunities/history')['setups'], list)
-            export=Path(api('/v1/export',{})['path'])
+            # Research JSONL is now exported via a read-only worker. Status
+            # polling must keep responding while the export owns its archive
+            # slot; no account or broker effects are permitted here.
+            status_latencies_ms=[]
+            busy_observations=0
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                research_export_future=pool.submit(api,'/v1/export',{},timeout=60)
+                # Synthetic local HTTP envelope only; this is NOT MT5 or
+                # broker order_send latency. Never assert universal P99.
+                for _ in range(48):
+                    started=time.perf_counter()
+                    status_sample=api('/v1/status',timeout=6)
+                    status_latencies_ms.append((time.perf_counter()-started)*1000)
+                    assert status_sample['state']=='stopped'
+                    busy_observations+=int(status_sample.get('backup_operation',{}).get('busy') is True)
+                export=Path(research_export_future.result(timeout=65)['path'])
+            samples=sorted(status_latencies_ms)
+            nearest_rank=lambda pct:round(samples[max(0,(len(samples)*pct+99)//100-1)],3)
+            print('CORE_LOCAL_HTTP_STATUS_PROFILE '+json.dumps({
+                'samples':len(samples),
+                'p50_ms':nearest_rank(50),'p95_ms':nearest_rank(95),
+                'p99_ms':nearest_rank(99),'max_ms':round(samples[-1],3),
+                'backup_busy_observations':busy_observations,
+                'scope':'synthetic localhost Core status, not MT5 broker execution'
+            }),flush=True)
             assert (export/'opportunity_setups.jsonl').exists()
             assert len((export/'decisions.jsonl').read_text().splitlines())==1
             assert len((export/'paper_events.jsonl').read_text().splitlines())==2
@@ -171,11 +220,33 @@ def main():
             assert len(api('/v1/learning/review/records')['records'])==1
             assert len(api('/v1/learning/inference/recent')['predictions'])==1
             assert not api('/v1/status')['execution_enabled']
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                learning_export_future=pool.submit(api,'/v1/learning/export',{},timeout=60)
+                status_during_learning_export=api('/v1/status')
+                dataset=learning_export_future.result(timeout=65)
+            assert status_during_learning_export['state']=='stopped'
+            dataset_path=Path(dataset['path'])
+            assert (dataset_path/'dataset.jsonl').is_file()
+            manifest=json.loads((dataset_path/'manifest.json').read_text())
+            assert manifest['feature_schema']=='gold-m1-feature-v1'
+            assert manifest['rows']==dataset['rows']
+            assert dataset['excluded_legacy_or_unverified_rows']>=0
 
-            backup=api('/v1/backup',{})
+            # P1-8G: the backup writer uses its own SQLite connection. The
+            # Core must still serve status while the online backup runs.
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                writing=pool.submit(api,'/v1/backup',{},timeout=60)
+                status_during_backup=api('/v1/status')
+                backup=writing.result(timeout=65)
+            assert status_during_backup['state']=='stopped'
             folder=Path(backup['path'])
             assert (folder/'config.json').exists()
-            with sqlite3.connect(folder/'events.sqlite') as db:
+            # A validated backup is sealed. sqlite3.connect(path) opens a
+            # read-write WAL database and CREATES -wal/-shm sidecars, which
+            # correctly makes the sealed archive invalid on later inspection.
+            # Use immutable read-only mode and explicitly close the handle.
+            sealed_db_uri=(folder/'events.sqlite').resolve().as_uri()+'?mode=ro&immutable=1'
+            with closing(sqlite3.connect(sealed_db_uri,uri=True)) as db:
                 assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
                 assert db.execute('SELECT COUNT(*) FROM events').fetchone()[0]>3
                 assert db.execute('SELECT COUNT(*) FROM chronological_evaluations').fetchone()[0]==1
@@ -183,6 +254,39 @@ def main():
                 assert db.execute('SELECT COUNT(*) FROM learning_predictions').fetchone()[0]==1
                 assert db.execute("SELECT COUNT(*) FROM learning_slots WHERE slot='champion' AND model_id IS NOT NULL").fetchone()[0]==0
             assert not list(folder.glob('*.sealed'))
+            assert not list(folder.glob('events.sqlite-*')), "Immutable check created SQLite sidecars"
+            # Backup integrity checks are read-only and served by their
+            # bounded worker, while Core status remains responsive.
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                listing_future=pool.submit(api,'/v1/backups',timeout=60)
+                core_status=api('/v1/status')
+                listing=listing_future.result(timeout=65)
+            assert core_status['state']=='stopped'
+            assert any(item.get('name')==backup['name'] and item.get('valid') is True
+                       for item in listing['backups'])
+            checked=api('/v1/backup/restore/validate',{'name':backup['name']},timeout=60)
+            assert checked['valid'] is True and checked['name']==backup['name']
+            try:api('/v1/backup/restore/validate',{'name':'missing-backup-fixture'})
+            except urllib.error.HTTPError as e:assert e.code==400
+            else:raise AssertionError('Invalid backup was not rejected')
+            # A self-contained snapshot export/import is a separate writer
+            # operation, and must never mutate the current Engine database.
+            brain=api('/v1/brain-snapshot/export',{},timeout=60)
+            assert brain['secrets_included'] is False
+            archive=Path(brain['path'])
+            assert archive.is_file() and archive.stat().st_size==brain['bytes']
+            inbox=Path(directory)/'brain_imports'
+            inbox.mkdir(exist_ok=True)
+            uploaded=inbox/'smoke-transfer.btbrain'
+            shutil.copyfile(archive,uploaded)
+            imported=api('/v1/brain-snapshot/import',{'name':uploaded.name},timeout=60)
+            assert imported['imported'] is True and imported['restore_required'] is True
+            assert not uploaded.exists()
+            imported_folder=Path(directory)/'backups'/imported['backup_name']
+            assert (imported_folder/'events.sqlite').is_file()
+            checked_import=api('/v1/backup/restore/validate',
+                               {'name':imported['backup_name']},timeout=60)
+            assert checked_import['valid'] is True
             frozen=api('/v1/learning/control',{'frozen':True})
             assert frozen['frozen'] and frozen['trading_unchanged'] and frozen['cutoff_ms']>0
             assert api('/v1/status')['learning_control']['frozen']
@@ -201,7 +305,7 @@ def main():
             assert status['state']=='stopped' and not status['execution_enabled']
             assert status['learning_control']['frozen'] and status['learning_control']['cutoff_ms']==frozen['cutoff_ms']
             assert api('/v1/learning/control',{'frozen':False})['frozen'] is False
-            api('/v1/gateway/snapshot',snapshot)
+            api('/v1/gateway/snapshot',learning_ids['inference_snapshot'])
             assert api('/v1/status')['paper']['trades']==1
             assert len(api('/v1/decisions')['decisions'])==1
             assert api('/v1/config')['config']['risk']['risk_percent']==.35
@@ -213,7 +317,7 @@ def main():
             reviews=api('/v1/learning/review/records')['records']
             assert reviews[0]['id']==learning_ids['review_id']
             inference=api('/v1/learning/inference')
-            assert inference['predictions']==1 and inference['shadow_effect'] is False
+            assert inference['predictions']==1 and inference['shadow_effect'] is False, inference
             assert inference['broker_effect'] is False
             assert len(api('/v1/events')['events'])>len(events_before)
             api('/v1/shutdown',{});process.wait(timeout=5)

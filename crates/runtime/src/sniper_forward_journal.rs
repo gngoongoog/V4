@@ -134,7 +134,7 @@ pub fn report(db:&Connection,account:&str,artifact_id:&str,
             ||digest(raw.as_bytes())!=*sha||v["schema"]!=EVENT_SCHEMA{
             integrity=false;break;
         }
-        seq=*n;
+        seq= *n;
         let opened=v["opened_broker_ms"].as_u64();
         let side=v["side"].as_i64();
         if !opened.is_some_and(|v|v>proof["cutoff_ms"].as_u64().unwrap_or(u64::MAX))

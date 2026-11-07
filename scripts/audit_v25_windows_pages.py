@@ -26,7 +26,7 @@ APPROVED_COMMANDS=(
     "execute_control", "update_risk", "update_portfolio", "update_settings",
     "priority_handoff", "shutdown_core", "close_terminal", "backup_action",
     "brain_snapshot_export", "brain_snapshot_import", "brain_snapshot_restore", "save_excel_report",
-    "backtest_action", "study_action", "news_action", "studio_action", "correlation_action", "update_trading_settings", "update_brain_control", "update_brain_paper_all", "update_risk_master", "update_position_protection", "save_partial_exit_prices", "set_learning_frozen", "manual_market", "cancel_pending_order", "select_solo_brain", "close_owned_positions",
+    "backtest_action", "study_action", "news_action", "studio_action", "correlation_action", "update_trading_settings", "update_brain_control", "update_brain_paper_all", "update_risk_master", "update_position_protection", "save_partial_exit_prices", "update_partial_exit_stage_consent", "update_partial_exit_trade_approval", "update_partial_exit_tp1_arm", "set_learning_frozen", "manual_market", "cancel_pending_order", "select_solo_brain", "close_owned_positions",
     "bind_execution", "update_supervisor", "frozen_coordinator_action", "frozen_sniper_action", "frozen_classic_action",
     "read_panel", "hvn_research_request", "read_trade_history", "get_status",
     "subscribe_status",
@@ -93,7 +93,7 @@ def check(root:Path=ROOT)->dict:
         and "readPanel(route)" in terminal,
         "Browser communicates via scoped Tauri IPC, not Core HTTP or token files")
     add("all_frontend_actions_registered_in_tauri",
-        declared_commands.issubset(set(re.findall(r"\b([a-z_]+)\b",registered)))
+        declared_commands.issubset(set(re.findall(r"\b([a-z0-9_]+)\b",registered)))
         and set(APPROVED_COMMANDS).issuperset(declared_commands),
         "Every Tauri UI invoke has a registered handler and is in the bounded command inventory")
     return {

@@ -27,7 +27,14 @@ class NewsReplayContractTests(unittest.TestCase):
 
     def test_news_service_persists_observations_and_routes_replay(self):
         self.assertIn("replay::init(db)?", self.news)
-        self.assertIn("replay::observe(db, &source.id, source.last_success_ms, &source.items)?", self.news)
+        # The causal news cache and per-source observations now share a
+        # transaction: the old direct-connection call was intentionally replaced.
+        self.assertIn("fn persist_sources(&mut self, db: &Connection, changed: Option<&str>)", self.news)
+        self.assertIn("let tx = db.unchecked_transaction()?", self.news)
+        self.assertIn("replay::observe(&tx, &source.id, source.last_success_ms, &source.items)?", self.news)
+        self.assertIn("tx.commit()?", self.news)
+        self.assertIn("self.persist_sources(db, Some(changed_source))", self.news)
+        self.assertIn('rss_cache_and_causal_history_rollback_together_on_invalid_feed', self.news)
         self.assertIn('path == "/v1/news/replay"', self.news)
         self.assertIn("replay::route(method, path, body, db, now)", self.news)
 

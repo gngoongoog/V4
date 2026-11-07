@@ -7,6 +7,7 @@ from __future__ import annotations
 import http.client
 import json
 import threading
+from urllib.error import HTTPError
 
 class LoopbackCore:
     def __init__(self, bearer_token: str, host='127.0.0.1', port=18741, timeout=4.0):
@@ -49,7 +50,13 @@ class LoopbackCore:
             if len(data)>4_194_304:
                 raise ValueError('Core response exceeded 4MB')
             if response.status < 200 or response.status >= 300:
-                raise OSError(f'Core returned HTTP {response.status} for {path}')
+                # Preserve urllib's HTTPError contract from the legacy client.
+                # Callers distinguish rejected/duplicate Core receipts (400)
+                # from transport ambiguity without parsing server error bodies.
+                # No HTTP POST is automatically retried on either path.
+                raise HTTPError(path, response.status,
+                                f'Core returned HTTP {response.status}',
+                                response.headers, None)
             self.requests+=1
             return json.loads(data) if expect_json else None
         except (OSError, http.client.HTTPException, ValueError):

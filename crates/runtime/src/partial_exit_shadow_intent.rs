@@ -438,6 +438,26 @@ mod tests{
             plans["rows"][i]["plan_id"].as_str().unwrap().to_string());
         crate::partial_exit_prices::save(&db,&live,"live",907,
             &ids,[2001.,2002.,2003.],10_000).unwrap();
+        crate::partial_exit_stage_consent::init(&db).unwrap();
+        let opted=crate::partial_exit_stage_consent::set(
+            &db,&live,"live",907,&ids,true,7,10_000).unwrap();
+        assert_eq!(opted["operator_approved"],true);
+        assert_eq!(opted["orders_enabled"],false);
+        assert_eq!(crate::partial_exit_stage_consent::report(
+            &db,&live,"live").unwrap()["rows"][0]["state"],
+            "operator_approved_not_dispatched");
+        assert!(crate::partial_exit_stage_consent::report(
+            &db,&telemetry(),"demo").unwrap()["rows"]
+            .as_array().unwrap().is_empty());
+        assert!(crate::partial_exit_stage_consent::set(
+            &db,&live,"live",907,&ids,true,8,10_000).is_err(),
+            "A changed Core revision must never silently inherit consent");
+        assert_eq!(crate::partial_exit_stage_consent::set(
+            &db,&live,"live",907,&ids,false,7,10_000).unwrap()
+            ["operator_approved"],false);
+        assert_eq!(crate::partial_exit_stage_consent::report(
+            &db,&live,"live").unwrap()["rows"][0]["state"],
+            "operator_disabled");
         live.bid=Some(2001.2);live.ask=Some(2001.4);
         live.quote_time_ms=Some(10_200);
         live.source_quote_time_ms=Some(10_200);

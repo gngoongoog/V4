@@ -59,6 +59,7 @@ impl ForwardDirectionAudit{
     /// Only qualifying frozen signals are opened. A later ACCEPTED quote may
     /// settle the pending candidate even if the current signal is WAIT.
     /// No overlapping evaluation windows and no same-quote label/capture.
+    #[cfg(test)]
     pub fn observe(&mut self,broker_ms:u64,bid:Option<f64>,ask:Option<f64>,
                    tick_size:Option<f64>,candidate:Option<&Signal>){
         self.observe_with_cost(broker_ms,bid,ask,tick_size,

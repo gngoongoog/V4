@@ -183,7 +183,6 @@ pub fn summary(db:&Connection,id:&str)->Result<Value>{
 #[cfg(test)]
 mod tests{
     use super::*;
-    use braintrade_domain::trading::TradingMode;
     fn db()->Connection{
         let db=Connection::open_in_memory().unwrap();
         db.execute_batch("CREATE TABLE frozen_shadow_runs(id TEXT PRIMARY KEY);").unwrap();

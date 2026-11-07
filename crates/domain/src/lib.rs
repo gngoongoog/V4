@@ -43,6 +43,10 @@ pub enum RunState {
 pub struct Config {
     pub schema: u32,
     pub mt5_path: String,
+    /// Opt-in MT5 /portable data isolation for an explicitly selected terminal.
+    /// Old configurations without this field keep the existing standard mode.
+    #[serde(default)]
+    pub mt5_portable: bool,
     pub symbol: String,
     pub telegram_user_id: String,
     pub telegram_chat_id: String,
@@ -60,6 +64,7 @@ impl Default for Config {
         Self {
             schema: 1,
             mt5_path: String::new(),
+            mt5_portable: false,
             symbol: "XAUUSD".into(),
             telegram_user_id: String::new(),
             telegram_chat_id: String::new(),
@@ -88,6 +93,9 @@ impl Config {
         }
         if self.schema != 1 {
             return Err("Unsupported config schema".into());
+        }
+        if self.mt5_portable && self.mt5_path.trim().is_empty() {
+            return Err("Portable MT5 requires an explicit terminal64.exe path".into());
         }
         if self.symbol.trim().is_empty() || self.symbol.len() > 80 {
             return Err("Enter a valid broker symbol".into());

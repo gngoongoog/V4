@@ -3,7 +3,7 @@
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 const POLICY: &str = "manual-review-eligibility-v1";
@@ -623,7 +623,7 @@ mod tests {
     fn invalid_window_bounds_are_not_accepted_as_evidence() {
         let db = db();
         let a = ContextKey{server:"A".into(),login:1,symbol:"XAUUSD".into(),currency:"USD".into()};
-        db.execute("INSERT INTO learning_models VALUES('m1','unreviewed_challenger',?1,?2)",params!["a".repeat(64),artifact(&[a.clone()]).to_string()]).unwrap();
+        db.execute("INSERT INTO learning_models VALUES('m1','unreviewed_challenger',?1,?2)",params!["a".repeat(64),artifact(std::slice::from_ref(&a)).to_string()]).unwrap();
         db.execute("INSERT INTO learning_slots VALUES('challenger','m1')",[]).unwrap();
         let (source,raw)=evidence(&a);let mut evaluation:Value=serde_json::from_str(&raw).unwrap();
         evaluation["windows"][1]["meta_v2"]["last_test_bar"]=json!(300);

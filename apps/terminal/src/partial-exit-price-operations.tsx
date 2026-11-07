@@ -8,15 +8,26 @@ export type PriceProposal={context:string;positionIdentifier:number;
  planIds:[string,string,string];prices:[number,number,number]};
 
 /** Operator-only saved research prices. No stage authorization or send path. */
-export function PartialExitPriceOperations({status,source,disabled,onSave}:{
+export function PartialExitPriceOperations({status,source,disabled,onSave,onConsent,onTradeApproval,onArm}:{
  status:Status|null;source:unknown;disabled:boolean;
  onSave:(proposal:PriceProposal)=>Promise<boolean>;
+ onConsent:(context:string,positionIdentifier:number,planIds:[string,string,string],enabled:boolean,confirmLiveLogin:string)=>Promise<boolean>;
+ onTradeApproval:(context:string,positionIdentifier:number,planIds:[string,string,string],enabled:boolean,confirmLiveLogin:string)=>Promise<boolean>;
+ onArm:(context:string,positionIdentifier:number,planIds:[string,string,string],enabled:boolean,confirmLiveLogin:string)=>Promise<boolean>;
 }){
  const [selected,setSelected]=useState(''),[values,setValues]=useState<[string,string,string]>(['','','']);
  const [dirty,setDirty]=useState(false);
+ const [liveConfirm,setLiveConfirm]=useState('');
  const t=status?.telemetry,view=object(source),settings=object(view.settings);
  const stages=object(view.partial_exit_stage_plans);
  const prices=object(view.partial_exit_price_proposals);
+ const consent=object(view.partial_exit_stage_consent);
+ const trade=object(view.partial_exit_trade_approval);
+ const sealed=object(view.partial_exit_stage_sealed_core);
+ const held=object(view.partial_exit_tp1_held);
+ const settlements=object(view.partial_exit_stage_settlements);
+ const commandLinks=object(view.partial_exit_command_links);
+ const arm=object(view.partial_exit_tp1_arm);
  const context=t?JSON.stringify([t.server,t.login,t.symbol,t.currency]):'';
  const target=settings.target==='live'?'live':settings.target==='demo'?'demo':null;
  const accountModeMatches=!!t&&((target==='demo'&&t.demo===true&&t.account_trade_mode===0)||
@@ -43,6 +54,106 @@ export function PartialExitPriceOperations({status,source,disabled,onSave}:{
   typeof r.plan_id==='string'&&/^tp-plan-[a-f0-9]{32}$/.test(r.plan_id as string))?
   plans.map(r=>String(r.plan_id)) as [string,string,string]:null;
  const recorded=stored.find(r=>r.position_identifier===Number(position?.identifier));
+ const consentValid=available&&consent.schema==='tp-stage-operator-consent-v1'&&
+  consent.status==='account_scoped_operator_consent_not_execution'&&
+  consent.purpose==='preparation_only'&&
+  consent.context===context&&consent.target===target&&consent.read_only===true&&
+  consent.automatic_tp_execution_enabled===false&&consent.orders_created===0;
+ const consentRows=consentValid&&Array.isArray(consent.rows)?consent.rows.map(object):[];
+ const approval=consentRows.find(r=>r.position_identifier===Number(position?.identifier));
+ const tradeValid=available&&trade.schema==='tp1-trade-approval-v1'&&
+  trade.status==='account_scoped_trade_preference_not_execution'&&
+  trade.context===context&&trade.target===target&&trade.read_only===true&&
+  trade.tp1_execution_enabled===false&&trade.broker_commands_created===0;
+ const tradeRows=tradeValid&&Array.isArray(trade.rows)?trade.rows.map(object):[];
+ const tradeRow=tradeRows.find(r=>r.position_identifier===Number(position?.identifier));
+ const tradeMatches=!!tradeRow&&tradeRow.physical_ticket===position?.ticket&&
+  Array.isArray(tradeRow.plan_ids)&&!!planIds&&
+  JSON.stringify(tradeRow.plan_ids)===JSON.stringify(planIds)&&
+  tradeRow.purpose==='tp1_future_trading_preference'&&
+  tradeRow.read_only===true&&tradeRow.tp1_execution_enabled===false&&
+  tradeRow.orders_enabled===false&&tradeRow.broker_command_id===null;
+ const tradeActive=tradeMatches&&tradeRow.trade_preference_current===true&&
+  tradeRow.state==='trade_preference_current_sender_locked';
+ const tradeNeedsRevoke=tradeMatches&&tradeRow.state!=='trade_preference_revoked';
+ const armValid=available&&arm.schema==='tp1-execution-arm-v1'&&
+  arm.status==='account_scoped_arm_not_broker_fill'&&
+  arm.context===context&&arm.target===target&&arm.read_only===true&&
+  arm.orders_enabled===false;
+ const armRows=armValid&&Array.isArray(arm.rows)?arm.rows.map(object):[];
+ const armRow=armRows.find(r=>r.position_identifier===Number(position?.identifier));
+ const armMatches=!!armRow&&armRow.physical_ticket===position?.ticket&&
+  !!planIds&&Array.isArray(armRow.plan_ids)&&
+  JSON.stringify(armRow.plan_ids)===JSON.stringify(planIds)&&
+  armRow.read_only===true&&armRow.orders_enabled===false;
+ const armActive=armMatches&&armRow.state==='execution_arm_valid_no_send_yet'&&
+  armRow.armed_active===true;
+ const armNeedsRevoke=armMatches&&
+  ['execution_arm_valid_no_send_yet','inactive_or_expired_execution_arm',
+   'consumed_wait_broker_reconciliation'].includes(String(armRow.state));
+ const armOther=armRows.filter(r=>
+   ['execution_arm_valid_no_send_yet','inactive_or_expired_execution_arm',
+    'consumed_wait_broker_reconciliation'].includes(String(r.state))&&
+   (r.position_identifier!==Number(position?.identifier)||!armMatches));
+ const tradeOther=tradeRows.filter(r=>r.state!=='trade_preference_revoked'&&
+  (r.position_identifier!==Number(position?.identifier)||!tradeMatches));
+ const sealedScoped=available&&sealed.schema==='tp-stage-sealed-core-intents-v1'&&
+  sealed.status==='account_scoped_prepared_not_sent'&&
+  sealed.context===context&&sealed.target===target&&
+  sealed.read_only===true&&sealed.orders_enabled===false&&
+  sealed.broker_commands_created===0;
+ const prepared=sealedScoped&&Array.isArray(sealed.rows)?sealed.rows.map(object):[];
+ const sealedTp1=prepared.find(r=>r.stage===1&&
+  r.position_identifier===Number(position?.identifier)&&
+  r.physical_ticket===position?.ticket&&
+  Array.isArray(planIds)&&r.plan_id===planIds[0]&&
+  r.broker_command_id===null&&r.gateway_send_id===null&&
+  r.broker_order_ticket===null);
+ const settlementsBound=available&&
+  settlements.schema==='partial-exit-stage-settlements-v1'&&
+  settlements.status==='account_scoped_historical_settlements'&&
+  settlements.context===context&&settlements.target===target&&
+  settlements.read_only===true&&settlements.orders_enabled===false&&
+  settlements.next_stage_authorized===false&&settlements.breakeven_enabled===false;
+ const settlementRows=settlementsBound&&Array.isArray(settlements.rows)?
+  settlements.rows.map(object):[];
+ const completedStages=settlementRows.filter(row=>
+  row.state==='historical_stage_sealed'||row.state==='sealed_evidence_needs_review');
+ const linked=available&&commandLinks.schema==='partial-exit-stage-command-links-v1'&&
+  commandLinks.status==='broker_stage_links_read_only'&&
+  commandLinks.context===context&&commandLinks.target===target&&
+  commandLinks.read_only===true&&commandLinks.orders_enabled===false&&
+  commandLinks.stage_execution_supported===false;
+ const linkRows=linked&&Array.isArray(commandLinks.rows)?commandLinks.rows.map(object):[];
+ const heldBound=available&&held.schema==='tp1-core-held-outbox-v1'&&
+  held.status==='account_scoped_tp1_outbox_not_fill_proof'&&
+  held.context===context&&held.target===target&&held.read_only===true&&
+  held.gateway_sends===null;
+ const heldRows=heldBound&&Array.isArray(held.rows)?held.rows.map(object):[];
+ const tp1Held=heldRows.find(r=>
+  r.position_identifier===Number(position?.identifier)&&
+  r.physical_ticket===position?.ticket&&Array.isArray(planIds)&&
+  r.plan_id===planIds[0]&&r.read_only===true&&
+  r.gateway_send_confirmed===false&&r.broker_fill_verified===false&&
+  typeof r.held_core_command_id==='string');
+ const approvalMatches=!!approval&&approval.position_ticket===position?.ticket&&
+  Array.isArray(approval.plan_ids)&&!!planIds&&
+  JSON.stringify(approval.plan_ids)===JSON.stringify(planIds)&&
+  approval.read_only===true&&approval.purpose==='preparation_only'&&
+  approval.orders_enabled===false&&
+  approval.broker_command_id===null;
+ const approved=approvalMatches&&approval.operator_approved===true&&
+  approval.state==='operator_approved_not_dispatched';
+ // Historical operator consent is not permission to send. A binding revision
+ // or immutable price/position change must offer revocation, not reapproval.
+ const staleConsent=approvalMatches&&
+  ['operator_approval_revision_mismatch','operator_approval_stale_needs_review']
+   .includes(String(approval?.state));
+ const revokeOther=consentRows.filter(r=>
+  (r.operator_approved===true||
+   ['operator_approval_revision_mismatch','operator_approval_stale_needs_review']
+    .includes(String(r.state)))&&
+  (r.position_identifier!==Number(position?.identifier)||!approvalMatches));
  const recordedValid=!!recorded&&
   ['price_levels_saved_no_execution','quote_stale_no_trigger'].includes(String(recorded.state))&&
   Array.isArray(recorded.prices)&&recorded.prices.length===3&&
@@ -58,6 +169,35 @@ export function PartialExitPriceOperations({status,source,disabled,onSave}:{
     targets[0]+tick*.5<Math.min(position.price_open,Number(t?.bid))&&
     targets[1]+tick*.5<targets[0]&&targets[2]+tick*.5<targets[1]);
  const locked=disabled||!available||status?.requested_run===true||!!recorded;
+ const consentLocked=disabled||!available||status?.requested_run===true||!consentValid;
+ const tradeLocked=disabled||!available||status?.requested_run===true||!tradeValid;
+ const armLocked=disabled||!available||status?.requested_run===true||!armValid;
+ const submitArm=(next:boolean)=>{
+  if(armLocked||!position||!planIds||
+   (next&&(!tradeActive||!!tp1Held))||
+   (next&&target==='live'&&liveConfirm!==String(t?.login))||
+   (armRow&&!armMatches)||(!next&&!armNeedsRevoke))return;
+  void onArm(context,Number(position.identifier),planIds,next,liveConfirm).then(ok=>{
+   if(ok)setLiveConfirm('');
+  });
+ };
+ const submitTrade=(next:boolean)=>{
+  if(tradeLocked||!position||!planIds||!recordedValid||
+   (next&&!approved)||(next&&tradeNeedsRevoke)||
+   (next&&target==='live'&&liveConfirm!==String(t?.login))||
+   (tradeRow&&!tradeMatches))return;
+  void onTradeApproval(context,Number(position.identifier),planIds,next,liveConfirm).then(ok=>{
+   if(ok)setLiveConfirm('');
+  });
+ };
+ const submitConsent=(next:boolean)=>{
+  if(consentLocked||!position||!planIds||!recordedValid||
+   (next&&target==='live'&&liveConfirm!==String(t?.login))||
+   (next&&staleConsent)||(approval&&!approvalMatches))return;
+  void onConsent(context,Number(position.identifier),planIds,next,liveConfirm).then(ok=>{
+   if(ok)setLiveConfirm('');
+  });
+ };
  const submit=()=>{
   if(locked||!valid||!position||!planIds||!dirty)return;
   void onSave({context,positionIdentifier:Number(position.identifier),planIds,
@@ -90,6 +230,75 @@ export function PartialExitPriceOperations({status,source,disabled,onSave}:{
        وصول السعر إلى أي هدف دليلاً على تنفيذ صفقة.
       </>}
     </p>:null}
+    {position&&sealedTp1&&!tp1Held?<div className="execution-binding-summary" aria-label="سجل هوية TP1 داخل Core">
+     <p className="safe-note">سجل هوية TP1 داخل Core — لا يوجد أمر مرسل إلى MT5 أو تفويض لتنفيذ الإغلاق.</p>
+     <p>{sealedTp1.state==='sealed_unarmed_not_dispatched'?
+       'تم ختم هوية TP1 للمركز الحالي، وهي غير مفعّلة للإرسال.':
+       sealedTp1.state==='historical_seal_expired_no_send'?
+       'سجل TP1 تاريخي، تغيرت البيانات أو انتهت صلاحية السعر؛ لا يمكن إرساله.':
+       'سجل TP1 غير موثوق ويحتاج مراجعة؛ لا يمكن إرساله.'}</p>
+    </div>:null}
+    {position&&tp1Held?<div className="execution-binding-summary" aria-label="أمر TP1 محجوز داخل Core دون إرسال">
+      <p className="safe-note">حالة أمر TP1 من Core: وجوده بالطابور أو وصوله إلى Gateway لا يثبت تنفيذ MT5. إثبات الإغلاق يحتاج Deal وحجم مركز متبقٍ مطابقين.</p>
+      <p>{tp1Held.state==='held_unreleased_no_gateway'?
+        'أمر TP1 محجوز ولم يُرسل إلى Gateway.':
+        tp1Held.state==='held_expired_never_dispatched'?
+        'انتهت صلاحية الأمر المحجوز قبل إطلاقه؛ لا يُعاد إرساله.':
+        tp1Held.state==='queued_for_gateway_not_broker_fill'?
+        'TP1 أُطلق إلى طابور Gateway؛ لا يوجد تأكيد تنفيذ من الوسيط بعد.':
+        tp1Held.state==='gateway_selected_broker_send_unconfirmed'?
+        'استلم Gateway أمر TP1، وقد يكون الإرسال جارياً؛ نتيجة الوسيط غير مؤكدة.':
+        tp1Held.state==='broker_receipt_needs_deal_and_position_reconciliation'?
+        'توجد نتيجة أولية لأمر TP1؛ يلزم التحقق من Deal وحجم المركز قبل اعتماد الإغلاق.':
+        'سجل TP1 يحتاج مراجعة، ولا يجوز افتراض تنفيذ أي إغلاق.'}</p>
+      {tp1Held.manual_replan_required===true&&
+       tp1Held.automatic_requeue_allowed===false?
+        <p className="safe-note">هذا الأمر انتهى قبل إطلاقه. النظام لا يعيد تسعيره أو إرساله تلقائياً على نفس المركز. راجع تاريخ أوامر MT5 والـDeals، ثم استخدم إدارة المراكز اليدوية إذا احتجت تدخلاً؛ لا تعِد تشغيل الأمر من قاعدة البيانات.</p>:null}
+     </div>:null}
+    {position&&recorded&&recordedValid&&consentValid?<div className="execution-binding-summary" aria-label="موافقة مشغل TP المرحلية">
+     <p className="safe-note">موافقة المشغل مرتبطة بهذا المركز وهي للتحضير فقط؛ هذا الزر لا يرسل أوامر. التنفيذ الفعلي يحتاج تفويض تداول مستقل وتسليح TP1 صريحاً.</p>
+     <p>{approved?'موافقة بحثية مُثبتة للحساب المحدد — لا أوامر':
+      staleConsent?'الموافقة المحفوظة قديمة أو تغيّر المركز/إعدادات التنفيذ؛ يجب إلغاء الموافقة القديمة قبل مراجعة الخطة. لا يُسمح بإعادة تفعيلها بصمت.':
+       'لم تُثبت موافقة تنفيذ هذه الخطة بعد'}</p>
+     {target==='live'?<label>اكتب رقم حساب Live لتأكيد موافقة TP
+      <input type="text" autoComplete="off" value={liveConfirm}
+       aria-label="تأكيد رقم حساب Live لخطة TP" disabled={consentLocked}
+       onChange={e=>setLiveConfirm(e.target.value)} placeholder={String(t?.login||'')}/>
+     </label>:null}
+     <button type="button" disabled={consentLocked||(approval&&!approvalMatches)||
+       (!approved&&!staleConsent&&target==='live'&&liveConfirm!==String(t?.login))}
+       onClick={()=>submitConsent(!(approved||staleConsent))}>
+       {staleConsent?'إلغاء الموافقة القديمة غير الصالحة':
+        approved?'إلغاء الموافقة المحفوظة':'تسجيل موافقة هذه الخطة للتحضير المستقبلي (لا إرسال)'}
+     </button>
+    </div>:null}
+    {position&&recordedValid&&tradeValid?<div className="execution-binding-summary" aria-label="تفويض تداول TP1 المستقبلي">
+     <p className="safe-note">تفويض تداول TP1 المستقبلي مرتبط بالحساب والمركز والخطة ومدته 24 ساعة. حفظ هذا التفويض وحده لا يرسل أمراً؛ يلزم تسليح تنفيذ TP1 مستقل قبل START.</p>
+     <p>{tradeActive?'تفويض TP1 مسجّل وساري، لكن لا إرسال منه وحده دون تسليح التنفيذ':
+       tradeNeedsRevoke?'تفويض TP1 محفوظ لكنه قديم أو غير مطابق؛ ألغِه وراجع الإعدادات قبل الموافقة مجدداً':
+       'لم تسجّل موافقة تداول TP1 المستقلة بعد'}</p>
+     <button type="button" disabled={tradeLocked||(tradeRow&&!tradeMatches)||
+       (!tradeNeedsRevoke&&(!approved||(target==='live'&&liveConfirm!==String(t?.login))))}
+      onClick={()=>submitTrade(!tradeNeedsRevoke)}>
+      {tradeNeedsRevoke?'إلغاء تفويض تداول TP1 المحفوظ':
+       'تسجيل تفويض TP1 المستقبلي (لا إرسال الآن)'}
+     </button>
+    </div>:null}
+    {position&&recordedValid&&armValid?<div className="execution-binding-summary" aria-label="تسليح تنفيذ TP1 الفعلي">
+     <p className="safe-note">تسليح TP1 قرار مستقل لمدة 15 دقيقة. عند تشغيل START ووصول سعر TP1، يمكن للنظام إرسال أمر إغلاق جزئي حقيقي إلى MT5 على حساب {target==='live'?'Live':'Demo'} المختار. هذا ليس اختباراً ولا وعداً بالربح؛ النتيجة تتطلب تأكيد الوسيط.</p>
+     <p>{armRow?.state==='consumed_wait_broker_reconciliation'?
+       'أُطلق أمر TP1 لطابور التنفيذ؛ يمكن إلغاء إذن أي إرسال جديد أثناء STOP، لكن إذا وصل أمر للوسيط فقد يكون تنفيذه جارياً. تحقق من سجل الـDeals قبل اعتبار الصفقة مغلقة.':
+       armActive?'تسليح TP1 نشط؛ قد ينفّذ عند وصول السعر إذا شغّلت النظام.':
+       armNeedsRevoke?'تسليح TP1 قديم أو انتهت صلاحيته؛ ألغِه قبل التجديد.':
+       'تنفيذ TP1 غير مسلّح لهذا المركز.'}</p>
+     <button type="button" disabled={armLocked||(armRow&&!armMatches)||
+      (armNeedsRevoke?false:!tradeActive||!!tp1Held||
+        (target==='live'&&liveConfirm!==String(t?.login)))}
+      onClick={()=>submitArm(!armNeedsRevoke)}>
+      {armNeedsRevoke?'إلغاء تسليح TP1':
+       'تسليح أمر TP1 الفعلي للمركز المحدد'}
+     </button>
+    </div>:null}
     {position&&!recorded?<>
      <p className="safe-note">دخول: {position.price_open} · Bid: {t?.bid??'—'} · Ask: {t?.ask??'—'} · Tick: {t?.tick_size??'—'} · الاتجاه: {position.side}</p>
      <div className="protection-cards">
@@ -105,5 +314,101 @@ export function PartialExitPriceOperations({status,source,disabled,onSave}:{
      {!valid&&dirty?<p className="safe-note">الأهداف لازم تكون على شبكة Tick وفي اتجاه الربح وبالترتيب، وخارج نطاق السعر الحالي. يُراجع Core أيضاً هوية المركز ومسودة TP وTP الوسيط الأصلي.</p>:null}
     </>:null}
    </form>}
+  {armValid&&armOther.length>0?<div className="execution-binding-summary" aria-label="إلغاء تسليحات TP1 القديمة">
+   <p className="safe-note">تسليحات TP1 قديمة أو لمركز اختفى؛ إلغاء التسليح أثناء STOP يمنع أي إذن إرسال جديد.</p>
+   {armOther.map((r,i)=>{
+    const ids=r.plan_ids;
+    const validIds=Array.isArray(ids)&&ids.length===3&&
+     ids.every((v:unknown)=>typeof v==='string'&&/^tp-plan-[a-f0-9]{32}$/.test(v));
+    const eligibleForRevoke=r.read_only===true&&r.orders_enabled===false&&
+     Number.isSafeInteger(r.position_identifier)&&Number(r.position_identifier)>0&&validIds;
+    return <div className="brain-control-row" key={'arm-'+String(r.position_identifier)+'-'+i}>
+     <span>مركز {String(r.position_identifier)} · تسليح TP1</span>
+     <button type="button" disabled={!eligibleForRevoke||armLocked}
+      onClick={()=>{if(eligibleForRevoke)void onArm(context,Number(r.position_identifier),
+       ids as [string,string,string],false,'')}}>
+      إلغاء تسليح TP1 للمركز {String(r.position_identifier)}
+     </button>
+    </div>;
+   })}
+  </div>:null}
+  {completedStages.length>0?<div className="execution-binding-summary" aria-label="أدلة الإغلاق الجزئي المرحلية من MT5">
+   <p className="safe-note">المصالحة المالية لمراحل TP — تأكيد تاريخي فقط، ولا يفعّل المرحلة التالية أو التعادل تلقائياً.</p>
+   {completedStages.map((r,i)=>{
+    const stage=Number(r.stage),pid=Number(r.position_identifier);
+    const safe=Number.isSafeInteger(stage)&&stage>=1&&stage<=3&&
+      Number.isSafeInteger(pid)&&pid>0&&
+      typeof r.plan_id==='string'&&/^tp-plan-[a-f0-9]{32}$/.test(r.plan_id as string);
+    if(!safe)return null;
+    const proven=r.state==='historical_stage_sealed'&&
+      typeof r.core_command_id==='string'&&r.core_command_id.length>0&&
+      Number.isSafeInteger(r.broker_order)&&Number(r.broker_order)>0&&
+      good(r.matched_volume)&&typeof r.remaining_volume_at_seal==='number'&&
+      Number.isFinite(r.remaining_volume_at_seal)&&r.remaining_volume_at_seal>=0&&
+      r.next_stage_authorized===false&&r.breakeven_triggered===false;
+    // A broker ACK or a stale settlement cannot be displayed as realized
+    // profit. Only a separately linked exact order + Deal audit with matching
+    // account/plan/physical position and volume can provide booked net costs.
+    const history=proven?linkRows.find(row=>
+      row.position_identifier===pid&&row.stage===stage&&row.plan_id===r.plan_id):null;
+    const evidence=object(history?.evidence);
+    const step=Number(t?.volume_step);
+    const netValid=proven&&evidence.state==='broker_order_deals_exactly_linked'&&
+      evidence.core_command_id===r.core_command_id&&
+      evidence.broker_order_ticket===r.broker_order&&
+      typeof evidence.matched_broker_lots==='number'&&
+      Number.isFinite(evidence.matched_broker_lots)&&good(step)&&
+      Math.abs(evidence.matched_broker_lots-Number(r.matched_volume))<=step*1e-6&&
+      typeof evidence.booked_net_account_currency==='number'&&
+      Number.isFinite(evidence.booked_net_account_currency)&&
+      typeof t?.currency==='string'&&t.currency.length>0;
+    return <p key={'stage-evidence-'+String(pid)+'-'+stage+'-'+i}>
+      المركز {pid} · TP{stage}: {proven?
+        'تم توثيق أمر الوسيط والـDeals وحجم المركز المتبقي وقت المصالحة':
+        'الأدلة المحفوظة تحتاج إعادة تدقيق ولا تُعد إثبات إغلاق'}
+      {proven?' · الحجم المغلق '+String(r.matched_volume)+' لوت، المتبقي '+String(r.remaining_volume_at_seal)+' لوت':''}
+      {netValid?' · صافي محجوز بعد تكاليف الـDeal: '+String(evidence.booked_net_account_currency)+' '+String(t?.currency):''}
+    </p>;
+   })}
+  </div>:null}
+  {tradeValid&&tradeOther.length>0?<div className="execution-binding-summary" aria-label="إلغاء تفويضات تداول TP1 القديمة">
+   <p className="safe-note">تفويضات TP1 قديمة أو تخص مركزاً غير ظاهر؛ تستطيع إلغاءها عند STOP دون إرسال أمر تداول.</p>
+   {tradeOther.map((r,i)=>{
+    const ids=r.plan_ids;
+    const validIds=Array.isArray(ids)&&ids.length===3&&
+     ids.every((v:unknown)=>typeof v==='string'&&/^tp-plan-[a-f0-9]{32}$/.test(v));
+    const verified=r.purpose==='tp1_future_trading_preference'&&r.read_only===true&&
+     r.tp1_execution_enabled===false&&r.orders_enabled===false&&
+     r.broker_command_id===null&&Number.isSafeInteger(r.position_identifier)&&
+     Number(r.position_identifier)>0&&validIds;
+    return <div className="brain-control-row" key={'trade-'+String(r.position_identifier)+'-'+i}>
+     <span>مركز {String(r.position_identifier)} · تفويض TP1 غير منفّذ</span>
+     <button type="button" disabled={!verified||tradeLocked}
+      onClick={()=>{if(verified)void onTradeApproval(context,Number(r.position_identifier),
+       ids as [string,string,string],false,'')}}>
+      إلغاء تفويض TP1 للمركز {String(r.position_identifier)}
+     </button>
+    </div>;
+   })}
+  </div>:null}
+  {consentValid&&revokeOther.length>0?<div className="execution-binding-summary" aria-label="إلغاء موافقات TP القديمة">
+   <p className="safe-note">موافقات مخزونة من مراكز ثانية أو تغيّر وضعها. ماكو تنفيذ تلقائي منها؛ تكدر تلغيها بعد STOP حتى لو المركز ما عاد متاح بالقائمة.</p>
+   {revokeOther.map((r,i)=>{
+    const ids=r.plan_ids;
+    const validIds=Array.isArray(ids)&&ids.length===3&&
+     ids.every((v:unknown)=>typeof v==='string'&&/^tp-plan-[a-f0-9]{32}$/.test(v));
+    const verified=r.purpose==='preparation_only'&&r.read_only===true&&
+     r.orders_enabled===false&&r.broker_command_id===null&&
+     Number.isSafeInteger(r.position_identifier)&&Number(r.position_identifier)>0&&validIds;
+    return <div className="brain-control-row" key={String(r.position_identifier)+'-'+i}>
+     <span>مركز {String(r.position_identifier)} · تحضير فقط</span>
+     <button type="button" disabled={!verified||consentLocked}
+      onClick={()=>{if(verified)void onConsent(context,Number(r.position_identifier),
+       ids as [string,string,string],false,'')}}>
+      إلغاء موافقة المركز {String(r.position_identifier)}
+     </button>
+    </div>;
+   })}
+  </div>:null}
  </section>;
 }

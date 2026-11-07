@@ -234,6 +234,7 @@ pub(crate) fn verified_forward_feedback(
     Some((net, reward, scored))
 }
 
+#[cfg(test)]
 fn forward_stats(db: &Connection, source: &str, regime: Option<&str>, now: u64) -> Result<Stats> {
     forward_stats_at(db,source,regime,now,None)
 }
@@ -337,6 +338,7 @@ fn verified_admission(source:&str,ctx:&str,brain:&str,pos:u64,closed:u64,
         && a.hash.as_deref()==Some(format!("{:x}",Sha256::digest(raw.as_bytes())).as_str())
 }
 
+#[cfg(test)]
 fn broker_stats(db:&Connection,source:&str,regime:Option<&str>,now:u64)->Result<Stats>{
     broker_stats_at(db,source,regime,now,None)
 }
@@ -385,6 +387,7 @@ fn broker_stats_at(db:&Connection,source:&str,regime:Option<&str>,now:u64,cutoff
 // Repeated-mistake memory uses only exact completed Demo broker evidence already
 // in coordinator_broker_samples. An observed loss is not proof that the strategy
 // caused the market move. The response is a temporary, bounded preference shift.
+#[cfg(test)]
 fn contextual_stats(db:&Connection,source:&str,key:&str,now:u64)->Result<(u64,f64,f64,u64,f64)> {
     contextual_stats_at(db,source,key,now,None)
 }
@@ -764,6 +767,7 @@ impl Learner {
         })
     }
 
+    #[cfg(test)]
     pub fn observe(
         &mut self,
         db: &Connection,
@@ -1045,7 +1049,7 @@ mod tests {
             point:Some(0.01),tick_size:Some(0.01),tick_value_profit:Some(1.),
             tick_value_loss:Some(1.),quote_time_ms:Some(now),tick_age_ms:Some(0),
             bid:Some(price),ask:Some(price+0.01),..Default::default()};
-        learner.observe_inactive_forward(&db,&t,&c,&[b.clone()],&frames,now).unwrap();
+        learner.observe_inactive_forward(&db,&t,&c,std::slice::from_ref(&b),&frames,now).unwrap();
         let source=inactive_source_key(&context(&t),c.trading.mode,&b.id,&b.timeframe,&b.report_id).unwrap();
         let active_source=source_key(&context(&t),c.trading.mode,&b.id,&b.timeframe,&b.report_id).unwrap();
         assert_ne!(source,active_source,"Research reward must not auto-promote to active execution weights");
@@ -1101,7 +1105,7 @@ mod tests {
         let signal=execution::evaluate(&b,&t,&c,&frames,None,now);
         assert!(signal.ready && signal.side==1,
             "Real Gann rule needs confirmed pivots, ATR and bullish last candle");
-        learner.observe_inactive_forward(&db,&t,&c,&[b.clone()],&frames,now).unwrap();
+        learner.observe_inactive_forward(&db,&t,&c,std::slice::from_ref(&b),&frames,now).unwrap();
         let research=inactive_source_key(&context(&t),c.trading.mode,&b.id,
             &b.timeframe,&b.report_id).unwrap();
         let live=source_key(&context(&t),c.trading.mode,&b.id,
@@ -1150,10 +1154,10 @@ mod tests {
         let system=BrainConfig{id:"system".into(),..Default::default()};
         for mode in [TradingMode::Scalping,TradingMode::Swing] {
             c.trading.mode=mode;
-            assert!(learner.observe_inactive_forward(&db,&t,&c,&[trend.clone()],
+            assert!(learner.observe_inactive_forward(&db,&t,&c,std::slice::from_ref(&trend),
                 &BTreeMap::new(),1000).is_err(),
                 "Duplicating trend's identical signal under a second mode is fake learning");
-            assert!(learner.observe_inactive_forward(&db,&t,&c,&[system.clone()],
+            assert!(learner.observe_inactive_forward(&db,&t,&c,std::slice::from_ref(&system),
                 &BTreeMap::new(),1000).is_ok());
         }
         c.trading.mode=TradingMode::Expert;
@@ -1392,7 +1396,7 @@ mod tests {
         let source=source_key(&context(&t),config.trading.mode,&brain.id,&brain.timeframe,&brain.report_id).unwrap();
         db.execute("INSERT INTO coordinator_samples VALUES(?1,?2,'{}',NULL)",params![source,old]).unwrap();
         let frames=BTreeMap::from([(brain.timeframe.clone(),frame)]);
-        learner.observe_gated(&db,&t,&config,&[brain.clone()],&frames,true,now,Some(now-1),(0.5,0)).unwrap();
+        learner.observe_gated(&db,&t,&config,std::slice::from_ref(&brain),&frames,true,now,Some(now-1),(0.5,0)).unwrap();
         let pending:bool=db.query_row("SELECT outcome IS NULL FROM coordinator_samples WHERE source=?1 AND bar=?2",params![source,old],|r|r.get(0)).unwrap();
         assert!(pending,"Pause cannot mature or train the pending sample");
         learner.observe(&db,&t,&config,&[brain],&frames,false,now).unwrap();
@@ -1436,7 +1440,7 @@ mod tests {
             tick_value_profit:Some(1.),tick_value_loss:Some(1.),tick_age_ms:Some(0),quote_time_ms:Some(now),
             bid:Some(price),ask:Some(price+0.01),..Default::default()};
         let frames=BTreeMap::from([(brain.timeframe.clone(),frame)]);
-        learner.observe(&db,&t,&config,&[brain.clone()],&frames,true,now).unwrap();
+        learner.observe(&db,&t,&config,std::slice::from_ref(&brain),&frames,true,now).unwrap();
         t.demo=false;t.account_trade_mode=Some(2);
         learner.observe(&db,&t,&config,&[brain],&frames,true,now).unwrap();
         let count:u64=db.query_row("SELECT COUNT(DISTINCT source) FROM coordinator_samples",[],|r|r.get(0)).unwrap();
@@ -1471,9 +1475,9 @@ mod tests {
         let price = f["M1"].last().unwrap().candle.close;
         t.bid = Some(price);
         t.ask = Some(price + 0.01);
-        let w = l.observe(&db, &t, &c, &[b.clone()], &f, true, now).unwrap();
+        let w = l.observe(&db, &t, &c, std::slice::from_ref(&b), &f, true, now).unwrap();
         assert_eq!(w["trend"].samples, 0);
-        l.observe(&db, &t, &c, &[b.clone()], &f, true, now).unwrap();
+        l.observe(&db, &t, &c, std::slice::from_ref(&b), &f, true, now).unwrap();
         assert_eq!(
             db.query_row("SELECT COUNT(*) FROM coordinator_samples", [], |r| r.get::<_, u64>(0))
                 .unwrap(),
@@ -1483,20 +1487,20 @@ mod tests {
         t.quote_time_ms = Some(now);
         f.insert("M1".into(), bars(now / 1000 - 60));
         assert_eq!(
-            l.observe(&db, &t, &c, &[b.clone()], &f, false, now).unwrap()["trend"].samples,
+            l.observe(&db, &t, &c, std::slice::from_ref(&b), &f, false, now).unwrap()["trend"].samples,
             0
         );
         now += 60_000;
         t.quote_time_ms = Some(now);
         f.insert("M1".into(), bars(now / 1000 - 60));
-        let w = l.observe(&db, &t, &c, &[b.clone()], &f, false, now).unwrap();
+        let w = l.observe(&db, &t, &c, std::slice::from_ref(&b), &f, false, now).unwrap();
         assert_eq!(w["trend"].samples, 1);
         assert_eq!(w["trend"].wins, 1);
         assert!(w["trend"].evidence_source.starts_with("forward_bars"));
         let mut restarted = Learner::new(&db).unwrap();
         assert_eq!(
             restarted
-                .observe(&db, &t, &c, &[b.clone()], &f, false, now)
+                .observe(&db, &t, &c, std::slice::from_ref(&b), &f, false, now)
                 .unwrap()["trend"]
                 .samples,
             1
@@ -1593,7 +1597,7 @@ mod tests {
         missing.as_object_mut().unwrap().remove("fee");
         db.execute("UPDATE broker_deals SET payload=?1 WHERE context=?2 AND ticket=101",
             params![missing.to_string(),key]).unwrap();
-        let rejected=l.observe(&db,&t,&c,&[b.clone()],&f,false,now).unwrap();
+        let rejected=l.observe(&db,&t,&c,std::slice::from_ref(&b),&f,false,now).unwrap();
         assert_eq!(rejected["trend"].broker_samples,0);
         assert_eq!(db.query_row("SELECT COUNT(*) FROM coordinator_broker_samples",
             [],|row|row.get::<_,u64>(0)).unwrap(),0);
@@ -1745,7 +1749,7 @@ mod tests {
         }
         let clean=broker_stats(&db,source,None,now).unwrap();
         assert_eq!(clean.samples,0,"Incomplete past receipts are not training evidence");
-        assert_eq!(contextual_stats(&db,&source,key,now).unwrap().0,0);
+        assert_eq!(contextual_stats(&db,source,key,now).unwrap().0,0);
         let weight=selected_weight(Stats::default(),Stats::default(),clean,Stats::default(),
             &IntelligenceContext::default());
         assert_eq!(weight.weight(),1.0,"No historical broker labels: neutral weight");
@@ -1757,7 +1761,7 @@ mod tests {
         let updated=broker_stats(&db,source,None,now).unwrap();
         assert_eq!(updated.samples,1);
         assert!((updated.mean_net_per_lot-15.0).abs()<1e-6);
-        assert_eq!(contextual_stats(&db,&source,key,now).unwrap().0,1);
+        assert_eq!(contextual_stats(&db,source,key,now).unwrap().0,1);
         let tuned=selected_weight(Stats::default(),Stats::default(),updated,Stats::default(),
             &IntelligenceContext::default());
         assert!(tuned.weight()>1.0,"Verified positive after-cost feedback updates actual weight");
@@ -1879,7 +1883,7 @@ mod tests {
                 params![source,i+1,now-1000,p.to_string()]).unwrap();
         }
         assert_eq!(broker_stats(&db,source,None,now).unwrap().samples,0);
-        assert_eq!(contextual_stats(&db,&source,key,now).unwrap().0,0);
+        assert_eq!(contextual_stats(&db,source,key,now).unwrap().0,0);
         let neutral=selected_weight(Stats::default(),Stats::default(),
             broker_stats(&db,source,None,now).unwrap(),Stats::default(),
             &IntelligenceContext::default());
@@ -1893,7 +1897,7 @@ mod tests {
         assert_eq!(valid.samples,1);
         assert!((valid.mean_net_per_lot-23.5).abs()<1e-9);
         assert!((valid.mean_reward-0.47_f64.tanh()).abs()<1e-9);
-        assert_eq!(contextual_stats(&db,&source,key,now).unwrap().0,1);
+        assert_eq!(contextual_stats(&db,source,key,now).unwrap().0,1);
         let positive=selected_weight(Stats::default(),Stats::default(),
             valid,Stats::default(),&IntelligenceContext::default());
         assert!(positive.weight()>1.0,"Only exact reward lineage can tune broker weights");

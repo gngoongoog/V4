@@ -122,6 +122,10 @@ class AuditGatewayRepairs(unittest.TestCase):
         self.assertEqual(len(self.b.sends),1)
 
     def test_sniper_target_grid_is_exact_for_buy_and_sell(self):
+        # Keep this test about exact TP grid geometry: the default 20-point
+        # permitted drift exceeds its 13-point target and must be rejected
+        # by the separate entry/TP safety rule. Use a safe 5-point window.
+        self.cmd['deviation_points']=5
         for side,bid,ask in ((1,1998.12,1998.13),(-1,1998.,1998.01)):
             self.cmd['id']=str(side)
             self.cmd['signal'].update(key='tick:test',side=side,target_distance=.13,stop_distance=1.)

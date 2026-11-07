@@ -597,7 +597,7 @@ pub mod tests {
             "Live consent must never enable Demo elevated risk");
         risk.risk_percent=5.01;
         assert!(risk.validate().is_err());
-        let old=serde_json::to_value(&RiskConfig::default()).unwrap();
+        let old=serde_json::to_value(RiskConfig::default()).unwrap();
         assert!(old.get("live_elevated_risk_opt_in").is_none(),
             "Existing serialized presets and golden research hashes stay compatible");
     }
@@ -644,6 +644,17 @@ pub mod tests {
         assert!(!config.risk.micro_real_temporary);
         assert_eq!(config.risk.micro_real_recovery_equity,500.);
         assert!(config.validate().is_ok());
+        assert!(!config.mt5_portable,
+            "Legacy settings must preserve nonportable MT5 connection mode");
+        let mut isolated=config.clone();
+        isolated.mt5_portable=true;
+        assert!(isolated.validate().is_err(),
+            "Portable mode without pinned terminal path must be rejected");
+        isolated.mt5_path="C:\\MT5\\terminal64.exe".into();
+        assert!(isolated.validate().is_ok());
+        let roundtrip:crate::Config=serde_json::from_value(
+            serde_json::to_value(&isolated).unwrap()).unwrap();
+        assert!(roundtrip.mt5_portable);
         assert!(!serde_json::to_value(&config.risk).unwrap().as_object().unwrap()
             .contains_key("micro_demo_risk_opt_in"),
             "disabled opt-in must not alter historical report fingerprints");

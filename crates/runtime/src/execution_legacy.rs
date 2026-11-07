@@ -23,8 +23,11 @@ pub(crate) const PENDING_BROKER_SQL:&str = "(state IN ('queued','dispatched','un
 // Keep this fail-closed gate for ALL stage markers, including Live and Demo.
 // Normal full closes remain independently authorized, not disabled.
 fn incomplete_tp_stage_execution_locked(command:&Value)->bool {
-    ["tp_stage_plan_id","tp_stage","expected_position_identifier","tp_target_price","expected_position_entry","expected_broker_tp"]
-        .iter().any(|key|command.get(*key).is_some())
+    command["schema"]=="tp-stage-broker-command-shape-v1"
+        ||["tp_stage_plan_id","tp_stage","expected_position_identifier",
+            "tp_target_price","expected_position_entry","expected_broker_tp",
+            "price_source_quote_ms"]
+            .iter().any(|key|command.get(*key).is_some())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -384,6 +387,7 @@ CREATE TABLE IF NOT EXISTS execution_solo(context TEXT NOT NULL,account_mode INT
 CREATE TABLE IF NOT EXISTS brain_configs(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS broker_commands(id TEXT PRIMARY KEY,context TEXT NOT NULL,brain TEXT NOT NULL,kind TEXT NOT NULL,created_ms INTEGER NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS broker_commands_context ON broker_commands(context,brain,created_ms);
+CREATE INDEX IF NOT EXISTS broker_commands_context_state ON broker_commands(context,state,created_ms);
 CREATE INDEX IF NOT EXISTS broker_commands_history_floor ON broker_commands(context,kind,created_ms);
 CREATE INDEX IF NOT EXISTS broker_commands_recovery ON broker_commands(kind,state,created_ms);
 CREATE INDEX IF NOT EXISTS broker_commands_manual_pending ON broker_commands(brain,state);
@@ -561,6 +565,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
         self.risk_master_key=key;
         Ok(())
     }
+    #[cfg(test)]
     pub fn set_risk_master(&mut self,db:&Connection,t:&Telemetry,enabled:bool,now:u64)->Result<()> {
         self.set_risk_master_with_recovery(db,t,enabled,None,now)
     }
@@ -1210,6 +1215,43 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                 let Some(t) = t.filter(|t| self.matches(t)) else {
                     return Ok(json!({"command":null,"history_from_ms":0}));
                 };
+                // A queued TP-stage close cannot yet be authorized by Core.
+                // Quarantine it BEFORE the Gateway command pull; otherwise it
+                // could be promoted to 'dispatched', block reconciliation and
+                // repeatedly reach a Gateway that cannot obtain final approval.
+                // Already-dispatched/placed/unknown rows are deliberately NOT
+                // cancelled here: a prior broker send must still be reconciled.
+                let unissued=db.prepare(
+                    "SELECT id,payload FROM broker_commands
+                     WHERE context=?1 AND state='queued'")?
+                    .query_map([&key],|r|Ok((
+                        r.get::<_,String>(0)?,r.get::<_,String>(1)?
+                    )))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                for (unissued_id,unissued_raw) in unissued {
+                    let parsed=serde_json::from_str::<Value>(&unissued_raw);
+                    if parsed.as_ref().map_or(true,|c| {
+                        let marked=incomplete_tp_stage_execution_locked(c)
+                            ||crate::partial_exit_tp1_release::stage_id_exists(
+                                db,&unissued_id);
+                        !c.is_object()||(marked
+                            &&!crate::partial_exit_tp1_release::authorize(
+                                db,t,&self.settings.target,&unissued_id,
+                                self.settings.revision,now,
+                                status.requested_run&&status.gateway_fresh))
+                    }){
+                        let n=db.execute(
+                            "UPDATE broker_commands SET state='cancelled'
+                             WHERE id=?1 AND context=?2 AND state='queued'",
+                            params![unissued_id,key])?;
+                        if n==1{
+                            db.execute(
+                                "INSERT INTO events(timestamp_ms,kind,detail)
+                                 VALUES(?1,'queued_stage_blocked_no_broker_send',?2)",
+                                params![now,unissued_id])?;
+                        }
+                    }
+                }
                 db.execute("UPDATE broker_commands SET state='expired' WHERE state='queued' AND CAST(json_extract(payload,'$.expires_ms') AS INTEGER)<?1",[now])?;
                 // New and interrupted dispatches keep priority. Recovery work
                 // rotates without changing stored states, so an old unknown
@@ -1244,8 +1286,18 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                                 cmd["daily_breaker_limit_percent"].as_f64().unwrap_or(2.))?;
                         let close_allowed = cmd["kind"] == "close"
                             && (cmd["manual_close"]!=true || !status.requested_run);
-                        let allowed = close_allowed || (breaker_ok &&
-                            ((self.enabled(status) && self.broker_entry_allowed(cmd)) || self.manual_entry_allowed(cmd,status)));
+                        let stage=incomplete_tp_stage_execution_locked(cmd)
+                            ||crate::partial_exit_tp1_release::stage_id_exists(db,id);
+                        let allowed = if stage {
+                            status.gateway_fresh&&status.requested_run
+                                &&crate::partial_exit_tp1_release::authorize(
+                                    db,t,&self.settings.target,id,
+                                    self.settings.revision,now,true)
+                        } else {
+                            close_allowed || (breaker_ok &&
+                                ((self.enabled(status) && self.broker_entry_allowed(cmd))
+                                  ||self.manual_entry_allowed(cmd,status)))
+                        };
                         if allowed {
                             db.execute("UPDATE broker_commands SET state='dispatched' WHERE id=?1 AND state='queued'",[id])?;
                         } else {
@@ -1283,15 +1335,24 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                         cmd["daily_breaker_enabled"].as_bool().unwrap_or(self.settings.target=="live"),
                         cmd["daily_breaker_limit_percent"].as_f64().unwrap_or(2.))?
                 } else { false };
+                let stage=incomplete_tp_stage_execution_locked(&cmd)
+                    ||crate::partial_exit_tp1_release::stage_id_exists(db,id);
                 let ok = state == "dispatched"
-                    && !incomplete_tp_stage_execution_locked(&cmd)
                     && breaker_ok
                     && t.is_some_and(|t| self.matches(t) && ctx(t) == cmd["context"])
                     && now <= cmd["expires_ms"].as_u64().unwrap_or(0)
-                    && ((cmd["kind"] == "close" && (cmd["manual_close"]!=true || !status.requested_run))
-                        || (cmd["revision"].as_u64()==Some(self.settings.revision)
-                            && ((self.enabled(status) && self.broker_entry_allowed(&cmd))
-                                || self.manual_entry_allowed(&cmd,status))));
+                    && (if stage {
+                        status.gateway_fresh&&status.requested_run
+                            &&t.is_some_and(|t|
+                                crate::partial_exit_tp1_release::authorize(
+                                    db,t,&self.settings.target,id,
+                                    self.settings.revision,now,true))
+                    } else {
+                        (cmd["kind"] == "close" && (cmd["manual_close"]!=true || !status.requested_run))
+                            || (cmd["revision"].as_u64()==Some(self.settings.revision)
+                                && ((self.enabled(status) && self.broker_entry_allowed(&cmd))
+                                    || self.manual_entry_allowed(&cmd,status)))
+                    });
                 Ok(json!({"authorized":ok}))
             }
             ("POST", "/v1/execution/result") => {
@@ -1376,7 +1437,7 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
                     if matches!(d["type"].as_i64(), Some(0 | 1)) {
                         if d["symbol"] == t.symbol {
                             let valid_magic=d["magic"].as_u64().is_some();
-                            let valid_entry=matches!(d["entry"].as_i64(),Some(0 | 1 | 2 | 3));
+                            let valid_entry=matches!(d["entry"].as_i64(),Some(0..=3));
                             let valid_time=d["time_msc"].as_u64()
                                 .is_some_and(|ms| ms>0 && ms<=until_ms.saturating_add(2_000));
                             let valid_volume=d["volume"].as_f64()
@@ -2536,11 +2597,152 @@ mod execution_persistence_tests {
 #[cfg(test)]
 mod tp_stage_core_authorization_gate_tests {
     use super::*;
+    fn demo() -> Telemetry {
+        Telemetry {
+            connected:true,demo:true,account_trade_mode:Some(0),
+            login:17,server:"Demo-Test".into(),currency:"USD".into(),
+            symbol:"XAUUSD".into(),..Default::default()
+        }
+    }
+    #[test]
+    fn quarantined_stage_never_reaches_gateway_before_authorization(){
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let indexed:i64=db.query_row(
+            "SELECT COUNT(*) FROM pragma_index_list('broker_commands')
+             WHERE name='broker_commands_context_state'",
+            [],|r|r.get(0)).unwrap();
+        assert_eq!(indexed,1,"Gateway polling must index account + pending state");
+        let t=demo();
+        svc.bind(&db,&t,100).unwrap();
+        let context=ctx(&t);
+        let status=Status{gateway_fresh:true,telemetry:Some(t),..Default::default()};
+        let stage=json!({"id":"queued-tp","kind":"close","position":87,
+            "context":context,"target":"demo","expires_ms":5000,
+            "tp_stage_plan_id":format!("tp-plan-{}","a".repeat(32)),
+            "tp_stage":1,"expected_position_identifier":907});
+        let ordinary=json!({"id":"queued-full","kind":"close","position":88,
+            "context":context,"target":"demo","expires_ms":5000});
+        for (id,payload) in [("queued-tp",stage),("queued-full",ordinary)]{
+            db.execute("INSERT INTO broker_commands(
+                id,context,brain,kind,created_ms,state,payload)
+                VALUES(?1,?2,'system','close',110,'queued',?3)",
+                params![id,context,payload.to_string()]).unwrap();
+        }
+        let issued=svc.route("GET","/v1/execution/gateway",b"",&db,&status,200).unwrap();
+        assert_eq!(issued["command"]["id"],"queued-full",
+            "Normal full closes remain available for broker dispatch");
+        let stage_state:String=db.query_row(
+            "SELECT state FROM broker_commands WHERE id='queued-tp'",
+            [],|r|r.get(0)).unwrap();
+        assert_eq!(stage_state,"cancelled");
+        assert_eq!(issued["command"]["kind"],"close");
+        assert_eq!(db.query_row(
+            "SELECT COUNT(*) FROM events WHERE kind='queued_stage_blocked_no_broker_send'",
+            [],|r|r.get::<_,i64>(0)).unwrap(),1);
+        // A repeat Gateway poll may not resurrect the cancelled stage or
+        // duplicate its rejection event; the quarantine is crash-stable.
+        svc.route("GET","/v1/execution/gateway",b"",&db,&status,201).unwrap();
+        assert_eq!(db.query_row(
+            "SELECT COUNT(*) FROM events WHERE kind='queued_stage_blocked_no_broker_send'",
+            [],|r|r.get::<_,i64>(0)).unwrap(),1);
+        // An old, interrupted dispatched stage cannot be assumed unsent:
+        // preserve it for broker reconciliation, but still deny permission
+        // to send it for the first time.
+        db.execute("INSERT INTO broker_commands(
+            id,context,brain,kind,created_ms,state,payload)
+            VALUES('past-dispatched',?1,'system','close',111,'dispatched',?2)",
+            params![context,json!({"id":"past-dispatched","kind":"close",
+                "tp_stage_plan_id":format!("tp-plan-{}","b".repeat(32)),
+                "position":87,"context":context,"expires_ms":5000}).to_string()]).unwrap();
+        let denied=svc.route("POST","/v1/execution/authorize",
+            br#"{"id":"past-dispatched"}"#,&db,&status,202).unwrap();
+        assert_eq!(denied["authorized"],false);
+        assert_eq!(db.query_row(
+            "SELECT state FROM broker_commands WHERE id='past-dispatched'",
+            [],|r|r.get::<_,String>(0)).unwrap(),"dispatched");
+    }
+    #[test]
+    fn held_tp1_outbox_row_is_invisible_to_gateway_and_never_authorized(){
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        crate::partial_exit_tp1_held::init(&db).unwrap();
+        let t=demo();svc.bind(&db,&t,100).unwrap();
+        let key=ctx(&t);
+        let p=json!({"id":"tp1-held-command","schema":"tp-stage-broker-command-shape-v1",
+            "kind":"close","position":87,"context":key,"target":"demo",
+            "tp_stage_plan_id":format!("tp-plan-{}","a".repeat(32)),
+            "tp_stage":1,"expected_position_identifier":907,
+            "created_ms":110,"expires_ms":5000});
+        db.execute("INSERT INTO broker_commands(
+            id,context,brain,kind,created_ms,state,payload)
+            VALUES('tp1-held-command',?1,'system','close',110,'stage_held',?2)",
+            params![key,p.to_string()]).unwrap();
+        let status=Status{gateway_fresh:true,telemetry:Some(t),..Default::default()};
+        let get=svc.route("GET","/v1/execution/gateway",b"",&db,&status,200).unwrap();
+        assert!(get["command"].is_null(),
+            "Held TP1 is not selected by Gateway polling");
+        let denied=svc.route("POST","/v1/execution/authorize",
+            br#"{"id":"tp1-held-command"}"#,&db,&status,201).unwrap();
+        assert_eq!(denied["authorized"],false,
+            "A held close cannot bypass stage execution lock or dispatched state");
+        assert_eq!(db.query_row(
+            "SELECT state FROM broker_commands WHERE id='tp1-held-command'",
+            [],|r|r.get::<_,String>(0)).unwrap(),"stage_held");
+        assert!(!svc.pending(&db).unwrap(),
+            "Held but never issued research does not block normal reconciliation");
+        // A damaged broker_commands payload could erase *all* TP markers
+        // and falsely resemble a normal full-close. The immutable outbox ID
+        // must still quarantine the row before Gateway can execute it.
+        db.execute(
+            "INSERT INTO partial_exit_tp1_held(
+              context,target,position_identifier,physical_ticket,plan_id,
+              command_id,created_ms,immutable_command,state)
+             VALUES(?1,'demo',907,87,?2,'tp1-held-command',110,?3,
+                    'held_never_dispatched')",
+            params![key,p["tp_stage_plan_id"].as_str().unwrap(),p.to_string()]
+        ).unwrap();
+        let mut stripped=p.clone();
+        for name in ["schema","tp_stage_plan_id","tp_stage",
+                     "expected_position_identifier"] {
+            stripped.as_object_mut().unwrap().remove(name);
+        }
+        db.execute(
+            "UPDATE broker_commands SET state='queued',payload=?1
+             WHERE id='tp1-held-command'",
+            [stripped.to_string()]
+        ).unwrap();
+        assert!(crate::partial_exit_tp1_release::stage_id_exists(
+            &db,"tp1-held-command"));
+        let get=svc.route("GET","/v1/execution/gateway",b"",&db,&status,202).unwrap();
+        assert!(get["command"].is_null(),
+            "Even corrupt manual promotion is quarantined before Gateway reads");
+        assert_eq!(db.query_row(
+            "SELECT state FROM broker_commands WHERE id='tp1-held-command'",
+            [],|r|r.get::<_,String>(0)).unwrap(),"cancelled");
+    }
+    #[test]
+    fn malformed_queued_command_is_quarantined_not_sent_or_retried(){
+        let db=Connection::open_in_memory().unwrap();
+        let mut svc=Service::new(&db).unwrap();
+        let t=demo();svc.bind(&db,&t,100).unwrap();
+        let key=ctx(&t);
+        db.execute("INSERT INTO broker_commands(id,context,brain,kind,created_ms,state,payload)
+            VALUES('broken',?1,'system','close',110,'queued','{invalid')",
+            [&key]).unwrap();
+        let status=Status{gateway_fresh:true,telemetry:Some(t),..Default::default()};
+        let reply=svc.route("GET","/v1/execution/gateway",b"",&db,&status,200).unwrap();
+        assert!(reply["command"].is_null());
+        assert_eq!(db.query_row(
+            "SELECT state FROM broker_commands WHERE id='broken'",
+            [],|r|r.get::<_,String>(0)).unwrap(),"cancelled");
+    }
     #[test]
     fn no_core_stage_execution_until_a_priced_broker_safe_producer_is_implemented(){
         assert!(!incomplete_tp_stage_execution_locked(&json!({"kind":"close","position":1})),
             "Normal full-close authorization must remain unchanged");
-        for key in ["tp_stage_plan_id","tp_stage","expected_position_identifier","tp_target_price","expected_position_entry","expected_broker_tp"]{
+        for key in ["tp_stage_plan_id","tp_stage","expected_position_identifier","tp_target_price",
+            "expected_position_entry","expected_broker_tp","price_source_quote_ms"]{
             let mut command=json!({"kind":"close","target":"demo","position":17,
                 "state":"dispatched"});
             command[key]=json!(if key=="tp_stage_plan_id" {"tp-plan-deadbeef"} else {"1"});
@@ -2551,5 +2753,8 @@ mod tp_stage_core_authorization_gate_tests {
             "tp_stage_plan_id":"tp-plan-aaa","tp_stage":1,
             "expected_position_identifier":907,"tp_target_price":2001.0,"state":"dispatched"});
         assert!(incomplete_tp_stage_execution_locked(&whole));
+        assert!(incomplete_tp_stage_execution_locked(
+            &json!({"kind":"close","schema":"tp-stage-broker-command-shape-v1"})),
+            "Stripping all stage fields but leaving its schema must remain blocked");
     }
 }

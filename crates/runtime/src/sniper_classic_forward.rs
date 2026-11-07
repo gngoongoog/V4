@@ -93,7 +93,7 @@ impl Study {
             return json!({"schema":"p1k5-classic-forward-v1","status":"not_started",
                 "no_broker_orders":true,"independent_oos":false});
         };
-        let Some(t)=t.filter(|t|t.connected&&t.demo&&t.account_trade_mode==Some(0)
+        let Some(_)=t.filter(|t|t.connected&&t.demo&&t.account_trade_mode==Some(0)
             &&identity(t)==x.context)else{
             return json!({"schema":"p1k5-classic-forward-v1","status":"unavailable",
                 "no_broker_orders":true});

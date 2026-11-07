@@ -68,6 +68,7 @@ fn verified_sniper_admission(row:&SniperBrokerRow,context:&str,now:u64)->Option<
     Some(p)
 }
 
+#[cfg(test)]
 pub fn refresh(engine: &mut Engine, db: &Connection, t: &Telemetry, now: u64) -> Result<()> {
     refresh_gated(engine,db,t,now,None)
 }

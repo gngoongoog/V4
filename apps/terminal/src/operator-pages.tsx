@@ -43,7 +43,7 @@ export function NewsOperatorWorkspace({source,preview,error,disabled,onRefresh,o
   (!term||[item.title,item.topic,item.source].some(v=>String(v||'').toLowerCase().includes(term.toLowerCase())))),[headlines,feed,freshOnly,term]);
  const macro=object(data.macro);
  return <section className="operator-workspace" dir="rtl" aria-label="غرفة أخبار السوق">
-  <div className="operator-workspace-head"><div><h3><Newspaper size={20}/> مصادر أخبار الذهب والاقتصاد</h3><p>عناوين منشورة من مصادر رسمية فقط. هذه الصفحة ليست تقويم أخبار مستقبلية ولا تصدر إشارة شراء أو بيع.</p></div><button onClick={onRefresh} disabled={preview}><RefreshCw size={16}/> تحديث قراءة Core</button></div>
+  <div className="operator-workspace-head"><div><h3><Newspaper size={20}/> مصادر أخبار الذهب والاقتصاد</h3><p>عناوين منشورة من مصادر رسمية فقط. هذه الصفحة ليست تقويم أخبار مستقبلية ولا تصدر إشارة شراء أو بيع.</p></div><button onClick={onRefresh} disabled={preview||disabled||actionBusy}><RefreshCw size={16}/> تحديث قراءة Core</button></div>
   <div className="operator-links">
    <button type="button" disabled={preview||disabled||actionBusy||data.offline===true||data.enabled!==true||data.refreshing===true} onClick={()=>void act('refresh')}><RefreshCw size={15}/> جلب الأخبار الآن من المصادر</button>
    <button type="button" disabled={preview||disabled||actionBusy||data.enabled===undefined} onClick={()=>void act(data.enabled===true?'disable':'enable')}>{data.enabled===true?'إيقاف تحديث المصادر':'تفعيل تحديث المصادر'}</button>
@@ -157,7 +157,7 @@ export function CoreReadoutWorkspace({page,source,preview,error,disabled,onRefre
  const filtered=entries.filter(x=>!search||JSON.stringify(x).toLowerCase().includes(search.toLowerCase()));
  const present=source!==null&&!preview&&!error;
  return <section className="operator-workspace" dir="rtl" aria-label={desc.title}>
-  <div className="operator-workspace-head"><div><h3><Activity size={20}/>{desc.title}</h3><p>{desc.description}</p></div><button disabled={preview} onClick={onRefresh}><RefreshCw size={16}/> تحديث البيانات</button></div>
+  <div className="operator-workspace-head"><div><h3><Activity size={20}/>{desc.title}</h3><p>{desc.description}</p></div><button disabled={preview||disabled||studioBusy} onClick={onRefresh}><RefreshCw size={16}/> تحديث البيانات</button></div>
   <Evidence source={source} preview={preview} error={error}/>
   {present&&<>
    {page==='studio'&&<>

@@ -91,6 +91,10 @@ class PackagingTests(unittest.TestCase):
             runtime.mkdir()
             (runtime / "generated.txt").write_text("generated", encoding="utf-8")
             generated_files = (
+                'secrets/credentials.json',
+                'apps/terminal/dist/index.html',
+                'apps/tauri/runtime/gateway/execution.py',
+                'apps/tauri/mt5/bridge.mq5',
                 ".ci/node_modules/pkg/index.js",
                 "node_modules/pkg/index.js",
                 ".venv/Lib/site-packages/pkg.py",

@@ -202,21 +202,202 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(self.send()['state'],'rejected')
         self.assertEqual(len(self.mt.sends),1,'real order may never go to a demo account')
 
+    def test_automatic_open_cancels_if_final_quote_moves_beyond_deviation(self):
+        # No broker connection: the fake terminal changes quote while Core
+        # authorization/account validation proceeds, after risk was sized.
+        # MT5 Market Execution may not enforce the request.deviation field;
+        # at the moved quote the projected stop loss would exceed the budget.
+        for side in (1,-1):
+            for fast in (False,True):
+                with self.subTest(side=side,fast=fast):
+                    self.mt=Broker()
+                    self.mt.account.equity=1000.
+                    self.cmd=command()
+                    self.cmd.update(
+                        id=f'late-quote-{side}-{fast}', lots=.08,
+                        risk_percent=1., commission_per_lot=0.,
+                        slippage_ticks=0., deviation_points=20,
+                        signal=dict(side=side,stop_distance=1.,target_distance=2.,
+                                    key='tick:123' if fast else 'bar:123'))
+                    def quote_move(n):
+                        if n>=3:
+                            if side==1:
+                                self.mt.tick.ask=2000.60
+                                self.mt.tick.bid=2000.50
+                            else:
+                                self.mt.tick.bid=1999.50
+                                self.mt.tick.ask=1999.60
+                    self.mt.on_account=quote_move
+                    out=self.send()
+                    self.assertEqual(out['state'],'cancelled',out)
+                    self.assertIn('quote',out['reason'].lower())
+                    self.assertFalse(self.mt.sends,'Changed quote must not result in order_send')
+                    self.assertLessEqual(out['risk_sizing']['estimated_stop_loss_including_costs'],
+                                         out['risk_sizing']['risk_budget'])
+
+    def test_automatic_open_cancels_when_final_quote_is_unavailable_or_invalid(self):
+        # The initial quote exists, but the final local MT5 read is missing,
+        # stale or crossed. All cases must fail closed after journaling.
+        for failure in ('missing','stale','crossed'):
+            with self.subTest(failure=failure):
+                self.mt=Broker()
+                self.cmd=command()
+                self.cmd.update(id='bad-final-'+failure,risk_percent=1.,
+                                commission_per_lot=0.,slippage_ticks=0.)
+                initial_tick=self.mt.tick
+                calls=[0]
+                def changing_quote(symbol):
+                    calls[0]+=1
+                    if calls[0]==1:
+                        return initial_tick
+                    if failure=='missing':
+                        return None
+                    if failure=='stale':
+                        return N(bid=2000.,ask=2000.1,time_msc=clock_ms()-10_000)
+                    return N(bid=2001.,ask=2000.1,time_msc=clock_ms())
+                self.mt.symbol_info_tick=changing_quote
+                result=self.send()
+                self.assertEqual(result['state'],'cancelled',result)
+                self.assertIn('quote',result['reason'].lower())
+                self.assertEqual(len(self.mt.sends),0)
+                self.assertGreaterEqual(calls[0],2,'final MT5 quote must be re-read')
+
+    def test_automatic_open_allows_fresh_move_within_priced_deviation(self):
+        self.mt.account.equity=1000.
+        self.cmd.update(id='auto-fresh-small-drift',lots=.08,
+                        risk_percent=1.,commission_per_lot=0.,slippage_ticks=0.)
+        def small_quote_move(n):
+            if n>=3:
+                self.mt.tick.ask=2000.20
+                self.mt.tick.bid=2000.10
+        self.mt.on_account=small_quote_move
+        result=self.send()
+        self.assertEqual(result['state'],'filled',result)
+        self.assertEqual(len(self.mt.sends),1)
+        self.assertLessEqual(result['risk_sizing']['estimated_stop_loss_including_costs'],
+                             result['risk_sizing']['risk_budget'])
+
+    def test_final_automatic_quote_rechecks_broker_stop_geometry_after_spread_change(self):
+        # Quote initially passes stops_level. While authorization runs, only
+        # the opposite side moves: BUY ask/SELL bid stay unchanged. The
+        # final exit-side price is now too close to SL for the broker grid.
+        # Covers both ordinary order_check path and Sniper fast path.
+        for side in (1,-1):
+            for fast in (False,True):
+                with self.subTest(side=side,fast=fast):
+                    self.mt=Broker()
+                    self.cmd=command()
+                    self.cmd.update(id=f'spread-invalid-{side}-{fast}',
+                                    signal=dict(side=side,stop_distance=1.,
+                                                target_distance=2.,
+                                                key='tick:999' if fast else 'bar:999'))
+                    initial=N(bid=2000.,ask=2000.10,time_msc=clock_ms())
+                    changed=N(bid=1999.13 if side==1 else 2000.,
+                              ask=2000.10 if side==1 else 2000.98,
+                              time_msc=clock_ms())
+                    reads=[0]
+                    def quote(symbol):
+                        reads[0]+=1
+                        return initial if reads[0]==1 else changed
+                    self.mt.symbol_info_tick=quote
+                    outcome=self.send()
+                    self.assertEqual(outcome['state'],'cancelled',outcome)
+                    self.assertIn('geometry',outcome['reason'].lower())
+                    self.assertFalse(self.mt.sends, 'Never send a stop inside current broker minimum')
+                    self.assertGreaterEqual(reads[0],2)
+                    self.assertEqual(self.send()['state'],'cancelled',
+                                     'Durable cancellation must not later resend on replay')
+
+    def test_final_automatic_quote_accepts_valid_new_spread_with_same_entry_price(self):
+        for side in (1,-1):
+            for fast in (False,True):
+                with self.subTest(side=side,fast=fast):
+                    self.mt=Broker()
+                    self.cmd=command()
+                    self.cmd.update(id=f'spread-valid-{side}-{fast}',
+                                    signal=dict(side=side,stop_distance=1.,
+                                                target_distance=2.,
+                                                key='tick:998' if fast else 'bar:998'))
+                    initial=N(bid=2000.,ask=2000.10,time_msc=clock_ms())
+                    changed=N(bid=1999.30 if side==1 else 2000.,
+                              ask=2000.10 if side==1 else 2000.70,
+                              time_msc=clock_ms())
+                    reads=[0]
+                    def quote(symbol):
+                        reads[0]+=1
+                        return initial if reads[0]==1 else changed
+                    self.mt.symbol_info_tick=quote
+                    outcome=self.send()
+                    self.assertEqual(outcome['state'],'filled',outcome)
+                    self.assertEqual(len(self.mt.sends),1)
+                    self.assertGreaterEqual(reads[0],2)
+
+    def test_standard_geometry_exact_tick_does_not_widen_buy_stop(self):
+        # float(1999.1 / 0.1) can fall just below an integer and floor()
+        # currently moves the BUY SL one FULL tick farther away.
+        self.mt.info.trade_tick_size=.10
+        self.cmd.update(id='standard-buy-exact-grid', signal=dict(side=1,stop_distance=1.,target_distance=2.))
+        result=self.send()
+        self.assertEqual(result['state'],'filled',result)
+        self.assertAlmostEqual(result['request']['sl'],1999.10)
+        self.assertAlmostEqual(result['request']['tp'],2002.10)
+
+    def test_automatic_buy_and_sell_budget_adverse_deviation_and_separate_fees(self):
+        # MT5 deviation_points is POINTS (0.01 here), not slippage_ticks;
+        # a 20-point accepted adverse entry movement adds $20/lot at the SL.
+        # Core risk sizing must reserve it for BOTH BUY and SELL independently.
+        for side, identifier in ((1, 'auto-worst-buy'), (-1, 'auto-worst-sell')):
+            with self.subTest(side=side):
+                self.mt.account.equity=1250.0   # 1% = $12.50
+                self.mt.info.point=.01
+                self.mt.info.trade_tick_size=.10  # point != tick size
+                self.cmd.update(id=identifier, lots=.10, deviation_points=20,
+                                risk_percent=1., commission_per_lot=7., slippage_ticks=2.,
+                                signal=dict(side=side, stop_distance=1., target_distance=2.))
+                result=self.send()
+                self.assertEqual(result['state'],'filled',result)
+                self.assertEqual(result['request']['deviation'],20)
+                # SL is snapped to the exact tick before outward rounding.
+                # Broker PnL uses the actual final stop, not nominal distance.
+                adverse=result['request']['price']+side*20*self.mt.info.point
+                expected_per_lot=-self.mt.order_calc_profit(
+                    result['request']['type'],'XAUUSD',1.,adverse,result['request']['sl'])
+                self.assertAlmostEqual(result['risk_sizing']['broker_stop_loss_per_lot'],expected_per_lot)
+                self.assertAlmostEqual(result['risk_sizing']['budgeted_entry_price'],adverse)
+                self.assertEqual(result['risk_sizing']['entry_deviation_points'],20)
+                self.assertAlmostEqual(result['risk_sizing']['commission_round_trip_per_lot'],7.)
+                self.assertAlmostEqual(result['risk_sizing']['slippage_cushion_per_lot'],4.)
+                self.assertAlmostEqual(result['request']['volume'],.09)
+                self.assertLessEqual(result['risk_sizing']['estimated_stop_loss_including_costs'],12.5)
+                self.assertAlmostEqual(result['risk_sizing']['estimated_stop_loss_including_costs'],
+                                       result['request']['volume']*(expected_per_lot+11.))
+
+    def test_automatic_worst_deviation_rejects_broker_minimum(self):
+        self.mt.account.equity=100.0
+        self.cmd.update(id='auto-minimum-adverse',lots=.01,deviation_points=20,
+                        risk_percent=1.,commission_per_lot=0.,slippage_ticks=0.)
+        # At the quote, 0.01 lot and a $1 stop costs $1: appears affordable.
+        # At the permitted adverse entry price, it costs $1.20: reject.
+        result=self.send()
+        self.assertEqual(result['state'],'rejected',result)
+        self.assertIn('minimum 0.01 lot needs',result['reason'])
+        self.assertFalse(self.mt.sends)
+
     def test_risk_sizing_is_lot_cap_not_lot_increase_and_commission_is_proportional(self):
         self.mt.account.equity=1000.
         self.cmd.update(id='risk-lot-cap',risk_percent=0.5,
                         commission_per_lot=7.,slippage_ticks=2.,lots=.1)
         result=self.send()
         self.assertEqual(result['state'],'filled',result)
-        # SL is one gold price unit: $100 per 1.00 lot on this mock
-        # + $7 round-trip fee + $4 two-sided slippage reserve per lot.
-        self.assertAlmostEqual(result['risk_sizing']['broker_stop_loss_per_lot'],100.)
+        # A $1 stop plus 20 adverse MT5 points = $120 per full lot,
+        # then add $7 round-trip fee and $4 separate two-sided slip reserve.
+        self.assertAlmostEqual(result['risk_sizing']['broker_stop_loss_per_lot'],120.)
         self.assertAlmostEqual(result['risk_sizing']['commission_round_trip_per_lot'],7.)
         self.assertAlmostEqual(result['risk_sizing']['slippage_cushion_per_lot'],4.)
         self.assertAlmostEqual(result['risk_sizing']['risk_budget'],5.)
-        self.assertAlmostEqual(result['request']['volume'],.04)
+        self.assertAlmostEqual(result['request']['volume'],.03)
         self.assertLessEqual(result['risk_sizing']['estimated_stop_loss_including_costs'],5.)
-        self.assertAlmostEqual(self.mt.sends[0]['volume'],.04)
+        self.assertAlmostEqual(self.mt.sends[0]['volume'],.03)
 
     def test_risk_sizing_rejects_broker_minimum_without_fabricating_lot(self):
         self.mt.account.equity=100.
@@ -244,7 +425,7 @@ class ExecutionTests(unittest.TestCase):
         accepted=self.send()
         self.assertEqual(accepted['state'],'filled',accepted)
         self.assertAlmostEqual(accepted['request']['volume'],.01)
-        self.assertAlmostEqual(accepted['risk_sizing']['estimated_stop_loss_including_costs'],3.11)
+        self.assertAlmostEqual(accepted['risk_sizing']['estimated_stop_loss_including_costs'],3.31)
         self.assertEqual(len(self.mt.sends),1)
         self.cmd.update(id='micro-demo-no-consent',micro_demo_risk_opt_in=False)
         rejected=self.send()
@@ -296,7 +477,7 @@ class ExecutionTests(unittest.TestCase):
         self.cmd.update(id='real-micro-enabled',micro_real_temporary=True)
         permitted=self.send()
         self.assertEqual(permitted['state'],'filled',permitted)
-        self.assertAlmostEqual(permitted['risk_sizing']['estimated_stop_loss_including_costs'],3.11)
+        self.assertAlmostEqual(permitted['risk_sizing']['estimated_stop_loss_including_costs'],3.31)
         self.assertAlmostEqual(permitted['risk_sizing']['risk_budget'],5.)
         self.assertEqual(len(self.mt.sends),1)
 
@@ -436,7 +617,7 @@ class ExecutionTests(unittest.TestCase):
         result=self.send()
         self.assertEqual(result['state'],'filled',result)
         self.assertEqual(result['risk_sizing']['commission_round_trip_per_lot'],0.)
-        self.assertAlmostEqual(result['request']['volume'],.05)
+        self.assertAlmostEqual(result['request']['volume'],.04)
         self.cmd['id']='risk-no-profit-estimate'
         self.mt.order_calc_profit=lambda *args:None
         rejected=self.send()
@@ -491,10 +672,10 @@ class ExecutionTests(unittest.TestCase):
         result=self.send()
         self.assertEqual(result['state'],'filled',result)
         self.assertAlmostEqual(result['sizing']['sent'],.08)
-        self.assertAlmostEqual(result['risk_sizing']['sent'],.04)
-        self.assertAlmostEqual(result['sizing']['post_risk_sent'],.04)
-        self.assertAlmostEqual(result['sizing']['post_risk_round_trip_commission'],.28)
-        self.assertAlmostEqual(self.mt.sends[0]['volume'],.04)
+        self.assertAlmostEqual(result['risk_sizing']['sent'],.03)
+        self.assertAlmostEqual(result['sizing']['post_risk_sent'],.03)
+        self.assertAlmostEqual(result['sizing']['post_risk_round_trip_commission'],.21)
+        self.assertAlmostEqual(self.mt.sends[0]['volume'],.03)
         self.assertLessEqual(result['risk_sizing']['estimated_stop_loss_including_costs'],5.)
 
     def test_flexible_margin_estimate_failure_does_not_guess(self):
@@ -608,6 +789,48 @@ class ExecutionTests(unittest.TestCase):
         result=self.send();self.assertEqual(result['state'],'rejected',result)
         self.assertIn('Inconsistent',result['reason'])
 
+    def test_risk_master_off_still_rejects_tp_consumed_by_entry_deviation(self):
+        # Turning risk sizing off is not approval to send a TP that is no
+        # longer on the profitable side at the worst permitted entry price.
+        # BUY/SELL and normal/Sniper must all retain this geometry check.
+        for point,deviation in ((.01,20),(.001,200)):
+            for side in (1,-1):
+                for fast in (False,True):
+                    with self.subTest(point=point,side=side,fast=fast):
+                        self.mt.info.point=point
+                        self.cmd.update(id=f'off-tp-{point}-{side}-{fast}',risk_master_enabled=False,
+                                        daily_breaker_enabled=False,deviation_points=deviation)
+                        self.cmd['signal']=dict(side=side,stop_distance=1.,target_distance=.1)
+                        if fast:self.cmd['signal']['key']='tick:123'
+                        result=self.send()
+                        self.assertEqual(result['state'],'rejected',result)
+                        self.assertIn('deviation reaches or crosses TP',result['reason'])
+                        self.assertFalse(self.mt.sends,'An unprofitable worst-price TP must never be sent')
+
+    def test_demo_missing_risk_budget_still_rejects_tp_consumed_by_deviation(self):
+        # Some legacy Demo commands omit risk_percent: lack of a lot cap
+        # must not disable the target-side price geometry gate.
+        for side in (1,-1):
+            for fast in (False,True):
+                with self.subTest(side=side,fast=fast):
+                    self.cmd.update(id=f'legacy-tp-{side}-{fast}',deviation_points=20)
+                    self.cmd['signal']=dict(side=side,stop_distance=1.,target_distance=.1)
+                    if fast:self.cmd['signal']['key']='tick:123'
+                    result=self.send()
+                    self.assertEqual(result['state'],'rejected',result)
+                    self.assertIn('deviation reaches or crosses TP',result['reason'])
+                    self.assertFalse(self.mt.sends)
+
+    def test_risk_master_off_keeps_valid_target_and_does_not_reenable_lot_cap(self):
+        self.cmd.update(id='off-valid-tp',risk_master_enabled=False,daily_breaker_enabled=False,
+                        risk_percent=.00001,deviation_points=20,lots=.1)
+        self.cmd['signal']['target_distance']=.5
+        result=self.send()
+        self.assertEqual(result['state'],'filled',result)
+        self.assertTrue(result['risk_sizing_disabled'])
+        self.assertAlmostEqual(result['request']['volume'],.1)
+        self.assertEqual(len(self.mt.sends),1)
+
     def test_risk_recovery_latches_broker_balance_crossing_across_restart(self):
         self.cmd.update(id='recovery-reached',revision=41,risk_master_enabled=False,risk_master_recovery_id='a'*32,
                         daily_breaker_enabled=False,micro_real_temporary=False,
@@ -707,6 +930,25 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(req['volume'],.05)
         self.assertEqual(req['position'],1)
         self.assertEqual(req['type'],1)
+    def test_automatic_close_rechecks_exact_position_after_authorization(self):
+        # Simulate a changed physical position while the Core RPC returns.
+        # This matters even when an automatic close uses the fast path.
+        for field,changed in (('volume',.02),('type',1),('magic',999),('ticket',2)):
+            with self.subTest(field=field):
+                p=N(ticket=1,magic=self.cmd['magic'],symbol='XAUUSD',volume=.05,type=0)
+                self.mt.positions=[p]
+                self.mt.sends.clear()
+                self.cmd.update(id='automatic-close-drift-'+field,kind='close',position=1)
+                calls=[0]
+                def authorize(_):
+                    calls[0]+=1
+                    if calls[0]==2:setattr(p,field,changed)
+                    return True
+                result=self.ex.execute(self.mt,self.cmd,authorize)
+                self.assertEqual(result['state'],'cancelled',result)
+                self.assertFalse(self.mt.sends,'A stale automatic close must not reach order_send')
+                self.assertEqual(self.send()['state'],'cancelled','Cancelled intent must not be re-sent')
+
     def test_manual_profit_close_rechecks_profit_before_send_and_never_retries(self):
         self.cmd.update(kind='close',position=1,manual_close=True,profit_only=True,expected_position_volume=.05,expected_position_side='BUY')
         p=N(ticket=1,magic=self.cmd['magic'],symbol='XAUUSD',volume=.05,type=0,profit=3.)
@@ -818,6 +1060,9 @@ class ExecutionTests(unittest.TestCase):
         self.mt.info.point=.10
         self.mt.info.trade_tick_size=.10
         self.mt.info.trade_stops_level=1
+        # 20 points at point=0.10 would permit a $2 adverse entry on a
+        # $1 target; use a valid price window while testing pip geometry.
+        self.cmd['deviation_points']=5
         self.cmd['signal'].update(key='tick:ten-pips',stop_distance=1.,target_distance=1.00)
         result=self.send()
         self.assertEqual(result['state'],'filled',result)

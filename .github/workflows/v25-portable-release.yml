@@ -91,6 +91,12 @@ jobs:
         shell: pwsh
         run: Expand-Archive test-output/download/BRAINTRADE_V4_ENTERPRISE_V25_PORTABLE_Windows_x64.zip -DestinationPath test-output/actual-portable
       - run: npm --prefix tools/windows-gui ci --ignore-scripts --no-audit --no-fund
+      - name: Packaged offline operator checklist in Windows Edge
+        shell: pwsh
+        run: |
+          $env:NODE_PATH="$env:GITHUB_WORKSPACE/tools/windows-gui/node_modules"
+          node scripts/check_operator_checklist.cjs test-output/actual-portable/BRAINTRADE_V4_ENTERPRISE_V25/BRAINTRADE_CHECKLIST_AR.html msedge
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Actual Tauri WebView2 controls, pages, settings and restart
         shell: pwsh
         run: node tools/windows-gui/acceptance.mjs test-output/actual-portable/BRAINTRADE_V4_ENTERPRISE_V25/BrainTradeNext.exe test-output/v25/native-webview
@@ -102,3 +108,10 @@ jobs:
           path: test-output/v25/native-webview/
           if-no-files-found: error
           retention-days: 30
+      - name: Upload operator checklist result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BRAINTRADE_Operator_Checklist_Validation
+          path: test-output/operator-checklist/report.json
+          if-no-files-found: warn

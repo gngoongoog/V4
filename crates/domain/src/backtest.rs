@@ -103,7 +103,7 @@ pub struct HistoryBar {
 impl HistoryBar {
     pub fn valid(&self, captured_ms: u64) -> bool {
         self.candle.valid()
-            && self.candle.time % 60 == 0
+            && self.candle.time.is_multiple_of(60)
             && self.candle.time.saturating_add(60).saturating_mul(1000) <= captured_ms
             && self.spread_points <= 100_000_000
             && self.candle.high <= 1e12
@@ -163,12 +163,12 @@ impl Options {
     pub fn validate(&self) -> Result<(), String> {
         self.risk.validate()?;
         if self.from == 0
-            || self.from % 60 != 0
-            || self.to % 60 != 0
+            || !self.from.is_multiple_of(60)
+            || !self.to.is_multiple_of(60)
             || self.to <= self.from
             || self.to - self.from > 30 * DAY
         {
-            return Err("الفترة يجب أن تكون من يوم إلى 30 يوماً وبوقت UTC صحيح".into());
+            return Err("الفترة يجب أن تكون أكبر من صفر ولا تتجاوز 30 يوماً، وبوقت UTC صحيح".into());
         }
         if !self.initial_equity.is_finite()
             || !(1.0..=1e9).contains(&self.initial_equity)
@@ -1021,6 +1021,23 @@ mod tests {
     }
     fn execute(h: &History, o: &Options) -> Report {
         run(h, o, &AtomicBool::new(false), &AtomicUsize::new(0)).unwrap()
+    }
+    #[test]
+    fn backtest_duration_contract_allows_short_replays_and_caps_thirty_days() {
+        let mut o = options(1800);
+        o.from = BASE + 1600 * 60;
+        o.to = o.from + 60;
+        assert!(o.validate().is_ok(), "research tests already rely on sub-day windows");
+        o.to = o.from + DAY;
+        assert!(o.validate().is_ok(), "one full day is valid");
+        o.to = o.from + 30 * DAY;
+        assert!(o.validate().is_ok(), "30 days inclusive is valid");
+        o.to += 60;
+        let error = o.validate().unwrap_err();
+        assert!(error.contains("30"));
+        assert!(!error.contains("من يوم"), "the message must not claim an unimplemented day minimum");
+        o.to = o.from;
+        assert!(o.validate().is_err(), "an empty interval is invalid");
     }
     #[test]
     fn meta_v2_entries_reconcile_and_legacy_report_shape_stays_unchanged() {

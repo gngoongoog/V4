@@ -1,7 +1,9 @@
 """Offline account-selected TP partial-close Gateway regressions.
 
-The fixture deliberately supplies a synthetic Core-approved command; the
-production Core does NOT yet generate these intents. No real broker is called.
+Production Core now creates one-shot, explicitly armed TP1 commands with a
+durable held->queued transition. This fixture deliberately exercises Gateway
+with synthetic, Core-shaped approvals; no real broker is called.
+TP2/TP3 automation and broker-connected acceptance remain unverified.
 """
 from __future__ import annotations
 
@@ -29,7 +31,8 @@ def stage_command(stage=1,held=0.1,lots=0.05):
         tp_target_price=round(1999.9+(stage-1)*0.01,2),
         expected_position_entry=1999.5,expected_broker_tp=0.0,
         expected_position_identifier=917,
-        expected_position_volume=held,expected_position_side="BUY")
+        expected_position_volume=held,expected_position_side="BUY",
+        price_source_quote_ms=clock_ms()-1000)
     return c
 
 
@@ -155,6 +158,22 @@ class StageDemoTests(unittest.TestCase):
         self.assertEqual(result['state'],'rejected',result)
         self.assertIn('Incomplete TP stage marker',result['reason'])
         self.assertFalse(self.mt.sends)
+    def test_orphan_quote_source_or_stage_schema_never_becomes_full_close(self):
+        for marker,value in [
+            ('price_source_quote_ms',clock_ms()),
+            ('schema','tp-stage-broker-command-shape-v1'),
+        ]:
+            with self.subTest(marker=marker):
+                self.cmd=command()
+                self.cmd.update(id='tp-orphan-'+marker+'-'+'e'*18,
+                                kind='close',position=91,magic=410601)
+                self.cmd[marker]=value
+                self.assertFalse(is_fast_path(self.cmd),
+                                 'Never let an orphaned staged-close field take the full-close fast path')
+                result=self.send()
+                self.assertEqual(result['state'],'rejected',result)
+                self.assertIn('Incomplete TP stage marker',result['reason'])
+                self.assertFalse(self.mt.sends)
     def test_stage_replay_cannot_switch_identity_or_expected_size(self):
         self.assertEqual(self.send()["state"],"placed")
         self.cmd["tp_stage_plan_id"]="tp-plan-"+"0"*32
@@ -440,6 +459,35 @@ class StageDemoTests(unittest.TestCase):
                          self.mt.tick,clock_ms())
         self.assertFalse(self.mt.sends)
 
+    def test_missing_or_expired_core_quote_crossing_never_sends_stage(self):
+        fresh=clock_ms()
+        self.mt.tick.time_msc=fresh
+        invalid=[("omitted",None),("null",None),("boolean",True),
+                 ("float",float(fresh)),("old",fresh-10000),
+                 ("future",fresh+3000),("newer_than_mt5",fresh+1),
+                 ("text",str(fresh))]
+        for index,(name,source) in enumerate(invalid):
+            with self.subTest(case=name):
+                self.cmd=stage_command()
+                self.cmd["id"]=f"tp-unverified-crossing-{index}-"+"d"*18
+                if name=="omitted":
+                    self.cmd.pop("price_source_quote_ms")
+                else:
+                    self.cmd["price_source_quote_ms"]=source
+                with self.assertRaisesRegex(ValueError,"crossing source"):
+                    stage_volume(self.cmd,self.mt.account,self.mt,self.p,
+                                 self.mt.info,self.mt.tick,clock_ms())
+                result=self.send()
+                self.assertIn(result["state"],("rejected","cancelled"),result)
+                self.assertFalse(self.mt.sends,
+                    "An unverified Core quote must not produce a physical broker order")
+        self.cmd=stage_command()
+        self.cmd["id"]="tp-genuine-crossing-"+"d"*24
+        self.cmd["price_source_quote_ms"]=fresh
+        qty,side=stage_volume(self.cmd,self.mt.account,self.mt,self.p,
+                              self.mt.info,self.mt.tick,clock_ms())
+        self.assertEqual((qty,side),(0.05,-1))
+
     def test_core_price_source_timestamp_is_monotonic_and_journal_immutable(self):
         stamp=clock_ms()
         self.mt.tick.time_msc=stamp
@@ -469,6 +517,47 @@ class StageDemoTests(unittest.TestCase):
     def test_final_authorization_refusal_stops_before_send(self):
         self.assertEqual(self.send(lambda _:False)["state"],"cancelled")
         self.assertFalse(self.mt.sends)
+
+    def test_tp1_stop_after_durable_journal_does_not_send_or_restart(self):
+        calls=[]
+        def stopped_after_first_authorization(command_id):
+            calls.append(command_id)
+            return len(calls)==1
+        first=self.send(stopped_after_first_authorization)
+        self.assertEqual(first["state"],"cancelled",first)
+        self.assertIn("after durable journal",first.get("reason",""))
+        self.assertEqual(calls,[self.cmd["id"],self.cmd["id"]])
+        self.assertEqual(len(self.mt.sends),0)
+        saved=self.ex.db.execute(
+            "SELECT request,result FROM sends WHERE id=?",(self.cmd["id"],)
+        ).fetchone()
+        self.assertIsNotNone(saved,"Crash-safe journal must exist even when STOP denies send")
+        self.ex.close()
+        self.ex=BrokerExecutor(Path(self.tmp.name)/"gateway.sqlite")
+        second=self.send(lambda _:True)
+        self.assertEqual(second["state"],"cancelled",second)
+        self.assertFalse(self.mt.sends,
+                         "A journaled STOP denial must not resend after restart")
+
+    def test_tp1_account_switch_after_final_authorization_never_sends(self):
+        calls=[]
+        def switched_account_after_authorization(_id):
+            calls.append(_id)
+            if len(calls)==2:
+                self.mt.account.trade_mode=2
+            return True
+        result=self.send(switched_account_after_authorization)
+        self.assertEqual(result["state"],"cancelled",result)
+        self.assertIn("Account changed",result.get("reason",""))
+        self.assertFalse(self.mt.sends)
+        self.mt.account.trade_mode=0
+        self.ex.close()
+        self.ex=BrokerExecutor(Path(self.tmp.name)/"gateway.sqlite")
+        recovered=self.send(lambda _:True)
+        self.assertEqual(recovered["state"],"cancelled",recovered)
+        self.assertFalse(self.mt.sends,
+                         "Core-approved stage cannot send after journaled account-switch abort")
+
     def test_helper_does_not_round_or_mutate_original_request(self):
         before=dict(self.cmd)
         qty,side=stage_volume(self.cmd,self.mt.account,self.mt,self.p,self.mt.info,

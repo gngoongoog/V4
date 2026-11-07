@@ -72,7 +72,9 @@ class NativeSniperLifecycleTests(unittest.TestCase):
         source=(ROOT / "gateway" / "mt5_gateway.py").read_text(encoding="utf-8")
         self.assertIn("next_native_rebind=0.0",source)
         self.assertIn("if mono >= next_native_rebind:",source)
-        self.assertIn("if not native.available:",source)
+        self.assertIn("if not native.available and binding.check_current(mt5):",source)
+        self.assertIn("if binding.check_current(mt5):",source)
+        self.assertIn("native.consume_trade_notice",source)
         self.assertIn("native.bind_terminal(mt5.terminal_info())",source)
         server_source=(ROOT / "gateway" / "sniper_native.py").read_text(encoding="utf-8")
         self.assertIn("def _serve(self)",server_source)
@@ -90,6 +92,46 @@ class NativeSniperLifecycleTests(unittest.TestCase):
         self.assertIn("SendPendingQuoteTicks();",ea)
         self.assertNotIn("if(!SendPendingQuoteTicks())",ea)
         self.assertIn("g_failed_ticks += forwarded;",ea)
+
+    def test_session_pipe_metadata_is_bound_to_token_and_rejects_bad_names(self):
+        with tempfile.TemporaryDirectory() as root:
+            token = "private-session-token-012345678901234"
+            name = native.PIPE_NAME + "-" + "f" * 24
+            path = native.write_session_pipe(root,token,name)
+            self.assertEqual(path,native.session_pipe_path(root))
+            self.assertEqual(path.read_text("ascii").strip(),token+"|"+name)
+            for bad in (native.PIPE_NAME, native.PIPE_NAME+"-"+"g"*24,
+                        native.PIPE_NAME+"-"+"1"*23,
+                        r"\\.\pipe\AnotherApp-"+"1"*24):
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    native.write_session_pipe(root,token,bad)
+            self.assertEqual(path.read_text("ascii").strip(),token+"|"+name)
+
+    @unittest.skipUnless(os.name == "nt", "Windows named-pipe integration")
+    def test_two_native_gateway_instances_on_distinct_terminals_get_isolated_pipes(self):
+        from types import SimpleNamespace as N
+        with tempfile.TemporaryDirectory() as root:
+            first = native.NativeTickBridge()
+            second = native.NativeTickBridge()
+            a = Path(root)/"MT5-A";a.mkdir()
+            b = Path(root)/"MT5-B";b.mkdir()
+            try:
+                self.assertTrue(first.bind_terminal(N(data_path=str(a))))
+                self.assertTrue(second.bind_terminal(N(data_path=str(b))))
+                self.assertNotEqual(first.pipe_name,second.pipe_name)
+                self.assertTrue(first.pipe_name.startswith(native.PIPE_NAME+"-"))
+                self.assertTrue(second.pipe_name.startswith(native.PIPE_NAME+"-"))
+                self.assertEqual(native.session_pipe_path(a).read_text("ascii").strip(),
+                                 first.token+"|"+first.pipe_name)
+                self.assertEqual(native.session_pipe_path(b).read_text("ascii").strip(),
+                                 second.token+"|"+second.pipe_name)
+                self.assertTrue(first.available)
+                self.assertTrue(second.available)
+            finally:
+                self.assertTrue(first.close())
+                self.assertTrue(second.close())
+            self.assertFalse(native.session_pipe_path(a).exists())
+            self.assertFalse(native.session_pipe_path(b).exists())
 
     @unittest.skipUnless(os.name == "nt", "Windows named-pipe contract")
     def test_real_windows_blocking_connect_stops_and_same_name_rebinds(self):
@@ -110,6 +152,99 @@ class NativeSniperLifecycleTests(unittest.TestCase):
         second.start()
         self.assertTrue(second.running)
         self.assertTrue(second.stop())
+
+    @unittest.skipUnless(os.name == "nt", "Windows named-pipe integration")
+    def test_real_pipe_heartbeat_and_trade_wake_never_create_false_quotes(self):
+        pipe_name = rf"\\.\pipe\BrainTradeControl-{os.getpid()}-{id(self)}"
+        token = "native-control-token-123456789"
+        box = native.NativeTickMailbox()
+        server = native._WindowsPipeServer(token, box, pipe_name)
+        def eventually(check, timeout=5.0):
+            until=time.monotonic()+timeout
+            while time.monotonic()<until:
+                result=check()
+                if result:
+                    return result
+                time.sleep(.01)
+            self.fail("Named-pipe control notification never arrived")
+        def connect():
+            def attempt():
+                try:
+                    return open(pipe_name, "wb", buffering=0)
+                except OSError:
+                    return None
+            return eventually(attempt)
+        server.start()
+        try:
+            with connect() as pipe:
+                eventually(lambda: box.connected)
+                payload=(f"BTH1|{token}|17|XAUUSD|1\n"
+                         f"BTE1|wrong-token|17|XAUUSD|2\n"
+                         f"BTE1|{token}|17|XAUUSD|3\n").encode("ascii")
+                for part in (payload[:9],payload[9:45],payload[45:]):
+                    pipe.write(part)
+                eventually(lambda: box.trade_wakes==1 and box.control_heartbeats==1)
+                self.assertFalse(box.recent(now_ms=native.clock_ms(),
+                    login=17,symbol="XAUUSD"))
+                self.assertEqual(box.drain(17,"XAUUSD"),[])
+                self.assertTrue(box.consume_trade_notice(17,"XAUUSD"))
+                self.assertFalse(box.consume_trade_notice(17,"XAUUSD"))
+            eventually(lambda: not box.connected)
+            with connect() as pipe:
+                eventually(lambda: box.connected)
+                self.assertFalse(box.consume_trade_notice(17,"XAUUSD"),
+                    "Reconnected pipes may not inherit a prior broker change flag")
+                pipe.write(f"BTH1|{token}|17|XAUUSD|4\n".encode("ascii"))
+                eventually(lambda: box.control_heartbeats==2)
+                self.assertFalse(box.consume_trade_notice(17,"XAUUSD"))
+                self.assertFalse(box.recent(now_ms=native.clock_ms(),
+                    login=17,symbol="XAUUSD"))
+        finally:
+            self.assertTrue(server.stop())
+
+    @unittest.skipUnless(os.name == "nt", "Windows named-pipe integration")
+    def test_real_pipe_disconnect_discards_undrained_prior_epoch_quote(self):
+        # Regression for an actual read from the named pipe into the mailbox,
+        # disconnected before Gateway consumes the quote. A quick reconnect
+        # must never expose the buffered prior-epoch quote for execution.
+        pipe_name = rf"\\.\pipe\BrainTradeEpoch-{os.getpid()}-{id(self)}"
+        token = "native-epoch-token-123456789012"
+        box = native.NativeTickMailbox(limit=8)
+        server = native._WindowsPipeServer(token, box, pipe_name)
+        def eventually(check, timeout=5):
+            deadline=time.monotonic()+timeout
+            while time.monotonic()<deadline:
+                x=check()
+                if x:return x
+                time.sleep(.01)
+            self.fail("Timed out waiting for actual Windows pipe state")
+        def connect():
+            def attempt():
+                try:return open(pipe_name,"wb",buffering=0)
+                except OSError:return None
+            return eventually(attempt)
+        server.start()
+        try:
+            with connect() as pipe:
+                eventually(lambda:box.connected)
+                now=native.clock_ms()
+                wire=(f"BT2|{token}|17|XAUUSD|{now}|"
+                      f"{now*native.EVENT_FACTOR+1}|2000.01|2000.21\n")
+                pipe.write(wire.encode("ascii"))
+                eventually(lambda:len(box._items)==1)
+                self.assertTrue(box.recent(now_ms=native.clock_ms(),
+                    maximum_age_ms=2000,login=17,symbol="XAUUSD"))
+            eventually(lambda:not box.connected)
+            self.assertEqual(box.drain(17,"XAUUSD"),[],
+                "Old read-but-undrained quote remained in mailbox after pipe close")
+            with connect() as pipe:
+                eventually(lambda:box.connected)
+                self.assertEqual(box.drain(17,"XAUUSD"),[],
+                    "New authenticated pipe epoch must not reuse prior quote")
+                self.assertFalse(box.recent(now_ms=native.clock_ms(),
+                    maximum_age_ms=2000,login=17,symbol="XAUUSD"))
+        finally:
+            self.assertTrue(server.stop())
 
     @unittest.skipUnless(os.name == "nt", "Windows named-pipe integration")
     def test_real_pipe_fragmented_authenticated_ticks_and_reconnect_freshness(self):

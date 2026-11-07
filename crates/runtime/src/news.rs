@@ -328,12 +328,23 @@ impl Service {
         })
     }
     fn persist(&mut self, db: &Connection) -> Result<()> {
-        db.execute("INSERT INTO news_cache(id,payload) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",params![serde_json::to_string(&self.saved)?])?;
+        self.persist_sources(db, None)
+    }
+    fn persist_sources(&mut self, db: &Connection, changed: Option<&str>) -> Result<()> {
+        // Save the visible RSS cache and its causal replay observations as
+        // ONE atomic transaction. Do not re-index other unchanged feeds on
+        // every update: a 3-feed refresh would otherwise rewrite all three
+        // observation sets up to three times on Core's request thread.
+        let tx = db.unchecked_transaction()?;
+        tx.execute("INSERT INTO news_cache(id,payload) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+                   params![serde_json::to_string(&self.saved)?])?;
         for source in &self.saved.sources {
-            if source.last_success_ms > 0 && !source.items.is_empty() {
-                replay::observe(db, &source.id, source.last_success_ms, &source.items)?;
+            if changed.is_none_or(|id| id == source.id.as_str())
+                && source.last_success_ms > 0 && !source.items.is_empty() {
+                replay::observe(&tx, &source.id, source.last_success_ms, &source.items)?;
             }
         }
+        tx.commit()?;
         self.storage_error.clear();
         Ok(())
     }
@@ -395,14 +406,19 @@ impl Service {
         }
     }
     pub fn tick(&mut self, db: &Connection, now: u64) {
-        loop {
+        // At most one potentially large feed replay/write per maintenance
+        // opportunity. Subsequent updates remain in the channel and are
+        // drained on future rounds, so a burst cannot hold Sniper's Core
+        // request loop for three sequential SQLite transactions.
+        for _ in 0..1 {
             let Some(rx) = &self.rx else {
                 break;
             };
             match rx.try_recv() {
                 Ok(u) => {
+                    let changed_source = u.id;
                     self.apply(u);
-                    if let Err(e) = self.persist(db) {
+                    if let Err(e) = self.persist_sources(db, Some(changed_source)) {
                         self.storage_error = format!("تعذر حفظ الأخبار: {e}");
                     }
                 }
@@ -623,6 +639,27 @@ mod tests {
         }
     }
     #[test]
+    fn feed_burst_is_persisted_one_update_per_maintenance_turn() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        service.offline=true; // Never start the network fetcher.
+        service.next_ms=u64::MAX;
+        let (tx,rx)=mpsc::channel();
+        service.rx=Some(rx);
+        for feed in FEEDS {
+            tx.send(Update{id:feed.id,at:NOW,result:Err("fixture".into())}).unwrap();
+        }
+        for completed in 1..=3 {
+            service.tick(&db,NOW);
+            let count=service.saved.sources.iter()
+                .filter(|source|source.last_attempt_ms==NOW).count();
+            assert_eq!(count,completed,"No burst of SQLite news writes");
+            let from_disk=Service::new(&db).unwrap();
+            assert_eq!(from_disk.saved.sources.iter()
+                .filter(|source|source.last_attempt_ms==NOW).count(),completed);
+        }
+    }
+    #[test]
     fn failure_retains_cache_and_restart_preserves_disabled_setting() {
         let db = Connection::open_in_memory().unwrap();
         let mut s = Service::new(&db).unwrap();
@@ -654,6 +691,38 @@ mod tests {
         assert_eq!(s.saved.sources[0].last_success_ms, NOW);
         assert_eq!(s.snapshot(NOW + 2000)["items"][0]["source_stale"], true);
         assert_eq!(s.snapshot(NOW + STALE_MS + 1)["sources"][0]["stale"], true);
+    }
+    #[test]
+    fn rss_cache_and_causal_history_rollback_together_on_invalid_feed() {
+        let db=Connection::open_in_memory().unwrap();
+        let mut service=Service::new(&db).unwrap();
+        service.apply(Update{
+            id:"fed",at:NOW,
+            result:Ok(vec![Headline{
+                title:"Federal Reserve policy".into(),
+                url:"https://www.federalreserve.gov/a".into(),
+                published_ms:Some(NOW-1000),
+                fetched_ms:NOW,topic:"policy".into(),
+            }]),
+        });
+        service.persist(&db).unwrap();
+        let before:String=db.query_row("SELECT payload FROM news_cache WHERE id=1",[],|r|r.get(0)).unwrap();
+        let observed_before:i64=db.query_row("SELECT COUNT(*) FROM news_observed_events",[],|r|r.get(0)).unwrap();
+        assert_eq!(observed_before,1);
+        service.apply(Update{
+            id:"ecb",at:NOW+1,
+            result:Ok(vec![Headline{
+                title:"Unverified domain".into(),
+                url:"https://not-the-ecb.example/a".into(),
+                published_ms:Some(NOW-1000),
+                fetched_ms:NOW+1,topic:"unverified".into(),
+            }]),
+        });
+        assert!(service.persist_sources(&db,Some("ecb")).is_err());
+        let after:String=db.query_row("SELECT payload FROM news_cache WHERE id=1",[],|r|r.get(0)).unwrap();
+        let observed_after:i64=db.query_row("SELECT COUNT(*) FROM news_observed_events",[],|r|r.get(0)).unwrap();
+        assert_eq!(before,after,"Cache must not commit if causal observations fail");
+        assert_eq!(observed_before,observed_after,"No partial causal event insertion");
     }
     #[test]
     fn macro_context_never_infers_direction_from_headline() {

@@ -3,7 +3,7 @@
 //! These are operator-supplied price levels, not trading signals or broker
 //! orders. Persisted separately from the original three broker-volume plans.
 //! No stage progression, order_send, stop modification or BE authorization.
-use anyhow::{bail,ensure,Context,Result};
+use anyhow::{ensure,Context,Result};
 use braintrade_domain::{execution,Telemetry};
 use rusqlite::{params,Connection,OptionalExtension};
 use serde_json::{json,Value};

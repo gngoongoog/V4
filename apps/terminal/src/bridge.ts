@@ -51,6 +51,33 @@ export async function savePartialExitPrices(context:string,positionIdentifier:nu
   throw new Error('Invalid DEMO TP price proposal');
  return invoke('save_partial_exit_prices',{context,positionIdentifier,planIds,prices});
 }
+export async function updatePartialExitStageConsent(context:string,positionIdentifier:number,
+ planIds:[string,string,string],enabled:boolean,confirmLiveLogin:string):Promise<unknown>{
+ if(!context||context.length>500||!Number.isSafeInteger(positionIdentifier)||positionIdentifier<=0||
+  planIds.length!==3||planIds.some(id=>!/^tp-plan-[a-f0-9]{32}$/.test(id))||
+  typeof confirmLiveLogin!=='string'||confirmLiveLogin.length>32)
+  throw new Error('Invalid account-scoped stage consent');
+ return invoke('update_partial_exit_stage_consent',
+  {context,positionIdentifier,planIds,enabled,confirmLiveLogin});
+}
+export async function updatePartialExitTradeApproval(context:string,positionIdentifier:number,
+ planIds:[string,string,string],enabled:boolean,confirmLiveLogin:string):Promise<unknown>{
+ if(!context||context.length>500||!Number.isSafeInteger(positionIdentifier)||positionIdentifier<=0||
+  planIds.length!==3||planIds.some(id=>!/^tp-plan-[a-f0-9]{32}$/.test(id))||
+  typeof enabled!=='boolean'||typeof confirmLiveLogin!=='string'||confirmLiveLogin.length>32)
+  throw new Error('Invalid account-scoped TP1 future trade preference');
+ return invoke('update_partial_exit_trade_approval',
+  {context,positionIdentifier,planIds,enabled,confirmLiveLogin});
+}
+export async function updatePartialExitTP1Arm(context:string,positionIdentifier:number,
+ planIds:[string,string,string],enabled:boolean,confirmLiveLogin:string):Promise<unknown>{
+ if(!context||context.length>500||!Number.isSafeInteger(positionIdentifier)||positionIdentifier<=0||
+  planIds.length!==3||planIds.some(id=>!/^tp-plan-[a-f0-9]{32}$/.test(id))||
+  typeof enabled!=='boolean'||typeof confirmLiveLogin!=='string'||confirmLiveLogin.length>32)
+  throw new Error('Invalid account-scoped TP1 execution arm');
+ return invoke('update_partial_exit_tp1_arm',
+  {context,positionIdentifier,planIds,enabled,confirmLiveLogin});
+}
 export async function setLearningFrozen(frozen:boolean):Promise<unknown>{return invoke('set_learning_frozen',{frozen})}
 export async function manualMarket(request:Record<string,unknown>):Promise<unknown>{return invoke('manual_market',{request})}
 export async function cancelPendingOrder(context:string,order:import('./types').PendingOrder):Promise<unknown>{return invoke('cancel_pending_order',{context,order})}
