@@ -122,11 +122,17 @@ export function TradingSettingsOperations({source,disabled,armed,apply,brokerPoi
   if(Number(updated.sniper_max_target_pips)<=Number(updated.sniper_min_target_pips)){
    setError('الهدف المتكيف الأعلى يجب أن يكون أكبر من الأدنى');return;
   }
-  if(updated.mode==='sniper'&&typeof brokerPoint==='number'&&Number.isFinite(brokerPoint)&&brokerPoint>0){
-   const points=Number(updated.pip_points),actual=Number(updated.sniper_pip_price)/brokerPoint;
-   if(Math.abs(actual-points)>Math.max(1e-6,Math.abs(points)*1e-7)){
-    setError('عدد نقاط MT5 لكل pip لا يطابق سعر pip ونقطة الوسيط الحالية. عدّل القيم قبل الحفظ.');return;
+  if(updated.mode==='sniper'){
+   if(typeof brokerPoint!=='number'||!Number.isFinite(brokerPoint)||brokerPoint<=0){
+    setError('لم تصل مواصفات Point حديثة من MT5؛ حدّث اتصال الوسيط قبل حفظ إعدادات القناص.');return;
    }
+   const points=Number(updated.sniper_pip_price)/brokerPoint,rounded=Math.round(points);
+   if(!Number.isFinite(points)||rounded<1||rounded>1000||Math.abs(points-rounded)>Math.max(1e-6,Math.abs(points)*1e-7)){
+    setError('مواصفات MT5 غير متوافقة: Point='+brokerPoint+'، وسعر pip='+updated.sniper_pip_price+'. تحقق من رمز التداول ومواصفاته.');return;
+   }
+   const targetPips=Number(updated.sniper_target_points)/Number(updated.pip_points);
+   updated.pip_points=rounded;
+   updated.sniper_target_points=targetPips*rounded;
   }
   if(!['fixed','adaptive'].includes(String(updated.sniper_target_mode))){
    setError('نوع هدف القناص غير مدعوم');return;
@@ -165,7 +171,7 @@ export function TradingSettingsOperations({source,disabled,armed,apply,brokerPoi
    <label>طريقة احتساب العمولة<select aria-label="commission basis" disabled={locked} value={editedBasis?basis:String(commission.basis||'round_trip')} onChange={e=>{markEditing();setEditedBasis(true);setBasis(e.target.value)}}><option value="round_trip">دخول وخروج معاً</option><option value="per_side">لكل جهة (مرتين)</option></select></label>
   </div>
   <h4>إعدادات القناص المنفّذة لدى Rust Core</h4>
-  <p className="safe-note">تُحفظ القيم الفعلية للقناص مع وضع التداول. الهدف الثابت يُعرض بوحدة pip (المحرك يحفظه كنقاط داخلياً)؛ وقف الخسارة بوحدة نقاط تسعير MT5.</p>
+  <p className="safe-note">تُحفظ القيم الفعلية للقناص مع وضع التداول. تحويل pip يُحسب تلقائياً من Point لدى الوسيط (غير متاح). الهدف بوحدة pip والوقف بوحدة نقاط MT5.</p>
   <div className="operator-grid">
    <label>الهدف الثابت (pip)<input aria-label="sniper fixed target pips" type="number" min="0.1" step="0.1" value={fixedPips??String(numeric('sniper_target_points',50)/numeric('pip_points',10))} disabled={locked} onChange={e=>{const value=e.target.value;setFixedPips(value);numericPatch('sniper_target_points',value===''?'':String(Number(value)*numeric('pip_points',10)))}}/></label>
    <label>وقف الخسارة (MT5 points)<input aria-label="sniper stop points" type="number" min="1" step="1" value={numericInput('sniper_stop_points',80)} disabled={locked} onChange={e=>numericPatch('sniper_stop_points',e.target.value)}/></label>
@@ -174,7 +180,7 @@ export function TradingSettingsOperations({source,disabled,armed,apply,brokerPoi
    <label>أعلى هدف متكيّف (pip)<input aria-label="sniper adaptive maximum pips" type="number" min="0.1" step="0.1" value={numericInput('sniper_max_target_pips',10)} disabled={locked} onChange={e=>numericPatch('sniper_max_target_pips',e.target.value)}/></label>
    <label>الفاصل بين دخولين (ثانية)<input aria-label="sniper cooldown seconds" type="number" min="0" max="3600" step="1" value={numericInput('sniper_cooldown_seconds',0)} disabled={locked} onChange={e=>numericPatch('sniper_cooldown_seconds',e.target.value)}/></label>
    <label>أقصى احتفاظ بالصفقة (ثانية)<input aria-label="sniper max hold seconds" type="number" min="1" max="3600" step="1" value={numericInput('sniper_max_hold_seconds',120)} disabled={locked} onChange={e=>numericPatch('sniper_max_hold_seconds',e.target.value)}/></label>
-   <label>عدد نقاط MT5 لكل pip<input aria-label="sniper points per pip" type="number" min="1" max="1000" step="any" value={numericInput('pip_points',10)} disabled={locked} onChange={e=>{markEditing();const value=e.target.value;const pips=fixedPips??String(numeric('sniper_target_points',50)/numeric('pip_points',10));setFixedPips(pips);setDraft(old=>({...old,pip_points:value,sniper_target_points:value===''||pips===''?'':String(Number(value)*Number(pips))}))}}/></label>
+   <label>عدد نقاط MT5 لكل pip<input aria-label="sniper points per pip" type="number" min="1" max="1000" step="any" value={typeof brokerPoint==='number'&&Number.isFinite(brokerPoint)&&brokerPoint>0?String(Number(numeric('sniper_pip_price',0.1)/brokerPoint)):numericInput('pip_points',10)} disabled={locked||typeof brokerPoint==='number'&&brokerPoint>0} onChange={e=>{markEditing();const value=e.target.value;const pips=fixedPips??String(numeric('sniper_target_points',50)/numeric('pip_points',10));setFixedPips(pips);setDraft(old=>({...old,pip_points:value,sniper_target_points:value===''||pips===''?'':String(Number(value)*Number(pips))}))}}/></label>
    <label>حجم pip بسعر الذهب<input aria-label="sniper pip price" type="number" min="0.00001" step="0.01" value={numericInput('sniper_pip_price',0.1)} disabled={locked} onChange={e=>numericPatch('sniper_pip_price',e.target.value)}/></label>
    <label>حصة التكلفة القصوى من الهدف (0.01–0.9)<input aria-label="sniper maximum cost fraction" type="number" min="0.01" max="0.9" step="0.01" value={numericInput('max_cost_fraction',0.45)} disabled={locked} onChange={e=>numericPatch('max_cost_fraction',e.target.value)}/></label>
    <label className="operator-toggle"><input type="checkbox" checked={edit.demo_flexible===true} disabled={locked} onChange={e=>patch('demo_flexible',e.target.checked)}/> مرونة تنفيذ Demo</label>
