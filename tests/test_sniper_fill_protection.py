@@ -151,6 +151,9 @@ class SniperFillProtectionTests(unittest.TestCase):
         row = executor.db.execute("SELECT result FROM sends WHERE id=?",
                                   (mt5.protection_id,)).fetchone()
         self.assertEqual(json.loads(row[0])["state"], "rejected")
+        with self.assertRaisesRegex(ValueError, "prior modification journal is unresolved"):
+            _apply_sniper_fill_protection(executor, mt5, cmd, mt5.info, N(), result)
+        self.assertEqual(len(mt5.sent), 1, "Uncertain SLTP modification must never be blindly resent")
 
     def test_partial_or_non_sniper_result_is_not_modified(self):
         mt5 = FakeMT5()
