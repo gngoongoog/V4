@@ -210,7 +210,7 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
             sel["sniper_target_samples"].as_u64().unwrap_or(0),
             sel["sniper_target_exploring"]);
         if let Some(models)=sel["sniper_target_policies"].as_array() {
-            if let Some(arms)=sel["sniper_target_candidates_pips"].as_array() {
+            if let Some(arms)=sel["sniper_target_candidates_price_distance"].as_array() {
                 for (i,p) in models.iter().enumerate() {
                     let _=writeln!(out,"مسافة هدف {:.5} | صفقات مكتملة {} | رابحة {} | مكافأة {:.3} | خسائر متتالية {}",
                         arms.get(i).and_then(Value::as_f64).unwrap_or(0.),
