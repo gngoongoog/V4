@@ -1141,10 +1141,10 @@ mod tests {
         let b=BrainConfig{id:"system".into(),..Default::default()};
         let mut entry=signal();
         entry.coordination=Some(json!({"selection":{
-            "brain":"sniper_learner","policy":"sniper-ticks-v1",
-            "sniper_target_mode":"adaptive","sniper_target_arm":2,"sniper_target_pips":6.0,
+            "brain":"sniper_learner","policy":"sniper-price-distance-v1",
+            "sniper_target_mode":"adaptive","sniper_target_arm":2,"sniper_target_price_distance":6.0,
             "sniper_definition":"fixture","sniper_regime":"directional_normal",
-            "definition":["sniper-ticks-v1","impulse"],"timeframe":"M1"
+            "definition":["sniper-price-distance-v1","impulse"],"timeframe":"M1"
         }}));
         let before_target=entry.target_distance;
         let mut baseline=entry.clone();
