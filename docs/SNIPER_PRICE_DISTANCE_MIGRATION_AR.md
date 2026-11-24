@@ -36,7 +36,6 @@ SELL mirrors the direction.
 Fixed and adaptive Sniper strategy geometry, UI inputs, cost gates, learning
 identity, and gateway protection now use quoted-price distances. Full fills
 have a tested post-fill SLTP re-anchor path. This branch is still NOT production
-approved: the repository's automated tests and native Windows/MT5 runtime have
-not yet been executed in this environment. Do not use it for Live trading
-until CI, real broker Demo validation, and partial-fill reconciliation are
-completed.
+approved: automated tests and native Windows/MT5 runtime have not yet been
+executed in this environment. Do not use it for Live trading until CI, real
+broker Demo validation, and partial-fill reconciliation are completed.
