@@ -109,8 +109,7 @@ def _apply_sniper_fill_protection(mt5, cmd, info, response, result):
         raise ValueError('Sniper fill protection: broker quote stale/invalid; initial quote protection remains attached')
     minimum = max(int(getattr(info, 'trade_stops_level', 0) or 0),
                   int(getattr(info, 'trade_freeze_level', 0) or 0)) * float(info.point)
-    exit_quote = bid if side == 1 else ask
-    if side == 1:
+        if side == 1:
         valid = bid > levels['sl'] and levels['tp'] > bid
         distances = (bid - levels['sl'], levels['tp'] - bid)
     else:
@@ -184,11 +183,11 @@ def is_fast_path(cmd):
 
 
 def sniper_broker_geometry(info, tick, stop, target):
-    """Validate a frozen Sniper TP without ever increasing its user pip target.
+    """Validate a Sniper TP/SL price distance without ever increasing the operator's requested movement.
 
     Both distances are from executable entry. The broker validates SL/TP
     against the opposite-side exit quote. A full tick cushions tick rounding.
-    If the broker's stops floor is too wide for the requested 5/10 pip TP,
+    If the broker's stops floor is too wide for the requested price-distance TP,
     reject the entry with an exact explanation instead of silently raising TP
     to 40/50 pips. Likewise, never silently expand the selected stop loss.
     """
@@ -204,17 +203,17 @@ def sniper_broker_geometry(info, tick, stop, target):
     tick_steps = target / step
     if abs(tick_steps - round(tick_steps)) > 1e-6:
         raise ValueError(
-            f'Sniper exact pip TP {target:.5f} is not a multiple of broker tick size {step:.5f}; '
+            f'Sniper exact price-distance TP {target:.5f} is not a multiple of broker tick size {step:.5f}; '
             'TP was NOT rounded or widened. Choose a tick-representable target.'
         )
     if abs(stop / step - round(stop / step)) > 1e-6:
-        raise ValueError(f'Sniper exact SL {stop:.5f} is not a multiple of broker tick size {step:.5f}; SL was not widened.')
+        raise ValueError(f'Sniper exact price-distance SL {stop:.5f} is not a multiple of broker tick size {step:.5f}; SL was not widened.')
     min_stop = spread + minimum
     min_target = max(step, minimum - spread)
     if stop + step * 1e-7 < min_stop:
         raise ValueError(f'Sniper SL too close for broker stop level: requested {stop:.5f}, minimum {min_stop:.5f} in price. SL was not widened.')
     if target + step * 1e-7 < min_target:
-        raise ValueError(f'Sniper exact pip TP cannot satisfy broker stop level: requested {target:.5f}, minimum {min_target:.5f} in price. TP was NOT widened.')
+        raise ValueError(f'Sniper exact price-distance TP cannot satisfy broker stop level: requested {target:.5f}, minimum {min_target:.5f} in price. TP was NOT widened.')
     return stop, target, minimum, spread
 
 
