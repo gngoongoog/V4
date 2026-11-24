@@ -31,9 +31,9 @@ assert.match(terminal,/throw new Error\('القيم التي أعادها Core �
 assert.match(terminal,/catch\(e\)\{if\(writeFresh\(mutation\)\)sendNotice\(String\(e\),true\);throw e\}/);
 assert.match(editor,/catch\(e\)\{setError\('فشل الحفظ؛ تم الاحتفاظ بالتعديلات:/);
 assert.match(editor,/payload\.account=account/);
-for(const field of ['sniper_target_points','sniper_stop_points','sniper_target_mode',
- 'sniper_cooldown_seconds','sniper_max_hold_seconds','sniper_min_target_pips',
- 'sniper_max_target_pips','sniper_pip_price','max_cost_fraction',
+for(const field of ['sniper_target_price_distance','sniper_stop_price_distance','sniper_target_mode',
+ 'sniper_cooldown_seconds','sniper_max_hold_seconds','sniper_min_target_price_distance',
+ 'sniper_max_target_price_distance','max_cost_fraction',
  'demo_flexible','adaptive_exits']){
  assert(editor.includes(field),'Missing editable Sniper parameter '+field);
 }
