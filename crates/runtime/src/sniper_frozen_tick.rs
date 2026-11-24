@@ -325,7 +325,7 @@ mod tests{
         assert!(s.freeze(&t,&c,&e,100_000).is_err());
         c.trading.sniper_brain=SniperBrain::Learner;
         s.freeze(&t,&c,&e,100_000).unwrap();
-        c.trading.sniper_min_target_pips+=1.;
+        c.trading.sniper_min_target_price_distance+=0.01;
         t.source_quote_time_ms=Some(101_000);t.quote_time_ms=Some(101_000);
         s.observe(&t,&c,None,&meta("native",0),101_001);
         assert_eq!(s.report(Some(&t),101_001)["status"],"stopped");
