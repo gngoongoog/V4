@@ -225,7 +225,7 @@ def check(exe=None, native_pipe=False):
                 'duplicate never resends; partial close never trains','net fees credited only to specialist and owner',
                 'restart restores policy history and STOP','SOLO blocked: only selected mode coordinator executes',
                 'inactive outside Sniper; account isolation',
-                'fixed 5-pip target; user-bounded adaptive 3–9-pip Demo-only target selection'])
+                'fixed 0.50 price-distance target; user-bounded adaptive 0.30–0.90 Demo-only price-distance selection'])
             out=ROOT/'test-output/sniper-learner-integration.json';out.parent.mkdir(exist_ok=True);out.write_text(json.dumps(report,indent=2))
             print(json.dumps(report))
         finally:
