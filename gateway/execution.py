@@ -206,7 +206,7 @@ def _apply_sniper_fill_protection(executor, mt5, cmd, info, response, result):
         observed_position = exact_position()
         if levels_observed(observed_position):
             return record_verified(observed_position, 'Existing journal reconciled to broker-observed SL/TP')
-        raise ValueError('Sniper fill protection: prior modification journal is unresolved; initial protection remains and no duplicate SLTP send is attempted')
+        raise ValueError('Sniper fill protection: prior modification journal is unresolved; current broker SLTP state requires reconciliation and no duplicate SLTP send is attempted')
 
     # The SLTP mutation has its own durable journal, separate from the entry
     # journal. Commit it before crossing the MT5 write boundary.
@@ -242,24 +242,30 @@ def _apply_sniper_fill_protection(executor, mt5, cmd, info, response, result):
             or abs(float(getattr(current, 'sl', 0) or 0) - float(getattr(position, 'sl', 0) or 0)) > eps
             or abs(float(getattr(current, 'tp', 0) or 0) - float(getattr(position, 'tp', 0) or 0)) > eps):
         executor._save(journal_cmd, dict(state='cancelled', reason='Exact position changed after protection journal; no SLTP send'))
-        raise ValueError('Sniper fill protection: exact position changed after durable journal; no SLTP send')
+        raise ValueError('Sniper fill protection: exact position changed after durable journal; no SLTP send was attempted')
 
     modified = mt5.order_send(protection_request)
     code = getattr(modified, 'retcode', None)
     if code not in (10008, 10009):
-        mod_result = dict(state='rejected' if code is not None else 'unknown',
+        known_rejects = {10004,10006,10007,10013,10014,10015,10016,10017,10018,10019,
+                         10020,10021,10022,10024,10026,10027,10029,10030,10032,10033,
+                         10034,10035,10036,10038,10040,10042,10043,10044,10045,10046}
+        rejected = code in known_rejects
+        mod_result = dict(state='rejected' if rejected else 'unknown',
                            retcode=code, reason=str(getattr(modified, 'comment', 'No broker acknowledgement')),
                            request=protection_request)
         executor._save(journal_cmd, mod_result)
-        raise ValueError('Sniper fill protection: broker rejected post-fill SL/TP update: '
-                         + str(getattr(modified, 'comment', 'unavailable'))
-                         + '; original quote-based SL/TP remain attached')
+        suffix = ('; original quote-based SL/TP remain attached' if rejected
+                  else '; current broker SLTP state requires reconciliation')
+        message = ('broker rejected' if rejected else 'broker acknowledgement is uncertain')
+        raise ValueError('Sniper fill protection: '+message+' post-fill SL/TP update: '
+                         + str(getattr(modified, 'comment', 'unavailable')) + suffix)
     observed_position = exact_position()
     if not levels_observed(observed_position):
         executor._save(journal_cmd, dict(state='unknown', retcode=code,
                                          reason='Broker acknowledged SLTP but exact position readback did not match',
                                          request=protection_request))
-        raise ValueError('Sniper fill protection: broker acknowledgement not reflected on exact position; initial protection remains')
+        raise ValueError('Sniper fill protection: broker acknowledgement not reflected on exact position; current broker SLTP state requires reconciliation')
     return record_verified(observed_position, 'Broker SLTP modification verified on exact MT5 position')
 
 
@@ -852,7 +858,8 @@ class BrokerExecutor:
                     result['state'] = 'unknown'
                     result['sniper_fill_protection'] = dict(
                         state='unverified', reason=str(exc),
-                        initial_quote_protection_retained=True,
+                        quote_protection_was_attached=True,
+                        current_levels_require_reconciliation=True,
                     )
                     result['reason'] = str(exc) + '; fill-relative protection remains unverified; no entry resend'
             # Recovery can restore booked evidence, never the unobserved quote path.
@@ -1417,7 +1424,8 @@ class BrokerExecutor:
                                       reason=str(exc)+'; no second entry send will be attempted',
                                       sniper_fill_protection=dict(
                                           state='unverified', reason=str(exc),
-                                          initial_quote_protection_retained=True,
+                                          quote_protection_was_attached=True,
+                                          current_levels_require_reconciliation=True,
                                       ))
                 if deal_id<=0 and code in (10009,10010):
                     result['reason']='Broker retcode acknowledges submission but deal ticket is unavailable; await exact MT5 history reconciliation'
