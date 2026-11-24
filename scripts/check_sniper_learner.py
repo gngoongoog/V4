@@ -85,7 +85,11 @@ def check(exe=None, native_pipe=False):
         original_order_send=broker.order_send
         def order_send_with_mt5_fill(request):
             response=original_order_send(request)
-            if request.get('magic')==410600 and response.retcode==10009:
+            if request.get('action')==broker.TRADE_ACTION_SLTP:
+                matches=[p for p in broker.positions if p.ticket==request['position']]
+                assert len(matches)==1, 'SLTP update must target one exact simulated position'
+                matches[0].sl=request['sl'];matches[0].tp=request['tp']
+            elif request.get('magic')==410600 and response.retcode==10009:
                 position_id=550077
                 broker.deals.append(N(
                     ticket=response.deal,order=response.order,position_id=position_id,
