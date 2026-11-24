@@ -54,8 +54,11 @@ def _apply_sniper_fill_protection(mt5, cmd, info, response, result):
     coordination = signal.get('coordination') or {}
     selection = coordination.get('selection') or {}
     policy = coordination.get('sniper_price_distance_policy') or selection.get('policy')
-    if (result.get('state') != 'filled' or not is_fast_path(cmd)
-            or policy != 'sniper-price-distance-v1'):
+    terminal = result.get('terminal_order') or {}
+    settled_partial = (result.get('state') == 'partial'
+                       and terminal.get('confirmed') is True
+                       and terminal.get('state') in ('canceled', 'rejected', 'expired'))
+    if (result.get('state') != 'filled' and not settled_partial) or not is_fast_path(cmd) or policy != 'sniper-price-distance-v1':
         return result
     deal_id = int(result.get('deal') or 0)
     order_id = int(result.get('order') or 0)
@@ -751,7 +754,10 @@ class BrokerExecutor:
             coordination = signal.get('coordination') or {}
             selection = coordination.get('selection') or {}
             policy = coordination.get('sniper_price_distance_policy') or selection.get('policy')
-            if state == 'filled' and cmd.get('kind') == 'open' and policy == 'sniper-price-distance-v1':
+            terminal = result.get('terminal_order') or {}
+            settled_partial = (state == 'partial' and terminal.get('confirmed') is True
+                               and terminal.get('state') in ('canceled', 'rejected', 'expired'))
+            if (state == 'filled' or settled_partial) and cmd.get('kind') == 'open' and policy == 'sniper-price-distance-v1':
                 try:
                     info = mt5.symbol_info(cmd['symbol'])
                     if info is None:
