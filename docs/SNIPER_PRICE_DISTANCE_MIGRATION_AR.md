@@ -7,7 +7,8 @@ Sniper TP and SL are price movements in the symbol's quoted price, not pips,
 points, or account-currency profit. Example: for a confirmed XAUUSD fill of
 4098.123, BUY TP distance 0.25 and SL distance 1.00 produce TP 4098.373 and
 SL 4097.123 (subject to exact broker tick-grid and stops/freeze validation).
-SELL mirrors the direction.
+SELL mirrors the direction. The native UI and domain defaults are aligned at
+TP distance 0.50 and SL distance 0.80; users can change both while stopped.
 
 ## Safety invariants
 - MT5 contract metadata remains authoritative: point, tick size, stops level,
