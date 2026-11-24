@@ -53,7 +53,7 @@ fn receipts_reconcile(db:&Connection,account:&str,position:u64,sample:&Value)
     if brain!=sample["trade_owner"].as_str().unwrap_or("")
        ||reply["deal"].as_u64()!=Some(open_ticket)
        ||cmd["signal"]["coordination"]["selection"]["brain"]!="sniper_learner"
-       ||cmd["signal"]["coordination"]["selection"]["policy"]!="sniper-ticks-v1"
+       ||cmd["signal"]["coordination"]["selection"]["policy"]!="sniper-price-distance-v1"
        ||cmd["signal"]["side"].as_i64().is_none_or(|side|!matches!(side,-1|1)){
         return Ok(false)
     }
@@ -245,7 +245,7 @@ mod tests{
         json!({"evidence_source":"mt5_demo_broker","context":account,
             "position_id":position,"brain":"sniper_learner","trading_mode":"sniper",
             "trade_owner":"system","selection":{"brain":"sniper_learner",
-                "policy":"sniper-ticks-v1"},
+                "policy":"sniper-price-distance-v1"},
             "open_command_id":format!("confirmed-core-open-{position}"),
             "open_deal":position*100+1,
             "closed_ms":closed,"closed_volume":0.1,
@@ -258,7 +258,7 @@ mod tests{
         let open_ticket=payload["open_deal"].as_u64().unwrap();
         let cmd=json!({"id":command_id,"brain":"system","signal":{
             "side":1,"coordination":{"selection":{
-                "brain":"sniper_learner","policy":"sniper-ticks-v1"}}}});
+                "brain":"sniper_learner","policy":"sniper-price-distance-v1"}}}});
         let result=json!({"deal":open_ticket});
         db.execute(
             "INSERT OR IGNORE INTO broker_commands VALUES(?1,?2,'system','open',1,
