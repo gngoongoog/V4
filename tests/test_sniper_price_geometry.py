@@ -22,6 +22,13 @@ class SniperPriceGeometryTests(unittest.TestCase):
         self.assertAlmostEqual(got["sl"], 4099.123)
         self.assertAlmostEqual(got["tp"], 4097.873)
 
+    def test_supports_broker_tick_size_distinct_from_point(self):
+        info = N(point=0.01, trade_tick_size=0.05,
+                 trade_stops_level=0, trade_freeze_level=0)
+        got = sniper_levels_from_fill(info, 1, 4098.10, 1.0, 0.25)
+        self.assertAlmostEqual(got["sl"], 4097.10)
+        self.assertAlmostEqual(got["tp"], 4098.35)
+
     def test_refuses_distance_not_on_tick_grid(self):
         with self.assertRaisesRegex(ValueError, "cannot be represented exactly"):
             sniper_levels_from_fill(self.info, 1, 4098.123, 1.0, 0.2505)
