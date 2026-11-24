@@ -79,7 +79,7 @@ class NativeUiContract(unittest.TestCase):
         self.assertEqual(total,{"Button":112,"ComboBox":30,"LineEdit":48,"CheckBox":14})
 
     def test_sniper_uses_direct_price_distance_not_user_pip_controls(self):
-        section=self.dashboard.split('3  •  إعداد القناص ومسافات السعر',1)[1].split('if root.page == 4:',1)[0]
+        section=self.dashboard.split('3  •  إعداد القناص ومسافات السعر',1)[1].split('if root.page == 15:',1)[0]
         self.assertIn('sniper-target: "0.50"',self.dashboard)
         self.assertIn('sniper-stop: "0.80"',self.dashboard)
         self.assertIn('هدف الحركة السعرية (فرق السعر)',section)
