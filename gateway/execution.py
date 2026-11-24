@@ -66,21 +66,36 @@ def _apply_sniper_fill_protection(mt5, cmd, info, response, result):
     deals = mt5.history_deals_get(start, now + timedelta(seconds=2))
     if deals is None:
         raise ValueError('Sniper fill protection: MT5 Deal history unavailable; initial quote protection remains attached')
-    exact = [d for d in deals if int(getattr(d, 'ticket', 0) or 0) == deal_id]
-    if len(exact) != 1:
-        raise ValueError('Sniper fill protection: exact opening Deal not uniquely visible; initial quote protection remains attached')
-    deal = exact[0]
     side = int(cmd['signal']['side'])
     expected_type = getattr(mt5, 'DEAL_TYPE_BUY', 0) if side == 1 else getattr(mt5, 'DEAL_TYPE_SELL', 1)
-    if (int(getattr(deal, 'order', 0) or 0) != order_id
-            or int(getattr(deal, 'magic', -1)) != int(cmd['magic'])
-            or getattr(deal, 'symbol', None) != cmd['symbol']
-            or int(getattr(deal, 'entry', -1)) != getattr(mt5, 'DEAL_ENTRY_IN', 0)
-            or int(getattr(deal, 'type', -1)) != expected_type):
-        raise ValueError('Sniper fill protection: Deal identity/direction does not match this entry; initial quote protection remains attached')
-    position_id = int(getattr(deal, 'position_id', 0) or 0)
-    if position_id <= 0:
-        raise ValueError('Sniper fill protection: Deal has no physical position ID; initial quote protection remains attached')
+    order_deals = [d for d in deals
+                   if int(getattr(d, 'order', 0) or 0) == order_id
+                   and int(getattr(d, 'magic', -1)) == int(cmd['magic'])
+                   and getattr(d, 'symbol', None) == cmd['symbol']]
+    exact = [d for d in order_deals if int(getattr(d, 'ticket', 0) or 0) == deal_id]
+    if len(exact) != 1 or not order_deals:
+        raise ValueError('Sniper fill protection: exact opening Deal/order not uniquely visible; initial quote protection remains attached')
+    try:
+        tickets = [int(getattr(d, 'ticket', 0) or 0) for d in order_deals]
+        positions_for_order = [int(getattr(d, 'position_id', 0) or 0) for d in order_deals]
+        deal_volumes = [float(getattr(d, 'volume', 0)) for d in order_deals]
+        deal_prices = [float(getattr(d, 'price', 0)) for d in order_deals]
+        ack_volume = float(result.get('volume', float('nan')))
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError('Sniper fill protection: invalid Deal volume/price evidence; initial quote protection remains attached')
+    if (len(set(tickets)) != len(tickets) or any(v <= 0 for v in tickets)
+            or any(p <= 0 for p in positions_for_order) or len(set(positions_for_order)) != 1
+            or any(not math.isfinite(v) or v <= 0 for v in deal_volumes + deal_prices)
+            or not math.isfinite(ack_volume) or ack_volume <= 0
+            or any(int(getattr(d, 'entry', -1)) != getattr(mt5, 'DEAL_ENTRY_IN', 0)
+                   or int(getattr(d, 'type', -1)) != expected_type for d in order_deals)):
+        raise ValueError('Sniper fill protection: order Deals conflict in identity, side, entry or geometry; initial quote protection remains attached')
+    position_id = positions_for_order[0]
+    total_volume = sum(deal_volumes)
+    weighted_fill = sum(p * v for p, v in zip(deal_prices, deal_volumes)) / total_volume
+    tolerance = max(1e-8, ack_volume * 1e-7)
+    if abs(total_volume - ack_volume) > tolerance:
+        raise ValueError('Sniper fill protection: exact order Deal volume does not match full broker acknowledgement; initial quote protection remains attached')
     positions = mt5.positions_get(symbol=cmd['symbol'])
     if positions is None:
         raise ValueError('Sniper fill protection: MT5 positions unavailable; initial quote protection remains attached')
@@ -94,6 +109,11 @@ def _apply_sniper_fill_protection(mt5, cmd, info, response, result):
     if int(getattr(position, 'type', -1)) != position_type:
         raise ValueError('Sniper fill protection: position direction changed; initial quote protection remains attached')
     fill_price = float(getattr(position, 'price_open', float('nan')))
+    position_volume = float(getattr(position, 'volume', float('nan')))
+    if (not math.isfinite(position_volume) or abs(position_volume - ack_volume) > tolerance
+            or not math.isfinite(fill_price) or fill_price <= 0
+            or abs(fill_price - weighted_fill) > float(info.trade_tick_size) * 1e-6):
+        raise ValueError('Sniper fill protection: physical position average/volume does not reconcile to exact order Deals; initial quote protection remains attached')
     levels = sniper_levels_from_fill(
         info, side, fill_price,
         float(cmd['signal']['stop_distance']),
