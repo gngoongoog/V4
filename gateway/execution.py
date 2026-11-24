@@ -742,6 +742,28 @@ class BrokerExecutor:
             result['price'] = sum(p * float(d.volume) for p, d in zip(prices, matches)) / volume
             result['fill_time_ms'] = min(times)
             result['position_id'] = positions[0]
+            # A previously ambiguous full Sniper fill may become visible in
+            # history only after the immediate send response. Retry the exact
+            # position-linked SLTP re-anchor during reconciliation; never mark
+            # the entry fully resolved while its requested fill geometry is
+            # still unverified.
+            signal = cmd.get('signal') or {}
+            coordination = signal.get('coordination') or {}
+            selection = coordination.get('selection') or {}
+            policy = coordination.get('sniper_price_distance_policy') or selection.get('policy')
+            if state == 'filled' and cmd.get('kind') == 'open' and policy == 'sniper-price-distance-v1':
+                try:
+                    info = mt5.symbol_info(cmd['symbol'])
+                    if info is None:
+                        raise ValueError('MT5 symbol contract unavailable for fill protection reconciliation')
+                    _apply_sniper_fill_protection(mt5, cmd, info, None, result)
+                except (ValueError,TypeError,KeyError,AttributeError,OverflowError,OSError,RuntimeError) as exc:
+                    result['state'] = 'unknown'
+                    result['sniper_fill_protection'] = dict(
+                        state='unverified', reason=str(exc),
+                        initial_quote_protection_retained=True,
+                    )
+                    result['reason'] = str(exc) + '; fill-relative protection remains unverified; no entry resend'
             # Recovery can restore booked evidence, never the unobserved quote path.
             result['reconciled_ms'] = clock_ms()
             final_account = mt5.account_info()
@@ -1301,7 +1323,11 @@ class BrokerExecutor:
                         _apply_sniper_fill_protection(mt5, cmd, info, response, result)
                     except (ValueError,TypeError,KeyError,AttributeError,OverflowError,OSError,RuntimeError) as exc:
                         result.update(state='unknown',
-                                      reason=str(exc)+'; no second entry send will be attempted')
+                                      reason=str(exc)+'; no second entry send will be attempted',
+                                      sniper_fill_protection=dict(
+                                          state='unverified', reason=str(exc),
+                                          initial_quote_protection_retained=True,
+                                      ))
                 if deal_id<=0 and code in (10009,10010):
                     result['reason']='Broker retcode acknowledges submission but deal ticket is unavailable; await exact MT5 history reconciliation'
             result['acknowledged_ms']=clock_ms()
