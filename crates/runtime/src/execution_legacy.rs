@@ -859,10 +859,6 @@ CREATE TABLE IF NOT EXISTS broker_signal_log(id INTEGER PRIMARY KEY,context TEXT
             }
             let decision_us = started.elapsed().as_micros() as u64;
             let mut gates = vec![];
-            if b.id=="system" && c.trading.mode==TradingMode::Sniper
-                && !t.point.is_some_and(|p|c.trading.sniper_pip_points_match(p)) {
-                gates.push("القناص: عدد نقاط MT5 لكل pip لا يطابق سعر pip ونقطة الوسيط؛ راجع إعدادات القناص");
-            }
             let netting_sql=format!("SELECT EXISTS(SELECT 1 FROM broker_commands WHERE context=?1 AND brain<>?2 AND {PENDING_BROKER_SQL})");
             if t.margin_mode!=Some(2)&&db.query_row(&netting_sql,params![key,b.id],|r|r.get::<_,bool>(0))?{gates.push("Netting: أمر لعقل آخر لم تتم تسويته");}
 

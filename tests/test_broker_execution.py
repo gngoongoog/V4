@@ -9,7 +9,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'gateway'))
 from execution import BrokerExecutor,clock_ms,round_trip_commission,size_to_stop_risk
 
 class Broker:
-    TRADE_ACTION_DEAL=1; ORDER_TYPE_BUY=0; ORDER_TYPE_SELL=1; POSITION_TYPE_BUY=0
+    TRADE_ACTION_DEAL=1; TRADE_ACTION_SLTP=6; ORDER_TYPE_BUY=0; ORDER_TYPE_SELL=1; POSITION_TYPE_BUY=0
     ORDER_TIME_GTC=0; ORDER_FILLING_FOK=0; ORDER_FILLING_IOC=1; ORDER_FILLING_RETURN=2
     ACCOUNT_MARGIN_MODE_RETAIL_HEDGING=2; SYMBOL_TRADE_EXECUTION_MARKET=2
     DEAL_TYPE_BUY=0; DEAL_TYPE_SELL=1; DEAL_ENTRY_IN=0; DEAL_ENTRY_OUT=1; DEAL_ENTRY_OUT_BY=3
@@ -39,6 +39,12 @@ class Broker:
     def order_send(self,r):
         self.sends.append(r)
         if self.raise_send:raise RuntimeError('network failure after submit')
+        if r.get('action')==self.TRADE_ACTION_SLTP:
+            matches=[p for p in self.positions if int(getattr(p,'ticket',0))==int(r['position'])]
+            if len(matches)!=1:return N(retcode=10036,comment='position not found')
+            matches[0].sl=r['sl'];matches[0].tp=r['tp']
+            return N(retcode=self.code,comment='broker',order=55,deal=self.reply_deal,
+                     volume=matches[0].volume,price=matches[0].price_open)
         return N(retcode=self.code,comment='broker',order=55,deal=self.reply_deal,volume=r['volume'],price=r['price'])
 
 def command():

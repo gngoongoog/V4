@@ -47,8 +47,14 @@ pub struct TradingConfig {
     pub demo_flexible: bool,
     /// Demo-only prospective exit learning; no effect on already open positions.
     pub adaptive_exits: bool,
+    /// Legacy fields retained only so older saved configurations still deserialize.
+    /// New Sniper execution uses quoted-price distances below.
     pub sniper_target_points: f64,
     pub sniper_stop_points: f64,
+    pub sniper_target_price_distance: f64,
+    pub sniper_stop_price_distance: f64,
+    pub sniper_min_target_price_distance: f64,
+    pub sniper_max_target_price_distance: f64,
     pub sniper_cooldown_seconds: u64,
     pub sniper_max_hold_seconds: u64,
     pub pip_points: f64,
@@ -73,6 +79,10 @@ impl Default for TradingConfig {
             adaptive_exits: true,
             sniper_target_points: 50.,
             sniper_stop_points: 80.,
+            sniper_target_price_distance: 0.50,
+            sniper_stop_price_distance: 0.80,
+            sniper_min_target_price_distance: 0.20,
+            sniper_max_target_price_distance: 1.00,
             sniper_cooldown_seconds: 0,
             sniper_max_hold_seconds: 120,
             pip_points: 10.,
@@ -106,20 +116,19 @@ impl TradingConfig {
             return Err("Trading priority has conflicting execution owners".into());
         }
         for (name, v, min, max) in [
-            ("Target points", self.sniper_target_points, 1., 100_000.),
-            ("Stop points", self.sniper_stop_points, 1., 100_000.),
-            ("Points per pip", self.pip_points, 1., 1000.),
-            ("Sniper pip price", self.sniper_pip_price, 0.00001, 1000.),
+            ("Sniper target price distance", self.sniper_target_price_distance, 0.00001, 100_000.),
+            ("Sniper stop price distance", self.sniper_stop_price_distance, 0.00001, 100_000.),
+            ("Sniper minimum target price distance", self.sniper_min_target_price_distance, 0.00001, 100_000.),
+            ("Sniper maximum target price distance", self.sniper_max_target_price_distance, 0.00001, 100_000.),
+            ("Legacy pip price for cost-display compatibility", self.sniper_pip_price, 0.00001, 1000.),
             ("Cost fraction", self.max_cost_fraction, 0.01, 0.9),
-            ("Adaptive min target pips", self.sniper_min_target_pips, 0.1, 1000.),
-            ("Adaptive max target pips", self.sniper_max_target_pips, 0.1, 1000.),
         ] {
             if !v.is_finite() || !(min..=max).contains(&v) {
                 return Err(format!("{name} must be {min}–{max}"));
             }
         }
-        if self.sniper_max_target_pips <= self.sniper_min_target_pips {
-            return Err("Adaptive Sniper max target must exceed min target in pips".into());
+        if self.sniper_max_target_price_distance <= self.sniper_min_target_price_distance {
+            return Err("Adaptive Sniper maximum price distance must exceed minimum".into());
         }
         if !(0..=3600).contains(&self.sniper_cooldown_seconds) {
             return Err("Cooldown must be 0–3600 seconds".into());
@@ -137,14 +146,14 @@ impl TradingConfig {
             TradingMode::Sniper => self.sniper_max_hold_seconds * 1000,
         }
     }
-    pub fn geometry(&self, atr: f64, point: f64) -> (f64, f64) {
+    pub fn geometry(&self, atr: f64, _point: f64) -> (f64, f64) {
         match self.mode {
             TradingMode::Expert => (1.5 * atr, 3. * atr),
             TradingMode::Scalping => (1.2 * atr, 1.68 * atr),
             TradingMode::Swing => (2. * atr, 5. * atr),
             TradingMode::Sniper => (
-                self.sniper_stop_points * point,
-                (self.sniper_target_points / self.pip_points) * self.sniper_pip_price,
+                self.sniper_stop_price_distance,
+                self.sniper_target_price_distance,
             ),
         }
     }
@@ -243,7 +252,7 @@ pub fn costs(t: &Telemetry, c: &Config, lots: f64, now: u64) -> Result<CostPrevi
         sell_break_even_ask: ask - break_even_points * point,
         commission_round_trip_per_lot: c.risk.commission_per_lot,
         slippage_ticks_per_side: c.risk.slippage_ticks,
-        desired_net_target_money: c.trading.sniper_target_points / c.trading.pip_points * c.trading.sniper_pip_price / tick * profit * lots,
+        desired_net_target_money: c.trading.sniper_target_price_distance / tick * profit * lots,
     };
     if [total, break_even_points, r.buy_break_even_bid, r.sell_break_even_ask, r.desired_net_target_money]
         .iter()
@@ -540,17 +549,18 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_pip_controls_validate_and_legacy_serialization_remains_compatible() {
+    fn price_distance_controls_validate_and_legacy_serialization_remains_compatible() {
         let old=r#"{"mode":"sniper","sniper_brain":"learner","sniper_target_points":50,"pip_points":10}"#;
         let c:TradingConfig=serde_json::from_str(old).unwrap();
         assert_eq!(c.sniper_target_mode,SniperTargetMode::Fixed);
-        assert_eq!(c.sniper_target_points/c.pip_points,5.);
+        assert_eq!(c.sniper_target_price_distance,0.50);
+        assert_eq!(c.sniper_stop_price_distance,0.80);
         let mut a=c.clone();a.sniper_target_mode=SniperTargetMode::Adaptive;
-        a.sniper_min_target_pips=3.;a.sniper_max_target_pips=11.;
+        a.sniper_min_target_price_distance=0.30;a.sniper_max_target_price_distance=0.90;
         a.validate().unwrap();
         assert_eq!(serde_json::to_value(&a).unwrap()["sniper_target_mode"],"adaptive");
-        a.sniper_max_target_pips=3.;assert!(a.validate().is_err());
-        a.sniper_max_target_pips=f64::INFINITY;assert!(a.validate().is_err());
+        a.sniper_max_target_price_distance=0.30;assert!(a.validate().is_err());
+        a.sniper_max_target_price_distance=f64::INFINITY;assert!(a.validate().is_err());
     }
     #[test]
     fn proportional_costs_without_double_spread() {
@@ -608,7 +618,7 @@ mod tests {
         assert!((sniper_target_from_entry(&narrow, 0.50).unwrap() - 0.50).abs() < 1e-8);
     }
     #[test]
-    fn fixed_gold_pips_do_not_change_when_broker_digits_change() {
+    fn fixed_price_distance_does_not_change_when_broker_digits_change() {
         let mut c=Config::default();
         c.trading.mode=TradingMode::Sniper;
         for point in [0.001,0.01,0.1] {
@@ -619,8 +629,8 @@ mod tests {
             let preview=costs(&t,&c,0.1,1000).unwrap();
             assert!((preview.pip_price-0.1).abs()<1e-10);
             assert!((preview.spread_pips-2.).abs()<1e-8);
-            for (pips,distance) in [(5.,0.5),(10.,1.)] {
-                c.trading.sniper_target_points=pips*c.trading.pip_points;
+            for distance in [0.25,0.50,1.00] {
+                c.trading.sniper_target_price_distance=distance;
                 assert!((c.trading.geometry(1.,point).1-distance).abs()<1e-8);
                 assert!((sniper_target_from_entry(&preview,distance).unwrap()-distance).abs()<1e-8);
             }

@@ -53,8 +53,8 @@ pub fn adapt(
     // Tick monetary values are frozen per experience, not policy identity: conversion
     // changes must not restart the same strategy study on every quote.
     identity.as_array_mut().unwrap().push(
-        json!({"definition":definition,"sniper_target":c.trading.sniper_target_points,
-        "sniper_stop":c.trading.sniper_stop_points,"sniper_hold":c.trading.sniper_max_hold_seconds, "sniper_pip_price":c.trading.sniper_pip_price,
+        json!({"definition":definition,"sniper_target_price_distance":c.trading.sniper_target_price_distance,
+        "sniper_stop_price_distance":c.trading.sniper_stop_price_distance,"sniper_hold":c.trading.sniper_max_hold_seconds,
         "commission":c.risk.commission_per_lot,"slippage":c.risk.slippage_ticks,"tick":t.tick_size}),
     );
     // Keep prior studies intact; new, known market regimes get their own comparison.
@@ -1098,7 +1098,7 @@ mod tests {
         t.point = Some(0.1);
         let mut c = Config::default();
         c.trading.mode = braintrade_domain::trading::TradingMode::Sniper;
-        c.trading.sniper_target_points = 19.;
+        c.trading.sniper_target_price_distance = 0.19;
         c.trading.max_cost_fraction = 0.15;
         c.risk.commission_per_lot = 1.;
         c.risk.slippage_ticks = 0.;
@@ -1141,10 +1141,10 @@ mod tests {
         let b=BrainConfig{id:"system".into(),..Default::default()};
         let mut entry=signal();
         entry.coordination=Some(json!({"selection":{
-            "brain":"sniper_learner","policy":"sniper-ticks-v1",
-            "sniper_target_mode":"adaptive","sniper_target_arm":2,"sniper_target_pips":6.0,
+            "brain":"sniper_learner","policy":"sniper-price-distance-v1",
+            "sniper_target_mode":"adaptive","sniper_target_arm":2,"sniper_target_price_distance":6.0,
             "sniper_definition":"fixture","sniper_regime":"directional_normal",
-            "definition":["sniper-ticks-v1","impulse"],"timeframe":"M1"
+            "definition":["sniper-price-distance-v1","impulse"],"timeframe":"M1"
         }}));
         let before_target=entry.target_distance;
         let mut baseline=entry.clone();

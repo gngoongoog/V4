@@ -43,7 +43,9 @@ jobs:
           path: test-output/
   research:
     if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[build-only]')
-    runs-on: ubuntu-latest
+    # Playwright 1.51.1 has no Ubuntu 26.04 browser dependency bundle.
+    # Pin this legacy report-browser job to a supported LTS runner.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4

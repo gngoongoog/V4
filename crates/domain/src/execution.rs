@@ -199,7 +199,9 @@ pub fn coordinate(mut primary:Signal,c:&Config,votes:Vec<(BrainConfig,Signal,Lea
     let broker_members=members.iter().filter(|v|v["broker_samples"].as_u64().unwrap_or(0)>0).count();
     primary.reason=format!("{} | Intelligence V3: شراء {:.2} / بيع {:.2}؛ regime={}؛ quality {:.2}؛ uncertainty {:.2}؛ {} أعضاء؛ {} بتعلم MT5 Demo",primary.reason,buy,sell,intelligence.regime,intelligence.execution_quality,uncertainty,members.len(),broker_members);
     primary.coordination=Some(serde_json::json!({
-        "version":"braintrade-intelligence-v3","trading_mode":c.trading.mode,"buy":buy,"sell":sell,"net":net,"required_net":required_net,"meta_edge":meta_edge,"evidence_confidence":evidence_confidence,"uncertainty":uncertainty,"intelligence":intelligence,"members":members,
+        "version":"braintrade-intelligence-v3","trading_mode":c.trading.mode,
+        "sniper_price_distance_policy":if c.trading.mode==TradingMode::Sniper {"sniper-price-distance-v1"} else {""},
+        "buy":buy,"sell":sell,"net":net,"required_net":required_net,"meta_edge":meta_edge,"evidence_confidence":evidence_confidence,"uncertainty":uncertainty,"intelligence":intelligence,"members":members,
         "reward_model":"Reward V2: net broker/forward R after costs, bounded for robust weighting",
         "recency_model":"time-decayed evidence; recent observations contribute more than old observations",
         "regime_model":"trend/range plus volatility regime selects relevant evidence when available",

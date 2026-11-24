@@ -545,7 +545,7 @@ fn open_learning_commands(db: &Connection, key: &str) -> Result<Vec<(String, Str
              OR (
                  c.brain='system'
                  AND json_extract(c.payload,'$.signal.coordination.selection.brain')='sniper_learner'
-                 AND json_extract(c.payload,'$.signal.coordination.selection.policy')='sniper-ticks-v1'
+                 AND json_extract(c.payload,'$.signal.coordination.selection.policy')='sniper-price-distance-v1'
                  AND NOT EXISTS(
                      SELECT 1 FROM coordinator_broker_samples s
                      WHERE s.context=c.context AND s.brain='sniper_learner'
@@ -662,7 +662,7 @@ fn sync_demo_broker_evidence(db: &Connection, t: &Telemetry, observed_ms:u64) ->
         if owner == "system"
             && mode == TradingMode::Sniper
             && selected == Some(braintrade_domain::sniper::ID)
-            && coordination["selection"]["policy"] == "sniper-ticks-v1"
+            && coordination["selection"]["policy"] == "sniper-price-distance-v1"
             && !members.iter().any(|m| m["id"] == braintrade_domain::sniper::ID)
         {
             members.push(json!({
@@ -2005,11 +2005,11 @@ mod tests {
                 "signal":{"side":1,"bar_time":10,"stop_distance":0.2,
                     "target_distance":0.2,"reason":"synthetic broker acceptance",
                     "coordination":{"trading_mode":"sniper",
-                        "selection":{"brain":"sniper_learner","policy":"sniper-ticks-v1",
+                        "selection":{"brain":"sniper_learner","policy":"sniper-price-distance-v1",
                             "timeframe":"M1","sniper_policy":"impulse",
                             "sniper_definition":"fixture","sniper_regime":"directional_normal",
                             "sniper_target_mode":"adaptive","sniper_target_arm":2,
-                            "sniper_target_pips":5.0}}},
+                            "sniper_target_price_distance":5.0}}},
                 "learning":{"trading_mode":"sniper","timeframe":"M1",
                     "report_id":"","tick_size":0.01,"tick_value_loss":1.0,
                     "tick_value_profit":1.0,"weight_at_entry":1.0}});
@@ -2104,11 +2104,11 @@ mod tests {
                 "coordination":{
                     "trading_mode":"sniper",
                     "selection":{
-                        "brain":"sniper_learner","policy":"sniper-ticks-v1",
+                        "brain":"sniper_learner","policy":"sniper-price-distance-v1",
                         "timeframe":"M1","sniper_policy":"impulse",
                         "sniper_definition":"fixture-pip-setup","sniper_regime":"directional_normal",
                         "sniper_target_mode":"adaptive","sniper_target_arm":2,
-                        "sniper_target_pips":5.0
+                        "sniper_target_price_distance":5.0
                     }
                 }
             },

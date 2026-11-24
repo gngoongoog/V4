@@ -46,9 +46,8 @@ function nodes(node,out=[]){
 let sourceData={config:{
  trading:{mode:'sniper',priority_enabled:true,sniper_active:true,fallback_mode:'expert',
  sniper_style:'auto',sniper_brain:'classic',sniper_target_mode:'fixed',
- sniper_target_points:50,sniper_stop_points:80,pip_points:10,sniper_pip_price:0.1,
- sniper_cooldown_seconds:0,sniper_max_hold_seconds:120,sniper_min_target_pips:2,
- sniper_max_target_pips:10,max_cost_fraction:0.45,demo_flexible:true,adaptive_exits:true},
+ sniper_target_points:50,sniper_stop_points:80,sniper_target_price_distance:0.5,sniper_stop_price_distance:0.8,sniper_min_target_price_distance:0.2,sniper_max_target_price_distance:1.0,pip_points:10,sniper_pip_price:0.1,
+ sniper_cooldown_seconds:0,sniper_max_hold_seconds:120,sniper_min_target_pips:2,sniper_max_target_pips:10,max_cost_fraction:0.45,demo_flexible:true,adaptive_exits:true},
  risk:{slippage_ticks:2}},
  commission_editor:{amount:7,basis:'round_trip',
  account:{login:123,server:'Exness-MT5Trial15',currency:'USD',symbol:'XAUUSDr'}}};
@@ -75,17 +74,14 @@ const flush=async()=>{await new Promise(resolve=>setImmediate(resolve));};
 (async()=>{
  render();
  let view=render();
- assert.equal(findInput(view,'sniper fixed target pips').props.value,'5');
- findInput(view,'sniper fixed target pips').props.onChange({target:{value:'7.5'}});
+ assert.equal(findInput(view,'sniper target price distance').props.value,'0.5');
+ findInput(view,'sniper target price distance').props.onChange({target:{value:'0.75'}});
  view=render();
- assert.equal(findInput(view,'sniper fixed target pips').props.value,'7.5');
+ assert.equal(findInput(view,'sniper target price distance').props.value,'0.75');
  const beforeDisconnect=sourceData;sourceData=null;
- view=render();assert.equal(findInput(view,'sniper fixed target pips').props.value,'7.5','Disconnect must not erase the draft');
+ view=render();assert.equal(findInput(view,'sniper target price distance').props.value,'0.75','Disconnect must not erase the draft');
  sourceData=beforeDisconnect;view=render();
- assert.equal(findInput(view,'sniper fixed target pips').props.value,'7.5','Same-account reconnect must retain the draft');
- findInput(view,'sniper points per pip').props.onChange({target:{value:'20'}});
- view=render();
- assert.equal(findInput(view,'sniper fixed target pips').props.value,'7.5','Pip conversion must retain user-selected target');
+ assert.equal(findInput(view,'sniper target price distance').props.value,'0.75','Same-account reconnect must retain the draft');
  findInput(view,'sniper cooldown seconds').props.onChange({target:{value:''}});
  view=render();
  saveButton(view).props.onClick();await flush();
@@ -99,15 +95,15 @@ const flush=async()=>{await new Promise(resolve=>setImmediate(resolve));};
  view=render();
  saveButton(view).props.onClick();await flush();
  assert.equal(calls,1);
- assert.equal(latest.trading.sniper_target_points,150);
- assert.equal(latest.trading.pip_points,20);
- assert.equal(typeof latest.trading.sniper_target_points,'number','Core expects JSON numbers, not numeric strings');
+ assert.equal(latest.trading.sniper_target_price_distance,0.75);
+ assert.equal(latest.trading.sniper_stop_price_distance,0.8);
+ assert.equal(typeof latest.trading.sniper_target_price_distance,'number','Core expects JSON numbers, not numeric strings');
  assert.equal(latest.trading.sniper_cooldown_seconds,3);
  assert.equal(latest.commission_per_lot,0);
  assert.equal(latest.account.symbol,'XAUUSDr');
  view=render();
  assert.equal(findInput(view,'sniper cooldown seconds').props.value,'3','Rejected save must retain unsaved edits');
- assert.equal(findInput(view,'sniper fixed target pips').props.value,'7.5');
+ assert.equal(findInput(view,'sniper target price distance').props.value,'0.75');
  assert(nodes(view).some(n=>n.props?.role==='alert'),'Rejected Core save must be surfaced');
  shouldReject=false;
  saveButton(view).props.onClick();await flush();
@@ -116,8 +112,7 @@ const flush=async()=>{await new Promise(resolve=>setImmediate(resolve));};
  sourceData={...sourceData,config:{...sourceData.config,trading:{...latest.trading}} ,
   commission_editor:{...sourceData.commission_editor,amount:latest.commission_per_lot}};
  render();view=render();
- assert.equal(findInput(view,'sniper points per pip').props.value,'20');
- assert.equal(Number(findInput(view,'sniper fixed target pips').props.value),7.5);
+ assert.equal(Number(findInput(view,'sniper target price distance').props.value),0.75);
  assert.equal(findInput(view,'sniper cooldown seconds').props.value,'3');
  assert.equal(findInput(view,'commission per lot').props.value,'0');
  // A background Core revision, account or risk change must not erase edits or
@@ -138,12 +133,5 @@ const flush=async()=>{await new Promise(resolve=>setImmediate(resolve));};
  view=render();saveButton(view).props.onClick();await flush();
  assert.equal(calls,3);assert.equal(latest.slippage_ticks,3);
  assert.equal(latest.trading.sniper_cooldown_seconds,9);
- brokerPoint=.01;view=render();
- findInput(view,'sniper cooldown seconds').props.onChange({target:{value:'10'}});
- view=render();saveButton(view).props.onClick();await flush();
- assert.equal(calls,3,'Mismatched pip and broker point must not be saved');
- view=render();findInput(view,'sniper pip price').props.onChange({target:{value:'0.2'}});
- view=render();saveButton(view).props.onClick();await flush();
- assert.equal(calls,4,'Corrected pip geometry should save');
- console.log('PASS: edits, pip geometry, rejection, reread and stale draft conflict');
+ console.log('PASS: price-distance edits, rejection, reread and stale draft conflict');
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -49,7 +49,7 @@ class FullSystemDataflowAudit(unittest.TestCase):
         self.assertIn("now,cutoff", self.engine)
         self.assertIn('owner == "system"', self.coordinator)
         self.assertIn('selected == Some(braintrade_domain::sniper::ID)', self.coordinator)
-        self.assertIn('coordination["selection"]["policy"] == "sniper-ticks-v1"', self.coordinator)
+        self.assertIn('coordination["selection"]["policy"] == "sniper-price-distance-v1"', self.coordinator)
         self.assertIn("mt5_demo_broker", self.coordinator)
         self.assertIn("sniper_tp_preserved", self.coordinator)
         self.assertIn("fn coordinator_owned_sniper_close_trains_the_specialist_from_exact_demo_deals_once()", self.coordinator)

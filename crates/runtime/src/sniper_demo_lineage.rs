@@ -21,7 +21,7 @@ fn context_closed(sample:&Value,position:u64,cmd_id:&str,closed_ms:u64)->bool{
        && sample["position_id"].as_u64()==Some(position)
        && sample["closed_ms"].as_u64()==Some(closed_ms)
        && sample["selection"]["brain"]=="sniper_learner"
-       && sample["selection"]["policy"]=="sniper-ticks-v1"
+       && sample["selection"]["policy"]=="sniper-price-distance-v1"
        && positive(&sample["closed_volume"]).is_some()
        && [ "gross","commission","swap","fee","net"].iter().all(|k|finite(&sample[k]).is_some())
        && {let calculated=["gross","commission","swap","fee"].iter()
@@ -98,7 +98,7 @@ pub fn report(db:&Connection,context:&str)->Result<Value>{
                                     && cmd["target"]=="demo"
                                     && cmd["signal"]["key"]==obs["signal_key"]
                                     && cmd["signal"]["coordination"]["selection"]["brain"]=="sniper_learner"
-                                    && cmd["signal"]["coordination"]["selection"]["policy"]=="sniper-ticks-v1";
+                                    && cmd["signal"]["coordination"]["selection"]["policy"]=="sniper-price-distance-v1";
                                 if !valid{"missing_or_wrong_command"}
                                 else {
                                     let mut statement=db.prepare("SELECT position_id,closed_ms,payload FROM coordinator_broker_samples
@@ -185,7 +185,7 @@ mod tests{
         let payload=json!({"target":"demo","trading_mode":mode,
             "signal":{"key":format!("tick:{time}"),"side":1,
                 "coordination":{"selection":{"brain":"sniper_learner",
-                    "policy":"sniper-ticks-v1","sniper_policy":"impulse",
+                    "policy":"sniper-price-distance-v1","sniper_policy":"impulse",
                     "sniper_definition":"rev1"}}}});
         db.execute("INSERT INTO broker_commands VALUES(?1,?2,'system','open',?3,'observed',?4,?5)",
             params![id,ctx,time,payload.to_string(),json!({"deal":deal}).to_string()]).unwrap();
@@ -196,7 +196,7 @@ mod tests{
             "position_id":pos,"closed_ms":10000,"closed_volume":0.01,
             "executed_side":1,"gross":net+0.07,
             "commission":-0.07,"swap":0.0,"fee":0.0,"net":net,
-            "selection":{"brain":"sniper_learner","policy":"sniper-ticks-v1",
+            "selection":{"brain":"sniper_learner","policy":"sniper-price-distance-v1",
                 "sniper_policy":"impulse","sniper_definition":"rev1"}});
         db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,?3,'sniper_learner',10000,?4)",
             params![format!("source:{pos}"),pos,ctx,p.to_string()]).unwrap();

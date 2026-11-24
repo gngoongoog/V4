@@ -76,7 +76,17 @@ class NativeUiContract(unittest.TestCase):
                     else:
                         self.assertRegex(element,r"\bchecked\s*<=>")
         # Catch missing fields silently disappearing from nested layouts.
-        self.assertEqual(total,{"Button":112,"ComboBox":30,"LineEdit":49,"CheckBox":14})
+        self.assertEqual(total,{"Button":112,"ComboBox":30,"LineEdit":48,"CheckBox":14})
+
+    def test_sniper_uses_direct_price_distance_not_user_pip_controls(self):
+        section=self.dashboard.split('3  •  إعداد القناص ومسافات السعر',1)[1].split('if root.page == 15:',1)[0]
+        self.assertIn('sniper-target: "0.50"',self.dashboard)
+        self.assertIn('sniper-stop: "0.80"',self.dashboard)
+        self.assertIn('هدف الحركة السعرية (فرق السعر)',section)
+        self.assertIn('وقف الحركة السعرية (فرق السعر)',section)
+        self.assertNotRegex(section,r'(?i)\bPip\b|\bPoints\b|\bpip-price\b')
+        self.assertIn('أدنى مسافة هدف متعلّم',section)
+        self.assertIn('أعلى مسافة هدف متعلّم',section)
 
     def test_premium_native_dashboard_keeps_real_market_provenance(self):
         main=(RUST / "main.rs").read_text(encoding="utf-8")

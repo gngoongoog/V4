@@ -84,7 +84,7 @@ pub fn refresh_gated(engine: &mut Engine, db: &Connection, t: &Telemetry, now: u
             // Core decision time. Corrupt JSON is skipped, not a fatal error.
             let Some(p)=verified_sniper_admission(&row,&context,evidence_time) else{continue;};
             let s = &p["selection"];
-            if s["brain"] != ID || s["policy"] != "sniper-ticks-v1" { continue; }
+            if s["brain"] != ID || s["policy"] != "sniper-price-distance-v1" { continue; }
             let Some(policy) = POLICIES.iter().position(|name| s["sniper_policy"] == *name) else { continue; };
             let (Some(definition),Some(regime),Some(reward),Some(net)) =
                 (s["sniper_definition"].as_str(),s["sniper_regime"].as_str(),p["reward"].as_f64(),p["net"].as_f64()) else { continue; };
@@ -101,7 +101,7 @@ pub fn refresh_gated(engine: &mut Engine, db: &Connection, t: &Telemetry, now: u
             // No booked fill => no completed coordinator_broker_samples row.
             if s["sniper_target_mode"]=="adaptive" && p["sniper_tp_preserved"]==true {
                 if let Some(arm)=s["sniper_target_arm"].as_u64().filter(|arm|(*arm as usize)<TARGET_ARMS) {
-                    if s["sniper_target_pips"].as_f64().is_some_and(|p|p.is_finite()&&p>0.) {
+                    if s["sniper_target_price_distance"].as_f64().is_some_and(|p|p.is_finite()&&p>0.) {
                         targets.entry((definition.into(),regime.into(),POLICIES[policy].into()))
                             .or_default()[arm as usize].learn(reward,net);
                     }
@@ -134,7 +134,7 @@ pub fn frozen_training_checkpoint(db:&Connection,t:&Telemetry,model:&Engine,now:
         let Some(p)=verified_sniper_admission(&row,&context,now) else{continue;};
         let s=&p["selection"];
         if p["evidence_source"]!="mt5_demo_broker"||p["trading_mode"]!="sniper"
-            ||s["brain"]!=ID||s["policy"]!="sniper-ticks-v1"
+            ||s["brain"]!=ID||s["policy"]!="sniper-price-distance-v1"
             ||!POLICIES.iter().any(|item|s["sniper_policy"]==*item)
             ||s["sniper_definition"].as_str().is_none()
             ||s["sniper_regime"].as_str().is_none()
@@ -145,7 +145,7 @@ pub fn frozen_training_checkpoint(db:&Connection,t:&Telemetry,model:&Engine,now:
         earliest=Some(earliest.map_or(closed,|v|v.min(closed)));
         if s["sniper_target_mode"]=="adaptive"&&p["sniper_tp_preserved"]==true
             &&s["sniper_target_arm"].as_u64().is_some_and(|n|(n as usize)<TARGET_ARMS)
-            &&s["sniper_target_pips"].as_f64().is_some_and(|p|p.is_finite()&&p>0.) {
+            &&s["sniper_target_price_distance"].as_f64().is_some_and(|p|p.is_finite()&&p>0.) {
             targets+=1;
         }
     }
@@ -215,7 +215,7 @@ mod tests {
         let record=json!({"evidence_source":"mt5_demo_broker","trading_mode":"sniper",
             "gross":2.0,"commission":0.0,"swap":0.0,"fee":0.0,
             "closed_volume":0.1,"net":2.,"net_per_lot":20.0,
-            "risk_money":0.0,"r_multiple":0.0,"reward":0.25,"selection":{"brain":ID,"policy":"sniper-ticks-v1",
+            "risk_money":0.0,"r_multiple":0.0,"reward":0.25,"selection":{"brain":ID,"policy":"sniper-price-distance-v1",
             "sniper_policy":"impulse","sniper_definition":"A","sniper_regime":"B"}});
         db.execute("INSERT INTO coordinator_broker_samples VALUES('first',1,?1,'sniper_learner',1000,?2)",
             rusqlite::params![ctx,record.to_string()]).unwrap();
@@ -250,7 +250,7 @@ mod tests {
                 "gross":-2.0,"commission":0.0,"swap":0.0,"fee":0.0,
                 "closed_volume":0.1,"net":-2.,"net_per_lot":-20.0,
                 "risk_money":0.0,"r_multiple":0.0,"reward":-0.25,
-                "selection":{"brain":ID,"policy":"sniper-ticks-v1","sniper_policy":"impulse","sniper_definition":"config-A","sniper_regime":"choppy"}});
+                "selection":{"brain":ID,"policy":"sniper-price-distance-v1","sniper_policy":"impulse","sniper_definition":"config-A","sniper_regime":"choppy"}});
             db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,?3,?4,1000,?5)",rusqlite::params![i.to_string(),i,account,brain,p.to_string()]).unwrap();
         }
         let mut e=Engine::default();
@@ -271,7 +271,7 @@ mod tests {
             "gross":2.0,"commission":-0.5,"swap":0.0,"fee":0.0,
             "net":1.5,"net_per_lot":15.0,"closed_volume":0.1,
             "risk_money":0.0,"r_multiple":0.0,"reward":0.25,
-            "selection":{"brain":ID,"policy":"sniper-ticks-v1",
+            "selection":{"brain":ID,"policy":"sniper-price-distance-v1",
                 "sniper_policy":"impulse","sniper_definition":"A","sniper_regime":"B"}});
         db.execute("INSERT INTO coordinator_broker_samples VALUES('fixture',1,?1,'sniper_learner',1000,?2)",rusqlite::params![ctx,record.to_string()]).unwrap();
         stamp_fixture_sniper(&db,&ctx,2000);
@@ -294,7 +294,7 @@ mod tests {
             "gross":2.0,"commission":-0.5,"swap":0.0,"fee":0.0,
             "net":1.5,"net_per_lot":15.0,"closed_volume":0.1,
             "risk_money":0.0,"r_multiple":0.0,"reward":0.25,
-            "selection":{"brain":ID,"policy":"sniper-ticks-v1",
+            "selection":{"brain":ID,"policy":"sniper-price-distance-v1",
                 "sniper_policy":"impulse","sniper_definition":"A","sniper_regime":"B"}});
         let mut corrupt=valid.clone();
         corrupt.as_object_mut().unwrap().remove("swap");
@@ -332,11 +332,11 @@ mod tests {
             "net":1.5,"net_per_lot":15.0,"closed_volume":0.1,
             "risk_money":5.0,"r_multiple":0.3,"reward":0.3_f64.tanh(),
             "sniper_tp_preserved":true,
-            "selection":{"brain":ID,"policy":"sniper-ticks-v1",
+            "selection":{"brain":ID,"policy":"sniper-price-distance-v1",
               "sniper_policy":"impulse","sniper_definition":"G5E",
               "sniper_regime":"directional_normal",
               "sniper_target_mode":"adaptive","sniper_target_arm":2,
-              "sniper_target_pips":6.0}
+              "sniper_target_price_distance":0.60}
         });
         let mut false_reward=valid.clone();false_reward["reward"]=json!(0.99);
         db.execute("INSERT INTO coordinator_broker_samples
@@ -377,9 +377,9 @@ mod tests {
                 "closed_volume":0.1,"net":1.2,"net_per_lot":12.0,
                 "risk_money":0.0,"r_multiple":0.0,"reward":0.25,
                 "sniper_tp_preserved":true,
-                "selection":{"brain":ID,"policy":"sniper-ticks-v1","sniper_policy":"impulse",
+                "selection":{"brain":ID,"policy":"sniper-price-distance-v1","sniper_policy":"impulse",
                     "sniper_definition":"config-P","sniper_regime":"directional_normal",
-                    "sniper_target_mode":mode,"sniper_target_arm":arm,"sniper_target_pips":6.0}});
+                    "sniper_target_mode":mode,"sniper_target_arm":arm,"sniper_target_price_distance":0.60}});
             db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,?3,?4,1000,?5)",
                 rusqlite::params![format!("pos-{id}"),id,ctx,brain,payload.to_string()]).unwrap();
         }
@@ -415,11 +415,11 @@ mod tests {
             "net":1.5,"closed_volume":0.1,"net_per_lot":15.,
             "risk_money":5.,"r_multiple":0.3,"reward":0.3_f64.tanh(),
             "sniper_tp_preserved":true,
-            "selection":{"brain":ID,"policy":"sniper-ticks-v1",
+            "selection":{"brain":ID,"policy":"sniper-price-distance-v1",
               "sniper_policy":"impulse","sniper_definition":"G6I",
               "sniper_regime":"directional_normal",
               "sniper_target_mode":"adaptive","sniper_target_arm":2,
-              "sniper_target_pips":6.}
+              "sniper_target_price_distance":0.60}
         });
         db.execute("INSERT INTO coordinator_broker_samples
             VALUES('pre-g6g',70,?1,'sniper_learner',1000,?2)",

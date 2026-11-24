@@ -11,8 +11,8 @@ pub const TARGET_ARMS: usize = 4;
 /// Four stationary arms inside the user-defined target bounds. Only real,
 /// fully closed Demo results for the chosen arm may change its score.
 pub fn target_candidates(c: &Config) -> [f64; TARGET_ARMS] {
-    let min = c.trading.sniper_min_target_pips;
-    let gap = c.trading.sniper_max_target_pips - min;
+    let min = c.trading.sniper_min_target_price_distance;
+    let gap = c.trading.sniper_max_target_price_distance - min;
     std::array::from_fn(|i| min + gap * (i as f64 / (TARGET_ARMS-1) as f64))
 }
 
@@ -44,11 +44,11 @@ pub fn selected(c: &Config) -> bool {
 }
 pub fn definition(t: &Telemetry, c: &Config) -> String {
     // Monetary tick conversion changes must not fragment the same policy's history.
-    let mut definition = json!(["sniper-ticks-v1", c.trading.sniper_target_points, c.trading.sniper_stop_points,
-        c.trading.sniper_max_hold_seconds, c.risk.commission_per_lot,
-        c.risk.slippage_ticks, t.point, t.tick_size, c.trading.pip_points, c.trading.sniper_pip_price,
-        c.trading.sniper_target_mode, c.trading.sniper_min_target_pips,
-        c.trading.sniper_max_target_pips]);
+    let mut definition = json!(["sniper-price-distance-v1", c.trading.sniper_target_price_distance,
+        c.trading.sniper_stop_price_distance, c.trading.sniper_min_target_price_distance,
+        c.trading.sniper_max_target_price_distance, c.trading.sniper_max_hold_seconds,
+        c.risk.commission_per_lot, c.risk.slippage_ticks, t.point, t.tick_size,
+        c.trading.sniper_target_mode]);
     // Preserve existing Auto evidence; never mix a new style into that history.
     if c.trading.sniper_style != SniperStyle::Auto {
         definition.as_array_mut().unwrap().push(json!(c.trading.sniper_style));
@@ -121,7 +121,7 @@ impl Engine {
             Ok(cost) if t.symbol == c.symbol && t.tick_age_ms.is_some_and(|age| age <= 1000) => cost,
             _ => { self.reset_quotes(); s.reason = "القناص: بيانات السعر أو العقد غير مكتملة".into(); return s; }
         };
-        let (bid, ask, tick, point) = (t.bid.unwrap(), t.ask.unwrap(), t.tick_size.unwrap(), t.point.unwrap());
+        let (bid, ask, tick) = (t.bid.unwrap(), t.ask.unwrap(), t.tick_size.unwrap());
         let mid = (bid + ask) / 2.;
         if self.quotes.back().is_some_and(|q| now.saturating_sub(q.1) > 1000 || ts < q.0) { self.reset_quotes(); }
         if self.quotes.back().is_none_or(|q| ts > q.0) { self.quotes.push_back((ts, now, mid)); }
@@ -190,28 +190,28 @@ impl Engine {
         let probability = epsilon / candidates.len() as f64 + if chosen==best { 1.-epsilon } else { 0. };
         let adaptive = demo && c.trading.sniper_target_mode == SniperTargetMode::Adaptive;
         let arms = target_candidates(c);
-        let fixed_pips = c.trading.sniper_target_points / c.trading.pip_points;
+        let fixed_distance = c.trading.sniper_target_price_distance;
         let target_key=(def.clone(), regime.clone(), POLICIES[chosen].to_owned());
         let target_policies = self.target_models.get(&target_key).cloned().unwrap_or_default();
         let mut eligible = Vec::new();
+        let money_for_distance = |distance:f64| distance / tick * t.tick_value_profit.unwrap();
         if adaptive {
             for i in 0..TARGET_ARMS {
-                let desired=arms[i]*c.trading.sniper_pip_price/tick*t.tick_value_profit.unwrap();
+                let desired=money_for_distance(arms[i]);
                 if desired.is_finite() && desired>0. && cost.total/(cost.total+desired) <= c.trading.max_cost_fraction {
                     eligible.push(i);
                 }
             }
         }
-        let target_total: u64 = target_policies.iter().map(|p|p.samples).sum();
+        let target_total: u64 = target_policies.iter().map(|p| p.samples).sum();
         let mut target_arm: Option<usize> = None;
         let mut target_exploring=false;
-        let target_pips=if adaptive {
+        let target_distance=if adaptive {
             if eligible.is_empty() {
                 s.reason=format!(
-                    "القناص: لا هدف ضمن {:.2}–{:.2} pip يجتاز حصة التكلفة {:.0}% | سبريد {:.2} pip | عمولة {:.4}/لوت | انزلاق {:.2} tick/جهة | الإجمالي {:.4}/لوت. يمكن تعديل هدف pip أو نسبة التكلفة، لكن السبريد الحقيقي لا يمكن تجاهله",
-                    c.trading.sniper_min_target_pips, c.trading.sniper_max_target_pips,
-                    c.trading.max_cost_fraction*100.,cost.spread_pips,c.risk.commission_per_lot,
-                    c.risk.slippage_ticks,cost.total
+                    "القناص: لا توجد مسافة هدف ضمن {:.5}–{:.5} بسعر الأداة تجتاز حصة التكلفة {:.0}%. التكلفة {:.4}/لوت؛ لم يتم توسيع الهدف تلقائياً",
+                    c.trading.sniper_min_target_price_distance, c.trading.sniper_max_target_price_distance,
+                    c.trading.max_cost_fraction*100.,cost.total
                 );
                 return s;
             }
@@ -227,43 +227,39 @@ impl Engine {
             target_arm=Some(pick);
             arms[pick]
         } else {
-            let desired=fixed_pips*c.trading.sniper_pip_price/tick*t.tick_value_profit.unwrap();
+            let desired=money_for_distance(fixed_distance);
             if !desired.is_finite() || desired<=0. || cost.total/(cost.total+desired)>c.trading.max_cost_fraction {
                 s.reason=format!(
-                    "القناص: الهدف {:.2} pip لا يجتاز حصة التكلفة {:.0}% | السبريد {:.2} pip (حقيقي) | العمولة {:.4}/لوت | الانزلاق {:.2} tick/جهة | الإجمالي {:.4}/لوت. راجع هدف الربح وعمولة الحساب ولا تُخفّض السبريد الحقيقي",
-                    fixed_pips,c.trading.max_cost_fraction*100.,cost.spread_pips,
-                    c.risk.commission_per_lot,c.risk.slippage_ticks,cost.total
+                    "القناص: الهدف السعري {:.5} لا يجتاز حصة التكلفة {:.0}% | السبريد {:.5} | التكلفة {:.4}/لوت. لم يتم تغيير الهدف تلقائياً",
+                    fixed_distance,c.trading.max_cost_fraction*100.,cost.spread_price,cost.total
                 );
                 return s;
             }
-            fixed_pips
+            fixed_distance
         };
         s.side = sides[chosen];
-        s.stop_distance = (c.trading.sniper_stop_points*point).max(ask-bid+2.*tick);
-        // The shared broker-entry geometry intentionally excludes the spread
-        // from target distance: Ask/Bid entry already paid that spread once.
-        s.target_distance = match trading::sniper_target_from_entry(
-            &cost,
-            target_pips * c.trading.sniper_pip_price,
-        ) {
-            Ok(v) => v,
-            Err(error) => { s.side = 0; s.reason = error; return s; }
-        };
+        s.stop_distance = c.trading.sniper_stop_price_distance;
+        if s.stop_distance < spread + 2.0*tick {
+            s.side=0;
+            s.reason=format!("القناص: وقف {:.5} أقرب من الحد المطلوب للسبريد والتذبذب اللحظي {:.5}; لم يتم توسيعه",s.stop_distance,spread+2.0*tick);
+            return s;
+        }
+        s.target_distance = target_distance;
         s.ready = true;
-        s.reason = format!("القناص المتعلّم: {} | حركة {:.5} | كفاءة {:.2} | سبريد {:.5} | {} | هدف {:.2} pip {} | نتائج MT5 المغلقة {} / عينات الهدف {}",
-            if chosen==0 {"اندفاع مقاس"} else {"ارتداد بعد حركة"},movement,efficiency,spread,regime,target_pips,
-            if adaptive {"تجريبي مرن"} else {"ثابت"},total,target_total);
+        s.reason = format!("القناص المتعلّم: {} | حركة {:.5} | كفاءة {:.2} | سبريد {:.5} | {} | هدف سعري {:.5} {} | نتائج MT5 المغلقة {} / عينات الهدف {}",
+            if chosen==0 {"اندفاع مقاس"} else {"ارتداد بعد حركة"},movement,efficiency,spread,regime,target_distance,
+            if adaptive {"متكيّف"} else {"ثابت"},total,target_total);
         s.coordination = Some(json!({"version":"sniper-learner-v1","trading_mode":"sniper",
-            "selection":{"sniper_style":c.trading.sniper_style,"brain":ID,"timeframe":"M1","report_id":"","policy":"sniper-ticks-v1",
+            "selection":{"sniper_style":c.trading.sniper_style,"brain":ID,"timeframe":"M1","report_id":"","policy":"sniper-price-distance-v1",
                 "sniper_policy":POLICIES[chosen],"sniper_definition":def,"sniper_regime":regime,
-                "definition":["sniper-ticks-v1",POLICIES[chosen]],"exploring":exploring,
+                "definition":["sniper-price-distance-v1",POLICIES[chosen]],"exploring":exploring,
                 "exploration_rate":epsilon,"selection_probability":probability,"broker_samples":total,
                 "sniper_target_mode":if adaptive {"adaptive"}else{"fixed"},
-                "sniper_target_pips":target_pips,"sniper_target_points":target_pips*c.trading.pip_points,
+                "sniper_target_price_distance":target_distance,
                 "sniper_target_arm":target_arm,"sniper_target_exploring":target_exploring,
-                "sniper_target_samples":target_total,"sniper_target_candidates_pips":arms,
+                "sniper_target_samples":target_total,"sniper_target_candidates_price_distance":arms,
                 "sniper_target_policies":target_policies,
-                "sniper_target_evidence":"booked Demo net outcomes for the chosen pip arm only; not a win probability",
+                "sniper_target_evidence":"booked Demo net outcomes for the chosen price-distance arm only; not a win probability",
                 "policies":policies,"applied_demo_learning":demo},
             "members":[{"id":ID,"timeframe":"M1","report_id":"","bar_time":s.bar_time,"side":s.side,"ready":true}]}));
         s
@@ -384,7 +380,7 @@ mod tests {
         assert!(changed);
     }
     #[test]
-    fn exactly_five_and_ten_gold_pips_even_when_quote_point_is_tenth_of_dollar() {
+    fn price_distance_targets_are_independent_of_quote_digits_and_pip_conventions() {
         for (pips,want) in [(5.,0.50),(10.,1.00)] {
             let (mut t,mut c)=fixture();
             t.point=Some(0.10);
@@ -393,7 +389,7 @@ mod tests {
             t.tick_value_loss=Some(10.);
             c.risk.commission_per_lot=0.;
             c.risk.slippage_ticks=0.;
-            c.trading.sniper_target_points=pips*c.trading.pip_points;
+            c.trading.sniper_target_price_distance=want;
             let mut engine=Engine::default();
             let mut result=None;
             for (ts,bid) in [(10000,2000.),(10010,2000.2),(10020,2000.4)] {
@@ -403,7 +399,7 @@ mod tests {
             let signal=result.unwrap();
             assert!(signal.ready,"{}",signal.reason);
             assert!((signal.target_distance-want).abs()<1e-8);
-            assert_eq!(signal.coordination.unwrap()["selection"]["sniper_target_pips"],pips);
+            assert_eq!(signal.coordination.unwrap()["selection"]["sniper_target_price_distance"],want);
         }
     }
 
@@ -412,7 +408,7 @@ mod tests {
         let (mut t,mut c) = fixture();
         c.risk.commission_per_lot = 0.;
         c.risk.slippage_ticks = 0.;
-        c.trading.sniper_target_points = 70.;
+        c.trading.sniper_target_price_distance = 0.70;
         let mut engine = Engine::default();
         for (ts,bid) in [(10000,2000.),(10010,2000.04),(10020,2000.08)] {
             let signal=feed(&mut engine,&mut t,&c,ts,bid);
@@ -433,30 +429,29 @@ mod tests {
     #[test]
     fn user_defined_pip_targets_are_fixed_or_bounded_and_cost_checked() {
         let (mut t,mut c)=fixture();
-        c.trading.pip_points=10.;
-        c.trading.sniper_target_points=70.;
+        c.trading.sniper_target_price_distance=0.70;
         let mut engine=Engine::default();
         for (ts,p) in [(10000,2000.),(10010,2000.04),(10020,2000.08)] {
             let s=feed(&mut engine,&mut t,&c,ts,p);
             if ts==10020 {
                 assert!(s.ready);
-                assert_eq!(s.coordination.as_ref().unwrap()["selection"]["sniper_target_pips"],7.);
+                assert_eq!(s.coordination.as_ref().unwrap()["selection"]["sniper_target_price_distance"],0.70);
                 assert!((s.target_distance-0.7).abs()<1e-8);
             }
         }
         c.trading.sniper_target_mode=SniperTargetMode::Adaptive;
-        c.trading.sniper_min_target_pips=3.;
-        c.trading.sniper_max_target_pips=9.;
+        c.trading.sniper_min_target_price_distance=0.30;
+        c.trading.sniper_max_target_price_distance=0.90;
         engine.reset_quotes();
         feed(&mut engine,&mut t,&c,10030,2000.);
         feed(&mut engine,&mut t,&c,10040,2000.04);
         let s=feed(&mut engine,&mut t,&c,10050,2000.08);
         assert!(s.ready);
         let v=&s.coordination.as_ref().unwrap()["selection"];
-        let pip=v["sniper_target_pips"].as_f64().unwrap();
-        assert!((3. ..=9.).contains(&pip));
+        let distance=v["sniper_target_price_distance"].as_f64().unwrap();
+        assert!((0.30 ..=0.90).contains(&distance));
         let arm=v["sniper_target_arm"].as_u64().unwrap() as usize;
-        assert!((pip-target_candidates(&c)[arm]).abs()<1e-8);
+        assert!((distance-target_candidates(&c)[arm]).abs()<1e-8);
         let mut live=t.clone();live.demo=false;live.account_trade_mode=Some(2);
         engine.reset_quotes();
         feed(&mut engine,&mut live,&c,10060,2000.);
@@ -464,13 +459,13 @@ mod tests {
         let s=feed(&mut engine,&mut live,&c,10080,2000.08);
         assert!(s.ready);
         assert_eq!(s.coordination.as_ref().unwrap()["selection"]["sniper_target_mode"],"fixed");
-        assert_eq!(s.coordination.as_ref().unwrap()["selection"]["sniper_target_pips"],7.);
+        assert_eq!(s.coordination.as_ref().unwrap()["selection"]["sniper_target_price_distance"],0.70);
     }
     #[test]
     fn learned_target_arm_uses_completed_demo_reward_and_never_blocks_exploration() {
         let (mut t,mut c)=fixture();
         c.trading.sniper_target_mode=SniperTargetMode::Adaptive;
-        c.trading.sniper_min_target_pips=2.;c.trading.sniper_max_target_pips=11.;
+        c.trading.sniper_min_target_price_distance=0.20;c.trading.sniper_max_target_price_distance=1.10;
         let def=definition(&t,&c);
         let mut engine=Engine::default();
         let mut stats=std::array::from_fn(|_| Policy::default());
@@ -485,7 +480,7 @@ mod tests {
             let s=feed(&mut engine,&mut t,&c,first+20,2000.08);
             assert!(s.ready);
             let v=&s.coordination.as_ref().unwrap()["selection"];
-            assert!(v["sniper_target_pips"].as_f64().unwrap()>=2.);
+            assert!(v["sniper_target_price_distance"].as_f64().unwrap()>=0.20);
             if v["sniper_policy"]=="impulse" && v["sniper_target_exploring"]==false {
                 saw_best |= v["sniper_target_arm"]==3;
             }

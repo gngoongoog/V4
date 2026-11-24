@@ -208,12 +208,12 @@ export component Dashboard inherits Window {
     in property <bool> frozen-trial-available: false;
     callback brain-monitor-action(string);
     in-out property <int> sniper-target-mode: 0;
-    in-out property <string> sniper-min-target-pips: "2";
-    in-out property <string> sniper-max-target-pips: "10";
+    in-out property <string> sniper-min-target-pips: "0.20";
+    in-out property <string> sniper-max-target-pips: "1.00";
     in-out property <bool> demo-flexible: true;
     in-out property <bool> adaptive-exits: true;
-    in-out property <string> sniper-target: "5";
-    in-out property <string> sniper-stop: "80";
+    in-out property <string> sniper-target: "0.50";
+    in-out property <string> sniper-stop: "0.80";
     in-out property <string> sniper-cooldown: "0";
     in-out property <string> sniper-hold: "120";
     in-out property <string> pip-points: "10";
@@ -923,8 +923,7 @@ export component Dashboard inherits Window {
                             spacing: 14px;
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "قيمة 1 pip بحركة سعر الذهب (مهم)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
-                                LineEdit { text <=> root.sniper-pip-price; placeholder-text: "0.10 = كل pip حركة سعر 10 سنت"; }
+                                Text { text: "مسافة الهدف والوقف تُحدد بحركة السعر مباشرة، بدون تحويلات يدوية."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
@@ -932,15 +931,15 @@ export component Dashboard inherits Window {
                                 LineEdit { text <=> root.slippage-ticks; placeholder-text: "0 = دون انزلاق مفترض"; }
                             }
                         }
-                        Text { text: "مثال على الذهب: قيمة pip = 0.10 بالسعر؛ الهدف الثابت 5 pip = تحرّك 0.50 بسعر الذهب، و10 pip = 1.00. هدف القناص لا يكبر بسبب العمولة أو السبريد أو التعلّم. السبريد الحقيقي من MT5 والانزلاق تقدير مستقل. تأكد من تعريف pip مع وسيطك."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
+                        Text { text: "القيم أدناه هي فرق السعر نفسه: هدف 0.25 يعني تحرك السعر لصالح الصفقة 0.25، ووقف 1.00 يعني حركة عكسية 1.00. الربح النقدي يعتمد على اللوت والعقد والتكاليف. يجلب النظام Tick Size وقيود الوسيط من MT5، ولا يوسّع المسافات بصمت. بعد التعبئة الكاملة يعيد تثبيت الحماية على متوسط سعر التنفيذ الفعلي."; color: root.theme-choice == 1 ? #5d6c7e : #b7bac3; wrap: word-wrap; }
                     }
                 }
                 Rectangle {
                     background: root.theme-choice == 1 ? #ffffff : #212329; border-radius: 12px; border-width: 1px; border-color: root.theme-choice == 1 ? #e3e9f0 : #393c43;
                     VerticalLayout {
                         padding: 16px; spacing: 12px;
-                        Text { text: "3  •  إعداد القناص وأهداف Pip"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 16px; font-weight: 700; }
-                        Text { text: "يعمل القناص المتعلّم بوضع Sniper بعد الحفظ والتشغيل، ويستند إلى صفقات Demo المغلقة. الهدف بـ pip، والوقف بنقاط MT5."; color: root.theme-choice == 1 ? #63798e : #c6c8ce; wrap: word-wrap; }
+                        Text { text: "3  •  إعداد القناص ومسافات السعر"; color: root.theme-choice == 1 ? #19283b : #f2f2f4; font-size: 16px; font-weight: 700; }
+                        Text { text: "يستخدم القناص فرق السعر مباشرة للهدف والوقف؛ مواصفات Point وTick Size وقيود الوسيط تُقرأ داخلياً من MT5."; color: root.theme-choice == 1 ? #63798e : #c6c8ce; wrap: word-wrap; }
                         HorizontalLayout {
                             spacing: 14px;
                             VerticalLayout {
@@ -954,20 +953,20 @@ export component Dashboard inherits Window {
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
                                 Text { text: "طريقة تحديد هدف الربح"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; }
-                                ComboBox { model: ["هدف pip ثابت تختاره", "تعلّم هدف pip ضمن نطاق — Demo فقط"]; current-index <=> root.sniper-target-mode; enabled: root.state == "STOPPED" && root.trade-mode == 3 && root.sniper-brain == 1; }
+                                ComboBox { model: ["هدف سعري ثابت تختاره", "تعلّم مسافة هدف ضمن نطاق — Demo فقط"]; current-index <=> root.sniper-target-mode; enabled: root.state == "STOPPED" && root.trade-mode == 3 && root.sniper-brain == 1; }
                             }
                         }
                         HorizontalLayout {
                             spacing: 14px;
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "هدف الربح الثابت (pip)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
-                                LineEdit { text <=> root.sniper-target; placeholder-text: "مثال: 5"; }
+                                Text { text: "هدف الحركة السعرية (فرق السعر)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
+                                LineEdit { text <=> root.sniper-target; placeholder-text: "مثال: 0.25"; }
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "وقف الخسارة (points)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
-                                LineEdit { text <=> root.sniper-stop; placeholder-text: "مثال: 80"; }
+                                Text { text: "وقف الحركة السعرية (فرق السعر)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
+                                LineEdit { text <=> root.sniper-stop; placeholder-text: "مثال: 1.00"; }
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
@@ -979,13 +978,13 @@ export component Dashboard inherits Window {
                             spacing: 14px;
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "أدنى هدف متعلّم (pip)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
-                                LineEdit { text <=> root.sniper-min-target-pips; placeholder-text: "مثال: 2"; enabled: root.sniper-target-mode == 1 && root.trade-mode == 3 && root.sniper-brain == 1; }
+                                Text { text: "أدنى مسافة هدف متعلّم"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
+                                LineEdit { text <=> root.sniper-min-target-pips; placeholder-text: "مثال: 0.20"; enabled: root.sniper-target-mode == 1 && root.trade-mode == 3 && root.sniper-brain == 1; }
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1; spacing: 6px;
-                                Text { text: "أعلى هدف متعلّم (pip)"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
-                                LineEdit { text <=> root.sniper-max-target-pips; placeholder-text: "مثال: 10"; enabled: root.sniper-target-mode == 1 && root.trade-mode == 3 && root.sniper-brain == 1; }
+                                Text { text: "أعلى مسافة هدف متعلّم"; color: root.theme-choice == 1 ? #28384b : #e0e1e4; wrap: word-wrap; }
+                                LineEdit { text <=> root.sniper-max-target-pips; placeholder-text: "مثال: 1.00"; enabled: root.sniper-target-mode == 1 && root.trade-mode == 3 && root.sniper-brain == 1; }
                             }
                         }
                         HorizontalLayout {

@@ -210,9 +210,12 @@ pub fn evaluate(
                     return s;
                 }
             };
-            s.stop_distance = s.stop_distance.max(
-                quote_costs.spread_price + 2. * t.tick_size.unwrap_or(0.),
-            );
+            let minimum_stop = quote_costs.spread_price + 2. * t.tick_size.unwrap_or(0.);
+            if s.stop_distance + 1e-10 < minimum_stop {
+                s.side = 0;
+                s.reason = format!("القناص الكلاسيكي: وقف {:.5} أقرب من الحد المطلوب {:.5}؛ لم يتم توسيعه",s.stop_distance,minimum_stop);
+                return s;
+            }
             s.target_distance = match trading::sniper_target_from_entry(
                 &quote_costs,
                 s.target_distance,

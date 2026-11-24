@@ -80,6 +80,29 @@ def check(exe=None, native_pipe=False):
             snapshot['market']['captured_ms']=clock_ms()
             api('/v1/gateway/snapshot',snapshot)
         broker=Broker();broker.tick.bid=2053.8;broker.tick.ask=2053.9
+        # The simulator must model the broker-confirmed opening Deal and the
+        # physical position; a success retcode alone is not fill evidence.
+        original_order_send=broker.order_send
+        def order_send_with_mt5_fill(request):
+            response=original_order_send(request)
+            if request.get('action')==broker.TRADE_ACTION_SLTP:
+                matches=[p for p in broker.positions if p.ticket==request['position']]
+                assert len(matches)==1, 'SLTP update must target one exact simulated position'
+                matches[0].sl=request['sl'];matches[0].tp=request['tp']
+            elif request.get('magic')==410600 and response.retcode==10009:
+                position_id=550077
+                broker.deals.append(N(
+                    ticket=response.deal,order=response.order,position_id=position_id,
+                    magic=request['magic'],symbol=request['symbol'],
+                    type=broker.DEAL_TYPE_BUY,entry=broker.DEAL_ENTRY_IN,
+                    volume=response.volume,price=response.price))
+                broker.positions.append(N(
+                    ticket=900077,identifier=position_id,magic=request['magic'],
+                    symbol=request['symbol'],type=broker.POSITION_TYPE_BUY,
+                    price_open=response.price,volume=response.volume,
+                    sl=request['sl'],tp=request['tp']))
+            return response
+        broker.order_send=order_send_with_mt5_fill
         executor=BrokerExecutor(Path(directory)/'send-journal.sqlite')
         def submit(cmd):
             broker.tick.time_msc=clock_ms()
@@ -151,10 +174,16 @@ def check(exe=None, native_pipe=False):
             selection=cmd['signal']['coordination']['selection']
             assert selection['brain']=='sniper_learner' and selection['sniper_policy']=='impulse'
             assert selection['sniper_target_mode']=='fixed'
-            assert abs(selection['sniper_target_pips'] - 5.)<1e-8
+            assert abs(selection['sniper_target_price_distance'] - 0.5)<1e-8
             assert 0<selection['selection_probability']<=1
             result=submit(cmd);assert result['state']=='filled' and result['fast_path'],result
-            submit(cmd);assert len(broker.sends)==1
+            assert result['sniper_fill_protection']['state']=='verified',result
+            assert abs(result['sniper_fill_protection']['fill_price']-result['price'])<1e-8,result
+            assert abs(result['sniper_fill_protection']['sl']-(result['price']-.8))<1e-8,result
+            assert abs(result['sniper_fill_protection']['tp']-(result['price']+.5))<1e-8,result
+            submit(cmd)
+            assert sum(1 for request in broker.sends if request.get('action')==broker.TRADE_ACTION_DEAL)==1
+            assert sum(1 for request in broker.sends if request.get('action')==broker.TRADE_ACTION_SLTP)==1
             api('/v1/stop',{})
             now=clock_ms();volume=result['volume']
             entry=dict(ticket=77,position_id=55,symbol='XAUUSD',magic=410600,
@@ -180,9 +209,9 @@ def check(exe=None, native_pipe=False):
             api('/v1/shutdown',{});process.wait(timeout=10);boot();prices([2054.04,2054.08,2054.12])
             assert not api('/v1/status')['requested_run'];assert learned_count()==1
             # The Demo-only bounded optimizer is enabled explicitly and uses
-            # four configured pip arms; it cannot invent out-of-range targets.
+            # four configured price-distance arms; it cannot invent out-of-range targets.
             config['trading'].update(sniper_target_mode='adaptive',
-                                     sniper_min_target_pips=3.0,sniper_max_target_pips=9.0)
+                                     sniper_min_target_price_distance=0.30,sniper_max_target_price_distance=0.90)
             saved=api('/v1/trading/settings',dict(trading=config['trading'],commission_per_lot=7.))
             assert saved['config']['trading']['sniper_target_mode']=='adaptive'
             prices([2054.13,2054.17,2054.21])
@@ -190,8 +219,8 @@ def check(exe=None, native_pipe=False):
             assert latest['ready'],latest
             selection=latest['coordination']['selection']
             assert selection['sniper_target_mode']=='adaptive',selection
-            assert 3.<=selection['sniper_target_pips']<=9.
-            assert len(selection['sniper_target_candidates_pips'])==4
+            assert 0.30<=selection['sniper_target_price_distance']<=0.90
+            assert len(selection['sniper_target_candidates_price_distance'])==4
             assert selection['sniper_target_samples']==0,selection
             # A previously separate Sniper Learner may now only advise the
             # selected-mode system coordinator. No independent MT5 order can
@@ -225,7 +254,7 @@ def check(exe=None, native_pipe=False):
                 'duplicate never resends; partial close never trains','net fees credited only to specialist and owner',
                 'restart restores policy history and STOP','SOLO blocked: only selected mode coordinator executes',
                 'inactive outside Sniper; account isolation',
-                'fixed 5-pip target; user-bounded adaptive 3–9-pip Demo-only target selection'])
+                'fixed 0.50 price-distance target; user-bounded adaptive 0.30–0.90 Demo-only price-distance selection'])
             out=ROOT/'test-output/sniper-learner-integration.json';out.parent.mkdir(exist_ok=True);out.write_text(json.dumps(report,indent=2))
             print(json.dumps(report))
         finally:

@@ -17,6 +17,7 @@ import math
 import sqlite3
 import time
 from broker_costs import booked_trading_net
+from sniper_price_geometry import sniper_levels_from_fill
 from institutional_controls import (
     calendar_entry_blocked, initialise_quality_table, quality_entry_blocked,
     record_execution_quality,
@@ -39,6 +40,233 @@ FINAL_AUTH_MAX_AGE_MS = 20
 
 def clock_ms():
     return int(time.time() * 1000)
+
+
+def _apply_sniper_fill_protection(executor, mt5, cmd, info, response, result):
+    """Re-anchor already-attached protective SL/TP to the exact confirmed MT5 fill.
+
+    The opening request always carries quote-anchored protection. This routine
+    only tightens that protection to the broker-confirmed position average after
+    the exact opening Deal and physical position have been linked. Failure never
+    removes the initial SL/TP and is reported as UNKNOWN for operator review.
+    """
+    signal = cmd.get('signal') or {}
+    coordination = signal.get('coordination') or {}
+    selection = coordination.get('selection') or {}
+    policy = coordination.get('sniper_price_distance_policy') or selection.get('policy')
+    terminal = result.get('terminal_order') or {}
+    settled_partial = (result.get('state') == 'partial'
+                       and terminal.get('confirmed') is True
+                       and terminal.get('state') in ('canceled', 'rejected', 'expired'))
+    if (result.get('state') != 'filled' and not settled_partial) or not is_fast_path(cmd) or policy != 'sniper-price-distance-v1':
+        return result
+    deal_id = int(result.get('deal') or 0)
+    order_id = int(result.get('order') or 0)
+    if deal_id <= 0 or order_id <= 0:
+        raise ValueError('Sniper fill protection: exact MT5 Deal/order ticket unavailable; initial quote protection remains attached')
+    now = datetime.now(timezone.utc)
+    start = datetime.fromtimestamp(max(0, int(cmd['created_ms']) - 60_000) / 1000, timezone.utc)
+    deals = mt5.history_deals_get(start, now + timedelta(seconds=2))
+    if deals is None:
+        raise ValueError('Sniper fill protection: MT5 Deal history unavailable; initial quote protection remains attached')
+    side = int(cmd['signal']['side'])
+    expected_type = getattr(mt5, 'DEAL_TYPE_BUY', 0) if side == 1 else getattr(mt5, 'DEAL_TYPE_SELL', 1)
+    order_deals = [d for d in deals
+                   if int(getattr(d, 'order', 0) or 0) == order_id
+                   and int(getattr(d, 'magic', -1)) == int(cmd['magic'])
+                   and getattr(d, 'symbol', None) == cmd['symbol']]
+    exact = [d for d in order_deals if int(getattr(d, 'ticket', 0) or 0) == deal_id]
+    if len(exact) != 1 or not order_deals:
+        raise ValueError('Sniper fill protection: exact opening Deal/order not uniquely visible; initial quote protection remains attached')
+    try:
+        tickets = [int(getattr(d, 'ticket', 0) or 0) for d in order_deals]
+        positions_for_order = [int(getattr(d, 'position_id', 0) or 0) for d in order_deals]
+        deal_volumes = [float(getattr(d, 'volume', 0)) for d in order_deals]
+        deal_prices = [float(getattr(d, 'price', 0)) for d in order_deals]
+        ack_volume = float(result.get('volume', float('nan')))
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError('Sniper fill protection: invalid Deal volume/price evidence; initial quote protection remains attached')
+    if (len(set(tickets)) != len(tickets) or any(v <= 0 for v in tickets)
+            or any(p <= 0 for p in positions_for_order) or len(set(positions_for_order)) != 1
+            or any(not math.isfinite(v) or v <= 0 for v in deal_volumes + deal_prices)
+            or not math.isfinite(ack_volume) or ack_volume <= 0
+            or any(int(getattr(d, 'entry', -1)) != getattr(mt5, 'DEAL_ENTRY_IN', 0)
+                   or int(getattr(d, 'type', -1)) != expected_type for d in order_deals)):
+        raise ValueError('Sniper fill protection: order Deals conflict in identity, side, entry or geometry; initial quote protection remains attached')
+    position_id = positions_for_order[0]
+    total_volume = sum(deal_volumes)
+    weighted_fill = sum(p * v for p, v in zip(deal_prices, deal_volumes)) / total_volume
+    tolerance = max(1e-8, ack_volume * 1e-7)
+    if abs(total_volume - ack_volume) > tolerance:
+        raise ValueError('Sniper fill protection: exact order Deal volume does not match full broker acknowledgement; initial quote protection remains attached')
+    positions = mt5.positions_get(symbol=cmd['symbol'])
+    if positions is None:
+        raise ValueError('Sniper fill protection: MT5 positions unavailable; initial quote protection remains attached')
+    matches = [p for p in positions if int(getattr(p, 'identifier', 0) or 0) == position_id
+               and int(getattr(p, 'magic', -1)) == int(cmd['magic'])
+               and getattr(p, 'symbol', None) == cmd['symbol']]
+    if len(matches) != 1:
+        raise ValueError('Sniper fill protection: exact physical position not uniquely visible; initial quote protection remains attached')
+    position = matches[0]
+    position_type = getattr(mt5, 'POSITION_TYPE_BUY', 0) if side == 1 else getattr(mt5, 'POSITION_TYPE_SELL', 1)
+    if int(getattr(position, 'type', -1)) != position_type:
+        raise ValueError('Sniper fill protection: position direction changed; initial quote protection remains attached')
+    fill_price = float(getattr(position, 'price_open', float('nan')))
+    position_volume = float(getattr(position, 'volume', float('nan')))
+    if (not math.isfinite(position_volume) or abs(position_volume - ack_volume) > tolerance
+            or not math.isfinite(fill_price) or fill_price <= 0
+            or abs(fill_price - weighted_fill) > float(info.trade_tick_size) * 1e-6):
+        raise ValueError('Sniper fill protection: physical position average/volume does not reconcile to exact order Deals; initial quote protection remains attached')
+    levels = sniper_levels_from_fill(
+        info, side, fill_price,
+        float(cmd['signal']['stop_distance']),
+        float(cmd['signal']['target_distance']),
+    )
+    tick = mt5.symbol_info_tick(cmd['symbol'])
+    if tick is None:
+        raise ValueError('Sniper fill protection: fresh quote unavailable; initial quote protection remains attached')
+    bid, ask = float(tick.bid), float(tick.ask)
+    quote_ms = int(getattr(tick, 'time_msc', 0) or 0)
+    age = clock_ms() - quote_ms
+    if not all(math.isfinite(v) and v > 0 for v in (bid, ask)) or ask < bid or age < -2000 or age > 3000:
+        raise ValueError('Sniper fill protection: broker quote stale/invalid; initial quote protection remains attached')
+    minimum = max(int(getattr(info, 'trade_stops_level', 0) or 0),
+                  int(getattr(info, 'trade_freeze_level', 0) or 0)) * float(info.point)
+    if side == 1:
+        valid = bid > levels['sl'] and levels['tp'] > bid
+        distances = (bid - levels['sl'], levels['tp'] - bid)
+    else:
+        valid = levels['sl'] > ask and ask > levels['tp']
+        distances = (levels['sl'] - ask, ask - levels['tp'])
+    if not valid or min(distances) + float(info.trade_tick_size)*1e-7 < minimum:
+        raise ValueError(
+            f"Sniper fill protection: exact fill-based levels violate current broker stops/freeze distance "
+            f"{minimum:.8f}; original quote-based SL/TP remain attached and were not widened"
+        )
+    protection_id = str(cmd['id']) + ':sniper-fill-protection'
+    journal_cmd = dict(id=protection_id, kind='protect')
+    protection_request = dict(
+        action=mt5.TRADE_ACTION_SLTP, symbol=cmd['symbol'],
+        position=int(position.ticket), sl=levels['sl'], tp=levels['tp'],
+    )
+    journal_request = dict(
+        id=protection_id, kind='protect', parent_command_id=cmd['id'],
+        login=cmd['login'], server=cmd['server'], currency=cmd['currency'],
+        target=cmd['target'], symbol=cmd['symbol'], magic=int(cmd['magic']),
+        position=int(position.ticket), position_id=position_id,
+        side='BUY' if side == 1 else 'SELL', volume=position_volume,
+        fill_price=fill_price, sl=levels['sl'], tp=levels['tp'],
+        policy=levels['policy'],
+    )
+    existing = executor.db.execute(
+        'SELECT request,result FROM sends WHERE id=?', (protection_id,)
+    ).fetchone()
+    eps = float(info.trade_tick_size) * 1e-7
+
+    def exact_position():
+        rows = mt5.positions_get(symbol=cmd['symbol'])
+        matches_now = [] if rows is None else [
+            p for p in rows if int(getattr(p, 'identifier', 0) or 0) == position_id
+            and int(getattr(p, 'magic', -1)) == int(cmd['magic'])
+            and getattr(p, 'symbol', None) == cmd['symbol']
+        ]
+        if len(matches_now) != 1:
+            raise ValueError('Sniper fill protection: exact position is no longer uniquely visible')
+        return matches_now[0]
+
+    def levels_observed(p):
+        return (abs(float(getattr(p, 'sl', 0) or 0) - levels['sl']) <= eps
+                and abs(float(getattr(p, 'tp', 0) or 0) - levels['tp']) <= eps)
+
+    def record_verified(p, reason):
+        saved = dict(state='filled', reason=reason, request=protection_request,
+                     position=int(p.ticket), position_id=position_id,
+                     fill_price=fill_price, sl=levels['sl'], tp=levels['tp'],
+                     verified_ms=clock_ms(), policy=levels['policy'])
+        executor._save(journal_cmd, saved)
+        result['sniper_fill_protection'] = dict(
+            state='verified', journal_id=protection_id,
+            position=int(p.ticket), position_id=position_id,
+            fill_price=fill_price, sl=levels['sl'], tp=levels['tp'],
+            stop_distance=levels['stop_distance'], target_distance=levels['target_distance'],
+            tick_size=levels['tick_size'], quote_age_ms=age,
+            policy=levels['policy'],
+        )
+        result['reason'] = (str(result.get('reason', '')).strip()
+                            + '; Sniper fill-relative SL/TP verified on exact MT5 position').strip('; ')
+        return result
+
+    if existing is not None:
+        try:
+            saved_request = json.loads(existing[0])
+        except (TypeError, ValueError):
+            raise ValueError('Sniper fill protection: corrupt durable modification journal; no repeat send')
+        if saved_request != journal_request:
+            raise ValueError('Sniper fill protection: existing durable modification differs from this fill; no repeat send')
+        observed_position = exact_position()
+        if levels_observed(observed_position):
+            return record_verified(observed_position, 'Existing journal reconciled to broker-observed SL/TP')
+        raise ValueError('Sniper fill protection: prior modification journal is unresolved; current broker SLTP state requires reconciliation and no duplicate SLTP send is attempted')
+
+    # The SLTP mutation has its own durable journal, separate from the entry
+    # journal. Commit it before crossing the MT5 write boundary.
+    checked = mt5.order_check(protection_request)
+    if checked is None or getattr(checked, 'retcode', None) != 0:
+        raise ValueError('Sniper fill protection: broker rejected SL/TP preflight: '
+                         + str(getattr(checked, 'comment', 'unavailable'))
+                         + '; original quote-based SL/TP remain attached')
+    try:
+        executor.db.execute(
+            'INSERT INTO sends(id,request,result,created_ms) VALUES(?,?,NULL,?)',
+            (protection_id, json.dumps(journal_request, allow_nan=False), clock_ms())
+        )
+        executor.db.commit()
+    except sqlite3.IntegrityError:
+        executor.db.rollback()
+        raise ValueError('Sniper fill protection: concurrent durable modification exists; no repeat send')
+    except sqlite3.Error:
+        executor.db.rollback()
+        raise ValueError('Sniper fill protection: durable modification journal unavailable; broker SLTP was not sent')
+
+    # Revalidate account and exact position after the journal commit.
+    account = mt5.account_info()
+    target_mode = {'demo': 0, 'live': 2}.get(cmd.get('target'), -1)
+    if (account_identity(account) != expected(cmd)
+            or getattr(account, 'trade_mode', None) != target_mode):
+        executor._save(journal_cmd, dict(state='cancelled', reason='Account binding changed after protection journal; no SLTP send'))
+        raise ValueError('Sniper fill protection: account changed after durable journal; initial quote-based SL/TP remain attached')
+    current = exact_position()
+    if (int(getattr(current, 'ticket', 0) or 0) != int(position.ticket)
+            or abs(float(getattr(current, 'price_open', 0) or 0) - fill_price) > eps
+            or abs(float(getattr(current, 'volume', 0) or 0) - position_volume) > tolerance
+            or abs(float(getattr(current, 'sl', 0) or 0) - float(getattr(position, 'sl', 0) or 0)) > eps
+            or abs(float(getattr(current, 'tp', 0) or 0) - float(getattr(position, 'tp', 0) or 0)) > eps):
+        executor._save(journal_cmd, dict(state='cancelled', reason='Exact position changed after protection journal; no SLTP send'))
+        raise ValueError('Sniper fill protection: exact position changed after durable journal; no SLTP send was attempted')
+
+    modified = mt5.order_send(protection_request)
+    code = getattr(modified, 'retcode', None)
+    if code not in (10008, 10009):
+        known_rejects = {10004,10006,10007,10013,10014,10015,10016,10017,10018,10019,
+                         10020,10021,10022,10024,10026,10027,10029,10030,10032,10033,
+                         10034,10035,10036,10038,10040,10042,10043,10044,10045,10046}
+        rejected = code in known_rejects
+        mod_result = dict(state='rejected' if rejected else 'unknown',
+                           retcode=code, reason=str(getattr(modified, 'comment', 'No broker acknowledgement')),
+                           request=protection_request)
+        executor._save(journal_cmd, mod_result)
+        suffix = ('; original quote-based SL/TP remain attached' if rejected
+                  else '; current broker SLTP state requires reconciliation')
+        message = ('broker rejected' if rejected else 'broker acknowledgement is uncertain')
+        raise ValueError('Sniper fill protection: '+message+' post-fill SL/TP update: '
+                         + str(getattr(modified, 'comment', 'unavailable')) + suffix)
+    observed_position = exact_position()
+    if not levels_observed(observed_position):
+        executor._save(journal_cmd, dict(state='unknown', retcode=code,
+                                         reason='Broker acknowledged SLTP but exact position readback did not match',
+                                         request=protection_request))
+        raise ValueError('Sniper fill protection: broker acknowledgement not reflected on exact position; current broker SLTP state requires reconciliation')
+    return record_verified(observed_position, 'Broker SLTP modification verified on exact MT5 position')
 
 
 def account_identity(a):
@@ -69,13 +297,13 @@ def is_fast_path(cmd):
 
 
 def sniper_broker_geometry(info, tick, stop, target):
-    """Validate a frozen Sniper TP without ever increasing its user pip target.
+    """Validate a Sniper TP/SL price distance without ever increasing the operator's requested movement.
 
     Both distances are from executable entry. The broker validates SL/TP
     against the opposite-side exit quote. A full tick cushions tick rounding.
-    If the broker's stops floor is too wide for the requested 5/10 pip TP,
+    If the broker's stops floor is too wide for the requested price-distance TP,
     reject the entry with an exact explanation instead of silently raising TP
-    to 40/50 pips. Likewise, never silently expand the selected stop loss.
+    to a larger price distance. Likewise, never silently expand the selected stop loss.
     """
     step = float(info.trade_tick_size)
     spread = float(tick.ask) - float(tick.bid)
@@ -85,21 +313,21 @@ def sniper_broker_geometry(info, tick, stop, target):
         raise ValueError('Invalid Sniper broker geometry')
     # Frozen Sniper targets must be exactly representable on this broker's
     # actual tick grid. The later price-normalization ceil/floor would
-    # otherwise silently extend a 5-pip request by up to one tick.
+    # otherwise silently extend a requested price distance by up to one tick.
     tick_steps = target / step
     if abs(tick_steps - round(tick_steps)) > 1e-6:
         raise ValueError(
-            f'Sniper exact pip TP {target:.5f} is not a multiple of broker tick size {step:.5f}; '
+            f'Sniper exact price-distance TP {target:.5f} is not a multiple of broker tick size {step:.5f}; '
             'TP was NOT rounded or widened. Choose a tick-representable target.'
         )
     if abs(stop / step - round(stop / step)) > 1e-6:
-        raise ValueError(f'Sniper exact SL {stop:.5f} is not a multiple of broker tick size {step:.5f}; SL was not widened.')
+        raise ValueError(f'Sniper exact price-distance SL {stop:.5f} is not a multiple of broker tick size {step:.5f}; SL was not widened.')
     min_stop = spread + minimum
     min_target = max(step, minimum - spread)
     if stop + step * 1e-7 < min_stop:
         raise ValueError(f'Sniper SL too close for broker stop level: requested {stop:.5f}, minimum {min_stop:.5f} in price. SL was not widened.')
     if target + step * 1e-7 < min_target:
-        raise ValueError(f'Sniper exact pip TP cannot satisfy broker stop level: requested {target:.5f}, minimum {min_target:.5f} in price. TP was NOT widened.')
+        raise ValueError(f'Sniper exact price-distance TP cannot satisfy broker stop level: requested {target:.5f}, minimum {min_target:.5f} in price. TP was NOT widened.')
     return stop, target, minimum, spread
 
 
@@ -608,6 +836,32 @@ class BrokerExecutor:
             result['price'] = sum(p * float(d.volume) for p, d in zip(prices, matches)) / volume
             result['fill_time_ms'] = min(times)
             result['position_id'] = positions[0]
+            # A previously ambiguous full Sniper fill may become visible in
+            # history only after the immediate send response. Retry the exact
+            # position-linked SLTP re-anchor during reconciliation; never mark
+            # the entry fully resolved while its requested fill geometry is
+            # still unverified.
+            signal = cmd.get('signal') or {}
+            coordination = signal.get('coordination') or {}
+            selection = coordination.get('selection') or {}
+            policy = coordination.get('sniper_price_distance_policy') or selection.get('policy')
+            terminal = result.get('terminal_order') or {}
+            settled_partial = (state == 'partial' and terminal.get('confirmed') is True
+                               and terminal.get('state') in ('canceled', 'rejected', 'expired'))
+            if (state == 'filled' or settled_partial) and cmd.get('kind') == 'open' and policy == 'sniper-price-distance-v1':
+                try:
+                    info = mt5.symbol_info(cmd['symbol'])
+                    if info is None:
+                        raise ValueError('MT5 symbol contract unavailable for fill protection reconciliation')
+                    _apply_sniper_fill_protection(self, mt5, cmd, info, None, result)
+                except (ValueError,TypeError,KeyError,AttributeError,OverflowError,OSError,RuntimeError,sqlite3.Error) as exc:
+                    result['state'] = 'unknown'
+                    result['sniper_fill_protection'] = dict(
+                        state='unverified', reason=str(exc),
+                        quote_protection_was_attached=True,
+                        current_levels_require_reconciliation=True,
+                    )
+                    result['reason'] = str(exc) + '; fill-relative protection remains unverified; no entry resend'
             # Recovery can restore booked evidence, never the unobserved quote path.
             result['reconciled_ms'] = clock_ms()
             final_account = mt5.account_info()
@@ -1159,6 +1413,20 @@ class BrokerExecutor:
                 result.update(state=state,retcode=code,reason=str(getattr(response,'comment','No broker acknowledgement')),
                               order=order_id,deal=deal_id,
                               volume=response_volume,price=response_price)
+                if state == 'filled' and is_fast_path(cmd):
+                    # The request already carried quote-based protection. Once
+                    # the exact Deal/position is visible, tighten/re-anchor it
+                    # to the broker's actual average fill and verify on MT5.
+                    try:
+                        _apply_sniper_fill_protection(self, mt5, cmd, info, response, result)
+                    except (ValueError,TypeError,KeyError,AttributeError,OverflowError,OSError,RuntimeError,sqlite3.Error) as exc:
+                        result.update(state='unknown',
+                                      reason=str(exc)+'; no second entry send will be attempted',
+                                      sniper_fill_protection=dict(
+                                          state='unverified', reason=str(exc),
+                                          quote_protection_was_attached=True,
+                                          current_levels_require_reconciliation=True,
+                                      ))
                 if deal_id<=0 and code in (10009,10010):
                     result['reason']='Broker retcode acknowledges submission but deal ticket is unavailable; await exact MT5 history reconciliation'
             result['acknowledged_ms']=clock_ms()
