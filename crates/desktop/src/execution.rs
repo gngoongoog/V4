@@ -203,8 +203,8 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
         let _=writeln!(out,"\nالقناص المتعلّم | أسلوب {} | سياق {} | صفقات الديمو {} | استكشاف {} | احتمال الاختيار {:.3}",
             sel["sniper_policy"].as_str().unwrap_or("—"),sel["sniper_regime"].as_str().unwrap_or("—"),
             sel["broker_samples"],sel["exploring"],sel["selection_probability"].as_f64().unwrap_or(1.));
-        let _=writeln!(out,"هدف صافي مطلوب {:.2} pip | النظام {} | هدف مُختبر {} | عينات هدف {} | استكشاف هدف {}",
-            sel["sniper_target_pips"].as_f64().unwrap_or(0.),
+        let _=writeln!(out,"هدف سعري مطلوب {:.5} | النظام {} | هدف مُختبر {} | عينات هدف {} | استكشاف هدف {}",
+            sel["sniper_target_price_distance"].as_f64().unwrap_or(0.),
             sel["sniper_target_mode"].as_str().unwrap_or("fixed"),
             sel["sniper_target_arm"].as_u64().map(|v|v.to_string()).unwrap_or_else(||"يدوي".into()),
             sel["sniper_target_samples"].as_u64().unwrap_or(0),
@@ -212,7 +212,7 @@ fn paint(ui: &Dashboard, v: &Value, load: bool, index: usize) {
         if let Some(models)=sel["sniper_target_policies"].as_array() {
             if let Some(arms)=sel["sniper_target_candidates_pips"].as_array() {
                 for (i,p) in models.iter().enumerate() {
-                    let _=writeln!(out,"هدف {:.2} pip | صفقات مكتملة {} | رابحة {} | مكافأة {:.3} | خسائر متتالية {}",
+                    let _=writeln!(out,"مسافة هدف {:.5} | صفقات مكتملة {} | رابحة {} | مكافأة {:.3} | خسائر متتالية {}",
                         arms.get(i).and_then(Value::as_f64).unwrap_or(0.),
                         p["samples"],p["wins"],p["reward"].as_f64().unwrap_or(0.),p["loss_streak"]);
                 }
