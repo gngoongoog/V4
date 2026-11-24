@@ -1412,7 +1412,7 @@ class BrokerExecutor:
                     # to the broker's actual average fill and verify on MT5.
                     try:
                         _apply_sniper_fill_protection(self, mt5, cmd, info, response, result)
-                    except (ValueError,TypeError,KeyError,AttributeError,OverflowError,OSError,RuntimeError) as exc:
+                    except (ValueError,TypeError,KeyError,AttributeError,OverflowError,OSError,RuntimeError,sqlite3.Error) as exc:
                         result.update(state='unknown',
                                       reason=str(exc)+'; no second entry send will be attempted',
                                       sniper_fill_protection=dict(
