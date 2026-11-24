@@ -336,7 +336,7 @@ mod tests {
               "sniper_policy":"impulse","sniper_definition":"G5E",
               "sniper_regime":"directional_normal",
               "sniper_target_mode":"adaptive","sniper_target_arm":2,
-              "sniper_target_price_distance":6.0}
+              "sniper_target_price_distance":0.60}
         });
         let mut false_reward=valid.clone();false_reward["reward"]=json!(0.99);
         db.execute("INSERT INTO coordinator_broker_samples
@@ -379,7 +379,7 @@ mod tests {
                 "sniper_tp_preserved":true,
                 "selection":{"brain":ID,"policy":"sniper-price-distance-v1","sniper_policy":"impulse",
                     "sniper_definition":"config-P","sniper_regime":"directional_normal",
-                    "sniper_target_mode":mode,"sniper_target_arm":arm,"sniper_target_price_distance":6.0}});
+                    "sniper_target_mode":mode,"sniper_target_arm":arm,"sniper_target_price_distance":0.60}});
             db.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,?3,?4,1000,?5)",
                 rusqlite::params![format!("pos-{id}"),id,ctx,brain,payload.to_string()]).unwrap();
         }
@@ -419,7 +419,7 @@ mod tests {
               "sniper_policy":"impulse","sniper_definition":"G6I",
               "sniper_regime":"directional_normal",
               "sniper_target_mode":"adaptive","sniper_target_arm":2,
-              "sniper_target_price_distance":6.}
+              "sniper_target_price_distance":0.60}
         });
         db.execute("INSERT INTO coordinator_broker_samples
             VALUES('pre-g6g',70,?1,'sniper_learner',1000,?2)",
