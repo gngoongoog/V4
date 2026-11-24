@@ -389,7 +389,7 @@ mod tests {
             t.tick_value_loss=Some(10.);
             c.risk.commission_per_lot=0.;
             c.risk.slippage_ticks=0.;
-            c.trading.sniper_target_points=pips*c.trading.pip_points;
+            c.trading.sniper_target_price_distance=want;
             let mut engine=Engine::default();
             let mut result=None;
             for (ts,bid) in [(10000,2000.),(10010,2000.2),(10020,2000.4)] {
@@ -408,7 +408,7 @@ mod tests {
         let (mut t,mut c) = fixture();
         c.risk.commission_per_lot = 0.;
         c.risk.slippage_ticks = 0.;
-        c.trading.sniper_target_points = 70.;
+        c.trading.sniper_target_price_distance = 0.70;
         let mut engine = Engine::default();
         for (ts,bid) in [(10000,2000.),(10010,2000.04),(10020,2000.08)] {
             let signal=feed(&mut engine,&mut t,&c,ts,bid);
@@ -429,30 +429,29 @@ mod tests {
     #[test]
     fn user_defined_pip_targets_are_fixed_or_bounded_and_cost_checked() {
         let (mut t,mut c)=fixture();
-        c.trading.pip_points=10.;
-        c.trading.sniper_target_points=70.;
+        c.trading.sniper_target_price_distance=0.70;
         let mut engine=Engine::default();
         for (ts,p) in [(10000,2000.),(10010,2000.04),(10020,2000.08)] {
             let s=feed(&mut engine,&mut t,&c,ts,p);
             if ts==10020 {
                 assert!(s.ready);
-                assert_eq!(s.coordination.as_ref().unwrap()["selection"]["sniper_target_pips"],7.);
+                assert_eq!(s.coordination.as_ref().unwrap()["selection"]["sniper_target_price_distance"],0.70);
                 assert!((s.target_distance-0.7).abs()<1e-8);
             }
         }
         c.trading.sniper_target_mode=SniperTargetMode::Adaptive;
-        c.trading.sniper_min_target_pips=3.;
-        c.trading.sniper_max_target_pips=9.;
+        c.trading.sniper_min_target_price_distance=0.30;
+        c.trading.sniper_max_target_price_distance=0.90;
         engine.reset_quotes();
         feed(&mut engine,&mut t,&c,10030,2000.);
         feed(&mut engine,&mut t,&c,10040,2000.04);
         let s=feed(&mut engine,&mut t,&c,10050,2000.08);
         assert!(s.ready);
         let v=&s.coordination.as_ref().unwrap()["selection"];
-        let pip=v["sniper_target_pips"].as_f64().unwrap();
-        assert!((3. ..=9.).contains(&pip));
+        let distance=v["sniper_target_price_distance"].as_f64().unwrap();
+        assert!((0.30 ..=0.90).contains(&distance));
         let arm=v["sniper_target_arm"].as_u64().unwrap() as usize;
-        assert!((pip-target_candidates(&c)[arm]).abs()<1e-8);
+        assert!((distance-target_candidates(&c)[arm]).abs()<1e-8);
         let mut live=t.clone();live.demo=false;live.account_trade_mode=Some(2);
         engine.reset_quotes();
         feed(&mut engine,&mut live,&c,10060,2000.);
@@ -460,13 +459,13 @@ mod tests {
         let s=feed(&mut engine,&mut live,&c,10080,2000.08);
         assert!(s.ready);
         assert_eq!(s.coordination.as_ref().unwrap()["selection"]["sniper_target_mode"],"fixed");
-        assert_eq!(s.coordination.as_ref().unwrap()["selection"]["sniper_target_pips"],7.);
+        assert_eq!(s.coordination.as_ref().unwrap()["selection"]["sniper_target_price_distance"],0.70);
     }
     #[test]
     fn learned_target_arm_uses_completed_demo_reward_and_never_blocks_exploration() {
         let (mut t,mut c)=fixture();
         c.trading.sniper_target_mode=SniperTargetMode::Adaptive;
-        c.trading.sniper_min_target_pips=2.;c.trading.sniper_max_target_pips=11.;
+        c.trading.sniper_min_target_price_distance=0.20;c.trading.sniper_max_target_price_distance=1.10;
         let def=definition(&t,&c);
         let mut engine=Engine::default();
         let mut stats=std::array::from_fn(|_| Policy::default());
@@ -481,7 +480,7 @@ mod tests {
             let s=feed(&mut engine,&mut t,&c,first+20,2000.08);
             assert!(s.ready);
             let v=&s.coordination.as_ref().unwrap()["selection"];
-            assert!(v["sniper_target_pips"].as_f64().unwrap()>=2.);
+            assert!(v["sniper_target_price_distance"].as_f64().unwrap()>=0.20);
             if v["sniper_policy"]=="impulse" && v["sniper_target_exploring"]==false {
                 saw_best |= v["sniper_target_arm"]==3;
             }
