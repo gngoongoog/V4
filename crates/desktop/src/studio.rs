@@ -35,11 +35,11 @@ fn load(ui: &Dashboard, c: &Config) {
     ui.set_sniper_brain(if c.trading.sniper_brain == SniperBrain::Learner { 1 } else { 0 });
     ui.set_demo_flexible(c.trading.demo_flexible);
     ui.set_adaptive_exits(c.trading.adaptive_exits);
-    ui.set_sniper_target((c.trading.sniper_target_points / c.trading.pip_points).to_string().into());
+    ui.set_sniper_target(c.trading.sniper_target_price_distance.to_string().into());
     ui.set_sniper_target_mode(if c.trading.sniper_target_mode == SniperTargetMode::Adaptive {1}else{0});
-    ui.set_sniper_min_target_pips(c.trading.sniper_min_target_pips.to_string().into());
-    ui.set_sniper_max_target_pips(c.trading.sniper_max_target_pips.to_string().into());
-    ui.set_sniper_stop(c.trading.sniper_stop_points.to_string().into());
+    ui.set_sniper_min_target_pips(c.trading.sniper_min_target_price_distance.to_string().into());
+    ui.set_sniper_max_target_pips(c.trading.sniper_max_target_price_distance.to_string().into());
+    ui.set_sniper_stop(c.trading.sniper_stop_price_distance.to_string().into());
     ui.set_sniper_cooldown(c.trading.sniper_cooldown_seconds.to_string().into());
     ui.set_sniper_hold(c.trading.sniper_max_hold_seconds.to_string().into());
     ui.set_pip_points(c.trading.pip_points.to_string().into());
@@ -211,8 +211,7 @@ pub fn setup(ui: &Dashboard) -> slint::Timer {
                 }};
                 let trading=TradingConfig{priority_enabled,sniper_active,fallback_mode,sniper_style:match ui.get_sniper_style(){1=>braintrade_domain::trading::SniperStyle::Impulse,2=>braintrade_domain::trading::SniperStyle::Rebound,3=>braintrade_domain::trading::SniperStyle::Confirmed,_=>braintrade_domain::trading::SniperStyle::Auto},sniper_brain:if ui.get_sniper_brain()==1{SniperBrain::Learner}else{SniperBrain::Classic},
 sniper_target_mode:if ui.get_sniper_target_mode()==1{SniperTargetMode::Adaptive}else{SniperTargetMode::Fixed},
-sniper_min_target_pips:number(ui.get_sniper_min_target_pips())?,
-sniper_max_target_pips:number(ui.get_sniper_max_target_pips())?,demo_flexible:ui.get_demo_flexible(),adaptive_exits:ui.get_adaptive_exits(),mode:selected_mode,sniper_target_points:number(ui.get_sniper_target())?*number(ui.get_pip_points())?,sniper_stop_points:number(ui.get_sniper_stop())?,sniper_cooldown_seconds:ui.get_sniper_cooldown().trim().parse()?,sniper_max_hold_seconds:ui.get_sniper_hold().trim().parse()?,pip_points:number(ui.get_pip_points())?,sniper_pip_price:number(ui.get_sniper_pip_price())?,max_cost_fraction:number(ui.get_cost_fraction())?};trading.validate().map_err(anyhow::Error::msg)?;json!({"trading":trading,"commission_per_lot":number(ui.get_commission_lot())?,"commission_basis":basis,"slippage_ticks":number(ui.get_slippage_ticks())?})},
+sniper_min_target_pips:2.0,sniper_max_target_pips:10.0,demo_flexible:ui.get_demo_flexible(),adaptive_exits:ui.get_adaptive_exits(),mode:selected_mode,sniper_target_points:50.0,sniper_stop_points:80.0,sniper_target_price_distance:number(ui.get_sniper_target())?,sniper_stop_price_distance:number(ui.get_sniper_stop())?,sniper_min_target_price_distance:number(ui.get_sniper_min_target_pips())?,sniper_max_target_price_distance:number(ui.get_sniper_max_target_pips())?,sniper_cooldown_seconds:ui.get_sniper_cooldown().trim().parse()?,sniper_max_hold_seconds:ui.get_sniper_hold().trim().parse()?,pip_points:number(ui.get_pip_points())?,sniper_pip_price:number(ui.get_sniper_pip_price())?,max_cost_fraction:number(ui.get_cost_fraction())?};trading.validate().map_err(anyhow::Error::msg)?;json!({"trading":trading,"commission_per_lot":number(ui.get_commission_lot())?,"commission_basis":basis,"slippage_ticks":number(ui.get_slippage_ticks())?})},
             "handoff_pause"|"handoff_resume"=>json!({
                 "sniper_active":action=="handoff_resume",
                 "confirm_live_login":ui.get_live_start_login().to_string()
