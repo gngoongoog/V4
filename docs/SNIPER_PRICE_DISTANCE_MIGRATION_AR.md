@@ -16,16 +16,27 @@ SELL mirrors the direction.
 - A distance that cannot be represented exactly on the broker tick grid is
   rejected with an actionable explanation.
 - Risk sizing continues to use MT5's broker profit calculator and actual SL.
-- A confirmed fill must be sourced from exact MT5 deal/position evidence.
-- No order may be left intentionally unprotected. The current Gateway sends
-  attached SL/TP using pre-send quote geometry; replacing this with
-  fill-relative protection requires a separately journaled, idempotent
-  post-fill SLTP modification plus a tested fail-closed emergency policy.
-- Do not enable this path for live trading until post-fill protection and
-  reconciliation are integrated and tested end-to-end.
+- Every Sniper market request first carries broker-validated quote-based SL/TP.
+  A filled order is then linked to its exact opening Deal, order ticket, and
+  physical MT5 position before any post-fill modification is attempted.
+- The Gateway computes levels from the observed position average fill, checks
+  the current quote/stops/freeze constraints, runs broker preflight, sends the
+  SLTP modification, and verifies the resulting SL/TP on that same position.
+- If Deal/position linkage or modification cannot be proven, the original
+  attached quote-based protection is retained, the command becomes UNKNOWN,
+  and the entry is not blindly retried. This is not a claim that the requested
+  fill-relative geometry was applied; operator/reconciliation review is needed.
+- Partial fills are not re-anchored while the broker order may still have a
+  remainder. Their initial attached protection remains; they require terminal
+  order reconciliation before a future safe enhancement can re-anchor them.
+- A broker stop/freeze restriction never causes silent widening. A requested
+  distance that cannot be represented exactly is rejected with an explanation.
 
 ## Current implementation stage
-This branch introduces and unit-tests a pure fill-relative price geometry
-function. It is not yet wired into the order-send path or UI. This is an
-intentional safety boundary: a helper alone does not make actual-fill
-protection production-ready.
+Fixed and adaptive Sniper strategy geometry, UI inputs, cost gates, learning
+identity, and gateway protection now use quoted-price distances. Full fills
+have a tested post-fill SLTP re-anchor path. This branch is still NOT production
+approved: the repository's automated tests and native Windows/MT5 runtime have
+not yet been executed in this environment. Do not use it for Live trading
+until CI, real broker Demo validation, and partial-fill reconciliation are
+completed.
