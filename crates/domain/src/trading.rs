@@ -47,8 +47,14 @@ pub struct TradingConfig {
     pub demo_flexible: bool,
     /// Demo-only prospective exit learning; no effect on already open positions.
     pub adaptive_exits: bool,
+    /// Legacy fields retained only so older saved configurations still deserialize.
+    /// New Sniper execution uses quoted-price distances below.
     pub sniper_target_points: f64,
     pub sniper_stop_points: f64,
+    pub sniper_target_price_distance: f64,
+    pub sniper_stop_price_distance: f64,
+    pub sniper_min_target_price_distance: f64,
+    pub sniper_max_target_price_distance: f64,
     pub sniper_cooldown_seconds: u64,
     pub sniper_max_hold_seconds: u64,
     pub pip_points: f64,
@@ -73,6 +79,10 @@ impl Default for TradingConfig {
             adaptive_exits: true,
             sniper_target_points: 50.,
             sniper_stop_points: 80.,
+            sniper_target_price_distance: 0.50,
+            sniper_stop_price_distance: 0.80,
+            sniper_min_target_price_distance: 0.20,
+            sniper_max_target_price_distance: 1.00,
             sniper_cooldown_seconds: 0,
             sniper_max_hold_seconds: 120,
             pip_points: 10.,
@@ -106,8 +116,10 @@ impl TradingConfig {
             return Err("Trading priority has conflicting execution owners".into());
         }
         for (name, v, min, max) in [
-            ("Target points", self.sniper_target_points, 1., 100_000.),
-            ("Stop points", self.sniper_stop_points, 1., 100_000.),
+            ("Sniper target price distance", self.sniper_target_price_distance, 0.00001, 100_000.),
+            ("Sniper stop price distance", self.sniper_stop_price_distance, 0.00001, 100_000.),
+            ("Sniper minimum target price distance", self.sniper_min_target_price_distance, 0.00001, 100_000.),
+            ("Sniper maximum target price distance", self.sniper_max_target_price_distance, 0.00001, 100_000.),
             ("Points per pip", self.pip_points, 1., 1000.),
             ("Sniper pip price", self.sniper_pip_price, 0.00001, 1000.),
             ("Cost fraction", self.max_cost_fraction, 0.01, 0.9),
@@ -118,8 +130,8 @@ impl TradingConfig {
                 return Err(format!("{name} must be {min}–{max}"));
             }
         }
-        if self.sniper_max_target_pips <= self.sniper_min_target_pips {
-            return Err("Adaptive Sniper max target must exceed min target in pips".into());
+        if self.sniper_max_target_price_distance <= self.sniper_min_target_price_distance {
+            return Err("Adaptive Sniper maximum price distance must exceed minimum".into());
         }
         if !(0..=3600).contains(&self.sniper_cooldown_seconds) {
             return Err("Cooldown must be 0–3600 seconds".into());
@@ -143,8 +155,8 @@ impl TradingConfig {
             TradingMode::Scalping => (1.2 * atr, 1.68 * atr),
             TradingMode::Swing => (2. * atr, 5. * atr),
             TradingMode::Sniper => (
-                self.sniper_stop_points * point,
-                (self.sniper_target_points / self.pip_points) * self.sniper_pip_price,
+                self.sniper_stop_price_distance,
+                self.sniper_target_price_distance,
             ),
         }
     }
