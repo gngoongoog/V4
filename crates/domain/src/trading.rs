@@ -255,7 +255,7 @@ pub fn costs(t: &Telemetry, c: &Config, lots: f64, now: u64) -> Result<CostPrevi
         sell_break_even_ask: ask - break_even_points * point,
         commission_round_trip_per_lot: c.risk.commission_per_lot,
         slippage_ticks_per_side: c.risk.slippage_ticks,
-        desired_net_target_money: c.trading.sniper_target_points / c.trading.pip_points * c.trading.sniper_pip_price / tick * profit * lots,
+        desired_net_target_money: c.trading.sniper_target_price_distance / tick * profit * lots,
     };
     if [total, break_even_points, r.buy_break_even_bid, r.sell_break_even_ask, r.desired_net_target_money]
         .iter()
