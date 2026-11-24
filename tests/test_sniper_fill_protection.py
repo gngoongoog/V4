@@ -54,7 +54,8 @@ def command(side=1):
         "kind": "open", "created_ms": clock_ms() - 1000,
         "magic": 1234, "symbol": "XAUUSD",
         "signal": {"key": "tick:123", "side": side,
-                   "stop_distance": 1.0, "target_distance": 0.25},
+                   "stop_distance": 1.0, "target_distance": 0.25,
+                   "coordination": {"sniper_price_distance_policy": "sniper-price-distance-v1"}},
     }
 
 
