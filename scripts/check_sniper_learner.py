@@ -182,7 +182,7 @@ def check(exe=None, native_pipe=False):
             # The Demo-only bounded optimizer is enabled explicitly and uses
             # four configured pip arms; it cannot invent out-of-range targets.
             config['trading'].update(sniper_target_mode='adaptive',
-                                     sniper_min_target_pips=3.0,sniper_max_target_pips=9.0)
+                                     sniper_min_target_price_distance=0.30,sniper_max_target_price_distance=0.90)
             saved=api('/v1/trading/settings',dict(trading=config['trading'],commission_per_lot=7.))
             assert saved['config']['trading']['sniper_target_mode']=='adaptive'
             prices([2054.13,2054.17,2054.21])
