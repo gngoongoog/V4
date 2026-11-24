@@ -120,6 +120,7 @@ impl TradingConfig {
             ("Sniper stop price distance", self.sniper_stop_price_distance, 0.00001, 100_000.),
             ("Sniper minimum target price distance", self.sniper_min_target_price_distance, 0.00001, 100_000.),
             ("Sniper maximum target price distance", self.sniper_max_target_price_distance, 0.00001, 100_000.),
+            ("Legacy pip price for cost-display compatibility", self.sniper_pip_price, 0.00001, 1000.),
             ("Cost fraction", self.max_cost_fraction, 0.01, 0.9),
         ] {
             if !v.is_finite() || !(min..=max).contains(&v) {
