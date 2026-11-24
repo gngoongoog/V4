@@ -120,11 +120,7 @@ impl TradingConfig {
             ("Sniper stop price distance", self.sniper_stop_price_distance, 0.00001, 100_000.),
             ("Sniper minimum target price distance", self.sniper_min_target_price_distance, 0.00001, 100_000.),
             ("Sniper maximum target price distance", self.sniper_max_target_price_distance, 0.00001, 100_000.),
-            ("Points per pip", self.pip_points, 1., 1000.),
-            ("Sniper pip price", self.sniper_pip_price, 0.00001, 1000.),
             ("Cost fraction", self.max_cost_fraction, 0.01, 0.9),
-            ("Adaptive min target pips", self.sniper_min_target_pips, 0.1, 1000.),
-            ("Adaptive max target pips", self.sniper_max_target_pips, 0.1, 1000.),
         ] {
             if !v.is_finite() || !(min..=max).contains(&v) {
                 return Err(format!("{name} must be {min}–{max}"));
