@@ -20,8 +20,12 @@ SELL mirrors the direction.
   A filled order is then linked to its exact opening Deal, order ticket, and
   physical MT5 position before any post-fill modification is attempted.
 - The Gateway computes levels from the observed position average fill, checks
-  the current quote/stops/freeze constraints, runs broker preflight, sends the
-  SLTP modification, and verifies the resulting SL/TP on that same position.
+  the current quote/stops/freeze constraints, and runs broker preflight.
+- The SLTP modification has its own durable `sends` journal committed before
+  the MT5 write. The Gateway revalidates the exact account and position, sends
+  the modification once, and verifies the resulting SL/TP on that same position.
+- If the modification result is uncertain, reconciliation observes the exact
+  position and journal; it never blindly repeats the SLTP write.
 - If Deal/position linkage or modification cannot be proven, the original
   attached quote-based protection is retained, the command becomes UNKNOWN,
   and the entry is not blindly retried. This is not a claim that the requested
