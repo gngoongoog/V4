@@ -151,7 +151,7 @@ def check(exe=None, native_pipe=False):
             selection=cmd['signal']['coordination']['selection']
             assert selection['brain']=='sniper_learner' and selection['sniper_policy']=='impulse'
             assert selection['sniper_target_mode']=='fixed'
-            assert abs(selection['sniper_target_pips'] - 5.)<1e-8
+            assert abs(selection['sniper_target_price_distance'] - 0.5)<1e-8
             assert 0<selection['selection_probability']<=1
             result=submit(cmd);assert result['state']=='filled' and result['fast_path'],result
             submit(cmd);assert len(broker.sends)==1
@@ -190,8 +190,8 @@ def check(exe=None, native_pipe=False):
             assert latest['ready'],latest
             selection=latest['coordination']['selection']
             assert selection['sniper_target_mode']=='adaptive',selection
-            assert 3.<=selection['sniper_target_pips']<=9.
-            assert len(selection['sniper_target_candidates_pips'])==4
+            assert 0.30<=selection['sniper_target_price_distance']<=0.90
+            assert len(selection['sniper_target_candidates_price_distance'])==4
             assert selection['sniper_target_samples']==0,selection
             # A previously separate Sniper Learner may now only advise the
             # selected-mode system coordinator. No independent MT5 order can
