@@ -80,7 +80,7 @@ impl Default for TradingConfig {
             sniper_target_points: 50.,
             sniper_stop_points: 80.,
             sniper_target_price_distance: 0.50,
-            sniper_stop_price_distance: 0.80,
+            sniper_stop_price_distance: 0.08,
             sniper_min_target_price_distance: 0.20,
             sniper_max_target_price_distance: 1.00,
             sniper_cooldown_seconds: 0,
@@ -554,7 +554,7 @@ mod tests {
         let c:TradingConfig=serde_json::from_str(old).unwrap();
         assert_eq!(c.sniper_target_mode,SniperTargetMode::Fixed);
         assert_eq!(c.sniper_target_price_distance,0.50);
-        assert_eq!(c.sniper_stop_price_distance,0.80);
+        assert_eq!(c.sniper_stop_price_distance,0.08);
         let mut a=c.clone();a.sniper_target_mode=SniperTargetMode::Adaptive;
         a.sniper_min_target_price_distance=0.30;a.sniper_max_target_price_distance=0.90;
         a.validate().unwrap();
