@@ -121,7 +121,7 @@ impl Engine {
             Ok(cost) if t.symbol == c.symbol && t.tick_age_ms.is_some_and(|age| age <= 1000) => cost,
             _ => { self.reset_quotes(); s.reason = "القناص: بيانات السعر أو العقد غير مكتملة".into(); return s; }
         };
-        let (bid, ask, tick, point) = (t.bid.unwrap(), t.ask.unwrap(), t.tick_size.unwrap(), t.point.unwrap());
+        let (bid, ask, tick) = (t.bid.unwrap(), t.ask.unwrap(), t.tick_size.unwrap());
         let mid = (bid + ask) / 2.;
         if self.quotes.back().is_some_and(|q| now.saturating_sub(q.1) > 1000 || ts < q.0) { self.reset_quotes(); }
         if self.quotes.back().is_none_or(|q| ts > q.0) { self.quotes.push_back((ts, now, mid)); }
@@ -250,9 +250,9 @@ impl Engine {
             if chosen==0 {"اندفاع مقاس"} else {"ارتداد بعد حركة"},movement,efficiency,spread,regime,target_distance,
             if adaptive {"متكيّف"} else {"ثابت"},total,target_total);
         s.coordination = Some(json!({"version":"sniper-learner-v1","trading_mode":"sniper",
-            "selection":{"sniper_style":c.trading.sniper_style,"brain":ID,"timeframe":"M1","report_id":"","policy":"sniper-ticks-v1",
+            "selection":{"sniper_style":c.trading.sniper_style,"brain":ID,"timeframe":"M1","report_id":"","policy":"sniper-price-distance-v1",
                 "sniper_policy":POLICIES[chosen],"sniper_definition":def,"sniper_regime":regime,
-                "definition":["sniper-ticks-v1",POLICIES[chosen]],"exploring":exploring,
+                "definition":["sniper-price-distance-v1",POLICIES[chosen]],"exploring":exploring,
                 "exploration_rate":epsilon,"selection_probability":probability,"broker_samples":total,
                 "sniper_target_mode":if adaptive {"adaptive"}else{"fixed"},
                 "sniper_target_price_distance":target_distance,
@@ -380,7 +380,7 @@ mod tests {
         assert!(changed);
     }
     #[test]
-    fn exactly_five_and_ten_gold_pips_even_when_quote_point_is_tenth_of_dollar() {
+    fn price_distance_targets_are_independent_of_quote_digits_and_pip_conventions() {
         for (pips,want) in [(5.,0.50),(10.,1.00)] {
             let (mut t,mut c)=fixture();
             t.point=Some(0.10);
@@ -399,7 +399,7 @@ mod tests {
             let signal=result.unwrap();
             assert!(signal.ready,"{}",signal.reason);
             assert!((signal.target_distance-want).abs()<1e-8);
-            assert_eq!(signal.coordination.unwrap()["selection"]["sniper_target_pips"],pips);
+            assert_eq!(signal.coordination.unwrap()["selection"]["sniper_target_price_distance"],want);
         }
     }
 
