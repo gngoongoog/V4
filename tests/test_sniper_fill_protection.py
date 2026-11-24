@@ -104,6 +104,9 @@ class SniperFillProtectionTests(unittest.TestCase):
         mt5.executor, mt5.protection_id = executor, cmd["id"] + ":sniper-fill-protection"
         result = {"state": "filled", "deal": 99, "order": 42, "volume": 0.10}
         _apply_sniper_fill_protection(executor, mt5, cmd, mt5.info, N(), result)
+        # Simulate a crash after the broker applied SLTP but before result save.
+        executor.db.execute("UPDATE sends SET result=NULL WHERE id=?", (mt5.protection_id,))
+        executor.db.commit()
         _apply_sniper_fill_protection(executor, mt5, cmd, mt5.info, N(), result)
         self.assertEqual(len(mt5.sent), 1)
         self.assertEqual(result["sniper_fill_protection"]["state"], "verified")
