@@ -155,7 +155,7 @@ mod tests{
  fn changing_classic_settings_or_real_account_ends_cohort() {
    let (mut t,mut c)=fixture(100000);let mut s=Study::default();
    s.freeze(&t,&c,100000).unwrap();
-   c.trading.sniper_stop_points+=10.;
+   c.trading.sniper_stop_price_distance+=0.10;
    t.quote_time_ms=Some(100250);t.source_quote_time_ms=Some(100250);
    s.observe(&t,&c,&BTreeMap::new(),100251);
    assert_eq!(s.report(Some(&t),100251)["status"],"stopped");
