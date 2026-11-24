@@ -95,7 +95,7 @@ class SniperFillProtectionTests(unittest.TestCase):
     def test_wrong_order_link_is_rejected_without_modification(self):
         mt5 = FakeMT5(deal_order=999)
         result = {"state": "filled", "deal": 99, "order": 42, "volume": 0.10}
-        with self.assertRaisesRegex(ValueError, "identity/direction"):
+        with self.assertRaisesRegex(ValueError, "not uniquely visible"):
             _apply_sniper_fill_protection(mt5, command(), mt5.info, N(), result)
         self.assertEqual(mt5.sent, [])
 
