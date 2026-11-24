@@ -109,7 +109,7 @@ def _apply_sniper_fill_protection(mt5, cmd, info, response, result):
         raise ValueError('Sniper fill protection: broker quote stale/invalid; initial quote protection remains attached')
     minimum = max(int(getattr(info, 'trade_stops_level', 0) or 0),
                   int(getattr(info, 'trade_freeze_level', 0) or 0)) * float(info.point)
-        if side == 1:
+    if side == 1:
         valid = bid > levels['sl'] and levels['tp'] > bid
         distances = (bid - levels['sl'], levels['tp'] - bid)
     else:
@@ -189,7 +189,7 @@ def sniper_broker_geometry(info, tick, stop, target):
     against the opposite-side exit quote. A full tick cushions tick rounding.
     If the broker's stops floor is too wide for the requested price-distance TP,
     reject the entry with an exact explanation instead of silently raising TP
-    to 40/50 pips. Likewise, never silently expand the selected stop loss.
+    to a larger price distance. Likewise, never silently expand the selected stop loss.
     """
     step = float(info.trade_tick_size)
     spread = float(tick.ask) - float(tick.bid)
@@ -199,7 +199,7 @@ def sniper_broker_geometry(info, tick, stop, target):
         raise ValueError('Invalid Sniper broker geometry')
     # Frozen Sniper targets must be exactly representable on this broker's
     # actual tick grid. The later price-normalization ceil/floor would
-    # otherwise silently extend a 5-pip request by up to one tick.
+    # otherwise silently extend a requested price distance by up to one tick.
     tick_steps = target / step
     if abs(tick_steps - round(tick_steps)) > 1e-6:
         raise ValueError(
