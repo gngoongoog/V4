@@ -113,6 +113,14 @@ class SniperFillProtectionTests(unittest.TestCase):
         _apply_sniper_fill_protection(mt5, command(), mt5.info, N(), result)
         self.assertEqual(mt5.sent, [])
 
+    def test_terminal_partial_fill_is_reanchored_only_after_remainder_is_proven_gone(self):
+        mt5 = FakeMT5()
+        result = {"state": "partial", "deal": 99, "order": 42, "volume": 0.10,
+                  "terminal_order": {"confirmed": True, "state": "canceled"}}
+        _apply_sniper_fill_protection(mt5, command(), mt5.info, N(), result)
+        self.assertEqual(result["sniper_fill_protection"]["state"], "verified")
+        self.assertEqual(len(mt5.sent), 1)
+
     def test_legacy_tick_signal_without_price_distance_marker_is_unchanged(self):
         mt5 = FakeMT5()
         cmd = command()
