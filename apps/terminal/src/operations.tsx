@@ -75,7 +75,6 @@ export function TradingSettingsOperations({source,disabled,armed,apply,brokerPoi
  const stored=safeObject(safeObject(view.config).trading);
  const commission=safeObject(view.commission_editor);
  const [draft,setDraft]=useState<Record<string,unknown>>({});const [saving,setSaving]=useState(false);
- const [fixedPips,setFixedPips]=useState<string|null>(null);
  const [fee,setFee]=useState('7');const [basis,setBasis]=useState('round_trip');const [error,setError]=useState('');
  const [editedFee,setEditedFee]=useState(false);const [editedBasis,setEditedBasis]=useState(false);
  // A draft belongs to the exact settings, fees, account and slippage that the
@@ -136,13 +135,13 @@ export function TradingSettingsOperations({source,disabled,armed,apply,brokerPoi
   try{
    await apply(payload);
    // Only discard the draft after Core has re-read and confirmed persistence.
-   editSource.current=null;setDraft({});setEditedFee(false);setEditedBasis(false);setFixedPips(null);
+   editSource.current=null;setDraft({});setEditedFee(false);setEditedBasis(false);
   }catch(e){setError('فشل الحفظ؛ تم الاحتفاظ بالتعديلات: '+String(e))}
   finally{setSaving(false)}
  };
  // The editor retains the user's typing; a new Core revision is not silently
  // applied on top of unsaved fields. Clicking reset re-reads the current scope.
- const reset=()=>{editSource.current=null;setDraft({});setEditedFee(false);setEditedBasis(false);setFixedPips(null);setError('')};
+ const reset=()=>{editSource.current=null;setDraft({});setEditedFee(false);setEditedBasis(false);setError('')};
  return <section className="operator-card" aria-label="Coordinator and costs">
   <h3><ShieldAlert size={18}/> منسق التداول وتكاليف الوسيط</h3>
   <p>يوجد منسق واحد فقط لإرسال صفقات MT5. العقول الأخرى تحليلية. لا يمكن تعديل هذه الإعدادات أثناء START.</p>
