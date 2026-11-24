@@ -99,6 +99,15 @@ class SniperFillProtectionTests(unittest.TestCase):
         _apply_sniper_fill_protection(mt5, command(), mt5.info, N(), result)
         self.assertEqual(mt5.sent, [])
 
+    def test_legacy_tick_signal_without_price_distance_marker_is_unchanged(self):
+        mt5 = FakeMT5()
+        cmd = command()
+        cmd["signal"].pop("coordination")
+        result = {"state": "filled", "deal": 99, "order": 42}
+        _apply_sniper_fill_protection(mt5, cmd, mt5.info, N(), result)
+        self.assertEqual(mt5.sent, [])
+        self.assertNotIn("sniper_fill_protection", result)
+
 
 if __name__ == "__main__":
     unittest.main()
