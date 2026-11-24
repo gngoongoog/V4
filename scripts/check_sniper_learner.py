@@ -181,7 +181,9 @@ def check(exe=None, native_pipe=False):
             assert abs(result['sniper_fill_protection']['fill_price']-result['price'])<1e-8,result
             assert abs(result['sniper_fill_protection']['sl']-(result['price']-.8))<1e-8,result
             assert abs(result['sniper_fill_protection']['tp']-(result['price']+.5))<1e-8,result
-            submit(cmd);assert len(broker.sends)==1
+            submit(cmd)
+            assert sum(1 for request in broker.sends if request.get('action')==broker.TRADE_ACTION_DEAL)==1
+            assert sum(1 for request in broker.sends if request.get('action')==broker.TRADE_ACTION_SLTP)==1
             api('/v1/stop',{})
             now=clock_ms();volume=result['volume']
             entry=dict(ticket=77,position_id=55,symbol='XAUUSD',magic=410600,
