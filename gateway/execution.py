@@ -50,7 +50,12 @@ def _apply_sniper_fill_protection(mt5, cmd, info, response, result):
     the exact opening Deal and physical position have been linked. Failure never
     removes the initial SL/TP and is reported as UNKNOWN for operator review.
     """
-    if result.get('state') != 'filled' or not is_fast_path(cmd):
+    signal = cmd.get('signal') or {}
+    coordination = signal.get('coordination') or {}
+    selection = coordination.get('selection') or {}
+    policy = coordination.get('sniper_price_distance_policy') or selection.get('policy')
+    if (result.get('state') != 'filled' or not is_fast_path(cmd)
+            or policy != 'sniper-price-distance-v1'):
         return result
     deal_id = int(result.get('deal') or 0)
     order_id = int(result.get('order') or 0)
