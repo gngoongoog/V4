@@ -60,7 +60,7 @@ fn read(pos:u64,closed:u64,context:&str,v:&Value)->Option<(String,String,String,
        ||v["trading_mode"]!="sniper"
        ||v["brain"]!="sniper_learner"
        ||v["selection"]["brain"]!="sniper_learner"
-       ||v["selection"]["policy"]!="sniper-ticks-v1"
+       ||v["selection"]["policy"]!="sniper-price-distance-v1"
        ||v["position_id"].as_u64()!=Some(pos)
        ||v["closed_ms"].as_u64()!=Some(closed){return None;}
     let policy=bounded_key(&v["selection"]["sniper_policy"])?;
@@ -195,7 +195,7 @@ mod tests {
             "net":net,"net_per_lot":net/0.10,"closed_volume":0.10,
             "risk_money":5.0,"r_multiple":net/5.0,
             "reward":(net/5.0).tanh(),
-            "selection":{"brain":"sniper_learner","policy":"sniper-ticks-v1",
+            "selection":{"brain":"sniper_learner","policy":"sniper-price-distance-v1",
               "sniper_policy":policy,"sniper_definition":definition,"sniper_regime":regime}});
         d.execute("INSERT INTO coordinator_broker_samples VALUES(?1,?2,?3,'sniper_learner',?4,?5)",
             params![format!("f{pos}"),pos,ctx,pos*1000,p.to_string()]).unwrap();
@@ -229,7 +229,7 @@ mod tests {
         let corrupted=json!({"evidence_source":"mt5_demo_broker","trading_mode":"sniper",
             "brain":"sniper_learner","position_id":5,"closed_ms":5000,
             "gross":100.,"commission":-7.,"swap":0.,"fee":0.,"net":100.,
-            "closed_volume":0.1,"selection":{"brain":"sniper_learner","policy":"sniper-ticks-v1",
+            "closed_volume":0.1,"selection":{"brain":"sniper_learner","policy":"sniper-price-distance-v1",
             "sniper_policy":"impulse","sniper_definition":"v1","sniper_regime":"trending"}});
         d.execute("INSERT INTO coordinator_broker_samples VALUES('bad',5,'a','sniper_learner',5000,?1)",
             [corrupted.to_string()]).unwrap();
@@ -249,7 +249,7 @@ mod tests {
                 "gross":2.7,"commission":-0.7,"swap":0.0,"fee":0.0,
                 "net":2.0,"net_per_lot":20.0,"closed_volume":0.1,
                 "risk_money":5.0,"r_multiple":0.4,"reward":0.4_f64.tanh(),
-                "selection":{"brain":"sniper_learner","policy":"sniper-ticks-v1",
+                "selection":{"brain":"sniper_learner","policy":"sniper-price-distance-v1",
                     "sniper_policy":"impulse","sniper_definition":"v1",
                     "sniper_regime":"trending"}});
             match variant {
