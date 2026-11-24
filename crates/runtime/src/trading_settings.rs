@@ -228,6 +228,10 @@ mod tests {
         modified.sniper_min_target_pips = 3.5;
         modified.sniper_max_target_pips = 9.5;
         modified.sniper_target_points = 150.0;
+        modified.sniper_target_price_distance = 1.50;
+        modified.sniper_stop_price_distance = 1.30;
+        modified.sniper_min_target_price_distance = 0.30;
+        modified.sniper_max_target_price_distance = 0.95;
         modified.pip_points = 20.0;
         modified.sniper_stop_points = 130.0;
         modified.sniper_cooldown_seconds = 3;
@@ -257,6 +261,8 @@ mod tests {
         let readback=view(&reloaded,&status);
         assert_eq!(readback["config"]["trading"],json!(modified));
         assert_eq!(readback["config"]["trading"]["sniper_target_points"],150.0);
+        assert_eq!(readback["config"]["trading"]["sniper_target_price_distance"],1.50);
+        assert_eq!(readback["config"]["trading"]["sniper_stop_price_distance"],1.30);
         assert_eq!(readback["config"]["trading"]["pip_points"],20.0);
         assert_eq!(readback["commission_editor"]["amount"],3.50);
         assert_eq!(readback["commission_editor"]["basis"],"per_side");
