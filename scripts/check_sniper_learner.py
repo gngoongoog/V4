@@ -80,6 +80,25 @@ def check(exe=None, native_pipe=False):
             snapshot['market']['captured_ms']=clock_ms()
             api('/v1/gateway/snapshot',snapshot)
         broker=Broker();broker.tick.bid=2053.8;broker.tick.ask=2053.9
+        # The simulator must model the broker-confirmed opening Deal and the
+        # physical position; a success retcode alone is not fill evidence.
+        original_order_send=broker.order_send
+        def order_send_with_mt5_fill(request):
+            response=original_order_send(request)
+            if request.get('magic')==410600 and response.retcode==10009:
+                position_id=550077
+                broker.deals.append(N(
+                    ticket=response.deal,order=response.order,position_id=position_id,
+                    magic=request['magic'],symbol=request['symbol'],
+                    type=broker.DEAL_TYPE_BUY,entry=broker.DEAL_ENTRY_IN,
+                    volume=response.volume,price=response.price))
+                broker.positions.append(N(
+                    ticket=900077,identifier=position_id,magic=request['magic'],
+                    symbol=request['symbol'],type=broker.POSITION_TYPE_BUY,
+                    price_open=response.price,volume=response.volume,
+                    sl=request['sl'],tp=request['tp']))
+            return response
+        broker.order_send=order_send_with_mt5_fill
         executor=BrokerExecutor(Path(directory)/'send-journal.sqlite')
         def submit(cmd):
             broker.tick.time_msc=clock_ms()
@@ -154,6 +173,10 @@ def check(exe=None, native_pipe=False):
             assert abs(selection['sniper_target_price_distance'] - 0.5)<1e-8
             assert 0<selection['selection_probability']<=1
             result=submit(cmd);assert result['state']=='filled' and result['fast_path'],result
+            assert result['sniper_fill_protection']['state']=='verified',result
+            assert abs(result['sniper_fill_protection']['fill_price']-result['price'])<1e-8,result
+            assert abs(result['sniper_fill_protection']['sl']-(result['price']-.8))<1e-8,result
+            assert abs(result['sniper_fill_protection']['tp']-(result['price']+.5))<1e-8,result
             submit(cmd);assert len(broker.sends)==1
             api('/v1/stop',{})
             now=clock_ms();volume=result['volume']
