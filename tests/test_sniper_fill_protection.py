@@ -46,6 +46,9 @@ class FakeMT5:
         self.executor = None
         self.protection_id = None
 
+    def account_info(self):
+        return N(login=1, server="Demo", currency="USD", trade_mode=0)
+
     def history_deals_get(self, start, end):
         return self.deals
 
@@ -95,6 +98,15 @@ class SniperFillProtectionTests(unittest.TestCase):
                                   (mt5.protection_id,)).fetchone()
         self.assertIsNotNone(row)
         self.assertEqual(json.loads(row[1])["state"], "filled")
+
+    def test_repeated_reconciliation_observes_journaled_protection_without_second_send(self):
+        mt5, executor, cmd = FakeMT5(), FakeExecutor(), command()
+        mt5.executor, mt5.protection_id = executor, cmd["id"] + ":sniper-fill-protection"
+        result = {"state": "filled", "deal": 99, "order": 42, "volume": 0.10}
+        _apply_sniper_fill_protection(executor, mt5, cmd, mt5.info, N(), result)
+        _apply_sniper_fill_protection(executor, mt5, cmd, mt5.info, N(), result)
+        self.assertEqual(len(mt5.sent), 1)
+        self.assertEqual(result["sniper_fill_protection"]["state"], "verified")
 
     def test_weighted_average_of_multiple_order_deals_matches_position(self):
         mt5, executor, cmd = FakeMT5(), FakeExecutor(), command()
