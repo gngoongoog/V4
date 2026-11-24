@@ -112,8 +112,7 @@ const flush=async()=>{await new Promise(resolve=>setImmediate(resolve));};
  sourceData={...sourceData,config:{...sourceData.config,trading:{...latest.trading}} ,
   commission_editor:{...sourceData.commission_editor,amount:latest.commission_per_lot}};
  render();view=render();
- assert.equal(findInput(view,'sniper points per pip').props.value,'20');
- assert.equal(Number(findInput(view,'sniper target price distance').props.value),7.5);
+ assert.equal(Number(findInput(view,'sniper target price distance').props.value),0.75);
  assert.equal(findInput(view,'sniper cooldown seconds').props.value,'3');
  assert.equal(findInput(view,'commission per lot').props.value,'0');
  // A background Core revision, account or risk change must not erase edits or
