@@ -35,7 +35,7 @@ class FakeMT5:
                       trade_stops_level=0, trade_freeze_level=0)
         self.position = N(ticket=555, identifier=777, magic=1234, symbol="XAUUSD",
                           type=0 if side == 1 else 1, volume=0.10,
-                          price_open=100.123, sl=99.123, tp=100.373)
+                          price_open=100.123, sl=99.120, tp=100.370)
         self.tick = N(bid=100.120, ask=100.121, time_msc=clock_ms())
         self.deal = N(ticket=99, order=deal_order, position_id=777, magic=1234,
                       symbol="XAUUSD", entry=0, type=0 if side == 1 else 1,
@@ -149,8 +149,8 @@ class SniperFillProtectionTests(unittest.TestCase):
         result = {"state": "filled", "deal": 99, "order": 42, "volume": 0.10}
         with self.assertRaisesRegex(ValueError, "broker rejected post-fill"):
             _apply_sniper_fill_protection(executor, mt5, cmd, mt5.info, N(), result)
-        self.assertEqual(mt5.position.sl, 99.123)
-        self.assertEqual(mt5.position.tp, 100.373)
+        self.assertEqual(mt5.position.sl, 99.120)
+        self.assertEqual(mt5.position.tp, 100.370)
         row = executor.db.execute("SELECT result FROM sends WHERE id=?",
                                   (mt5.protection_id,)).fetchone()
         self.assertEqual(json.loads(row[0])["state"], "rejected")
