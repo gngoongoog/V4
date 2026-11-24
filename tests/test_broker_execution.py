@@ -39,6 +39,12 @@ class Broker:
     def order_send(self,r):
         self.sends.append(r)
         if self.raise_send:raise RuntimeError('network failure after submit')
+        if r.get('action')==self.TRADE_ACTION_SLTP:
+            matches=[p for p in self.positions if int(getattr(p,'ticket',0))==int(r['position'])]
+            if len(matches)!=1:return N(retcode=10036,comment='position not found')
+            matches[0].sl=r['sl'];matches[0].tp=r['tp']
+            return N(retcode=self.code,comment='broker',order=55,deal=self.reply_deal,
+                     volume=matches[0].volume,price=matches[0].price_open)
         return N(retcode=self.code,comment='broker',order=55,deal=self.reply_deal,volume=r['volume'],price=r['price'])
 
 def command():
