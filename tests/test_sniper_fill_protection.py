@@ -26,10 +26,11 @@ class FakeMT5:
                       symbol="XAUUSD", entry=0, type=0 if side == 1 else 1,
                       volume=0.10, price=100.123)
         self.modify_retcode = modify_retcode
+        self.deals = [self.deal]
         self.sent = []
 
     def history_deals_get(self, start, end):
-        return [self.deal]
+        return self.deals
 
     def positions_get(self, symbol=None):
         return [self.position]
@@ -62,32 +63,45 @@ def command(side=1):
 class SniperFillProtectionTests(unittest.TestCase):
     def test_reanchors_and_verifies_actual_fill_position(self):
         mt5 = FakeMT5()
-        result = {"state": "filled", "deal": 99, "order": 42}
+        result = {"state": "filled", "deal": 99, "order": 42, "volume": 0.10}
         _apply_sniper_fill_protection(mt5, command(), mt5.info, N(), result)
         self.assertEqual(result["sniper_fill_protection"]["state"], "verified")
         self.assertAlmostEqual(mt5.position.sl, 99.123)
         self.assertAlmostEqual(mt5.position.tp, 100.373)
         self.assertEqual(len(mt5.sent), 1)
 
+    def test_weighted_average_of_multiple_order_deals_matches_position(self):
+        mt5 = FakeMT5()
+        mt5.deals.append(N(ticket=100, order=42, position_id=777, magic=1234,
+                           symbol="XAUUSD", entry=0, type=0,
+                           volume=0.10, price=100.133))
+        mt5.position.volume = 0.20
+        mt5.position.price_open = 100.128
+        result = {"state": "filled", "deal": 99, "order": 42, "volume": 0.20}
+        _apply_sniper_fill_protection(mt5, command(), mt5.info, N(), result)
+        self.assertAlmostEqual(result["sniper_fill_protection"]["fill_price"], 100.128)
+        self.assertAlmostEqual(mt5.position.sl, 99.128)
+        self.assertAlmostEqual(mt5.position.tp, 100.378)
+
     def test_sell_direction_is_reversed(self):
         mt5 = FakeMT5(side=-1)
         mt5.position.price_open = 100.123
         mt5.tick = N(bid=100.125, ask=100.126, time_msc=clock_ms())
-        result = {"state": "filled", "deal": 99, "order": 42}
+        result = {"state": "filled", "deal": 99, "order": 42, "volume": 0.10}
         _apply_sniper_fill_protection(mt5, command(-1), mt5.info, N(), result)
         self.assertAlmostEqual(mt5.position.sl, 101.123)
         self.assertAlmostEqual(mt5.position.tp, 99.873)
 
     def test_wrong_order_link_is_rejected_without_modification(self):
         mt5 = FakeMT5(deal_order=999)
-        result = {"state": "filled", "deal": 99, "order": 42}
+        result = {"state": "filled", "deal": 99, "order": 42, "volume": 0.10}
         with self.assertRaisesRegex(ValueError, "identity/direction"):
             _apply_sniper_fill_protection(mt5, command(), mt5.info, N(), result)
         self.assertEqual(mt5.sent, [])
 
     def test_broker_modification_rejection_is_not_reported_as_success(self):
         mt5 = FakeMT5(modify_retcode=10016)
-        result = {"state": "filled", "deal": 99, "order": 42}
+        result = {"state": "filled", "deal": 99, "order": 42, "volume": 0.10}
         with self.assertRaisesRegex(ValueError, "broker rejected post-fill"):
             _apply_sniper_fill_protection(mt5, command(), mt5.info, N(), result)
         self.assertEqual(mt5.position.sl, 99.123)
@@ -103,7 +117,7 @@ class SniperFillProtectionTests(unittest.TestCase):
         mt5 = FakeMT5()
         cmd = command()
         cmd["signal"].pop("coordination")
-        result = {"state": "filled", "deal": 99, "order": 42}
+        result = {"state": "filled", "deal": 99, "order": 42, "volume": 0.10}
         _apply_sniper_fill_protection(mt5, cmd, mt5.info, N(), result)
         self.assertEqual(mt5.sent, [])
         self.assertNotIn("sniper_fill_protection", result)
